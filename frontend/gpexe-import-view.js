@@ -2295,6 +2295,15 @@ function compactHasValues(a, c) {
   return ["duration", "distance", "maxSpeed"].some((k) => h[k] !== null && h[k] !== undefined);
 }
 
+// A team athlete whose name another team athlete shares can't be linked here (the confirmation would refuse it): the
+// option says so before it is pressed, disabled, as on Link athletes (code review of #562).
+function linkOptionHtml(o) {
+  return `<option value="${escapeAttr(o.id)}"${o.duplicate ? " disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`;
+}
+function sharedNameNote(choices) {
+  return choices.some((o) => o.duplicate) ? `<p class="muted gpexe-link-shared">An athlete whose name another team athlete shares can't be chosen. Give them different names in Settings > Athletes, then link.</p>` : "";
+}
+
 function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } = {}) {
   const gx = state.trainingLoad.gpexe;
   const id = a.gpexeAthleteId;
@@ -2329,15 +2338,16 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } 
       ${renderLinkContextHtml(a, c, { bare: true })}
       ${numberNote}
       <div class="gpexe-link-row">
-        <label><span>${escapeHtml(`Link ${gpexeAthleteLabel(id)} to`)}</span>
+        <label><span>Team athlete</span>
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
             <option value="" selected>Choose an athlete of the team</option>
             ${sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""}
-            ${unlinkedChoices.filter((o) => String(o.id) !== String(sg?.id)).map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(sg?.id)).map(linkOptionHtml).join("")}
           </select>
         </label>
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
       </div>
+      ${sharedNameNote(unlinkedChoices)}
       ${idTechHtml(id)}
     </div>
   `;
@@ -2353,11 +2363,12 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } 
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
             <option value="" selected>Choose an athlete of the team</option>
             ${(() => { const sg = suggestedChoice(id, unlinkedChoices); return sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""; })()}
-            ${unlinkedChoices.filter((o) => String(o.id) !== String(suggestedChoice(id, unlinkedChoices)?.id)).map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(suggestedChoice(id, unlinkedChoices)?.id)).map(linkOptionHtml).join("")}
           </select>
         </label>
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
       </div>
+      ${sharedNameNote(unlinkedChoices)}
       ${idTechHtml(id)}
     </div>
   `;

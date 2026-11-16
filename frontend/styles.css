@@ -27324,8 +27324,16 @@ body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
   padding-bottom: 4px;
   background: var(--surface, #fff);
 }
+/* The step count sits in the sticky head, so a long step never hides how many are left. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
+  flex-wrap: wrap;
+}
+.imports-fix-head .imports-fix-count {
+  flex-basis: 100%;
+}
 .imports-fix-head h3 {
   margin: 0;
+  flex: 1 1 0;
   min-width: 0;
   overflow-wrap: anywhere;
 }
