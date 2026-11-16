@@ -823,7 +823,7 @@ test("MT-C 3: the platform admin's 'Choose a recording' opens the same Fix sheet
   const w = multiWorld();
   await open(w);
   await act("training-load-gpexe-open", { candidateId: "cand-5" });
-  assert.match(reviewRow("Blake Sample"), /<button type="button" class="plain-button gpexe-button gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="cand-5">Choose a recording<\/button>/);
+  assert.match(reviewRow("Blake Sample"), /<button type="button" class="plain-button gpexe-button gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="">Choose a recording<\/button>/);
   assert.equal((html().match(/gpexe-choose-recording/g) || []).length, 1, "one button, on that row only");
   await act("training-load-gpexe-fix", { candidateId: "cand-5" });
   assert.match(sheet(), /GPEXE has 2 recordings of Blake Sample in this session\. Which one should be imported\?/);
@@ -840,4 +840,19 @@ test("MT-C 3: the platform admin's 'Choose a recording' opens the same Fix sheet
   await open(multiWorld());
   await act("training-load-gpexe-open", { candidateId: "cand-5" });
   assert.doesNotMatch(html(), /gpexe-choose-recording/);
+});
+
+test("MT-C 4 (code review): while the review's answer is on its way the button waits; it keeps the review's group", async () => {
+  resetState();
+  viewer = { canApprove: true, approvalBasis: "platform_admin", isPlatformAdmin: true };
+  await open(multiWorld());
+  await act("training-load-gpexe-open", { candidateId: "cand-5", group: "review" });
+  assert.match(reviewRow("Blake Sample"), /gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="review">/, "the group goes with it");
+  for (const set of [(d) => { d.approving = true; }, (d) => { d.updating = true; }, () => { gx().linkBusy = true; }]) {
+    const d = gx().detail;
+    set(d);
+    assert.match(reviewRow("Blake Sample"), /gpexe-choose-recording"[^>]* disabled>Choose a recording</);
+    d.approving = false; d.updating = false; gx().linkBusy = false;
+  }
+  assert.doesNotMatch(reviewRow("Blake Sample"), /gpexe-choose-recording"[^>]* disabled/);
 });

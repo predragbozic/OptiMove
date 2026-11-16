@@ -2677,7 +2677,10 @@ function chooseRecordingHtml(r, c) {
   const gx = state.trainingLoad.gpexe;
   if (!platformViewer() || gx.status?.viewer?.canApprove !== true || c?.status !== "pending" || !c.snapshot?.available) return "";
   if (r.a?.notImported?.code !== "multiple_tracks") return "";
-  return ` <button type="button" class="plain-button gpexe-button gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(c.id)}">Choose a recording</button>`;
+  // The review's answer must be seen (code review): while an import, a link, a recompute or an undo is on its way the button
+  // waits, since opening the sheet replaces the review. It keeps the review's group, so "Next session" still works.
+  const busy = reviewMustStay(gx, gx.detail) || undoBusy(gx);
+  return ` <button type="button" class="plain-button gpexe-button gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(c.id)}" data-group="${escapeAttr(gx.detail?.group || "")}"${busy ? " disabled" : ""}>Choose a recording</button>`;
 }
 
 function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }) {

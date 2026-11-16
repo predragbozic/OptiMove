@@ -26070,6 +26070,9 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
   display: inline-block;
   max-width: 100%;
 }
+.gpexe-choose-recording {
+  margin-top: 4px;
+}
 .gpexe-short-cell {
   font-weight: 600;
   color: var(--om-warning, #8a5300);
