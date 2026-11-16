@@ -44,7 +44,7 @@ test("a preset with a plain (non-Drive) http(s) icon_url still renders as a dire
 
   const html = renderTaxonomyPanelHtml(emptyOrgData());
 
-  assert.match(html, /<img class="taxonomy-icon" src="https:\/\/example\.com\/strength\.png" alt="">/);
+  assert.match(html, /<img class="taxonomy-icon" src="https:\/\/example\.com\/strength\.png" alt="" referrerpolicy="no-referrer">/);
 });
 
 test("a preset with a Google Drive share link renders through the same Drive-aware renderImage() the plan tree/Calendar already use for this exact value - converted to a real thumbnail URL, with fallback sources", () => {

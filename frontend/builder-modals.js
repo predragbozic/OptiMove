@@ -2,7 +2,7 @@ import { builderIconGlyph, sessionLabel } from "./builder-helpers.js";
 import { athleteFilterAttrs, matchingAthletes, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderImage } from "./media.js";
-import { escapeAttr, escapeHtml, initialsFor, localDateIso, weekMondayIso } from "./utils.js";
+import { escapeAttr, escapeHtml, initialsFor, localDateIso, weekMondayIso, NO_REFERRER } from "./utils.js";
 
 export function renderBuilderAthletePicker(state) {
   const selectedIds = new Set((state.builder.createAthleteIds || []).map(String));
@@ -188,7 +188,7 @@ function pickerSessionLabel(session) {
 }
 
 function renderPickerNodeIcon(iconUrl) {
-  if (iconUrl && /^https?:\/\//i.test(iconUrl)) return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="">`;
+  if (iconUrl && /^https?:\/\//i.test(iconUrl)) return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="" ${NO_REFERRER}>`;
   return builderIconGlyph(iconUrl);
 }
 

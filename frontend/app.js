@@ -219,6 +219,7 @@ import {
   templateFilterSuggestions,
 } from "./program-library.js";
 import {
+  athleteLibraryFilters,
   renderTemplateDetailHtml,
   renderTemplateFiltersViewHtml,
   renderTemplateLibraryPageHtml,
@@ -3745,7 +3746,7 @@ function wireAthleteProgramsPanel(programs) {
   renderRail();
 }
 function renderProgramRoot(program) {
-  if (!program) return renderEmpty("This athlete has no specific programs.");
+  if (!program) return renderEmpty(isAthleteMode() ? "You have no specific programs yet." : "This athlete has no specific programs.");
   // The overlay only ever opens from an explicit click (see the chip/card
   // click handlers below) - a program can be "selected" (highlighted in
   // the still-visible list, targeted by the more-menu) without its overlay
@@ -3947,16 +3948,17 @@ function renderTemplateLibrary(templates) {
 function renderTemplateLibraryResults() {
   const visibleTemplates = visibleTemplateLibraryRows(state.lastTemplates || []);
   const count = document.querySelector("[data-template-count]");
-  if (count) count.textContent = `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
+  if (count) count.textContent = isAthleteMode() && !visibleTemplates.length ? "" : `${visibleTemplates.length} ${visibleTemplates.length === 1 ? "program" : "programs"}`;
   document.querySelector(".program-preview-overlay")?.remove();
   const target = document.querySelector("[data-template-results]");
-  if (target) target.innerHTML = renderTemplateLibraryResultsOnlyHtml(visibleTemplates, state.selectedTemplateId, state.currentUser);
+  if (target) target.innerHTML = renderTemplateLibraryResultsOnlyHtml(visibleTemplates, state.selectedTemplateId, state.currentUser, state.templateFilters);
 }
 
 function visibleTemplateLibraryRows(templates) {
-  const filters = state.templateScope === "my_programs"
+  const base = state.templateScope === "my_programs"
     ? state.templateFilters
     : { ...state.templateFilters, lifecycle: "all" };
+  const filters = isAthleteMode() ? athleteLibraryFilters(base, state.templateScope) : base;
   const filtered = applyTemplateClientFilters(templates, filters);
   return applyTemplateAccessScope(filtered, state.templateScope, state.currentUser);
 }
@@ -3979,6 +3981,7 @@ function renderTemplateFilters() {
     scopeLabel: (scope) => templateScopeMeta(scope).label,
     showAdminFilters: canUseProgramAdminFilters(),
     showRequests: !isAthleteMode(),
+    athlete: isAthleteMode(),
   });
 }
 

@@ -1,5 +1,5 @@
 import { exerciseMediaOf, imageSources, renderAssetImage, videoThumbnailSources } from "./media.js";
-import { escapeAttr, escapeHtml, initialsFor } from "./utils.js";
+import { escapeAttr, escapeHtml, initialsFor, NO_REFERRER } from "./utils.js";
 
 // How exercises are laid out in the Exercise Library and in the Builder's
 // section editor. "details" is the full library card (the original layout,
@@ -58,7 +58,7 @@ export function renderExerciseViewSwitcher(surface, current, action) {
 
 function imageAttributes(sources) {
   const fallbacks = sources.slice(1);
-  return `src="${escapeAttr(sources[0])}" alt="" loading="lazy" decoding="async"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}`;
+  return `src="${escapeAttr(sources[0])}" alt="" ${NO_REFERRER} loading="lazy" decoding="async"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}`;
 }
 
 // A blurred copy of a picture that fills its frame behind it, so a picture

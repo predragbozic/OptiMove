@@ -209,6 +209,13 @@ export function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+// On every <img> whose address a person entered (a logo, a photo, a cover, an icon; a Google Drive picture and its
+// fallbacks too): the picture is asked for the way a direct visit asks for it, without our page's address. A host
+// that refuses pictures embedded on other sites ("hotlink protection") then answers as it does in a new tab, and no
+// third-party host learns which OptiMove page showed its picture. It cannot help with a host that forbids embedding
+// outright (Cross-Origin-Resource-Policy) - that picture stays hidden, as before.
+export const NO_REFERRER = 'referrerpolicy="no-referrer"';
+
 export function escapeAttr(value) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }

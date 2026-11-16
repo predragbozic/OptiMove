@@ -27534,3 +27534,29 @@ body:not(.athlete-mode):not(.login-mode) .imports-later-help {
   color: var(--muted);
   font-size: var(--om-text-sm);
 }
+
+/* Athlete screens (manager, 2026-11-16): a hidden count stays hidden in the open phone menu (a "0" showed on Tests), and
+   the measured targets are 44 px. */
+body.mobile-nav-open:not(.login-mode) .rail-button span[hidden] {
+  display: none !important;
+}
+body.athlete-mode:not(.login-mode) .training-load-week-link {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+body.athlete-mode:not(.login-mode) .training-load-athlete-weekly-panel .icon-button,
+body.athlete-mode:not(.login-mode) .training-load-athlete-weekly-panel .training-load-weekly-today-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+body.athlete-mode:not(.login-mode) .tests-section-tabs .tab,
+body.athlete-mode:not(.login-mode) .athlete-simple-view button,
+body.athlete-mode:not(.login-mode) [data-action="notifications-read-all"] {
+  min-height: 44px;
+}
+body.athlete-mode:not(.login-mode) .brand-mark {
+  min-width: 44px;
+  min-height: 44px;
+}
+/* End of athlete screens. */
