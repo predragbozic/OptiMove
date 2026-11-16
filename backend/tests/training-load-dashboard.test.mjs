@@ -5620,7 +5620,22 @@ test("Simple production HTTP mount authenticates, hides foreign dashboards and r
       assert.deepEqual(stableHeaders(actual), stableHeaders(reference));
     }
   }
-  const hidden = await fetch(apiBaseUrl + base + "/simple/capabilities?private=excluded", { headers: { Cookie: adminCookie } });
+  const absolutePath = base + "/simple/capabilities";
+  const absolute = await new Promise((resolve, reject) => {
+    const request = http.request(apiBaseUrl, {
+      path: apiBaseUrl + absolutePath + "?private=excluded",
+      headers: { Cookie: adminCookie },
+    }, response => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, body: JSON.parse(body) }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+  assert.deepEqual(absolute, { status: 404, body: { error: "Not found", path: absolutePath } });
+  const hidden = await fetch(apiBaseUrl + absolutePath + "?private=excluded", { headers: { Cookie: adminCookie } });
   assert.equal((await hidden.json()).path, base + "/simple/capabilities");
 
   // Simulate an admitted request whose workspace changes before the transaction rechecks it.

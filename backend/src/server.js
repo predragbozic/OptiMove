@@ -79,7 +79,10 @@ app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
 app.use("/api/app-errors", express.json({ limit: "4kb" }));
 function missingRoute(req, res) {
   const target = req.originalUrl;
-  const pathname = target.startsWith("/") ? target.split("?", 1)[0] : URL.parse(target)?.pathname ?? req.path;
+  let pathname = target.split("?", 1)[0];
+  if (!target.startsWith("/")) {
+    try { pathname = new URL(target).pathname; } catch { pathname = req.path; }
+  }
   res.status(404).json({ error: "Not found", path: pathname });
 }
 

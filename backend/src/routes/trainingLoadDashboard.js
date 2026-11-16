@@ -314,7 +314,7 @@ router.get("/:dashboardId", async (req, res, next) => {
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     const detail = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
-    const simplePreview = ['preview', 'enabled'].includes(req.app.locals.dashboardSimpleMode)
+    const simplePreview = ['preview', 'enabled'].includes(req.app?.locals?.dashboardSimpleMode)
       && canUseSimplePlatformPilot(req, dataWorkspace);
     res.json(simplePreview ? { ...detail, simplePreview: true } : detail);
   } catch (error) {
@@ -481,7 +481,7 @@ router.patch("/:dashboardId/widgets/:widgetId/layout", async (req, res, next) =>
 // ------------------------------------------------------------
 
 async function advancedWidgetKeys(req, body, legacyKeys) {
-  if (!Object.hasOwn(body, "presentation") || !["preview", "enabled"].includes(req.app.locals.dashboardSimpleMode) || !req.user) return legacyKeys;
+  if (!Object.hasOwn(body, "presentation") || !["preview", "enabled"].includes(req.app?.locals?.dashboardSimpleMode) || !req.user) return legacyKeys;
   const workspace = await resolveActiveDataWorkspace(req);
   return canUseSimplePlatformPilot(req, workspace) ? [...legacyKeys, "presentation"] : legacyKeys;
 }

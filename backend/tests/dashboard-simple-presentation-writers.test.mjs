@@ -27,7 +27,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     pool: { connect: async () => connectHandler() },
   } });
   mock.module("../src/trainingLoadDashboardAccess.js", { namedExports: {
-    resolveActiveDataWorkspace: async () => workspace,
+    resolveActiveDataWorkspace: async request => request.pilotWorkspace ?? workspace,
     canManageDashboardRow: (request, row) => row.owner_user_id === request.user.id,
     canViewDashboardRow: (request, row) => row.owner_scope === "system" || row.owner_user_id === request.user.id,
     dashboardManageBasis: () => "owner",
@@ -64,13 +64,13 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
 
   const createBody = () => ({ expectedDashboardRevision: 7, widgetType: "line_chart", title: " Chart ", widgetOrder: 0, x: 0, y: 0, width: 6, height: 4, mobileOrder: 0 });
   const updateBody = () => ({ expectedWidgetRevision: 3, title: " Updated " });
-  const request = body => ({ user: { id: ownerId }, params: { dashboardId, widgetId }, body });
+  const request = body => ({ app: { locals: { dashboardSimpleMode: "enabled" } }, authz: { platformRoles: ["platform_admin"] }, user: { id: ownerId }, params: { dashboardId, widgetId }, body });
 
   async function invokeRoute(method, routePath, body, requestOverrides = {}) {
     const layer = router.stack.find(entry => entry.route?.path === routePath && entry.route.methods[method]);
     assert.ok(layer, `Missing ${method} ${routePath}`);
     const response = { statusCode: 200, status(value) { this.statusCode = value; return this; }, json(value) { this.body = value; return this; } };
-    await layer.route.stack[0].handle({ ...request(body), ...requestOverrides }, response, error => { throw error; });
+    await layer.route.stack[0].handle({ ...request(body), pilotWorkspace: routePath.includes("/widgets") ? { type: "platform" } : undefined, ...requestOverrides }, response, error => { throw error; });
     assert.ok(response.body);
     return response;
   }
@@ -340,4 +340,22 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
       assert.ok(!queryCalls.at(-1).sql.includes("presentation"));
     }
   });
+
+  test("presentation is rejected historically with missing or off mode and outside the pilot", async () => {
+    for (const overrides of [
+      { app: undefined }, { app: {} }, { app: { locals: { dashboardSimpleMode: "off" } } },
+      { pilotWorkspace: { type: "club" } }, { authz: { platformRoles: [] } },
+    ]) {
+      for (const [method, path, body] of [
+        ["post", "/:dashboardId/widgets", { ...createBody(), presentation: { mode: "replace", value: chartPresentation } }],
+        ["patch", "/:dashboardId/widgets/:widgetId", { ...updateBody(), presentation: { mode: "clear" } }],
+      ]) {
+        const result = await invokeRoute(method, path, body, overrides);
+        assert.equal(result.statusCode, 400);
+        assert.match(result.body.message, /^Unknown field: presentation/);
+      }
+    }
+    assert.equal(queryCalls.length, 0);
+  });
+
 }

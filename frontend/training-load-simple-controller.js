@@ -134,7 +134,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
       await complete(target, result, run);
     } catch (error) {
       if (!currentTarget(target, run)) return;
-      const definiteRejection = error.status >= 400 && error.status < 500 && ['invalidRequest', 'invalidDraft', 'payloadTooLarge', 'staleRevision', 'previewRequired', 'catalogChanged', 'advancedRequired', 'pagesClientRequired', 'dashboardArchived', 'templateRequiresClone'].includes(error?.data?.error);
+      const definiteRejection = error.status >= 400 && error.status < 500 && ['invalidRequest', 'invalid_json', 'invalidDraft', 'payloadTooLarge', 'body_too_large', 'staleRevision', 'previewRequired', 'catalogChanged', 'advancedRequired', 'pagesClientRequired', 'dashboardArchived', 'templateRequiresClone'].includes(error?.data?.error);
       if (!definiteRejection) {
         target.saveState = 'unknown'; target.saveError = '';
       } else if (retry) {
