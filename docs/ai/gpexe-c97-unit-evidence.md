@@ -1,13 +1,13 @@
-# C97 unit evidence: the three pilot fields of `server3` / `rest_v1`
+# C97 unit evidence: the pilot fields of `server3` / `rest_v1`
 
 | | |
 |---|---|
 | Status | **Proposed.** It is evidence for the unit act only once it is merged, and it is merged only on the owner's word. |
-| Covers | The **unit** of `athlete_session.total_time`, `athlete_session.total_distance` and `athlete_session.max_v` on `server3` / `rest_v1`. |
-| Does not cover | The meaning of any field (section 5), the other seven seeded fields, any other server. |
+| Covers | The **unit** of `athlete_session.total_time`, `athlete_session.total_distance` and `athlete_session.max_v` (sections 3.1–3.3), and of `details.players.tot_burst_events` and `details.players.tot_brake_events` (sections 3.4–3.5), on `server3` / `rest_v1`. |
+| Does not cover | The meaning of any field (section 5), the other seeded fields, any other server. |
 | Cited by | The unit act of M2b (`POST /fields/:fieldId/revisions/:revisionId/unit-verification`, discovery document J4) through the anchors of section 3. |
 | Procedure | `docs/runbooks/gpexe-c97-unit-evidence-owner-procedure.md`; standard C97 (discovery document, decision 97). |
-| Recorded | 2026-11-01, from the *Rukovodilac*'s report and the owner's words in its session. |
+| Recorded | 2026-11-01 (sections 3.1–3.3), from the *Rukovodilac*'s report and the owner's words in its session; 2026-11-16 (sections 3.4–3.5), from the owner's own comparison as the *Rukovodilac* relays it. |
 
 The anchors of section 3 are stable. A unit act stores its anchor for good (v34's `unit_evidence_ref`), so an anchor is
 never renamed or removed. A correction is a new section with a new anchor.
@@ -146,6 +146,57 @@ recorded counts. It was not read.
 The UI does not round seconds the same way every time: one value was cut to the whole second, another was rounded to
 the nearest one. The difference stays under 1 s and does not change the unit.
 
+<a id="burst-brake-method"></a>
+
+### 3.4 and 3.5: how the burst and brake evidence was made (2026-11-16)
+
+This evidence was made differently from sections 3.1–3.3:
+
+- **Who compared.** The owner compared the numbers himself, on production (`54038df5`). The *Rukovodilac* relays his
+  statement of 2026-11-16 from its session. The main session ran no probe, read no database and sent no GPEXE request.
+  The author of this section saw neither side of the comparison.
+- **The session.** One GPEXE session: the full-training session of 14.11.2026, First team, GPEXE team 980,
+  `server3` / `rest_v1`, at the whole-session level. The owner's decision of section 1 (one session instead of two) is
+  applied to these two fields, as the *Rukovodilac* relays it.
+- **The raw side.** The mapping board's two example athletes for that session, as the board shows them (Training Load
+  > Data configuration). The board showed whole numbers. GPEXE sends these fields as `{ unit: "number", value }`
+  (proven on 2026-10-05 and 2026-10-09: section A of the discovery document).
+- **The UI side.** The GPEXE web screen of the same session and the same two athletes.
+- **What is recorded.** Yes / no answers and the factor only. No name, no athlete id, no date of birth and no
+  athlete's value, raw or rounded. No bounds either: the owner gave none.
+
+| # | C97 and the procedure say | What happened | On whose word |
+|---|---|---|---|
+| 6 | Two sessions, two or three athletes each | One session, two athletes | The owner's (section 1), as the *Rukovodilac* relays it |
+| 7 | The owner returns sanitized answers of a procedure run | The owner's own comparison on the board and the GPEXE screen, stated in his chat | The owner's |
+
+<a id="burst-events-unit"></a>
+
+### 3.4 `details.players.tot_burst_events`
+
+| | |
+|---|---|
+| Board label | Burst events |
+| UI | the burst events of the same athletes on the GPEXE screen of the same session |
+| Raw against UI | UI = raw for 2 of 2, whole numbers |
+| **Source unit** | **`count`** (factor 1) |
+
+The owner states that these are counts of events, as the acceleration and deceleration event counts are. The
+answer's literal `unit: "number"` is a shape, not a unit (J17, R7); this section is what fixes the unit as `count`.
+
+<a id="brake-events-unit"></a>
+
+### 3.5 `details.players.tot_brake_events`
+
+| | |
+|---|---|
+| Board label | Brake events |
+| UI | the brake events of the same athletes on the GPEXE screen of the same session |
+| Raw against UI | UI = raw for 2 of 2, whole numbers |
+| **Source unit** | **`count`** (factor 1) |
+
+The same as section 3.4: a count of events, by the owner's statement, and the literal `unit: "number"` is a shape.
+
 <a id="unit-acts"></a>
 
 ## 4. What the unit acts would send (prepared, not done)
@@ -155,6 +206,8 @@ the nearest one. The difference stays under 1 s and does not change the unit.
 | `athlete_session.total_time` | `s` | none (a plain field) | `docs/ai/gpexe-c97-unit-evidence.md#total-time-unit` |
 | `athlete_session.total_distance` | `m` | none | `docs/ai/gpexe-c97-unit-evidence.md#total-distance-unit` |
 | `athlete_session.max_v` | `m/s` | none | `docs/ai/gpexe-c97-unit-evidence.md#max-v-unit` |
+| `details.players.tot_burst_events` | `count` | none | `docs/ai/gpexe-c97-unit-evidence.md#burst-events-unit` |
+| `details.players.tot_brake_events` | `count` | none | `docs/ai/gpexe-c97-unit-evidence.md#brake-events-unit` |
 
 Each unit equals the seed's hypothesis (`expected_source_unit` of v34). An act is the owner's: an active platform
 admin in the platform workspace, in Source fields, once per field (J17 section 10.2, step 2). It needs this document
@@ -171,7 +224,12 @@ merged first (C95). It does not make a field `verified`: that also needs the mea
 - **Not sessions S1 and S2.** For two more sessions (three athletes each) the owner confirmed only that the fields
   agree in meaning (time, distance, maximum speed). The owner did not compare numbers with the UI. That is not unit
   evidence, and it is not meaning evidence either.
-- **Not the other seven fields.** The zone fields, the event counts and burst / brake have no evidence here.
+- **Not the meaning of burst and brake.** Sections 3.4–3.5 support the unit act only. What GPEXE counts as a "burst"
+  or a "brake" event (its threshold, its duration) is still unproven: no documentation or written support answer
+  defines it, so no meaning act may cite this document for these two fields, and neither field becomes `verified`.
+- **Not a probe.** Sections 3.4–3.5 are the owner's own comparison of two athletes in one session, relayed by the
+  *Rukovodilac*. They are not a procedure run, a database read or a GPEXE request by the main session.
+- **Not the other fields.** The zone fields and the acceleration / deceleration event counts have no evidence here.
 - **Not another server.** It covers `server3` / `rest_v1` only.
 - **Not the link gates** of J17 section 10.1, P1 (the count of non-canonical GPEXE athlete ids and the helper values
   on the *Link athletes* screen). They are separate checks.
