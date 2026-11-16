@@ -724,7 +724,7 @@ test("5. the v39 database guards: a revision INSERT, an activation and a retirem
   }));
   assert.deepEqual([(await revisionRow(unproven.revId)).state, (await revisionRow(unproven.revId)).evidence_status], ["retired", "unproven"]);
   // v37's verification chain is unchanged under v39 (M2b's own suite covers it).
-  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_create',$1,$2,'platform_admin',$3,null,'active')`,
+  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_retire',$1,$2,'platform_admin',$3,'active','retired')`,
     [f.fieldId, W.pa.id, crypto.randomUUID()])), "23514", /^source_metric_audit: no writer of this action exists yet$/);
   refusedWith(await tx(W.caA.id, (c) => lifecycleRow(c, { action: "source_metric_revision_retire", fieldId: f.fieldId, revId: f.revId, by: W.caA.id, from: "active", to: "retired", reason: "x" })), "42501");
   void AUDIT_MAY_NOT;

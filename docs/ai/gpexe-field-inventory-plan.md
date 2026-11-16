@@ -402,10 +402,7 @@ I2 (the read route, ★★ without a migration) → I3 (the screen) → the G1 c
 
 ## 8. G1: creating a generic field and its `source_stated` evidence (contract, 2026-11-16)
 
-**Status: Proposed.** Accepted only by the *Rukovodilac*'s GO on this section.
-
-**PENDING (8.0):** decision (a), the meaning, waits for the owner's explicit word. The *Rukovodilac* is asking him. The
-migration file is not started before the *Rukovodilac* relays that word.
+**Status: Accepted** (the *Rukovodilac*, 2026-11-16; merged as PR #564). The owner decided (a) the same day (8.0).
 
 G1 is J18's reserved slice 18-P (`docs/ai/c112-drag-mapping-contract.md`, sections 5.1 note, 5.7, 15.2 and C114),
 reshaped by D-INV-2 (section 6.1).
@@ -416,11 +413,13 @@ reshaped by D-INV-2 (section 6.1).
 - **G1 alone makes nothing importable.** A created field has no extractor until G2, so a T4 create on it still answers
   `409 source_metric_unsupported` (J12).
 
+<a id="number-count"></a>
+
 ### 8.0 The *Rukovodilac*'s decisions (2026-11-16)
 
 | | Decision |
 |---|---|
-| (a) | **The meaning.** For generic fields only, the board's tick is also the meaning act. The screen reads "Meaning: GPEXE's own label, checked on the board". **PENDING the owner's word**, because C97 asks for official documentation or a written support answer. If the owner says no, the act confirms the unit only and the meaning stays an M2b document act. |
+| (a) | **The meaning: the owner's decision, 2026-11-16.** The *Rukovodilac* described the flow: drop a column, compare two athletes with the GPEXE screen, tick, save. It asked whether that one tick replaces both the unit and the meaning confirmation, with the meaning recorded as what GPEXE calls the field, checked on the board, without documents. The owner answered „taj način je dobar" (yes), as the *Rukovodilac* relays it. **For generic plain fields only**, the board's tick is the unit act and the meaning act together. The screen reads "Meaning: GPEXE's own label, checked on the board". **C97 is changed accordingly for these fields:** their evidence is `source_stated`, never `verified`, and never shown as "Verified". Every other field keeps C97 and the M2b document acts. |
 | (b) | **One session, two athletes.** This is D-INV-2's wording and the owner's standing C97 decision ("one session instead of two", `docs/ai/gpexe-c97-unit-evidence.md#owner-decision`). It departs from C116 (J18: two sessions for a global confirmation) on the owner's decisions. The act stores which session, so a later, stricter rule can re-check it. |
 | (c) | **Only a platform admin** raises a field to `source_stated`, and only in the platform workspace. A club admin's tick stays what it is today: one per save (C112). **Open point** for the day a second club exists: the owner wants clubs to map what they want, so a per-club path will be asked for then. |
 | (d) | **`number → count`** is a seed row of `unit_conversions` (scale 1, divisor 1, offset 0) in G1's migration. Its note points to section 6.1 of this plan. It asserts that GPEXE's word `number` is a count for **every** `{unit: "number"}` field; the two-athlete tick is what checks it, field by field. The rollback removes the row only while it is unchanged and unused. |
@@ -505,15 +504,14 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
   - T2b:
     - `source_unit` = the word, with `unit_verified_by_user_id`, `unit_verified_at` and
       `unit_observation_id` = the T9 row;
-    - and, under (a), the same for the meaning (`meaning_observation_id`);
+    - and the same for the meaning (`meaning_observation_id`), decision (a);
     - `evidence_status = 'source_stated'`;
   - two T8 rows, `source_metric_unit_observed` and `source_metric_meaning_observed`, linked by `confirmation_id`.
-    Without (a), only the unit row is written, and the status stays `unproven` until the M2b meaning act.
 - **Who sees the values:** platform admins only, in the platform workspace, through J18's route 10
   (`GET /fields/:fieldId/observations`; C119 (c)). A club admin sees "Unit stated by GPEXE, checked on the board" on the
   field, never the values.
 
-### 8.3 The schema (migration v74; its prefix is later than `202611151500`, confirmed with the *Rukovodilac* on the day)
+### 8.3 The schema (migration v74, `migrations_v2/202611161200_training_load_v74_…sql`; the prefix is the *Rukovodilac*'s of 2026-11-16)
 
 - **T2b:**
   - `evidence_status` gains `source_stated`;
@@ -564,7 +562,7 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
   its tick per save (C112) stays.
 - **Source fields:**
   - "Create field" on an inventory row (route C), and the status words "Unit stated by GPEXE, checked on the board";
-  - under (a), "Meaning: GPEXE's own label, checked on the board". It is never "Verified".
+  - "Meaning: GPEXE's own label, checked on the board" (decision (a)). It is never "Verified".
   - For an `athlete_session` row: "GPEXE sends no unit with this value, so a platform administrator confirms it with a
     document."
 - **The revision lifecycle** (`sourceRevisionLifecycleService.js` around line 509): replacing `source_stated` with
@@ -589,7 +587,6 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
   - one write with every row of 8.2;
   - no athlete id anywhere, and the values only in T9i;
   - the deferred checks (a second session, a missing item, T2b not naming the row);
-  - with and without (a).
 - **The gates:** a `source_stated` revision activates a T4 version and is placeable on the club's board; a club admin
   never reads `field_observation` values (route 10 is 404 for a club admin).
 - **The lifecycle:** `source_stated → verified` through R+1, and `verified → source_stated` refused.
