@@ -101,7 +101,7 @@ test("display 1: a number is rounded for reading only - whole numbers stay, at m
   for (const [v, want] of [
     ["8.047761344372203", "8.05"], [6595.123077392578, "6595.12"], ["3000", "3000"], [12, "12"], ["7.10", "7.1"], ["2.5", "2.5"],
     [0.004, "<0.01"], ["1e-7", "<0.01"], [-0.004, ">-0.01"], [-0, "0"], ["-0.001", ">-0.01"], [0, "0"], ["-3.456", "-3.46"],
-    [123456789.987, "123456789.99"], ["abc", "abc"],
+    [123456789.987, "123456789.99"], ["abc", "abc"], ["00123", "00123"], ["0x10", "0x10"], [true, "true"], [" ", " "],
   ]) assert.equal(d(v), want, String(v));
   for (const v of [1e21, "1e21", -1e22]) assert.doesNotMatch(String(d(v)), /e/i, `no scientific notation for ${v}`);
   assert.equal(d(null), null);
@@ -135,4 +135,11 @@ test("display 3: a column whose unit is not confirmed - a coach or club admin is
   await open();
   assert.match(text(), /This column's unit is not confirmed yet\. Switch to the platform workspace, then confirm it in Data configuration > Source fields\./);
   assert.doesNotMatch(text(), /Ask OptiMove support/);
+});
+
+test("display 4 (board owner's review): the check and review lines keep the exact value - only the column's two examples are rounded", () => {
+  const src = readFileSync(new URL("../metric-board-view.js", import.meta.url), "utf8");
+  assert.match(src, /const withUnit = \(value, unit\) => \([^\n]*escapeHtml\(value\)/, "withUnit shows the value as it is");
+  assert.equal((src.match(/roughWithUnit\(/g) || []).length, 2, "the rounding helper is used for the two examples only");
+  assert.match(src, /<span class="mb-col-vals"[^\n]*roughWithUnit\(c\.rawA[^\n]*roughWithUnit\(c\.rawB/);
 });
