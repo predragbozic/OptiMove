@@ -120,13 +120,14 @@ test("app.js: renderAthleteSettings() clears the toolbar instead of populating i
 
 test("athlete-view.js: the compact identity row is labeled \"Profile\" - not \"My program\", which belonged to the now-removed toolbar hero", () => {
   const body = sliceFunction(athleteViewSource, "renderAthleteSettingsIdentityHtml", 900);
-  assert.match(body, /<span class="athlete-settings-identity-eyebrow">Profile<\/span>/);
+  // The header names the place as the menu does (manager, 2026-11-16): "Account".
+  assert.match(body, /<span class="athlete-settings-identity-eyebrow">Account<\/span>/);
 });
 
 test("athlete-view.js: renderAthleteSettingsHtml's own Profile+name heading was removed from the .athlete-settings-card panel - the sticky identity row above is now the only place that shows it, not a second copy right below", () => {
   const body = sliceFunction(athleteViewSource, "renderAthleteSettingsHtml", 700);
   assert.ok(!/<p class="eyebrow">Profile<\/p>\s*<h3>\$\{escapeHtml\(athlete/.test(body), "the panel must no longer render its own Profile eyebrow+name heading");
-  assert.match(body, /Your coach controls program assignment/, "the descriptive intro text must still be there, just without the redundant heading above it");
+  assert.match(body, /Your coach manages your programs and teams\. You can edit your own details below\./, "the descriptive intro text must still be there, just without the redundant heading above it");
 });
 
 // === Goal 2: Athlete Settings compact sticky identity row ===

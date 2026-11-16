@@ -190,12 +190,15 @@ function renderAthleteSessionRowHtml(session) {
 export function renderTrainingLoadAthleteWeeklyHtml() {
   const nav = state.trainingLoad.athleteWeekly;
   const todayIso = localDateIso();
+  // The title names the week shown: "This week's" only while the shown week holds today (manager, item 3).
+  const shownThisWeek = !nav.data || (todayIso >= nav.data.weekStart && todayIso <= nav.data.weekEnd);
+  const title = shownThisWeek ? "This week's training load" : "Training load";
   return `
     <div class="training-load-overlay">
       <button class="training-load-overlay-backdrop" type="button" data-action="training-load-athlete-weekly-close" aria-label="Close"></button>
-      <section class="panel training-load-athlete-weekly-panel" role="dialog" aria-modal="true" aria-label="This week's training load">
+      <section class="panel training-load-athlete-weekly-panel" role="dialog" aria-modal="true" aria-label="${escapeAttr(title)}">
         <div class="training-load-list-head">
-          <h3>This week's training load</h3>
+          <h3>${escapeHtml(title)}</h3>
           <button class="plain-button icon-button" type="button" data-action="training-load-athlete-weekly-close" aria-label="Close">&times;</button>
         </div>
         ${nav.loading && !nav.data ? `<p class="muted training-load-empty">Loading...</p>` : ""}
