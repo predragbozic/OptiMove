@@ -33,7 +33,7 @@ select (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronames
        (select count(*) from information_schema.columns where table_schema = 'training_load'
          and column_name in ('unit_observation_id', 'meaning_observation_id', 'source_metric_version_id')
          and table_name in ('source_metric_definition_versions', 'source_metric_confirmations')) as columns,
-       (select count(*) from training_load.unit_conversions where from_unit = 'number' and to_unit = 'count') as number_count;
+       (select count(*) from information_schema.tables where table_schema = 'training_load' and table_name = 'source_unit_words') as words_table;
 
 -- 4. The rows the new CHECKs read already satisfy them (they only widen; a sanity count). Expected: 0.
 select count(*) as rows_outside from training_load.source_metric_definition_versions

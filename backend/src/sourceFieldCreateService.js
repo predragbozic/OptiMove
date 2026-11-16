@@ -7,7 +7,6 @@
 // key, a name outside T2a's key rule or a taken key is refused before anything is written.
 import { adminWriteKit, SourceMetricMappingError } from "./sourceMetricMappingService.js";
 import { mayVerify } from "./sourceFieldVerificationService.js";
-import { unitTokenOk } from "./metricTextRules.js";
 import { deriveField, FieldCreateRefusal, LABEL_MAX_LENGTH, parseCreateFieldBody } from "./sourceFieldCreate.js";
 
 const { runWrite, rightsStillHold, refusal, NOT_FOUND, MESSAGES, hashOf, REVISION_COLUMNS, revisionOut } = adminWriteKit;
@@ -90,10 +89,13 @@ export async function createField({ ctx, body }) {
     reread: (executor, record) => fieldAnswer(executor, record),
     body: async (client, operationId) => {
       // The inventory: the name was observed on this endpoint through a rest_v1 connection, and its latest unit word.
+      // The word is a quantity kind (plan section 8.10): the expected unit is its seeded unit token, or none - a word
+      // without a row of source_unit_words is never guessed.
       const seen = (await client.query(
-        `select unit_word from training_load.source_field_observations
-          where api_family = 'rest_v1' and endpoint = $1 and field_name = $2
-          order by last_seen_at desc, source_connection_id limit 1`,
+        `select o.unit_word, w.unit_token from training_load.source_field_observations o
+           left join training_load.source_unit_words w on w.source_system = 'gpexe' and w.api_family = 'rest_v1' and w.word = o.unit_word
+          where o.api_family = 'rest_v1' and o.endpoint = $1 and o.field_name = $2
+          order by o.last_seen_at desc, o.source_connection_id limit 1`,
         [endpoint, name],
       )).rows[0];
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
@@ -106,7 +108,7 @@ export async function createField({ ctx, body }) {
       if ((await client.query(`select training_load.source_metric_text_ok($1, $2) as ok`, [label, LABEL_MAX_LENGTH])).rows[0].ok !== true) {
         throw refusal(400, "invalid_body", TEXT.invalid_label);
       }
-      const expected = seen.unit_word !== null && unitTokenOk(seen.unit_word) ? seen.unit_word : null;
+      const expected = seen.unit_token ?? null;
       if (writeHold) await writeHold(client);
       const fieldId = (await client.query(
         `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id)

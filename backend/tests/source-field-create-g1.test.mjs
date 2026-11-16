@@ -112,7 +112,8 @@ async function world() {
     `insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id, state)
      values ('gpexe','club',$1,'server3',$2,'exchanged_token',$3,'not_connected') returning id`, [W.club, `Label ${uid()}`, pa])).id;
   await observe(W.conn, [
-    ["details.session", "metabolic_power", { kind: "unit_value_object", unit: "W/kg" }],
+    ["details.session", "metabolic_power", { kind: "unit_value_object", unit: "power" }],
+    ["details.session", "odd_word", { kind: "unit_value_object", unit: "furlongs" }],
     ["details.session", "no_unit_word", { kind: "number" }],
     ["details.drill", "drill_only", { kind: "unit_value_object", unit: "number" }],
     ["athlete_session", "average_v"],
@@ -159,10 +160,13 @@ test("2. route C: a plain athlete-row number, its expected unit null (GPEXE send
   assert.deepEqual([row.body.field.key, row.body.revision.valueShape, row.body.revision.expectedSourceUnit], ["athlete_session.average_v", "number", null]);
   const drill = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ endpoint: "details.drill", name: "drill_only", label: "Drill only", supportsSession: false }) });
   assert.equal(drill.status, 201, drill.text);
-  assert.deepEqual([drill.body.field.key, drill.body.revision.supportsSession, drill.body.revision.supportsDrill, drill.body.revision.expectedSourceUnit], ["details.players.drill_only", false, true, "number"]);
+  assert.deepEqual([drill.body.field.key, drill.body.revision.supportsSession, drill.body.revision.supportsDrill, drill.body.revision.expectedSourceUnit], ["details.players.drill_only", false, true, "count"], "the word number is a kind: the expected unit is its seeded token");
   const plain = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ name: "no_unit_word", label: "No unit word" }) });
   assert.equal(plain.status, 201, plain.text);
   assert.equal(plain.body.revision.expectedSourceUnit, null, "no unit word seen, no hypothesis (the inventory's own CHECK keeps a non-token word out)");
+  const odd = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ endpoint: "details.session", name: "odd_word", label: "Odd" }) });
+  assert.equal(odd.status, 201, odd.text);
+  assert.equal(odd.body.revision.expectedSourceUnit, null, "a word not in source_unit_words is never guessed");
 });
 
 test("3. route C's refusals, each before anything is written: not generic, not observed, structural, not supported, taken, a bad body; nothing written by any of them", async () => {
@@ -235,9 +239,23 @@ test("5. v74's T2a guard: with an acting user, only a platform admin, in their o
   assert.equal(raw.ok, true, raw.error?.message);
 });
 
-test("6. v74's seed and display rule: number -> count (1, 1, 0) with its evidence anchor; as_sent takes any unit token, the three old rules unchanged", async () => {
-  const seed = await one(`select scale::text, scale_divisor::text, "offset"::text, evidence_ref, state from training_load.unit_conversions where from_unit = 'number' and to_unit = 'count'`);
-  assert.deepEqual(seed, { scale: "1", scale_divisor: "1", offset: "0", evidence_ref: "docs/ai/gpexe-field-inventory-plan.md#number-count", state: "active" });
+test("6. v74's unit words (section 8.10): the nine seeded rows exactly, seed-only and append-only; no unit conversion seeded; as_sent takes any unit token, the three old rules unchanged", async () => {
+  const words = (await q(`select word, unit_token, display_rule, evidence_kind, evidence_ref from training_load.source_unit_words where source_system = 'gpexe' and api_family = 'rest_v1' order by word`)).map((r) => Object.values(r).join("|"));
+  const A = "docs/ai/gpexe-field-inventory-plan.md#unit-word-";
+  assert.deepEqual(words, [
+    `acceleration|m/s2|as_sent|owner_statement|${A}acceleration`, `distance|m|distance_m|repository_by_analogy|${A}distance`,
+    `duration|s|duration_mmss|repository_by_analogy|${A}time`, `energy|J/kg|as_sent|owner_statement|${A}energy`,
+    `energy_std|J/kg|as_sent|owner_statement|${A}energy`, `number|count|as_sent|repository|${A}number`,
+    `power|W/kg|as_sent|owner_statement|${A}power`, `speed|m/s|speed_kmh|repository|${A}speed`, `time|s|duration_mmss|repository_by_analogy|${A}time`]);
+  assert.equal((await one(`select count(*)::int n from training_load.source_unit_words`)).n, 9);
+  assert.equal((await one(`select count(*)::int n from training_load.unit_conversions where from_unit = 'number' and to_unit = 'count'`)).n, 0, "no conversion is seeded");
+  for (const sql of [
+    `insert into training_load.source_unit_words (source_system, api_family, word, unit_token, display_rule, evidence_kind, evidence_ref, seed_migration) values ('gpexe','rest_v1','pace','s','as_sent','repository','docs/ai/x.md#p','migrations_v2/202611161200_training_load_v74_generic_source_fields.sql')`,
+    `update training_load.source_unit_words set unit_token = 'km' where word = 'distance'`,
+    `delete from training_load.source_unit_words where word = 'power'`,
+    `truncate training_load.source_unit_words`]) {
+    await assert.rejects(q(sql), (e) => e.code === "23514" || e.code === "42501", sql.slice(0, 40));
+  }
   const ok = async (rule, unit) => (await one(`select training_load.source_metric_display_unit_ok($1, $2) as ok`, [rule, unit])).ok;
   for (const [rule, unit, want] of [["as_sent", "count", true], ["as_sent", "W/kg", true], ["as_sent", "two words", false], ["as_sent", "", false], ["as_sent", null, false],
     ["duration_mmss", "mm:ss", true], ["duration_mmss", "s", false], ["distance_m", "m", true], ["speed_kmh", "km/h", true], ["speed_kmh", "m/s", false], ["nope", "m", false]]) {
@@ -311,7 +329,7 @@ async function txAs(actorId, fn) {
   }
 }
 // The whole observed act; `skip` leaves one step out, `over` changes one value.
-async function observed(c, actor, { f, st, unit = "number", rawA = "12", rawB = "17", skip = null, over = {} }) {
+async function observed(c, actor, { f, st, word = "number", unit = "count", rawA = "12", rawB = "17", skip = null, over = {} }) {
   const opId = crypto.randomUUID();
   const confId = (await c.query(
     `insert into training_load.source_metric_confirmations (operation_id, kind, owner_scope, owner_club_id, binding_id, team_id, credential_connection_id,
@@ -326,9 +344,9 @@ async function observed(c, actor, { f, st, unit = "number", rawA = "12", rawB = 
   }
   if (skip !== "item") {
     await c.query(
-      `insert into training_load.source_metric_confirmation_items (id, confirmation_id, session_ordinal, item_no, item_kind, checked, source_metric_version_id, source_unit, compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, raw_b)
-       values (gen_random_uuid(), $1, 1, 1, 'field_unit', true, $2, $3, 'session', $4, $5, $6, $7)`,
-      [confId, f.revisionId, unit, over.rule ?? "as_sent", over.displayUnit ?? unit, rawA, rawB]);
+      `insert into training_load.source_metric_confirmation_items (id, confirmation_id, session_ordinal, item_no, item_kind, checked, source_metric_version_id, source_unit, compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, raw_b, source_unit_word)
+       values (gen_random_uuid(), $1, 1, 1, 'field_unit', true, $2, $3, 'session', $4, $5, $6, $7, $8)`,
+      [confId, f.revisionId, unit, over.rule ?? "as_sent", over.displayUnit ?? unit, rawA, rawB, word]);
   }
   if (skip !== "revision") {
     await c.query(
@@ -354,7 +372,7 @@ test("8. the observed act, whole, in one transaction: the revision is source_sta
   assert.equal(res.ok, true, res.error?.message);
   const rev = await one(`select * from training_load.source_metric_definition_versions where id = $1`, [f.revisionId]);
   assert.deepEqual([rev.evidence_status, rev.source_unit, rev.unit_observation_id, rev.meaning_observation_id, rev.unit_evidence_ref, rev.meaning_evidence_ref, rev.evidence_ref],
-    ["source_stated", "number", res.value, res.value, null, null, null]);
+    ["source_stated", "count", res.value, res.value, null, null, null]);
   const item = await one(`select item_kind, checked, mapping_version_id, stored_a, values_digest is not null as digested, octet_length(values_salt) as salt from training_load.source_metric_confirmation_items where confirmation_id = $1`, [res.value]);
   assert.deepEqual(item, { item_kind: "field_unit", checked: true, mapping_version_id: null, stored_a: null, digested: true, salt: 16 });
   // A second observed act on the same revision: refused (the proof is written once).
@@ -364,14 +382,28 @@ test("8. the observed act, whole, in one transaction: the revision is source_sta
   // An M2b document act on it: refused (its unit is proven already).
   const doc = await txAs(W.pa.id, (c) => c.query(`update training_load.source_metric_definition_versions set unit_verified_at = now() where id = $1`, [f.revisionId]));
   assert.equal(doc.ok, false);
+  // Each word takes its own seeded unit, rule and screen unit (section 8.10).
+  for (const [word, unit, rule, displayUnit] of [["speed", "m/s", "speed_kmh", "km/h"], ["distance", "m", "distance_m", "m"], ["time", "s", "duration_mmss", "mm:ss"], ["power", "W/kg", "as_sent", "W/kg"]]) {
+    const name = `word_${word}_${uid()}`;
+    await plantObserved(name);
+    const g = await newField(name);
+    const sw = await storedSession();
+    const r = await txAs(W.pa.id, (c) => observed(c, W.pa.id, { f: g, st: sw, word, unit, over: { rule, displayUnit } }));
+    assert.equal(r.ok, true, `${word}: ${r.error?.message}`);
+    assert.equal((await one(`select source_unit from training_load.source_metric_definition_versions where id = $1`, [g.revisionId])).source_unit, unit);
+  }
 });
 
-test("9. the observed act's refusals: another actor, a club admin, a unit without a conversion or not a token, a display rule other than as_sent, two equal or a zero value, a missing session, row, revision update or T8 row, an unkeyed request row", async () => {
+test("9. the observed act's refusals: another actor, a club admin, a word not in the table, a unit or display rule not the word's, two equal or a zero value, a missing session, row, revision update or T8 row, an unkeyed request row", async () => {
   const cases = [
     ["a club admin", W.ca.id, {}, "42501", /^source metric confirmation: the acting user may not write this confirmation$/],
-    ["no conversion from the unit", W.pa.id, { unit: "furlongs" }, "23514", /^source_metric_confirmation_items: the unit GPEXE states is a unit token with an active conversion$/],
-    ["a non-token unit", W.pa.id, { unit: "two words" }, "23514", /^source_metric_confirmation_items: the unit GPEXE states is a unit token with an active conversion$/],
-    ["another display rule", W.pa.id, { over: { rule: "distance_m", displayUnit: "m" }, unit: "m" }, "23514", null],
+    ["a word not in the table (never guessed)", W.pa.id, { word: "furlongs" }, "23514", /^source_metric_confirmation_items: the unit word GPEXE sends has a seeded unit, and the row's unit is it$/],
+    ["no word", W.pa.id, { word: null }, "23514", null],
+    ["a unit not the word's", W.pa.id, { word: "number", unit: "W/kg" }, "23514", /^source_metric_confirmation_items: the unit word GPEXE sends has a seeded unit, and the row's unit is it$/],
+    ["a non-token unit", W.pa.id, { unit: "two words" }, "23514", null],
+    ["speed's unit with as_sent (its rule is speed_kmh)", W.pa.id, { word: "speed", unit: "m/s" }, "23514", /^source_metric_confirmation_items: a field_unit row is compared by its word's display rule, in that rule's screen unit$/],
+    ["the word's rule in another screen unit", W.pa.id, { word: "speed", unit: "m/s", over: { rule: "speed_kmh", displayUnit: "m/s" } }, "23514", /^source_metric_confirmation_items: a field_unit row is compared by its word's display rule, in that rule's screen unit$/],
+    ["a display rule not the word's (distance is distance_m)", W.pa.id, { word: "distance", unit: "m", over: { rule: "as_sent", displayUnit: "m" } }, "23514", /^source_metric_confirmation_items: a field_unit row is compared by its word's display rule, in that rule's screen unit$/],
     ["equal values", W.pa.id, { rawA: "4", rawB: "4" }, "23514", /^source_metric_confirmation_items: the two athletes' values are non-zero and different$/],
     ["a zero value", W.pa.id, { rawA: "0" }, "23514", /^source_metric_confirmation_items: the two athletes' values are non-zero and different$/],
     ["no session (the row's own foreign key)", W.pa.id, { skip: "session" }, "23503", null],
@@ -397,7 +429,7 @@ test("9. the observed act's refusals: another actor, a club admin, a unit withou
 });
 
 async function plantObserved(name) {
-  await observe(W.conn, [["details.session", name, { kind: "unit_value_object", unit: "W/kg" }]]);
+  await observe(W.conn, [["details.session", name, { kind: "unit_value_object", unit: "power" }]]);
 }
 
 test("10. a source_stated revision stays active and proven; the lifecycle never replaces it by an unproven draft (O2 as G1 widens it; its mapping version is G2's, which gives the field an extractor)", async () => {
@@ -465,7 +497,7 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     const pre = await readOnly(c, RUNBOOK("generic-source-fields-v74-preflight.sql"));
     assert.deepEqual([pre[0][0].v72, pre[0][0].v74, pre[0][0].later_than_v74], ["1", "0", "0"]);
     assert.ok(pre[1].length === 12 && pre[1].every((r) => r.ok === true), "the twelve bodies are the ones v74 was written on");
-    assert.deepEqual(pre[2][0], { functions: "0", columns: "0", number_count: "0" });
+    assert.deepEqual(pre[2][0], { functions: "0", columns: "0", words_table: "0" });
     assert.deepEqual(pre[4][0], { locks: "0", idle_transactions: "0" });
     const digestBefore = pre[5][0];
     assert.equal(digestBefore.verified_revisions, 1);
@@ -474,9 +506,9 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     await migrateTo(rdb.url, GPEXE_TEST_MIGRATIONS);
     const post = await readOnly(c, RUNBOOK("generic-source-fields-v74-postcheck.sql"));
     assert.deepEqual([post[0][0].v74_rows, post[0][0].checksum_ok, post[0][0].later], ["1", true, "0"], "recorded once with the file's checksum");
-    assert.ok(post[1].length === 14 && post[1].every((r) => r.ok === true), "the fourteen v74 bodies");
+    assert.ok(post[1].length === 15 && post[1].every((r) => r.ok === true), "the fifteen v74 bodies");
     assert.deepEqual(post[2][0], { triggers: "2", columns: "3" });
-    assert.equal(post[3].length, 1);
+    assert.equal(post[3].length, 9, "the nine unit words");
     assert.deepEqual(post[4][0], digestBefore, "the revision verified by documents is unchanged byte for byte");
     assert.deepEqual(post[5][0], { audit_rows: "0", observations: "0", source_stated: "0" });
 
@@ -485,6 +517,23 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     assert.deepEqual((await c.query(CATALOG)).rows.map((r) => r.x), catalog72);
     await migrateTo(rdb.url, GPEXE_TEST_MIGRATIONS);
     assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V74}`])).rows[0].n, 1);
+
+    // A row that names a GPEXE unit word: the rollback refuses (plan section 8.10) and changes nothing.
+    const catalogW = (await c.query(CATALOG)).rows.map((r) => r.x);
+    await c.query("set session_replication_role = replica");
+    const wRev = (await c.query(`select id from training_load.source_metric_definition_versions where source_metric_definition_id = $1`, [fid])).rows[0].id;
+    const wConf = (await c.query(`insert into training_load.source_metric_confirmations (id, operation_id, kind, owner_scope, binding_id, team_id, credential_connection_id, confirmed_by_user_id, confirmed_basis, confirmed_at, attested, display_registry_version, values_expire_at, source_metric_version_id)
+                                  select gen_random_uuid(), gen_random_uuid(), 'field_observation', 'system', gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), $1, 'platform_admin', now(), true, 2, now() + interval '2160 hours', $2 returning id`, [pa, wRev])).rows[0].id;
+    await c.query(`insert into training_load.source_metric_confirmation_items (id, confirmation_id, session_ordinal, item_no, item_kind, checked, source_metric_version_id, source_unit, compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, raw_b, values_salt, values_digest, source_unit_word)
+                   values (gen_random_uuid(), $1, 1, 1, 'field_unit', true, $2, 'count', 'session', 'as_sent', 'count', 12, 17, uuid_send(gen_random_uuid()), encode(sha256('x'), 'hex'), 'number')`, [wConf, wRev]);
+    await c.query("set session_replication_role = origin");
+    await assert.rejects(c.query(RUNBOOK("generic-source-fields-v74-rollback.sql")), /v74 rollback refused: a row names a GPEXE unit word/);
+    await c.query("rollback").catch(() => {});
+    assert.deepEqual((await c.query(CATALOG)).rows.map((r) => r.x), catalogW, "nothing changed");
+    await c.query("set session_replication_role = replica");
+    await c.query(`delete from training_load.source_metric_confirmation_items where confirmation_id = $1`, [wConf]);
+    await c.query(`delete from training_load.source_metric_confirmations where id = $1`, [wConf]);
+    await c.query("set session_replication_role = origin");
 
     // Once a field is created (a source_metric_create row), the rollback refuses and changes nothing.
     await c.query("begin");

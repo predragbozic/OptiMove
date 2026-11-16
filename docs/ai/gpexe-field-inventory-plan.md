@@ -413,8 +413,6 @@ reshaped by D-INV-2 (section 6.1).
 - **G1 alone makes nothing importable.** A created field has no extractor until G2, so a T4 create on it still answers
   `409 source_metric_unsupported` (J12).
 
-<a id="number-count"></a>
-
 ### 8.0 The *Rukovodilac*'s decisions (2026-11-16)
 
 | | Decision |
@@ -422,7 +420,7 @@ reshaped by D-INV-2 (section 6.1).
 | (a) | **The meaning: the owner's decision, 2026-11-16.** The *Rukovodilac* described the flow: drop a column, compare two athletes with the GPEXE screen, tick, save. It asked whether that one tick replaces both the unit and the meaning confirmation, with the meaning recorded as what GPEXE calls the field, checked on the board, without documents. The owner answered „taj način je dobar" (yes), as the *Rukovodilac* relays it. **For generic plain fields only**, the board's tick is the unit act and the meaning act together. The screen reads "Meaning: GPEXE's own label, checked on the board". **C97 is changed accordingly for these fields:** their evidence is `source_stated`, never `verified`, and never shown as "Verified". Every other field keeps C97 and the M2b document acts. |
 | (b) | **One session, two athletes.** This is D-INV-2's wording and the owner's standing C97 decision ("one session instead of two", `docs/ai/gpexe-c97-unit-evidence.md#owner-decision`). It departs from C116 (J18: two sessions for a global confirmation) on the owner's decisions. The act stores which session, so a later, stricter rule can re-check it. |
 | (c) | **Only a platform admin** raises a field to `source_stated`, and only in the platform workspace. A club admin's tick stays what it is today: one per save (C112). **Open point** for the day a second club exists: the owner wants clubs to map what they want, so a per-club path will be asked for then. |
-| (d) | **`number → count`** is a seed row of `unit_conversions` (scale 1, divisor 1, offset 0) in G1's migration. Its note points to section 6.1 of this plan. It asserts that GPEXE's word `number` is a count for **every** `{unit: "number"}` field; the two-athlete tick is what checks it, field by field. The rollback removes the row only while it is unchanged and unused. |
+| (d) | **Superseded by 8.10 (the *Rukovodilac*, 2026-11-16).** It first read: `number → count` as a seed row of `unit_conversions`. It is not a conversion: GPEXE's unit words are quantity kinds, and they are mapped by `source_unit_words` (8.10). No `unit_conversions` row is seeded. |
 | (e) | **Capitalised GPEXE names** are refused with `409 name_not_supported`, because T2a's key CHECK is lower case only. I3 lists them as they are. This is revisited when the production inventory shows whether any exist; the executor reports the count after the owner's first search on the deployed build. |
 | (f) | **Typed foreign-key columns** hold the proof. `training_load.source_metric_evidence_ref_ok` stays docs-only. |
 
@@ -680,5 +678,66 @@ The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_sour
   checked replacements.
 - **The rollback is proven exact.** It restores the catalog of v72 exactly (test 11).
 
+- **The unit words (8.10) replace decision (d).** v74 seeds `source_unit_words` (nine rows), not a `unit_conversions`
+  row. A `field_unit` row names its word, and v74's T9i guard takes the unit, rule and screen unit from it; a mapping
+  row that names a word is refused. The rollback refuses while a row names a word (test 11). Proof: test 6 (the nine
+  rows, seed-only and append-only), test 8 (four words, each with its own rule), test 9 (a word not in the table, a unit
+  or rule not the word's), and `source-metric-board-18-2` test 14.
+
 **Not yet tested:** v52's activation gate on a `source_stated` revision (mutation M10 survives). A mapping version of a
 created field needs its extractor (J12), which is G2's; G2's or G1b's tests cover it.
+
+### 8.10 GPEXE's unit words are kinds, not units (the *Rukovodilac*'s amendment, accepted 2026-11-16)
+
+**The finding.** The *Rukovodilac* counted the production inventory read-only, after the owner's first search on
+`34d5e8f3`. The distinct unit words in `details.session` and `details.drill` are `acceleration`, `distance`,
+`duration`, `energy`, `energy_std`, `number`, `power`, `speed` and `time`. These are quantity kinds, not units, so
+D-INV-2's "the unit is the word GPEXE sends" is not taken literally.
+
+The athlete row carries no unit word on any field. No name has a capital letter, so decision (e) has no case today; the
+refusal stays.
+
+**The rule.**
+- A seeded, seed-only table, `training_load.source_unit_words`, maps each word to:
+  - the unit token the raw value is in;
+  - the board's display rule;
+  - the kind and reference of its evidence.
+
+  It is not `unit_conversions`, so a kind word never stands where a unit is expected.
+- **Each row is a hypothesis per word.** The two-athlete tick is what proves each field.
+- **A word without a row is never guessed:** route O answers `409 unit_not_stated`, and only the M2b document acts can
+  open the field.
+- **Adding a tenth word is a migration** (the seed window), with its evidence.
+
+| Word | Unit token | Display rule on the board | Evidence |
+|---|---|---|---|
+| `number` | `count` | `as_sent` | <a id="unit-word-number"></a>repository: the C97 burst / brake evidence, a `{unit: "number"}` details value is a count (`docs/ai/gpexe-c97-unit-evidence.md#burst-events-unit`) |
+| `speed` | `m/s` | `speed_kmh` | <a id="unit-word-speed"></a>repository: probe C of 2026-10-24, the details' `max_values_speed` (unit word `speed`) equals the row's `max_v` in m/s for 9 of 9 pairs (`docs/ai/CURRENT_STATE.md`, the owner-run read-only sitting, C; `docs/ai/gpexe-c97-unit-evidence.md#max-v-provenance`) |
+| `distance` | `m` | `distance_m` | <a id="unit-word-distance"></a>repository, by analogy: the athlete row's `total_distance` is in m (`docs/ai/gpexe-c97-unit-evidence.md#total-distance-unit`). No details field with this word is compared yet |
+| `time` | `s` | `duration_mmss` | <a id="unit-word-time"></a>repository, by analogy: the athlete row's `total_time` is in s (`docs/ai/gpexe-c97-unit-evidence.md#total-time-unit`). **Unresolved whether `time` and `duration` differ in GPEXE**; no fixture shows it |
+| `duration` | `s` | `duration_mmss` | as `time` (`#unit-word-time`) |
+| `power` | `W/kg` | `as_sent` | <a id="unit-word-power"></a>the owner's statement, 2026-11-16, as the *Rukovodilac* relays it |
+| `energy` | `J/kg` | `as_sent` | <a id="unit-word-energy"></a>the owner's statement, 2026-11-16, from the GPEXE application's own screen, as the *Rukovodilac* relays it |
+| `energy_std` | `J/kg` | `as_sent` | as `energy` (`#unit-word-energy`) |
+| `acceleration` | `m/s2` | `as_sent` | <a id="unit-word-acceleration"></a>the owner's statement, 2026-11-16, as the *Rukovodilac* relays it; spelled `m/s2`, as Metrics Core's own variables form spells it |
+
+**The owner's statements** (`power`, `energy`, `energy_std`, `acceleration`) are recorded as his statements, relayed
+by the *Rukovodilac*: not documentation. This is the same class as the burst / brake meaning.
+
+**What it changes in G1:**
+- **The T9i `field_unit` row** gains `source_unit_word`. It is set exactly for `field_unit`, so the stored evidence
+  records both the word and the unit token.
+- **Route O and v74's guard** take everything from the word's row:
+  - the unit token: `source_unit` must equal it;
+  - the display rule: the row's own;
+  - the display unit: that rule's screen unit — `km/h`, `mm:ss` or `m`, or the token itself for `as_sent`.
+- **No conversion requirement on the act.** The act no longer requires an active conversion from the unit; a mapping
+  version still needs its conversion, or the same unit, at T4.
+- **The board's sentence (G1b):**
+  - it always names each athlete's expected number, so a mismatch is visible and the tick is a deliberate "they
+    match";
+  - there is no tick without both values shown;
+  - for `as_sent` with no known screen format it says plainly: "GPEXE may show this rounded or in another unit.
+    Compare the number: <value> <unit>.";
+  - for `duration_mmss` it says that GPEXE may show hours for long values.
+- **The rollback of v74** refuses once any T9i row carries a `source_unit_word`.

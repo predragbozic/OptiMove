@@ -17,7 +17,8 @@
 --     source_metric_meaning_observed, their shapes and chains, and the chain of source_metric_create.
 --   * The display registry: the generic rule as_sent (section 8.7), any unit token.
 --   * The gates of v52 (activation) and v65 (T9i) accept source_stated as well as verified.
---   * Seed: the conversion number -> count (1, 1, 0), decision (d).
+--   * GPEXE's unit words (section 8.10): the seed-only table source_unit_words, nine rows; a field_unit row names its
+--     word, and its unit token, display rule and screen unit come from that word's row.
 --
 -- Bodies are replaced after an md5 check of the body in force; every replaced body keeps its lines and adds
 -- its new ones between "-- G1 (v74) begin" and "-- G1 (v74) end". The revisions already verified by
@@ -26,7 +27,7 @@
 -- Errors: 42501 for an acting user who may not; 23514 with fixed text for every other refusal; no id, name,
 -- unit or value in a message.
 -- Locks, in the writers' order: T4 SHARE ROW EXCLUSIVE first (as v65), then the tables this migration
--- alters (T2a by its trigger, T2b, T9, T9i, unit_conversions by its seed row), and T8 last, ACCESS
+-- alters (T2a by its trigger, T2b, T9, T9i), and T8 last, ACCESS
 -- EXCLUSIVE NOWAIT (a busy T8 fails the migration at once, nothing applied).
 -- Rollback: docs/runbooks/generic-source-fields-v74-rollback.sql.
 
@@ -142,6 +143,9 @@ alter table training_load.source_metric_confirmation_items
   alter column scale drop not null,
   alter column scale_divisor drop not null,
   alter column "offset" drop not null,
+  add column source_unit_word text
+    constraint source_metric_confirmation_items_unit_word_format check (source_unit_word is null or source_unit_word ~ '^[a-z][a-z0-9_]{0,39}$'),
+  add constraint source_metric_confirmation_items_unit_word_iff check ((item_kind = 'field_unit') = (source_unit_word is not null)),
   drop constraint source_metric_confirmation_items_kind_check,
   add constraint source_metric_confirmation_items_kind_check check (item_kind in ('club_mapping', 'system_mapping', 'field_unit')),
   drop constraint source_metric_confirmation_items_system_unchecked,
@@ -567,6 +571,7 @@ declare
   conf training_load.source_metric_confirmations := training_load.source_metric_confirmation_of_this_transaction(new.confirmation_id);
   ver record;
   rev record;
+  word record; -- G1 (v74)
 begin
   -- Before anything else that could fail on a row holding values: the three
   -- columns no other rule below reads (a NOT NULL or CHECK failure would
@@ -586,19 +591,25 @@ begin
     if new.item_kind is distinct from 'field_unit' or conf.kind is distinct from 'field_observation' then
       raise exception 'source_metric_confirmation_items: a field observation has only a field_unit row' using errcode = '23514';
     end if;
-    if new.item_no <> 1 or new.session_ordinal <> 1 or new.checked is distinct from true
+    if new.source_unit_word is null or new.item_no <> 1 or new.session_ordinal <> 1 or new.checked is distinct from true
        or new.source_metric_version_id is distinct from conf.source_metric_version_id
        or new.mapping_version_id is not null or new.parameter_fingerprint is not null or new.target_unit is not null
        or new.scale is not null or new.scale_divisor is not null or new."offset" is not null
        or new.stored_a is not null or new.stored_b is not null then
       raise exception 'source_metric_confirmation_items: a field_unit row is the one compared row of its revision, with no mapping' using errcode = '23514';
     end if;
-    if new.source_unit is null or not training_load.source_metric_unit_token_ok(new.source_unit)
-       or not exists (select 1 from training_load.unit_conversions u where u.state = 'active' and u.from_unit = new.source_unit) then
-      raise exception 'source_metric_confirmation_items: the unit GPEXE states is a unit token with an active conversion' using errcode = '23514';
+    -- The word GPEXE sends is a kind (plan section 8.10): its unit token, display rule and screen unit come from
+    -- source_unit_words only; a word without a row is never guessed.
+    select w.unit_token, w.display_rule into word
+      from training_load.source_unit_words w
+     where w.source_system = 'gpexe' and w.api_family = 'rest_v1' and w.word = new.source_unit_word;
+    if not found or new.source_unit is distinct from word.unit_token then
+      raise exception 'source_metric_confirmation_items: the unit word GPEXE sends has a seeded unit, and the row''s unit is it' using errcode = '23514';
     end if;
-    if new.gpexe_display_rule is distinct from 'as_sent' or new.gpexe_display_unit is distinct from new.source_unit then
-      raise exception 'source_metric_confirmation_items: a field_unit row is compared as sent, in its own unit' using errcode = '23514';
+    if new.gpexe_display_rule is distinct from word.display_rule
+       or new.gpexe_display_unit is distinct from (case word.display_rule when 'as_sent' then word.unit_token when 'speed_kmh' then 'km/h'
+                                                     when 'duration_mmss' then 'mm:ss' when 'distance_m' then 'm' end) then
+      raise exception 'source_metric_confirmation_items: a field_unit row is compared by its word''s display rule, in that rule''s screen unit' using errcode = '23514';
     end if;
     if not training_load.source_metric_confirmation_number_ok(new.raw_a) or not training_load.source_metric_confirmation_number_ok(new.raw_b) then
       raise exception 'source_metric_confirmation_items: a compared row stores two finite values' using errcode = '23514';
@@ -611,6 +622,9 @@ begin
     return new;
   end if;
   -- G1 (v74) end
+  if new.source_unit_word is not null then -- G1 (v74)
+    raise exception 'source_metric_confirmation_items: only a field_unit row names a unit word' using errcode = '23514';
+  end if;
   -- The T4 version and its T2b revision: plain reads (the writer holds their
   -- locks; a guard takes none).
   select owner_key, source_metric_version_id, parameter_fingerprint, source_unit, target_unit, scale, scale_divisor, "offset" into ver
@@ -893,9 +907,56 @@ begin
 end;
 $function$;
 
--- 7. The seed (decision (d)): GPEXE's word number is a count; the two-athlete tick checks it per field.
-insert into training_load.unit_conversions (from_unit, to_unit, scale, scale_divisor, "offset", evidence_ref, seed_migration)
-values ('number', 'count', 1, 1, 0, 'docs/ai/gpexe-field-inventory-plan.md#number-count', 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql');
+-- 7. GPEXE's unit words (plan section 8.10): a word is a quantity kind, never a unit. Seed-only (a tenth word is a
+--    migration, inside its own seed window); append-only; no route writes it.
+create table training_load.source_unit_words (
+  source_system  text not null constraint source_unit_words_system_check check (source_system ~ '^[a-z][a-z0-9_]{1,30}$'),
+  api_family     text not null constraint source_unit_words_family_check check (api_family in ('api', 'rest_v1')),
+  word           text not null constraint source_unit_words_word_check check (word ~ '^[a-z][a-z0-9_]{0,39}$'),
+  unit_token     text not null constraint source_unit_words_unit_check check (training_load.source_metric_unit_token_ok(unit_token)),
+  display_rule   text not null constraint source_unit_words_rule_check check (display_rule in ('as_sent', 'speed_kmh', 'duration_mmss', 'distance_m')),
+  evidence_kind  text not null constraint source_unit_words_evidence_kind_check
+                   check (evidence_kind in ('repository', 'repository_by_analogy', 'owner_statement')),
+  evidence_ref   text not null constraint source_unit_words_evidence_ref_check check (training_load.source_metric_evidence_ref_ok(evidence_ref)),
+  seed_migration text not null constraint source_unit_words_seed_check check (seed_migration ~ '^migrations_v2/[0-9]{12}_[a-z0-9_]+\.sql$'),
+  created_at     timestamptz not null default now(),
+  constraint source_unit_words_pkey primary key (source_system, api_family, word),
+  -- A specific rule reads its own source unit (the registry's RULES): a word may take it only in that unit.
+  constraint source_unit_words_rule_unit check (
+    display_rule = 'as_sent' or (display_rule = 'speed_kmh' and unit_token = 'm/s')
+    or (display_rule = 'duration_mmss' and unit_token = 's') or (display_rule = 'distance_m' and unit_token = 'm'))
+);
+
+comment on table training_load.source_unit_words is
+  'v74 (G1, plan section 8.10): GPEXE''s unit words are quantity kinds; each seeded row maps one to the unit token its raw value is in, the board''s display rule and the evidence. A hypothesis per word: the two-athlete tick proves each field. Seed-only, append-only.';
+
+create function training_load.source_unit_words_guard() returns trigger as $$
+begin
+  perform training_load.source_metric_require_seed_window(new.seed_migration);
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger source_unit_words_seed_only
+  before insert on training_load.source_unit_words
+  for each row execute function training_load.source_unit_words_guard();
+create trigger source_unit_words_append_only
+  before update or delete on training_load.source_unit_words
+  for each row execute function training_load.source_metric_append_only();
+create trigger source_unit_words_no_truncate
+  before truncate on training_load.source_unit_words
+  for each statement execute function training_load.source_metric_no_truncate();
+
+insert into training_load.source_unit_words (source_system, api_family, word, unit_token, display_rule, evidence_kind, evidence_ref, seed_migration) values
+  ('gpexe', 'rest_v1', 'number',       'count', 'as_sent',       'repository',            'docs/ai/gpexe-field-inventory-plan.md#unit-word-number',       'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'speed',        'm/s',   'speed_kmh',     'repository',            'docs/ai/gpexe-field-inventory-plan.md#unit-word-speed',        'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'distance',     'm',     'distance_m',    'repository_by_analogy', 'docs/ai/gpexe-field-inventory-plan.md#unit-word-distance',     'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'time',         's',     'duration_mmss', 'repository_by_analogy', 'docs/ai/gpexe-field-inventory-plan.md#unit-word-time',         'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'duration',     's',     'duration_mmss', 'repository_by_analogy', 'docs/ai/gpexe-field-inventory-plan.md#unit-word-time',         'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'power',        'W/kg',  'as_sent',       'owner_statement',       'docs/ai/gpexe-field-inventory-plan.md#unit-word-power',        'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'energy',       'J/kg',  'as_sent',       'owner_statement',       'docs/ai/gpexe-field-inventory-plan.md#unit-word-energy',       'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'energy_std',   'J/kg',  'as_sent',       'owner_statement',       'docs/ai/gpexe-field-inventory-plan.md#unit-word-energy',       'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
+  ('gpexe', 'rest_v1', 'acceleration', 'm/s2',  'as_sent',       'owner_statement',       'docs/ai/gpexe-field-inventory-plan.md#unit-word-acceleration', 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql');
 
 -- 8. T8, last: the two observed actions, their typed link, their shapes and chains.
 lock table training_load.source_metric_audit in access exclusive mode nowait;

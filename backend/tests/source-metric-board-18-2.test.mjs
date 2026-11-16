@@ -255,11 +255,11 @@ async function confirm(actor, t, cand, items) {
     for (const it of items) {
       n += 1;
       await k.query(`insert into ${T9I} (confirmation_id, session_ordinal, item_no, item_kind, checked, source_metric_version_id, mapping_version_id, parameter_fingerprint, source_unit, target_unit,
-                       scale, scale_divisor, "offset", compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, stored_a, raw_b, stored_b)
-                     values ($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'session',$13,$14,$15,$16,$17,$18)`,
+                       scale, scale_divisor, "offset", compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, stored_a, raw_b, stored_b, source_unit_word)
+                     values ($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'session',$13,$14,$15,$16,$17,$18,$19)`,
       [confId, n, it.kind ?? "club_mapping", it.checked, it.row.source_metric_version_id, it.v.versionId, it.row.parameter_fingerprint, it.row.source_unit, it.row.target_unit,
         it.row.scale, it.row.scale_divisor, it.row.offset, it.checked ? "duration_mmss" : null, it.checked ? "mm:ss" : null,
-        it.checked ? "1200" : null, it.checked ? "20" : null, it.checked ? "1800" : null, it.checked ? "30" : null]);
+        it.checked ? "1200" : null, it.checked ? "20" : null, it.checked ? "1800" : null, it.checked ? "30" : null, it.word ?? null]);
     }
     await k.query(`insert into ${T8} (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash) values ('mapping_confirmation',$1,$2,$3,$4,$5,$6,$7)`,
       [t.teamId, confId, actor.id, actor.basis, operationId, key(), hash()]);
@@ -1036,4 +1036,19 @@ test("13. G1a: the real tot_burst_events and tot_brake_events, verified in count
   const burst = board.columns.find((c) => c.key === "details.players.tot_burst_events");
   assert.match(String(burst.rawA), /^\d+$/);
   assert.match(String(burst.rawB), /^\d+$/);
+});
+
+test("14. G1a: only a field_unit row names a GPEXE unit word; a mapping row that carries one is refused and nothing is written", async () => {
+  const clubE = await club("Club E");
+  const caE = await clubAdmin(clubE, "Club E Admin");
+  const t = await gpexeTeam(clubE);
+  const cand = await candidate(t);
+  const f = await field("time");
+  const v = await activeVersion(caE, f, await variable(caE, { unit: "min" }));
+  const before = (await one(`select count(*)::int n from ${T9} where team_id = $1`, [t.teamId])).n;
+  await assert.rejects(confirm(caE, t, cand, [{ v, checked: true, word: "time" }]),
+    (e) => e.code === "23514" && /^source_metric_confirmation_items: only a field_unit row names a unit word$/.test(e.message));
+  assert.equal((await one(`select count(*)::int n from ${T9} where team_id = $1`, [t.teamId])).n, before);
+  // The same row without the word is written.
+  assert.ok(await confirm(caE, t, cand, [{ v, checked: true }]));
 });

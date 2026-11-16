@@ -23,7 +23,13 @@ Migration `migrations_v2/202611161200_training_load_v74_generic_source_fields.sq
   and the chain of `source_metric_create`.
 - **The display rule `as_sent`** (section 8.7): any unit token.
 - **The gates** of v52 (activation) and v65 (T9i) accept `source_stated` as well as `verified`.
-- **Seed:** the unit conversion `number → count` (1, 1, 0), decision (d).
+- **GPEXE's unit words** (plan section 8.10): the seed-only table `training_load.source_unit_words`, nine rows. A word
+  GPEXE sends is a quantity kind; its row gives the unit token, the board's display rule and the evidence. A
+  `field_unit` row names its word in `source_unit_word`, and the database takes its unit, rule and screen unit from that
+  row. A word without a row is never guessed: the act answers `409 unit_not_stated`. No `unit_conversions` row is
+  seeded.
+- **A tenth word is a migration.** The table takes rows only inside a migration's seed window and is append-only, so a
+  new word GPEXE starts to send (or a corrected one) needs its own migration with its evidence anchor.
 
 Twelve bodies are replaced. Each one is md5-gated, and every new line sits between the `G1 (v74)` marks. The revisions
 already verified by documents are not changed.
@@ -55,12 +61,13 @@ Run `docs/runbooks/generic-source-fields-v74-postcheck.sql` read-only.
 ## Rollback
 
 `docs/runbooks/generic-source-fields-v74-rollback.sql`, one transaction. It refuses once any field was created or
-observed: the evidence is append-only, so the way forward is a new migration. It also refuses when the seeded
-conversion was changed or used, or when a later migration is recorded. It restores every body and CHECK exactly.
+observed: the evidence is append-only, so the way forward is a new migration. It also refuses once any
+`field_unit` row names a GPEXE unit word, and when a later migration is recorded. It drops `source_unit_words` with its
+rows. It restores every body and CHECK exactly.
 
 It is rehearsed in `backend/tests/source-field-create-g1.test.mjs` test 11:
 - the preflight on v72;
 - v74 applied, then the post-check with a verified revision's digest unchanged;
 - the rollback, giving exactly v72's catalog;
 - v74 applied again;
-- a refusal after a created field, with nothing changed.
+- a refusal while a row names a unit word, and after a created field, each with nothing changed.

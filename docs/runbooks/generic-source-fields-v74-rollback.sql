@@ -8,9 +8,9 @@
 -- what v74 allows; and the owner approved this database specifically (.claude/rules/database-safety.md).
 --
 -- v74 adds two T2a functions and their triggers, T2b's two observation columns, T9's revision column, five CHECKs and
--- three indexes; it widens CHECKs of T2b, T9, T9i and T8, relaxes NOT NULLs of T9 and T9i, replaces twelve bodies and
--- seeds one unit conversion. This script restores every body byte for byte (by its pre-v74 text) and every CHECK and
--- NOT NULL, drops what v74 created, removes the seed and the v74 record; it changes no other row. It refuses, changing
+-- three indexes, the seed-only table source_unit_words with its guard and nine rows, and T9i's source_unit_word; it widens
+-- CHECKs of T2b, T9, T9i and T8, relaxes NOT NULLs of T9 and T9i and replaces twelve bodies. This script restores every body byte for byte (by its pre-v74 text) and every CHECK and
+-- NOT NULL, drops what v74 created (the words table with its rows) and the v74 record; it changes no other row. It refuses, changing
 -- nothing, when
 --   * the migrator is running (advisory lock 822026, as backend/src/migrate.js);
 --   * v74 is not recorded, or a later migrations_v2 migration is (v73 may be recorded or not, in either order: its
@@ -18,7 +18,7 @@
 --   * any row v74 made possible exists: a source_metric_create row (a field created by route C), a field observation,
 --     a field_unit or as_sent row of T9i, a source_stated revision or an observation id, an observed T8 row (once one
 --     exists the way forward is a new migration: the evidence is append-only);
---   * the seeded conversion number -> count was changed, retired or is used by a mapping version;
+--   * any T9i row carries a source_unit_word (the plan's section 8.10);
 --   * a v74 body in force is not v74's (by md5).
 --
 -- One transaction: everything or nothing. Run it at a quiet moment as
@@ -50,7 +50,7 @@ lock table training_load.source_metric_definitions in share row exclusive mode;
 lock table training_load.source_metric_definition_versions in access exclusive mode;
 lock table training_load.source_metric_confirmations in access exclusive mode;
 lock table training_load.source_metric_confirmation_items in access exclusive mode;
-lock table training_load.unit_conversions in access exclusive mode;
+lock table training_load.source_unit_words in access exclusive mode;
 lock table training_load.source_metric_audit in access exclusive mode;
 
 do $$
@@ -62,14 +62,15 @@ declare
     ['source_metric_require_seed_window', '0152cdbdd79f8c40151ee40efe1aab21'],
     ['source_metric_display_unit_ok', '0f9faa060c4d3a98d7a665af0885a95d'],
     ['source_metric_confirmations_insert_guard', '54db1047da56c6848acc21bfe68d6685'],
-    ['source_metric_confirmation_items_insert_guard', 'c58290ee93f6c0251b6d20104b402392'],
+    ['source_metric_confirmation_items_insert_guard', 'cd5b1d7fabbc47448b79dd91fcf92b4e'],
     ['source_metric_confirmation_rows_hold', '54d39cb464774bcba838b046e236b682'],
     ['source_metric_confirmations_commit_link', 'f55ef973de6a49ead59359c87a8279fa'],
     ['source_metric_audit_row_ok', 'd4f6fa07d21bcd54a21d7789b67c38ae'],
     ['source_metric_audit_revision_guard', '833800203ddc21ef2c9758d6393a554a'],
     ['source_metric_mapping_versions_update_guard', '1a5652ad19625a1d7e57333984dc1ad8'],
     ['source_metric_definitions_actor_guard', 'eaf6ebc56de03c7413e843da4dc77644'],
-    ['source_metric_definitions_create_link', 'ee8dbd5650fbcad096bb3f0e146a95c4']];
+    ['source_metric_definitions_create_link', 'ee8dbd5650fbcad096bb3f0e146a95c4'],
+    ['source_unit_words_guard', 'dbfa79d52c1479affbdd796136ee3cac']];
   i integer;
 begin
   for i in 1 .. array_length(expected, 1) loop
@@ -82,21 +83,14 @@ begin
               where action in ('source_metric_create', 'source_metric_unit_observed', 'source_metric_meaning_observed')) then
     raise exception 'v74 rollback refused: a field was created or observed; the evidence is append-only';
   end if;
+  if exists (select 1 from training_load.source_metric_confirmation_items where source_unit_word is not null) then
+    raise exception 'v74 rollback refused: a row names a GPEXE unit word';
+  end if;
   if exists (select 1 from training_load.source_metric_confirmations where kind = 'field_observation')
      or exists (select 1 from training_load.source_metric_confirmation_items where item_kind = 'field_unit' or gpexe_display_rule = 'as_sent')
      or exists (select 1 from training_load.source_metric_definition_versions
                  where evidence_status = 'source_stated' or unit_observation_id is not null or meaning_observation_id is not null) then
     raise exception 'v74 rollback refused: a row v74 allows exists';
-  end if;
-  if not exists (select 1 from training_load.unit_conversions
-                  where from_unit = 'number' and to_unit = 'count' and seed_migration = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'
-                    and scale = 1 and scale_divisor = 1 and "offset" = 0 and state = 'active' and created_by_user_id is null
-                    and evidence_ref = 'docs/ai/gpexe-field-inventory-plan.md#number-count')
-     or (select count(*) from training_load.unit_conversions where seed_migration = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') <> 1
-     or exists (select 1 from training_load.source_metric_mapping_versions where source_unit = 'number' and target_unit = 'count')
-     or exists (select 1 from training_load.source_metric_audit a join training_load.unit_conversions u on u.id = a.unit_conversion_id
-                 where u.seed_migration = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') then
-    raise exception 'v74 rollback refused: the seeded conversion number -> count was changed or is used';
   end if;
 end $$;
 
@@ -149,6 +143,8 @@ alter table training_load.source_metric_definition_versions
 
 -- T9i.
 alter table training_load.source_metric_confirmation_items
+  drop constraint source_metric_confirmation_items_unit_word_iff,
+  drop column source_unit_word,
   drop constraint source_metric_confirmation_items_field_unit_shape,
   drop constraint source_metric_confirmation_items_kind_check,
   add constraint source_metric_confirmation_items_kind_check check (item_kind in ('club_mapping', 'system_mapping')),
@@ -1000,11 +996,9 @@ begin
 end;
 $function$;
 
--- The seed and the record.
--- v34's guard refuses every DELETE of a conversion; for this one seed row only, inside this transaction.
-alter table training_load.unit_conversions disable trigger unit_conversions_guard;
-delete from training_load.unit_conversions where seed_migration = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql';
-alter table training_load.unit_conversions enable trigger unit_conversions_guard;
+-- GPEXE's unit words, and the record.
+drop table training_load.source_unit_words;
+drop function training_load.source_unit_words_guard();
 delete from public.schema_migrations where migration_name = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql';
 
 commit;
