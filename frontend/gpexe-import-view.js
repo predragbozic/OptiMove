@@ -1050,16 +1050,27 @@ function renderFixHtml(gx, status) {
       return (a?.athleteId && c?.athletes?.[a.athleteId]?.name) || gpexeAthleteLabel(id);
     },
     changeCount: c?.changesToImported || 0,
-    // Per athlete and kind of change: "Alex Example: 2 results corrected".
+    // Per athlete and kind, in words that say what happens to the result (the server's CHANGE_TO_IMPORTED): two kinds replace
+    // or add values, two keep the current values and save GPEXE's version aside - never "changed" for those (#570 follow-up).
     changeLines: (() => {
-      const KIND = { corrected: "corrected", supplemented: "with values added", needs_review: "marked for review", stale_resend_ignored: "kept as they are" };
+      const KIND = {
+        corrected: (one) => `${one ? "is" : "are"} replaced with newer GPEXE values`,
+        supplemented: (one) => `${one ? "gets" : "get"} more values from GPEXE`,
+        needs_review: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's different values are saved for review`,
+        // "Older or manual" (the writer flags a manual correction this way even when GPEXE's report is newer): never "older".
+        stale_resend_ignored: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's values are saved aside`,
+      };
       const m = new Map();
       for (const ch of c?.preview?.changesToImported || []) {
         const who = ch.athleteId ? (c?.athletes?.[ch.athleteId]?.name || "An athlete") : gpexeAthleteLabel(ch.gpexeAthleteId);
-        const key = `${who}\u0000${KIND[ch.kind] || "changed"}`;
+        const key = `${who}\u0000${KIND[ch.kind] ? ch.kind : "other"}`;
         m.set(key, (m.get(key) || 0) + 1);
       }
-      return [...m.entries()].map(([key, n]) => { const [who, kind] = key.split("\u0000"); return `${who}: ${n === 1 ? "1 result" : `${n} results`} ${kind}`; });
+      return [...m.entries()].map(([key, n]) => {
+        const [who, kind] = key.split("\u0000");
+        const words = KIND[kind] ? KIND[kind](n === 1) : (n === 1 ? "is affected" : "are affected");
+        return `${who}: ${n === 1 ? "1 result" : `${n} results`} ${words}`;
+      });
     })(),
     // A refused import is said as the review says it: nothing was imported.
     refusalText: detail.outcome?.kind === "refused" && detail.outcome.error?.code !== "already_imported" ? (REFUSAL_TEXT[detail.outcome.error?.code] || "Not imported: the server refused the approval.") : "",

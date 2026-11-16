@@ -98,7 +98,7 @@ export function renderFixSheetHtml(gx, status, h) {
       // Slice 2: whoever imports accepts the changes to results already in OptiMove; the approval sends acceptChanges.
       const n = Number(h.changeCount) || 0;
       body = `
-        <p class="imports-fix-sentence">${escapeHtml(`Importing this session changes ${n === 1 ? "1 result that is" : `${n} results that are`} already in OptiMove.`)}</p>
+        <p class="imports-fix-sentence">${escapeHtml(`Importing this session affects ${n === 1 ? "1 result that is" : `${n} results that are`} already in OptiMove.`)}</p>
         ${h.changeLines.length ? `<ul class="imports-fix-changes">${h.changeLines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul>` : ""}
         <p class="muted">Open the full review below to see each value before you accept. Nothing changes until you import.</p>`;
       actions = skip() + button("primary-button", "training-load-gpexe-fix-accept", "Accept and continue");
@@ -149,7 +149,7 @@ export function renderFixSheetHtml(gx, status, h) {
         : `This session is ready except for ${who} with more than one GPEXE recording: whoever imports chooses which one to use.`;
     }
     // Accepted changes are said again beside the Import button.
-    else if (h.canImport && detail.acceptChanges && h.changeCount) base += ` Importing also changes ${h.changeCount === 1 ? "1 result" : `${h.changeCount} results`} already in OptiMove.`;
+    else if (h.canImport && detail.acceptChanges && h.changeCount) base += ` Importing also affects ${h.changeCount === 1 ? "1 result" : `${h.changeCount} results`} already in OptiMove.`;
     if (h.switchOff) {
       body = `<p class="imports-fix-sentence">${escapeHtml(`${base} Importing is switched off${h.teamSwitchOff ? " for this team" : ""}; ${h.AskWho().replace(/^./, (ch) => ch.toLowerCase())} to turn it on.`)}</p>`;
       actions = nextOrBack();
