@@ -6,8 +6,8 @@
 // server replays a saved act and never saves twice.
 import { state } from "./state.js";
 import {
-  CLOSES_FORM, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, emptySourceFieldsState, errorInfo, fetchField,
-  fetchFields, meaningActOffered, newRequestKey, openSourceFieldForm, outcomeUnknown, sourceFieldCodeText, sourceFieldsContext,
+  CLOSES_FORM, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, emptyInventory, emptySourceFieldsState, errorInfo, fetchField,
+  fetchFields, fetchInventory, inventoryMatches, meaningActOffered, newRequestKey, openSourceFieldForm, outcomeUnknown, sourceFieldCodeText, sourceFieldsContext,
   sourceFieldsState, unitActOffered, verifyMeaning, verifyUnit,
 } from "./source-fields-data.js";
 
@@ -75,6 +75,84 @@ export async function loadSourceField(id, render) {
   render();
 }
 
+// I3: the names GPEXE sent that no source field covers yet (I2's read). `more` reads the next page; otherwise the list
+// is read again from the start with the chosen filter. Read-only: nothing here ever writes.
+export async function loadInventory(render, { more = false } = {}) {
+  const s = sourceFieldsState();
+  if (!sourceFieldsContext()) return;
+  const inv = s.inventory;
+  // One read at a time, both ways: neither Load more nor a read from the start runs while the other is in flight (code
+  // review, LOW; its re-review's L1).
+  if (inv.loading || inv.loadingMore || (more && !inv.nextCursor)) return;
+  const generation = s.generation;
+  const filter = `${inv.endpoint}|${inv.showSupported}`;
+  if (more) inv.loadingMore = true; else { inv.loading = true; inv.error = null; inv.nextCursor = null; }
+  render();
+  try {
+    const data = await fetchInventory({ endpoint: inv.endpoint, showSupported: inv.showSupported, cursor: more ? inv.nextCursor : null });
+    if (sourceFieldsState().generation !== generation || `${inv.endpoint}|${inv.showSupported}` !== filter) return;
+    const items = Array.isArray(data?.fields) ? data.fields : [];
+    inv.items = more ? [...inv.items, ...items] : items;
+    inv.nextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
+    inv.loaded = true;
+    inv.error = null;
+  } catch (error) {
+    if (sourceFieldsState().generation !== generation || `${inv.endpoint}|${inv.showSupported}` !== filter) return;
+    const info = errorInfo(error);
+    inv.error = info.code === "notFound" ? "The names GPEXE sent are not available in this workspace."
+      : info.code === "try_again" ? "The server was busy. Try again in a moment."
+      : more ? "More names could not be loaded." : "The names GPEXE sent could not be loaded.";
+  } finally {
+    if (sourceFieldsState().generation === generation) { inv.loading = false; inv.loadingMore = false; }
+  }
+  render();
+}
+// Team thresholds (P1): the platform workspace only, read once when asked for.
+export async function loadInventoryThresholds(render) {
+  const s = sourceFieldsState();
+  const ctx = sourceFieldsContext();
+  if (!ctx?.mayVerify) return;
+  const t = s.inventory.thresholds;
+  if (t.loading) return;
+  t.open = true;
+  const generation = s.generation;
+  t.loading = true;
+  t.error = null;
+  render();
+  try {
+    const data = await fetchInventory({ endpoint: "team_thresholds" });
+    if (sourceFieldsState().generation !== generation) return;
+    t.items = Array.isArray(data?.fields) ? data.fields : [];
+    t.loaded = true;
+  } catch (error) {
+    if (sourceFieldsState().generation !== generation) return;
+    t.error = errorInfo(error).code === "try_again" ? "The server was busy. Try again in a moment." : "The team thresholds could not be loaded.";
+  } finally {
+    if (sourceFieldsState().generation === generation) t.loading = false;
+  }
+  render();
+}
+// The team thresholds fold's open state, from its own "toggle" (app.js), so a repaint keeps it as the admin left it.
+export function sourceFieldsThresholdsToggled(open) {
+  const s = state.trainingLoad.sourceFields;
+  if (s?.inventory?.thresholds) s.inventory.thresholds.open = Boolean(open);
+}
+// The search narrows the loaded names in place, so the field keeps its focus while typing.
+function applyInventorySearch(search) {
+  const doc = globalThis.document;
+  if (!doc?.querySelectorAll) return;
+  const items = sourceFieldsState().inventory.items;
+  let shown = 0;
+  doc.querySelectorAll("[data-sf-inv-row]").forEach((row) => {
+    const item = items[Number(row.dataset.sfInvRow)];
+    const match = Boolean(item) && inventoryMatches(item, search);
+    row.hidden = !match;
+    if (match) shown += 1;
+  });
+  const none = doc.getElementById("sf-inv-no-match");
+  if (none) none.hidden = shown > 0 || !items.length;
+}
+
 // The list read once, for the Data configuration start screen's card.
 export function ensureSourceFieldsList(render) {
   const s = sourceFieldsState();
@@ -86,7 +164,10 @@ export function loadSourceFieldsSection(render) {
   const s = sourceFieldsState();
   if (!sourceFieldsContext()) { render(); return Promise.resolve(); }
   if (s.detail.id && !s.form) return loadSourceField(s.detail.id, render);
-  if (!s.list.loaded && !s.list.loading) return loadSourceFields(render);
+  const reads = [];
+  if (!s.list.loaded && !s.list.loading) reads.push(loadSourceFields(render));
+  if (!s.inventory.loaded && !s.inventory.loading) reads.push(loadInventory(render));
+  if (reads.length) return Promise.all(reads).then(() => {});
   render();
   return Promise.resolve();
 }
@@ -127,6 +208,30 @@ export async function handleSourceFieldsAction(action, { render }) {
     await loadSourceFields(render);
     return true;
   }
+  if (type === "source-fields-inv-reload") {
+    await loadInventory(render);
+    return true;
+  }
+  if (type === "source-fields-inv-endpoint") {
+    const endpoint = action.dataset.endpoint || "";
+    if (s.inventory.endpoint === endpoint) return true;
+    s.inventory = { ...emptyInventory(), endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+    await loadInventory(render);
+    return true;
+  }
+  if (type === "source-fields-inv-supported") {
+    s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: !s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+    await loadInventory(render);
+    return true;
+  }
+  if (type === "source-fields-inv-more") {
+    await loadInventory(render, { more: true });
+    return true;
+  }
+  if (type === "source-fields-inv-thresholds") {
+    await loadInventoryThresholds(render);
+    return true;
+  }
   if (type === "source-fields-detail-reload") {
     if (s.detail.id) await loadSourceField(s.detail.id, render);
     return true;
@@ -144,6 +249,7 @@ export async function handleSourceFieldsAction(action, { render }) {
     s.detail = { ...emptySourceFieldsState().detail };
     s.notice = "";
     if (!s.list.loaded) await loadSourceFields(render); else render();
+    if (!s.inventory.loaded && !s.inventory.loading) await loadInventory(render);
     toTitle();
     return true;
   }
@@ -191,6 +297,11 @@ export async function handleSourceFieldsAction(action, { render }) {
 // Typing: the form's values live in state, so a repaint never loses them.
 // ---------------------------------------------------------------------------
 export function handleSourceFieldsInput(target) {
+  if (target.matches?.("[data-sf-inv-search]")) {
+    sourceFieldsState().inventory.search = target.value;
+    applyInventorySearch(target.value);
+    return true;
+  }
   const field = target.closest?.("[data-sf-field]");
   if (!field) return false;
   const form = state.trainingLoad.sourceFields?.form;

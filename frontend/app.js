@@ -40,7 +40,7 @@ import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, sub
 import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
 import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./icon-picker.js";
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
-import { handleSourceFieldsAction, handleSourceFieldsInput, submitSourceFieldsForm } from "./source-fields-actions.js";
+import { handleSourceFieldsAction, handleSourceFieldsInput, sourceFieldsThresholdsToggled, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-actions.js";
 import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput } from "./metric-board-actions.js";
 import { endSourceFieldDrag, dropSourceFieldDrag, leaveSourceFieldDrag, overSourceFieldDrag, startSourceFieldDrag } from "./metric-board-drag.js";
@@ -558,6 +558,11 @@ function bindEvents() {
     const panel = event.target;
     if (panel?.dataset?.rosterDisclosure) {
       activityRosterDisclosureToggled(panel);
+      return;
+    }
+    // I3: Source fields' team thresholds fold keeps its open state across repaints.
+    if (panel?.classList?.contains("source-fields-inventory-thresholds")) {
+      sourceFieldsThresholdsToggled(panel.open);
       return;
     }
     const settings = panel?.classList?.contains("imports-settings");

@@ -106,7 +106,7 @@ async function world() {
   await workspace(caB, "club", W.clubB);
   W.caB = { id: caB, cookie: await cookieFor(caB) };
   const coach = await user("coach");
-  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'coach',true)`, [coach, W.teamA]);
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [coach, W.teamA]);
   await workspace(coach, "team", W.teamA);
   W.coach = { id: coach, cookie: await cookieFor(coach) };
 
@@ -208,6 +208,9 @@ test("6. the identical 404: a coach, a team workspace, an archived club's worksp
     const r = await api("/field-inventory", { cookie });
     assert.deepEqual([r.status, r.text], [missing.status, missing.text], who);
   }
+  // The Independent's L1: the coach is a real team coach in the team's own workspace, and stays there.
+  const pref = await one(`select workspace_type, scope_id from public.user_workspace_preferences where user_id = $1`, [W.coach.id]);
+  assert.deepEqual([pref.workspace_type, pref.scope_id], ["team", W.teamA], "the coach's workspace is still the team's after the request");
   assert.equal((await api("/field-inventory")).status, 401);
 });
 
@@ -372,4 +375,22 @@ test("13. paging over an endpoint with hidden structural rows: page 1 holds 200 
   assert.ok(measured.every((n) => all.includes(n)), "no measured name lost at the page edge");
   assert.ok(!all.some((n) => ["id", "teamsession", "track"].includes(n)), "no structural key");
   assert.deepEqual(all, [...all].sort((a, b) => (Buffer.from(a) < Buffer.from(b) ? -1 : Buffer.from(a) > Buffer.from(b) ? 1 : 0)), "C order");
+});
+
+test("14. the order is the \"C\" collation's even when the column collates otherwise (the Independent's L2): names whose ICU order differs keep C order", async (t) => {
+  const icu = await one(`select count(*)::int n from pg_collation where collname = 'und-x-icu'`);
+  if (!icu.n) { t.skip("no ICU collation on this cluster: the order difference cannot be shown"); return; }
+  const clubE = await club("Club E");
+  const conn = await connection({ clubId: clubE, by: W.pa.id });
+  const order = ["Zeta_count", "_b", "a_b", "ab", "alpha_count"];
+  await observe(conn, order.map((name) => ["more.events", name]));
+  await q(`alter table training_load.source_field_observations alter column field_name type text collate "und-x-icu"`);
+  try {
+    const icuOrder = (await q(`select field_name from training_load.source_field_observations where source_connection_id = $1 order by field_name`, [conn])).map((r) => r.field_name);
+    assert.notDeepEqual(icuOrder, order, "the column's own order differs from C's");
+    const r = await api("/field-inventory?endpoint=more.events", { cookie: W.pa.cookie });
+    assert.deepEqual(r.body.fields.map((f) => f.name).filter((n) => order.includes(n)), order, "C order, byte by byte");
+  } finally {
+    await q(`alter table training_load.source_field_observations alter column field_name type text collate "default"`);
+  }
 });

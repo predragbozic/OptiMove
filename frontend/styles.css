@@ -27211,3 +27211,75 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
 }
 
 /* End of Imports P5. */
+
+/* I3: Source fields - "Available in GPEXE, not supported yet" (read-only). */
+.source-fields-inventory-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+.source-fields-inventory-search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.source-fields-inventory-search input {
+  width: 100%;
+  min-height: 44px;
+  font-size: 16px;
+}
+.source-fields-inventory-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.source-fields-inventory-chips .chip {
+  min-height: 44px;
+}
+.source-fields-inventory-item {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.source-fields-inventory-thresholds {
+  margin-top: 12px;
+}
+.source-fields-inventory-thresholds summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+/* I3 reviews: the section reads as a separate, secondary list; the checkbox keeps its own size (mobile-qa); the
+   thresholds fold shows that it opens. */
+.source-fields-inventory {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.source-fields-choice input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+.source-fields-inventory-thresholds summary::after {
+  content: "▸";
+  margin-left: 8px;
+}
+.source-fields-inventory-thresholds[open] summary::after {
+  content: "▾";
+}
+@media (max-width: 560px) {
+  .source-fields-inventory-tools .source-fields-choice {
+    width: 100%;
+  }
+}
