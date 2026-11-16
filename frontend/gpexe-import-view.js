@@ -516,6 +516,7 @@ export function renderGpexeImportsHtml() {
       ${gx.notice && !gx.detail ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.notice)}</p>` : ""}
       ${!gx.detail ? renderLastLinkHtml(gx) : ""}
       ${status ? renderImportsTabsHtml(gx, status) : ""}
+      ${status ? renderSourcePeriodHtml(gx, status) : ""}
       ${gx.detail ? (gx.detail.fix ? renderFixHtml(gx, status) : renderCandidateDetailHtml(gx, status)) : ""}
       ${!gx.detail && gx.mapping?.open ? renderTeamMappingHtml(gx, teams) : ""}
       ${!gx.detail && !gx.mapping?.open ? renderBatchOverlayHtml(gx) : ""}
@@ -582,7 +583,7 @@ function renderSourceCardHtml(source, gx, status) {
   const check = gx.check || status.lastCheck;
   const running = Boolean(gx.checkStarting || check?.status === "running");
   const canFind = connected && !running;
-  // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page under the banner; on a phone
+  // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page, after the work list (owner, 2026-11-16); on a phone
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
   const open = connected && periodOf(gx).open;
   const suggested = datesNeededFor(gx.candidates || [], gx);
@@ -599,7 +600,6 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month), monthFacts: gx.candidates && !listsAllStates(status) ? monthFactsText(gx, suggested?.to || "") : "" }) : ""}
     ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open) : ""}
   `;
 }
@@ -616,6 +616,20 @@ function monthFactsText(gx, suggestedTo) {
   if (facts) return `${facts} · pick a day to open one`;
   const last = lastImportedDay(gx);
   return `Nothing imported this month${last && !last.startsWith(month) ? ` · the last import is on ${periodText(last, last)}` : ""}`;
+}
+
+// The period chooser. Owner, 2026-11-16 (Imports item 3): on a computer the work list comes first and the calendar below it,
+// so the page draws it after the tabs. On a phone it is the full-screen sheet "Find new sessions" opens (fixed, hidden while
+// closed), so its place in the page changes nothing there; the month line that opens it stays under the banner.
+function renderSourcePeriodHtml(gx, status) {
+  const connected = Boolean(status.settings);
+  if (!connected) return "";
+  const check = gx.check || status.lastCheck;
+  const running = Boolean(gx.checkStarting || check?.status === "running");
+  const suggested = datesNeededFor(gx.candidates || [], gx);
+  return `
+    ${renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month), monthFacts: gx.candidates && !listsAllStates(status) ? monthFactsText(gx, suggested?.to || "") : "" })}
+  `;
 }
 
 // A phone hides the calendar until "Find new sessions" opens it: one quiet button whose subject is the calendar.

@@ -26500,7 +26500,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-tab-panel .imports-attn-group 
 
 /* End of design IMP2. */
 
-/* Imports P4: the period chooser. On a computer it is always on the page under the banner: the calendar on the left,
+/* Imports P4: the period chooser. On a computer it is always on the page, after the work list: the calendar on the left,
    the search and the chosen days on the right. On a phone "Find new sessions" opens it as a full-screen sheet (and
    that button is the phone's only). Seven columns that always fit; a day is a button with its sessions as chips
    (colour + glyph, never colour alone); the chosen days are filled, the first and the last outlined more strongly; a
