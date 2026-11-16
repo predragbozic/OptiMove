@@ -106,6 +106,8 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 const monthName = (ym) => MONTHS[Number(ym.slice(5, 7)) - 1] + (ym.slice(0, 4) === String(new Date().getFullYear()) ? "" : ` ${ym.slice(0, 4)}`);
 const tabs = () => [...html().matchAll(/data-import-tab="(\w+)"/g)].map((m) => m[1]);
 const line = () => (html().match(/<p class="muted imports-month-line">[\s\S]*?<\/p>/) || [""])[0];
+// The month's facts, said inside the calendar under its month name.
+const facts = () => (html().match(/<p class="muted period-month-facts">([^<]*)<\/p>/) || [null, ""])[1];
 const THIS = TODAY.slice(0, 7);
 
 test("P4c 1: a coach gets no Imported or Stays out tab; a tab kept from before falls back; nothing extra is read", async () => {
@@ -128,13 +130,15 @@ test("P4c 2: the quiet line counts the month the calendar shows and follows pagi
   installFetchMock(gpexeServer({ candidates: [imported(1, prevDay(10)), imported(2, prevDay(10)), staysOut(3, prevDay(11)), imported(4, daysAgo(0)), row(5, prevDay(12))] }));
   await openImports();
   gx().period.month = PREV;
-  assert.match(line(), new RegExp(`imports-month-desk">2 imported · 1 stays out in ${monthName(PREV)} · pick a day in the calendar to open one<`));
-  assert.match(line(), /data-action="training-load-gpexe-period-toggle"[^>]*>2 imported · 1 stays out in [^<]+ · open the calendar</, "on a phone the line opens the calendar sheet");
+  assert.equal(facts(), "2 imported · 1 stays out (not imported) · pick a day to open one", "the calendar says it under its month");
+  assert.match(line(), new RegExp(`data-action="training-load-gpexe-period-toggle"[^>]*>Open the calendar · ${monthName(PREV)}: 2 imported · 1 stays out<`), "on a phone the line opens the calendar sheet");
   await act("training-load-gpexe-period-month", { delta: "1" });
   assert.equal(gx().period.month, THIS);
-  assert.match(line(), new RegExp(`1 imported in ${monthName(THIS)} ·`), "the line follows the month shown");
+  assert.match(facts(), /^1 imported ·/, "the facts follow the month shown");
+  assert.match(line(), new RegExp(`${monthName(THIS)}: 1 imported<`), "and so does the phone line");
   gx().period.month = "2020-01";
-  assert.match(line(), /imports-month-desk">Nothing imported in January 2020 · the last import is on /);
+  assert.match(facts(), /^Nothing imported this month · the last import is on /);
+  assert.match(line(), />Open the calendar · January 2020: nothing imported</);
 });
 
 test("P4c 3: the line's phone button opens the calendar sheet", async () => {
@@ -186,20 +190,20 @@ test("P4c 6: a platform admin keeps the Imported and Stays out tabs and the repl
   platform = false;
 });
 
-test("P4c 7: an empty month names the last import's day; a full list read also says so in the line", async () => {
+test("P4c 7: an empty month names the last import's day; a cut list says so in the calendar", async () => {
   resetState();
   platform = false;
   installFetchMock(gpexeServer({ candidates: [imported(1, prevDay(10)), row(2, prevDay(12))] }));
   await openImports();
   gx().period.month = "2020-01";
-  assert.match(line(), new RegExp(`imports-month-desk">Nothing imported in January 2020 · the last import is on 10\\.${PREV.slice(5, 7)}\\.<`));
+  assert.match(facts(), new RegExp(`^Nothing imported this month · the last import is on 10\\.${PREV.slice(5, 7)}\\.${PREV.slice(0, 4) === String(new Date().getFullYear()) ? "" : PREV.slice(0, 4)}$`));
   gx().period.month = PREV;
-  assert.doesNotMatch(line(), /the last import is on/, "a month with an import does not repeat it");
+  assert.doesNotMatch(facts(), /the last import is on/, "a month with an import does not repeat it");
   resetState();
   installFetchMock(gpexeServer({ candidates: Array.from({ length: 200 }, (_, i) => imported(i + 1, daysAgo(i % 40))), truncated: true }));
   await openImports();
   gx().period.month = daysAgo(39).slice(0, 7); // the month the cut list starts in
-  assert.match(line(), /· older sessions may not be shown · open the calendar</);
+  assert.match(panel(), /class="muted period-cap">Older sessions may not be shown\.</, "the calendar says it, once");
 });
 
 test("P4c 8: an undone import, a withdrawn and a replaced version never count for a coach; no list read, no line", async () => {
@@ -214,10 +218,11 @@ test("P4c 8: an undone import, a withdrawn and a replaced version never count fo
   ] }));
   await openImports();
   gx().period.month = PREV;
-  assert.match(line(), new RegExp(`imports-month-desk">1 imported in ${monthName(PREV)} ·`));
+  assert.match(facts(), /^1 imported ·/);
   assert.equal((dayCell(panel(), d).match(/period-chip is-done/g) || []).length, 1, "one check mark");
   gx().candidates = null;
   assert.equal(line(), "", "no line before the list is read");
+  assert.equal(facts(), "", "and no facts in the calendar");
 });
 
 test("P4c 9: closing an imported session's review: a coach is told it shows with ✓ in the calendar, a platform admin that it is listed under Imported", async () => {

@@ -130,6 +130,8 @@ test("P5 2: it says each thing once: the search, the four marks with colour and 
   await act("training-load-gpexe-help");
   const h = help();
   for (const [re, what] of [
+    [/<strong>GPEXE<\/strong> is your club(?:'|&#039;)s GPS system\. OptiMove only reads the sessions it recorded and changes nothing there\./, "GPEXE, introduced once"],
+    [/<strong>A result<\/strong> is one athlete(?:'|&#039;)s values for the whole session or for one drill/, "what a result is"],
     [/Find new sessions<\/strong> reads GPEXE for the days you choose\. It imports nothing; you choose what to import\./, "the search"],
     [/period-chip is-needs" aria-hidden="true">!<\/i> <strong>Needs you<\/strong>/, "!"],
     [/period-chip is-ready" aria-hidden="true">→<\/i> <strong>Ready<\/strong>/, "→"],
@@ -137,7 +139,8 @@ test("P5 2: it says each thing once: the search, the four marks with colour and 
     [/period-chip is-out" aria-hidden="true">–<\/i> <strong>Stays out<\/strong>/, "–"],
     [/A day without a mark may not have been searched yet\./, "unmarked days"],
     [/<strong>Needs you<\/strong> - one step is missing before it can be imported\. The Needs you tab groups the sessions by that step; each group(?:'|&#039;)s button does it\./, "Needs you, once"],
-    [/<strong>Import off<\/strong> importing is not turned on for this team yet\. You can still find and review sessions\./, "Import off"],
+    [/<strong>Import off<\/strong> importing is not turned on yet\. You can still find and review sessions\./, "Import off"],
+    [/<strong>Fix or Link athletes<\/strong> Fix takes one session(?:'|&#039;)s missing steps one at a time\. Link athletes, in the Athletes tab, links all of your team(?:'|&#039;)s GPEXE athletes at once\./, "Fix vs Link athletes"],
     [/<strong>Linking athletes<\/strong> tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session\. It is never guessed: the values of the last session only help you find them\./, "linking, in what this viewer sees"],
     [/<strong>Later<\/strong> puts a Ready session aside on this device only\./, "Later"],
     [/<strong>After importing<\/strong> a session shows with ✓ in the calendar here, and its results are in Training Load → Activities\./, "where they go"],

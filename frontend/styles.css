@@ -26071,6 +26071,14 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
   background: var(--om-warning-soft, #fdf1dc);
   border-color: color-mix(in srgb, var(--om-warning, #8a5300) 30%, transparent);
 }
+/* MT-C: the recording choice's label moves to the next line whole instead of splitting its pill. */
+.gpexe-badge.is-track-choice {
+  display: inline-block;
+  max-width: 100%;
+}
+.gpexe-choose-recording {
+  margin-top: 4px;
+}
 .gpexe-short-cell {
   font-weight: 600;
   color: var(--om-warning, #8a5300);
@@ -26165,6 +26173,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-lastsearch {
   font-size: var(--om-text-md);
   font-weight: 600;
   overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-actions {
@@ -26324,16 +26333,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-choose[open] > summary::after 
   content: "\25BE";
 }
 
-/* What waits in the Ready tab, said once on the Needs you tab. */
-body:not(.athlete-mode):not(.login-mode) .imports-ready-hint {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--om-text-sm);
-}
 
 body:not(.athlete-mode):not(.login-mode) .imports-import-row {
   display: flex;
@@ -26546,6 +26545,7 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
   min-height: var(--om-tap-target, 44px);
 }
 .imports-period .period-hint,
+.imports-period .period-days,
 .imports-period .period-note,
 .imports-period .period-wait {
   margin: 0;
@@ -26888,15 +26888,19 @@ body:not(.athlete-mode):not(.login-mode) .imports-later-aside .gpexe-button:focu
 .imports-period .period-cap {
   margin: 6px 0 0;
 }
+.imports-period .period-month-facts {
+  margin: 0;
+  font-size: 0.85rem;
+  text-align: center;
+}
+/* A phone only: the calendar is hidden there until it is opened. */
 .imports-month-line {
+  display: none;
   margin: 0;
 }
-.imports-month-phone {
-  display: none;
-}
 @media (max-width: 760px) {
-  .imports-month-desk {
-    display: none;
+  .imports-month-line {
+    display: block;
   }
   /* A quiet line, not a card: muted, underlined like a link, the whole line the 44 px target. */
   body:not(.athlete-mode):not(.login-mode) .imports-month-phone {
@@ -27330,8 +27334,16 @@ body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
   padding-bottom: 4px;
   background: var(--surface, #fff);
 }
+/* The step count sits in the sticky head, so a long step never hides how many are left. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
+  flex-wrap: wrap;
+}
+.imports-fix-head .imports-fix-count {
+  flex-basis: 100%;
+}
 .imports-fix-head h3 {
   margin: 0;
+  flex: 1 1 0;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -27444,4 +27456,81 @@ body:not(.athlete-mode):not(.login-mode) .imports-fix-full .imports-fix-full-lin
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+/* Slice 2: the recordings of one athlete, as 44 px rows to choose from, and the list of changes to imported results. */
+.imports-fix-choices {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.imports-fix-legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice:has(input:checked) {
+  border-color: var(--accent, #1f6f68);
+  background: var(--accent-soft, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent, #1f6f68);
+}
+/* While a choice is being saved or its outcome is not confirmed, the rows are locked and look it. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+/* The radio itself: none of the text field's padding, height or ring (the global input rule); the focus shows on the row. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice input[type="radio"] {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice input[type="radio"]:focus {
+  box-shadow: none;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+.imports-fix-choice > span {
+  min-width: 0;
+}
+.imports-fix-changes {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+/* The platform admin's group keeps its review button and gets Fix beside it: a gap between the two. */
+body:not(.athlete-mode):not(.login-mode) .imports-attn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 /* End of the Imports Fix flow. */
+
+/* The review-only sentence: once, at the top of the Ready tab, for whoever can't import there. */
+body:not(.athlete-mode):not(.login-mode) .imports-review-only,
+body:not(.athlete-mode):not(.login-mode) .imports-later-help {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--om-text-sm);
+}

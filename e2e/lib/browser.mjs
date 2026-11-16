@@ -59,3 +59,21 @@ export async function request(context, world, path, { method = "GET", body } = {
   const text = await res.text();
   return { status: res.status(), text };
 }
+
+// Imports P4: the period chooser opens on today's month; the e2e fixture's sessions are in November 2026. Page the chooser
+// (on the page or in the phone's sheet) to a month by its heading ("November 2026"), whatever the date of the run.
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthIndex = (heading) => {
+  const [name, year] = heading.trim().split(/\s+/);
+  return Number(year) * 12 + MONTHS.indexOf(name);
+};
+export async function showPeriodMonth(page, heading = "November 2026") {
+  const target = monthIndex(heading);
+  for (let i = 0; i < 36; i += 1) {
+    const shown = (await page.textContent(".imports-period .period-month")).trim();
+    if (shown === heading) return;
+    await page.click(`.imports-period [data-action="training-load-gpexe-period-month"][data-delta="${monthIndex(shown) > target ? -1 : 1}"]`);
+    await page.waitForFunction((s) => document.querySelector(".imports-period .period-month")?.textContent.trim() !== s, shown, { timeout: 10_000 });
+  }
+  throw new Error(`the period chooser never showed ${heading}`);
+}

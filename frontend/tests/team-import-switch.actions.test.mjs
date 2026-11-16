@@ -122,14 +122,14 @@ test("1. a coach sees one sentence about the team's switch and no panel: off say
   assert.equal(panel(page), "", "no panel for a coach");
   // IMP1: the review-only reason sits by the Import place, in the Ready tab.
   await act("training-load-gpexe-tab", { importTab: "ready" });
-  assert.match(html(), /Review only - imports are switched off for this team\./);
+  assert.match(html(), /You can review these\. Importing is switched off for this team\./);
   assert.equal(puts().length, 0);
   resetState();
   responder = server({ sw: switchBody({ manager: false, enabled: true, mode: "team" }) });
   await openImports();
   page = html();
   assert.match(page, /Imports are on for this team\. Team mode: the club administrator and the team(?:'|&#039;)s coaches import\./);
-  assert.doesNotMatch(page, /Review only - imports are switched off/);
+  assert.doesNotMatch(page, /Importing is switched off for this team/);
 });
 
 test("2. a platform administrator: the panel lists the conditions with their dates, turning on needs a reason and a confirmation, and sends exactly {enabled, reason}", async () => {

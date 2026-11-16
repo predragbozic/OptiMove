@@ -130,6 +130,8 @@ test("P4b 1: Later puts a Ready session aside on this device: nothing is sent, t
   await openReady([row(1, daysAgo(2)), row(2, daysAgo(3))]);
   assert.deepEqual(readyRows(), ["cand-1", "cand-2"]);
   assert.equal(readyTab(), "Ready (2)");
+  // Explained where it first appears, not only in the help.
+  assert.equal((html().match(/imports-later-help">Later puts a session aside on this device only; it stays ready for everyone else\.</g) || []).length, 1);
   const before = fetchCalls.length;
   await act("training-load-gpexe-later", { candidateId: "cand-1" });
   assert.equal(fetchCalls.length, before, "nothing is sent");

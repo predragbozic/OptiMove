@@ -24,7 +24,7 @@ import { importedActivityOf, renderEstimateTargetsHtml } from "./gpexe-estimate-
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
-import { periodOf } from "./gpexe-period-data.js";
+import { periodOf, sessionDay } from "./gpexe-period-data.js";
 import { renderImportsHelpHtml } from "./gpexe-help-view.js";
 import { renderFixSheetHtml } from "./gpexe-fix-view.js";
 import { FIX_GROUPS } from "./gpexe-fix-data.js";
@@ -554,7 +554,11 @@ function bannerText(gx, check) {
   const needs = list.filter((c) => inboxBucket(c, gx) === "attention").length;
   const when = check?.finishedAt || check?.startedAt;
   // Honest: OptiMove does not look in GPEXE by itself yet, so the banner says what the last search found, not what waits.
-  const head = when ? `Last search ${shortWhen(when) || fmtDateTime(when)}` : "No search yet";
+  // A search made on one day for earlier days says which days it read, so "Find new sessions" (from its last day to today)
+  // never seems to contradict it.
+  const win = check?.window;
+  const read = when && win?.from && win?.to && check.status === "succeeded" && win.to < sessionDay(when) ? `, for ${periodText(win.from, win.to)}` : "";
+  const head = when ? `Last search ${shortWhen(when) || fmtDateTime(when)}${read}` : "No search yet";
   // IMP3 (the sketch's "Everything from GPEXE is imported."): only after a search that succeeded, with nothing ready,
   // nothing that needs the person and at least one session imported - never after a failed, stopped or unknown search,
   // and never from a list read before that search ended.
@@ -595,28 +599,33 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month) }) : ""}
-    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open, !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month)) : ""}
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month), monthFacts: gx.candidates && !listsAllStates(status) ? monthFactsText(gx, suggested?.to || "") : "" }) : ""}
+    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open) : ""}
   `;
 }
 
 
 // P4c: a coach and a club admin get no Imported or Stays out list - those sessions live in the calendar. One quiet line
 // counts the month the calendar shows (it follows paging); on a phone it opens the calendar sheet.
-function renderMonthLineHtml(gx, suggestedTo, open, capped = false) {
-  const now = new Date();
-  const { month, name } = shownMonth(gx, now, suggestedTo);
+// The month the calendar shows, by state, said inside the calendar under its month name (so the month is the subject).
+// An empty month names the last import, so "nothing" never reads as "nothing ever imported" (UX review).
+function monthFactsText(gx, suggestedTo) {
+  const { month } = shownMonth(gx, new Date(), suggestedTo);
+  const n = monthCounts(gx, month);
+  const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out (not imported)` : ""].filter(Boolean).join(" · ");
+  if (facts) return `${facts} · pick a day to open one`;
+  const last = lastImportedDay(gx);
+  return `Nothing imported this month${last && !last.startsWith(month) ? ` · the last import is on ${periodText(last, last)}` : ""}`;
+}
+
+// A phone hides the calendar until "Find new sessions" opens it: one quiet button whose subject is the calendar.
+function renderMonthLineHtml(gx, suggestedTo, open) {
+  const { month, name } = shownMonth(gx, new Date(), suggestedTo);
   const n = monthCounts(gx, month);
   const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out` : ""].filter(Boolean).join(" · ");
-  // UX review: an empty month names the last import, so "nothing" never reads as "nothing ever imported".
-  const last = facts ? "" : lastImportedDay(gx);
-  const head = [facts ? `${facts} in ${name}` : `Nothing imported in ${name}`, last && !last.startsWith(month) ? `the last import is on ${periodText(last, last, now)}` : "", capped ? "older sessions may not be shown" : ""].filter(Boolean).join(" · ");
-  const desk = facts ? `${head} · pick a day in the calendar to open one` : head;
-  const phone = `${head} · open the calendar`;
   return `
     <p class="muted imports-month-line">
-      <span class="imports-month-desk">${escapeHtml(desk)}</span>
-      <button type="button" class="plain-button gpexe-button imports-month-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period">${escapeHtml(phone)}</button>
+      <button type="button" class="plain-button gpexe-button imports-month-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period">${escapeHtml(`Open the calendar · ${name}: ${facts || "nothing imported"}`)}</button>
     </p>
   `;
 }
@@ -860,11 +869,17 @@ function findAgainText(list) {
 }
 
 // Why the Ready sessions cannot be imported right now, or "" when they can.
-// U6a: said once, under the state bar's main button, so the coach never reads an
-// import instruction that the next screen refuses.
+// Said once, at the top of the Ready tab, so the coach never reads an import instruction that the next screen refuses.
+// A coach and a club admin read it in plain words, with the contact their own role has (askWho); the platform admin keeps
+// the words of the rules (environment switch, team switch, approver grant).
 function reviewOnlyText(status) {
   const sw = status.importSwitch || {};
   const viewer = status.viewer || {};
+  if (!platformViewer()) {
+    if (!sw.enabled) return "You can review these. Importing is not turned on yet.";
+    if (status.teamImportSwitch && status.teamImportSwitch.enabled !== true) return "You can review these. Importing is switched off for this team."; // the team switch line says who turns it on
+    return viewer.canApprove ? "" : `You can review these. ${AskWho()} to import them.`;
+  }
   if (!sw.enabled) return "Review only - importing waits until it is turned on in this environment.";
   // U2 (v56): the team's own switch comes before the person's right.
   if (status.teamImportSwitch && status.teamImportSwitch.enabled !== true) return "Review only - imports are switched off for this team.";
@@ -887,7 +902,7 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   else if (gx.checkStarting || check?.status === "running") text = "Finding new sessions...";
   // U6a / U6a-2: what the state bar and the attention groups below already say is not repeated here.
   else if (stale.length || unlinkedAthletes || attention) text = "";
-  // The review-only reason is said once, under the main button (renderDailyStripHtml).
+  // The review-only reason is said once, at the top of the Ready tab.
   else if (ready.length) text = "";
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
   // A failed search is not "nothing found": its reason is in the box above.
@@ -921,11 +936,8 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     // U6a-2: the groups cover the whole list, like the counts.
     const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
     const groups = attentionGroups(allAttention, gx);
-    // IMP1: what is ready waits a tab away - one quiet line says so and opens it (local, nothing is sent).
-    const readyCount = readyNow(all, gx).length;
-    const readyHint = readyCount ? `<p class="imports-ready-hint">${escapeHtml(plural(readyCount, "session is", "sessions are"))} ready to import. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready</button></p>` : "";
+    // The counts are said once, in the bar and in the tab labels (no inner "N ready" line here).
     return `
-      ${readyHint}
       ${allAttention.length ? `
         <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
           <div class="gpexe-panel-head imports-tab-title"><h3>Needs you (${allAttention.length})</h3></div>
@@ -942,6 +954,8 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     return `
       <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
         <div class="gpexe-panel-head imports-tab-title"><h3>Ready to import (${ready.length})</h3></div>
+        ${daily.reviewOnly ? `<p class="imports-review-only">${escapeHtml(daily.reviewOnly)}</p>` : ""}
+        ${ready.length && !choosing ? `<p class="muted imports-later-help">Later puts a session aside on this device only; it stays ready for everyone else.</p>` : ""}
         ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
         ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
         ${laterNoticeHtml(gx)}
@@ -993,11 +1007,15 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
     const dated = datesNeededFor(gx.candidates || [], gx);
     const range = dated ? (dated.from === dated.to ? formatDate(dated.from) : `${formatDate(dated.from)} - ${formatDate(dated.to)}`) : "";
     const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
-    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find again for ${range}` : "Find again")}</button>`;
+    button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find new sessions for ${range}` : "Find new sessions")}</button>`;
   } else {
     // Fix flow (slice 1): the coach and the club admin fix the group one problem at a time; the platform admin keeps the
     // full review and gets "Fix" beside it.
-    button = `<button type="button" class="${cls} gpexe-button" data-action="${fixOpens(grp.key) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(grp.button)}</button>`;
+    // Two words for two places (manager, item 4 A): "Link athletes" names only the team-wide screen (the Athletes tab);
+    // this group's button fixes its sessions one step at a time, or opens the session for the platform admin.
+    const label = grp.key !== "unlinked" ? grp.button
+      : fixOpens(grp.key) ? (grp.count === 1 ? "Fix this session" : "Fix these sessions") : "Open the session";
+    button = `<button type="button" class="${cls} gpexe-button" data-action="${fixOpens(grp.key) ? "training-load-gpexe-fix" : "training-load-gpexe-open"}" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">${escapeHtml(label)}</button>`;
   }
   if (platformViewer() && FIX_GROUPS.has(grp.key)) button += `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(grp.first.id)}" data-group="${escapeAttr(grp.key)}">Fix</button>`;
   const sessions = grp.count > 1
@@ -1044,6 +1062,34 @@ function renderFixHtml(gx, status) {
     errorTech: (error) => (platformViewer() ? errorTech(error) : ""),
     checkErrorText,
     linkErrorText: errorText(gx.linkError, "The link could not be changed."),
+    // Slice 2: an athlete by the team's own name (a recording choice is made for a linked athlete), else the GPEXE label.
+    athleteName: (id) => {
+      const a = (c?.preview?.athletes || []).find((x) => String(x.gpexeAthleteId) === String(id));
+      return (a?.athleteId && c?.athletes?.[a.athleteId]?.name) || gpexeAthleteLabel(id);
+    },
+    changeCount: c?.changesToImported || 0,
+    // Per athlete and kind, in words that say what happens to the result (the server's CHANGE_TO_IMPORTED): two kinds replace
+    // or add values, two keep the current values and save GPEXE's version aside - never "changed" for those (#570 follow-up).
+    changeLines: (() => {
+      const KIND = {
+        corrected: (one) => `${one ? "is" : "are"} replaced with newer GPEXE values`,
+        supplemented: (one) => `${one ? "gets" : "get"} more values from GPEXE`,
+        needs_review: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's different values are saved for review`,
+        // "Older or manual" (the writer flags a manual correction this way even when GPEXE's report is newer): never "older".
+        stale_resend_ignored: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's values are saved aside`,
+      };
+      const m = new Map();
+      for (const ch of c?.preview?.changesToImported || []) {
+        const who = ch.athleteId ? (c?.athletes?.[ch.athleteId]?.name || "An athlete") : gpexeAthleteLabel(ch.gpexeAthleteId);
+        const key = `${who}\u0000${KIND[ch.kind] ? ch.kind : "other"}`;
+        m.set(key, (m.get(key) || 0) + 1);
+      }
+      return [...m.entries()].map(([key, n]) => {
+        const [who, kind] = key.split("\u0000");
+        const words = KIND[kind] ? KIND[kind](n === 1) : (n === 1 ? "is affected" : "are affected");
+        return `${who}: ${n === 1 ? "1 result" : `${n} results`} ${words}`;
+      });
+    })(),
     // A refused import is said as the review says it: nothing was imported.
     refusalText: detail.outcome?.kind === "refused" && detail.outcome.error?.code !== "already_imported" ? (REFUSAL_TEXT[detail.outcome.error?.code] || "Not imported: the server refused the approval.") : "",
     teamSwitchOff: Boolean(status?.teamImportSwitch && status.teamImportSwitch.enabled !== true) || (c?.approvalBlockers || []).includes("team_import_switch_off"),
@@ -1067,7 +1113,8 @@ function renderSessionRowHtml(c, status, kind, pick = false, group = "") {
   const counts = c.counts || {};
   const facts = [];
   if (kind === "ready" || kind === "attention") {
-    if (counts.created) facts.push(plural(counts.created, "new result", "new results"));
+    // What will happen: "9 results to import" (a result is one athlete's values for the session or one drill; the help says so).
+    if (counts.created) facts.push(plural(counts.created, "result to import", "results to import"));
     if (kind === "ready" && counts.unchanged) facts.push(plural(counts.unchanged, "result unchanged", "results unchanged"));
     // D32: values left out are named before an approval, never imported silently.
     if (kind === "ready" && Number(counts.skippedValues) > 0) facts.push(plural(counts.skippedValues, "value left out", "values left out"));
@@ -1176,8 +1223,6 @@ function renderDailyStripHtml(gx, ready, status = gx.status) {
   const notes = [];
   if (d.pickable.length > BATCH_MAX) notes.push(`${plural(d.pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.`);
   if (d.allowed && d.pickable.length < ready.length) notes.push(`${plural(ready.length - d.pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - d.pickable.length === 1 ? "its" : "their"} own.`);
-  // U6a: the one place the review-only reason is said, from the whole list.
-  if (d.reviewOnly) notes.push(d.reviewOnly);
   if (!notes.length) return "";
   return `<div class="imports-daily" role="group" aria-label="Import summary">${notes.map((t) => `<p class="muted">${escapeHtml(t)}</p>`).join("")}</div>`;
 }
@@ -1248,7 +1293,7 @@ function batchStoppedText(error) {
   const code = error?.code;
   const why = code === "import_switch_off" ? "importing was switched off in this environment"
     : code === "team_import_switch_off" ? "imports were switched off for this team"
-    : code === "not_an_approver" ? "you may not approve imports for this team any more"
+    : code === "not_an_approver" ? (platformViewer() ? "you may not approve imports for this team any more" : "you can't import sessions for this team any more")
     : error?.status === 404 ? "one of the sessions is not available in this team any more"
     : error?.status === 400 ? "the selection is out of date"
     : code === "internal_error" ? "the server failed"
@@ -1284,7 +1329,7 @@ function batchSummaryText(summary) {
 // silently.
 function batchFacts(c) {
   const facts = [];
-  if (c?.counts?.created) facts.push(plural(c.counts.created, "new result", "new results"));
+  if (c?.counts?.created) facts.push(plural(c.counts.created, "result to import", "results to import"));
   if (Number(c?.counts?.skippedValues) > 0) facts.push(plural(c.counts.skippedValues, "value left out", "values left out"));
   return facts.join(" · ");
 }
@@ -2004,7 +2049,7 @@ function renderApprovalRecordHtml(c) {
   if (!c.approval) return "";
   const a = c.approval;
   const counts = countsText(a.import?.counts);
-  return `<p class="${c.importUndoneAt ? "muted" : "gpexe-success"}">${c.importUndoneAt ? "Was imported" : "Imported"} ${escapeHtml(fmtDateTime(a.approvedAt))} (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
+  return `<p class="${c.importUndoneAt ? "muted" : "gpexe-success"}">${c.importUndoneAt ? "Was imported" : "Imported"} ${escapeHtml(fmtDateTime(a.approvedAt))}${platformViewer() ? ` (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})` : ""}${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
 }
 
 // The coach's reason and step for a blocked session, from the list's neutral
@@ -2295,6 +2340,15 @@ function compactHasValues(a, c) {
   return ["duration", "distance", "maxSpeed"].some((k) => h[k] !== null && h[k] !== undefined);
 }
 
+// A team athlete whose name another team athlete shares can't be linked here (the confirmation would refuse it): the
+// option says so before it is pressed, disabled, as on Link athletes (code review of #562).
+function linkOptionHtml(o) {
+  return `<option value="${escapeAttr(o.id)}"${o.duplicate ? " disabled" : ""}>${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`;
+}
+function sharedNameNote(choices) {
+  return choices.some((o) => o.duplicate) ? `<p class="muted gpexe-link-shared">An athlete whose name another team athlete shares can't be chosen. Give them different names in Settings > Athletes, then link.</p>` : "";
+}
+
 function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } = {}) {
   const gx = state.trainingLoad.gpexe;
   const id = a.gpexeAthleteId;
@@ -2329,15 +2383,16 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } 
       ${renderLinkContextHtml(a, c, { bare: true })}
       ${numberNote}
       <div class="gpexe-link-row">
-        <label><span>${escapeHtml(`Link ${gpexeAthleteLabel(id)} to`)}</span>
+        <label><span>Team athlete</span>
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
             <option value="" selected>Choose an athlete of the team</option>
             ${sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""}
-            ${unlinkedChoices.filter((o) => String(o.id) !== String(sg?.id)).map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(sg?.id)).map(linkOptionHtml).join("")}
           </select>
         </label>
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
       </div>
+      ${sharedNameNote(unlinkedChoices)}
       ${idTechHtml(id)}
     </div>
   `;
@@ -2353,11 +2408,12 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } 
           <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
             <option value="" selected>Choose an athlete of the team</option>
             ${(() => { const sg = suggestedChoice(id, unlinkedChoices); return sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""; })()}
-            ${unlinkedChoices.filter((o) => String(o.id) !== String(suggestedChoice(id, unlinkedChoices)?.id)).map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(suggestedChoice(id, unlinkedChoices)?.id)).map(linkOptionHtml).join("")}
           </select>
         </label>
         <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
       </div>
+      ${sharedNameNote(unlinkedChoices)}
       ${idTechHtml(id)}
     </div>
   `;
@@ -2599,6 +2655,34 @@ export function leaveOutOffered(c, detail = state.trainingLoad.gpexe.detail, sta
   return true;
 }
 
+// MT-C: what the recording choice of an athlete GPEXE recorded more than once did, read-only from the preview's trackChoice (the
+// server applied it; nothing is decided here). The preview names only the chosen track, not the order of the others, so the
+// label says "one of N". A scale-only choice (one recording) is not named here.
+export function trackChoiceLabel(a) {
+  const t = a?.trackChoice;
+  if (!t || !(Number(t.trackCount) > 1)) return "";
+  if (t.stale === true) return "Recording choice out of date";
+  if (t.kind === "none") return "Left out by choice";
+  if (t.kind === "track") return `One of ${t.trackCount} recordings used`;
+  return "";
+}
+const TRACK_CHOICE_NOTE = {
+  "Recording choice out of date": "GPEXE's recordings of this athlete changed after the choice was made, so it no longer applies.",
+  "Left out by choice": "GPEXE recorded this athlete more than once and none of the recordings is used, as chosen.",
+};
+
+// MT-C: the platform admin chooses a recording in the Fix sheet (the one chooser); the full review only opens it, for a row
+// that still needs a choice. Whoever else may import gets the same step from the Needs you group.
+function chooseRecordingHtml(r, c) {
+  const gx = state.trainingLoad.gpexe;
+  if (!platformViewer() || gx.status?.viewer?.canApprove !== true || c?.status !== "pending" || !c.snapshot?.available) return "";
+  if (r.a?.notImported?.code !== "multiple_tracks") return "";
+  // The review's answer must be seen (code review): while an import, a link, a recompute or an undo is on its way the button
+  // waits, since opening the sheet replaces the review. It keeps the review's group, so "Next session" still works.
+  const busy = reviewMustStay(gx, gx.detail) || undoBusy(gx);
+  return ` <button type="button" class="plain-button gpexe-button gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(c.id)}" data-group="${escapeAttr(gx.detail?.group || "")}"${busy ? " disabled" : ""}>Choose a recording</button>`;
+}
+
 function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }) {
   const ready = r.status === "importable" || r.status === "participation";
   const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" || r.status === "left_out" ? "" : "is-blocked";
@@ -2618,9 +2702,9 @@ function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }
   return `
     <tr class="gpexe-review-row is-${r.status}" role="row">
       <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
-      <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.short ? ` <span class="gpexe-badge is-check">Check</span>` : ""}${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
+      <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.short ? ` <span class="gpexe-badge is-check">Check</span>` : ""}${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}${trackChoiceLabel(r.a) ? ` <span class="gpexe-badge is-track-choice">${escapeHtml(trackChoiceLabel(r.a))}</span>` : ""}</td>
       ${cells}
-      <td data-label="What happens" role="cell">${escapeHtml(lo.states && r.status === "no_record" ? "No GPS record in this session. You can set their attendance here; it is saved after the import." : r.note)}${escapeHtml(shortNote)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}${lo.states ? stateChooserHtml(r, lo) : ""}</td>
+      <td data-label="What happens" role="cell">${escapeHtml(lo.states && r.status === "no_record" ? "No GPS record in this session. You can set their attendance here; it is saved after the import." : r.note)}${escapeHtml(shortNote)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}${TRACK_CHOICE_NOTE[trackChoiceLabel(r.a)] ? ` ${escapeHtml(TRACK_CHOICE_NOTE[trackChoiceLabel(r.a)])}` : ""}${chooseRecordingHtml(r, c)}${lo.states ? stateChooserHtml(r, lo) : ""}</td>
       ${lo.offered ? leaveOutCellHtml(r, lo) : ""}
     </tr>${link ? `
     <tr class="gpexe-review-link" role="presentation"><td colspan="${VALUE_COLUMNS.length + 3 + (lo.offered ? 1 : 0)}" role="presentation">${link}</td></tr>` : ""}`;
@@ -2839,7 +2923,7 @@ const SUBSET_ERROR_TEXT = {
   invalid_excluded_athlete: "The session changed, and one of the athletes you left out is no longer part of it. Update the review, then choose again.",
   nothing_to_import: "The athletes that remain have nothing new to import.",
   subset_blocked: "This session can't be imported right now. Update the review, then choose again.",
-  not_an_approver: "You may not approve imports for this team.",
+  get not_an_approver() { return platformViewer() ? "You may not approve imports for this team." : "You can't import this session."; },
 };
 
 function renderSubsetApproveHtml(c, detail, leave, importN, changes) {

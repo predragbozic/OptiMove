@@ -44,3 +44,17 @@ export function boardBundles(sourceTeam = 7001) {
     category: "FULL TRAINING", athletes, detailsDrills: [0, 1],
   })];
 }
+
+// Fix flow slice 2: one session in which GPEXE recorded athlete 103 on two tracks that differ (a real restart; the backend
+// tests' standard athletes), 101 and 102 on one track each. The session needs a look until a recording is chosen.
+export const SESSION_MULTI_TRACK = 9131;
+export function multiTrackBundles(sourceTeam = 7001) {
+  const athletes = standardAthletes().map((a) => structuredClone(a));
+  athletes[0].tracks = [SESSION_MULTI_TRACK * 10 + 1];
+  athletes[1].tracks = [SESSION_MULTI_TRACK * 10 + 2];
+  for (const a of athletes.slice(0, 2)) for (const part of a.parts) delete part.track;
+  return [makeBundle({
+    sessionId: SESSION_MULTI_TRACK, gpexeTeamId: Number(sourceTeam), start: "2026-11-04T09:08:12", updatedOn: "2026-11-04T11:18:09.337",
+    category: "FULL TRAINING", athletes, detailsDrills: [0, 1],
+  })];
+}

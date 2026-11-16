@@ -84,8 +84,9 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
           await page.waitForSelector(".imports-period", { state: "hidden" });
         }
         const month = new Date().getFullYear() === 2026 ? "November" : "November 2026";
-        const lineText = (await page.locator(width < 500 ? ".imports-month-phone" : ".imports-month-desk").textContent()).trim();
-        assert.equal(lineText, width < 500 ? `3 imported in ${month} · open the calendar` : `3 imported in ${month} · pick a day in the calendar to open one`);
+        // The month's facts: inside the calendar under its month name on a computer; a phone's line names the calendar.
+        const lineText = (await page.locator(width < 500 ? ".imports-month-phone" : ".imports-period .period-month-facts").textContent()).trim();
+        assert.equal(lineText, width < 500 ? `Open the calendar · ${month}: 3 imported` : "3 imported · pick a day to open one");
         if (width < 500) assert.ok((await page.locator(".imports-month-phone").boundingBox()).height >= 44, "the line's button is 44 px");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
         assert.deepEqual(pageErrors, []);
