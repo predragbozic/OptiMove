@@ -23625,6 +23625,31 @@ p.coach-home-library-note.muted:not([role="status"]) {
 @media (max-width: 760px), (pointer: coarse) {
   .app-health-devices { flex-direction: column; }
 }
+/* An exercise's favorite that could not be saved: one line under the actions it belongs to, in all three
+   renderings (library card, library icon row, Builder result). It takes a line of its own inside the actions and
+   never widens them; "Try again" is a 44 px target. */
+.exercise-favorite-failed {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  min-width: 0;
+  color: var(--om-warning, #8a5300);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.exercise-favorite-failed .text-action,
+.builder-exercise-view .builder-exercise-mini-actions .exercise-favorite-failed .text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 13px;
+}
+:is(.exercise-card-actions, .exercise-view-actions, .builder-exercise-mini-actions):has(> .exercise-favorite-failed) { flex-wrap: wrap; }
 /* App health: the "most recently seen" note reads as a note, not an error. */
 .app-health-truncated {
   padding: var(--om-space-2) var(--om-space-3);
