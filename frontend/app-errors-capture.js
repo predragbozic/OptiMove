@@ -146,8 +146,49 @@ function checkedDevice(device) {
   return Object.keys(out).length ? out : null;
 }
 
+// ---- which request failed (v73): its method and its path as a route pattern, never a URL ----
+// The same reduction the server applies to its own routes and applies AGAIN to this one (appErrorTracking.js
+// normalizeRoute): the query and the fragment are cut, an id (a UUID, a number, a long hex or any long segment)
+// becomes ":id", a segment of other characters ":x". The server then keeps only the words its own routes contain.
+export const REQUEST_METHODS = Object.freeze(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+export function routeOf(path) {
+  if (typeof path !== "string") return null;
+  const bare = path.split("?")[0].split("#")[0];
+  if (!bare.startsWith("/")) return null;
+  const segments = bare.split("/").slice(1).map((seg) => {
+    if (seg === "") return "";
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return ":id";
+    if (/^\d+$/.test(seg)) return ":id";
+    if (/^[0-9a-f]{16,}$/i.test(seg)) return ":id";
+    if (seg.length > 40) return ":id";
+    if (!/^[A-Za-z0-9_.:-]+$/.test(seg)) return ":x";
+    return seg;
+  });
+  const out = `/${segments.join("/")}`.slice(0, 120);
+  return /^\/[A-Za-z0-9_/:.-]*$/.test(out) ? out : null;
+}
+function requestOf(request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const route = routeOf(request?.path);
+  return REQUEST_METHODS.includes(method) && route ? { method, route } : null;
+}
+// The build this page was made from (the production build's <meta name="optimove-build">), as a commit word, or "".
+export function pageBuild(doc = globalThis.document) {
+  try {
+    const stamp = String(doc?.querySelector?.('meta[name="optimove-build"]')?.getAttribute("content") || "").trim().toLowerCase();
+    return /^[0-9a-f]{7,40}$/.test(stamp) ? stamp : "";
+  } catch {
+    return "";
+  }
+}
+// How long a report was held before it could be delivered, as the server's word.
+export const LATE_BUCKETS = Object.freeze(["lt_1m", "lt_10m", "lt_1h", "ge_1h"]);
+export const lateBucket = (ms) => (ms < 60_000 ? "lt_1m" : ms < 600_000 ? "lt_10m" : ms < 3_600_000 ? "lt_1h" : "ge_1h");
+// At most this many undelivered reports are kept, in memory only, for one later attempt each.
+export const MAX_HELD_REPORTS = 5;
+
 // The report body, exactly the keys the server accepts, or null.
-export function buildReport({ screen, action, code, status, error, reason, device }) {
+export function buildReport({ screen, action, code, status, error, reason, device, request, build }) {
   const body = { screen: wordOf(screen, "app").replace(/[.]/g, "-"), code: wordOf(code, "js_error") };
   if (REASONS.includes(reason)) body.reason = reason;
   if (action) body.action = wordOf(action, "unknown");
@@ -156,35 +197,61 @@ export function buildReport({ screen, action, code, status, error, reason, devic
   if (sig) body.stackSig = sig;
   const dev = checkedDevice(device);
   if (dev) body.device = dev;
+  const req = request ? requestOf(request) : null;
+  if (req) body.request = req;
+  if (typeof build === "string" && /^[0-9a-f]{7,40}$/.test(build)) body.release = build;
   return body;
 }
 
-export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS, getDevice = deviceOf } = {}) {
+export function createReporter({ send: sendIn, isSignedIn: signedIn, now = () => Date.now(), perMinute = MAX_PER_MINUTE, dedupeMs = DEDUPE_MS, getDevice = deviceOf, getBuild = pageBuild, getUserId = () => context.getUser()?.id ?? null } = {}) {
   // The default sender needs a signed-in page; an injected sender (a test) decides for itself.
   const send = sendIn || defaultSend;
   const isSignedIn = signedIn || (sendIn ? () => true : () => Boolean(context.getUser()));
   const seen = new Map();
   let windowStart = 0;
   let inWindow = 0;
-  return function report(input) {
+  // Reports whose own request failed (the server could not be reached): kept here, in memory, for ONE later attempt.
+  const held = [];
+  function report(input) {
     try {
       if (!isSignedIn()) return false; // before any slot is spent: an error before sign-in must not hide the same one after it
-      const body = buildReport({ ...input, device: getDevice() });
+      const body = buildReport({ ...input, device: getDevice(), build: getBuild() });
       const t = now();
       if (t - windowStart >= 60_000) { windowStart = t; inWindow = 0; }
       if (inWindow >= perMinute) return false;
-      const key = [body.screen, body.action || "", body.code, body.reason || "", body.status ?? "", body.stackSig || ""].join("|");
+      const key = [body.screen, body.action || "", body.code, body.reason || "", body.status ?? "", body.stackSig || "", body.request ? `${body.request.method} ${body.request.route}` : ""].join("|");
       if (t - (seen.get(key) ?? -Infinity) < dedupeMs) return false;
       if (seen.size >= MAX_KEYS) for (const [k, ts] of seen) if (t - ts >= dedupeMs) seen.delete(k);
       if (seen.size >= MAX_KEYS) return false;
       seen.set(key, t);
       inWindow += 1;
-      Promise.resolve(send(body)).catch(() => {});
+      // A send that got no answer at all (the same outage, usually) is held; an answer of any kind is final.
+      const who = getUserId();
+      Promise.resolve(send(body)).then(undefined, () => { if (held.length < MAX_HELD_REPORTS) held.push({ body, at: t, who }); });
       return true;
     } catch {
       return false;
     }
+  }
+  // Called after a request that succeeded: each held report is sent once more, marked late with how long it
+  // was held. Whatever happens to that attempt, the report is not kept: never a retry loop.
+  report.flushLate = function flushLate() {
+    if (!held.length) return 0;
+    const due = held.splice(0, held.length);
+    try {
+      if (!isSignedIn()) return 0;
+      const me = getUserId();
+      for (const { body, at, who } of due) {
+        if (who !== me) continue; // another person signed in meanwhile: their session never carries this report
+        try { Promise.resolve(send({ ...body, late: lateBucket(Math.max(0, now() - at)) })).then(undefined, () => {}); } catch { /* dropped */ }
+      }
+      return due.length;
+    } catch {
+      return 0;
+    }
   };
+  report.heldCount = () => held.length;
+  return report;
 }
 
 export function defaultSend(body) {
@@ -202,9 +269,14 @@ let report = createReporter({ send: defaultSend });
 export function setReporterForTests(r) { report = r; active = Boolean(r); }
 
 // A failed API call (api.js calls this; never for the report route itself).
-export function reportApiFailure({ code, status }) {
+export function reportApiFailure({ code, status, method, path }) {
   if (!active) return;
-  report({ screen: currentScreen(), action: currentAction() || "api_call", code, status });
+  report({ screen: currentScreen(), action: currentAction() || "api_call", code, status, request: { method, path } });
+}
+// api.js calls this after a request that got an answer: reports held during an outage go out now, once.
+export function flushLateReports() {
+  if (!active) return 0;
+  try { return report.flushLate?.() ?? 0; } catch { return 0; }
 }
 
 // A click handler that threw or whose promise rejected (app.js wraps its two async click listeners with guardHandler):
