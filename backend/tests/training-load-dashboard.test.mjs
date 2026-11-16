@@ -5005,13 +5005,14 @@ test("S2c S12 a presentation-only save increments only the widget revision; pres
 
 test("S2c S12 Advanced presentation modes preserve omitted sidecars, reject ambiguous null and bump revision only for an actual replacement or clear", async testContext => {
   const fixture = await s2aFixture("s2c-advanced-sidecar");
+  const { adminCookie } = await makePlatformAdmin("advanced-sidecar");
   const harness = await s2cHttpHarness(testContext);
   const created = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture)).body), "created");
   const sidecar = { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } };
   async function patch(body) {
     const current = await s2aStored(created.widgetId);
     return api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
-      method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: current.revision, ...body },
+      method: "PATCH", cookie: adminCookie, body: { expectedWidgetRevision: current.revision, ...body },
     });
   }
   assert.equal((await patch({ presentation: { mode: "replace", value: sidecar } })).status, 200);
@@ -5113,8 +5114,9 @@ test("S2c S13 opaque presentation versions survive title and layout edits; seman
   assert.ok(guarded.body.issues.some(issue => issue.code === "presentationRevalidationRequired"));
   assert.equal(guarded.body.previewToken, undefined);
   assert.deepEqual(await s2bDatabaseState(), before);
+  const { adminCookie } = await makePlatformAdmin("clear-sidecar");
   const cleared = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
-    method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: stored.revision, presentation: { mode: "clear" } },
+    method: "PATCH", cookie: adminCookie, body: { expectedWidgetRevision: stored.revision, presentation: { mode: "clear" } },
   });
   assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
   const afterClear = await s2aStored(stored.id);
@@ -5241,10 +5243,11 @@ test("S2c S12/S13 opaque chart clear or replacement can atomically change groupi
 
 test("S2c S13 V1 chart attachment and series insertion reject current text or boolean metrics; numeric and null-sidecar legacy paths succeed", async () => {
   const fixture = await s2aFixture("s2c-numeric-chart-guard");
+  const { adminCookie } = await makePlatformAdmin("s2c-numeric-chart-guard");
   const sidecar = { schemaVersion: 1, chartComposition: "athletes-v1", chartInteractions: { tooltip: { mode: "exact" } } };
   let chartIndex = 0;
   async function chart(presentation) {
-    const created = await makeWidgetHttp(fixture.coachCookie, {
+    const created = await makeWidgetHttp(adminCookie, {
       ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id),
     }, { widgetType: "line_chart", groupBy: "day", y: chartIndex++ * 5, ...(presentation ? { presentation: { mode: "replace", value: presentation } } : {}) });
     return s2aStored(created.widgetId);
@@ -5266,7 +5269,7 @@ test("S2c S13 V1 chart attachment and series insertion reject current text or bo
     assert.equal(legacyStored.series[0].metric_definition_id, definition.metricDefinitionId);
     const beforeAttachment = await s2bDatabaseState();
     const attached = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${legacy.id}`, {
-      method: "PATCH", cookie: fixture.coachCookie,
+      method: "PATCH", cookie: adminCookie,
       body: { expectedWidgetRevision: legacyStored.revision, presentation: { mode: "replace", value: sidecar } },
     });
     if (valueType === "numeric") {
@@ -5301,12 +5304,13 @@ test("S2c S13 V1 chart attachment and series insertion reject current text or bo
 
 test("S2c S13 the series-update binding guard rejects text and boolean under V1 charts while null-sidecar legacy resolution remains supported", async () => {
   const fixture = await s2aFixture("s2c-resolve-chart-guard");
+  const { adminCookie } = await makePlatformAdmin("s2c-resolve-chart-guard");
   const sidecar = { schemaVersion: 1, chartInteractions: { tooltip: { mode: "exact" } } };
   const numericSource = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, dailyAggregationMethod: "last", scopeLevels: ["session"] });
   let chartIndex = 0;
   for (const valueType of ["text", "boolean", "numeric"]) {
     const definition = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType, dailyAggregationMethod: "last", scopeLevels: ["session"] });
-    const known = await makeWidgetHttp(fixture.coachCookie, {
+    const known = await makeWidgetHttp(adminCookie, {
       ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id),
     }, { widgetType: "line_chart", groupBy: "day", y: chartIndex++ * 5, presentation: { mode: "replace", value: sidecar } });
     const knownWidget = await s2aStored(known.widgetId);
@@ -5523,17 +5527,124 @@ test("S2c S13 a legacy text metric chart with a null sidecar atomically becomes 
   assert.deepEqual(await s2bDatabaseState(), beforeReplay);
 });
 
-test("Simple production HTTP mount authenticates, hides foreign dashboards and replays an atomic save", async () => {
-  const fixture = await s2aFixture("simple-production-mount");
-  const foreign = await s2aFixture("simple-production-foreign");
-  const route = (id, action) => `/api/training-load/dashboards/${id}/simple/${action}`;
-  const request = (action, body) => api(route(fixture.dashboard.id, action), {
-    cookie: fixture.coachCookie, method: body === undefined ? "GET" : "POST", body,
+test("Simple production HTTP mount authenticates, hides foreign dashboards and replays an atomic save", async testContext => {
+  const previousMode = process.env.DASHBOARD_SIMPLE_MODE;
+  process.env.DASHBOARD_SIMPLE_MODE = "off";
+  let offApp;
+  try { ({ app: offApp } = await import("../src/server.js?pilot-off-reference")); }
+  finally {
+    if (previousMode === undefined) delete process.env.DASHBOARD_SIMPLE_MODE;
+    else process.env.DASHBOARD_SIMPLE_MODE = previousMode;
+  }
+  const offServer = http.createServer(offApp);
+  await new Promise(resolve => offServer.listen(0, "127.0.0.1", resolve));
+  testContext.after(() => new Promise(resolve => offServer.close(resolve)));
+  const offOrigin = "http://127.0.0.1:" + offServer.address().port;
+  const { adminId, adminCookie } = await makePlatformAdmin("simple-pilot");
+  const dashboard = await makeDashboardHttp(adminCookie);
+  assert.ok(dashboard?.id);
+  const club = await makeClubCoach("simple-pilot-club");
+  const team = await makeTeamCoach("simple-pilot-team", { clubId: club.clubId });
+  const athlete = await makeAthleteInClub(club.clubId);
+  const base = "/api/training-load/dashboards/" + dashboard.id;
+  const request = (action, body) => api(base + "/simple/" + action, {
+    cookie: adminCookie, method: body === undefined ? "GET" : "POST", body,
   });
-  assert.equal((await api(route(fixture.dashboard.id, "capabilities"))).status, 401);
-  const missing = await api(route(crypto.randomUUID(), "capabilities"), { cookie: fixture.coachCookie });
-  assert.equal(missing.status, 404);
-  assert.deepEqual(await api(route(foreign.dashboard.id, "capabilities"), { cookie: fixture.coachCookie }), missing);
+  assert.equal((await api(base, { cookie: adminCookie })).body.simplePreview, true);
+  const routes = [["GET", "capabilities"], ["GET", "metrics"], ["POST", "validate"],
+    ["POST", "preview"], ["POST", "widgets"], ["PUT", "widgets/" + crypto.randomUUID()],
+    ["POST", "requests/status"]];
+  const { createSimplePreviewRouter } = await import("../src/dashboardSimple/previewRouter.js");
+  const { createSimpleSaveRouter } = await import("../src/dashboardSimple/saveRouter.js");
+  const unused = () => assert.fail("route inventory must not execute handlers");
+  const inventory = [
+    createSimplePreviewRouter({ service: { capabilities: unused, metrics: unused, validate: unused, preview: unused } }),
+    createSimpleSaveRouter({ service: { save: unused, status: unused } }),
+  ].flatMap(router => router.stack.flatMap(({ route }) => route
+    ? Object.keys(route.methods).map(method => method.toUpperCase() + " " + route.path.slice(1)) : []));
+  assert.deepEqual(inventory.sort(), routes.map(([method, route]) =>
+    method + " " + route.replace(/^widgets\/.+/, "widgets/:widgetId")).sort());
+  const clubDashboard = await makeDashboardHttp(club.coachCookie);
+  assert.equal(Object.hasOwn((await api("/api/training-load/dashboards/" + clubDashboard.id, { cookie: club.coachCookie })).body, "simplePreview"), false);
+  await grantClubAdmin(adminId, club.clubId);
+  await setActiveWorkspace(adminId, "club", club.clubId);
+  for (const [method, suffix] of routes) {
+    const target = base + "/simple/" + suffix;
+    for (const cookie of [adminCookie, club.coachCookie, team.coachCookie, athlete.cookie]) {
+      const headers = { Cookie: cookie, "Content-Type": "application/json" };
+      const options = { method, headers, ...(method !== "GET" ? { body: "{}" } : {}) };
+      const denied = await fetch(apiBaseUrl + target, options);
+      const absent = await fetch(offOrigin + target, options);
+      assert.equal(denied.status, 404, method + " " + suffix);
+      assert.equal(denied.status, absent.status);
+      assert.equal(await denied.text(), await absent.text());
+      const stableHeaders = response => [...response.headers].filter(([key]) => key !== "date");
+      assert.deepEqual(stableHeaders(denied), stableHeaders(absent));
+    }
+    assert.equal((await api(target, { method, ...(method !== "GET" ? { body: {} } : {}) })).status, 401);
+  }
+  await setActiveWorkspace(adminId, "platform");
+  const presentation = { mode: "replace", value: { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } } };
+  const sidecar = await makeWidgetHttp(adminCookie, clubDashboard, { presentation });
+  const widgetPath = "/api/training-load/dashboards/" + clubDashboard.id + "/widgets";
+  const storedSidecar = () => query("select presentation_config::text as value from training_load.dashboard_widgets where id=$1", [sidecar.widgetId]).then(result => result.rows[0].value);
+  const stored = await storedSidecar();
+  assert.ok(stored);
+  const legacyCreate = { error: "invalidRequest", message: "Unknown field: presentation." };
+  const legacyPatch = { error: "invalidRequest", message: "Unknown field: presentation (clearing localFilterOverride is done by sending it as null, not a separate clear flag)." };
+  for (const [origin, cookie] of [[offOrigin, adminCookie], [apiBaseUrl, club.coachCookie], [apiBaseUrl, team.coachCookie], [apiBaseUrl, adminCookie]]) {
+    if (origin === apiBaseUrl && cookie === adminCookie) await setActiveWorkspace(adminId, "club", club.clubId);
+    for (const [method, suffix, body, expected] of [
+      ["POST", "", { presentation }, legacyCreate],
+      ["PATCH", "/" + sidecar.widgetId, { expectedWidgetRevision: (await s2aStored(sidecar.widgetId)).revision, presentation: { mode: "clear" } }, legacyPatch],
+    ]) {
+      const response = await fetch(origin + widgetPath + suffix, {
+        method, headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), expected);
+      assert.equal(await storedSidecar(), stored);
+    }
+  }
+  const rawTarget = base + "/simple/preview?private=excluded";
+  for (const [body, expected] of [["{", 400], [JSON.stringify("x".repeat(110 * 1024)), 413]]) {
+    for (const cookie of [undefined, adminCookie, club.coachCookie]) {
+      const headers = { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) };
+      const options = { method: "POST", headers, body };
+      const actual = await fetch(apiBaseUrl + rawTarget, options);
+      const reference = await fetch(offOrigin + rawTarget, options);
+      assert.equal(actual.status, expected);
+      assert.equal(actual.status, reference.status);
+      assert.equal(await actual.text(), await reference.text());
+      const stableHeaders = response => [...response.headers].filter(([key]) => key !== "date");
+      assert.deepEqual(stableHeaders(actual), stableHeaders(reference));
+    }
+  }
+  const absolutePath = base + "/simple/capabilities";
+  const absolute = await new Promise((resolve, reject) => {
+    const request = http.request(apiBaseUrl, {
+      path: apiBaseUrl + absolutePath + "?private=excluded",
+      headers: { Cookie: adminCookie },
+    }, response => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, body: JSON.parse(body) }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+  assert.deepEqual(absolute, { status: 404, body: { error: "Not found", path: absolutePath } });
+  const hidden = await fetch(apiBaseUrl + absolutePath + "?private=excluded", { headers: { Cookie: adminCookie } });
+  assert.equal((await hidden.json()).path, base + "/simple/capabilities");
+
+  // Simulate an admitted request whose workspace changes before the transaction rechecks it.
+  const clubBound = await makeDashboardHttp(adminCookie);
+  const { authorizePreviewTarget } = await import("../src/dashboardSimple/previewContext.js");
+  const admitted = { user: { id: adminId }, simplePlatformPilot: true };
+  assert.equal((await authorizePreviewTarget(query, { user: admitted.user }, clubBound.id)).dashboard.id, clubBound.id);
+  await assert.rejects(authorizePreviewTarget(query, admitted, clubBound.id), { code: "notFound", status: 404 });
+  await setActiveWorkspace(adminId, "platform");
   assert.equal((await request("capabilities")).status, 200);
   const input = s2bEnvelope();
   const preview = await request("preview", input);
