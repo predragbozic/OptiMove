@@ -4,6 +4,7 @@ import { templateScopeMeta, visibleTemplateScopes } from "./navigation.js";
 import { renderProgramAccessRequests } from "./organization-view.js";
 import { renderPlanMoreMenu } from "./plan-actions-view.js";
 import { isAthleteUser } from "./program-access-ui.js";
+import { isAthleteMode } from "./access.js";
 import {
   duplicateTemplateNames,
   programPriceLabel,
@@ -68,6 +69,8 @@ export function renderTemplateLibraryPageHtml({
 }) {
   const accessRequests = appState.organization?.data?.accessRequests || [];
   const athleteUser = isAthleteUser(currentUser);
+  // The athlete's app (body.athlete-mode), as the filters decide it: her user may not carry the athlete role itself.
+  const athleteView = athleteUser || isAthleteMode();
   const requestCount = accessRequests.filter((row) => row.status === "requested").length;
   const isRequestsSection = !athleteUser && appState.programLibrarySection === "requests";
   if (isRequestsSection) {
@@ -91,11 +94,11 @@ export function renderTemplateLibraryPageHtml({
   return `
     <section class="content-section program-library-page">
       <div class="program-library-head">
-        <p class="muted" data-template-count>${templates.length} ${templates.length === 1 ? "program" : "programs"}</p>
+        <p class="muted" data-template-count>${athleteView && !templates.length ? "" : `${templates.length} ${templates.length === 1 ? "program" : "programs"}`}</p>
       </div>
       ${templateFiltersHtml}
       <div class="program-library-shelves" data-template-results>
-        ${renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser)}
+        ${renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser, libraryEmptyOf(athleteView, appState.templateFilters))}
       </div>
     </section>
     ${templatePreviewHtml}
@@ -105,8 +108,14 @@ export function renderTemplateLibraryPageHtml({
   `;
 }
 
-export function renderTemplateLibraryResultsOnlyHtml(templates, selectedTemplateId, currentUser = null) {
-  return renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser);
+export function renderTemplateLibraryResultsOnlyHtml(templates, selectedTemplateId, currentUser = null, filters = {}) {
+  return renderTemplateLibraryResultsHtml(templates, selectedTemplateId, currentUser, libraryEmptyOf(isAthleteUser(currentUser) || isAthleteMode(), filters));
+}
+
+// What an empty list says to an athlete: her search or group found nothing, or nothing is shared with her on this tab.
+export function libraryEmptyOf(athlete, filters = {}) {
+  const set = (v) => Boolean(clean(v)) && clean(v).toLowerCase() !== "all";
+  return { athlete, searching: set(filters?.search) || set(filters?.category) };
 }
 
 export function renderTemplateFiltersViewHtml({
@@ -120,6 +129,7 @@ export function renderTemplateFiltersViewHtml({
   scopes,
   showAdminFilters,
   showRequests = false,
+  athlete = false,
 }) {
   const tagPrefix = clean(filters.tag).toLowerCase();
   const visibleTags = tagPrefix ? (options.tags || []).filter((tag) => templateFilterOptionMatches(tag, tagPrefix)) : (options.tags || []);
@@ -148,6 +158,7 @@ export function renderTemplateFiltersViewHtml({
     visibleCreators,
     clubOptions,
     visibleClubs,
+    athlete,
   });
 }
 

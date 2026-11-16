@@ -76,7 +76,7 @@ export function renderAthleteHeaderToolbarHtml(athlete, { isAthleteMode }) {
       <nav class="tabs athlete-tabs" aria-label="Athlete views">
         <button class="tab tab-with-icon" data-tab="weekly">
           ${ICON_CALENDAR}
-          <span>Weekly plans</span>
+          <span>Weekly plan</span>
         </button>
         <button class="tab tab-with-icon" data-tab="programs">
           ${ICON_SPECIFIC_PROGRAMS}
@@ -136,7 +136,7 @@ function renderAthleteSettingsIdentityHtml(athlete, profile) {
     <div class="athlete-settings-identity">
       ${avatarMarkup}
       <span class="athlete-settings-identity-copy">
-        <span class="athlete-settings-identity-eyebrow">Profile</span>
+        <span class="athlete-settings-identity-eyebrow">Account</span>
         <span class="athlete-settings-identity-name">${escapeHtml(name)}</span>
       </span>
     </div>
@@ -149,7 +149,7 @@ export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatu
     <section class="content-section athlete-simple-view">
       <section class="panel athlete-settings-card">
         <div>
-          <p class="muted">Your coach controls program assignment and club/team membership - only your own basic profile fields below are yours to edit.</p>
+          <p class="muted">Your coach manages your programs and teams. You can edit your own details below.</p>
         </div>
         <div class="athlete-setting-list">
           <article class="athlete-personal-data">
@@ -162,7 +162,7 @@ export function renderAthleteSettingsHtml(athlete, currentUser, emailChangeStatu
           </article>
         </div>
       </section>
-      ${renderContentLanguageSectionHtml(currentUser)}
+      ${renderContentLanguageSectionHtml(currentUser, { athlete: true })}
       ${renderAccountEmailPasswordSectionsHtml(currentUser, emailChangeStatus)}
     </section>
   `;
@@ -224,10 +224,10 @@ function renderPersonalDataFormHtml(profile) {
       <label class="search-field"><span>Country</span><input name="country" maxlength="100" value="${escapeAttr(profile.country)}" autocomplete="country-name"></label>
       <label class="search-field"><span>City</span><input name="city" maxlength="100" value="${escapeAttr(profile.city)}" autocomplete="address-level2"></label>
       <label class="search-field">
-        <span>Profile photo URL</span>
+        <span>Profile photo</span>
         <input name="imageUrl" type="url" maxlength="2000" placeholder="https://..." value="${escapeAttr(profile.imageUrl)}">
       </label>
-      <p class="muted athlete-personal-data-photo-hint">Paste a link to an image - there's no photo upload yet.</p>
+      <p class="muted athlete-personal-data-photo-hint">Paste a link to an image.</p>
       <p class="builder-error" aria-live="polite"></p>
       <p class="builder-success" aria-live="polite"></p>
       <button class="plain-button" type="submit">Save personal data</button>

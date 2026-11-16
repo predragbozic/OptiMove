@@ -9,19 +9,21 @@ const LANGUAGES = [["sr", "Srpski"], ["en", "English"]];
 // Where the choice shows today: the screens that read the exercise itself.
 // An exercise already added to a program keeps the name it was added with.
 export const CONTENT_LANGUAGE_SCOPE = "The Exercise Library, an exercise's details, the Builder's exercise list and Home show the English name and instruction where an exercise has one. Exercises already added to programs keep their names.";
+// An athlete has none of those screens: her sentence names none (manager, item 9).
+export const CONTENT_LANGUAGE_SCOPE_ATHLETE = "Exercise names and instructions show in English where an exercise has one. Exercises already in your plans and programs keep the names they were added with.";
 
 export function renderContentLanguageOptions(language) {
   const current = language === "en" ? "en" : "sr";
   return LANGUAGES.map(([value, label]) => `<option value="${escapeAttr(value)}"${value === current ? " selected" : ""}>${label}</option>`).join("");
 }
 
-export function renderContentLanguageSectionHtml(currentUser) {
+export function renderContentLanguageSectionHtml(currentUser, { athlete = false } = {}) {
   return `
     <section class="panel athlete-settings-card">
       <div>
         <p class="eyebrow">Account</p>
         <h3>Exercise language</h3>
-        <p class="muted">${CONTENT_LANGUAGE_SCOPE}</p>
+        <p class="muted">${athlete ? CONTENT_LANGUAGE_SCOPE_ATHLETE : CONTENT_LANGUAGE_SCOPE}</p>
       </div>
       <form class="organization-form" data-account-form="content-language">
         <label class="search-field"><span>Exercise language</span>
