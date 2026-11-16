@@ -27283,3 +27283,159 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
     width: 100%;
   }
 }
+/* Imports Fix flow, slice 1: one problem per screen. A 560 px centred dialog over a real backdrop on a computer, a
+   full-screen sheet on a phone (the P5 help's frame). "Step x of y", one sentence, Skip for now and ONE main button. */
+body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-fix {
+  position: fixed;
+  z-index: 1200;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  margin: 0;
+  padding-top: 0;
+  box-shadow: 0 12px 40px rgba(15, 23, 32, 0.25);
+  /* One column from the top: the panel's grid would spread the rows over a full-height phone sheet. */
+  display: block;
+}
+.imports-fix-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: rgba(15, 23, 32, 0.45);
+}
+body:has(.imports-fix.is-open) {
+  overflow: hidden;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 12px;
+  padding-bottom: 4px;
+  background: var(--surface, #fff);
+}
+.imports-fix-head h3 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.imports-fix-close {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 1.4rem;
+}
+.imports-fix-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.imports-fix-body {
+  margin-top: 12px;
+}
+.imports-fix-sentence {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+.imports-fix-body .gpexe-link-row {
+  display: grid;
+  gap: 8px;
+}
+.imports-fix-body .gpexe-select,
+.imports-fix-body .gpexe-button {
+  min-height: 44px;
+  font-size: 16px;
+}
+.imports-fix-body .gpexe-select {
+  width: 100%;
+  max-width: 100%;
+}
+/* The link box is the step itself, not a box in the dialog. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-body .gpexe-link {
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.imports-fix-body .gpexe-link-context {
+  margin: 10px 0;
+}
+/* A 44 px row that keeps its disclosure marker (a flex summary loses it). */
+.imports-fix summary {
+  display: list-item;
+  padding: 12px 0;
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
+.imports-fix-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-bottom: 16px;
+}
+.imports-fix-actions .gpexe-button {
+  min-height: 44px;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix .gpexe-button:focus-visible,
+body:not(.athlete-mode):not(.login-mode) .imports-fix .gpexe-select:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+@media (max-width: 760px) {
+  body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-fix {
+    inset: 0;
+    top: 0;
+    left: 0;
+    transform: none;
+    width: auto;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+  }
+  .imports-fix-actions,
+  .imports-fix-body .gpexe-link-actions {
+    flex-direction: column-reverse;
+  }
+  .imports-fix-actions .gpexe-button {
+    width: 100%;
+  }
+}
+/* The way to the full review: a quiet text link, never a second main button. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-full {
+  margin: 0;
+  padding-bottom: 8px;
+  text-align: center;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-full .imports-fix-full-link {
+  min-height: 44px;
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* End of the Imports Fix flow. */

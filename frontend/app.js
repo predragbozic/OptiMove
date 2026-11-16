@@ -94,6 +94,7 @@ import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled 
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
 import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
+import { closeFixFromKey } from "./gpexe-import-actions.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
@@ -683,6 +684,8 @@ function bindEvents() {
     // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions" (P5: the help closes
     // first, and the focus goes back to "How importing works").
     const importsHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);
+    // Fix flow: the step sheet closes like its × (it asks first while a change is on its way).
+    if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closeFixFromKey(renderTrainingLoad)) return;
     if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
       renderTrainingLoad();
       document.querySelector(importsHelp ? ".imports-help-open" : ".imports-find-phone")?.focus?.({ preventScroll: true });
@@ -2238,6 +2241,7 @@ function handleAppBack() {
   // Imports P4: the phone's period sheet closes before anything else of the screen (a hidden athlete list included).
   // P5: the help closes first, and the focus goes back to "How importing works".
   const backHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);
+  if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closeFixFromKey(renderTrainingLoad)) return true;
   if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
     renderTrainingLoad();
     if (backHelp) document.querySelector(".imports-help-open")?.focus?.({ preventScroll: true });

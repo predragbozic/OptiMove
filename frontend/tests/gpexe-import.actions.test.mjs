@@ -958,7 +958,8 @@ function setupServer(sourceCode, message) {
   });
 }
 // U6a: a row is found by its own open button (U6a-2 adds group buttons with the same id).
-const rowIdx = (h, id) => h.indexOf(`class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${id}"`);
+// Fix flow (slice 1): a coach's row in a Fix group opens the step sheet, every other row the review.
+const rowIdx = (h, id) => Math.max(h.indexOf(`class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="${id}"`), h.indexOf(`class="gpexe-candidate" data-action="training-load-gpexe-fix" data-candidate-id="${id}"`));
 const setupRowStep = (h) => {
   const at = rowIdx(h, "c-setup");
   return h.slice(at, h.indexOf("</button>", at)).match(/<span class="gpexe-candidate-next">([^<]+)<\/span>/)?.[1];

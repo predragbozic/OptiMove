@@ -14,7 +14,8 @@ before(async () => { browser = await launch(); });
 after(async () => { await browser?.close(); });
 
 const G = "/api/training-load/gpexe";
-const OPEN = '[data-action="training-load-gpexe-open"]';
+// Fix flow (slice 1): a coach's row in a Fix group opens the step sheet; every other row opens the review.
+const OPEN = '[data-action="training-load-gpexe-open"], [data-action="training-load-gpexe-fix"]';
 
 async function findThroughUi(page) {
   await openTrainingLoad(page);
@@ -31,6 +32,9 @@ async function findThroughUi(page) {
 
 async function openSession(page, day) {
   await page.locator(OPEN, { hasText: day }).first().click();
+  // From the Fix sheet the full review is one quiet link away (Fix flow, slice 1).
+  await page.waitForSelector(".gpexe-detail .gpexe-review-table, .imports-fix.is-open .imports-fix-full-link", { timeout: 20_000 });
+  if (await page.locator(".imports-fix.is-open").count()) await page.click(".imports-fix.is-open .imports-fix-full-link");
   await page.waitForSelector(".gpexe-detail .gpexe-review-table", { timeout: 20_000 });
 }
 

@@ -55,9 +55,11 @@ export function bindPeriodDrag(root, render, doc = globalThis.document) {
 // The open phone sheet is modal (aria-modal): Tab and Shift+Tab stay inside it, as in the icon picker (icon-picker.js).
 export function trapPeriodSheetTab(event, doc = globalThis.document) {
   if (event?.key !== "Tab") return false;
-  const sheet = doc?.querySelector?.(".imports-help.is-open") || doc?.querySelector?.(".imports-period.is-open");
+  const sheet = doc?.querySelector?.(".imports-fix.is-open") || doc?.querySelector?.(".imports-help.is-open") || doc?.querySelector?.(".imports-period.is-open");
   if (!sheet) return false;
-  const controls = Array.from(sheet.querySelectorAll("button:not(:disabled)")).filter((b) => b.getAttribute("aria-disabled") !== "true");
+  // The Fix sheet's link step has a select (and its review's details/summary); the others have buttons only.
+  // Only what can take the focus now: nothing inside a closed <details> (code review, mobile-qa).
+  const controls = Array.from(sheet.querySelectorAll("button:not(:disabled), select:not(:disabled), summary")).filter((b) => b.offsetParent !== null || b.getClientRects?.().length).filter((b) => b.getAttribute("aria-disabled") !== "true");
   if (!controls.length) return false;
   const at = controls.indexOf(doc.activeElement);
   const inside = sheet.contains(doc.activeElement);
