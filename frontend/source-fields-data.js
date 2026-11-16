@@ -28,6 +28,14 @@ export function sourceFieldsContext(user = state.currentUser) {
   return null;
 }
 
+export function emptyInventory() {
+  return {
+    items: [], loaded: false, loading: false, loadingMore: false, error: null, nextCursor: null,
+    endpoint: "", showSupported: false, search: "",
+    // Team thresholds (P1): the platform workspace only, read when their fold opens.
+    thresholds: { items: [], loaded: false, loading: false, error: null },
+  };
+}
 export function emptySourceFieldsState() {
   return {
     // Bumped on every reset: an answer for an older view is dropped.
@@ -35,6 +43,8 @@ export function emptySourceFieldsState() {
     list: { items: [], loaded: false, loading: false, error: null },
     detail: { id: null, field: null, verifications: [], loading: false, error: null },
     form: null,
+    // I2 / I3: the names GPEXE sent that no source field covers yet (read-only).
+    inventory: emptyInventory(),
     notice: "",
     // "" for what was saved; "warning" for a refusal or an unchecked result.
     noticeKind: "",
@@ -49,6 +59,38 @@ export function sourceFieldsState() {
 // Reads and writes
 // ---------------------------------------------------------------------------
 export const fetchFields = () => api(BASE);
+// I2 (docs/ai/gpexe-field-inventory-plan.md, section 7.2): one page of the field inventory.
+const INVENTORY = "/api/training-load/sources/metrics/field-inventory";
+export function fetchInventory({ endpoint = "", showSupported = false, cursor = null } = {}) {
+  const query = new URLSearchParams();
+  if (showSupported) query.set("state", "all");
+  if (endpoint) query.set("endpoint", endpoint);
+  if (cursor) query.set("cursor", cursor);
+  const text = query.toString();
+  return api(text ? `${INVENTORY}?${text}` : INVENTORY);
+}
+// Where a name comes from and what it holds, in plain words (I3; never a key or a code).
+export const INVENTORY_ENDPOINTS = Object.freeze(["athlete_session", "details.session", "details.drill", "more.events", "more.complementary_data"]);
+export const ENDPOINT_LABEL = {
+  athlete_session: "Athlete row",
+  "details.session": "Session details",
+  "details.drill": "Drill details",
+  "more.events": "Events",
+  "more.complementary_data": "Zone data",
+  team_thresholds: "Team thresholds",
+};
+export const KIND_LABEL = {
+  number: "number",
+  text: "text",
+  boolean: "yes or no",
+  null: "empty",
+  unit_value_object: "number with unit",
+  zone_list: "zone list",
+  object: "group of values",
+  list: "list",
+};
+// The search narrows the loaded names in place, by name, ignoring case.
+export const inventoryMatches = (item, search) => !search || String(item.name || "").toLowerCase().includes(String(search).trim().toLowerCase());
 export const fetchField = (id) => api(`${BASE}/${encodeURIComponent(id)}`);
 function write(path, body) {
   const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(WRITE_BOUND_MS) : undefined;

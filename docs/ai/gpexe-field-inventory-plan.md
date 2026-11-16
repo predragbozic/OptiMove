@@ -324,7 +324,10 @@ then the *Rukovodilac* and the *Nezavisni revizor* on the frozen head.
   - a club admin, in their own club's workspace, sees their club's names, including those from a team-owned connection
     of their own team;
   - a foreign club's team-owned connection is never included;
-  - the same club admin in another club's workspace, a coach and a team workspace get the identical 404;
+  - a coach, a team workspace and an archived club's workspace get the identical 404. A club admin whose saved workspace
+    names a club they do not administer is not refused: the workspace resolver falls back to a workspace of their own
+    (`pickFallbackWorkspace`), so they read their own club's names and never the other club's (corrected after I2's review;
+    I2's test 11 proves it);
 - covered names are hidden by default;
 - `team_thresholds` reaches the platform admin only;
 - the unit word: a club admin sees it only when it is a known unit;
@@ -350,6 +353,16 @@ Frontend only, in `frontend/source-fields-{view,data,actions}.js`. Reviewers: `c
 - **Empty states:** "No names yet. The list fills in after the next successful search for sessions." A club with no
   connection gets "This club has no GPEXE connection."
 - *Load more* pages the list.
+
+**As built (I3):**
+- **The list:** "Available in GPEXE, not supported yet", under the supported fields, is read when Source fields opens. The
+  Data configuration start screen's card does not read it.
+- **Each row:** the name; where it comes from, its kind, the unit word, the answers and the last day, all in plain words;
+  for a platform admin, the connection count.
+- **Filters:** the endpoint chips and "Show supported too" become the read's query. The search narrows the loaded names
+  in place, so its field keeps the focus. "Load more" reads the next page.
+- **Team thresholds:** a platform admin's fold, read only when opened.
+- **Read-only:** nothing on the list writes.
 
 ### 7.4 Open point: a wish list (not a slice)
 

@@ -27184,3 +27184,48 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
 }
 
 /* End of Imports P5. */
+
+/* I3: Source fields - "Available in GPEXE, not supported yet" (read-only). */
+.source-fields-inventory-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+.source-fields-inventory-search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.source-fields-inventory-search input {
+  width: 100%;
+  min-height: 44px;
+  font-size: 16px;
+}
+.source-fields-inventory-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.source-fields-inventory-chips .chip {
+  min-height: 44px;
+}
+.source-fields-inventory-item {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.source-fields-inventory-thresholds {
+  margin-top: 12px;
+}
+.source-fields-inventory-thresholds summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
