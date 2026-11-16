@@ -9,11 +9,13 @@ select current_setting('server_version_num') as server_version_num,
        (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') as v74,
        (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') as later_than_v74;
 
--- 2. The twelve bodies v74 replaces are the ones it was written on. Expected: 12 rows, every ok = true.
+-- 2. The fourteen bodies v74 replaces are the ones it was written on. Expected: 14 rows, every ok = true.
 with expected(name, md5) as (values
     ('source_metric_audit_revision_guard', '942b806526756311a5289b42c27e4918'),
     ('source_metric_audit_row_ok', '0ef48fd391a5380f70c92d96f47f894a'),
+    ('source_metric_confirmation_item_digest', 'c7b8d407b350b1a3073b56bd72bd64b4'),
     ('source_metric_confirmation_items_insert_guard', 'e653a3f19a7509468035912c4af4fddc'),
+    ('source_metric_confirmation_items_update_guard', 'e622fb9b4b231a227446415bfa24bd8c'),
     ('source_metric_confirmation_rows_hold', 'cad0eba4b81cd3abf13e81be61879a17'),
     ('source_metric_confirmations_commit_link', '5d424bf0457f4b94a2377b733b6b1414'),
     ('source_metric_confirmations_insert_guard', 'bbab4e588f066c01abee0cf931c4c768'),

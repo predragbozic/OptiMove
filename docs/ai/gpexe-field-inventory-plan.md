@@ -692,6 +692,26 @@ The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_sour
   rightly refuses that state, because v74 replaces a body v66 checks, and production never has it. It now follows the
   v66 suite's rule (PR #565): every migration up to v69 by file name, except v66. The suites of 7h, LO-1 and 9-B pass.
 
+- **After the internal reviews of `76fb65c1`** (db, security, code, mobile; no BLOCKER or HIGH):
+  - v74 takes every lock it needs before its first change, in the writers' order (T4, T2a, T2b, T9, T9i, then T8
+    NOWAIT), with `lock_timeout` 5 s (db MEDIUM-1). This is reviewed statically, with no test of its own.
+  - A `field_unit` row's word is final, by v65's update guard, and inside its values digest; a row without a word keeps
+    v65's digest (db MEDIUM-2, test 13). Fourteen bodies are now replaced.
+  - Route C's `source_metric_create` row must carry its request key, since it is the request record (db LOW-1,
+    test 5).
+  - A mapping row shown `as_sent` is accepted only in its own source unit (security 2a, db LOW-3, `source-metric-board-18-2`
+    test 14).
+  - The importer treats `source_stated` as proven through `statusProven`, as every other consumer does (security 1,
+    code 2; `gpexe-import-mapped-plan-9b` test 2).
+  - Route C's lost answer is proven through the route: a verified COMMIT answers 200 `verified_after_commit_error`; an
+    unknown one answers 503 `outcome_unknown`, and the same key then creates the field once (code 1, test 12).
+  - Recorded, not built: the club board shows the raw values of every readable column, proven or not. Once G2 gives
+    created keys an extractor, a club admin would see two athletes' values of an unproven created field from the club's
+    own session. G2 decides that (security 2). Also recorded: a structural name answers `name_not_observed` as 8.1
+    says; the losing writer of a race gets `field_exists` without `current`; the levels are declared by the admin; the
+    expected unit may come from another club's observation, and is only a hypothesis; T2a's key rule holds only with
+    an acting user (C74).
+
 **Not yet tested:** v52's activation gate on a `source_stated` revision (mutation M10 survives). A mapping version of a
 created field needs its extractor (J12), which is G2's; G2's or G1b's tests cover it.
 

@@ -258,7 +258,7 @@ async function confirm(actor, t, cand, items) {
                        scale, scale_divisor, "offset", compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, stored_a, raw_b, stored_b, source_unit_word)
                      values ($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'session',$13,$14,$15,$16,$17,$18,$19)`,
       [confId, n, it.kind ?? "club_mapping", it.checked, it.row.source_metric_version_id, it.v.versionId, it.row.parameter_fingerprint, it.row.source_unit, it.row.target_unit,
-        it.row.scale, it.row.scale_divisor, it.row.offset, it.checked ? "duration_mmss" : null, it.checked ? "mm:ss" : null,
+        it.row.scale, it.row.scale_divisor, it.row.offset, it.checked ? (it.rule ?? "duration_mmss") : null, it.checked ? (it.displayUnit ?? "mm:ss") : null,
         it.checked ? "1200" : null, it.checked ? "20" : null, it.checked ? "1800" : null, it.checked ? "30" : null, it.word ?? null]);
     }
     await k.query(`insert into ${T8} (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash) values ('mapping_confirmation',$1,$2,$3,$4,$5,$6,$7)`,
@@ -1051,4 +1051,9 @@ test("14. G1a: only a field_unit row names a GPEXE unit word; a mapping row that
   assert.equal((await one(`select count(*)::int n from ${T9} where team_id = $1`, [t.teamId])).n, before);
   // The same row without the word is written.
   assert.ok(await confirm(caE, t, cand, [{ v, checked: true }]));
+  // as_sent on a mapping row only in the row's own source unit (the security review's 2a, the database review's LOW-3).
+  const vOther = await activeVersion(caE, await field("time"), await variable(caE, { unit: "min" }));
+  await assert.rejects(confirm(caE, t, cand, [{ v: vOther, checked: true, rule: "as_sent", displayUnit: "m" }]),
+    (e) => e.code === "23514" && /^source_metric_confirmation_items: a compared row names a display rule and a unit of that rule$/.test(e.message));
+  assert.ok(await confirm(caE, t, cand, [{ v: vOther, checked: true, rule: "as_sent", displayUnit: "s" }]), "as sent in the row's own unit");
 });

@@ -26,12 +26,17 @@
 --
 -- Errors: 42501 for an acting user who may not; 23514 with fixed text for every other refusal; no id, name,
 -- unit or value in a message.
--- Locks, in the writers' order: T4 SHARE ROW EXCLUSIVE first (as v65), then the tables this migration
--- alters (T2a by its trigger, T2b, T9, T9i), and T8 last, ACCESS
--- EXCLUSIVE NOWAIT (a busy T8 fails the migration at once, nothing applied).
+-- Locks, in the writers' order (v65, v39, v37: T4, T2b, T9, T8), all taken here before the first change: T4 SHARE ROW
+-- EXCLUSIVE (as v65), T2a SHARE ROW EXCLUSIVE (its triggers), then T2b, T9 and T9i ACCESS EXCLUSIVE, each wait bounded by
+-- lock_timeout 5 s, and T8 last, ACCESS EXCLUSIVE NOWAIT (a busy table fails the migration at once, nothing applied).
 -- Rollback: docs/runbooks/generic-source-fields-v74-rollback.sql.
 
+set local lock_timeout = '5s';
 lock table training_load.source_metric_mapping_versions in share row exclusive mode;
+lock table training_load.source_metric_definitions in share row exclusive mode;
+lock table training_load.source_metric_definition_versions in access exclusive mode;
+lock table training_load.source_metric_confirmations in access exclusive mode;
+lock table training_load.source_metric_confirmation_items in access exclusive mode;
 
 -- 1. Written on the bodies in force: refuse any other.
 do $$
@@ -48,7 +53,9 @@ declare
     ['source_metric_confirmations_commit_link', '5d424bf0457f4b94a2377b733b6b1414', 'v65'],
     ['source_metric_audit_row_ok', '0ef48fd391a5380f70c92d96f47f894a', 'v65'],
     ['source_metric_audit_revision_guard', '942b806526756311a5289b42c27e4918', 'v65'],
-    ['source_metric_mapping_versions_update_guard', '42fb55a2dd043328079fa9b6f4a2c43e', 'v52']];
+    ['source_metric_mapping_versions_update_guard', '42fb55a2dd043328079fa9b6f4a2c43e', 'v52'],
+    ['source_metric_confirmation_items_update_guard', 'e622fb9b4b231a227446415bfa24bd8c', 'v65'],
+    ['source_metric_confirmation_item_digest', 'c7b8d407b350b1a3073b56bd72bd64b4', 'v65']];
   i integer;
 begin
   for i in 1 .. array_length(expected, 1) loop
@@ -678,7 +685,9 @@ begin
   -- A checked row. Every refusal below is fixed text: the row holds values.
   if new.gpexe_display_rule is null or new.gpexe_display_unit is null
      or new.gpexe_display_rule !~ '^[a-z_]{1,40}$'
-     or not training_load.source_metric_display_unit_ok(new.gpexe_display_rule, new.gpexe_display_unit) then
+     or not training_load.source_metric_display_unit_ok(new.gpexe_display_rule, new.gpexe_display_unit)
+     or (new.gpexe_display_rule = 'as_sent' and new.gpexe_display_unit is distinct from new.source_unit) -- G1 (v74): as sent, in the row's own unit
+     then
     raise exception 'source_metric_confirmation_items: a compared row names a display rule and a unit of that rule' using errcode = '23514';
   end if;
   if not training_load.source_metric_confirmation_number_ok(new.raw_a) or not training_load.source_metric_confirmation_number_ok(new.raw_b)
@@ -743,6 +752,81 @@ begin
   end if;
 end;
 $function$;
+
+CREATE OR REPLACE FUNCTION training_load.source_metric_confirmation_items_update_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+declare
+  actor uuid;
+  expires timestamptz;
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'source_metric_confirmation_items: a row is never deleted' using errcode = '23514';
+  end if;
+  -- The right first: the acting user, or none. A present but invalid setting
+  -- raises 42501; an acting user who is not an active platform admin changes
+  -- nothing here, whatever the change.
+  actor := training_load.source_metric_confirmation_actor_or_null();
+  if actor is not null and training_load.source_metric_actor_basis(actor, null) is distinct from 'platform_admin' then
+    raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
+  end if;
+  if new.id is distinct from old.id or new.confirmation_id is distinct from old.confirmation_id
+     or new.session_ordinal is distinct from old.session_ordinal or new.item_no is distinct from old.item_no
+     or new.item_kind is distinct from old.item_kind or new.checked is distinct from old.checked
+     or new.source_metric_version_id is distinct from old.source_metric_version_id
+     or new.mapping_version_id is distinct from old.mapping_version_id
+     or new.parameter_fingerprint is distinct from old.parameter_fingerprint
+     or new.source_unit is distinct from old.source_unit or new.target_unit is distinct from old.target_unit
+     or new.scale::text is distinct from old.scale::text or new.scale_divisor::text is distinct from old.scale_divisor::text
+     or new."offset"::text is distinct from old."offset"::text or new.compared_level is distinct from old.compared_level
+     or new.gpexe_display_rule is distinct from old.gpexe_display_rule or new.gpexe_display_unit is distinct from old.gpexe_display_unit
+     or new.values_digest is distinct from old.values_digest
+     or new.source_unit_word is distinct from old.source_unit_word -- G1 (v74): the word GPEXE sent is evidence, final
+     then
+    raise exception 'source_metric_confirmation_items: only the values of a row are removed' using errcode = '23514';
+  end if;
+  if old.checked is distinct from true or old.values_removed_at is not null then
+    raise exception 'source_metric_confirmation_items: the row holds no values to remove' using errcode = '23514';
+  end if;
+  if new.raw_a is not null or new.stored_a is not null or new.raw_b is not null or new.stored_b is not null
+     or new.values_salt is not null then
+    raise exception 'source_metric_confirmation_items: a removal nulls the four values and the salt together' using errcode = '23514';
+  end if;
+  if new.values_removed_kind is null or new.values_removed_kind not in ('expired', 'erased') then
+    raise exception 'source_metric_confirmation_items: a removal is expired or erased' using errcode = '23514';
+  end if;
+  if new.values_removed_kind = 'expired' then
+    select values_expire_at into expires from training_load.source_metric_confirmations where id = old.confirmation_id;
+    if expires is null or expires > now() then
+      raise exception 'source_metric_confirmation_items: the values are not past their date' using errcode = '23514';
+    end if;
+    if not training_load.source_metric_confirmation_purge_marker_ok() then
+      raise exception 'source_metric_confirmation_items: expired values are removed only by the removal function' using errcode = '23514';
+    end if;
+  elsif actor is null then
+    -- An erasure always has an acting user (a platform admin, checked above).
+    raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
+  end if;
+  -- The record of the removal is the database's, never the writer's.
+  new.values_removed_at := clock_timestamp();
+  new.values_removed_by_user_id := actor;
+  return new;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION training_load.source_metric_confirmation_item_digest(i training_load.source_metric_confirmation_items)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    select encode(sha256(i.values_salt || convert_to(concat_ws('|',
+      i.confirmation_id::text, i.item_no::text, i.item_kind, i.mapping_version_id::text, i.source_metric_version_id::text,
+      i.parameter_fingerprint, i.source_unit, i.target_unit, i.scale::text, i.scale_divisor::text, i."offset"::text,
+      i.gpexe_display_rule, i.gpexe_display_unit,
+      i.raw_a::text, i.stored_a::text, i.raw_b::text, i.stored_b::text,
+      i.source_unit_word), 'UTF8')), 'hex') -- G1 (v74): the word last; concat_ws skips its null, so a row without one keeps its digest
+  $function$;
 
 CREATE OR REPLACE FUNCTION training_load.source_metric_confirmations_commit_link()
  RETURNS trigger
@@ -1094,7 +1178,8 @@ begin
     select state, created_by_user_id, xmin::text::bigint as written_in into rev
       from training_load.source_metric_definitions where id = new.source_metric_definition_id;
     if not found or rev.written_in is distinct from here or rev.state is distinct from 'active'
-       or rev.created_by_user_id is distinct from actor or new.reason is not null or new.evidence_ref is not null then
+       or rev.created_by_user_id is distinct from actor or new.reason is not null or new.evidence_ref is not null
+       or new.request_key is null or new.request_hash is null then
       raise exception 'source_metric_audit: the audit row must follow its own source metric creation in the same transaction' using errcode = '23514';
     end if;
     if exists (select 1 from training_load.source_metric_audit

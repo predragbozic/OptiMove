@@ -2,15 +2,17 @@
 -- Run each block in a read-only transaction. Every block names its expected value.
 
 -- 1. v74 recorded once with the file's checksum, and nothing later. Expected: 1, true, 0.
-select count(*) as v74_rows, bool_and(checksum = '4bba2767f4b39b8ffdab4ef39a4513f33d884f9bcff880af147b31537a4f764b') as checksum_ok,
+select count(*) as v74_rows, bool_and(checksum = '78f549f8e8281e38a5216da09a00550e5bd7d9df8897bdc15c049a90ea46ef90') as checksum_ok,
        (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') as later
   from public.schema_migrations where migration_name = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql';
 
--- 2. The fifteen v74 bodies. Expected: 15 rows, every ok = true.
+-- 2. The seventeen v74 bodies. Expected: 17 rows, every ok = true.
 with expected(name, md5) as (values
-    ('source_metric_audit_revision_guard', '833800203ddc21ef2c9758d6393a554a'),
+    ('source_metric_audit_revision_guard', 'abf18bd36d707b194896f3cb576be5cd'),
     ('source_metric_audit_row_ok', 'd4f6fa07d21bcd54a21d7789b67c38ae'),
-    ('source_metric_confirmation_items_insert_guard', '1d2c25710612f3adf811cc4421db4d62'),
+    ('source_metric_confirmation_item_digest', 'aa63fad014aa75884bf61e6ee4ca8a6a'),
+    ('source_metric_confirmation_items_insert_guard', 'cfedbe8120b9ea6bd71773a3ef595803'),
+    ('source_metric_confirmation_items_update_guard', '9eacfa749eee01f4a6e9a1d30cc7e3c3'),
     ('source_metric_confirmation_rows_hold', '54d39cb464774bcba838b046e236b682'),
     ('source_metric_confirmations_commit_link', 'f55ef973de6a49ead59359c87a8279fa'),
     ('source_metric_confirmations_insert_guard', '54db1047da56c6848acc21bfe68d6685'),
@@ -27,12 +29,19 @@ select e.name, (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid
                  where n.nspname = 'training_load' and p.proname = e.name) = e.md5 as ok
   from expected e order by 1;
 
--- 3. The two new triggers, enabled; the new columns. Expected: 2 enabled triggers; 3 columns.
+-- 3. The new triggers, enabled (T2a's two and the unit words' three); the new columns; the three new indexes, valid.
+--    Expected: 5 triggers; 4 columns; 3 indexes.
 select (select count(*) from pg_trigger where not tgisinternal and tgenabled = 'O'
-         and tgname in ('source_metric_definitions_v74_actor_guard', 'source_metric_definitions_v74_create_link')) as triggers,
+         and tgname in ('source_metric_definitions_v74_actor_guard', 'source_metric_definitions_v74_create_link',
+                        'source_unit_words_seed_only', 'source_unit_words_append_only', 'source_unit_words_no_truncate')) as triggers,
        (select count(*) from information_schema.columns where table_schema = 'training_load'
          and ((table_name = 'source_metric_definition_versions' and column_name in ('unit_observation_id', 'meaning_observation_id'))
-           or (table_name = 'source_metric_confirmations' and column_name = 'source_metric_version_id'))) as columns;
+           or (table_name = 'source_metric_confirmations' and column_name = 'source_metric_version_id')
+           or (table_name = 'source_metric_confirmation_items' and column_name = 'source_unit_word'))) as columns,
+       (select count(*) from pg_index i join pg_class c on c.oid = i.indexrelid join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'training_load' and i.indisvalid
+           and c.relname in ('source_metric_revisions_unit_observation_idx', 'source_metric_revisions_meaning_observation_idx',
+                             'source_metric_confirmations_revision_idx')) as indexes;
 
 -- 4. GPEXE's unit words, exactly (plan section 8.10). Expected: nine rows, as listed there.
 select word, source_unit, display_rule, evidence_kind, evidence_ref from training_load.source_unit_words

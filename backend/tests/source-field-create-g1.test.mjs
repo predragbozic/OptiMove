@@ -20,7 +20,7 @@ const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const PREFIX = "/api/training-load/sources/metrics";
 const CTX = `select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`;
 
-let db, admin, server, apiBase, createSession, appPool, createService;
+let db, admin, server, apiBase, createSession, appPool, createService, mappingService;
 const responses = [];
 const W = {};
 
@@ -34,6 +34,7 @@ before(async () => {
   ({ createSession } = await import("../src/auth.js"));
   ({ pool: appPool } = await import("../src/db.js"));
   createService = await import("../src/sourceFieldCreateService.js");
+  mappingService = await import("../src/sourceMetricMappingService.js");
   assert.equal((await appPool.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: the app talks to the disposable database");
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
@@ -43,6 +44,7 @@ before(async () => {
 
 after(async () => {
   createService?.setFieldCreateHoldForTests(null);
+  mappingService?.setMappingCommitForTests();
   if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
   if (appPool) await appPool.end().catch(() => {});
   if (admin) await admin.end();
@@ -190,7 +192,7 @@ test("3. route C's refusals, each before anything is written: not generic, not o
   assert.equal((await one(`select count(*)::int n from training_load.source_metric_definitions`)).n, before);
 });
 
-test("4. route C's audience: a club admin, a platform admin in a club's workspace, no session - the identical 404, before the body", async () => {
+test("4. route C's audience: a club admin and a platform admin in a club's workspace get the identical 404, before the body; no session is the app-wide 401", async () => {
   const missing = await api("/no-such-route-g1", { cookie: W.pa.cookie });
   for (const cookie of [W.ca.cookie, W.paClub.cookie]) {
     const r = await api("/fields", { cookie, method: "POST", body: body({ name: "never_seen_either" }) });
@@ -224,10 +226,15 @@ test("5. v74's T2a guard: with an acting user, only a platform admin, in their o
   refused(await tx(W.pa.id, (c) => insert(c, `athlete_session.g1_${uid()}`, W.ca.id)), "42501", /^source metric: the acting user may not create a source metric$/);
   refused(await tx(W.pa.id, (c) => insert(c, `more.events.g1_${uid()}`, W.pa.id)), "23514", /^source_metric_definitions: a created source metric is a generic gpexe \/ rest_v1 field$/);
   refused(await tx(W.pa.id, (c) => insert(c, `athlete_session.g1_${uid()}`, W.pa.id)), "23514", /^source_metric_definitions: a created source metric is written with its source_metric_create audit row$/);
-  // With its row: committed.
-  const ok = await tx(W.pa.id, async (c) => {
+  // Its row is the request record: without a request key it is refused (the database review's LOW-1).
+  refused(await tx(W.pa.id, async (c) => {
     const id = (await insert(c, `athlete_session.g1_${uid()}`, W.pa.id)).rows[0].id;
     await c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, to_status, performed_by_user_id, basis, operation_id) values ('source_metric_create',$1,'active',$2,'platform_admin',$3)`, [id, W.pa.id, crypto.randomUUID()]);
+  }), "23514", /^source_metric_audit: the audit row must follow its own source metric creation in the same transaction$/);
+  // With its keyed row: committed.
+  const ok = await tx(W.pa.id, async (c) => {
+    const id = (await insert(c, `athlete_session.g1_${uid()}`, W.pa.id)).rows[0].id;
+    await c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, to_status, performed_by_user_id, basis, operation_id, request_key, request_hash) values ('source_metric_create',$1,'active',$2,'platform_admin',$3,$4,$5)`, [id, W.pa.id, crypto.randomUUID(), crypto.randomUUID(), hash()]);
     return id;
   });
   assert.equal(ok.ok, true, ok.error?.message);
@@ -500,7 +507,7 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     const pre = await readOnly(c, RUNBOOK("generic-source-fields-v74-preflight.sql"));
     assert.deepEqual([pre[0][0].v72, pre[0][0].v74, pre[0][0].later_than_v74], ["1", "0", "0"]);
     assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = 'migrations_v2/202611151500_app_error_events_v73_request_and_restart.sql'`)).rows[0].n, 1, "v73 is recorded, as on production");
-    assert.ok(pre[1].length === 12 && pre[1].every((r) => r.ok === true), "the twelve bodies are the ones v74 was written on");
+    assert.ok(pre[1].length === 14 && pre[1].every((r) => r.ok === true), "the fourteen bodies are the ones v74 was written on");
     assert.deepEqual(pre[2][0], { functions: "0", columns: "0", words_table: "0" });
     assert.deepEqual(pre[4][0], { locks: "0", idle_transactions: "0" });
     const digestBefore = pre[5][0];
@@ -510,8 +517,8 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     await migrateTo(rdb.url, withAppHealth);
     const post = await readOnly(c, RUNBOOK("generic-source-fields-v74-postcheck.sql"));
     assert.deepEqual([post[0][0].v74_rows, post[0][0].checksum_ok, post[0][0].later], ["1", true, "0"], "recorded once with the file's checksum");
-    assert.ok(post[1].length === 15 && post[1].every((r) => r.ok === true), "the fifteen v74 bodies");
-    assert.deepEqual(post[2][0], { triggers: "2", columns: "3" });
+    assert.ok(post[1].length === 17 && post[1].every((r) => r.ok === true), "the seventeen v74 bodies");
+    assert.deepEqual(post[2][0], { triggers: "5", columns: "4", indexes: "3" });
     assert.equal(post[3].length, 9, "the nine unit words");
     assert.deepEqual(post[4][0], digestBefore, "the revision verified by documents is unchanged byte for byte");
     assert.deepEqual(post[5][0], { audit_rows: "0", observations: "0", source_stated: "0" });
@@ -544,7 +551,7 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     await c.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [pa]);
     await c.query(CTX, [pa]);
     const nid = (await c.query(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1','athlete_session.g1_created','C',$1) returning id`, [pa])).rows[0].id;
-    await c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, to_status, performed_by_user_id, basis, operation_id) values ('source_metric_create',$1,'active',$2,'platform_admin',$3)`, [nid, pa, crypto.randomUUID()]);
+    await c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, to_status, performed_by_user_id, basis, operation_id, request_key, request_hash) values ('source_metric_create',$1,'active',$2,'platform_admin',$3,$4,$5)`, [nid, pa, crypto.randomUUID(), crypto.randomUUID(), hash()]);
     await c.query("commit");
     const catalog74 = (await c.query(CATALOG)).rows.map((r) => r.x);
     await assert.rejects(c.query(RUNBOOK("generic-source-fields-v74-rollback.sql")), /v74 rollback refused: a field was created or observed/);
@@ -554,4 +561,53 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     await c.end();
     await rdb.drop();
   }
+});
+
+test("12. route C's lost answer, through the route: a COMMIT that went through but whose answer was lost is verified by its request key (200, verified_after_commit_error, one field, as M2); a COMMIT that did not go through and cannot be confirmed is 503 outcome_unknown, and the same key then creates it once", async () => {
+  const plant = async (name) => observe(W.conn, [["details.session", name, { kind: "unit_value_object", unit: "power" }]]);
+  // (a) The COMMIT is sent and goes through; its answer is lost.
+  const nameA = `lost_ok_${uid()}`;
+  await plant(nameA);
+  mappingService.setMappingCommitForTests({ fault: (client) => client.query("commit").then(() => { throw new Error("answer lost"); }), timeoutMs: 2_000 });
+  const lost = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ name: nameA, label: "Lost ok" }) });
+  mappingService.setMappingCommitForTests();
+  assert.deepEqual([lost.status, lost.body.commitConfirmation, lost.body.replayed], [200, "verified_after_commit_error", false], lost.text);
+  const fieldA = await one(`select id from training_load.source_metric_definitions where source_metric_key = $1`, [`details.players.${nameA}`]);
+  assert.equal(lost.body.field.id, fieldA.id);
+  assert.equal((await auditOf(fieldA.id)).filter((r) => r.keyed).length, 1, "one request record");
+  // (b) The COMMIT does not go through and the check cannot confirm it: outcome unknown; the same key creates it once.
+  const nameB = `lost_unknown_${uid()}`;
+  await plant(nameB);
+  const b = body({ name: nameB, label: "Lost unknown" });
+  mappingService.setMappingCommitForTests({ fault: (client) => client.query("rollback").then(() => { throw new Error("answer lost"); }), timeoutMs: 2_000 });
+  const unknown = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: b });
+  mappingService.setMappingCommitForTests();
+  assert.deepEqual([unknown.status, unknown.body.error, unknown.body.requestKey], [503, "outcome_unknown", b.requestKey], unknown.text);
+  assert.equal((await q(`select 1 from training_load.source_metric_definitions where source_metric_key = $1`, [`details.players.${nameB}`])).length, 0);
+  const retry = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: b });
+  assert.equal(retry.status, 201, retry.text);
+  const again = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: b });
+  assert.deepEqual([again.status, again.body.replayed, again.body.field.id], [200, true, retry.body.field.id], again.text);
+  assert.equal((await q(`select 1 from training_load.source_metric_definitions where source_metric_key = $1`, [`details.players.${nameB}`])).length, 1, "created once");
+});
+
+test("13. the database review's MEDIUM-2: a field_unit row's word is final (an update that changes it is refused) and inside its values digest (a row without a word keeps v65's digest)", async () => {
+  await plantObserved("final_word");
+  const f = await newField("final_word");
+  const st = await storedSession();
+  const res = await txAs(W.pa.id, (c) => observed(c, W.pa.id, { f, st }));
+  assert.equal(res.ok, true, res.error?.message);
+  const changed = await txAs(W.pa.id, (c) => c.query(`update training_load.source_metric_confirmation_items set source_unit_word = 'time' where confirmation_id = $1`, [res.value]));
+  assert.equal(changed.ok, false);
+  assert.equal(changed.error.code, "23514");
+  assert.match(changed.error.message, /^source_metric_confirmation_items: only the values of a row are removed$/);
+  const d = await one(`select i.values_digest = training_load.source_metric_confirmation_item_digest(i) as stored_is_recomputed,
+                              training_load.source_metric_confirmation_item_digest(i)
+                                <> training_load.source_metric_confirmation_item_digest(jsonb_populate_record(i, '{"source_unit_word": "time"}')) as word_covered,
+                              training_load.source_metric_confirmation_item_digest(jsonb_populate_record(i, '{"source_unit_word": null}'))
+                                = encode(sha256(i.values_salt || convert_to(concat_ws('|', i.confirmation_id::text, i.item_no::text, i.item_kind, i.mapping_version_id::text,
+                                    i.source_metric_version_id::text, i.parameter_fingerprint, i.source_unit, i.target_unit, i.scale::text, i.scale_divisor::text, i."offset"::text,
+                                    i.gpexe_display_rule, i.gpexe_display_unit, i.raw_a::text, i.stored_a::text, i.raw_b::text, i.stored_b::text), 'UTF8')), 'hex') as wordless_is_v65
+                         from training_load.source_metric_confirmation_items i where i.confirmation_id = $1`, [res.value]);
+  assert.deepEqual(d, { stored_is_recomputed: true, word_covered: true, wordless_is_v65: true });
 });

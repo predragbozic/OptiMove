@@ -9,7 +9,7 @@
 --
 -- v74 adds two T2a functions and their triggers, T2b's two observation columns, T9's revision column, five CHECKs and
 -- three indexes, the seed-only table source_unit_words with its guard and nine rows, and T9i's source_unit_word; it widens
--- CHECKs of T2b, T9, T9i and T8, relaxes NOT NULLs of T9 and T9i and replaces twelve bodies. This script restores every body byte for byte (by its pre-v74 text) and every CHECK and
+-- CHECKs of T2b, T9, T9i and T8, relaxes NOT NULLs of T9 and T9i and replaces fourteen bodies. This script restores every body byte for byte (by its pre-v74 text) and every CHECK and
 -- NOT NULL, drops what v74 created (the words table with its rows) and the v74 record; it changes no other row. It refuses, changing
 -- nothing, when
 --   * the migrator is running (advisory lock 822026, as backend/src/migrate.js);
@@ -62,12 +62,14 @@ declare
     ['source_metric_require_seed_window', '0152cdbdd79f8c40151ee40efe1aab21'],
     ['source_metric_display_unit_ok', '0f9faa060c4d3a98d7a665af0885a95d'],
     ['source_metric_confirmations_insert_guard', '54db1047da56c6848acc21bfe68d6685'],
-    ['source_metric_confirmation_items_insert_guard', '1d2c25710612f3adf811cc4421db4d62'],
+    ['source_metric_confirmation_items_insert_guard', 'cfedbe8120b9ea6bd71773a3ef595803'],
     ['source_metric_confirmation_rows_hold', '54d39cb464774bcba838b046e236b682'],
     ['source_metric_confirmations_commit_link', 'f55ef973de6a49ead59359c87a8279fa'],
     ['source_metric_audit_row_ok', 'd4f6fa07d21bcd54a21d7789b67c38ae'],
-    ['source_metric_audit_revision_guard', '833800203ddc21ef2c9758d6393a554a'],
+    ['source_metric_audit_revision_guard', 'abf18bd36d707b194896f3cb576be5cd'],
     ['source_metric_mapping_versions_update_guard', '1a5652ad19625a1d7e57333984dc1ad8'],
+    ['source_metric_confirmation_items_update_guard', '9eacfa749eee01f4a6e9a1d30cc7e3c3'],
+    ['source_metric_confirmation_item_digest', 'aa63fad014aa75884bf61e6ee4ca8a6a'],
     ['source_metric_definitions_actor_guard', 'eaf6ebc56de03c7413e843da4dc77644'],
     ['source_metric_definitions_create_link', 'ee8dbd5650fbcad096bb3f0e146a95c4'],
     ['source_unit_words_guard', 'dbfa79d52c1479affbdd796136ee3cac']];
@@ -995,6 +997,78 @@ begin
   return new;
 end;
 $function$;
+
+CREATE OR REPLACE FUNCTION training_load.source_metric_confirmation_items_update_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+declare
+  actor uuid;
+  expires timestamptz;
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'source_metric_confirmation_items: a row is never deleted' using errcode = '23514';
+  end if;
+  -- The right first: the acting user, or none. A present but invalid setting
+  -- raises 42501; an acting user who is not an active platform admin changes
+  -- nothing here, whatever the change.
+  actor := training_load.source_metric_confirmation_actor_or_null();
+  if actor is not null and training_load.source_metric_actor_basis(actor, null) is distinct from 'platform_admin' then
+    raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
+  end if;
+  if new.id is distinct from old.id or new.confirmation_id is distinct from old.confirmation_id
+     or new.session_ordinal is distinct from old.session_ordinal or new.item_no is distinct from old.item_no
+     or new.item_kind is distinct from old.item_kind or new.checked is distinct from old.checked
+     or new.source_metric_version_id is distinct from old.source_metric_version_id
+     or new.mapping_version_id is distinct from old.mapping_version_id
+     or new.parameter_fingerprint is distinct from old.parameter_fingerprint
+     or new.source_unit is distinct from old.source_unit or new.target_unit is distinct from old.target_unit
+     or new.scale::text is distinct from old.scale::text or new.scale_divisor::text is distinct from old.scale_divisor::text
+     or new."offset"::text is distinct from old."offset"::text or new.compared_level is distinct from old.compared_level
+     or new.gpexe_display_rule is distinct from old.gpexe_display_rule or new.gpexe_display_unit is distinct from old.gpexe_display_unit
+     or new.values_digest is distinct from old.values_digest then
+    raise exception 'source_metric_confirmation_items: only the values of a row are removed' using errcode = '23514';
+  end if;
+  if old.checked is distinct from true or old.values_removed_at is not null then
+    raise exception 'source_metric_confirmation_items: the row holds no values to remove' using errcode = '23514';
+  end if;
+  if new.raw_a is not null or new.stored_a is not null or new.raw_b is not null or new.stored_b is not null
+     or new.values_salt is not null then
+    raise exception 'source_metric_confirmation_items: a removal nulls the four values and the salt together' using errcode = '23514';
+  end if;
+  if new.values_removed_kind is null or new.values_removed_kind not in ('expired', 'erased') then
+    raise exception 'source_metric_confirmation_items: a removal is expired or erased' using errcode = '23514';
+  end if;
+  if new.values_removed_kind = 'expired' then
+    select values_expire_at into expires from training_load.source_metric_confirmations where id = old.confirmation_id;
+    if expires is null or expires > now() then
+      raise exception 'source_metric_confirmation_items: the values are not past their date' using errcode = '23514';
+    end if;
+    if not training_load.source_metric_confirmation_purge_marker_ok() then
+      raise exception 'source_metric_confirmation_items: expired values are removed only by the removal function' using errcode = '23514';
+    end if;
+  elsif actor is null then
+    -- An erasure always has an acting user (a platform admin, checked above).
+    raise exception 'source metric confirmation: the acting user may not remove these values' using errcode = '42501';
+  end if;
+  -- The record of the removal is the database's, never the writer's.
+  new.values_removed_at := clock_timestamp();
+  new.values_removed_by_user_id := actor;
+  return new;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION training_load.source_metric_confirmation_item_digest(i training_load.source_metric_confirmation_items)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    select encode(sha256(i.values_salt || convert_to(concat_ws('|',
+      i.confirmation_id::text, i.item_no::text, i.item_kind, i.mapping_version_id::text, i.source_metric_version_id::text,
+      i.parameter_fingerprint, i.source_unit, i.target_unit, i.scale::text, i.scale_divisor::text, i."offset"::text,
+      i.gpexe_display_rule, i.gpexe_display_unit,
+      i.raw_a::text, i.stored_a::text, i.raw_b::text, i.stored_b::text), 'UTF8')), 'hex')
+  $function$;
 
 -- GPEXE's unit words, and the record.
 drop table training_load.source_unit_words;

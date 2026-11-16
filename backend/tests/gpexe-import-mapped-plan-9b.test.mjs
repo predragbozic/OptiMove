@@ -59,6 +59,13 @@ test("2. mappedMetricSpecs refuses mapping_not_usable for every cause, and sourc
     const rows = allRows({ [key]: override });
     assert.deepEqual(mappedMetricSpecs(rows), { block: "mapping_not_usable", blockReason: reason }, reason);
   }
+  // G1 (plan section 8.4): a revision proven by the unit word GPEXE states (source_stated) is as usable as a verified
+  // one - the same predicate the activation gate, the board and the mapping screen use (statusProven); every other
+  // status is refused.
+  assert.equal(specsOf(allRows({ gpexe_time_min: { revisionEvidence: "source_stated" } })).length, KEYS.length, "a source_stated revision is usable");
+  for (const status of ["unproven", "documented", "observed", null, "VERIFIED"]) {
+    assert.deepEqual(mappedMetricSpecs(allRows({ gpexe_time_min: { revisionEvidence: status } })), { block: "mapping_not_usable", blockReason: "revision_not_usable" }, String(status));
+  }
   // Two activations of one canonical variable at one level (D11.7 defence).
   const twice = allRows();
   twice[1] = { ...twice[1], metricDefinitionId: twice[0].metricDefinitionId };
