@@ -17,6 +17,7 @@
 // service); return, log or put into a URL an athlete id or a GPEXE athlete
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
+import { revisionProven } from "./sourceFieldEvidence.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMapper.js";
 import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
@@ -322,7 +323,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
 function columnsOf(world) {
   return world.fields.map((f) => {
     const extractor = extractorFor({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key });
-    const proven = f.evidence_status === "verified" && f.source_unit !== null;
+    const proven = revisionProven(f);
     const rule = proven ? displayRuleFor({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key, sourceUnit: f.source_unit }) : null;
     let reason = null;
     if (!extractor || (extractor.valueShape !== null && (extractor.valueShape !== f.value_shape || extractor.parameterKind !== f.parameter_kind))) reason = "source_metric_unsupported";
@@ -497,8 +498,8 @@ function boardOf(world, pairIndex) {
         const reason = c.reason ?? (distinctPair(rawA, rawB) ? null : "no_value_for_pair");
         return {
           fieldId: c.field.id, revisionId: c.field.revision_id, key: c.field.source_metric_key, label: c.field.source_label,
-          unit: c.field.evidence_status === "verified" ? c.field.source_unit : null,
-          unitProven: c.field.evidence_status === "verified" && c.field.source_unit !== null,
+          unit: revisionProven(c.field) ? c.field.source_unit : null,
+          unitProven: revisionProven(c.field),
           expectedUnit: c.field.expected_source_unit ?? null,
           placeable: reason === null, reason,
           displayRule: c.rule?.rule ?? null, displayUnits: c.rule ? [...c.rule.units] : [],

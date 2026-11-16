@@ -40,6 +40,7 @@
 //
 // Responses carry no acting user's id, no SQL, no trigger text and no free
 // text beyond the M1-bounded label, evidence references and conversion note.
+import { statusProven } from "./sourceFieldEvidence.js";
 import crypto from "node:crypto";
 import pg from "pg";
 import { pool } from "./db.js";
@@ -1485,7 +1486,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       const status = locked.get(vId);
       if (status !== "needs_review") throw refusal(409, "version_not_submitted", MESSAGES.version_not_submitted, { current: { status } });
       if (active !== expectedActiveVersionId) throw refusal(409, "active_version_changed", MESSAGES.active_version_changed, { current: { activeVersionId: active } });
-      if (!revision || revision.state !== "active" || revision.evidence_status !== "verified") throw refusal(409, "revision_not_verified", MESSAGES.revision_not_verified);
+      if (!revision || revision.state !== "active" || !statusProven(revision.evidence_status)) throw refusal(409, "revision_not_verified", MESSAGES.revision_not_verified);
       if (!md || md.state !== "active") throw refusal(409, "target_not_active", MESSAGES.target_not_active);
       if (md.current_version_id !== v.metric_definition_version_id) throw refusal(409, "canonical_version_changed", MESSAGES.canonical_version_changed);
       const conversion = await conversionsHold(client, v);

@@ -42,6 +42,7 @@ import { adminWriteKit, LIST_CAPS, SourceMetricMappingError } from "./sourceMetr
 import { endAuditRows, endOpenActivations, lockOpenActivations } from "./sourceMetricActivationSteps.js";
 import { boundedText, unitTokenOk } from "./metricTextRules.js";
 import { evidenceRefOk, mayVerify } from "./sourceFieldVerificationService.js";
+import { statusProven } from "./sourceFieldEvidence.js";
 
 const {
   runWrite, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, hashOf, UUID, REVISION_COLUMNS, revisionOut,
@@ -505,8 +506,9 @@ export async function replaceRevision({ ctx, fieldId: rawField, revisionId: rawR
       if (field.state !== "active") throw refusal(409, "field_not_active", TEXT.field_not_active);
       if (!active) throw refusal(409, "revision_not_active", TEXT.revision_not_active);
       if (active.id !== expectedActiveRevisionId) throw refusal(409, "revision_changed", TEXT.revision_changed, { current: { activeRevisionId: active.id } });
-      // O2: a verified revision is replaced only by a verified one.
-      if (active.evidence_status === "verified" && successor.evidence_status !== "verified") {
+      // O2: a verified revision is replaced only by a verified one. G1 (section 8.4): a source_stated revision too - it
+      // rises to verified through R+1 and the M2b acts, and nothing replaces a proven revision with a weaker one.
+      if (statusProven(active.evidence_status) && successor.evidence_status !== "verified") {
         throw refusal(409, "successor_not_verified", TEXT.successor_not_verified);
       }
       const toDisable = await pinnedDecisions(client, pinned);

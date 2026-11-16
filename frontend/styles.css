@@ -20117,6 +20117,12 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .source-fields-evidence.is-verified {
   background: var(--accent-soft);
 }
+/* G1: the unit GPEXE states, checked on the board - its own look, never the verified one. */
+.source-fields-evidence.is-source_stated {
+  border-color: #b9a7dd;
+  background: #f3effb;
+  color: #4b3488;
+}
 
 /* Exercise Library "Load more" (exercise-actions.js, loadMoreExercises): a
    failed further page is said under the button, the list stays as it was. */

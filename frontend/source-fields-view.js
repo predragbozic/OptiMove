@@ -38,15 +38,16 @@ const noticeHtml = (s) => (!s.notice ? ""
   : s.noticeKind === "warning" ? `<p class="metric-variables-notice is-warning" role="alert" tabindex="-1">${escapeHtml(s.notice)}</p>`
   : `<p class="metric-variables-notice" role="status" tabindex="-1">${escapeHtml(s.notice)}</p>`);
 const boundUnitLabel = (revision) => (revision.parameterKind === "zone_bounds" ? "Unit of the zone bounds" : "Unit of the threshold");
-// The four kinds of evidence, each with its badge (its colour never says it
+// The five kinds of evidence, each with its badge (its colour never says it
 // alone: every badge keeps its word).
 const EVIDENCE_LEGEND = [
   ["unproven", "no evidence yet."],
   ["documented", "described in a document."],
   ["observed", "seen in the source's answers; its unit and meaning are not confirmed."],
   ["verified", "its unit and meaning are confirmed."],
+  ["source_stated", "its unit is the one GPEXE sends with the value, checked by an administrator on the board; not confirmed by a document."],
 ];
-// One chip that opens the four meanings on a tap (the language pass).
+// One chip that opens the five meanings on a tap (the language pass).
 function legendHtml() {
   return `
     <details class="source-fields-legend-chip">

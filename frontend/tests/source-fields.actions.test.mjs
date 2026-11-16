@@ -194,8 +194,9 @@ test("the list groups the fields by source, shows the unit (expected units marke
     "Documented: described in a document.",
     "Observed: seen in the source's answers; its unit and meaning are not confirmed.",
     "Verified: its unit and meaning are confirmed.",
+    "Unit stated by GPEXE: its unit is the one GPEXE sends with the value, checked by an administrator on the board; not confirmed by a document.",
   ]);
-  assert.deepEqual([...content.querySelectorAll(".source-fields-legend .source-fields-evidence")].map((b) => b.className.split(" ").at(-1)), ["is-unproven", "is-documented", "is-observed", "is-verified"]);
+  assert.deepEqual([...content.querySelectorAll(".source-fields-legend .source-fields-evidence")].map((b) => b.className.split(" ").at(-1)), ["is-unproven", "is-documented", "is-observed", "is-verified", "is-source_stated"]);
   // Each field has a tile for its kind of value: a time, a zone, a count of events.
   assert.deepEqual([...content.querySelectorAll(".metric-variables-item .dc-tile-field svg")].length, 3);
   assert.ok(content.innerHTML.includes("Power zone &lt;distance&gt;"), "a label is escaped");
