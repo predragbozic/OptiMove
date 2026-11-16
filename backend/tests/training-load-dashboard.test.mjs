@@ -5579,6 +5579,29 @@ test("Simple production HTTP mount authenticates, hides foreign dashboards and r
     }
     assert.equal((await api(target, { method, ...(method !== "GET" ? { body: {} } : {}) })).status, 401);
   }
+  const rawTarget = base + "/simple/preview?private=excluded";
+  for (const [body, expected] of [["{", 400], [JSON.stringify("x".repeat(110 * 1024)), 413]]) {
+    for (const cookie of [undefined, adminCookie, club.coachCookie]) {
+      const headers = { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) };
+      const options = { method: "POST", headers, body };
+      const actual = await fetch(apiBaseUrl + rawTarget, options);
+      const reference = await fetch(offOrigin + rawTarget, options);
+      assert.equal(actual.status, expected);
+      assert.equal(actual.status, reference.status);
+      assert.equal(await actual.text(), await reference.text());
+      const stableHeaders = response => [...response.headers].filter(([key]) => key !== "date");
+      assert.deepEqual(stableHeaders(actual), stableHeaders(reference));
+    }
+  }
+  const hidden = await fetch(apiBaseUrl + base + "/simple/capabilities?private=excluded", { headers: { Cookie: adminCookie } });
+  assert.equal((await hidden.json()).path, base + "/simple/capabilities");
+
+  // Simulate an admitted request whose workspace changes before the transaction rechecks it.
+  const clubBound = await makeDashboardHttp(adminCookie);
+  const { authorizePreviewTarget } = await import("../src/dashboardSimple/previewContext.js");
+  const admitted = { user: { id: adminId }, simplePlatformPilot: true };
+  assert.equal((await authorizePreviewTarget(query, { user: admitted.user }, clubBound.id)).dashboard.id, clubBound.id);
+  await assert.rejects(authorizePreviewTarget(query, admitted, clubBound.id), { code: "notFound", status: 404 });
   await setActiveWorkspace(adminId, "platform");
   assert.equal((await request("capabilities")).status, 200);
   const input = s2bEnvelope();

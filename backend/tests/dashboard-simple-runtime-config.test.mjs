@@ -40,3 +40,14 @@ test('prototype-like key IDs remain inert data without changing the verification
   assert.equal(Object.getPrototypeOf(result.verificationKeys), Object.prototype);
   assert.ok(Object.hasOwn(result.verificationKeys,'__proto__'));
 });
+
+test('platform-pilot is the only supported Simple audience and is the default', () => {
+  for (const mode of ['preview', 'enabled']) {
+    const env = { ...base(), DASHBOARD_SIMPLE_MODE: mode };
+    assert.deepEqual(readSimpleRuntimeConfig(env), readSimpleRuntimeConfig({ ...env, DASHBOARD_SIMPLE_AUDIENCE: 'platform-pilot' }));
+    for (const audience of ['', 'all', 'true', 'PLATFORM-PILOT']) {
+      assert.throws(() => readSimpleRuntimeConfig({ ...env, DASHBOARD_SIMPLE_AUDIENCE: audience }),
+        { code: 'simpleRuntimeConfiguration', message: 'Invalid Dashboard Simple configuration: DASHBOARD_SIMPLE_AUDIENCE' });
+    }
+  }
+});

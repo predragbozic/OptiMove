@@ -1,3 +1,4 @@
+import { captureSimplePreviewRequestBytes } from './dashboardSimple/previewRouter.js';
 import { mediaRetentionDatabaseError } from './mediaReferences.js';
 import "dotenv/config";
 import express from "express";
@@ -77,22 +78,27 @@ app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
 // An error report is tiny: this route parses at most 4 KB (a larger body is 413 body_too_large from the error handler); the global parser then skips an already parsed body.
 app.use("/api/app-errors", express.json({ limit: "4kb" }));
 function missingRoute(req, res) {
-  res.status(404).json({ error: "Not found", path: req.originalUrl.split("?", 1)[0] });
+  const target = req.originalUrl;
+  const pathname = target.startsWith("/") ? target.split("?", 1)[0] : URL.parse(target)?.pathname ?? req.path;
+  res.status(404).json({ error: "Not found", path: pathname });
 }
 
 const simpleRuntime = await createSimpleRuntime({ pool, poolMax: POOL_MAX, queryDashboard });
 app.locals.dashboardSimpleMode = simpleRuntime.mode;
+// Parse first with the normal API rules, even for denied and anonymous requests.
+// Simple's routers still enforce their smaller limits using the captured length.
+app.use(express.json({ verify: captureSimplePreviewRequestBytes }));
+app.use(authMiddleware);
+app.use(attachAuthorizationContext);
 if (simpleRuntime.router) {
-  app.use(SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, async (req, res, next) => {
+  app.use(SIMPLE_RUNTIME_PATH, requireAuth, async (req, res, next) => {
     const workspace = await resolveActiveDataWorkspace(req);
     if (!canUseSimplePlatformPilot(req, workspace)) return missingRoute(req, res);
     req.simplePlatformPilot = true;
     next();
   }, simpleRuntime.router);
 }
-app.use(express.json());
-app.use(authMiddleware);
-app.use(attachAuthorizationContext);
+
 
 app.get("/api/health", async (_req, res, next) => {
   try {
