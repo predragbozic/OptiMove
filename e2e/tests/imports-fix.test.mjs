@@ -159,3 +159,84 @@ test("Fix (platform admin, 1280 px): Fix beside the review, through the link to 
     await world.stop();
   }
 });
+
+// Slice 2: an athlete GPEXE recorded on more than one track. Whoever imports chooses the recording in the sheet; anyone else
+// is told who does.
+for (const width of [1280, 390, 360]) {
+  test(`Fix slice 2 (${width} px): a platform admin chooses the recording of an athlete on two tracks, then imports in the sheet`, async () => {
+    const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "multitrack" } });
+    try {
+      const setup = await prepareImports(world);
+      const session = setup.candidates.find((c) => String(c.gpexeTeamSessionId) === "9131");
+      assert.ok(session, "the session is found");
+      const admin = await openAs(browser, world, "platform_admin", width);
+      try {
+        admin.page.on("dialog", (d) => d.accept());
+        const puts = [];
+        admin.page.on("request", (r) => { if (r.method() === "PUT" && /track-choices\//.test(r.url())) puts.push(r.postDataJSON()); });
+        await openTrainingLoad(admin.page);
+        await admin.page.click('[data-action="training-load-section"][data-section="imports"]');
+        await admin.page.waitForSelector('[data-attention-group="review"]', { timeout: 20_000 });
+        await admin.page.click('[data-attention-group="review"] [data-action="training-load-gpexe-fix"]');
+        await admin.page.waitForSelector(".imports-fix.is-open .imports-fix-choice", { timeout: 20_000 });
+        const text = (await admin.page.locator(".imports-fix.is-open").innerText()).replace(/\s+/g, " ");
+        assert.match(text, /GPEXE has 2 recordings of .+ in this session\. Which one should be imported\?/);
+        assert.match(text, /Recording 1 · started \d{2}:\d{2} · \d+ min · [\d,]+ m/);
+        assert.ok(!/\b900[34]\b/.test(text), "never a track id in what is read");
+        await checkLayout(admin.page, width);
+        if (SHOTS) await admin.page.screenshot({ path: `${SHOTS}/fix-track-${width}.png` });
+        await admin.page.locator(".imports-fix.is-open .imports-fix-choice").first().click();
+        if (width >= 760) {
+          // A keyboard: the arrow key moves the choice and the focus stays on the radios (the repaint gives it back).
+          await admin.page.keyboard.press("ArrowDown");
+          const focus = await admin.page.evaluate(() => ({ id: document.activeElement?.id || "", checked: document.activeElement?.checked === true }));
+          assert.match(focus.id, /^fix-track-\d+-/, `the focus stays on a radio (${focus.id})`);
+          assert.equal(focus.checked, true, "and that radio is the choice");
+          await admin.page.locator(".imports-fix.is-open .imports-fix-choice").first().click();
+        }
+        await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-fix-track-save"]');
+        const approve = admin.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]');
+        await approve.waitFor({ timeout: 20_000 });
+        assert.equal(puts.length, 1, "one choice sent");
+        assert.equal(puts[0].choice, "track");
+        assert.equal((await approve.innerText()).trim(), "Import 3 athletes");
+        await approve.click();
+        await admin.page.locator(".imports-fix.is-open", { hasText: "This session is imported." }).waitFor({ timeout: 30_000 });
+        const after = (await setup.call("platform_admin", "GET", `${G}/teams/${setup.teamId}/candidates/${session.id}`)).body.candidate;
+        assert.equal(after.status, "imported");
+        assert.equal(admin.pageErrors.length, 0, admin.pageErrors.join("\n"));
+      } finally {
+        await admin.context.close();
+      }
+    } finally {
+      await world.stop();
+    }
+  });
+}
+
+test("Fix slice 2 (coach, 1280 px): a coach who may not import reads no recordings; the end says whoever imports chooses", async () => {
+  const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "multitrack" } });
+  try {
+    await prepareImports(world);
+    const coach = await openAs(browser, world, "team_coach", 1280);
+    try {
+      const reads = [];
+      coach.page.on("request", (r) => { if (/track-choices/.test(r.url())) reads.push(r.url()); });
+      await openTrainingLoad(coach.page);
+      await coach.page.click('[data-action="training-load-section"][data-section="imports"]');
+      await coach.page.waitForSelector('[data-attention-group="review"]', { timeout: 20_000 });
+      await coach.page.click('[data-attention-group="review"] [data-action="training-load-gpexe-fix"]');
+      await coach.page.locator(".imports-fix.is-open", { hasText: "whoever imports chooses" }).waitFor({ timeout: 20_000 });
+      const text = (await coach.page.locator(".imports-fix.is-open").innerText()).replace(/\s+/g, " ");
+      assert.match(text, /This session is ready except for one athlete with more than one GPEXE recording: whoever imports chooses which one to use\. Ask your club administrator to import it\./);
+      assert.ok(!CODE.test(text), `no code: ${text.match(CODE)}`);
+      assert.equal(await coach.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]').count(), 0);
+      assert.deepEqual(reads, [], "the approver-only read is never asked");
+      assert.equal(coach.pageErrors.length, 0, coach.pageErrors.join("\n"));
+    } finally {
+      await coach.context.close();
+    }
+  } finally {
+    await world.stop();
+  }
+});

@@ -4,12 +4,28 @@
 // gpexe-period-drag.js). Pure template strings: the import view hands in the helpers it owns (wording per viewer, the
 // link chooser, the counts), so the review and the sheet say the same thing the same way.
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
-import { fixScreen, fixMustStay } from "./gpexe-fix-data.js";
+import { fixScreen, fixMustStay, openMultiTrackIds } from "./gpexe-fix-data.js";
+import { trackEntry } from "./gpexe-fix-tracks-data.js";
 
 const GIVE_UP_AFTER_CHECKS = 3;
 
 function button(cls, action, label, { disabled = false, attrs = "" } = {}) {
   return `<button type="button" class="${cls} gpexe-button" data-action="${escapeAttr(action)}" ${attrs} ${disabled ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+}
+
+const two = (n) => String(n).padStart(2, "0");
+// A recording as a coach can tell it apart: when it started, how long, how far. Never its GPEXE id.
+function recordingText(t, i) {
+  const parts = [];
+  const at = t?.startedAt ? new Date(t.startedAt) : null;
+  // A number first: two recordings can start in the same minute.
+  parts.push(`Recording ${i + 1}`);
+  if (at && !Number.isNaN(at.getTime())) parts.push(`started ${two(at.getHours())}:${two(at.getMinutes())}`);
+  if (Number.isFinite(t?.wholeSessionSeconds)) parts.push(`${Math.round(t.wholeSessionSeconds / 60)} min`);
+  if (Number.isFinite(t?.wholeSessionDistance)) parts.push(`${Math.round(t.wholeSessionDistance).toLocaleString("en-US")} m`);
+  // The drills a recording covers help tell two of the same start apart.
+  if (Array.isArray(t?.drillIndexes)) parts.push(t.drillIndexes.length ? (t.drillIndexes.length === 1 ? "1 drill" : `${t.drillIndexes.length} drills`) : "no drills");
+  return parts.join(" · ");
 }
 
 // helpers: { title, day, linkHtml(id), athleteLabel(id), AskWho(), importCount, canImport, switchOff, next, errorTech(error),
@@ -53,6 +69,44 @@ export function renderFixSheetHtml(gx, status, h) {
       // The error belongs to the athlete whose link was asked (a lost answer for one is never shown on the next).
       body = `${gx.linkError && String(gx.linkOpen) === String(s.id) ? `<p class="gpexe-error" role="alert">${escapeHtml(h.linkErrorText)}</p>` : ""}${h.linkHtml(s.id)}`;
       actions = skip(`data-gpexe-athlete-id="${escapeAttr(s.id)}"`);
+    } else if (s.kind === "track") {
+      // Slice 2: one athlete GPEXE recorded on more than one track. The choice is local until Save; one PUT, then the review's
+      // recompute. A lost answer is "Check the result" with the same key, never sent again by itself.
+      const entry = trackEntry(detail, s.id) || { tracks: [] };
+      const name = h.athleteName(s.id);
+      const pick = detail.fix.trackPick?.gpexeAthleteId === String(s.id) ? detail.fix.trackPick.value : "";
+      const w = detail.fix.trackWrite?.gpexeAthleteId === String(s.id) ? detail.fix.trackWrite : null;
+      const err = detail.fix.trackError;
+      const locked = Boolean(w?.sending || w?.unknown);
+      const radio = (value, label) => `<label class="imports-fix-choice"><input type="radio" id="fix-track-${escapeAttr(s.id)}-${escapeAttr(value)}" name="fix-track-${escapeAttr(s.id)}" value="${escapeAttr(value)}" data-action="training-load-gpexe-fix-track-pick" data-gpexe-athlete-id="${escapeAttr(s.id)}" ${pick === value ? "checked" : ""} ${locked ? "disabled" : ""}><span>${escapeHtml(label)}</span></label>`;
+      body = `
+        <p class="imports-fix-sentence">${escapeHtml(`GPEXE has ${entry.tracks.length} recordings of ${name} in this session. Which one should be imported?`)}</p>
+        ${entry.currentChoice?.stale ? `<p class="muted">GPEXE changed these recordings after the last choice; choose again.</p>` : ""}
+        <fieldset class="imports-fix-choices"><legend class="imports-fix-legend">${escapeHtml(`Recording for ${name}`)}</legend>
+          ${entry.tracks.map((t, i) => radio(String(t.trackId), recordingText(t, i))).join("")}
+          ${radio("none", `None of them: leave ${name} out of this import`)}
+        </fieldset>
+        ${w?.unknown ? `<p class="gpexe-unknown" role="alert">We can't tell whether the choice was saved. Check the result before choosing again.</p>` : ""}
+        ${err ? `<p class="gpexe-error" role="alert">${escapeHtml(err.status === 409 ? "The recordings or the choice changed meanwhile. Nothing was saved; choose again." : "The choice was not saved. Choose again.")}</p>${h.errorTech(err)}` : ""}`;
+      actions = w?.unknown
+        ? button("primary-button", "training-load-gpexe-fix-track-check", w.sending ? "Checking..." : "Check the result", { disabled: w.sending })
+        : skip(`data-gpexe-athlete-id="${escapeAttr(s.id)}"`) + button("primary-button", "training-load-gpexe-fix-track-save", w?.sending ? "Saving..." : "Save the choice", { disabled: !pick || locked });
+    } else if (s.kind === "tracksError") {
+      body = `<p class="imports-fix-sentence" role="alert">The recordings of this session could not be read. Try again.</p>${h.errorTech(detail.fix.tracks?.error)}`;
+      actions = skip() + button("primary-button", "training-load-gpexe-fix-tracks-reload", "Try again");
+    } else if (s.kind === "changes") {
+      // Slice 2: whoever imports accepts the changes to results already in OptiMove; the approval sends acceptChanges.
+      const n = Number(h.changeCount) || 0;
+      body = `
+        <p class="imports-fix-sentence">${escapeHtml(`Importing this session changes ${n === 1 ? "1 result that is" : `${n} results that are`} already in OptiMove.`)}</p>
+        ${h.changeLines.length ? `<ul class="imports-fix-changes">${h.changeLines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul>` : ""}
+        <p class="muted">Open the full review below to see each value before you accept. Nothing changes until you import.</p>`;
+      actions = skip() + button("primary-button", "training-load-gpexe-fix-accept", "Accept and continue");
+    } else if (s.kind === "applyChoice") {
+      body = `<p class="imports-fix-sentence">${escapeHtml(detail.updateError
+        ? "The review could not be updated this time. Update it again before importing."
+        : "A recording is chosen, but the review does not show it yet. Update the review before importing.")}</p>${detail.updateError ? h.errorTech(detail.updateError) : ""}`;
+      actions = skip() + button("primary-button", "training-load-gpexe-review-update", "Update the review", { disabled: gx.linkBusy });
     } else if (s.kind === "stale") {
       body = `<p class="imports-fix-sentence">${escapeHtml(detail.updateError
         ? "The review could not be updated this time. Update it again before importing."
@@ -78,9 +132,24 @@ export function renderFixSheetHtml(gx, status, h) {
     actions = nextOrBack();
   } else if (view.screen === "ready" && h.importCount > 0) {
     // A skipped athlete: the session can be imported without them - never "ready" as if nothing was left.
-    const skipped = (detail.fix.skipped || []).length;
-    const base = skipped === 1 ? "This session can be imported without the athlete you skipped; their results are not imported until linked."
-      : skipped ? `This session can be imported without the ${skipped} athletes you skipped; their results are not imported until linked.` : "This session is ready.";
+    const skippedIds = detail.fix.skipped || [];
+    const skipped = skippedIds.length;
+    const multi = new Set(openMultiTrackIds(detail));
+    // A link skipped stays "until linked"; a recording skipped stays out until one is chosen.
+    const until = skippedIds.every((id) => !multi.has(String(id))) ? " until linked" : "";
+    const waiting = !h.canImport ? openMultiTrackIds(detail).length : 0;
+    let base = skipped === 1 ? `This session can be imported without the athlete you skipped; their results are not imported${until}.`
+      : skipped ? `This session can be imported without the ${skipped} athletes you skipped; their results are not imported${until}.` : "This session is ready.";
+    // Someone who may not import can't choose a recording: whoever imports does.
+    if (waiting) {
+      // A skipped link stays said; the recording is added to it (code review).
+      const who = waiting === 1 ? "one athlete" : `${waiting} athletes`;
+      base = skipped
+        ? `${base} ${waiting === 1 ? "One athlete has" : `${waiting} athletes have`} more than one GPEXE recording: whoever imports chooses which one to use.`
+        : `This session is ready except for ${who} with more than one GPEXE recording: whoever imports chooses which one to use.`;
+    }
+    // Accepted changes are said again beside the Import button.
+    else if (h.canImport && detail.acceptChanges && h.changeCount) base += ` Importing also changes ${h.changeCount === 1 ? "1 result" : `${h.changeCount} results`} already in OptiMove.`;
     if (h.switchOff) {
       body = `<p class="imports-fix-sentence">${escapeHtml(`${base} Importing is switched off${h.teamSwitchOff ? " for this team" : ""}; ${h.AskWho().replace(/^./, (ch) => ch.toLowerCase())} to turn it on.`)}</p>`;
       actions = nextOrBack();

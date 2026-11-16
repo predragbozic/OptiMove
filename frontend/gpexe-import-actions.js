@@ -8,6 +8,7 @@ import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImpor
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { fixMustStay, fixWriteInFlight, newFix, noteFixSteps, skipFixAthlete } from "./gpexe-fix-data.js";
+import { chooseFixTrack, loadFixTracks, sendFixTrack, tracksNeedReading } from "./gpexe-fix-tracks-data.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import { ensurePeriodData,
   reloadGpexeCandidates,
@@ -96,7 +97,9 @@ export async function handleGpexeImportAction(action, ctx) {
   const handled = await handleGpexeImportActionInner(action, ctx);
   const gx = state.trainingLoad.gpexe;
   if (gx?.detail?.fix) {
-    noteFixSteps(gx.detail, gx);
+    // A link's recompute or a search can bring an athlete on more than one track: the recordings are read for them.
+    if (tracksNeedReading(gx.detail, gx)) await loadFixTracks(gx.detail, ctx.renderTrainingLoad);
+    if (gx.detail?.fix) noteFixSteps(gx.detail, gx);
     keepFocusInFix();
   }
   return handled;
@@ -149,6 +152,9 @@ async function openFix(candidateId, group, groupIds, opener, renderTrainingLoad)
   if (detail?.id !== candidateId || !detail.fix) return;
   noteFixSteps(detail, gx);
   renderTrainingLoad();
+  // Slice 2: an approver reads the recordings of athletes GPEXE recorded on more than one track (the step needs them).
+  await loadFixTracks(detail, renderTrainingLoad);
+  if (gx.detail === detail) noteFixSteps(detail, gx);
   // The coach reads the GPEXE names of the athletes to link (no GPEXE request): the stored names, as on Link athletes.
   if (identityNameViewer(gx)) void loadGpexeIdentities(renderTrainingLoad);
 }
@@ -237,6 +243,9 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
       gx.linkConfirm = null;
       gx.linkError = null;
       gx.linkOpen = "";
+      if (detail.fix.trackWrite?.sending || detail.fix.trackWrite?.unknown) return true;
+      detail.fix.trackPick = null;
+      detail.fix.trackError = null;
       skipFixAthlete(detail, id);
       renderTrainingLoad();
       return true;
@@ -260,6 +269,39 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     const refresh = closeGpexeCandidate();
     await openFix(next.id, detail.group, detail.groupIds, detail.fix.opener, renderTrainingLoad);
     if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
+    return true;
+  }
+  // Slice 2: the recording of an athlete GPEXE recorded on more than one track - a local choice, then Save (one PUT).
+  if (type === "training-load-gpexe-fix-track-pick") {
+    if (chooseFixTrack(gx.detail, action.dataset.gpexeAthleteId, action.value)) {
+      renderTrainingLoad();
+      // The repaint replaces the radios: the focus goes back to the one chosen, so the arrow keys keep working (code review).
+      const id = `fix-track-${action.dataset.gpexeAthleteId}-${action.value}`;
+      globalThis.document?.getElementById?.(id)?.focus?.({ preventScroll: true });
+    }
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-track-save") {
+    if (!gx.detail?.fix || fixMustStay(gx)) return true;
+    await sendFixTrack(gx.detail, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-track-check") {
+    // The same request with the same key again: the server answers the saved choice, never a second one.
+    if (!gx.detail?.fix) return true;
+    await sendFixTrack(gx.detail, renderTrainingLoad, { again: true });
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-tracks-reload") {
+    if (!gx.detail?.fix) return true;
+    await loadFixTracks(gx.detail, renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-fix-accept") {
+    // Slice 2: the changes to imported results are accepted here (local); the import sends acceptChanges, as the review does.
+    if (!gx.detail?.fix || gx.detail.approving) return true;
+    gx.detail.acceptChanges = true;
+    renderTrainingLoad();
     return true;
   }
   if (type === "training-load-gpexe-fix-search") {
