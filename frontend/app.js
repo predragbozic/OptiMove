@@ -69,7 +69,7 @@ import {
   moveBuilderItemTo,
   submitBuilderForm as submitBuilderFormAction,
 } from "./builder-actions.js";
-import { ensureBuilderExercises, loadBuilderDrafts, loadBuilderExercises, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
+import { ensureBuilderExercises, loadBuilderDrafts, loadBuilderExercises, loadBuilderExercisesDetached, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
 import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
@@ -1698,7 +1698,7 @@ function debounceBuilderSearch() {
   // anymore -- doing so anyway would fight the user's own cursor position with a
   // stale (pre-fetch) offset, which is what used to make it look like typed letters
   // landed mid-word.
-  builderSearchTimer = setTimeout(() => loadBuilderExercises(), 250);
+  builderSearchTimer = setTimeout(() => loadBuilderExercisesDetached(), 250);
 }
 
 let templateSearchTimer = null;

@@ -1584,8 +1584,9 @@ export function renderTrainingLoadCoachHtml() {
             ? `<button type="button" class="training-load-tab ${space === "dataConfig" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataConfig" ? "true" : "false"}" data-action="training-load-section" data-section="${space === "dataConfig" ? section : "variables"}">${renderTrainingLoadTabIcon("dataConfig")}<span>Data configuration</span></button>`
             : ""}
         </div>
-        ${space === "dataConfig" ? ""
-          : section === "analysis" || section === "imports"
+        ${space === "dataConfig" || section === "imports" ? ""
+          // Imports (manager, 2026-11-15): the filter does nothing there, so there is no control and no line about it.
+          : section === "analysis"
           // Phase F (confirmed decision): the shell's Club/Team/Athletes
           // filter never reaches the Dashboards query (it only ever sends
           // the runtime activity/component filter - see
@@ -1598,7 +1599,6 @@ export function renderTrainingLoadCoachHtml() {
           : `<button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>`}
       </div>
       ${section === "analysis" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters are not available for Dashboards yet.</p>` : ""}
-      ${section === "imports" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters do not apply to Imports.</p>` : ""}
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}

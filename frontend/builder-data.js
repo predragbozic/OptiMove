@@ -105,6 +105,13 @@ export async function loadBuilderExercises(options = {}) {
   options.afterRender?.();
 }
 
+// The same load for a caller nobody waits for (the search box's timer, a refresh after marking an exercise). The
+// load has already said its failure in place, with Try again, and api.js has already reported it once: the
+// rejection ends here instead of surfacing as an unhandled one, which App health would count as a second error.
+export function loadBuilderExercisesDetached(options) {
+  return loadBuilderExercises(options).catch(() => {});
+}
+
 // An open section editor shows the library of the current search. Opening
 // a draft (Continue) does not wait for the library, so the editor loads it
 // when it opens and the list on hand is of another search, of an earlier

@@ -276,7 +276,9 @@ test("GPEXE imports: a Data & Analysis sub-tab that loads status, candidates and
   assert.match(html, /Importing is switched off in this environment\./);
   assert.match(html, /checks and previews are saved, but no result or activity can be written/);
   assert.ok(!/backup/i.test(html), "the screen never says anything about a backup");
-  assert.match(html, /training-load-filter-button[^>]*disabled/, "the shell filter does not apply here");
+  // Manager, 2026-11-15: a control that does nothing is not shown - no Filter and no line about it on Imports.
+  assert.doesNotMatch(html, /training-load-filter-button/, "no shell filter on Imports");
+  assert.doesNotMatch(html, /filters do not apply to Imports/);
   assert.match(html, /Session of/);
   assert.ok(state.trainingLoad.gpexe.links.some((l) => l.athleteName === "Ana Example"), "the links are loaded (they are listed on the Link athletes screen)");
   assert.ok(!/GPEXE athletes linked to this team/.test(html), "U6a: no list of linked athletes on the daily screen");
