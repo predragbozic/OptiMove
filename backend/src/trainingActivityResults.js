@@ -5,7 +5,6 @@
 // isAthleteSelf/scope split as trainingLoadMetrics.js's own
 // resolveReadContext).
 import crypto from "node:crypto";
-import { loadRosterSnapshot } from "./activityRoster.js";
 import { estimateLabelFor, readEstimateLabels } from "./estimateLabels.js";
 import { query } from "./db.js";
 import { activityReadScopeSqlForWorkspace, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
@@ -41,7 +40,9 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
      where a.id = $1`,
     [activityId],
   );
-  if (!activityRow.rowCount) throw httpError(404, "Activity not found.");
+  // An athlete: the ownership question is asked whether or not the id exists, so a missing id and one that is not hers
+  // cost the same and answer the same.
+  if (!activityRow.rowCount && !readContext.isAthleteSelf) throw httpError(404, "Activity not found.");
 
   if (readContext.isAthleteSelf) {
     // Her own past results stay hers when the team (or its club) is archived later: an archive is the club's
@@ -52,7 +53,7 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
        where ap.athlete_id = $1 and training.resolve_canonical_activity_id(ap.activity_id) = training.resolve_canonical_activity_id($2)`,
       [readContext.athleteId, activityId],
     );
-    if (!owns.rowCount) throw httpError(404, "Activity not found.");
+    if (!owns.rowCount || !activityRow.rowCount) throw httpError(404, "Activity not found.");
   } else if (!canReadActivityInScope(readContext.scope, activityRow.rows[0])) {
     throw httpError(404, "Activity not found.");
   }
@@ -180,7 +181,7 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
     }
   }
 
-  if (readContext.isAthleteSelf) return athleteSelfResults({ canonicalActivityId, facts: scoped, components, athleteId: readContext.athleteId, hasRoster: activity.owner_scope === "team" });
+  if (readContext.isAthleteSelf) return athleteSelfResults({ canonicalActivityId, facts: scoped, components, athleteId: readContext.athleteId });
   return { canonicalActivityId, facts: scoped, athleteNamesById, variableNamesById, components };
 }
 
@@ -209,6 +210,8 @@ export function athleteSelfFact(fact, place = () => ({ componentId: null, drillO
     detail.level = segmentId ? "drill" : "session";
     detail.componentId = placed?.componentId ?? null;
     detail.drillOrdinal = placed?.drillOrdinal ?? null;
+    // Which drill, as a key that says nothing: two drills are two keys even when neither has a component.
+    detail.drillKey = segmentId ? crypto.createHash("sha256").update(`athlete-drill|${segmentId}`).digest("hex").slice(0, 16) : null;
     // A key for a row on the screen, the same on every read, that says nothing: two values of one variable in one
     // place (a re-measurement, an estimate beside a measurement) are told apart by it.
     detail.valueKey = crypto.createHash("sha256").update(`athlete-value|${fact.detail?.occasionId ?? ""}|${fact.detail?.metricDefinitionId ?? ""}`).digest("hex").slice(0, 16);
@@ -218,41 +221,60 @@ export function athleteSelfFact(fact, place = () => ({ componentId: null, drillO
   if (fact.estimate) out.estimate = { method: fact.estimate.method, estimatedBy: fact.estimate.estimatedBy, estimatedAt: fact.estimate.estimatedAt };
   return out;
 }
-// Her own attendance in a team session, from the roster's derived state of her alone: no reason, no note, no author.
-// A coach's decision about her says it; without one, a value of hers means she took part; otherwise nothing is said.
-const SELF_ATTENDANCE = Object.freeze({
-  did_not_participate: "did_not_participate", participated_no_values: "participated_no_device_data",
-  measured: "participated", measured_change_waiting: "participated", manual_values: "participated", estimated: "participated",
-});
-async function athleteSelfResults({ canonicalActivityId, facts, components, athleteId, hasRoster }) {
-  // Where each drill's values belong: the segment's order, and the component of THIS session it is linked to.
+// Her own attendance in a session: a value of hers means she took part (whatever an older decision says - the coach
+// is shown that disagreement, she is not); without a value, the coach's current decision about her in one word - no
+// reason, no note, no author; otherwise nothing is said. Read from the decisions about HER only.
+const SELF_ATTENDANCE = Object.freeze({ did_not_participate: "did_not_participate", participated_no_values: "participated_no_device_data" });
+async function selfAttendance(canonicalActivityId, athleteId, hasValues) {
+  if (hasValues) return "participated";
+  const decisions = await query(
+    `select distinct d.decision_kind
+       from training.activity_athlete_decisions d
+      where d.activity_id in (select activity_id from training.activity_alias_ids($1)) and d.athlete_id = $2
+        and d.superseded_by_decision_id is null and d.decision_kind <> 'cleared'`,
+    [canonicalActivityId, athleteId],
+  );
+  // Two alias sessions that disagree about her (a merge the coach has not settled): nothing is said.
+  if (decisions.rowCount !== 1) return null;
+  return SELF_ATTENDANCE[decisions.rows[0].decision_kind] ?? "participated";
+}
+async function athleteSelfResults({ canonicalActivityId, facts, components, athleteId }) {
+  // Where each drill's values belong: the component of THIS session its segment is linked to, and its order among
+  // the drills of the recordings it came from (a session can hold more than one recording, each numbering from 1).
   const segmentIds = [...new Set(facts.filter((f) => f.factKind === "metric_value").map((f) => f.detail?.segmentId).filter((id) => typeof id === "string" && UUID_PATTERN.test(id)))];
   const places = new Map();
   if (segmentIds.length) {
     const componentIds = new Set(components.map((c) => String(c.id)));
     const rows = await query(
-      `select s.id, s.segment_order, l.activity_component_id
+      `select s.id, l.activity_component_id,
+              dense_rank() over (order by e.occurred_instant nulls last, e.occurred_date, e.id, s.segment_order, s.id) as ordinal
          from training_load.metric_event_segments s
+         join training_load.metric_events e on e.id = s.event_id
          left join training.activity_component_metric_segment_links l on l.metric_event_segment_id = s.id and l.link_status = 'confirmed'
-        where s.id = any($1::uuid[])`,
+        where s.event_id in (select event_id from training_load.metric_event_segments where id = any($1::uuid[]))`,
       [segmentIds],
     );
     for (const r of rows.rows) {
       const componentId = r.activity_component_id && componentIds.has(String(r.activity_component_id)) ? String(r.activity_component_id) : null;
-      const before = places.get(String(r.id));
-      places.set(String(r.id), { componentId: before?.componentId ?? componentId, drillOrdinal: Number(r.segment_order) });
+      places.set(String(r.id), { componentId, drillOrdinal: Number(r.ordinal) });
     }
   }
   const own = facts.map((f) => athleteSelfFact(f, (segmentId) => places.get(segmentId) ?? { componentId: null, drillOrdinal: null })).filter(Boolean);
-  let myAttendance = null;
-  if (hasRoster) {
-    const snapshot = await loadRosterSnapshot({ query }, canonicalActivityId);
-    const me = snapshot.athletes.find((a) => String(a.athleteId) === String(athleteId));
-    if (me) myAttendance = SELF_ATTENDANCE[me.state] ?? null;
-  }
   const mine = facts.filter((f) => f.factKind === "metric_value");
-  if (myAttendance === null && mine.length) myAttendance = "participated";
+  const myAttendance = await selfAttendance(canonicalActivityId, athleteId, mine.length > 0);
   const recordedBy = recordedByOf({ device: mine.some((f) => DEVICE_METHODS.includes(f.detail?.entryMethod)), any: mine.length > 0 });
+  // The session's structure as far as it is hers: the components she has a result on (a value placed there, or her
+  // own performance of it) and the ones they sit under. A drill only another athlete did is not listed to her.
+  const byId = new Map(components.map((c) => [String(c.id), c]));
+  const hers = new Set();
+  for (const f of own) {
+    let id = f.detail?.componentId ? String(f.detail.componentId) : null;
+    while (id && byId.has(id) && !hers.has(id)) {
+      hers.add(id);
+      id = byId.get(id).parentComponentId ? String(byId.get(id).parentComponentId) : null;
+    }
+  }
+  const ownComponents = components.filter((c) => hers.has(String(c.id)));
   // The name and unit of exactly the variables in her own facts, whoever owns them (a club's or a team's variable
   // has no name in her catalog read): read by id, never the catalog, never a key, an icon, an owner or a description.
   const definitionIds = [...new Set(own.filter((f) => f.factKind === "metric_value").map((f) => f.detail.metricDefinitionId).filter((id) => typeof id === "string" && UUID_PATTERN.test(id)))];
@@ -267,7 +289,7 @@ async function athleteSelfResults({ canonicalActivityId, facts, components, athl
     );
     variableNamesById = Object.fromEntries(names.rows.map((r) => [r.id, { label: r.label, shortLabel: r.short_label ?? null, unit: r.unit ?? null }]));
   }
-  return { canonicalActivityId, myAttendance, recordedBy, facts: own, variableNamesById, components: components.map((c) => pick(c, SELF_COMPONENT)) };
+  return { canonicalActivityId, myAttendance, recordedBy, facts: own, variableNamesById, components: ownComponents.map((c) => pick(c, SELF_COMPONENT)) };
 }
 
 // How HER values of a session came to be recorded, for an athlete: by a device (an imported value), by a coach
@@ -278,15 +300,43 @@ export function recordedByOf({ device, any }) {
   return any ? "coach" : null;
 }
 const DEVICE_METHODS = ["api_import", "csv_import"];
-// SQL: whether participant `alias`'s effective values include any (and any by a device). One row, two booleans.
+// SQL: whether a participant's effective values - her alias participants' after a merge included, as the detail
+// reads them - include any (and any by a device). One row, two booleans.
 export function recordedBySql(participantIdSql) {
   return `(select coalesce(bool_or(o.entry_method in ('api_import', 'csv_import')), false) as device, count(*) > 0 as any
             from training.activity_participant_metric_participant_links mpl
             join training_load.metric_measurement_occasions o on o.event_participant_id = mpl.metric_event_participant_id
             join training_load.metric_values v on v.occasion_id = o.id
-           where mpl.activity_participant_id = ${participantIdSql} and mpl.link_status = 'confirmed'
+           where mpl.activity_participant_id in (select pa.participant_id from training.participant_alias_ids(${participantIdSql}) pa) and mpl.link_status = 'confirmed'
              and o.superseded_by_occasion_id is null and o.import_conflict_status is null
              and (o.source_identity_id is null or exists (select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id)))`;
+}
+
+// Whether she has at least one recorded session (owner, 2026-11-16: "My training" is shown only then): she is a
+// participant of a session that holds recorded values - a device's, or entered or estimated by a coach - hers or
+// another participant's of that same session ("you took part; no data of yours was recorded" is such a session). A
+// planned session she only rated does not count. One boolean: no count, no date, the same answer for every reason
+// she has none. Sessions on a team or club archived later count (her history stays hers).
+export async function athleteHasRecordedSessions(athleteId) {
+  const found = await query(
+    `select exists (
+       select 1
+         from training.activity_participants ap
+         join training.activities a on a.id = ap.activity_id
+        where ap.athlete_id = $1 and ap.merge_status = 'canonical' and a.lifecycle_state <> 'superseded'
+          and exists (
+            select 1
+              from training.activity_alias_ids(a.id) aa
+              join training.activity_participants ap2 on ap2.activity_id = aa.activity_id
+              join training.activity_participant_metric_participant_links mpl on mpl.activity_participant_id = ap2.id and mpl.link_status = 'confirmed'
+              join training_load.metric_measurement_occasions o on o.event_participant_id = mpl.metric_event_participant_id
+              join training_load.metric_values v on v.occasion_id = o.id
+             where o.superseded_by_occasion_id is null and o.import_conflict_status is null
+               and (o.source_identity_id is null or exists (select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id)))
+     ) as has`,
+    [athleteId],
+  );
+  return found.rows[0].has === true;
 }
 
 const LIST_MAX_PAGE_SIZE = 200;
