@@ -23,6 +23,7 @@ import {
   loadExternalScheduleDetail,
   loadPlannedRpeSetting,
   loadTrainingLoadAthleteToday,
+  loadTrainingLoadAthleteHomeWeek,
   loadTrainingLoadAthleteWeekly,
   loadTrainingLoadOrgPickerData,
   loadTrainingLoadWeekly,
@@ -728,6 +729,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // show a reload for otherwise.
     if (hadSaved) {
       await loadTrainingLoadAthleteToday();
+      // Home's "This week" row counts what still waits (owner, 2026-11-16, item 2): read again only once Home has read it.
+      if (state.trainingLoad.athleteHomeWeek.data) await loadTrainingLoadAthleteHomeWeek();
       if (state.trainingLoad.athleteWeeklyOpen) {
         await loadTrainingLoadAthleteWeekly();
       }
@@ -753,6 +756,13 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // was already viewed this session, or the shell + loading state
     // otherwise) via the onPainted callback - never waits on the network
     // just to show the overlay itself.
+    // "Rate your sessions (N)" (owner, 2026-11-16, item 2): the sheet opens on this week's first day that waits for her
+    // rating, so the button lands where its promise is (code review); otherwise it keeps its own week and day.
+    const firstWaiting = action.dataset.firstWaiting;
+    if (firstWaiting) {
+      state.trainingLoad.athleteWeekly.weekStart = weekMondayIso(firstWaiting);
+      state.trainingLoad.athleteWeekly.selectedDate = firstWaiting;
+    }
     state.trainingLoad.athleteWeeklyOpen = true;
     renderTrainingLoad();
     await loadTrainingLoadAthleteWeekly(renderTrainingLoad);
@@ -2858,6 +2868,8 @@ export function resetTrainingLoadForWorkspaceChange() {
   state.trainingLoad.athleteWeekly.data = null;
   state.trainingLoad.athleteWeekly.error = "";
   state.trainingLoad.athleteWeekly.loading = false;
+  // Home's own week (item 2): another workspace's count must never show (code review).
+  state.trainingLoad.athleteHomeWeek = { weekStart: "", selectedDate: "", data: null, loading: false, error: "" };
   state.trainingLoad.resultsAthleteActivities = { athleteId: "", weekStart: "", data: null, loading: false, error: "" };
   state.trainingLoad.overviewCoverage = { weekStart: "", data: null, loading: false, error: "" };
   state.trainingLoad.filter = emptyTrainingLoadFilter();

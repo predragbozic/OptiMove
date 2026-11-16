@@ -35,14 +35,14 @@ for (const width of [360, 390]) {
     const a = await openAthlete(width);
     try {
       await a.home();
-      assert.deepEqual(await a.under44(".training-load-week-link"), [], "the training-load link");
+      assert.deepEqual(await a.under44(".training-load-week-button"), [], "the This week button");
       await a.page.locator("#mobileNavToggle").click();
       await a.page.waitForTimeout(400);
       assert.equal(await a.page.locator(".sidebar [data-tests-count]").isVisible(), false, "no count of 0 on Tests");
       assert.deepEqual(await a.under44(".sidebar .brand-mark"), [], "the menu's logo");
 
       await a.home();
-      await a.page.getByText("This week's training load", { exact: false }).first().click();
+      await a.page.locator(".athlete-home-week-head .training-load-week-button").click();
       const title = a.page.locator(".training-load-athlete-weekly-panel h3");
       assert.equal((await title.innerText()).trim(), "This week's training load");
       assert.deepEqual(await a.under44(".training-load-athlete-weekly-panel .icon-button, .training-load-weekly-today-button"), [], "the sheet's controls");

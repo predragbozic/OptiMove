@@ -55,11 +55,17 @@ export function renderDayEntryHtml(day, makeNode) {
         <span class="calendar-date">${escapeHtml(formatDayMonth(day.date))}${isToday ? `<span class="calendar-today-label"> · Today</span>` : ""}</span>
       </div>
       ${day.dayNote ? `<div class="calendar-note">${escapeHtml(day.dayNote)}</div>` : ""}
-      <div class="calendar-events">
-        ${items.length ? renderCalendarHierarchyHtml(items, makeNode) : `<div class="calendar-empty">No entries</div>`}
-      </div>
+      ${!items.length && day.dayNote && isAthleteMode() ? "" : `<div class="calendar-events">
+        ${items.length ? renderCalendarHierarchyHtml(items, makeNode) : isAthleteMode() ? `<div class="calendar-empty">Nothing planned</div>` : `<div class="calendar-empty">No entries</div>`}
+      </div>`}
     </article>
   `;
+}
+
+// The athlete's week with nothing planned on any day (owner, 2026-11-16, item 4): one sentence instead of seven empty
+// days. A day note counts as something planned.
+export function athleteWeekIsEmpty(days) {
+  return (days || []).every((day) => !day.dayNote && !allSlotItems(day.slots).length);
 }
 
 export function renderCalendarHierarchyHtml(items, makeNode) {
@@ -172,6 +178,7 @@ export function renderWeeklyRootHtml({
         <button class="week-title-button" type="button" data-action="week-toggle" aria-expanded="${Boolean(weekSelectorMarkup)}" aria-label="Choose weekly plan date">
           <strong class="week-range-full">${escapeHtml(weekRange)}</strong>
           <strong class="week-range-short" aria-hidden="true">${escapeHtml(weekRangeShort)}</strong>
+          <strong class="week-range-days" aria-hidden="true">${escapeHtml(`${formatDayMonth(activeWeek.weekStart)} - ${formatDayMonth(activeWeek.weekEnd)}`)}</strong>
         </button>
         <button class="plain-button week-today-button" data-action="week-today">Today</button>
         <button class="plain-button week-arrow-button" data-action="week-next" aria-label="Next week">›</button>
@@ -180,9 +187,11 @@ export function renderWeeklyRootHtml({
       ${weekSelectorMarkup}
       </div>
       <section class="panel">
-        <div class="calendar-grid">
+        ${isAthleteMode() && athleteWeekIsEmpty(activeWeek.days)
+          ? `<p class="calendar-week-empty">Nothing is planned this week.</p>`
+          : `<div class="calendar-grid">
           ${(activeWeek.days || []).map((day) => renderDayEntryHtml(day, makeNode)).join("")}
-        </div>
+        </div>`}
       </section>
     </div>
     ${copyPlanModal}
