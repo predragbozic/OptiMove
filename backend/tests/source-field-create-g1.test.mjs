@@ -240,7 +240,7 @@ test("5. v74's T2a guard: with an acting user, only a platform admin, in their o
 });
 
 test("6. v74's unit words (section 8.10): the nine seeded rows exactly, seed-only and append-only; no unit conversion seeded; as_sent takes any unit token, the three old rules unchanged", async () => {
-  const words = (await q(`select word, unit_token, display_rule, evidence_kind, evidence_ref from training_load.source_unit_words where source_system = 'gpexe' and api_family = 'rest_v1' order by word`)).map((r) => Object.values(r).join("|"));
+  const words = (await q(`select word, source_unit, display_rule, evidence_kind, evidence_ref from training_load.source_unit_words where source_system = 'gpexe' and api_family = 'rest_v1' order by word`)).map((r) => Object.values(r).join("|"));
   const A = "docs/ai/gpexe-field-inventory-plan.md#unit-word-";
   assert.deepEqual(words, [
     `acceleration|m/s2|as_sent|owner_statement|${A}acceleration`, `distance|m|distance_m|repository_by_analogy|${A}distance`,
@@ -250,8 +250,8 @@ test("6. v74's unit words (section 8.10): the nine seeded rows exactly, seed-onl
   assert.equal((await one(`select count(*)::int n from training_load.source_unit_words`)).n, 9);
   assert.equal((await one(`select count(*)::int n from training_load.unit_conversions where from_unit = 'number' and to_unit = 'count'`)).n, 0, "no conversion is seeded");
   for (const sql of [
-    `insert into training_load.source_unit_words (source_system, api_family, word, unit_token, display_rule, evidence_kind, evidence_ref, seed_migration) values ('gpexe','rest_v1','pace','s','as_sent','repository','docs/ai/x.md#p','migrations_v2/202611161200_training_load_v74_generic_source_fields.sql')`,
-    `update training_load.source_unit_words set unit_token = 'km' where word = 'distance'`,
+    `insert into training_load.source_unit_words (source_system, api_family, word, source_unit, display_rule, evidence_kind, evidence_ref, seed_migration) values ('gpexe','rest_v1','pace','s','as_sent','repository','docs/ai/x.md#p','migrations_v2/202611161200_training_load_v74_generic_source_fields.sql')`,
+    `update training_load.source_unit_words set source_unit = 'km' where word = 'distance'`,
     `delete from training_load.source_unit_words where word = 'power'`,
     `truncate training_load.source_unit_words`]) {
     await assert.rejects(q(sql), (e) => e.code === "23514" || e.code === "42501", sql.slice(0, 40));

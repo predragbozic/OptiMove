@@ -2,7 +2,7 @@
 -- Run each block in a read-only transaction. Every block names its expected value.
 
 -- 1. v74 recorded once with the file's checksum, and nothing later. Expected: 1, true, 0.
-select count(*) as v74_rows, bool_and(checksum = 'b28b728393c4dd206a834c3055bdc63919b6d4eae567390df1845bcb51a96976') as checksum_ok,
+select count(*) as v74_rows, bool_and(checksum = '4bba2767f4b39b8ffdab4ef39a4513f33d884f9bcff880af147b31537a4f764b') as checksum_ok,
        (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') as later
   from public.schema_migrations where migration_name = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql';
 
@@ -10,7 +10,7 @@ select count(*) as v74_rows, bool_and(checksum = 'b28b728393c4dd206a834c3055bdc6
 with expected(name, md5) as (values
     ('source_metric_audit_revision_guard', '833800203ddc21ef2c9758d6393a554a'),
     ('source_metric_audit_row_ok', 'd4f6fa07d21bcd54a21d7789b67c38ae'),
-    ('source_metric_confirmation_items_insert_guard', 'cd5b1d7fabbc47448b79dd91fcf92b4e'),
+    ('source_metric_confirmation_items_insert_guard', '1d2c25710612f3adf811cc4421db4d62'),
     ('source_metric_confirmation_rows_hold', '54d39cb464774bcba838b046e236b682'),
     ('source_metric_confirmations_commit_link', 'f55ef973de6a49ead59359c87a8279fa'),
     ('source_metric_confirmations_insert_guard', '54db1047da56c6848acc21bfe68d6685'),
@@ -35,7 +35,7 @@ select (select count(*) from pg_trigger where not tgisinternal and tgenabled = '
            or (table_name = 'source_metric_confirmations' and column_name = 'source_metric_version_id'))) as columns;
 
 -- 4. GPEXE's unit words, exactly (plan section 8.10). Expected: nine rows, as listed there.
-select word, unit_token, display_rule, evidence_kind, evidence_ref from training_load.source_unit_words
+select word, source_unit, display_rule, evidence_kind, evidence_ref from training_load.source_unit_words
  where source_system = 'gpexe' and api_family = 'rest_v1' order by word;
 
 -- 5. The revisions verified by documents are unchanged. Expected: the two values of the preflight's block 6.

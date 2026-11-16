@@ -684,6 +684,14 @@ The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_sour
   rows, seed-only and append-only), test 8 (four words, each with its own rule), test 9 (a word not in the table, a unit
   or rule not the word's), and `source-metric-board-18-2` test 14.
 
+- **The words table's unit column is `source_unit`,** the name T2b and T9i already use for a unit token. It was first
+  `unit_token`, and the legacy-schema dump scanner (`tools/legacy-schema/scan.mjs`) read `unit_token = 'm/s'` as a
+  literal secret.
+- **The test list "before the confirmation gate" stops at v69 by name.** `GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE`
+  (`backend/tests/_gpexe-disposable-db.mjs`) was the whole list minus v66, so it held v74 without v66. v66's md5 gate
+  rightly refuses that state, because v74 replaces a body v66 checks, and production never has it. It now follows the
+  v66 suite's rule (PR #565): every migration up to v69 by file name, except v66. The suites of 7h, LO-1 and 9-B pass.
+
 **Not yet tested:** v52's activation gate on a `source_stated` revision (mutation M10 survives). A mapping version of a
 created field needs its extractor (J12), which is G2's; G2's or G1b's tests cover it.
 

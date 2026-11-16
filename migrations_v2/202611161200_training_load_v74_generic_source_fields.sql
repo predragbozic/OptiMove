@@ -600,14 +600,14 @@ begin
     end if;
     -- The word GPEXE sends is a kind (plan section 8.10): its unit token, display rule and screen unit come from
     -- source_unit_words only; a word without a row is never guessed.
-    select w.unit_token, w.display_rule into word
+    select w.source_unit, w.display_rule into word
       from training_load.source_unit_words w
      where w.source_system = 'gpexe' and w.api_family = 'rest_v1' and w.word = new.source_unit_word;
-    if not found or new.source_unit is distinct from word.unit_token then
+    if not found or new.source_unit is distinct from word.source_unit then
       raise exception 'source_metric_confirmation_items: the unit word GPEXE sends has a seeded unit, and the row''s unit is it' using errcode = '23514';
     end if;
     if new.gpexe_display_rule is distinct from word.display_rule
-       or new.gpexe_display_unit is distinct from (case word.display_rule when 'as_sent' then word.unit_token when 'speed_kmh' then 'km/h'
+       or new.gpexe_display_unit is distinct from (case word.display_rule when 'as_sent' then word.source_unit when 'speed_kmh' then 'km/h'
                                                      when 'duration_mmss' then 'mm:ss' when 'distance_m' then 'm' end) then
       raise exception 'source_metric_confirmation_items: a field_unit row is compared by its word''s display rule, in that rule''s screen unit' using errcode = '23514';
     end if;
@@ -913,7 +913,7 @@ create table training_load.source_unit_words (
   source_system  text not null constraint source_unit_words_system_check check (source_system ~ '^[a-z][a-z0-9_]{1,30}$'),
   api_family     text not null constraint source_unit_words_family_check check (api_family in ('api', 'rest_v1')),
   word           text not null constraint source_unit_words_word_check check (word ~ '^[a-z][a-z0-9_]{0,39}$'),
-  unit_token     text not null constraint source_unit_words_unit_check check (training_load.source_metric_unit_token_ok(unit_token)),
+  source_unit    text not null constraint source_unit_words_unit_check check (training_load.source_metric_unit_token_ok(source_unit)),
   display_rule   text not null constraint source_unit_words_rule_check check (display_rule in ('as_sent', 'speed_kmh', 'duration_mmss', 'distance_m')),
   evidence_kind  text not null constraint source_unit_words_evidence_kind_check
                    check (evidence_kind in ('repository', 'repository_by_analogy', 'owner_statement')),
@@ -923,8 +923,8 @@ create table training_load.source_unit_words (
   constraint source_unit_words_pkey primary key (source_system, api_family, word),
   -- A specific rule reads its own source unit (the registry's RULES): a word may take it only in that unit.
   constraint source_unit_words_rule_unit check (
-    display_rule = 'as_sent' or (display_rule = 'speed_kmh' and unit_token = 'm/s')
-    or (display_rule = 'duration_mmss' and unit_token = 's') or (display_rule = 'distance_m' and unit_token = 'm'))
+    display_rule = 'as_sent' or (display_rule = 'speed_kmh' and source_unit = 'm/s')
+    or (display_rule = 'duration_mmss' and source_unit = 's') or (display_rule = 'distance_m' and source_unit = 'm'))
 );
 
 comment on table training_load.source_unit_words is
@@ -947,7 +947,7 @@ create trigger source_unit_words_no_truncate
   before truncate on training_load.source_unit_words
   for each statement execute function training_load.source_metric_no_truncate();
 
-insert into training_load.source_unit_words (source_system, api_family, word, unit_token, display_rule, evidence_kind, evidence_ref, seed_migration) values
+insert into training_load.source_unit_words (source_system, api_family, word, source_unit, display_rule, evidence_kind, evidence_ref, seed_migration) values
   ('gpexe', 'rest_v1', 'number',       'count', 'as_sent',       'repository',            'docs/ai/gpexe-field-inventory-plan.md#unit-word-number',       'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
   ('gpexe', 'rest_v1', 'speed',        'm/s',   'speed_kmh',     'repository',            'docs/ai/gpexe-field-inventory-plan.md#unit-word-speed',        'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
   ('gpexe', 'rest_v1', 'distance',     'm',     'distance_m',    'repository_by_analogy', 'docs/ai/gpexe-field-inventory-plan.md#unit-word-distance',     'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
