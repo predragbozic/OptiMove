@@ -51,7 +51,7 @@ test("1. v72: the preflight passes before it; it refuses over an existing table,
 
     await applyGpexeTestMigrations(rb.url, MAIN_MIGRATIONS);
     const post = await booleansOf(client, fs.readFileSync(RUNBOOK("source-field-observations-v72-postcheck.sql"), "utf8"));
-    assert.equal(post.length, 11, "the post-check returns its 11 booleans");
+    assert.equal(post.length, 14, "the post-check returns its 14 booleans");
     assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok after v72");
     const after = await catalogOf(client);
     assert.notDeepEqual(after, before);

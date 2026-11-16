@@ -339,8 +339,9 @@ test("13. architecture: no module of backend/src sets the test seam; only the re
     const text = fs.readFileSync(f, "utf8");
     if (rel(f) !== "sourceMetricExtractors.js") assert.doesNotMatch(text, /setExtractorFallbackForTests/, `${rel(f)} sets the test seam`);
     if (/complementary_data|_events_count|_events_threshold_value/.test(text)) {
-      // sourceFieldInventory.js (I1) names complementary_data only as an endpoint whose NAMES it records, never a value it reads.
-      assert.ok(["sourceMetricExtractors.js", "gpexeRestV1Adapter.js", "sourceFieldInventory.js"].includes(rel(f)), `${rel(f)} reads a /more/ zone or event field outside the registry`);
+      // sourceFieldInventory.js (I1) and sourceFieldInventoryRead.js (I2) name complementary_data only as an endpoint whose NAMES
+      // they record and list, never a value they read.
+      assert.ok(["sourceMetricExtractors.js", "gpexeRestV1Adapter.js", "sourceFieldInventory.js", "sourceFieldInventoryRead.js"].includes(rel(f)), `${rel(f)} reads a /more/ zone or event field outside the registry`);
     }
   }
   const service = fs.readFileSync(path.join(SRC, "sourceMetricMappingService.js"), "utf8");

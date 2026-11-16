@@ -57,6 +57,22 @@ write's `42P01` is skipped like any other refusal and the probe runs again.
 and who may read the rows is I2's (a platform admin all of them; a club admin read-only, only those seen through their own
 club's connection; a coach nothing).
 
+## Who reads the rows (I2)
+
+`GET /api/training-load/sources/metrics/field-inventory` (`backend/src/sourceFieldInventoryRead.js`; plan section 7.2):
+- **A platform admin in the platform workspace** reads every connection's names. A club scope (the club's admin, or a
+  platform admin in that club's workspace) reads only the names seen through the club's own connections: club-owned,
+  or team-owned by one of its own teams.
+- **Everyone else** gets the identical 404 of the metrics routes.
+- **One row per (endpoint, name):** kind, unit word, answers seen, last date, and whether a source field already covers it.
+- **Never answered:** a connection id, a check id, a label, a club or a team.
+- **A club sees a unit word** only when it is an active conversion's unit.
+- **Team thresholds** reach the platform admin only, with `endpoint=team_thresholds`. `state` does not apply to them: they are never a field, so
+  `covered` is null.
+- **`covered`** counts an active source field only; a retired one no longer covers its name. Source field keys are lower
+  case, so a name with a capital letter is never covered until G1 can add it.
+- **Bounded** like every metrics read (C70): read-only, a statement bound, `409 try_again` past it.
+
 ## Order with D1's v71
 
 D1 (another track, PR #524) holds v71: `202611151000_training_load_v71_dashboard_simple_atomic_save.sql`. Its prefix sorts before v72's. The preflight, the post-check
@@ -70,7 +86,9 @@ and the rollback accept it recorded once or not at all, in either order of deplo
 
 ## After the deploy
 
-Run `docs/runbooks/source-field-observations-v72-postcheck.sql`, each block read-only. Every boolean must be true. The
+Run `docs/runbooks/source-field-observations-v72-postcheck.sql`, each block read-only. Every boolean must be true. Block 5
+(added with I2) checks that `anon` and `authenticated` have no USAGE on `training_load` and no table there they could
+select; it is the pattern for every later post-check that touches `training_load`. The
 first rows appear with the first succeeded check after the deploy.
 
 ## Rollback

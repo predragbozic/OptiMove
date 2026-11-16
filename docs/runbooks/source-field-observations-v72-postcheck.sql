@@ -26,3 +26,11 @@ select (select count(*) from pg_trigger t where not t.tgisinternal and t.tgenabl
 
 -- 4. No idle transaction. (Rows appear from the first succeeded check after the deploy; their presence is no failure of v72.)
 select not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and datname = current_database()) as no_idle_tx;
+
+-- 5. (L3, the Independent's note on I1) The Supabase API roles reach nothing of training_load: no USAGE on the schema and no
+--    table they could select. Each boolean is true when the role does not exist (a disposable database).
+select coalesce((select not has_schema_privilege(r.oid, 'training_load', 'USAGE') from pg_roles r where r.rolname = 'anon'), true) as anon_no_usage,
+       coalesce((select not has_schema_privilege(r.oid, 'training_load', 'USAGE') from pg_roles r where r.rolname = 'authenticated'), true) as authenticated_no_usage,
+       (select count(*) from pg_roles r cross join pg_tables t
+         where r.rolname in ('anon', 'authenticated') and t.schemaname = 'training_load'
+           and has_table_privilege(r.oid, quote_ident(t.schemaname) || '.' || quote_ident(t.tablename), 'SELECT')) = 0 as no_selectable_table;
