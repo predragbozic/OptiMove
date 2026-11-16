@@ -86,7 +86,9 @@ and the rollback accept it recorded once or not at all, in either order of deplo
 
 ## After the deploy
 
-Run `docs/runbooks/source-field-observations-v72-postcheck.sql`, each block read-only. Every boolean must be true. The
+Run `docs/runbooks/source-field-observations-v72-postcheck.sql`, each block read-only. Every boolean must be true. Block 5
+(added with I2) checks that `anon` and `authenticated` have no USAGE on `training_load` and no table there they could
+select; it is the pattern for every later post-check that touches `training_load`. The
 first rows appear with the first succeeded check after the deploy.
 
 ## Rollback
