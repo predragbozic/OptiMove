@@ -214,6 +214,47 @@ for (const width of [1280, 390, 360]) {
   });
 }
 
+// MT-C: the full review names the recording choice read-only; the platform admin's choice opens the same Fix sheet.
+for (const width of [1280, 390]) {
+  test(`MT-C (${width} px): the platform admin's full review offers "Choose a recording", which opens the Fix sheet; the row then names the choice`, async () => {
+    const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "multitrack" } });
+    try {
+      await prepareImports(world);
+      const admin = await openAs(browser, world, "platform_admin", width);
+      try {
+        admin.page.on("dialog", (d) => d.accept());
+        await openTrainingLoad(admin.page);
+        await admin.page.click('[data-action="training-load-section"][data-section="imports"]');
+        await admin.page.waitForSelector('[data-attention-group="review"]', { timeout: 20_000 });
+        await admin.page.click('[data-attention-group="review"] [data-action="training-load-gpexe-open"]');
+        const choose = admin.page.locator(".gpexe-review-row .gpexe-choose-recording");
+        await choose.waitFor({ timeout: 20_000 });
+        assert.equal(await choose.count(), 1, "one row still needs a choice");
+        assert.ok((await choose.boundingBox()).height >= 44, "a 44 px target");
+        assert.equal(await admin.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0, "no horizontal page scroll");
+        if (SHOTS) { await choose.scrollIntoViewIfNeeded(); await admin.page.screenshot({ path: `${SHOTS}/mtc-choose-${width}.png` }); }
+        await choose.click();
+        await admin.page.waitForSelector(".imports-fix.is-open .imports-fix-choice", { timeout: 20_000 });
+        await admin.page.locator(".imports-fix.is-open .imports-fix-choice").nth(1).click();
+        await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-fix-track-save"]');
+        await admin.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]').waitFor({ timeout: 20_000 });
+        await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-fix-full"]');
+        const badge = admin.page.locator(".gpexe-review-row .gpexe-badge.is-track-choice");
+        await badge.waitFor({ timeout: 20_000 });
+        assert.equal((await badge.innerText()).trim(), "One of 2 recordings used");
+        assert.equal(await admin.page.locator(".gpexe-choose-recording").count(), 0, "nothing left to choose");
+        assert.equal(await admin.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0, "no horizontal page scroll");
+        if (SHOTS) { await badge.scrollIntoViewIfNeeded(); await admin.page.screenshot({ path: `${SHOTS}/mtc-label-${width}.png` }); }
+        assert.equal(admin.pageErrors.length, 0, admin.pageErrors.join("\n"));
+      } finally {
+        await admin.context.close();
+      }
+    } finally {
+      await world.stop();
+    }
+  });
+}
+
 test("Fix slice 2 (coach, 1280 px): a coach who may not import reads no recordings; the end says whoever imports chooses", async () => {
   const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "multitrack" } });
   try {

@@ -77,9 +77,11 @@ function world({ sessions, unlinkedBy = {}, extraAthletes = {}, multiTrack = {},
   // An athlete may appear on more than one track only once another athlete is linked (a recompute brings it: m.afterLinkOf).
   const trackAthletes = (s) => Object.entries(multiTrack[s.id] || {}).filter(([, m]) => !m.afterLinkOf || w.links.some((l) => l.gpexeAthleteId === m.afterLinkOf)).map(([g, m]) => {
     const ch = w.choices[`${s.id}:${g}`];
-    if (ch?.choice === "track") return { gpexeAthleteId: g, athleteId: m.athleteId, results: [] };
-    if (ch?.choice === "none") return { gpexeAthleteId: g, athleteId: m.athleteId, gps: { status: "not_used_by_choice" }, notImported: { code: "no_track_by_choice" }, results: [] };
-    return { gpexeAthleteId: g, athleteId: m.athleteId, gps: { status: "needs_manual_review" }, notImported: { code: "multiple_tracks" }, results: [] };
+    // MT-B's trackChoice, as the coach's audience sends it (no choiceId).
+    const tc = (kind, trackId, stale = false) => ({ kind, trackId, trackCount: m.tracks.length, stale });
+    if (ch?.choice === "track") return { gpexeAthleteId: g, athleteId: m.athleteId, results: [], trackChoice: tc("track", ch.trackId) };
+    if (ch?.choice === "none") return { gpexeAthleteId: g, athleteId: m.athleteId, gps: { status: "not_used_by_choice" }, notImported: { code: "no_track_by_choice" }, results: [], trackChoice: tc("none", null) };
+    return { gpexeAthleteId: g, athleteId: m.athleteId, gps: { status: "needs_manual_review" }, notImported: { code: "multiple_tracks" }, results: [], ...(m.staleChoice ? { trackChoice: tc(m.staleChoice, m.staleChoice === "track" ? m.tracks[0].trackId : null, true) } : {}) };
   });
   const openTracks = (s) => trackAthletes(s).filter((a) => a.notImported?.code === "multiple_tracks").length;
   const preview = (s) => {
@@ -783,4 +785,59 @@ test("Fix 32: after Update the review, a choice cleared elsewhere is read again 
   await act("training-load-gpexe-review-update");
   assert.equal(trackGets().length, reads + 1, "read again after the update");
   assert.match(sheet(), /GPEXE has 2 recordings of Blake Sample/);
+});
+
+// MT-C: the full review row says, read-only, what the recording choice did; the platform admin's choice opens the Fix sheet.
+const reviewRow = (name) => (html().match(new RegExp(`<tr class="gpexe-review-row is-(?!no_record)[^"]*" role="row">\\s*<th scope="row" data-label="Athlete" role="rowheader">${name}</th>[\\s\\S]*?</tr>`)) || [""])[0];
+
+test("MT-C 1: after a choice the review row says which kind - one of N recordings used, or left out by choice - and never a track id", async () => {
+  for (const [choice, label, note] of [["track", "One of 2 recordings used", null], ["none", "Left out by choice", /none of the recordings is used, as chosen/]]) {
+    resetState();
+    const w = multiWorld();
+    w.choices["cand-5:131"] = { choice, trackId: choice === "track" ? "555002" : null };
+    await open(w);
+    await act("training-load-gpexe-open", { candidateId: "cand-5" });
+    const row = reviewRow("Blake Sample");
+    assert.match(row, new RegExp(`<span class="gpexe-badge is-track-choice">${label}</span>`), choice);
+    if (note) assert.match(row, note);
+    assert.ok(!/55500[12]/.test(visibleText(row)), "no track id");
+    assert.doesNotMatch(row, /gpexe-choose-recording/, "a coach chooses in Fix, not here");
+  }
+});
+
+test("MT-C 2: a choice that no longer applies is named as out of date; an athlete without a choice has no label", async () => {
+  resetState();
+  await open(world({ sessions: [row(5, { reasons: [{ code: "athletes_need_manual_review", count: 1 }] })], multiTrack: { "cand-5": { "131": { athleteId: "ath-2", tracks: TRACKS, staleChoice: "track" } } } }));
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  assert.match(reviewRow("Blake Sample"), /<span class="gpexe-badge is-track-choice">Recording choice out of date<\/span>/);
+  assert.match(reviewRow("Blake Sample"), /GPEXE(?:'|&#039;)s recordings of this athlete changed after the choice was made, so it no longer applies\./);
+  resetState();
+  await open(multiWorld());
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  assert.doesNotMatch(reviewRow("Blake Sample"), /is-track-choice/);
+});
+
+test("MT-C 3: the platform admin's 'Choose a recording' opens the same Fix sheet (one chooser) - only on a row that still needs a choice, only while it can be imported", async () => {
+  resetState();
+  viewer = { canApprove: true, approvalBasis: "platform_admin", isPlatformAdmin: true };
+  const w = multiWorld();
+  await open(w);
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  assert.match(reviewRow("Blake Sample"), /<button type="button" class="plain-button gpexe-button gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="cand-5">Choose a recording<\/button>/);
+  assert.equal((html().match(/gpexe-choose-recording/g) || []).length, 1, "one button, on that row only");
+  await act("training-load-gpexe-fix", { candidateId: "cand-5" });
+  assert.match(sheet(), /GPEXE has 2 recordings of Blake Sample in this session\. Which one should be imported\?/);
+  assert.equal(trackGets().length, 1, "the Fix module reads the recordings");
+  // After the choice, the row names it and the button is gone.
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555001" }, { renderTrainingLoad: render });
+  await act("training-load-gpexe-fix-track-save");
+  await act("training-load-gpexe-fix-full");
+  assert.match(reviewRow("Blake Sample"), /One of 2 recordings used/);
+  assert.doesNotMatch(html(), /gpexe-choose-recording/);
+  // A viewer who may not import never gets the button.
+  resetState();
+  viewer = { canApprove: false, approvalBasis: null, isPlatformAdmin: true };
+  await open(multiWorld());
+  await act("training-load-gpexe-open", { candidateId: "cand-5" });
+  assert.doesNotMatch(html(), /gpexe-choose-recording/);
 });

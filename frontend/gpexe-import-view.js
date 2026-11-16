@@ -2655,6 +2655,31 @@ export function leaveOutOffered(c, detail = state.trainingLoad.gpexe.detail, sta
   return true;
 }
 
+// MT-C: what the recording choice of an athlete GPEXE recorded more than once did, read-only from the preview's trackChoice (the
+// server applied it; nothing is decided here). The preview names only the chosen track, not the order of the others, so the
+// label says "one of N". A scale-only choice (one recording) is not named here.
+export function trackChoiceLabel(a) {
+  const t = a?.trackChoice;
+  if (!t || !(Number(t.trackCount) > 1)) return "";
+  if (t.stale === true) return "Recording choice out of date";
+  if (t.kind === "none") return "Left out by choice";
+  if (t.kind === "track") return `One of ${t.trackCount} recordings used`;
+  return "";
+}
+const TRACK_CHOICE_NOTE = {
+  "Recording choice out of date": "GPEXE's recordings of this athlete changed after the choice was made, so it no longer applies.",
+  "Left out by choice": "GPEXE recorded this athlete more than once and none of the recordings is used, as chosen.",
+};
+
+// MT-C: the platform admin chooses a recording in the Fix sheet (the one chooser); the full review only opens it, for a row
+// that still needs a choice. Whoever else may import gets the same step from the Needs you group.
+function chooseRecordingHtml(r, c) {
+  const gx = state.trainingLoad.gpexe;
+  if (!platformViewer() || gx.status?.viewer?.canApprove !== true || c?.status !== "pending" || !c.snapshot?.available) return "";
+  if (r.a?.notImported?.code !== "multiple_tracks") return "";
+  return ` <button type="button" class="plain-button gpexe-button gpexe-choose-recording" data-action="training-load-gpexe-fix" data-candidate-id="${escapeAttr(c.id)}">Choose a recording</button>`;
+}
+
 function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }) {
   const ready = r.status === "importable" || r.status === "participation";
   const badge = ready ? "is-ready" : r.status === "no_record" || r.status === "nothing_new" || r.status === "left_out" ? "" : "is-blocked";
@@ -2674,9 +2699,9 @@ function reviewRowHtml(r, c, choices, lo = { offered: false, chosen: new Set() }
   return `
     <tr class="gpexe-review-row is-${r.status}" role="row">
       <th scope="row" data-label="Athlete" role="rowheader">${escapeHtml(r.name)}</th>
-      <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.short ? ` <span class="gpexe-badge is-check">Check</span>` : ""}${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}</td>
+      <td data-label="Status" role="cell"><span class="gpexe-badge ${badge}">${escapeHtml(r.label)}</span>${r.short ? ` <span class="gpexe-badge is-check">Check</span>` : ""}${r.changes ? ` <span class="gpexe-badge is-unknown">${escapeHtml(`Changes ${plural(r.changes, "imported result", "imported results")}`)}</span>` : ""}${trackChoiceLabel(r.a) ? ` <span class="gpexe-badge is-track-choice">${escapeHtml(trackChoiceLabel(r.a))}</span>` : ""}</td>
       ${cells}
-      <td data-label="What happens" role="cell">${escapeHtml(lo.states && r.status === "no_record" ? "No GPS record in this session. You can set their attendance here; it is saved after the import." : r.note)}${escapeHtml(shortNote)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}${lo.states ? stateChooserHtml(r, lo) : ""}</td>
+      <td data-label="What happens" role="cell">${escapeHtml(lo.states && r.status === "no_record" ? "No GPS record in this session. You can set their attendance here; it is saved after the import." : r.note)}${escapeHtml(shortNote)}${r.changes ? ` ${escapeHtml("The change must be accepted before the import.")}` : ""}${TRACK_CHOICE_NOTE[trackChoiceLabel(r.a)] ? ` ${escapeHtml(TRACK_CHOICE_NOTE[trackChoiceLabel(r.a)])}` : ""}${chooseRecordingHtml(r, c)}${lo.states ? stateChooserHtml(r, lo) : ""}</td>
       ${lo.offered ? leaveOutCellHtml(r, lo) : ""}
     </tr>${link ? `
     <tr class="gpexe-review-link" role="presentation"><td colspan="${VALUE_COLUMNS.length + 3 + (lo.offered ? 1 : 0)}" role="presentation">${link}</td></tr>` : ""}`;
