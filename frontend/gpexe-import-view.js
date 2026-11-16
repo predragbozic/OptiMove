@@ -1057,7 +1057,8 @@ function renderFixHtml(gx, status) {
         corrected: (one) => `${one ? "is" : "are"} replaced with newer GPEXE values`,
         supplemented: (one) => `${one ? "gets" : "get"} more values from GPEXE`,
         needs_review: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's different values are saved for review`,
-        stale_resend_ignored: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's older values are saved aside`,
+        // "Older or manual" (the writer flags a manual correction this way even when GPEXE's report is newer): never "older".
+        stale_resend_ignored: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's values are saved aside`,
       };
       const m = new Map();
       for (const ch of c?.preview?.changesToImported || []) {

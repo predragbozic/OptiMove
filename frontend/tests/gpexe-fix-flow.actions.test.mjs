@@ -759,7 +759,8 @@ test("Fix 31: the kinds of change say what happens - an older or different GPEXE
   await fixFirst();
   await linkTo("101", "ath-3");
   const s = sheet();
-  assert.match(s, /<li>Alex Example: 1 result stays as it is; GPEXE(?:'|&#039;)s older values are saved aside<\/li>/);
+  assert.match(s, /<li>Alex Example: 1 result stays as it is; GPEXE(?:'|&#039;)s values are saved aside<\/li>/);
+  assert.ok(!/older values/.test(s), "a manual correction is flagged this way too: GPEXE's version is not called older");
   assert.match(s, /<li>Alex Example: 1 result stays as it is; GPEXE(?:'|&#039;)s different values are saved for review<\/li>/);
   assert.match(s, /<li>Alex Example: 1 result gets more values from GPEXE<\/li>/);
   assert.ok(!/kept as they are|marked for review|changes 3/.test(s));
