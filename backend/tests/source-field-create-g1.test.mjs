@@ -481,7 +481,10 @@ async function migrateTo(url, files) {
 }
 
 test("11. the preflight on v72, v74, the post-check (a verified revision's digest unchanged), the rollback to v72's catalog exactly, v74 again; the rollback refuses once a field was created", async () => {
-  const before72 = GPEXE_TEST_MIGRATIONS.filter((m) => m !== V74);
+  // Production's state when v74 is applied: every test migration and App health's v70 and v73, which reached
+  // production first. v73 sorts before v74 by file name, so no "later than v74" check counts it.
+  const withAppHealth = [...GPEXE_TEST_MIGRATIONS, "202611131400_app_error_events_v70_device_and_keyed_hash.sql", "202611151500_app_error_events_v73_request_and_restart.sql"].sort();
+  const before72 = withAppHealth.filter((m) => m !== V74);
   const rdb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "g1rb", migrations: before72 });
   const c = new pg.Client({ connectionString: rdb.url });
   await c.connect();
@@ -496,6 +499,7 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     await c.query("set session_replication_role = origin");
     const pre = await readOnly(c, RUNBOOK("generic-source-fields-v74-preflight.sql"));
     assert.deepEqual([pre[0][0].v72, pre[0][0].v74, pre[0][0].later_than_v74], ["1", "0", "0"]);
+    assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = 'migrations_v2/202611151500_app_error_events_v73_request_and_restart.sql'`)).rows[0].n, 1, "v73 is recorded, as on production");
     assert.ok(pre[1].length === 12 && pre[1].every((r) => r.ok === true), "the twelve bodies are the ones v74 was written on");
     assert.deepEqual(pre[2][0], { functions: "0", columns: "0", words_table: "0" });
     assert.deepEqual(pre[4][0], { locks: "0", idle_transactions: "0" });
@@ -503,7 +507,7 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     assert.equal(digestBefore.verified_revisions, 1);
     const catalog72 = (await c.query(CATALOG)).rows.map((r) => r.x);
 
-    await migrateTo(rdb.url, GPEXE_TEST_MIGRATIONS);
+    await migrateTo(rdb.url, withAppHealth);
     const post = await readOnly(c, RUNBOOK("generic-source-fields-v74-postcheck.sql"));
     assert.deepEqual([post[0][0].v74_rows, post[0][0].checksum_ok, post[0][0].later], ["1", true, "0"], "recorded once with the file's checksum");
     assert.ok(post[1].length === 15 && post[1].every((r) => r.ok === true), "the fifteen v74 bodies");
@@ -515,7 +519,7 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
     // The rollback: the catalog of v72 exactly; v74 applies again.
     await c.query(RUNBOOK("generic-source-fields-v74-rollback.sql"));
     assert.deepEqual((await c.query(CATALOG)).rows.map((r) => r.x), catalog72);
-    await migrateTo(rdb.url, GPEXE_TEST_MIGRATIONS);
+    await migrateTo(rdb.url, withAppHealth);
     assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V74}`])).rows[0].n, 1);
 
     // A row that names a GPEXE unit word: the rollback refuses (plan section 8.10) and changes nothing.
