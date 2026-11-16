@@ -40,11 +40,13 @@ export function renderFixSheetHtml(gx, status, h) {
         : o.verified === "still_unknown" ? " Still not clear; check again in a moment." : "";
       const giveUp = (o.checks || 0) >= GIVE_UP_AFTER_CHECKS ? ` ${h.AskWho()} to check this import.` : "";
       body = `<p class="imports-fix-sentence" role="alert">${escapeHtml(`The answer to this session's import did not arrive. Check the result before doing anything else.${more}${giveUp}`)}</p>`;
-      actions = skip() + button("primary-button", "training-load-gpexe-verify", detail.verifying ? "Checking..." : "Check the result", { disabled: detail.verifying });
+      // No Skip here: the sentence says check first, and nothing else is offered until the result is known.
+      actions = button("primary-button", "training-load-gpexe-verify", detail.verifying ? "Checking..." : "Check the result", { disabled: detail.verifying });
     } else if (s.kind === "link") {
       // The chooser is the review's own (U3's suggested athlete first, then the team; nothing preselected; a name two team
       // athletes share can't be confirmed); "Link..." asks, "Confirm link" sends, and the review is updated once.
-      body = `${gx.linkError ? `<p class="gpexe-error" role="alert">${escapeHtml(h.linkErrorText)}</p>` : ""}${h.linkHtml(s.id)}`;
+      // The error belongs to the athlete whose link was asked (a lost answer for one is never shown on the next).
+      body = `${gx.linkError && String(gx.linkOpen) === String(s.id) ? `<p class="gpexe-error" role="alert">${escapeHtml(h.linkErrorText)}</p>` : ""}${h.linkHtml(s.id)}`;
       actions = skip(`data-gpexe-athlete-id="${escapeAttr(s.id)}"`);
     } else if (s.kind === "stale") {
       body = `<p class="imports-fix-sentence">${escapeHtml(detail.updateError
@@ -70,22 +72,24 @@ export function renderFixSheetHtml(gx, status, h) {
     body = `<p class="imports-fix-sentence gpexe-success" role="status">This session is imported.</p>`;
     actions = nextOrBack();
   } else if (view.screen === "ready" && h.importCount > 0) {
+    // A skipped athlete: the session can be imported without them - never "ready" as if nothing was left.
     const skipped = (detail.fix.skipped || []).length;
-    const note = skipped ? `<p class="muted">${escapeHtml(skipped === 1 ? "The athlete you skipped is not imported until linked." : `The ${skipped} athletes you skipped are not imported until linked.`)}</p>` : "";
+    const base = skipped === 1 ? "This session can be imported without the athlete you skipped; their results are not imported until linked."
+      : skipped ? `This session can be imported without the ${skipped} athletes you skipped; their results are not imported until linked.` : "This session is ready.";
     if (h.switchOff) {
-      body = `<p class="imports-fix-sentence">This session is ready, but importing is switched off for this team. It can be imported once it is turned on.</p>${note}`;
+      body = `<p class="imports-fix-sentence">${escapeHtml(`${base} Importing is switched off${h.teamSwitchOff ? " for this team" : ""}; ${h.AskWho().replace(/^./, (ch) => ch.toLowerCase())} to turn it on.`)}</p>`;
       actions = nextOrBack();
     } else if (!h.canImport) {
-      body = `<p class="imports-fix-sentence">${escapeHtml(`This session is ready. ${h.AskWho()} to import it.`)}</p>${note}`;
+      body = `<p class="imports-fix-sentence">${escapeHtml(`${base} ${h.AskWho()} to import it.`)}</p>`;
       actions = nextOrBack();
     } else {
-      body = `<p class="imports-fix-sentence">This session is ready.</p>${note}`;
+      body = `<p class="imports-fix-sentence">${escapeHtml(base)}</p>`;
       actions = (h.next ? button("plain-button", "training-load-gpexe-fix-next", "Next session in the group", { disabled: busy }) : "")
         + button("primary-button", "training-load-gpexe-approve", detail.approving ? "Importing..." : `Import ${h.importCount === 1 ? "1 athlete" : `${h.importCount} athletes`}`, { disabled: busy });
     }
   } else {
     // A kind outside slice 1, a refusal, or nothing to import: the full review says why.
-    body = `<p class="imports-fix-sentence">This session needs a look in its full review.</p>`;
+    body = `${h.refusalText ? `<p class="gpexe-refused" role="alert">${escapeHtml(h.refusalText)}</p>` : ""}<p class="imports-fix-sentence">This session needs a look in its full review.</p>`;
     actions = (h.next ? button("plain-button", "training-load-gpexe-fix-next", "Next session in the group", { disabled: busy }) : "")
       + button("primary-button", "training-load-gpexe-fix-full", "See why", { disabled: busy });
   }

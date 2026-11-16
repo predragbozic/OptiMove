@@ -71,7 +71,7 @@ function row(n, o = {}) {
 }
 
 // A small world: sessions, their GPEXE athletes and the team's links. A link changes what a recompute says.
-function world({ sessions, unlinkedBy = {}, links = [], switchOn = true, onLink, onPreview, onApprove, onCheck, onCandidate } = {}) {
+function world({ sessions, unlinkedBy = {}, extraAthletes = {}, links = [], switchOn = true, globalOn = true, onLink, onPreview, onApprove, onCheck, onCandidate } = {}) {
   const w = { sessions: sessions.map((s) => ({ ...s })), links: [...links], unlinkedBy };
   const preview = (s) => {
     const ids = (w.unlinkedBy[s.id] || []).filter((g) => !w.links.some((l) => l.gpexeAthleteId === g));
@@ -82,6 +82,7 @@ function world({ sessions, unlinkedBy = {}, links = [], switchOn = true, onLink,
         { gpexeAthleteId: "900", athleteId: "ath-9", results: [] },
         ...linkedHere.map((g) => ({ gpexeAthleteId: g, athleteId: w.links.find((l) => l.gpexeAthleteId === g).athleteId, results: [] })),
         ...ids.map((g) => ({ gpexeAthleteId: g, athleteId: null, notImported: { code: "athlete_not_linked" }, results: [] })),
+        ...(extraAthletes[s.id] || []),
       ],
       teamAthletesWithoutGpexeRecord: ["ath-1", "ath-2", "ath-3"].filter((a) => !w.links.some((l) => l.athleteId === a)).map((athleteId) => ({ athleteId })),
     };
@@ -96,7 +97,7 @@ function world({ sessions, unlinkedBy = {}, links = [], switchOn = true, onLink,
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
     if (!m) return { status: 404, body: { error: "notFound" } };
     const rest = m[2];
-    if (rest === "/status") return { status: 200, body: { ...status(), ...(switchOn ? {} : { teamImportSwitch: { enabled: false, mode: "team" } }) } };
+    if (rest === "/status") return { status: 200, body: { ...status({ enabled: globalOn }), ...(switchOn ? {} : { teamImportSwitch: { enabled: false, mode: "team" } }) } };
     if (rest === "/source-athletes") return { status: 200, body: { athletes: [], units: {}, lastSeenRule: "" } };
     if (rest === "/athlete-links" && call.method === "GET") return { status: 200, body: { links: w.links } };
     if (rest === "/athlete-links" && call.method === "POST") {
@@ -106,7 +107,14 @@ function world({ sessions, unlinkedBy = {}, links = [], switchOn = true, onLink,
       return { status: 201, body: { link } };
     }
     if (rest.startsWith("/candidates?") || rest === "/candidates") return { status: 200, body: { candidates: w.sessions.map(summary) } };
-    if (rest === "/checks" && call.method === "POST") return onCheck ? onCheck(call, w) : { status: 202, body: { check: { id: "chk-1", status: "succeeded", window: { from: call.body.from, to: call.body.to }, startedAt: "2026-09-22T11:00:00Z", sessionsSeen: 1, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 1, error: null } } };
+    if (rest === "/checks" && call.method === "POST") {
+      if (onCheck) return onCheck(call, w);
+      // As the real check: the sessions it saw are seen again after it started.
+      for (const x of w.sessions) if (x.sessionStartedAt.slice(0, 10) >= call.body.from && x.sessionStartedAt.slice(0, 10) <= call.body.to) x.lastSeenAt = "2026-09-22T11:00:30Z";
+      return { status: 202, body: { check: { id: "chk-1", status: "running", window: { from: call.body.from, to: call.body.to }, startedAt: "2026-09-22T11:00:00Z", sessionsSeen: 1, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 1, error: null } } };
+    }
+    // The real check runs, then is polled until it ends.
+    if (rest === "/checks/chk-1") return { status: 200, body: { check: { id: "chk-1", status: "succeeded", startedAt: "2026-09-22T11:00:00Z", finishedAt: "2026-09-22T11:01:00Z", sessionsSeen: 1, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 1, error: null } } };
     const pre = rest.match(/^\/candidates\/([^/?]+)\/preview$/);
     if (pre) {
       if (onPreview) { const r = await onPreview(call, w); if (r) return r; }
@@ -216,8 +224,8 @@ test("Fix 3: a name two team athletes share can't be confirmed; Skip for now ski
     await act("training-load-gpexe-fix-skip", { gpexeAthleteId: "101" });
     const s = sheet();
     assert.equal(gx().detail.id, "cand-5", "the same session");
-    assert.match(s, /This session is ready\./);
-    assert.match(s, /The athlete you skipped is not imported until linked\./);
+    assert.match(s, /This session can be imported without the athlete you skipped; their results are not imported until linked\./);
+    assert.ok(!/This session is ready/.test(s), "never \"ready\" as if nothing was left");
     assert.match(s, /data-action="training-load-gpexe-approve"[^>]*>Import 1 athlete</);
     assert.equal(posts(/athlete-links$/).length, 0);
   } finally {
@@ -272,7 +280,7 @@ test("Fix 4: the end per viewer - an approver imports here; a coach without the 
   await fixFirst();
   await linkTo("101", "ath-1");
   s = sheet();
-  assert.match(s, /This session is ready, but importing is switched off for this team\./);
+  assert.match(s, /This session is ready\. Importing is switched off for this team; ask your club administrator to turn it on\./);
   assert.ok(!/training-load-gpexe-approve/.test(s));
 });
 
@@ -393,4 +401,64 @@ test("Fix 11: a kind outside slice 1 has no Fix; a session that ends outside it 
   await act("training-load-gpexe-fix-full");
   assert.equal(gx().detail.fix, null);
   assert.match(html(), /gpexe-detail-overlay/, "the full review");
+});
+
+test("Fix 12: a session that needs a search AND has an unlinked athlete: after the link (its recompute is refused) the next step is the search, never Update the review", async () => {
+  resetState();
+  const w = world({ sessions: [row(5, { snapshot: { available: false } })], unlinkedBy: { "cand-5": ["101"] }, onPreview: (call, wd) => (wd.sessions[0].snapshot.available ? null : { status: 409, body: { error: "snapshot_expired_check_again" } }) });
+  await open(w);
+  await act("training-load-gpexe-fix", { candidateId: "cand-5", group: "fresh" });
+  await linkTo("101", "ath-1");
+  let s = sheet();
+  assert.match(s, /data-action="training-load-gpexe-fix-search"/);
+  assert.ok(!/Update the review/.test(s));
+  assert.match(s, /Step 2 of 2/);
+  w.sessions[0].snapshot = { available: true, expiresAt: "2099-01-01T00:00:00Z" };
+  await act("training-load-gpexe-fix-search");
+  s = sheet();
+  assert.match(s, /This session is ready\./);
+});
+
+test("Fix 13: an athlete left out for another reason than a link: the sheet never says ready - See why opens the full review", async () => {
+  resetState();
+  const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] }, extraAthletes: { "cand-5": [{ gpexeAthleteId: "104", athleteId: "ath-2", notImported: { code: "athlete_needs_manual_review" }, results: [] }] } });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-1");
+  const s = sheet();
+  assert.match(s, /This session needs a look in its full review\./);
+  assert.ok(!/training-load-gpexe-approve/.test(s));
+});
+
+test("Fix 14: a refused import says nothing was imported before See why; the global switch off is not called the team's", async () => {
+  resetState();
+  let w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] }, onApprove: () => ({ status: 409, body: { error: "candidate_not_actionable" } }) });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-1");
+  await act("training-load-gpexe-approve");
+  let s = sheet();
+  assert.match(s, /class="gpexe-refused" role="alert">Not imported/);
+  assert.match(s, /data-action="training-load-gpexe-fix-full"[^>]*>See why</);
+  assert.ok(!CODE.test(visibleText(s)), "no code for the coach");
+
+  resetState();
+  w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] }, globalOn: false });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-1");
+  s = sheet();
+  assert.match(s, /This session is ready\. Importing is switched off; ask your club administrator to turn it on\./);
+  assert.ok(!/for this team/.test(s) && !/training-load-gpexe-approve/.test(s));
+});
+
+test("Fix 15: a lost link answer for one athlete is not shown on the next athlete's step", async () => {
+  resetState();
+  const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101", "102"] }, onLink: (call, wd) => { wd.links.push({ id: "link-x", gpexeAthleteId: call.body.gpexeAthleteId, athleteId: call.body.athleteId }); return "lost"; } });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-1");
+  const s = sheet();
+  assert.match(s, /data-gpexe-athlete-id="102"/, "the link was made: the next athlete");
+  assert.ok(!/We can(?:'|&#039;)t tell/.test(s), "the uncertainty about 101 is not shown on 102");
 });

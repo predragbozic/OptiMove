@@ -108,15 +108,49 @@ test("Fix (club admin, 1280 px): the same steps without a code, through to the i
       await admin.page.locator(".imports-fix.is-open", { hasText: "This session is ready" }).waitFor({ timeout: 20_000 });
       const end = (await admin.page.locator(".imports-fix.is-open").innerText()).replace(/\s+/g, " ");
       assert.ok(!CODE.test(end), "no code at the end either");
+      // The server says whether this club admin may import (the seed's team switch is in team mode); the end follows it.
+      const canApprove = (await setup.call("club_admin", "GET", `${G}/teams/${setup.teamId}/status`)).body.viewer?.canApprove === true;
       const approve = admin.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]');
-      if (await approve.count()) {
+      assert.equal(await approve.count(), canApprove ? 1 : 0, "an Import button exactly when the server allows it");
+      if (canApprove) {
         await approve.click();
         await admin.page.locator(".imports-fix.is-open", { hasText: "This session is imported." }).waitFor({ timeout: 30_000 });
         const after = (await setup.call("platform_admin", "GET", `${G}/teams/${setup.teamId}/candidates/${needs.id}`)).body.candidate;
         assert.equal(after.status, "imported");
       } else {
-        assert.match(end, /This session is ready\. .+ to import it\./, "a club admin who may not import is told who does");
+        assert.match(end, /This session is ready\. Contact OptiMove support to import it\./, "a club admin who may not import is told who does");
       }
+      assert.equal(admin.pageErrors.length, 0, admin.pageErrors.join("\n"));
+    } finally {
+      await admin.context.close();
+    }
+  } finally {
+    await world.stop();
+  }
+});
+
+test("Fix (platform admin, 1280 px): Fix beside the review, through the link to the import in the sheet", async () => {
+  const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "imports" } });
+  try {
+    const setup = await prepareImports(world);
+    const needs = setup.candidates.find((c) => String(c.gpexeTeamSessionId) === "9102");
+    const admin = await openAs(browser, world, "platform_admin", 1280);
+    try {
+      admin.page.on("dialog", (d) => d.accept());
+      await openNeedsYou(admin.page);
+      assert.equal(await admin.page.locator('[data-attention-group="unlinked"] [data-action="training-load-gpexe-open"]').count() > 0, true, "the review is still offered");
+      await admin.page.click('[data-attention-group="unlinked"] [data-action="training-load-gpexe-fix"]');
+      await admin.page.waitForSelector(".imports-fix.is-open .gpexe-link select");
+      await admin.page.locator(".imports-fix.is-open select").selectOption(world.ids.athleteIds[3]);
+      await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link"]');
+      await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link-confirm"]');
+      const approve = admin.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]');
+      await approve.waitFor({ timeout: 20_000 });
+      assert.equal((await approve.innerText()).trim(), "Import 3 athletes");
+      await approve.click();
+      await admin.page.locator(".imports-fix.is-open", { hasText: "This session is imported." }).waitFor({ timeout: 30_000 });
+      const after = (await setup.call("platform_admin", "GET", `${G}/teams/${setup.teamId}/candidates/${needs.id}`)).body.candidate;
+      assert.equal(after.status, "imported", "imported through the sheet");
       assert.equal(admin.pageErrors.length, 0, admin.pageErrors.join("\n"));
     } finally {
       await admin.context.close();

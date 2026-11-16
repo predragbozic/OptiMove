@@ -1030,7 +1030,7 @@ function renderFixHtml(gx, status) {
   const linkHtml = (id) => {
     const preview = c?.preview || {};
     const a = (preview.athletes || []).find((x) => String(x.gpexeAthleteId) === String(id));
-    return a ? renderLinkHtml(a, c, linkChoicesOf(preview, c)) : "";
+    return a ? renderLinkHtml(a, c, linkChoicesOf(preview, c), { fix: true }) : "";
   };
   return renderFixSheetHtml(gx, status, {
     title: c ? `${niceSessionName(c)}${c.sessionStartedAt ? ` · ${fmtDateTime(c.sessionStartedAt)}` : ""}` : "Session",
@@ -1044,6 +1044,9 @@ function renderFixHtml(gx, status) {
     errorTech: (error) => (platformViewer() ? errorTech(error) : ""),
     checkErrorText,
     linkErrorText: errorText(gx.linkError, "The link could not be changed."),
+    // A refused import is said as the review says it: nothing was imported.
+    refusalText: detail.outcome?.kind === "refused" && detail.outcome.error?.code !== "already_imported" ? (REFUSAL_TEXT[detail.outcome.error?.code] || "Not imported: the server refused the approval.") : "",
+    teamSwitchOff: Boolean(status?.teamImportSwitch && status.teamImportSwitch.enabled !== true) || (c?.approvalBlockers || []).includes("team_import_switch_off"),
   });
 }
 
@@ -2242,14 +2245,14 @@ function renderAthletesHtml(preview, c) {
 // mappings are.
 const LINK_CONTEXT_KEYS = ["gpexe_total_distance", "gpexe_max_speed", "gpexe_time_min"];
 
-function renderLinkContextHtml(a, c) {
-  if (isV3(c?.preview)) return renderHelperContextHtml(a, c);
+function renderLinkContextHtml(a, c, { bare = false } = {}) {
+  if (isV3(c?.preview)) return renderHelperContextHtml(a, c, { bare });
   const whole = (a.results || []).find((r) => r.level !== "drill");
   const values = LINK_CONTEXT_KEYS.map((key) => whole?.values?.find((v) => v.metricKey === key)).filter((v) => v && v.value !== null && v.value !== undefined);
   const drills = new Set((a.results || []).filter((r) => r.level === "drill").map((r) => r.drillIndex)).size;
   if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
   return `
-    <p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    ${bare ? "" : `<p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>`}
     <ul class="gpexe-link-context">
       ${values.map((v) => `<li><span>${escapeHtml(metricName(v))}</span> <strong>${escapeHtml(fmtValue(v.value, v.unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
@@ -2261,13 +2264,13 @@ function renderLinkContextHtml(a, c) {
 // snapshot for this GPEXE athlete (duration in min, distance in m, top speed
 // in km/h, and its drill rows), never the mapped values. A value the source
 // did not give is null and is not shown.
-function renderHelperContextHtml(a, c) {
+function renderHelperContextHtml(a, c, { bare = false } = {}) {
   const h = c?.helperValues?.[a.gpexeAthleteId] || {};
   const values = MAP_VALUE_LABELS.filter(([key]) => h[key] !== null && h[key] !== undefined);
   const drills = Number.isInteger(h.drillRows) && h.drillRows > 0 ? h.drillRows : 0;
   if (!values.length && !drills) return `<p class="muted">GPEXE sent no values for this athlete that could help you find them.</p>`;
   return `
-    <p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>
+    ${bare ? "" : `<p class="muted">Recorded by GPEXE for ${escapeHtml(gpexeWho(a.gpexeAthleteId))} in this session - to help you find them in GPEXE. The values do not prove who it is.</p>`}
     <ul class="gpexe-link-context">
       ${values.map(([key, label, unit]) => `<li><span>${escapeHtml(label)}</span> <strong>${escapeHtml(fmtValue(h[key], unit))}</strong></li>`).join("")}
       ${drills ? `<li><span>Drills</span> <strong>${drills}</strong></li>` : ""}
@@ -2292,7 +2295,7 @@ function compactHasValues(a, c) {
   return ["duration", "distance", "maxSpeed"].some((k) => h[k] !== null && h[k] !== undefined);
 }
 
-function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
+function renderLinkHtml(a, c, unlinkedChoices, { compact = false, fix = false } = {}) {
   const gx = state.trainingLoad.gpexe;
   const id = a.gpexeAthleteId;
   const pending = gx.linkConfirm && gx.linkConfirm.gpexeAthleteId === id ? gx.linkConfirm : null;
@@ -2302,7 +2305,7 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
         <p class="gpexe-link-pair"><strong>${escapeHtml(gpexeAthleteLabel(id))}</strong> → <strong>${escapeHtml(pending.athleteName)}</strong></p>
         <p>Link ${escapeHtml(gpexeWho(id))} to ${escapeHtml(pending.athleteName)}? The review updates right away. When this session is imported, ${escapeHtml("this GPEXE athlete")}'s results in this session, and in every GPEXE session imported later, will be imported as ${escapeHtml(pending.athleteName)}.</p>
         ${idTechHtml(id)}
-        ${(() => { const wrong = `<p>You can unlink it before the session is imported. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — ${askWho()}.</p>`; return compact ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
+        ${(() => { const wrong = `<p>You can unlink it before the session is imported. Unlinking doesn't change results that are already imported: if the link turns out wrong after an import, those results can't be changed here — ${askWho()}.</p>`; return compact || fix ? `<details class="gpexe-fine"><summary>What if the link is wrong?</summary>${wrong}</details>` : wrong; })()}
         <div class="gpexe-link-actions">
           <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-link-cancel" ${gx.linkBusy ? "disabled" : ""}>Cancel</button>
           <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link-confirm" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>${gx.linkBusy ? "Linking..." : "Confirm link"}</button>
@@ -2311,7 +2314,33 @@ function renderLinkHtml(a, c, unlinkedChoices, { compact = false } = {}) {
     `;
   }
   if (!unlinkedChoices.length) {
-    return `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml("this GPEXE athlete")} is one of them, close this review and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`;
+    return fix
+      ? `<p class="imports-fix-sentence">Every athlete of the team is already linked. Close this and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`
+      : `<p class="muted">Every athlete of the team without a GPEXE record here is already linked. If ${escapeHtml("this GPEXE athlete")} is one of them, close this review and check the linked athletes under Link athletes.</p>${idTechHtml(id)}`;
+  }
+  // Fix flow: one sentence, the values that help, the chooser and ONE main button; the notes are folded.
+  if (fix) {
+    const sg = suggestedChoice(id, unlinkedChoices);
+    const numberNote = !identityOf(id)?.name ? `<details class="gpexe-fine"><summary>What does the number mean?</summary><p>${escapeHtml(`"GPEXE athlete ${gpexeAthleteOrdinal(id)}" is this athlete's place in OptiMove's list, not the GPEXE id.`)}</p></details>` : "";
+    return `
+    <div class="gpexe-link imports-fix-link">
+      <p class="imports-fix-sentence">${escapeHtml(`Who is ${gpexeAthleteLabel(id)} in your team? Compare the values with GPEXE and link only if you are sure.`)}</p>
+      ${duplicateIdentityNames().has(identityNameKey(identityOf(id)?.name || "")) ? `<p class="gpexe-map-caution" role="note">Check: another GPEXE athlete has the same name. Compare the session values below${identityViewer() ? ", and the date of birth on Link athletes," : ""} before you choose.</p>` : ""}
+      ${renderLinkContextHtml(a, c, { bare: true })}
+      ${numberNote}
+      <div class="gpexe-link-row">
+        <label><span>${escapeHtml(`Link ${gpexeAthleteLabel(id)} to`)}</span>
+          <select class="gpexe-select" data-gpexe-link-select="${escapeAttr(id)}">
+            <option value="" selected>Choose an athlete of the team</option>
+            ${sg ? `<option value="${escapeAttr(sg.id)}">Suggested: ${escapeHtml(sg.name)}</option>` : ""}
+            ${unlinkedChoices.filter((o) => String(o.id) !== String(sg?.id)).map((o) => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}${o.duplicate ? " (same name as another athlete)" : ""}</option>`).join("")}
+          </select>
+        </label>
+        <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-link" data-gpexe-athlete-id="${escapeAttr(id)}" ${gx.linkBusy || gx.detail?.updating ? "disabled" : ""}>Link...</button>
+      </div>
+      ${idTechHtml(id)}
+    </div>
+  `;
   }
   return `
     <div class="gpexe-link">

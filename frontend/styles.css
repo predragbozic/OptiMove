@@ -27264,6 +27264,23 @@ body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
   width: 100%;
   max-width: 100%;
 }
+/* The link box is the step itself, not a box in the dialog. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-body .gpexe-link {
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.imports-fix-body .gpexe-link-context {
+  margin: 10px 0;
+}
+/* A 44 px row that keeps its disclosure marker (a flex summary loses it). */
+.imports-fix summary {
+  display: list-item;
+  padding: 12px 0;
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
 .imports-fix-actions {
   display: flex;
   flex-wrap: wrap;
@@ -27299,7 +27316,8 @@ body:not(.athlete-mode):not(.login-mode) .imports-fix .gpexe-select:focus-visibl
   body:not(.athlete-mode):not(.login-mode) .imports-fix-head {
     padding-top: max(12px, env(safe-area-inset-top, 0px));
   }
-  .imports-fix-actions {
+  .imports-fix-actions,
+  .imports-fix-body .gpexe-link-actions {
     flex-direction: column-reverse;
   }
   .imports-fix-actions .gpexe-button {

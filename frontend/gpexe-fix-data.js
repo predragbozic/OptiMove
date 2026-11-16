@@ -53,7 +53,9 @@ export function fixSteps(detail, gx) {
   if (steps.length) return steps;
   for (const id of unlinkedForFix(detail, gx)) steps.push({ kind: "link", id });
   // c) never a step to press when the recompute after the last link already refreshed the review (it then is current).
-  if (reviewMadeBeforeLinkChange(c, gx)) steps.push({ kind: "stale" });
+  // A session that needs a search can't be recomputed (the server refuses it until the search); the search makes its
+  // review current, so it is the step (code review, HIGH).
+  if (reviewMadeBeforeLinkChange(c, gx) && !needsSearch(c)) steps.push({ kind: "stale" });
   if (needsSearch(c)) steps.push({ kind: "fresh" });
   return steps;
 }
@@ -87,6 +89,10 @@ function endReady(detail) {
   if (c.status !== "pending" || c.previewStatus === "blocked") return false;
   if ((c.approvalBlockers || []).some((b) => b !== "blocked" && b !== "team_import_switch_off" && b !== "import_switch_off")) return false;
   if (c.changesToImported) return false;
+  // Athletes left out for another reason than a missing link (manual GPS review, not in the team, invalid in GPEXE, a
+  // blocking row): the full review names them, so the sheet does not say "ready" (code review, MEDIUM).
+  if ((c.preview?.athletes || []).some((a) => a?.blocksSession || (a?.notImported && a.notImported.code !== "athlete_not_linked"))) return false;
+  if ((c.reasons || []).some((r) => !["athletes_not_linked", "no_linked_athlete"].includes(r?.code))) return false;
   if (detail.outcome?.kind === "refused") return false;
   return true;
 }
