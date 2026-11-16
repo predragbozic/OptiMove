@@ -224,9 +224,9 @@ merged first (C95). It does not make a field `verified`: that also needs the mea
 - **Not sessions S1 and S2.** For two more sessions (three athletes each) the owner confirmed only that the fields
   agree in meaning (time, distance, maximum speed). The owner did not compare numbers with the UI. That is not unit
   evidence, and it is not meaning evidence either.
-- **Not the meaning of burst and brake.** Sections 3.4–3.5 support the unit act only. What GPEXE counts as a "burst"
-  or a "brake" event (its threshold, its duration) is still unproven: no documentation or written support answer
-  defines it, so no meaning act may cite this document for these two fields, and neither field becomes `verified`.
+- **Not the meaning of burst and brake.** Sections 3.4–3.5 support the unit act only, so no meaning act cites this
+  document. Their meaning is in `docs/ai/gpexe-c97-meaning-evidence.md` sections 3.4–3.5, on the owner's own statement
+  of GPEXE's definition (a departure from C97 recorded there, section 1.1), not on a vendor document or written support.
 - **Not a probe.** Sections 3.4–3.5 are the owner's own comparison of two athletes in one session, relayed by the
   *Rukovodilac*. They are not a procedure run, a database read or a GPEXE request by the main session.
 - **Not the other fields.** The zone fields and the acceleration / deceleration event counts have no evidence here.
