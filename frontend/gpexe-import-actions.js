@@ -8,7 +8,7 @@ import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImpor
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { fixMustStay, fixWriteInFlight, newFix, noteFixSteps, skipFixAthlete } from "./gpexe-fix-data.js";
-import { chooseFixTrack, loadFixTracks, sendFixTrack, tracksNeedReading } from "./gpexe-fix-tracks-data.js";
+import { chooseFixTrack, loadFixTracks, savedChoiceNotShown, sendFixTrack, tracksNeedReading } from "./gpexe-fix-tracks-data.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import { ensurePeriodData,
   reloadGpexeCandidates,
@@ -515,7 +515,12 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-review-update") {
     if (gx.detail?.updating || gx.linkBusy) return true;
+    const detail = gx.detail;
+    // Fix's "a recording is chosen but not shown": after the update the recordings are read again, so a choice cleared
+    // elsewhere meanwhile becomes a choice to make, not the same step again (#570 follow-up).
+    const applying = Boolean(detail?.fix && savedChoiceNotShown(detail));
     await recomputeGpexeReview(renderTrainingLoad);
+    if (applying && gx.detail === detail && !detail.updateError) await loadFixTracks(detail, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-review-filter") {

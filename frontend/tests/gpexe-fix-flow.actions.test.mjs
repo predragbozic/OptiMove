@@ -619,13 +619,13 @@ test("Fix 22: changes to imported results are accepted in a step of their own by
   await linkTo("101", "ath-3");
   let s = sheet();
   assert.match(s, /Step 2 of 2/);
-  assert.match(s, /Importing this session changes 2 results that are already in OptiMove\./);
-  assert.match(s, /<li>Alex Example: 2 results corrected<\/li>/);
+  assert.match(s, /Importing this session affects 2 results that are already in OptiMove\./);
+  assert.match(s, /<li>Alex Example: 2 results are replaced with newer GPEXE values<\/li>/);
   assert.match(s, /Open the full review below to see each value before you accept\. Nothing changes until you import\./);
   assert.match(s, /data-action="training-load-gpexe-fix-accept"[^>]*>Accept and continue</);
   await act("training-load-gpexe-fix-accept");
   s = sheet();
-  assert.match(s, /This session is ready\. Importing also changes 2 results already in OptiMove\./, "said again beside Import");
+  assert.match(s, /This session is ready\. Importing also affects 2 results already in OptiMove\./, "said again beside Import");
   await act("training-load-gpexe-approve");
   assert.equal(posts(/\/approve$/).at(-1).body.acceptChanges, true, "the import carries the acceptance");
 
@@ -749,4 +749,37 @@ test("Fix 30: choosing a recording keeps the focus on that radio (the repaint re
     globalThis.document.getElementById = prev;
   }
   assert.deepEqual(focused, ["fix-track-131-555002"]);
+});
+
+test("Fix 31: the kinds of change say what happens - an older or different GPEXE version leaves the result as it is", async () => {
+  resetState();
+  const changes = { "cand-5": [{ athleteId: "ath-1", kind: "stale_resend_ignored" }, { athleteId: "ath-1", kind: "needs_review" }, { athleteId: "ath-1", kind: "supplemented" }] };
+  const w = world({ sessions: [row(5, { changesToImported: 3 })], unlinkedBy: { "cand-5": ["101"] }, changes });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-3");
+  const s = sheet();
+  assert.match(s, /<li>Alex Example: 1 result stays as it is; GPEXE(?:'|&#039;)s older values are saved aside<\/li>/);
+  assert.match(s, /<li>Alex Example: 1 result stays as it is; GPEXE(?:'|&#039;)s different values are saved for review<\/li>/);
+  assert.match(s, /<li>Alex Example: 1 result gets more values from GPEXE<\/li>/);
+  assert.ok(!/kept as they are|marked for review|changes 3/.test(s));
+});
+
+test("Fix 32: after Update the review, a choice cleared elsewhere is read again and asked - not the same step again", async () => {
+  resetState();
+  let fail = false;
+  const w = multiWorld({ onPreview: () => (fail ? { status: 503, body: { error: "try_again" } } : null) });
+  await open(w);
+  await fixFirst("review");
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555001" }, { renderTrainingLoad: render });
+  fail = true;
+  await act("training-load-gpexe-fix-track-save");
+  assert.match(sheet(), /Update it again before importing/);
+  // Another admin clears the choice: the review (recomputed) still shows two recordings, and the read has no choice.
+  delete w.choices["cand-5:131"];
+  fail = false;
+  const reads = trackGets().length;
+  await act("training-load-gpexe-review-update");
+  assert.equal(trackGets().length, reads + 1, "read again after the update");
+  assert.match(sheet(), /GPEXE has 2 recordings of Blake Sample/);
 });
