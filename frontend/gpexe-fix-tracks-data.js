@@ -21,20 +21,35 @@ export function multiTrackIds(candidate) {
 export async function loadFixTracks(detail, render) {
   const gx = g();
   if (!detail?.fix || !multiTrackIds(detail.candidate).length || gx.status?.viewer?.canApprove !== true) return;
+  // An expired snapshot: the read would refuse it (snapshot_expired_check_again); the search comes first (code review).
+  if (!detail.candidate?.snapshot?.available) return;
   const generation = gx.generation;
   const candidateId = detail.id;
-  detail.fix.tracks = { status: "loading", athletes: [] };
+  const forIds = multiTrackIds(detail.candidate).join(",");
+  detail.fix.tracks = { status: "loading", athletes: [], forIds };
   render();
   try {
     const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidateId)}/track-choices`));
     if (generation !== gx.generation || gx.detail !== detail) return;
-    detail.fix.tracks = { status: "ready", athletes: Array.isArray(answer?.athletes) ? answer.athletes : [] };
+    detail.fix.tracks = { status: "ready", athletes: Array.isArray(answer?.athletes) ? answer.athletes : [], forIds };
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail) return;
-    detail.fix.tracks = { status: "error", athletes: [], error: errorInfo(error) };
+    detail.fix.tracks = { status: "error", athletes: [], error: errorInfo(error), forIds };
   } finally {
     if (generation === gx.generation && gx.detail === detail) render();
   }
+}
+
+// The recordings must be read (again): an approver, athletes on more than one track in the review, and no read yet for
+// exactly these athletes - a link or a search can bring one (UX review, HIGH). A failed read waits for Try again.
+export function tracksNeedReading(detail, gx = g()) {
+  if (!detail?.fix || !detail.candidate || gx.status?.viewer?.canApprove !== true) return false;
+  const ids = multiTrackIds(detail.candidate);
+  if (!ids.length || !detail.candidate.snapshot?.available) return false;
+  const t = detail.fix.tracks;
+  if (t?.status === "loading" || detail.fix.trackWrite?.sending || detail.updating) return false;
+  if (t?.status === "error" && t.forIds === ids.join(",")) return false;
+  return !t || t.forIds !== ids.join(",");
 }
 
 // One athlete's entry of the read, or null.
@@ -52,6 +67,16 @@ export function trackStepIds(detail) {
     const e = trackEntry(detail, id);
     if (!e || e.choosable !== true || skipped.has(id)) return false;
     return !e.currentChoice || e.currentChoice.choice === "cleared" || e.currentChoice.stale === true;
+  });
+}
+
+// A choice is saved (current, not stale) but the stored review still shows the athlete on more than one track: a recompute
+// that failed, or a choice made elsewhere. The review must be updated before the import (code review).
+export function savedChoiceNotShown(detail) {
+  if (detail?.fix?.tracks?.status !== "ready") return false;
+  return multiTrackIds(detail.candidate).some((id) => {
+    const e = trackEntry(detail, id);
+    return e?.currentChoice && e.currentChoice.choice !== "cleared" && e.currentChoice.stale !== true;
   });
 }
 

@@ -74,7 +74,8 @@ function row(n, o = {}) {
 function world({ sessions, unlinkedBy = {}, extraAthletes = {}, multiTrack = {}, changes = {}, links = [], switchOn = true, globalOn = true, onTracks, onTrackPut, onLink, onPreview, onApprove, onCheck, onCandidate } = {}) {
   const w = { sessions: sessions.map((s) => ({ ...s })), links: [...links], unlinkedBy, choices: {}, puts: [] };
   // Slice 2: an athlete GPEXE recorded on more than one track, until a choice is made (track: imported; none: left out by choice).
-  const trackAthletes = (s) => Object.entries(multiTrack[s.id] || {}).map(([g, m]) => {
+  // An athlete may appear on more than one track only once another athlete is linked (a recompute brings it: m.afterLinkOf).
+  const trackAthletes = (s) => Object.entries(multiTrack[s.id] || {}).filter(([, m]) => !m.afterLinkOf || w.links.some((l) => l.gpexeAthleteId === m.afterLinkOf)).map(([g, m]) => {
     const ch = w.choices[`${s.id}:${g}`];
     if (ch?.choice === "track") return { gpexeAthleteId: g, athleteId: m.athleteId, results: [] };
     if (ch?.choice === "none") return { gpexeAthleteId: g, athleteId: m.athleteId, gps: { status: "not_used_by_choice" }, notImported: { code: "no_track_by_choice" }, results: [] };
@@ -129,7 +130,7 @@ function world({ sessions, unlinkedBy = {}, extraAthletes = {}, multiTrack = {},
     if (tc && call.method === "GET") {
       if (onTracks) { const r = await onTracks(call, w); if (r) return r; }
       if (viewer.canApprove !== true) return { status: 404, body: { error: "notFound" } };
-      return { status: 200, body: { candidateId: tc[1], athletes: Object.entries(multiTrack[tc[1]] || {}).map(([g, m]) => ({ gpexeAthleteId: g, tracks: m.tracks, choosable: true, sumOffered: false, currentChoice: w.choices[`${tc[1]}:${g}`] ? { id: "choice-1", choice: w.choices[`${tc[1]}:${g}`].choice, stale: false } : null })) } };
+      return { status: 200, body: { candidateId: tc[1], athletes: Object.entries(multiTrack[tc[1]] || {}).map(([g, m]) => ({ gpexeAthleteId: g, tracks: m.tracks, choosable: m.choosable !== false, sumOffered: false, currentChoice: w.choices[`${tc[1]}:${g}`] ? { id: "choice-1", choice: w.choices[`${tc[1]}:${g}`].choice, stale: false } : null })) } };
     }
     if (tc && call.method === "PUT") {
       w.puts.push(call.body);
@@ -527,9 +528,9 @@ test("Fix 17: an approver chooses the recording of an athlete GPEXE recorded on 
   await open(w);
   await fixFirst("review");
   let s = sheet();
-  assert.match(s, /Which recording is Blake Sample\? GPEXE recorded them on 2 tracks in this session\./);
-  assert.match(s, /<span>Recording 1 · started \d{2}:\d{2} · 40 min · 3,000 m<\/span>/);
-  assert.match(s, /<span>Recording 2 · started \d{2}:\d{2} · 10 min · 800 m<\/span>/);
+  assert.match(s, /GPEXE has 2 recordings of Blake Sample in this session\. Which one should be imported\?/);
+  assert.match(s, /<span>Recording 1 · started \d{2}:\d{2} · 40 min · 3,000 m · 1 drill<\/span>/);
+  assert.match(s, /<span>Recording 2 · started \d{2}:\d{2} · 10 min · 800 m · no drills<\/span>/);
   assert.match(s, /None of them: leave Blake Sample out of this import/);
   assert.ok(!/55500[12]</.test(s) && !/>[^<]*55500[12]/.test(visibleText(s)), "never a track id in what is read");
   assert.match(s, /data-action="training-load-gpexe-fix-track-save"[^>]*disabled[^>]*>Save the choice</, "nothing to save before a choice");
@@ -592,7 +593,7 @@ test("Fix 20: someone who may not import reads no recordings; the end says whoev
   await fixFirst("review");
   assert.equal(trackGets().length, 0, "the approver-only read is not asked");
   const s = sheet();
-  assert.match(s, /This session is ready, except an athlete GPEXE recorded on more than one track: whoever imports chooses which recording to use\. Ask your club administrator to import it\./);
+  assert.match(s, /This session is ready except for one athlete with more than one GPEXE recording: whoever imports chooses which one to use\. Ask your club administrator to import it\./);
   assert.ok(!/training-load-gpexe-approve/.test(s));
   assert.ok(!CODE.test(visibleText(s)));
 });
@@ -619,10 +620,12 @@ test("Fix 22: changes to imported results are accepted in a step of their own by
   let s = sheet();
   assert.match(s, /Step 2 of 2/);
   assert.match(s, /Importing this session changes 2 results that are already in OptiMove\./);
-  assert.match(s, /<li>Alex Example: 2 results<\/li>/);
+  assert.match(s, /<li>Alex Example: 2 results corrected<\/li>/);
+  assert.match(s, /Open the full review below to see each value before you accept\. Nothing changes until you import\./);
+  assert.match(s, /data-action="training-load-gpexe-fix-accept"[^>]*>Accept and continue</);
   await act("training-load-gpexe-fix-accept");
   s = sheet();
-  assert.match(s, /This session is ready\./);
+  assert.match(s, /This session is ready\. Importing also changes 2 results already in OptiMove\./, "said again beside Import");
   await act("training-load-gpexe-approve");
   assert.equal(posts(/\/approve$/).at(-1).body.acceptChanges, true, "the import carries the acceptance");
 
@@ -648,7 +651,7 @@ test("Fix 23: a recordings read that fails is a step of its own; Try again reads
   fail = false;
   await act("training-load-gpexe-fix-tracks-reload");
   assert.equal(trackGets().length, 2);
-  assert.match(sheet(), /Which recording is Blake Sample\?/);
+  assert.match(sheet(), /GPEXE has 2 recordings of Blake Sample/);
 });
 
 test("Fix 24: a refused choice (409) says nothing was saved and reads the recordings again; a new choice gets a new key", async () => {
@@ -666,4 +669,84 @@ test("Fix 24: a refused choice (409) says nothing was saved and reads the record
   await act("training-load-gpexe-fix-track-save");
   assert.notEqual(trackPuts()[1].body.requestKey, trackPuts()[0].body.requestKey);
   assert.match(sheet(), /This session is ready\./);
+});
+
+test("Fix 25: a recompute after a link brings an athlete on more than one track - the recordings are read and asked, never 'ready'", async () => {
+  resetState();
+  const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] }, multiTrack: { "cand-5": { "131": { athleteId: "ath-2", tracks: TRACKS, afterLinkOf: "101" } } } });
+  await open(w);
+  await fixFirst();
+  assert.equal(trackGets().length, 0, "no athlete on more than one track yet: nothing to read");
+  await linkTo("101", "ath-3");
+  assert.equal(trackGets().length, 1, "read after the recompute brought one");
+  const s = sheet();
+  assert.match(s, /GPEXE has 2 recordings of Blake Sample in this session/);
+  assert.ok(!/This session is ready/.test(s));
+});
+
+test("Fix 26: an athlete on more than one track that the read says can't be chosen is never 'ready' for an approver: See why", async () => {
+  resetState();
+  const w = world({ sessions: [row(5, { reasons: [{ code: "athletes_need_manual_review", count: 1 }] })], multiTrack: { "cand-5": { "131": { athleteId: "ath-2", tracks: TRACKS, choosable: false } } } });
+  await open(w);
+  await fixFirst("review");
+  const s = sheet();
+  assert.ok(!/This session is ready/.test(s) && !/training-load-gpexe-approve/.test(s));
+  assert.match(s, /This session needs a look in its full review\./);
+});
+
+test("Fix 27: a saved choice the review does not show yet (its recompute failed) is Update the review - never 'ready'", async () => {
+  resetState();
+  let fail = false;
+  const w = multiWorld({ onPreview: () => (fail ? { status: 503, body: { error: "try_again" } } : null) });
+  await open(w);
+  await fixFirst("review");
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555001" }, { renderTrainingLoad: render });
+  fail = true;
+  // The choice is saved, but the recompute after it fails: the stored review still shows the athlete on two tracks.
+  await act("training-load-gpexe-fix-track-save");
+  let s = sheet();
+  assert.ok(!/This session is ready/.test(s));
+  assert.match(s, /The review could not be updated this time\. Update it again before importing\./);
+  assert.match(s, /data-action="training-load-gpexe-review-update"/);
+  fail = false;
+  await act("training-load-gpexe-review-update");
+  assert.match(sheet(), /This session is ready\./);
+});
+
+test("Fix 28: an expired snapshot: the recordings are not read (the server would refuse); the search is the step", async () => {
+  resetState();
+  const w = multiWorld({ sessions: [row(5, { snapshot: { available: false }, reasons: [{ code: "athletes_need_manual_review", count: 1 }] })] });
+  await open(w);
+  await act("training-load-gpexe-fix", { candidateId: "cand-5", group: "fresh" });
+  assert.equal(trackGets().length, 0);
+  const s = sheet();
+  assert.match(s, /data-action="training-load-gpexe-fix-search"/);
+  assert.ok(!/training-load-gpexe-fix-tracks-reload/.test(s));
+});
+
+test("Fix 29: a coach who skipped a link reads it, and also that whoever imports chooses a recording", async () => {
+  resetState();
+  viewer = { canApprove: false, approvalBasis: null, isPlatformAdmin: false };
+  const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] }, multiTrack: { "cand-5": { "131": { athleteId: "ath-2", tracks: TRACKS } } } });
+  await open(w);
+  await fixFirst();
+  await act("training-load-gpexe-fix-skip", { gpexeAthleteId: "101" });
+  const s = sheet();
+  assert.match(s, /This session can be imported without the athlete you skipped; their results are not imported until linked\. One athlete has more than one GPEXE recording: whoever imports chooses which one to use\. Ask your club administrator to import it\./);
+});
+
+test("Fix 30: choosing a recording keeps the focus on that radio (the repaint replaces it)", async () => {
+  resetState();
+  const w = multiWorld();
+  await open(w);
+  await fixFirst("review");
+  const focused = [];
+  const prev = globalThis.document.getElementById;
+  globalThis.document.getElementById = (id) => ({ focus: () => focused.push(id) });
+  try {
+    await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555002" }, { renderTrainingLoad: render });
+  } finally {
+    globalThis.document.getElementById = prev;
+  }
+  assert.deepEqual(focused, ["fix-track-131-555002"]);
 });

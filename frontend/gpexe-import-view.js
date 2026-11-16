@@ -1050,10 +1050,17 @@ function renderFixHtml(gx, status) {
       return (a?.athleteId && c?.athletes?.[a.athleteId]?.name) || gpexeAthleteLabel(id);
     },
     changeCount: c?.changesToImported || 0,
-    changeLines: [...changesByAthlete(c?.preview).entries()].map(([key, n]) => {
-      const name = key.startsWith("a:") ? (c?.athletes?.[key.slice(2)]?.name || "An athlete") : gpexeAthleteLabel(key.slice(2));
-      return `${name}: ${n === 1 ? "1 result" : `${n} results`}`;
-    }),
+    // Per athlete and kind of change: "Alex Example: 2 results corrected".
+    changeLines: (() => {
+      const KIND = { corrected: "corrected", supplemented: "with values added", needs_review: "marked for review", stale_resend_ignored: "kept as they are" };
+      const m = new Map();
+      for (const ch of c?.preview?.changesToImported || []) {
+        const who = ch.athleteId ? (c?.athletes?.[ch.athleteId]?.name || "An athlete") : gpexeAthleteLabel(ch.gpexeAthleteId);
+        const key = `${who}\u0000${KIND[ch.kind] || "changed"}`;
+        m.set(key, (m.get(key) || 0) + 1);
+      }
+      return [...m.entries()].map(([key, n]) => { const [who, kind] = key.split("\u0000"); return `${who}: ${n === 1 ? "1 result" : `${n} results`} ${kind}`; });
+    })(),
     // A refused import is said as the review says it: nothing was imported.
     refusalText: detail.outcome?.kind === "refused" && detail.outcome.error?.code !== "already_imported" ? (REFUSAL_TEXT[detail.outcome.error?.code] || "Not imported: the server refused the approval.") : "",
     teamSwitchOff: Boolean(status?.teamImportSwitch && status.teamImportSwitch.enabled !== true) || (c?.approvalBlockers || []).includes("team_import_switch_off"),

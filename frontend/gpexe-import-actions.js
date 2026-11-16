@@ -8,7 +8,7 @@ import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImpor
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { fixMustStay, fixWriteInFlight, newFix, noteFixSteps, skipFixAthlete } from "./gpexe-fix-data.js";
-import { chooseFixTrack, loadFixTracks, sendFixTrack } from "./gpexe-fix-tracks-data.js";
+import { chooseFixTrack, loadFixTracks, sendFixTrack, tracksNeedReading } from "./gpexe-fix-tracks-data.js";
 import { handleTeamImportSwitchAction } from "./team-import-switch-actions.js";
 import { ensurePeriodData,
   reloadGpexeCandidates,
@@ -97,7 +97,9 @@ export async function handleGpexeImportAction(action, ctx) {
   const handled = await handleGpexeImportActionInner(action, ctx);
   const gx = state.trainingLoad.gpexe;
   if (gx?.detail?.fix) {
-    noteFixSteps(gx.detail, gx);
+    // A link's recompute or a search can bring an athlete on more than one track: the recordings are read for them.
+    if (tracksNeedReading(gx.detail, gx)) await loadFixTracks(gx.detail, ctx.renderTrainingLoad);
+    if (gx.detail?.fix) noteFixSteps(gx.detail, gx);
     keepFocusInFix();
   }
   return handled;
@@ -271,7 +273,12 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   }
   // Slice 2: the recording of an athlete GPEXE recorded on more than one track - a local choice, then Save (one PUT).
   if (type === "training-load-gpexe-fix-track-pick") {
-    if (chooseFixTrack(gx.detail, action.dataset.gpexeAthleteId, action.value)) renderTrainingLoad();
+    if (chooseFixTrack(gx.detail, action.dataset.gpexeAthleteId, action.value)) {
+      renderTrainingLoad();
+      // The repaint replaces the radios: the focus goes back to the one chosen, so the arrow keys keep working (code review).
+      const id = `fix-track-${action.dataset.gpexeAthleteId}-${action.value}`;
+      globalThis.document?.getElementById?.(id)?.focus?.({ preventScroll: true });
+    }
     return true;
   }
   if (type === "training-load-gpexe-fix-track-save") {

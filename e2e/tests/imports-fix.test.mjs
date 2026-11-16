@@ -180,12 +180,20 @@ for (const width of [1280, 390, 360]) {
         await admin.page.click('[data-attention-group="review"] [data-action="training-load-gpexe-fix"]');
         await admin.page.waitForSelector(".imports-fix.is-open .imports-fix-choice", { timeout: 20_000 });
         const text = (await admin.page.locator(".imports-fix.is-open").innerText()).replace(/\s+/g, " ");
-        assert.match(text, /Which recording is .+\? GPEXE recorded them on 2 tracks in this session\./);
+        assert.match(text, /GPEXE has 2 recordings of .+ in this session\. Which one should be imported\?/);
         assert.match(text, /Recording 1 · started \d{2}:\d{2} · \d+ min · [\d,]+ m/);
         assert.ok(!/\b900[34]\b/.test(text), "never a track id in what is read");
         await checkLayout(admin.page, width);
         if (SHOTS) await admin.page.screenshot({ path: `${SHOTS}/fix-track-${width}.png` });
         await admin.page.locator(".imports-fix.is-open .imports-fix-choice").first().click();
+        if (width >= 760) {
+          // A keyboard: the arrow key moves the choice and the focus stays on the radios (the repaint gives it back).
+          await admin.page.keyboard.press("ArrowDown");
+          const focus = await admin.page.evaluate(() => ({ id: document.activeElement?.id || "", checked: document.activeElement?.checked === true }));
+          assert.match(focus.id, /^fix-track-\d+-/, `the focus stays on a radio (${focus.id})`);
+          assert.equal(focus.checked, true, "and that radio is the choice");
+          await admin.page.locator(".imports-fix.is-open .imports-fix-choice").first().click();
+        }
         await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-fix-track-save"]');
         const approve = admin.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]');
         await approve.waitFor({ timeout: 20_000 });
@@ -220,7 +228,7 @@ test("Fix slice 2 (coach, 1280 px): a coach who may not import reads no recordin
       await coach.page.click('[data-attention-group="review"] [data-action="training-load-gpexe-fix"]');
       await coach.page.locator(".imports-fix.is-open", { hasText: "whoever imports chooses" }).waitFor({ timeout: 20_000 });
       const text = (await coach.page.locator(".imports-fix.is-open").innerText()).replace(/\s+/g, " ");
-      assert.match(text, /This session is ready, except an athlete GPEXE recorded on more than one track: whoever imports chooses which recording to use\. Ask your club administrator to import it\./);
+      assert.match(text, /This session is ready except for one athlete with more than one GPEXE recording: whoever imports chooses which one to use\. Ask your club administrator to import it\./);
       assert.ok(!CODE.test(text), `no code: ${text.match(CODE)}`);
       assert.equal(await coach.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]').count(), 0);
       assert.deepEqual(reads, [], "the approver-only read is never asked");

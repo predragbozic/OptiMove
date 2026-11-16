@@ -8,7 +8,7 @@
 // import; MT-A's routes), and changes to results already imported (accepted in one step, sent with the approval's own
 // acceptChanges). "Needs a look" opens Fix too; what the sheet can't fix there still ends on "See why".
 import { isUncertain, notConfirmedForImport, reviewMadeBeforeLinkChange } from "./gpexe-import-data.js";
-import { multiTrackIds, trackStepIds } from "./gpexe-fix-tracks-data.js";
+import { multiTrackIds, savedChoiceNotShown, trackStepIds } from "./gpexe-fix-tracks-data.js";
 
 // The attention groups the Fix flow covers (gpexe-attention-groups.js keys): slice 1, and "Needs a look" from slice 2.
 export const FIX_GROUPS = new Set(["unknown", "unlinked", "stale", "fresh", "review"]);
@@ -66,6 +66,8 @@ export function fixSteps(detail, gx) {
   // A session that needs a search can't be recomputed (the server refuses it until the search); the search makes its
   // review current, so it is the step (code review, HIGH).
   if (reviewMadeBeforeLinkChange(c, gx) && !needsSearch(c)) steps.push({ kind: "stale" });
+  // A saved recording choice the review does not show yet: the same Update the review, with its own sentence.
+  else if (canImport(gx) && !needsSearch(c) && savedChoiceNotShown(detail)) steps.push({ kind: "applyChoice" });
   if (needsSearch(c)) steps.push({ kind: "fresh" });
   // Slice 2: changes to imported results are accepted by whoever imports, in a step of their own, before the import.
   if (c.changesToImported && canImport(gx) && !detail.acceptChanges && c.status === "pending") steps.push({ kind: "changes" });
@@ -111,6 +113,10 @@ function endReady(detail, gx) {
   // Athletes left out for another reason than one the sheet handles (manual review of another kind, not in the team,
   // invalid in GPEXE, a blocking row): the full review names them, so the sheet does not say "ready" (code review, MEDIUM).
   const athletes = c.preview?.athletes || [];
+  // An approver is never told "ready" while an athlete on more than one track is still open and not skipped: the step asks,
+  // or (not choosable, not read) the full review says why (UX review, HIGH). Anyone else is told who imports.
+  const skipped = new Set((detail.fix?.skipped || []).map(String));
+  if (canImport(gx) && multiTrackIds(c).some((id) => !skipped.has(id))) return false;
   if (athletes.some((a) => a?.blocksSession || (a?.notImported && !HANDLED_CODES.has(a.notImported.code)))) return false;
   // "Needs manual review" is also the session reason for more than one track: the athlete check above already refuses every
   // other kind of review (each carries its own notImported code), so the reason is allowed here.

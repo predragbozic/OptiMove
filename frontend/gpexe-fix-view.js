@@ -23,6 +23,8 @@ function recordingText(t, i) {
   if (at && !Number.isNaN(at.getTime())) parts.push(`started ${two(at.getHours())}:${two(at.getMinutes())}`);
   if (Number.isFinite(t?.wholeSessionSeconds)) parts.push(`${Math.round(t.wholeSessionSeconds / 60)} min`);
   if (Number.isFinite(t?.wholeSessionDistance)) parts.push(`${Math.round(t.wholeSessionDistance).toLocaleString("en-US")} m`);
+  // The drills a recording covers help tell two of the same start apart.
+  if (Array.isArray(t?.drillIndexes)) parts.push(t.drillIndexes.length ? (t.drillIndexes.length === 1 ? "1 drill" : `${t.drillIndexes.length} drills`) : "no drills");
   return parts.join(" · ");
 }
 
@@ -78,7 +80,7 @@ export function renderFixSheetHtml(gx, status, h) {
       const locked = Boolean(w?.sending || w?.unknown);
       const radio = (value, label) => `<label class="imports-fix-choice"><input type="radio" id="fix-track-${escapeAttr(s.id)}-${escapeAttr(value)}" name="fix-track-${escapeAttr(s.id)}" value="${escapeAttr(value)}" data-action="training-load-gpexe-fix-track-pick" data-gpexe-athlete-id="${escapeAttr(s.id)}" ${pick === value ? "checked" : ""} ${locked ? "disabled" : ""}><span>${escapeHtml(label)}</span></label>`;
       body = `
-        <p class="imports-fix-sentence">${escapeHtml(`Which recording is ${name}? GPEXE recorded them on ${entry.tracks.length} tracks in this session.`)}</p>
+        <p class="imports-fix-sentence">${escapeHtml(`GPEXE has ${entry.tracks.length} recordings of ${name} in this session. Which one should be imported?`)}</p>
         ${entry.currentChoice?.stale ? `<p class="muted">GPEXE changed these recordings after the last choice; choose again.</p>` : ""}
         <fieldset class="imports-fix-choices"><legend class="imports-fix-legend">${escapeHtml(`Recording for ${name}`)}</legend>
           ${entry.tracks.map((t, i) => radio(String(t.trackId), recordingText(t, i))).join("")}
@@ -97,8 +99,14 @@ export function renderFixSheetHtml(gx, status, h) {
       const n = Number(h.changeCount) || 0;
       body = `
         <p class="imports-fix-sentence">${escapeHtml(`Importing this session changes ${n === 1 ? "1 result that is" : `${n} results that are`} already in OptiMove.`)}</p>
-        ${h.changeLines.length ? `<ul class="imports-fix-changes">${h.changeLines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul>` : ""}`;
-      actions = skip() + button("primary-button", "training-load-gpexe-fix-accept", "Accept the changes");
+        ${h.changeLines.length ? `<ul class="imports-fix-changes">${h.changeLines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul>` : ""}
+        <p class="muted">Open the full review below to see each value before you accept. Nothing changes until you import.</p>`;
+      actions = skip() + button("primary-button", "training-load-gpexe-fix-accept", "Accept and continue");
+    } else if (s.kind === "applyChoice") {
+      body = `<p class="imports-fix-sentence">${escapeHtml(detail.updateError
+        ? "The review could not be updated this time. Update it again before importing."
+        : "A recording is chosen, but the review does not show it yet. Update the review before importing.")}</p>${detail.updateError ? h.errorTech(detail.updateError) : ""}`;
+      actions = skip() + button("primary-button", "training-load-gpexe-review-update", "Update the review", { disabled: gx.linkBusy });
     } else if (s.kind === "stale") {
       body = `<p class="imports-fix-sentence">${escapeHtml(detail.updateError
         ? "The review could not be updated this time. Update it again before importing."
@@ -133,7 +141,15 @@ export function renderFixSheetHtml(gx, status, h) {
     let base = skipped === 1 ? `This session can be imported without the athlete you skipped; their results are not imported${until}.`
       : skipped ? `This session can be imported without the ${skipped} athletes you skipped; their results are not imported${until}.` : "This session is ready.";
     // Someone who may not import can't choose a recording: whoever imports does.
-    if (waiting) base = `This session is ready, except ${waiting === 1 ? "an athlete GPEXE recorded" : `${waiting} athletes GPEXE recorded`} on more than one track: whoever imports chooses which recording to use.`;
+    if (waiting) {
+      // A skipped link stays said; the recording is added to it (code review).
+      const who = waiting === 1 ? "one athlete" : `${waiting} athletes`;
+      base = skipped
+        ? `${base} ${waiting === 1 ? "One athlete has" : `${waiting} athletes have`} more than one GPEXE recording: whoever imports chooses which one to use.`
+        : `This session is ready except for ${who} with more than one GPEXE recording: whoever imports chooses which one to use.`;
+    }
+    // Accepted changes are said again beside the Import button.
+    else if (h.canImport && detail.acceptChanges && h.changeCount) base += ` Importing also changes ${h.changeCount === 1 ? "1 result" : `${h.changeCount} results`} already in OptiMove.`;
     if (h.switchOff) {
       body = `<p class="imports-fix-sentence">${escapeHtml(`${base} Importing is switched off${h.teamSwitchOff ? " for this team" : ""}; ${h.AskWho().replace(/^./, (ch) => ch.toLowerCase())} to turn it on.`)}</p>`;
       actions = nextOrBack();
