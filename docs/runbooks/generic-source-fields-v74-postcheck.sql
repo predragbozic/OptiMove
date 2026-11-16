@@ -2,7 +2,7 @@
 -- Run each block in a read-only transaction. Every block names its expected value.
 
 -- 1. v74 recorded once with the file's checksum, and nothing later. Expected: 1, true, 0.
-select count(*) as v74_rows, bool_and(checksum = '78f549f8e8281e38a5216da09a00550e5bd7d9df8897bdc15c049a90ea46ef90') as checksum_ok,
+select count(*) as v74_rows, bool_and(checksum = 'ded0dfd4638f3f21f14ed9bd45047b6f93d5086fbc8af9d375dc456013775836') as checksum_ok,
        (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') as later
   from public.schema_migrations where migration_name = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql';
 

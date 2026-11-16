@@ -72,3 +72,27 @@ test("architecture: route C's service is the only application writer of T2a, and
   assert.ok(body.indexOf("ACTOR_CONTEXT_SQL") > 0 && body.indexOf("ACTOR_CONTEXT_SQL") < body.indexOf("await operation(client, operationId)"),
     "runWrite sets the acting user before it runs the operation");
 });
+
+test("v74 takes every lock before its first change, in the writers' order (T4, T2a, T2b, T9, T9i, T8 NOWAIT last), within lock_timeout - the recorded SQL order (migrations.md, PR #346)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const file = new URL("../../migrations_v2/202611161200_training_load_v74_generic_source_fields.sql", import.meta.url);
+  // Top-level statements only: dollar-quoted bodies and comments removed, then split on ';'.
+  const top = readFileSync(file, "utf8").replace(/\$\$[\s\S]*?\$\$/g, "$$$$").replace(/--[^\n]*/g, "")
+    .split(";").map((t) => t.replace(/\s+/g, " ").trim().toLowerCase()).filter(Boolean);
+  const idx = (re) => top.findIndex((t) => re.test(t));
+  const timeout = idx(/^set local lock_timeout = '5s'$/);
+  const locks = [
+    /^lock table training_load\.source_metric_mapping_versions in share row exclusive mode$/,
+    /^lock table training_load\.source_metric_definitions in share row exclusive mode$/,
+    /^lock table training_load\.source_metric_definition_versions in access exclusive mode$/,
+    /^lock table training_load\.source_metric_confirmations in access exclusive mode$/,
+    /^lock table training_load\.source_metric_confirmation_items in access exclusive mode$/,
+    /^lock table training_load\.source_metric_audit in access exclusive mode nowait$/,
+  ].map(idx);
+  assert.equal(timeout, 0, "the lock timeout is the first statement");
+  assert.ok(locks.every((i) => i > 0), `every lock is taken: ${locks}`);
+  assert.deepEqual([...locks].sort((a, b) => a - b), locks, "in the writers' order");
+  assert.equal(top.filter((t) => t.startsWith("lock table")).length, locks.length, "no other lock statement");
+  const firstChange = idx(/^(create|alter|drop|insert|update|delete|comment|do )/);
+  assert.ok(firstChange > Math.max(...locks), `every lock before the first change (${firstChange})`);
+});

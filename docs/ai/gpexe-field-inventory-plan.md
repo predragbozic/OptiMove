@@ -694,7 +694,9 @@ The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_sour
 
 - **After the internal reviews of `76fb65c1`** (db, security, code, mobile; no BLOCKER or HIGH):
   - v74 takes every lock it needs before its first change, in the writers' order (T4, T2a, T2b, T9, T9i, then T8
-    NOWAIT), with `lock_timeout` 5 s (db MEDIUM-1). This is reviewed statically, with no test of its own.
+    NOWAIT), with `lock_timeout` 5 s (db MEDIUM-1). A test reads the file's statements and pins that order, the
+    timeout first and every lock before the first change (`source-field-create-g1-unit`, the rule of PR #346; code LOW).
+    The 5 s replaces the runner's 30 s lock wait for the whole of v74: a busy table fails the deploy fast, nothing applied.
   - A `field_unit` row's word is final, by v65's update guard, and inside its values digest; a row without a word keeps
     v65's digest (db MEDIUM-2, test 13). Fourteen bodies are now replaced.
   - Route C's `source_metric_create` row must carry its request key, since it is the request record (db LOW-1,

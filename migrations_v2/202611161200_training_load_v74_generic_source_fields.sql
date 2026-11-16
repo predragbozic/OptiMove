@@ -26,9 +26,10 @@
 --
 -- Errors: 42501 for an acting user who may not; 23514 with fixed text for every other refusal; no id, name,
 -- unit or value in a message.
--- Locks, in the writers' order (v65, v39, v37: T4, T2b, T9, T8), all taken here before the first change: T4 SHARE ROW
--- EXCLUSIVE (as v65), T2a SHARE ROW EXCLUSIVE (its triggers), then T2b, T9 and T9i ACCESS EXCLUSIVE, each wait bounded by
--- lock_timeout 5 s, and T8 last, ACCESS EXCLUSIVE NOWAIT (a busy table fails the migration at once, nothing applied).
+-- Locks, in the writers' order (v65, v39, v37: T4, T2b, T9, T8), every one taken here before the first change: T4 SHARE
+-- ROW EXCLUSIVE (as v65), T2a SHARE ROW EXCLUSIVE (its triggers), then T2b, T9 and T9i ACCESS EXCLUSIVE, each wait bounded
+-- by lock_timeout 5 s, and T8 last, ACCESS EXCLUSIVE NOWAIT (a busy table fails the migration at once, nothing applied).
+-- The order is pinned by a test of the file's statements (backend/tests/source-field-create-g1-unit.test.mjs).
 -- Rollback: docs/runbooks/generic-source-fields-v74-rollback.sql.
 
 set local lock_timeout = '5s';
@@ -37,6 +38,7 @@ lock table training_load.source_metric_definitions in share row exclusive mode;
 lock table training_load.source_metric_definition_versions in access exclusive mode;
 lock table training_load.source_metric_confirmations in access exclusive mode;
 lock table training_load.source_metric_confirmation_items in access exclusive mode;
+lock table training_load.source_metric_audit in access exclusive mode nowait;
 
 -- 1. Written on the bodies in force: refuse any other.
 do $$
@@ -1042,8 +1044,7 @@ insert into training_load.source_unit_words (source_system, api_family, word, so
   ('gpexe', 'rest_v1', 'energy_std',   'J/kg',  'as_sent',       'owner_statement',       'docs/ai/gpexe-field-inventory-plan.md#unit-word-energy',       'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'),
   ('gpexe', 'rest_v1', 'acceleration', 'm/s2',  'as_sent',       'owner_statement',       'docs/ai/gpexe-field-inventory-plan.md#unit-word-acceleration', 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql');
 
--- 8. T8, last: the two observed actions, their typed link, their shapes and chains.
-lock table training_load.source_metric_audit in access exclusive mode nowait;
+-- 8. T8, last: the two observed actions, their typed link, their shapes and chains (its lock is taken at the top).
 
 alter table training_load.source_metric_audit
   drop constraint source_metric_audit_action_check,
