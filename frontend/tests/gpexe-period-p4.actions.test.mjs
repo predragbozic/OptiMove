@@ -506,3 +506,32 @@ test("P4 21: the phone's Back closes the period sheet before any other step of t
     assert.ok(body.indexOf(later) > sheet, `the sheet closes before ${later}`);
   }
 });
+
+test("P4 22 (code review): a search started from the calendar on a computer brings the banner into view once - never again while it is polled or read after it", async () => {
+  const run = async ({ fromCalendar, sheetOpen = false }) => {
+    resetState();
+    let reads = 0;
+    const base = gpexeServer({ candidates: [], onCheck: () => ({ status: 202, body: { check: { id: "chk-1", status: "running", window: { from: daysAgo(3), to: TODAY }, startedAt: new Date().toISOString() } } }) });
+    installFetchMock(async (call) => {
+      if (/\/checks\/chk-1$/.test(call.url)) {
+        reads += 1;
+        return { status: 200, body: { check: { id: "chk-1", status: reads > 3 ? "succeeded" : "running", window: { from: daysAgo(3), to: TODAY }, startedAt: new Date().toISOString(), finishedAt: reads > 3 ? new Date().toISOString() : null, sessionsSeen: 0, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 0, error: null } } };
+      }
+      return base(call);
+    });
+    await openImports();
+    if (sheetOpen) period.setPeriodOpen(true);
+    let scrolls = 0;
+    const banner = { scrollIntoView: () => { scrolls += 1; } };
+    const saved = globalThis.document.querySelector;
+    globalThis.document.querySelector = (sel) => (sel === ".imports-banner" ? banner : null);
+    try {
+      await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-check", from: daysAgo(3), to: TODAY }, closest: (sel) => (fromCalendar && sel === ".imports-period" ? {} : null) }, { renderTrainingLoad: render });
+    } finally { globalThis.document.querySelector = saved; }
+    assert.ok(reads >= 4, `the search was polled to its end (${reads} reads)`);
+    return scrolls;
+  };
+  assert.equal(await run({ fromCalendar: true }), 1, "a computer's calendar: once, at the start");
+  assert.equal(await run({ fromCalendar: true, sheetOpen: true }), 0, "a phone's sheet: the banner stays where it is");
+  assert.equal(await run({ fromCalendar: false }), 0, "a step's own button elsewhere on the page: no scroll");
+});

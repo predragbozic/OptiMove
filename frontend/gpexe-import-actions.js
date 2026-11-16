@@ -188,14 +188,28 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-check") {
     gx.notice = "";
+    // On a computer the calendar sits below the work list (owner, 2026-11-16) while a search's outcome (progress, a refusal)
+    // is shown in the banner at the top: a search started from the calendar brings the banner into view (code review). A
+    // phone's sheet is open here and closes, which leaves the banner where it is.
+    const fromCalendar = Boolean(action.closest?.(".imports-period")) && !periodOf(gx).open;
     // P4: the phone's sheet closes and the chosen days are cleared once a search starts (the month stays), so the
     // chooser next shows what is still missing or what a session needs (code review).
     setPeriodOpen(false);
     clearPeriod();
     // U6a-2: the "Needs a new search" button carries the dates its label names, so the label and the search agree.
     const own = action.dataset.from && action.dataset.to ? { from: action.dataset.from, to: action.dataset.to } : null;
+    // Once, on the first render (the search is starting): the same render goes on to the poll and the reads after the search,
+    // which run for minutes and must never pull the page back while the person reads the list (code review, HIGH). The
+    // progress and a refusal are drawn in that banner, so it is already in view when they come.
+    let scrolled = !fromCalendar;
+    const renderAndShowOnce = () => {
+      renderTrainingLoad();
+      if (scrolled) return;
+      scrolled = true;
+      globalThis.document?.querySelector?.(".imports-banner")?.scrollIntoView?.({ block: "nearest" });
+    };
     // P4: the days come with the button (the period chooser's "Search ..." or a step's own dates); none = the server's 14 days.
-    await startGpexeCheck(own || {}, renderTrainingLoad);
+    await startGpexeCheck(own || {}, renderAndShowOnce);
     return true;
   }
   if (type === "training-load-gpexe-superseded") {
