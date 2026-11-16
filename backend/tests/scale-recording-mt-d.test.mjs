@@ -537,8 +537,15 @@ test("4. the undo removes the scaled estimates with the session; the choice and 
 // ---------------------------------------------------------------------------
 // 5. The migration
 // ---------------------------------------------------------------------------
+// The rollback and runbook rehearsals run on production's state when v68 and v69 were applied: every test migration
+// up to v69 by FILE NAME, never a later one (v72 and on came after). Selected by name, not by position, so a migration
+// added to the list later never moves this window (the v66 suite's fix, PR #565).
+const LAST_AT_V69 = "202611131310_training_load_v69_scale_recording_estimates.sql";
+const UP_TO_V69 = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events") && m <= LAST_AT_V69);
+
 test("5. v68 and v69: each rollback refuses while what it removes is in use (a scaled choice, a scaled estimate, a later migration); on a clean database v69 then v68 roll back to v67's catalog exactly and both apply again; the md5 gate refuses another basis body", async () => {
-  const fresh = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mtd68", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")) });
+  const fresh = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mtd68", migrations: UP_TO_V69 });
+  assert.equal(UP_TO_V69.at(-1), LAST_AT_V69, "the rehearsal database ends at v69");
   const c = new pg.Client({ connectionString: fresh.url });
   await c.connect();
   const fs = await import("node:fs/promises");
@@ -577,7 +584,7 @@ test("5. v68 and v69: each rollback refuses while what it removes is in use (a s
     await c.query("rollback");
     assert.deepEqual(await catalog(), v67Catalog);
     // Re-applied by the real runner (their records and checksums as at start-up).
-    await applyGpexeTestMigrations(fresh.url, GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")));
+    await applyGpexeTestMigrations(fresh.url, UP_TO_V69);
     assert.deepEqual(await catalog(), withBoth, "v68 and v69 again: the same catalog");
   } finally {
     await c.end();
@@ -588,13 +595,21 @@ test("5. v68 and v69: each rollback refuses while what it removes is in use (a s
   await r.connect();
   try {
     assert.ok((await admin.query(`select count(*)::int n from training_load.metric_value_estimates where method = 'scale_recording'`)).rows[0].n > 0);
-    await assert.rejects(r.query(rb69), /a scaled estimate exists/);
-    await r.query("rollback").catch(() => {});
-    await r.query(`create temp table later as select * from public.schema_migrations where migration_name like '%v69_scale_recording_estimates.sql'`);
+    // The suite's database holds every test migration; the records later than v69 are set aside while each rollback is
+    // tried, so the refusal read is the one about what it removes, not "later migrations are applied".
+    await r.query(`create temp table later as select * from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > $1`, [`migrations_v2/${LAST_AT_V69}`]);
     await r.query(`delete from public.schema_migrations where migration_name in (select migration_name from later)`);
     try {
-      await assert.rejects(r.query(rb68), /a scaled or one-track choice exists/);
+      await assert.rejects(r.query(rb69), /a scaled estimate exists/);
       await r.query("rollback").catch(() => {});
+      await r.query(`create temp table later69 as select * from public.schema_migrations where migration_name like '%v69_scale_recording_estimates.sql'`);
+      await r.query(`delete from public.schema_migrations where migration_name in (select migration_name from later69)`);
+      try {
+        await assert.rejects(r.query(rb68), /a scaled or one-track choice exists/);
+        await r.query("rollback").catch(() => {});
+      } finally {
+        await r.query(`insert into public.schema_migrations select * from later69`);
+      }
     } finally {
       await r.query(`insert into public.schema_migrations select * from later`);
     }
@@ -623,7 +638,7 @@ test("6. the runbook's preflight is all true on a database at v67, and the post-
       await c.end();
     }
   };
-  const base = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events"));
+  const base = UP_TO_V69;
   const atV67 = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mtdpre", migrations: base.filter((m) => !/_v6[89]_/.test(m)) });
   try {
     await allTrue(atV67.url, "docs/runbooks/scale-recording-v68-v69-preflight.sql");
