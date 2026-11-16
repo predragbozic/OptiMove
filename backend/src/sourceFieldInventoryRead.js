@@ -11,7 +11,7 @@
 // reads them with endpoint=team_thresholds only, and a club scope gets an empty list there (P1).
 import { refusal } from "./sourceMetricAccess.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
-import { FIELD_ENDPOINTS } from "./sourceFieldInventory.js";
+import { FIELD_ENDPOINTS, STRUCTURAL_FIELDS } from "./sourceFieldInventory.js";
 
 export const INVENTORY_PAGE_SIZE = 200;
 const STATES = new Set(["not_supported", "covered", "all"]);
@@ -19,6 +19,11 @@ const ENDPOINTS = new Set(FIELD_ENDPOINTS);
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const CURSOR_TEXT = /^[A-Za-z0-9_-]{1,400}$/;
 const THRESHOLDS = "team_thresholds";
+// The structural keys the collector no longer records (an identifier, a reference, a timestamp); hidden here too, for any
+// row written before that rule. Two parallel arrays, one pair per (endpoint, name).
+const STRUCTURAL_PAIRS = Object.entries(STRUCTURAL_FIELDS).flatMap(([endpoint, names]) => names.map((n) => [endpoint, n]));
+const STRUCTURAL_ENDPOINTS = STRUCTURAL_PAIRS.map(([e]) => e);
+const STRUCTURAL_NAMES = STRUCTURAL_PAIRS.map(([, n]) => n);
 // Every metrics read is bounded (C70): read-only, a statement bound, a client bound, 409 try_again (M2's boundedRead).
 const { boundedRead } = adminWriteKit;
 
@@ -85,6 +90,7 @@ const INVENTORY_SQL = `
      where o.api_family = 'rest_v1'
        and ($2::text is null or o.endpoint = $2::text)
        and ($2::text = '${THRESHOLDS}' or o.endpoint <> '${THRESHOLDS}')
+       and not exists (select 1 from unnest($7::text[], $8::text[]) s(endpoint, name) where s.endpoint = o.endpoint and s.name = o.field_name)
      group by o.endpoint, o.field_name
   ), marked as (
     select g.*,
@@ -116,6 +122,7 @@ export async function listFieldInventory({ ctx, query }) {
   const params = [
     platform ? null : ctx.owner.clubId, parsed.endpoint, parsed.state,
     parsed.after?.endpoint ?? null, parsed.after?.name ?? null, INVENTORY_PAGE_SIZE + 1,
+    STRUCTURAL_ENDPOINTS, STRUCTURAL_NAMES,
   ];
   const r = await boundedRead((client) => client.query(INVENTORY_SQL, params));
   const rows = r.rows.slice(0, INVENTORY_PAGE_SIZE);

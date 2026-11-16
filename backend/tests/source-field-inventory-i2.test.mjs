@@ -125,9 +125,13 @@ async function world() {
     ["more.complementary_data", "a_b", { kind: "zone_list" }],
     ["more.events", "acceleration_events_count"], // covered
     ["team_thresholds", "max_speed", { unit: "m/s" }],
+    // Structural keys written before the collector skipped them: the read hides them (STRUCTURAL_FIELDS).
+    ["athlete_session", "id"], ["athlete_session", "teamsession", { answers: 4 }], ["athlete_session", "start_timestamp", { kind: "text" }],
+    ["team_thresholds", "validity_start", { kind: "text" }], ["team_thresholds", "team"],
   ]);
+  // The same name as a measured value of another endpoint stays: the list is per endpoint (seeded on club B's connection).
   await observe(W.connTeamA, [["athlete_session", "team_a_only", { answers: 3 }], ["athlete_session", "a_b", { answers: 5, at: "2026-11-14T08:00:00Z" }]]);
-  await observe(W.connB, [["athlete_session", "club_b_only"], ["details.session", "custom_secret_unit", { kind: "unit_value_object", unit: "xyzzy" }]]);
+  await observe(W.connB, [["athlete_session", "club_b_only"], ["details.session", "team"], ["details.session", "custom_secret_unit", { kind: "unit_value_object", unit: "xyzzy" }]]);
   await observe(W.connTeamB, [["athlete_session", "foreign_team_b_only"]]);
   // A T2a key whose underscore position another name would match under LIKE: `axb` is covered only by its own key.
   await q(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id)
@@ -147,7 +151,8 @@ test("1. a platform admin in the platform workspace: every connection's names th
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(names(r), [
     "athlete_session:a_b", "athlete_session:club_b_only", "athlete_session:foreign_team_b_only", "athlete_session:team_a_only",
-    "details.drill:speed_known", "details.session:custom_secret_unit", "details.session:metabolic_power", "more.complementary_data:a_b",
+    "details.drill:speed_known", "details.session:custom_secret_unit", "details.session:metabolic_power", "details.session:team",
+    "more.complementary_data:a_b",
   ]);
   const ab = r.body.fields.find((f) => f.endpoint === "athlete_session" && f.name === "a_b");
   assert.deepEqual(ab, { endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, answersSeen: 7, lastSeenOn: "2026-11-14", covered: false, connectionCount: 2 });
@@ -179,7 +184,7 @@ test("4. Q2 / P2: a club admin in their own club's workspace sees the club's con
   assert.deepEqual(names(r), ["athlete_session:a_b", "athlete_session:team_a_only", "details.drill:speed_known", "details.session:metabolic_power", "more.complementary_data:a_b"]);
   assert.ok(r.body.fields.every((f) => !("connectionCount" in f)));
   const b = await api("/field-inventory", { cookie: W.caB.cookie });
-  assert.deepEqual(names(b), ["athlete_session:club_b_only", "athlete_session:foreign_team_b_only", "details.session:custom_secret_unit"], "club B's workspace: club B's names only");
+  assert.deepEqual(names(b), ["athlete_session:club_b_only", "athlete_session:foreign_team_b_only", "details.session:custom_secret_unit", "details.session:team"], "club B's workspace: club B's names only");
 });
 
 test("5. P3: a club scope sees a unit word only when it is a known unit (an active conversion's token); a platform admin sees every word", async () => {
@@ -335,4 +340,18 @@ test("11. an admin of club A only, whose workspace preference names club B, read
   const own = await api("/field-inventory?endpoint=athlete_session&state=all", { cookie: W.ca.cookie });
   assert.deepEqual(names(r), names(own));
   assert.ok(!names(r).some((n) => /club_b_only|foreign_team_b_only/.test(n)), "never club B's names");
+});
+
+test("12. structural keys written before the collector skipped them are hidden under every state and filter, and the measured names beside them stay", async () => {
+  for (const path of ["/field-inventory?state=all", "/field-inventory?state=all&endpoint=athlete_session", "/field-inventory?endpoint=team_thresholds"]) {
+    const r = await api(path, { cookie: W.pa.cookie });
+    assert.equal(r.status, 200, r.text);
+    assert.ok(!names(r).some((n) => /:(id|teamsession|start_timestamp|validity_start|team)$/.test(n)), `${path}: ${names(r)}`);
+  }
+  const thr = await api("/field-inventory?endpoint=team_thresholds", { cookie: W.pa.cookie });
+  assert.deepEqual(names(thr), ["team_thresholds:max_speed"]);
+  const details = await api("/field-inventory?endpoint=details.session", { cookie: W.pa.cookie });
+  assert.ok(names(details).includes("details.session:team"), "the list is per endpoint: a measured `team` of a players' map stays");
+  const ca = await api("/field-inventory?state=all&endpoint=athlete_session", { cookie: W.ca.cookie });
+  assert.ok(names(ca).includes("athlete_session:a_b") && !names(ca).some((n) => /:(id|teamsession|start_timestamp)$/.test(n)));
 });
