@@ -36,6 +36,7 @@ import {
   candidateGroup,
   gpexeTeamOptions,
   inboxBucket,
+  periodMonthComplete,
   isUncertain,
   reviewMadeBeforeLinkChange,
   rowReasons,
@@ -579,6 +580,8 @@ function renderSourceCardHtml(source, gx, status) {
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
   const open = connected && periodOf(gx).open;
   const suggested = datesNeededFor(gx.candidates || [], gx);
+  // #540: the reads beyond a cut list follow the days the chooser shows (the view only notes them; it reads nothing).
+  gx.periodSuggested = suggested;
   return `
     <section class="gpexe-panel imports-source imports-banner" aria-label="Data source ${escapeAttr(source.name)}">
       <div class="imports-statusbar" role="group" aria-label="Import state">
@@ -590,13 +593,11 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: (gx.candidates || []).length >= CANDIDATES_CAP }) : ""}
-    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open, (gx.candidates || []).length >= CANDIDATES_CAP) : ""}
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month) }) : ""}
+    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open, !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month)) : ""}
   `;
 }
 
-// P4c (owner, 2026-11-15): the list read holds at most this many sessions, the newest first (listCandidates).
-const CANDIDATES_CAP = 200;
 
 // P4c: a coach and a club admin get no Imported or Stays out list - those sessions live in the calendar. One quiet line
 // counts the month the calendar shows (it follows paging); on a phone it opens the calendar sheet.
