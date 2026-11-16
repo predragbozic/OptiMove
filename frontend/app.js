@@ -92,7 +92,7 @@ import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
-import { closePeriodSheet } from "./gpexe-period-data.js";
+import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
 import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
@@ -603,7 +603,7 @@ function bindEvents() {
   // Imports P4: the period sheet is a phone's; a wider layout (a turned tablet) closes it, so its dialog role and the
   // Escape / Back step never outlive it.
   window.matchMedia?.("(max-width: 760px)")?.addEventListener?.("change", (event) => {
-    if (!event.matches && closePeriodSheet(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
+    if (!event.matches && closeImportsOverlays(state.trainingLoad?.gpexe) && state.activeTab === "training-load") renderTrainingLoad();
   });
   // Data configuration's Categories screen on a computer: drag a variable onto
   // a category (PR-2). Each handler leaves alone a drag that is not its own.
@@ -675,10 +675,12 @@ function bindEvents() {
     if (state.mobileNavOpen) closeMobileNav();
     // Central calendar (K1b): Escape closes the open item panel.
     if (closeCentralCalendarPanel(renderCentralCalendar)) return;
-    // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions".
+    // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions" (P5: the help closes
+    // first, and the focus goes back to "How importing works").
+    const importsHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);
     if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
       renderTrainingLoad();
-      document.querySelector(".imports-find-phone")?.focus?.({ preventScroll: true });
+      document.querySelector(importsHelp ? ".imports-help-open" : ".imports-find-phone")?.focus?.({ preventScroll: true });
       return;
     }
     closeMedia();
@@ -2229,8 +2231,11 @@ function handleAppBack() {
   if (closeSpecificProgramOverlay()) return true;
 
   // Imports P4: the phone's period sheet closes before anything else of the screen (a hidden athlete list included).
+  // P5: the help closes first, and the focus goes back to "How importing works".
+  const backHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);
   if (state.activeTab === "training-load" && state.trainingLoad.section === "imports" && closePeriodSheet(state.trainingLoad?.gpexe)) {
     renderTrainingLoad();
+    if (backHelp) document.querySelector(".imports-help-open")?.focus?.({ preventScroll: true });
     return true;
   }
 
@@ -2834,6 +2839,7 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  if (type?.startsWith('training-load-simple-') && action.matches('input, select, textarea')) return;
   // 3B3 UX slice: clicking anywhere in the Analysis From/To field (not just
   // the tiny native calendar-icon glyph) opens the date picker. The label
   // wraps the input, so a click on the "From"/"To" text also lands here via

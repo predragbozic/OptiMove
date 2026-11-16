@@ -169,7 +169,6 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
             <span class="period-range-text">${escapeHtml(`${periodText(range.from, range.to, now)} · ${plural(range.days, "day", "days")}`)}</span>
             <span class="period-range-actions">${search}${chosen ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-period-clear">Clear</button>` : ""}</span>
           </div>` : ""}
-        <p class="muted period-note">Days without a mark may not have been searched yet. Nothing is imported until you import it.</p>
         ${rangeListHtml(range, byDay, nameOf, timeOf)}
       </div>
     </section>

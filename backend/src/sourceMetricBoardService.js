@@ -211,6 +211,10 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
       // had refused and that was not read again speaks by its stored code.
       const all = rows.map((r) => reasons[r.index] ?? (r.gate ? r.blocked_code : undefined)).filter((x) => x !== undefined);
       const distinct = [...new Set(all)];
+      // Every session that was read failed the same unexpected way: that points at this code, not at one stored
+      // bundle. Said once more, so it is not mistaken for a single bad session.
+      const failed = reasons.filter((x) => x !== undefined);
+      if (failed.length >= 2 && failed.every((x) => x === DEFAULT_SESSION_UNREADABLE)) console.error(`[source-metric-board] default_session_all_unreadable (tried=${failed.length})`);
       throw refusal(409, "no_usable_session", BOARD_MESSAGES.no_usable_session, { current: { reason: distinct.length === 1 ? distinct[0] : "mixed", tried } });
     }
   }
@@ -356,6 +360,8 @@ function keyedPlan(bundle, columns, teamTimezone) {
   return { ids, out: gpexeSessionValuesKeyed(bundle, extracts, { teamTimezone }) };
 }
 
+// The reason of a stored session whose plan failed in a way the import's gates do not name.
+export const DEFAULT_SESSION_UNREADABLE = "session_unreadable";
 // Whether the default can open on a stored session: `why` is the reason it must be passed by, or null with the
 // session's plan. The same checks, in the same order, a named session is refused by (its size, its check and
 // binding, its start, the board's size cap), and then the board's own plan - the import's gates - so a session taken
@@ -367,7 +373,15 @@ function defaultSessionVerdict(row, team, columns, teamTimezone) {
   if (row.check_status !== "succeeded" || row.source_path !== SOURCE_CONNECTION_PATH || row.source_binding_id !== team.binding_id) return no("candidate_source_mismatch");
   if (row.session_started_at === null) return no("session_start_unknown");
   if (row.raw_bundle === null || typeof row.raw_bundle !== "object") return no("candidate_source_mismatch");
-  const plan = keyedPlan(row.raw_bundle, columns, teamTimezone);
+  let plan;
+  try {
+    plan = keyedPlan(row.raw_bundle, columns, teamTimezone);
+  } catch (error) {
+    // A stored bundle the plan cannot even walk (a shape the mapper does not expect) is one more session to pass by,
+    // never a failed board for the team. Said once, by the kind of error only - no message, no value, no id.
+    console.error(`[source-metric-board] default_session_plan_failed (${String(error?.name || "Error").replace(/[^A-Za-z0-9_]/g, "").slice(0, 40) || "Error"})`);
+    return no(DEFAULT_SESSION_UNREADABLE);
+  }
   if (plan.tooLarge) return no("board_too_large");
   return plan.out.code ? no(plan.out.code) : { why: null, plan };
 }

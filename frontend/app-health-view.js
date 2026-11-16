@@ -49,10 +49,54 @@ function chips(items, current, action, attr, busy = false) {
   return items.map(([value, label]) => `<button type="button" ${busy ? "disabled" : ""} class="app-health-chip ${String(current) === String(value) ? "is-active" : ""}" data-action="${action}" data-${attr}="${escapeAttr(value)}" aria-pressed="${String(current) === String(value) ? "true" : "false"}">${escapeHtml(label)}</button>`).join("");
 }
 
+// A device in words, from the server's closed lists (backend/src/appErrorTracking.js DEVICE_LISTS). Own keys only.
+const SYSTEM_LABEL = { windows: "Windows", macos: "Mac", linux: "Linux", chromeos: "Chromebook" };
+const CLASS_LABEL = { phone: "Phone", tablet: "Tablet", desktop: "Computer", unknown: "Unknown device" };
+const BROWSER_LABEL = { safari: "Safari", chrome: "Chrome", firefox: "Firefox", edge: "Edge", samsung: "Samsung Internet", webview: "In-app browser", other: "Other browser" };
+const ownLabel = (map, key) => (typeof key === "string" && Object.hasOwn(map, key) ? map[key] : null);
+export function deviceWords(d) {
+  let device;
+  if (d?.os === "ios") device = d.class === "tablet" ? "iPad" : d.class === "phone" ? "iPhone" : "Apple device";
+  else if (d?.os === "android") device = d.class === "tablet" ? "Android tablet" : d.class === "phone" ? "Android phone" : "Android device";
+  else device = ownLabel(SYSTEM_LABEL, d?.os) || ownLabel(CLASS_LABEL, d?.class) || "Unknown device";
+  const browser = ownLabel(BROWSER_LABEL, d?.browser);
+  const major = Number.isInteger(d?.major) && d.major >= 1 && d.major <= 999 ? ` ${d.major}` : "";
+  return browser ? `${device} · ${browser}${major}` : device;
+}
+// The devices of a browser error, one phrase each: at most three devices, most frequent first, each with its count;
+// then how many other kinds of device there are and how often; then how often none was recorded. With no device at
+// all: the one phrase "Device not recorded". A server error has no device and no phrase.
+export const MAX_DEVICE_LINES = 3;
+const NO_DEVICE = "Device not recorded";
+export function deviceParts(g) {
+  if (g?.source !== "client") return [];
+  const list = (Array.isArray(g.devices) ? g.devices : []).slice(0, MAX_DEVICE_LINES);
+  if (!list.length) return [NO_DEVICE];
+  const count = (n) => (Number.isInteger(n) && n >= 0 ? n : 0);
+  const parts = list.map((d) => `${deviceWords(d)} · ${timesLabel(count(d.occurrences))}`);
+  const others = count(g.otherDevices);
+  // "Device types", not devices: one entry is a kind of device and browser, however many phones that is.
+  if (others) parts.push(`${others} other device ${others === 1 ? "type" : "types"}${count(g.otherDeviceOccurrences) ? ` · ${timesLabel(count(g.otherDeviceOccurrences))}` : ""}`);
+  const missing = count(g.deviceNotRecorded);
+  if (missing) parts.push(`device not recorded · ${timesLabel(missing)}`);
+  return parts;
+}
+
+// "Where in the code" of a kind of error. A failed request the browser reports (no answer, an answer it could not
+// read, an HTTP error status) has no place in the page's code by its nature: "not applicable", never "not recorded",
+// which reads as something that went missing. Any other kind without a signature really has none recorded.
+const REQUEST_FAILURE_CODES = new Set(["no_response", "unexpected_response"]);
+export function whereInCodeWords(g) {
+  if (g?.stackSignature) return String(g.stackSignature);
+  const requestFailure = g?.source === "client" && (REQUEST_FAILURE_CODES.has(g.code) || Number.isInteger(g.status));
+  return requestFailure ? "not applicable" : "not recorded";
+}
+
 function groupCard(g, selected) {
   const open = selected === g.fingerprint;
   const where = placeLabel(g);
   const kind = g.source === "client" ? "Browser" : "Server";
+  const devices = deviceParts(g);
   return `
     <article class="app-health-group ${open ? "is-open" : ""}">
       <button type="button" class="app-health-row" data-action="app-health-open" data-fingerprint="${escapeAttr(g.fingerprint)}" aria-expanded="${open ? "true" : "false"}">
@@ -60,6 +104,7 @@ function groupCard(g, selected) {
         <span class="app-health-what">${escapeHtml(codeWords(g.code, g.status))}<small class="app-health-code">${escapeHtml(`${g.code || "unknown"}${g.status ? ` · HTTP ${g.status}` : ""}`)}</small></span>
         <span class="app-health-count">${escapeHtml(timesLabel(g.occurrences))} · ${escapeHtml(String(g.users))} ${g.users === 1 ? "person" : "people"}</span>
         <span class="app-health-seen">Since ${escapeHtml(formatSeen(g.firstSeenAt))} · last ${escapeHtml(formatSeen(g.lastSeenAt))}</span>
+        ${devices.length ? `<span class="app-health-devices">${devices.map((part) => `<span class="app-health-device">${escapeHtml(part)}</span>`).join("")}</span>` : ""}
       </button>
       ${open ? `
         <dl class="app-health-detail">
@@ -68,7 +113,7 @@ function groupCard(g, selected) {
           <div><dt>Roles</dt><dd>${escapeHtml((g.roles || []).map((r) => ROLE_LABEL[r] || r).join(", ") || "—")}</dd></div>
           ${g.action ? `<div><dt>Last button pressed</dt><dd>${escapeHtml(g.action)}</dd></div>` : ""}
           <div><dt>Release</dt><dd>${escapeHtml(g.release ? g.release.slice(0, 8) : "unknown")}</dd></div>
-          <div><dt>Where in the code</dt><dd>${escapeHtml(g.stackSignature || "not recorded")}</dd></div>
+          <div><dt>Where in the code</dt><dd>${escapeHtml(whereInCodeWords(g))}</dd></div>
           <div><dt>Group</dt><dd>${escapeHtml(String(g.fingerprint).slice(0, 12))}</dd></div>
         </dl>` : ""}
     </article>`;

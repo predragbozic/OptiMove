@@ -205,7 +205,7 @@ test("4. the read route: platform admin only; everyone else the unknown-route 40
   assert.equal(ok.status, 200);
   assert.ok(Array.isArray(ok.body.groups) && ok.body.groups.length > 0);
   const g = ok.body.groups[0];
-  assert.deepEqual(Object.keys(g).sort(), ["action", "code", "fingerprint", "firstSeenAt", "lastSeenAt", "occurrences", "release", "roles", "routeTemplate", "screen", "source", "stackSignature", "status", "users"]);
+  assert.deepEqual(Object.keys(g).sort(), ["action", "code", "deviceNotRecorded", "devices", "fingerprint", "firstSeenAt", "lastSeenAt", "occurrences", "otherDeviceOccurrences", "otherDevices", "release", "roles", "routeTemplate", "screen", "source", "stackSignature", "status", "users"]);
   assert.ok(!JSON.stringify(ok.body).includes("example.invalid"));
   const denied = await call("/api/app-errors/groups", { cookie: coach.cookie });
   const unknown = await call("/api/app-errors/nothing-here", { cookie: coach.cookie });
@@ -269,11 +269,17 @@ test("5c. through a real route: a 5xx answers the generic body and one sanitized
   M.resetServerDedupeForTests();
   const admin = await user("Boom Example", { platform: true });
   const { pool } = await import("../src/db.js");
-  const realQuery = pool.query.bind(pool);
-  pool.query = (text, ...rest) => (typeof text === "string" && text.includes("from public.app_error_events") && text.includes("array_agg")
-    ? Promise.reject(new Error(`boom ${SECRET} password=hunter2`)) : realQuery(text, ...rest));
+  // The groups read runs on one connection (one snapshot for its two reads): the failure is planted in that connection's query.
+  const realConnect = pool.connect.bind(pool);
+  pool.connect = async (callback) => {
+    if (callback) return realConnect(callback); // pool.query's own checkout
+    const client = await realConnect();
+    const realQuery = client.query.bind(client);
+    return { release: () => client.release(), query: (text, ...rest) => (typeof text === "string" && text.includes("from public.app_error_events") && text.includes("array_agg")
+      ? Promise.reject(new Error(`boom ${SECRET} password=hunter2`)) : realQuery(text, ...rest)) };
+  };
   let res;
-  try { res = await call("/api/app-errors/groups", { cookie: admin.cookie }); } finally { pool.query = realQuery; }
+  try { res = await call("/api/app-errors/groups", { cookie: admin.cookie }); } finally { pool.connect = realConnect; }
   assert.equal(res.status, 500);
   assert.equal(res.body.error, "Internal server error", "the answer is the handler's own, unchanged by the recording (outside production the handler has always echoed the message)");
   let stored = [];
@@ -367,5 +373,35 @@ test("7. the preflight and post-check read what they claim, and the rollback rem
   } finally {
     await k.query(`alter default privileges in schema public revoke all on tables from anon, authenticated, public`);
     for (const role of made) { try { await k.query(`drop owned by ${role}`); await k.query(`drop role ${role}`); } catch { /* left for the cluster's owner */ } }
+  }
+});
+
+test("the app retention tick calls the Simple receipt purge", async () => {
+  const { pool } = await import("../src/db.js");
+  const originalQuery = pool.query;
+  let stop;
+  try {
+    const purged = new Promise(resolve => {
+      pool.query = function (sql, ...args) {
+        if (String(sql).includes("to_regprocedure('training_load.cleanup_dashboard_simple_requests")) {
+          return Promise.resolve({ rows: [{ installed: true }] });
+        }
+        if (String(sql).includes("cleanup_dashboard_simple_requests(100)")) {
+          resolve();
+          return Promise.resolve({ rows: [{ deleted: 0 }] });
+        }
+        return originalQuery.call(this, sql, ...args);
+      };
+    });
+    stop = M.startAppErrorRetentionSchedule({ startupDelayMs: 0 });
+    let timeout;
+    try {
+      await Promise.race([purged, new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Receipt purge did not run")), 2000);
+      })]);
+    } finally { clearTimeout(timeout); }
+  } finally {
+    stop?.();
+    pool.query = originalQuery;
   }
 });
