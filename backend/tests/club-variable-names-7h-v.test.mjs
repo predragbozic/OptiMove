@@ -247,15 +247,16 @@ test("4. a coach of a team whose club is archived still reads the session, but g
   }
 });
 
-test("5. outside a team workspace nobody gets a name, whatever the activity holds: club A's admin in A's workspace (D8), a platform admin in the platform workspace, and the athlete on their own result; the facts are unchanged", async () => {
+test("5. outside a team workspace no staff reader gets a name, whatever the activity holds: club A's admin in A's workspace (D8), a platform admin in the platform workspace; the athlete on their own result is named exactly the variables in their own facts (owner's decision 2026-11-16; athlete-own-results.test.mjs)", async () => {
   for (const who of [W.caA, W.pa]) {
     const body = await names(who, W.actX);
     assert.deepEqual(body.variableNamesById, {});
     assert.equal(factIds(body).length, 6);
   }
   const own = await names(W.athA1, W.actX);
-  assert.deepEqual(own.variableNamesById, {});
   assert.equal(factIds(own).length, 6, "the athlete's own facts");
+  assert.deepEqual(Object.keys(own.variableNamesById).sort(), factIds(own), "a name for each variable in their own facts, and for no other");
+  for (const entry of Object.values(own.variableNamesById)) assert.deepEqual(Object.keys(entry).sort(), ["label", "shortLabel", "unit"]);
 });
 
 test("6. a coach of A1 who also holds a stronger role (club A's admin, a platform admin, or club B's admin) in A1's workspace is named club A's variables by the same rule, and never club B's", async () => {

@@ -1213,7 +1213,7 @@ test("link: no athlete is preselected, the session's values only help to find th
   await openImports();
   await openCandidate();
   let html = renderTrainingLoadCoachHtml();
-  const select = html.match(/<select class="gpexe-select" data-gpexe-link-select="104">([\s\S]*?)<\/select>/)[1];
+  const select = html.match(/<select class="gpexe-select"[^>]*data-gpexe-link-select="104"[^>]*>([\s\S]*?)<\/select>/)[1];
   assert.match(select, /<option value="" selected>Choose an athlete of the team<\/option>/);
   assert.equal((select.match(/selected/g) || []).length, 1, "only the empty choice is selected");
   // P1: the how-to is said once above the table, not on every row.
@@ -2923,7 +2923,7 @@ test("J20-A2 / J20-C: with nobody to link, the no-data rows are what needs a per
 });
 
 // ---- J20-A2 follow-up: U3's suggested pair in the row's chooser, the sticky Approve bar, the light link box.
-const selectOf = (html) => html.match(/<select class="gpexe-select" data-gpexe-link-select="104">([\s\S]*?)<\/select>/)?.[1] || "";
+const selectOf = (html) => html.match(/<select class="gpexe-select"[^>]*data-gpexe-link-select="104"[^>]*>([\s\S]*?)<\/select>/)?.[1] || "";
 const withSuggestion = (exact) => { state.trainingLoad.gpexe.suggestions = { status: "ready", data: { state: "ok", exact, ambiguous: [], dateConflicts: [] } }; };
 
 test("follow-up: U3's exact pair for this GPEXE athlete is the first option in the row's chooser, labelled Suggested, never selected, and choosing it still sends nothing", async () => {

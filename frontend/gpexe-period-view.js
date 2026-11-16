@@ -183,7 +183,7 @@ function missingText(missing, now) {
   return `From ${periodText(missing.from, missing.from, now)} to today.`;
 }
 
-// The period chooser. On a computer it is always on the page under the banner; on a phone "Find new sessions" opens it
+// The period chooser. On a computer it is always on the page, after the work list; on a phone "Find new sessions" opens it
 // as a full-screen sheet (CSS: .imports-period is hidden there unless .is-open). `running` turns every search button
 // off (one search at a time). `suggested` is the days a session needs to be found again (datesNeededFor): shown as
 // chosen until the person taps a day.

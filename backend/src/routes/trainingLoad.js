@@ -16,6 +16,7 @@ import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAth
 import { emitRealtimeEvent } from "../realtime.js";
 import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
 import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace } from "../trainingActivityAccess.js";
+import { recordedByOf, recordedBySql } from "../trainingActivityResults.js";
 import { countSessionResults, writePublishedSessionFlags } from "../plannedSessionFlags.js";
 
 const router = Router();
@@ -1555,8 +1556,10 @@ router.get("/calendar", async (req, res, next) => {
          coalesce(rc.requested, 0) as rpe_requested, coalesce(rc.rated, 0) as rpe_rated,
          coalesce(mc.total, 0) as metrics_total, coalesce(mc.with_data, 0) as metrics_with_data,
          coalesce(cc.conflict_count, 0) as conflict_count,
-         coalesce(sc.open_suggestions, 0) as open_suggestion_count
+         coalesce(sc.open_suggestions, 0) as open_suggestion_count${isAthlete ? ", rb.device as recorded_device, rb.any as recorded_any" : ""}
        from training.activities a
+       ${isAthlete ? `left join lateral (select bool_or(x.device) as device, bool_or(x.any) as any from training.activity_participants apr
+           cross join lateral ${recordedBySql("apr.id")} x where apr.activity_id = a.id and apr.athlete_id = $3 and apr.merge_status = 'canonical') rb on true` : ""}
        left join lateral (
          select count(*) as participant_count from training.activity_participants ap where ap.activity_id = a.id and ap.merge_status = 'canonical'
        ) pc on true
@@ -1569,7 +1572,7 @@ router.get("/calendar", async (req, res, next) => {
          left join plans.plan_sessions ps on ps.logical_session_id = l.logical_session_id
          left join training_load.session_feedback sf on sf.athlete_id = ap.athlete_id
            and ((l.logical_session_id is not null and sf.logical_session_id = l.logical_session_id) or (l.external_assignment_id is not null and sf.external_assignment_id = l.external_assignment_id))
-         where ap.activity_id = a.id and ap.merge_status = 'canonical'
+         where ap.activity_id = a.id and ap.merge_status = 'canonical' ${isAthlete ? "and ap.athlete_id = $3" : ""}
        ) rc on true
        left join lateral (
          select count(distinct ap.id) as total, count(distinct ap.id) filter (where v.id is not null) as with_data
@@ -1658,6 +1661,17 @@ router.get("/calendar", async (req, res, next) => {
     for (const row of activityResult.rows) {
       const bucket = byDate.get(row.occurred_local_date instanceof Date ? row.occurred_local_date.toISOString().slice(0, 10) : String(row.occurred_local_date));
       if (!bucket) continue;
+      const rpe = Number(row.rpe_requested) > 0 ? { requested: Number(row.rpe_requested), rated: Number(row.rpe_rated) } : null;
+      // An athlete: the activity and whether SHE was asked for and gave an RPE. How many took part, how many have
+      // data, conflicts, open suggestions, where it came from and its lifecycle are the staff's (team information).
+      if (isAthlete) {
+        bucket.items.push({
+          kind: "activity", activityId: row.activity_id, name: row.name, activityTypeKey: row.activity_type_key, occurredLocalDate: row.occurred_local_date,
+          startedAt: row.started_at, timezoneSnapshot: row.timezone_snapshot, recordedBy: recordedByOf({ device: row.recorded_device, any: row.recorded_any }), rpe,
+          sortTime: row.started_at || `${row.occurred_local_date}T00:00:00Z`,
+        });
+        continue;
+      }
       bucket.items.push({
         kind: "activity",
         activityId: row.activity_id,
@@ -1674,7 +1688,7 @@ router.get("/calendar", async (req, res, next) => {
         // Number.MAX_SAFE_INTEGER) - explicitly coerced here since none of
         // these calendar counts can realistically approach that ceiling.
         participantCount: Number(row.participant_count),
-        rpe: Number(row.rpe_requested) > 0 ? { requested: Number(row.rpe_requested), rated: Number(row.rpe_rated) } : null,
+        rpe,
         metrics: Number(row.metrics_total) > 0 ? { total: Number(row.metrics_total), withData: Number(row.metrics_with_data) } : null,
         conflictCount: Number(row.conflict_count),
         openSuggestionCount: Number(row.open_suggestion_count),

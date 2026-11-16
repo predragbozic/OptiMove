@@ -14,6 +14,7 @@ import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATI
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const V70_FILE = "202611131400_app_error_events_v70_device_and_keyed_hash.sql";
+const V73_FILE = "202611151500_app_error_events_v73_request_and_restart.sql";
 let db, k, server, base, T, M;
 const uid = () => crypto.randomBytes(4).toString("hex");
 const SECRET = "ana.example@example.invalid";
@@ -36,7 +37,7 @@ const GOOD = { screen: "training-load", action: "open-imports", code: "js_error"
 
 before(async () => {
   // v58 and, on top of it, v70 (the code writes v70's columns). Test 7 takes v70 off again before it rehearses v58's own rollback.
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("app_error_events")) + 1), V70_FILE] });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "a1err", migrations: [...GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.findIndex((m) => m.includes("app_error_events")) + 1), V70_FILE, V73_FILE] });
   process.env.APP_ERROR_USER_HASH_KEYS = `2:${crypto.randomBytes(32).toString("base64")}`;
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
@@ -205,7 +206,7 @@ test("4. the read route: platform admin only; everyone else the unknown-route 40
   assert.equal(ok.status, 200);
   assert.ok(Array.isArray(ok.body.groups) && ok.body.groups.length > 0);
   const g = ok.body.groups[0];
-  assert.deepEqual(Object.keys(g).sort(), ["action", "code", "deviceNotRecorded", "devices", "fingerprint", "firstSeenAt", "lastSeenAt", "occurrences", "otherDeviceOccurrences", "otherDevices", "release", "roles", "routeTemplate", "screen", "source", "stackSignature", "status", "users"]);
+  assert.deepEqual(Object.keys(g).sort(), ["action", "aroundRestart", "code", "deliveredLate", "deviceNotRecorded", "devices", "fingerprint", "firstSeenAt", "lastSeenAt", "occurrences", "otherDeviceOccurrences", "otherDevices", "pageBehindServer", "release", "request", "roles", "routeTemplate", "screen", "source", "stackSignature", "status", "timedOccurrences", "users"]);
   assert.ok(!JSON.stringify(ok.body).includes("example.invalid"));
   const denied = await call("/api/app-errors/groups", { cookie: coach.cookie });
   const unknown = await call("/api/app-errors/nothing-here", { cookie: coach.cookie });
@@ -332,6 +333,7 @@ test("7. the preflight and post-check read what they claim, and the rollback rem
   // v70 comes off first (its own rehearsal is app-error-events-v70.test.mjs); its rollback refuses while a keyed hash is stored, so the rows go first.
   const v70Rollback = await fs.readFile(new URL("app-error-events-v70-rollback.sql", dir), "utf8");
   await k.query(`delete from public.app_error_events`);
+  await k.query(await fs.readFile(new URL("app-error-events-v73-rollback.sql", dir), "utf8")); // v73 first: it sits on v70
   await k.query(v70Rollback);
   const post = blocks(await fs.readFile(new URL("app-error-events-v58-postcheck.sql", dir), "utf8"));
   assert.equal(post.length, 7);

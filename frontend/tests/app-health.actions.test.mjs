@@ -100,11 +100,12 @@ test("3. api.js reports a 5xx, no answer and an unreadable answer; nothing for a
   const reply = (status, body, { json = true } = {}) => { globalThis.fetch = async () => ({ ok: status < 300, status, statusText: "", json: async () => { if (!json) throw new SyntaxError("<html>"); return body; } }); };
   reply(500, { error: "internal_error", message: `boom ${SECRET}` });
   await assert.rejects(api("/api/athletes/3f2b8c1e-1111-4222-8333-444455556666/plans?token=abc"));
-  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "internal_error", status: 500 }]);
-  capture(); reply(502, { error: "Bad Gateway & more" }); await assert.rejects(api("/api/x"));
-  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "http_502", status: 502 }]);
+  // v73: which request it was - the method and the path as a route pattern (the id replaced, the query cut).
+  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "internal_error", status: 500, request: { method: "GET", route: "/api/athletes/:id/plans" } }]);
+  capture(); reply(502, { error: "Bad Gateway & more" }); await assert.rejects(api("/api/x", { method: "POST", body: "{}" }));
+  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "http_502", status: 502, request: { method: "POST", route: "/api/x" } }]);
   capture(); globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); }; await assert.rejects(api("/api/x"));
-  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "no_response" }]);
+  assert.deepEqual(sent, [{ screen: "training-load", action: "api_call", code: "no_response", request: { method: "GET", route: "/api/x" } }]);
   capture(); reply(200, null, { json: false }); await assert.rejects(api("/api/x"));
   assert.deepEqual(sent.map((b) => b.code), ["unexpected_response"]);
   capture(); reply(502, null, { json: false }); await assert.rejects(api("/api/x2"));
@@ -118,7 +119,7 @@ test("3. api.js reports a 5xx, no answer and an unreadable answer; nothing for a
   capture(); globalThis.fetch = async () => ({ ok: true, status: 200, statusText: "", json: async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); } }); await assert.rejects(api("/api/x")); assert.deepEqual(sent, [], "an abort while the body is read too");
   capture(); C.noteAction("training-load-gpexe-open"); reply(500, { error: "internal_error" }); await assert.rejects(api("/api/x"));
   assert.equal(sent[0].action, "training-load-gpexe-open");
-  assert.ok(!JSON.stringify(sent).match(/token|example|3f2b8c1e|plans/));
+  assert.ok(!JSON.stringify(sent).match(/token|example|3f2b8c1e|abc/));
 });
 
 const GROUPS = [

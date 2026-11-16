@@ -106,6 +106,17 @@ test("P4 (1280 px): a mouse drag across days chooses the period; the click that 
       await page.waitForSelector(".imports-period .period-month", { state: "visible", timeout: 20_000 });
       await showPeriodMonth(page, "November 2026");
       await page.waitForSelector(DAY("2026-11-06"), { state: "visible", timeout: 20_000 });
+      // The work list comes first and the calendar below it (owner, 2026-11-16): bring the calendar into view, as a person
+      // scrolls to it, before dragging (a mouse can't drag across days that are below the fold).
+      await page.locator(".imports-period .period-grid").scrollIntoViewIfNeeded();
+      // The order itself: on a computer the work list (the tabs and their panel) sits above the calendar.
+      const order = await page.evaluate(() => {
+        const tabs = document.querySelector(".imports-tabs");
+        const period = document.querySelector(".imports-period");
+        return tabs && period ? { before: Boolean(tabs.compareDocumentPosition(period) & Node.DOCUMENT_POSITION_FOLLOWING), tabsTop: tabs.getBoundingClientRect().top, periodTop: period.getBoundingClientRect().top } : null;
+      });
+      assert.ok(order, "the tabs and the calendar are both on the page");
+      assert.ok(order.before && order.tabsTop < order.periodTop, `the work list comes before the calendar: ${JSON.stringify(order)}`);
       // The screen repaints while the status is read: wait for the day, and read its box again if it was just replaced.
       const box = async (d) => {
         for (let i = 0; i < 20; i += 1) {
@@ -130,6 +141,21 @@ test("P4 (1280 px): a mouse drag across days chooses the period; the click that 
       // The next tap starts a new period.
       await page.click(DAY("2026-11-04"));
       assert.equal((await page.textContent(".imports-period .period-range-text")).trim(), "04.11. · 1 day");
+      // The calendar is below the work list and a search's outcome is in the banner at the top: a search started from the
+      // calendar brings that outcome into view (code review). Here the server refuses it (503), so nothing is searched.
+      await page.route("**/gpexe/teams/*/checks", (route) => (route.request().method() === "POST"
+        ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "database_busy" }) })
+        : route.continue()));
+      // A laptop screen (720 px tall): with the search button in view, the banner is above the fold.
+      await page.setViewportSize({ width: 1280, height: 720 });
+      await page.locator('.imports-period [data-action="training-load-gpexe-check"][data-from]:not(.period-missing)').scrollIntoViewIfNeeded();
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      const bannerBefore = await page.locator(".imports-banner").boundingBox();
+      assert.ok(bannerBefore && bannerBefore.y + bannerBefore.height < 0, `precondition: the banner is out of view ${JSON.stringify(bannerBefore)}`);
+      await page.click('.imports-period [data-action="training-load-gpexe-check"][data-from]:not(.period-missing)');
+      await page.waitForSelector(".imports-banner .gpexe-error", { timeout: 10_000 });
+      const shown = await page.locator(".imports-banner .gpexe-error").boundingBox();
+      assert.ok(shown && shown.y >= 0 && shown.y + shown.height <= page.viewportSize().height, `the refusal is in view: ${JSON.stringify(shown)}`);
       assert.deepEqual(pageErrors, []);
     } finally { await context.close(); }
   } finally { await world.stop(); }

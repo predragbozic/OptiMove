@@ -22,7 +22,7 @@ import {
   materializeActivityParticipant, materializeGroupFromExternalOccurrence, materializeGroupFromMetricEvent,
   acceptMatchSuggestion, dismissMatchSuggestion, reparentActivityParticipant, mergeActivityParticipants,
 } from "../trainingActivityMaterialize.js";
-import { getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
+import { athleteHasRecordedSessions, getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
 import { getActivityRoster, RosterError } from "../activityRoster.js";
 import { getEstimateProposal, saveEstimate } from "../metricEstimateService.js";
 import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
@@ -205,6 +205,18 @@ router.get("/", async (req, res, next) => {
     if (cursorError) return res.status(400).json({ error: cursorError });
     const result = await listActivities(readContext, { athleteId, dateFrom, dateTo, limit, cursor });
     res.json(result);
+  } catch (error) {
+    respondToServiceError(res, next, error);
+  }
+});
+
+// An athlete's own summary: whether she has at least one recorded session (the "My training" entry is shown only
+// then). An athlete workspace only; for every other caller the route does not exist.
+router.get("/self", async (req, res, next) => {
+  try {
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    if (workspace?.type !== "athlete" || !req.authz.athleteId) return res.status(404).json({ error: "Not found", path: req.originalUrl.split("?")[0] }); // the unknown route's own answer (server.js)
+    res.json({ hasRecordedSessions: await athleteHasRecordedSessions(req.authz.athleteId) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }

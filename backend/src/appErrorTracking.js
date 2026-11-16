@@ -23,7 +23,7 @@ const PURGE_INTERVAL_HOURS = 6;
 const WORD = /^[a-z0-9_.-]{1,60}$/;
 const SCREEN = /^[a-z0-9_-]{1,60}$/;
 const COMMIT = /^[0-9a-f]{7,40}$/;
-const CLIENT_KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release", "reason", "device"]);
+const CLIENT_KEYS = new Set(["screen", "action", "code", "status", "stackSig", "release", "reason", "device", "request", "late"]);
 // What failed, as one word of a closed list: the kind of the rejection's reason or of the error object (its `name`,
 // never its message). A native rejection (an aborted request, a refused play() or full screen) has no script frames,
 // so without this word such an error says nothing about itself. Only the codes below take one; it is stored as the
@@ -178,8 +178,11 @@ export function cleanStackSignature(value) {
   return STACK_SIGNATURE.test(value) ? value : null;
 }
 
-export function fingerprintOf({ source, where, action, code, status, stackSignature }) {
+// `request` ("POST /api/x", v73) is part of the kind only when a row has one, so every fingerprint made before v73
+// - and every row without a request - is what it was.
+export function fingerprintOf({ source, where, action, code, status, stackSignature, request = null }) {
   const parts = [source, where || "", action || "", code, status == null ? "" : String(status), stackSignature || ""];
+  if (request) parts.push(request);
   return crypto.createHash("sha256").update(parts.join("|")).digest("hex");
 }
 
@@ -197,6 +200,69 @@ function releaseOf(clientValue) {
   return COMMIT.test(server) ? server.slice(0, 40) : null;
 }
 
+// ---- which request failed, and the restart window (v73) ----
+export const REQUEST_METHODS = Object.freeze(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+export const LATE_BUCKETS = Object.freeze(["lt_1m", "lt_10m", "lt_1h", "ge_1h"]);
+export const UPTIME_BUCKETS = Object.freeze(["lt_2m", "lt_10m", "ge_10m"]);
+const REQUEST_KEYS = new Set(["method", "route"]);
+// The request of a report: exactly { method, route }, the method one of five words, the route normalized HERE AGAIN
+// (ids replaced, query cut) whatever the browser sent, and then held to the route shape. {} when the report has
+// none, null for a report that is refused.
+export function sanitizeRequest(request) {
+  if (request === undefined || request === null) return {};
+  if (typeof request !== "object" || Array.isArray(request)) return null;
+  for (const key of Object.keys(request)) if (!REQUEST_KEYS.has(key)) return null;
+  if (typeof request.method !== "string" || !REQUEST_METHODS.includes(request.method)) return null;
+  if (typeof request.route !== "string" || request.route.length > 400) return null;
+  const normalized = normalizeRoute(request.route);
+  if (normalized === null) return null;
+  // Reduced to the server's own words, the route can be longer than it was (":x" for a one-letter segment): held to
+  // the table's shape here, so a route the table would refuse is a refused report and never a failed insert.
+  const route = knownWordsOnly(normalized);
+  if (route.length > 120 || !ROUTE_SHAPE.test(route)) return null;
+  return { method: request.method, route };
+}
+// The words a path of this server can contain: the static segments of its own routes (collected from the Express
+// app at start, server.js). A segment the browser sent that is not one of them - a name, a search word, anything a
+// person typed that ended up in a path - is stored as ":x", so a browser's route is made of the server's own words
+// only. Until the words are set there are none: every segment that is not an id is ":x" (closed, never the path).
+const ROUTE_SHAPE = /^\/[A-Za-z0-9_/:.-]*$/;
+let routeWords = null;
+export function setRouteWords(words) { routeWords = words ? new Set(words) : null; }
+function knownWordsOnly(route) {
+  return route.split("/").map((seg) => (seg === "" || seg === ":id" || seg === ":x" || routeWords?.has(seg) ? seg : ":x")).join("/");
+}
+// The static words of every route of an Express app: each route's own path and each mounted router's prefix.
+export function collectRouteWords(app) {
+  const words = new Set();
+  const add = (text) => { for (const seg of String(text).split("/")) if (/^[A-Za-z0-9_.-]{1,40}$/.test(seg)) words.add(seg); };
+  const walk = (stack) => {
+    for (const layer of stack || []) {
+      if (layer.route) for (const path of [].concat(layer.route.path)) { if (typeof path === "string") add(path); }
+      // A mounted router's prefix lives only in the layer's pattern: "^\\/api\\/athletes\\/?(?=\\/|$)".
+      else if (layer.regexp && !layer.regexp.fast_slash) add(layer.regexp.source.replace(/\\\//g, "/").replace(/[^A-Za-z0-9_./-]+/g, "/"));
+      if (layer.handle?.stack) walk(layer.handle.stack);
+    }
+  };
+  walk(app?._router?.stack);
+  return words;
+}
+// How long this server process has been running, as a word. "The server had just restarted" is the first.
+let uptimeSeconds = () => process.uptime();
+export function setUptimeForTests(fn = () => process.uptime()) { uptimeSeconds = fn; }
+export function serverUptimeBucket() {
+  const s = Number(uptimeSeconds());
+  if (!Number.isFinite(s) || s < 0) return null;
+  return s < 120 ? "lt_2m" : s < 600 ? "lt_10m" : "ge_10m";
+}
+// Whether the page's own build differs from the server's (the page was loaded before a deploy); null when either is unknown.
+export function pageBehindServer(pageBuild) {
+  const server = String(process.env.RENDER_GIT_COMMIT || "").toLowerCase();
+  if (typeof pageBuild !== "string" || !COMMIT.test(pageBuild) || !COMMIT.test(server)) return null;
+  const page = pageBuild.toLowerCase();
+  return !(server.startsWith(page) || page.startsWith(server));
+}
+
 // A browser report: exactly the allowed keys, each in its closed shape, or null (the route answers 400).
 export function sanitizeClientReport(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
@@ -204,6 +270,9 @@ export function sanitizeClientReport(body) {
   const { screen, action, code, status, stackSig, release, reason } = body;
   const device = sanitizeDevice(body.device);
   if (device === null) return null;
+  const request = sanitizeRequest(body.request);
+  if (request === null) return null;
+  if (body.late != null && (typeof body.late !== "string" || !LATE_BUCKETS.includes(body.late))) return null;
   if (reason != null && (typeof reason !== "string" || !CLIENT_REASONS.includes(reason) || !CODES_WITH_REASON.includes(code))) return null;
   if (typeof screen !== "string" || !SCREEN.test(screen)) return null;
   if (action != null && (typeof action !== "string" || !WORD.test(action))) return null;
@@ -213,7 +282,8 @@ export function sanitizeClientReport(body) {
   if (release != null && typeof release !== "string") return null;
   const stackSignature = stackSig == null ? null : cleanStackSignature(stackSig);
   if (stackSig != null && stackSignature === null) return null;
-  return { source: "client", screen, routeTemplate: null, action: action ?? null, code: reason == null ? code : `${code}.${reason}`, status: status ?? null, stackSignature, release: releaseOf(release), device };
+  return { source: "client", screen, routeTemplate: null, action: action ?? null, code: reason == null ? code : `${code}.${reason}`, status: status ?? null, stackSignature, release: releaseOf(release), device,
+    request, late: body.late ?? null, pageBehind: pageBehindServer(release) };
 }
 
 // ---- per-user rate limit (in memory, bounded) ----
@@ -235,7 +305,12 @@ export function resetRateLimitForTests() { buckets.clear(); }
 // One write: the same user repeating the same fingerprint inside the window raises repeat_count on the existing row;
 // otherwise a new row, unless the user already has MAX_ROWS_PER_USER_WINDOW rows in the window.
 export async function writeEvent(event, { executor = pool } = {}) {
-  const fingerprint = fingerprintOf({ source: event.source, where: event.screen || event.routeTemplate, action: event.action, code: event.code, status: event.status, stackSignature: event.stackSignature });
+  // v73: the request, the page's build and a late delivery are a browser report's; the server's uptime is every row's.
+  const isClient = event.source === "client";
+  const rq = isClient && event.request?.method ? event.request : null;
+  const extra = [rq ? rq.method : null, rq ? rq.route : null, serverUptimeBucket(), isClient ? event.pageBehind ?? null : null, isClient ? event.late ?? null : null];
+  const fingerprint = fingerprintOf({ source: event.source, where: event.screen || event.routeTemplate, action: event.action, code: event.code, status: event.status, stackSignature: event.stackSignature,
+    request: rq ? `${rq.method} ${rq.route}` : null });
   const hash = event.userHash ?? null;
   // A hash is stored only with the version that says how it was made: a keyed hash labelled unkeyed could never be resolved.
   if (hash !== null && event.userHashVersion == null) throw new Error("writeEvent: a user hash needs its version");
@@ -257,9 +332,11 @@ export async function writeEvent(event, { executor = pool } = {}) {
                        and user_hash_version = $3
                        and device_class is not distinct from $4 and os_family is not distinct from $5 and browser_family is not distinct from $6
                        and browser_major is not distinct from $7::smallint and viewport_bucket is not distinct from $8 and touch is not distinct from $9::boolean
+                       and request_method is not distinct from $10 and request_route is not distinct from $11 and server_uptime is not distinct from $12
+                       and page_behind_server is not distinct from $13::boolean and delivered_late is not distinct from $14
                      order by last_seen_at desc limit 1)
         returning id`,
-      [fingerprint, hash, hashVersion, ...device],
+      [fingerprint, hash, hashVersion, ...device, ...extra],
     );
     let outcome = "counted";
     if (!bumped.rowCount) {
@@ -272,10 +349,11 @@ export async function writeEvent(event, { executor = pool } = {}) {
       } else {
         await client.query(
           `insert into public.app_error_events (fingerprint, source, screen, route_template, action, error_code, http_status, role, release_commit, user_hash, stack_signature,
-                                                user_hash_version, device_class, os_family, browser_family, browser_major, viewport_bucket, touch)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+                                                user_hash_version, device_class, os_family, browser_family, browser_major, viewport_bucket, touch,
+                                                request_method, request_route, server_uptime, page_behind_server, delivered_late)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
           [fingerprint, event.source, event.screen ?? null, event.routeTemplate ?? null, event.action ?? null, event.code, event.status ?? null, event.role, event.release ?? null, hash, event.stackSignature ?? null,
-            hashVersion, ...device],
+            hashVersion, ...device, ...extra],
         );
         outcome = "stored";
       }
@@ -378,7 +456,13 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
             min(first_seen_at) as first_seen_at,
             max(last_seen_at) as last_seen_at,
             array_agg(distinct role) as roles,
-            coalesce(sum(repeat_count) filter (where source = 'client' and device_class is null and os_family is null and browser_family is null), 0)::int as no_device
+            coalesce(sum(repeat_count) filter (where source = 'client' and device_class is null and os_family is null and browser_family is null), 0)::int as no_device,
+            (array_agg(request_method order by last_seen_at desc))[1] as request_method,
+            (array_agg(request_route order by last_seen_at desc))[1] as request_route,
+            coalesce(sum(repeat_count) filter (where server_uptime = 'lt_2m'), 0)::int as around_restart,
+            coalesce(sum(repeat_count) filter (where server_uptime is not null), 0)::int as timed,
+            coalesce(sum(repeat_count) filter (where delivered_late is not null), 0)::int as delivered_late,
+            coalesce(sum(repeat_count) filter (where page_behind_server), 0)::int as page_behind
        from public.app_error_events
       where last_seen_at > now() - make_interval(days => $1)
       group by fingerprint
@@ -425,6 +509,12 @@ export async function listErrorGroups({ days = 7, limit = 100 } = {}, { executor
       firstSeenAt: r.first_seen_at, lastSeenAt: r.last_seen_at, roles: r.roles,
       devices: dev ? dev.list : [], otherDevices: dev ? Math.max(dev.combos - dev.list.length, 0) : 0,
       otherDeviceOccurrences: dev ? Math.max(dev.total - dev.list.reduce((n, x) => n + x.occurrences, 0), 0) : 0, deviceNotRecorded: r.no_device,
+      // v73: which request failed (a browser's failed request); and, of the occurrences recorded since v73
+      // (`timedOccurrences` - older rows say nothing), how many were stored within two minutes of the server's start,
+      // how many reached the server late (the report itself could not get through at the time - the server or the
+      // person's own connection) and how many came from a page older than the server.
+      request: r.request_method && r.request_route ? { method: r.request_method, route: r.request_route } : null,
+      timedOccurrences: r.timed, aroundRestart: r.around_restart, deliveredLate: r.delivered_late, pageBehindServer: r.page_behind,
     };
   });
 }

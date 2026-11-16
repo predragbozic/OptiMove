@@ -3,7 +3,7 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
-import { importableAthleteCount, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
+import { importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
@@ -188,14 +188,28 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   }
   if (type === "training-load-gpexe-check") {
     gx.notice = "";
+    // On a computer the calendar sits below the work list (owner, 2026-11-16) while a search's outcome (progress, a refusal)
+    // is shown in the banner at the top: a search started from the calendar brings the banner into view (code review). A
+    // phone's sheet is open here and closes, which leaves the banner where it is.
+    const fromCalendar = Boolean(action.closest?.(".imports-period")) && !periodOf(gx).open;
     // P4: the phone's sheet closes and the chosen days are cleared once a search starts (the month stays), so the
     // chooser next shows what is still missing or what a session needs (code review).
     setPeriodOpen(false);
     clearPeriod();
     // U6a-2: the "Needs a new search" button carries the dates its label names, so the label and the search agree.
     const own = action.dataset.from && action.dataset.to ? { from: action.dataset.from, to: action.dataset.to } : null;
+    // Once, on the first render (the search is starting): the same render goes on to the poll and the reads after the search,
+    // which run for minutes and must never pull the page back while the person reads the list (code review, HIGH). The
+    // progress and a refusal are drawn in that banner, so it is already in view when they come.
+    let scrolled = !fromCalendar;
+    const renderAndShowOnce = () => {
+      renderTrainingLoad();
+      if (scrolled) return;
+      scrolled = true;
+      globalThis.document?.querySelector?.(".imports-banner")?.scrollIntoView?.({ block: "nearest" });
+    };
     // P4: the days come with the button (the period chooser's "Search ..." or a step's own dates); none = the server's 14 days.
-    await startGpexeCheck(own || {}, renderTrainingLoad);
+    await startGpexeCheck(own || {}, renderAndShowOnce);
     return true;
   }
   if (type === "training-load-gpexe-superseded") {
@@ -243,6 +257,8 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
       gx.linkConfirm = null;
       gx.linkError = null;
       gx.linkOpen = "";
+      // "Not now" for this athlete: its pick is not kept for later (code review).
+      if (gx.linkPicks) delete gx.linkPicks[id];
       if (detail.fix.trackWrite?.sending || detail.fix.trackWrite?.unknown) return true;
       detail.fix.trackPick = null;
       detail.fix.trackError = null;
@@ -486,7 +502,11 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-link") {
     if (gx.detail?.updating) return true;
     const gpexeAthleteId = action.dataset.gpexeAthleteId;
-    const athleteId = fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
+    // The pick kept in state (it survives a repaint) while it is still one of the choices; a pick that left them is dropped.
+    // The select itself only when no pick is kept.
+    const kept = keptLinkPick(gpexeAthleteId);
+    if (!kept && gx.linkPicks?.[gpexeAthleteId]) delete gx.linkPicks[gpexeAthleteId];
+    const athleteId = kept || fieldValue(`[data-gpexe-link-select='${gpexeAthleteId}']`);
     gx.linkOpen = gpexeAthleteId;
     gx.linkError = null;
     if (!athleteId) {
@@ -526,6 +546,23 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-review-filter") {
     gx.reviewFilter = action.dataset.filter || "";
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-link-pick") {
+    // The chooser's pick, kept by GPEXE athlete id so a repaint never drops it. Nothing is sent.
+    const id = action.dataset.gpexeAthleteId;
+    if (!id) return true;
+    // The select is reached by a click too (opening it): an unchanged value changes nothing and never repaints, or the repaint
+    // would close the list it opens (code review).
+    const value = String(action.value || "");
+    if ((gx.linkPicks?.[id] || "") === value) return true;
+    gx.linkPicks = { ...(gx.linkPicks || {}), [id]: value };
+    if (!value) delete gx.linkPicks[id];
+    // "Choose the team athlete first" is answered by a pick itself.
+    if (value && gx.linkError?.code === "choose_athlete" && String(gx.linkOpen) === String(id)) {
+      gx.linkError = null;
+      renderTrainingLoad();
+    }
     return true;
   }
   if (type === "training-load-gpexe-link-cancel") {
