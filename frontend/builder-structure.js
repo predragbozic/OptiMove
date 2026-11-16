@@ -3,7 +3,7 @@ import { renderExerciseThumb } from "./exercise-view-modes.js";
 import { planItemText } from "./exercise-text.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import { autogrowRows } from "./textarea-autosize.js";
-import { formatDate, weekDayName, escapeAttr, escapeHtml } from "./utils.js";
+import { formatDate, weekDayName, escapeAttr, escapeHtml, NO_REFERRER } from "./utils.js";
 
 export const ICON_CHECK = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 12l5 5L20 6"></path></svg>`;
 export const ICON_X = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>`;
@@ -226,7 +226,7 @@ function renderBuilderInlineAddForm(session, parentId, context) {
 
 function renderBuilderNodeIcon(iconUrl, context) {
   if (iconUrl && /^https?:\/\//i.test(iconUrl)) {
-    return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="">`;
+    return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="" ${NO_REFERRER}>`;
   }
   return context.builderIconGlyph(iconUrl);
 }
@@ -244,7 +244,7 @@ function renderBuilderNodeIcon(iconUrl, context) {
 // text-match-based applyBuilderNodePresetMatch to key off of).
 function renderPresetPickerIcon(iconUrl) {
   if (iconUrl && /^https?:\/\//i.test(iconUrl)) {
-    return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="">`;
+    return `<img class="builder-node-icon-image" src="${escapeAttr(iconUrl)}" alt="" ${NO_REFERRER}>`;
   }
   return builderIconGlyph(iconUrl);
 }

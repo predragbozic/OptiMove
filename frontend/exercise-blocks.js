@@ -62,7 +62,7 @@ function renderBlockCover(block) {
   const slides = blockCoverSlides(block);
   const picture = slides.length
     ? renderSlideImage(slides[0], 0)
-    : block.coverImageUrl ? renderImage(block.coverImageUrl, "exercise-block-cover-image", block.name).replace("<img ", '<img referrerpolicy="no-referrer" ') : "";
+    : block.coverImageUrl ? renderImage(block.coverImageUrl, "exercise-block-cover-image", block.name) : "";
   const cover = `<${tag} class="exercise-block-cover" ${open}>${picture}${PLACEHOLDER}</${tag}>`;
   if (slides.length < 2) return cover;
   const arrow = (step, label) => `<button class="exercise-block-cover-step ${step < 0 ? "is-previous" : "is-next"}" type="button" data-block-slide-step="${step}" aria-label="${label} picture: ${escapeAttr(block.name)}" title="${label} picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CHEVRON[step]}</svg></button>`;

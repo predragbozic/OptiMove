@@ -122,7 +122,7 @@ test("6. only the Exercise Library asks for locked previews; the Builder's searc
 
 test("7. a block cover sends no referrer; switching all-users access off says who loses it", async () => {
   const html = renderExerciseBlocksHtml({ blocks: [{ id: BLOCK, name: "Ankle", exerciseCount: 1, coverImageUrl: "https://example.test/cover.jpg", locked: false }], other: { id: "other", exerciseCount: 0 }, canManageCollections: false });
-  assert.match(html, /<img referrerpolicy="no-referrer" class="exercise-block-cover-image" src="https:\/\/example\.test\/cover\.jpg"/);
+  assert.match(html, /<img class="exercise-block-cover-image" src="https:\/\/example\.test\/cover\.jpg" alt="Ankle" referrerpolicy="no-referrer">/);
   const collections = await readFile(new URL("../exercise-collections.js", import.meta.url), "utf8");
   assert.match(collections, /panel\.original\.accessAll && !panel\.draft\.accessAll \? "Everyone who is not a selected user loses access to these exercises, including their personal copies\."/);
 });
