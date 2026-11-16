@@ -473,3 +473,18 @@ test("Fix 13b: a session reason other than a missing link (the preview clean) al
   assert.match(s, /This session needs a look in its full review\./);
   assert.ok(!/training-load-gpexe-approve/.test(s));
 });
+
+test("Fix 16: the full review is one quiet link away on every step and end (never a main button); not on the See why screen", async () => {
+  resetState();
+  const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] } });
+  await open(w);
+  await fixFirst();
+  let s = sheet();
+  assert.match(s, /<p class="imports-fix-full"><button type="button" class="plain-button imports-fix-full-link gpexe-button" data-action="training-load-gpexe-fix-full"[^>]*>Open the full review</);
+  assert.ok(!/primary-button imports-fix-full-link/.test(s));
+  await linkTo("101", "ath-1");
+  assert.match(sheet(), /Open the full review/, "on the end too");
+  await act("training-load-gpexe-fix-full");
+  assert.equal(gx().detail.fix, null);
+  assert.match(html(), /gpexe-detail-overlay/);
+});

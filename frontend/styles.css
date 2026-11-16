@@ -27422,4 +27422,20 @@ body:not(.athlete-mode):not(.login-mode) .imports-fix .gpexe-select:focus-visibl
     width: 100%;
   }
 }
+/* The way to the full review: a quiet text link, never a second main button. */
+body:not(.athlete-mode):not(.login-mode) .imports-fix-full {
+  margin: 0;
+  padding-bottom: 8px;
+  text-align: center;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-full .imports-fix-full-link {
+  min-height: 44px;
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 /* End of the Imports Fix flow. */

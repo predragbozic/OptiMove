@@ -24,6 +24,11 @@ export function renderFixSheetHtml(gx, status, h) {
     ? button(primary ? "primary-button" : "plain-button", "training-load-gpexe-fix-next", "Next session in the group", { disabled: busy })
     : button(primary ? "primary-button" : "plain-button", "training-load-gpexe-fix-close", "Back to Imports", { disabled: busy });
   let counter = "";
+  // Everything the review offers (values, Leave out, attendance states) stays one quiet link away, for every viewer; never a
+  // second main button. Not on the screen whose main button already is See why.
+  const fullReviewLink = detail.candidate && view.screen !== "other" && view.screen !== "loading"
+    ? `<p class="imports-fix-full">${button("plain-button imports-fix-full-link", "training-load-gpexe-fix-full", "Open the full review", { disabled: busy })}</p>`
+    : "";
   let body = "";
   let actions = "";
   if (view.screen === "loading") {
@@ -103,6 +108,7 @@ export function renderFixSheetHtml(gx, status, h) {
       ${counter}
       <div class="imports-fix-body">${body}</div>
       ${actions ? `<div class="imports-fix-actions">${actions}</div>` : ""}
+      ${fullReviewLink}
     </section>
   `;
 }
