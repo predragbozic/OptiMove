@@ -235,6 +235,27 @@ test("5. v74's T2a guard: with an acting user, only a platform admin, in their o
   assert.equal(raw.ok, true, raw.error?.message);
 });
 
+test("6. v74's seed and display rule: number -> count (1, 1, 0) with its evidence anchor; as_sent takes any unit token, the three old rules unchanged", async () => {
+  const seed = await one(`select scale::text, scale_divisor::text, "offset"::text, evidence_ref, state from training_load.unit_conversions where from_unit = 'number' and to_unit = 'count'`);
+  assert.deepEqual(seed, { scale: "1", scale_divisor: "1", offset: "0", evidence_ref: "docs/ai/gpexe-field-inventory-plan.md#number-count", state: "active" });
+  const ok = async (rule, unit) => (await one(`select training_load.source_metric_display_unit_ok($1, $2) as ok`, [rule, unit])).ok;
+  for (const [rule, unit, want] of [["as_sent", "count", true], ["as_sent", "W/kg", true], ["as_sent", "two words", false], ["as_sent", "", false], ["as_sent", null, false],
+    ["duration_mmss", "mm:ss", true], ["duration_mmss", "s", false], ["distance_m", "m", true], ["speed_kmh", "km/h", true], ["speed_kmh", "m/s", false], ["nope", "m", false]]) {
+    assert.equal(await ok(rule, unit), want, `${rule} ${unit}`);
+  }
+});
+
+test("7. source_stated is never written by hand: a raw status change on an unproven revision is refused, with or without a unit", async () => {
+  await plantObserved("raw_status");
+  const f = await newField("raw_status");
+  for (const set of [`evidence_status = 'source_stated'`, `evidence_status = 'source_stated', source_unit = 'number', unit_verified_by_user_id = '${W.pa.id}', unit_verified_at = now()`]) {
+    const res = await txAs(W.pa.id, (c) => c.query(`update training_load.source_metric_definition_versions set ${set} where id = $1`, [f.revisionId]));
+    assert.equal(res.ok, false, set);
+    assert.equal(res.error.code, "23514", `${set}: ${res.error.message}`);
+  }
+  assert.equal((await one(`select evidence_status from training_load.source_metric_definition_versions where id = $1`, [f.revisionId])).evidence_status, "unproven");
+});
+
 // ---------------------------------------------------------------------------
 // The observed act's chain (8.2, 8.3), written by SQL as route O will write it (G1b): T9 field_observation, its T9s
 // session, one T9i field_unit row, T2b's update to source_stated, and the two T8 rows - in ONE transaction.
@@ -347,21 +368,21 @@ test("8. the observed act, whole, in one transaction: the revision is source_sta
 
 test("9. the observed act's refusals: another actor, a club admin, a unit without a conversion or not a token, a display rule other than as_sent, two equal or a zero value, a missing session, row, revision update or T8 row, an unkeyed request row", async () => {
   const cases = [
-    ["a club admin", W.ca.id, {}, "42501"],
-    ["no conversion from the unit", W.pa.id, { unit: "furlongs" }, "23514"],
-    ["a non-token unit", W.pa.id, { unit: "two words" }, "23514"],
-    ["another display rule", W.pa.id, { over: { rule: "distance_m", displayUnit: "m" }, unit: "m" }, "23514"],
-    ["equal values", W.pa.id, { rawA: "4", rawB: "4" }, "23514"],
-    ["a zero value", W.pa.id, { rawA: "0" }, "23514"],
-    ["no session (the row's own foreign key)", W.pa.id, { skip: "session" }, "23503"],
-    ["no row", W.pa.id, { skip: "item" }, "23514"],
-    ["no revision update", W.pa.id, { skip: "revision" }, "23514"],
-    ["no unit row", W.pa.id, { skip: "unitRow" }, "23514"],
-    ["no meaning row", W.pa.id, { skip: "meaningRow" }, "23514"],
-    ["an unkeyed unit row", W.pa.id, { over: { unitRowKeyed: false } }, "23514"],
-    ["the revision's unit not the row's", W.pa.id, { over: { revisionUnit: "m/s" } }, "23514"],
+    ["a club admin", W.ca.id, {}, "42501", /^source metric confirmation: the acting user may not write this confirmation$/],
+    ["no conversion from the unit", W.pa.id, { unit: "furlongs" }, "23514", /^source_metric_confirmation_items: the unit GPEXE states is a unit token with an active conversion$/],
+    ["a non-token unit", W.pa.id, { unit: "two words" }, "23514", /^source_metric_confirmation_items: the unit GPEXE states is a unit token with an active conversion$/],
+    ["another display rule", W.pa.id, { over: { rule: "distance_m", displayUnit: "m" }, unit: "m" }, "23514", null],
+    ["equal values", W.pa.id, { rawA: "4", rawB: "4" }, "23514", /^source_metric_confirmation_items: the two athletes' values are non-zero and different$/],
+    ["a zero value", W.pa.id, { rawA: "0" }, "23514", /^source_metric_confirmation_items: the two athletes' values are non-zero and different$/],
+    ["no session (the row's own foreign key)", W.pa.id, { skip: "session" }, "23503", null],
+    ["no row", W.pa.id, { skip: "item" }, "23514", null],
+    ["no revision update", W.pa.id, { skip: "revision" }, "23514", null],
+    ["no unit row", W.pa.id, { skip: "unitRow" }, "23514", null],
+    ["no meaning row", W.pa.id, { skip: "meaningRow" }, "23514", null],
+    ["an unkeyed unit row", W.pa.id, { over: { unitRowKeyed: false } }, "23514", /^source_metric_audit: the audit row must follow its own verification in the same transaction$/],
+    ["the revision's unit not the row's", W.pa.id, { over: { revisionUnit: "m/s" } }, "23514", /^source_metric_definition_versions: an observed act names its own confirmation of this revision, written in this transaction$/],
   ];
-  for (const [label, actor, opts, code] of cases) {
+  for (const [label, actor, opts, code, message] of cases) {
     const name = `ref_${uid()}`;
     await plantObserved(name);
     const f = await newField(name);
@@ -369,6 +390,7 @@ test("9. the observed act's refusals: another actor, a club admin, a unit withou
     const res = await txAs(actor, (c) => observed(c, actor, { f, st, ...opts }));
     assert.equal(res.ok, false, `${label}: refused`);
     assert.equal(res.error.code, code, `${label}: ${res.error.message}`);
+    if (message) assert.match(res.error.message, message, `${label}: its own fixed message (a CHECK would print the row)`);
     const rev = await one(`select evidence_status from training_load.source_metric_definition_versions where id = $1`, [f.revisionId]);
     assert.equal(rev.evidence_status, "unproven", `${label}: nothing written`);
   }

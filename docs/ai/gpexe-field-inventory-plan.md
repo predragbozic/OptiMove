@@ -650,3 +650,35 @@ what to do. A proposal for a platform admin on such a slot, three lines:
 > This is an OptiMove variable, so a club does not fill it by dragging.
 > To fill it for this club, create the variable in the club's workspace and drag the column onto it there.
 > To fill it for every club, a platform administrator maps it in Data configuration > Mappings.
+
+### 8.9 As built (G1a; the executor, 2026-11-16)
+
+The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_source_fields.sql`, with its runbook
+`docs/runbooks/generic-source-fields-v74.md` (preflight, post-check, rollback). Route C is
+`backend/src/sourceFieldCreateService.js`. The tests are `backend/tests/source-field-create-g1.test.mjs` and
+`source-field-create-g1-unit.test.mjs`. Where it departs from 8.1–8.3, and why:
+
+- **T2a is guarded only when a write carries an acting user.** v37 never guarded a T2a insert, and the test suites
+  write raw T2a fixtures without an actor. So a write with an acting user (every application write sets one) is held
+  to route C's contract:
+  - a platform admin, in their own name;
+  - a generic key;
+  - its `source_metric_create` row at COMMIT.
+
+  A write without an actor stays as before v74. This is a known limit of the same kind as C74.
+- **Route C reuses existing chains.** It reuses v34's reserved action `source_metric_create` (its chain is built here)
+  instead of a new action. Revision 1 is created through v39's own chains (a draft, then its activation), so it ends
+  active and unproven, as 8.1 says. That makes three T8 rows; the keyed one, `source_metric_create`, is the request
+  record.
+- **One `field_unit` row, not two.** A field observation holds exactly one `field_unit` T9i row carrying both athletes'
+  raw values (`raw_a`, `raw_b`), in T9i's existing per-row shape for one session.
+- **Route O comes after G2.** Route O reads the two values from the stored snapshot, and the snapshot holds only the
+  importer's consumed fields (PR #141, #149) until G2 projects the pinned set of active fields. So route O, routes 8
+  and 10, the platform-workspace board and "Create field" are **G1b**, after G2. v74 already holds their whole database
+  chain, and tests 8 and 9 write it by SQL as route O will.
+- **The function bodies are generated, not copied.** They come from `pg_get_functiondef` of the bodies in force, with
+  checked replacements.
+- **The rollback is proven exact.** It restores the catalog of v72 exactly (test 11).
+
+**Not yet tested:** v52's activation gate on a `source_stated` revision (mutation M10 survives). A mapping version of a
+created field needs its extractor (J12), which is G2's; G2's or G1b's tests cover it.
