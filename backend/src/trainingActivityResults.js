@@ -181,7 +181,7 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
     }
   }
 
-  if (readContext.isAthleteSelf) return athleteSelfResults({ canonicalActivityId, facts: scoped, components, athleteId: readContext.athleteId });
+  if (readContext.isAthleteSelf) return athleteSelfResults({ canonicalActivityId, facts: scoped, components, athleteId: readContext.athleteId, teamSession: activity.owner_scope === "team" });
   return { canonicalActivityId, facts: scoped, athleteNamesById, variableNamesById, components };
 }
 
@@ -225,8 +225,10 @@ export function athleteSelfFact(fact, place = () => ({ componentId: null, drillO
 // is shown that disagreement, she is not); without a value, the coach's current decision about her in one word - no
 // reason, no note, no author; otherwise nothing is said. Read from the decisions about HER only.
 const SELF_ATTENDANCE = Object.freeze({ did_not_participate: "did_not_participate", participated_no_values: "participated_no_device_data" });
-async function selfAttendance(canonicalActivityId, athleteId, hasValues) {
+async function selfAttendance(canonicalActivityId, athleteId, hasValues, teamSession) {
   if (hasValues) return "participated";
+  // A coach decides about an athlete only on a team's session (the roster); elsewhere there is nothing to read.
+  if (!teamSession) return null;
   const decisions = await query(
     `select distinct d.decision_kind
        from training.activity_athlete_decisions d
@@ -238,7 +240,7 @@ async function selfAttendance(canonicalActivityId, athleteId, hasValues) {
   if (decisions.rowCount !== 1) return null;
   return SELF_ATTENDANCE[decisions.rows[0].decision_kind] ?? "participated";
 }
-async function athleteSelfResults({ canonicalActivityId, facts, components, athleteId }) {
+async function athleteSelfResults({ canonicalActivityId, facts, components, athleteId, teamSession }) {
   // Where each drill's values belong: the component of THIS session its segment is linked to, and its order among
   // the drills of the recordings it came from (a session can hold more than one recording, each numbering from 1).
   const segmentIds = [...new Set(facts.filter((f) => f.factKind === "metric_value").map((f) => f.detail?.segmentId).filter((id) => typeof id === "string" && UUID_PATTERN.test(id)))];
@@ -261,7 +263,7 @@ async function athleteSelfResults({ canonicalActivityId, facts, components, athl
   }
   const own = facts.map((f) => athleteSelfFact(f, (segmentId) => places.get(segmentId) ?? { componentId: null, drillOrdinal: null })).filter(Boolean);
   const mine = facts.filter((f) => f.factKind === "metric_value");
-  const myAttendance = await selfAttendance(canonicalActivityId, athleteId, mine.length > 0);
+  const myAttendance = await selfAttendance(canonicalActivityId, athleteId, mine.length > 0, teamSession);
   const recordedBy = recordedByOf({ device: mine.some((f) => DEVICE_METHODS.includes(f.detail?.entryMethod)), any: mine.length > 0 });
   // The session's structure as far as it is hers: the components she has a result on (a value placed there, or her
   // own performance of it) and the ones they sit under. A drill only another athlete did is not listed to her.
