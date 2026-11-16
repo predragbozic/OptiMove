@@ -209,6 +209,10 @@ const trim = (n) => String(Number(n.toFixed(6)));
 // (or ">-0.01"). Display only: the comparison, the checks and what is saved keep the exact value.
 export function displayNumber(value) {
   if (value === null || value === undefined || value === "") return value;
+  // Only a real number, or a plain decimal string, is read as a number; anything else is shown as it came ("00123",
+  // "0x10", true, " " stay as they are - board owner's review).
+  const plain = typeof value === "string" && /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(value.trim()) && !/^-?0\d/.test(value.trim());
+  if (typeof value !== "number" && !plain) return String(value);
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return String(value);
   if (Number.isInteger(n)) return Math.abs(n) < 1e21 ? n.toFixed(0).replace(/^-0$/, "0") : BigInt(n).toString();
