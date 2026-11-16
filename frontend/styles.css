@@ -6351,6 +6351,33 @@ body.specific-program-open {
 
 .exercise-card-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 2px; }
 .exercise-card-actions .text-action { font-size: 12px; }
+/* An exercise's favorite that could not be saved: one line under the actions it belongs to, in all three
+   renderings (library card, library icon row, Builder result). It takes a line of its own inside the actions and
+   never widens them; "Try again" is a 44 px target. */
+.exercise-favorite-failed {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  min-width: 0;
+  color: var(--warning-text, #8a5300);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.exercise-favorite-failed .text-action,
+.builder-exercise-view .builder-exercise-mini-actions .exercise-favorite-failed .text-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 13px;
+}
+:is(.exercise-card-actions, .exercise-view-actions, .builder-exercise-mini-actions):has(> .exercise-favorite-failed) { flex-wrap: wrap; }
+/* The Builder's phone layouts set the row to one line further down; with the message it wraps there too. */
+.builder-exercise-view .builder-exercise-mini-actions:has(> .exercise-favorite-failed) { flex-wrap: wrap; }
 .exercise-tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
 .exercise-tag-list span, .exercise-tag-pill { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 3px 7px; border-radius: 999px; background: #eef2f4; color: var(--muted); font-size: 11px; font-weight: 800; }
 /* z-index: the overlay ladder, see .media-modal. */

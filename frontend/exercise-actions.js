@@ -9,7 +9,7 @@ import { EXERCISE_SELECTION_LIMIT, openExerciseBulkMove } from "./exercise-bulk-
 import { exerciseText } from "./exercise-text.js";
 import { filterIconSvg, isSelectableExercise, QUICK_FILTER_KEYS, renderExerciseFilterControls, renderExerciseQuickFilters, renderExerciseSelectionBar, renderExerciseVisibilityFilters, renderExerciseOwnerOptions, syncExerciseFilterSearch } from "./exercise-library.js";
 import { emptyExerciseFilters, emptyExerciseOptions, EXERCISE_FILTERS, state } from "./state.js";
-import { debounce, escapeHtml } from "./utils.js";
+import { debounce, escapeAttr, escapeHtml } from "./utils.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
 const EXERCISES_CACHE_NAMESPACE = "exercises";
@@ -503,7 +503,7 @@ export async function handleExerciseLibraryAction(action, handlers) {
     return true;
   }
   if (type === "exercise-toggle-favorite") {
-    void toggleExerciseFavorite(action.dataset.exerciseId, action.dataset.favorite === "true", handlers);
+    void toggleExerciseFavorite(action.dataset.exerciseId, action.dataset.favorite === "true", handlers, action);
     return true;
   }
   if (type === "exercise-toggle-mark") {
@@ -560,18 +560,46 @@ function findExerciseResultById(exerciseId) {
   return [...state.lastExerciseResults, ...state.builder.exercises].find((exercise) => String(exercise.id) === String(exerciseId)) || null;
 }
 
-async function toggleExerciseFavorite(exerciseId, isFavorite, handlers) {
+// The actions of an exercise in its three renderings (the library's card and icon row, the Builder's result).
+const FAVORITE_ACTIONS = ".exercise-card-actions, .exercise-view-actions, .builder-exercise-mini-actions";
+// "The favorite was not saved. Try again." (or "not removed", for a star that was on) beside the star that was
+// pressed: one sentence and the one next step, which repeats the same press. The star keeps the state it had. Gone
+// with the next render of the list.
+export function favoriteNotSavedHtml(exerciseId, isFavorite) {
+  return `<span class="exercise-favorite-failed" role="status">The favorite was not ${isFavorite ? "removed" : "saved"}. <button type="button" class="text-action" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exerciseId)}" data-favorite="${isFavorite ? "true" : "false"}">Try again</button></span>`;
+}
+function showFavoriteNotSaved(action, exerciseId, isFavorite) {
+  const actions = action?.closest?.(FAVORITE_ACTIONS);
+  if (!actions) return;
+  actions.querySelector(".exercise-favorite-failed")?.remove();
+  actions.insertAdjacentHTML("beforeend", favoriteNotSavedHtml(exerciseId, isFavorite));
+}
+
+// Nobody waits for this (the click handler starts it and returns), so it never rejects: a save that failed is
+// said beside the star; a refresh that failed after a saved change is said by the list itself.
+async function toggleExerciseFavorite(exerciseId, isFavorite, handlers, action = null) {
   if (!exerciseId) return;
-  await api(`/api/exercises/${encodeURIComponent(exerciseId)}/favorite`, {
-    method: isFavorite ? "DELETE" : "POST",
-  });
-  if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
-  // Just changed this exercise's favorite flag server-side - the cached
-  // entry for the current search context still has the pre-toggle value
-  // (favorite is a real server filter, so a favorites-only view could even
-  // need to drop/gain this row), so this specific re-fetch must never be
-  // satisfied from cache.
-  else await searchExercises(state.exerciseSearch.term, handlers, { forceRefresh: true });
+  try {
+    await api(`/api/exercises/${encodeURIComponent(exerciseId)}/favorite`, {
+      method: isFavorite ? "DELETE" : "POST",
+    });
+  } catch {
+    // api.js has reported the failure once; here the person is told, where they pressed.
+    showFavoriteNotSaved(action, exerciseId, isFavorite);
+    return;
+  }
+  action?.closest?.(FAVORITE_ACTIONS)?.querySelector(".exercise-favorite-failed")?.remove();
+  try {
+    if (state.activeTab === "builder" && state.builder.selectedNodeId) await loadBuilderExercises();
+    // Just changed this exercise's favorite flag server-side - the cached
+    // entry for the current search context still has the pre-toggle value
+    // (favorite is a real server filter, so a favorites-only view could even
+    // need to drop/gain this row), so this specific re-fetch must never be
+    // satisfied from cache.
+    else await searchExercises(state.exerciseSearch.term, handlers, { forceRefresh: true });
+  } catch {
+    // The change is saved; the list that could not be refreshed says so itself, in place.
+  }
 }
 
 function toggleExerciseMark(exerciseId, handlers) {
