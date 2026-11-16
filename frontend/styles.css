@@ -26065,6 +26065,14 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
   background: var(--om-warning-soft, #fdf1dc);
   border-color: color-mix(in srgb, var(--om-warning, #8a5300) 30%, transparent);
 }
+/* MT-C: the recording choice's label moves to the next line whole instead of splitting its pill. */
+.gpexe-badge.is-track-choice {
+  display: inline-block;
+  max-width: 100%;
+}
+.gpexe-choose-recording {
+  margin-top: 4px;
+}
 .gpexe-short-cell {
   font-weight: 600;
   color: var(--om-warning, #8a5300);
@@ -26159,6 +26167,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-lastsearch {
   font-size: var(--om-text-md);
   font-weight: 600;
   overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 body:not(.athlete-mode):not(.login-mode) .imports-banner .imports-actions {
