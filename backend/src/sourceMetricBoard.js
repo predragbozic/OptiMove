@@ -7,9 +7,10 @@
 import crypto from "node:crypto";
 import { canonicalDecimal, compareDecimal } from "./sourceMetricExtractors.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
+import { unitTokenOk } from "./metricTextRules.js";
 
-// The registry's version, stored with every confirmation (T9).
-export const DISPLAY_REGISTRY_VERSION = 1;
+// The registry's version, stored with every confirmation (T9). 2: G1's generic `as_sent` rule (plan section 8.7).
+export const DISPLAY_REGISTRY_VERSION = 2;
 // At most this many pairs are offered for one board (pair = 0 .. count - 1).
 export const PAIR_LIMIT = 200;
 
@@ -69,14 +70,26 @@ export function setDisplayRuleFallbackForTests(fn) { testRuleFor = fn ?? null; }
 
 // The display rule of a source field whose proven unit is `sourceUnit`, or
 // null: { rule, units }.
+// G1 (plan section 8.7): the generic rule of a plain field with no special screen format - the value as GPEXE sends it,
+// in the field's own proven unit, with no rounding (a whole number stays whole; otherwise GPEXE's own digits, as exact
+// decimal text). The unit is the revision's source unit token; the database's twin is v74's
+// source_metric_display_unit_ok('as_sent', <unit token>).
+export const AS_SENT_RULE = "as_sent";
+function asSentRule(sourceUnit) {
+  if (!unitTokenOk(sourceUnit)) return null;
+  return Object.freeze({ rule: AS_SENT_RULE, sourceUnit, units: Object.freeze([sourceUnit]), show: (raw) => canonicalDecimal(raw) });
+}
+
 export function displayRuleFor({ sourceSystem, apiFamily, sourceMetricKey, sourceUnit }) {
   const key = `${sourceSystem}/${apiFamily}/${sourceMetricKey}`;
   let entry = Object.hasOwn(RULES, key) ? RULES[key] : null;
   if (!entry && testRuleFor && typeof sourceMetricKey === "string" && SYNTHETIC_TEST_KEY.test(sourceMetricKey)) {
     const name = testRuleFor({ sourceSystem, apiFamily, sourceMetricKey });
-    entry = Object.values(RULES).find((r) => r.rule === name) ?? null;
+    entry = name === AS_SENT_RULE ? asSentRule(sourceUnit) : Object.values(RULES).find((r) => r.rule === name) ?? null;
   }
-  if (!entry || entry.sourceUnit !== sourceUnit) return null;
+  // A specific rule wins, and only for its own unit; a field without one is shown as sent.
+  if (!entry) return asSentRule(sourceUnit);
+  if (entry.sourceUnit !== sourceUnit) return null;
   return entry;
 }
 

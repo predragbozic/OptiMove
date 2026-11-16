@@ -605,3 +605,51 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
 - No zone or event field (Z0 / Z1).
 - No club-scoped raising of a field (decision (c), an open point).
 - The revisions already verified by documents are not touched.
+
+### 8.7 The generic display rule `as_sent` (the *Rukovodilac*'s addition, 2026-11-16)
+
+**Found on production on 2026-11-16.** The owner confirmed `details.players.tot_burst_events` and `tot_brake_events` by
+documents: unit `count`, plus the meaning. Both are `verified`, yet the board still refused them with
+`display_rule_missing`. The display registry knew only the three athlete-row columns:
+- in code, `RULES` in `backend/src/sourceMetricBoard.js`;
+- in the database, v65's `training_load.source_metric_display_unit_ok`, which checks every T9i's `gpexe_display_rule`.
+
+So no proven field beyond those three could ever be compared or placed, and that would also block every `source_stated`
+field.
+
+**The rule:**
+- **`as_sent`:** the value exactly as GPEXE sends it, in the field's own proven unit.
+  - Its unit is the revision's `source_unit`, which must be a unit token.
+  - It shows the canonical decimal text of the raw value with **no rounding**: a whole number stays whole, otherwise
+    GPEXE's own digits.
+  - The comparison sentence on the board names this rule.
+- **`displayRuleFor`:** a specific rule still wins, and only in its own unit (a specific column proven in another unit
+  is still `display_rule_missing`). A field with no specific rule falls back to `as_sent`.
+- **`DISPLAY_REGISTRY_VERSION`** goes from 1 to 2. The placement hash's inputs carry no registry version, so the hashes
+  of the three specific rules do not change. A test pins one of them from `main`.
+- **v74** replaces `source_metric_display_unit_ok`'s body behind its md5 check. It keeps the three cases byte for byte
+  and adds `when 'as_sent' then training_load.source_metric_unit_token_ok(p_unit)`. The rollback restores the v65
+  body, and refuses once any T9i row carries `as_sent`.
+- **Burst and brake** become placeable through it with unit `count`. Their placement still needs an active conversion
+  to the variable's unit.
+
+**Tests:**
+- the two real keys are placeable after v74, with a disposable world on v74;
+- an unproven field is still `field_not_confirmed`;
+- the three specific rules and a pinned placement hash are unchanged;
+- the database function refuses a non-token unit, and the three old cases answer as in v65;
+- a board save with an `as_sent` placement is refused before v74 (v65's function) and accepted after it.
+
+**Built before v74 (branch `feature/gpexe-field-create-g1`):** the code half, with its unit tests and the board suites
+updated. It ships only with v74: until then a board save with an `as_sent` column would be refused by v65's database
+function.
+
+### 8.8 Backlog: a sentence for a system variable on the club's board (wording only, later)
+
+The owner created his "Burst" variable in the platform workspace, so it is a system variable. The club's board then
+says "OptiMove does not fill this variable from a column of this session", which is correct, but it does not tell him
+what to do. A proposal for a platform admin on such a slot, three lines:
+
+> This is an OptiMove variable, so a club does not fill it by dragging.
+> To fill it for this club, create the variable in the club's workspace and drag the column onto it there.
+> To fill it for every club, a platform administrator maps it in Data configuration > Mappings.

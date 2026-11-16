@@ -393,7 +393,7 @@ test("1. the audience: the club's admin and a platform admin in the club's works
 // ---------------------------------------------------------------------------
 test("2. the board: the columns with their unit state, their reason and two athletes' raw values; the club's variables then OptiMove's; OptiMove's active mappings pre-placed; the pair named live and stable", async () => {
   const { board } = ok(await boardOf(W.caA, W.tA));
-  assert.equal(board.displayRegistryVersion, 1);
+  assert.equal(board.displayRegistryVersion, 2, "2 since G1's as_sent rule");
   assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId });
   assert.equal(board.session.candidateId, W.cA.id);
   assert.equal(new Date(board.session.startedAt).toISOString(), "2026-09-14T18:08:12.000Z");
@@ -409,7 +409,8 @@ test("2. the board: the columns with their unit state, their reason and two athl
   assert.deepEqual([unverified.placeable, unverified.reason, unverified.unitProven, unverified.unit], [false, "field_not_confirmed", false, null], "an unproven unit is never shown as what GPEXE sends");
   assert.deepEqual([columnOf(board, W.fZone).placeable, columnOf(board, W.fZone).reason], [false, "field_has_parameters"]);
   assert.deepEqual([columnOf(board, W.fNoReader).placeable, columnOf(board, W.fNoReader).reason, columnOf(board, W.fNoReader).rawA], [false, "source_metric_unsupported", null]);
-  assert.deepEqual([columnOf(board, W.fBurst).placeable, columnOf(board, W.fBurst).reason], [false, "display_rule_missing"]);
+  // G1 (plan 8.7): a proven plain field with no specific screen format is shown as GPEXE sends it, in its own unit.
+  assert.deepEqual([columnOf(board, W.fBurst).placeable, columnOf(board, W.fBurst).reason, columnOf(board, W.fBurst).displayRule, columnOf(board, W.fBurst).displayUnits], [true, null, "as_sent", ["number"]]);
   // The seeded GPEXE fields of v34 are there too, observed only.
   assert.ok(board.columns.some((c) => c.key === "athlete_session.total_time" && c.reason === "field_not_confirmed"));
   // The variables: the club's first, then OptiMove's; never another club's.
@@ -526,7 +527,7 @@ test("4. a placement: the proposal from the one active conversion, the two athle
   assert.equal((await code(W.fUnverified, W.vMin)).code, "field_not_confirmed");
   assert.equal((await code(W.fZone, W.vMin)).code, "field_has_parameters");
   assert.equal((await code(W.fNoReader, W.vMin)).code, "source_metric_unsupported");
-  assert.equal((await code(W.fBurst, W.vMin)).code, "display_rule_missing");
+  assert.equal((await code(W.fBurst, W.vMin)).code, "conversion_unavailable", "as_sent opens the column; the unit still needs a conversion to the variable's");
   const out = await code(W.fTime, W.vSmall);
   assert.deepEqual([out.code, out.limits], ["value_outside_limits", { min: null, max: "10", unit: "min" }], "20 minutes is above the variable's 10");
   assert.equal(JSON.stringify(out).includes("1200"), false, "a refusal carries no value");
