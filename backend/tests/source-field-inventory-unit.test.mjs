@@ -2,7 +2,7 @@
 // name guard, the per-endpoint and total bounds, one count per answer, and that it never throws.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createFieldCollector, MAX_PER_ENDPOINT, valueKind } from "../src/sourceFieldInventory.js";
+import { createFieldCollector, isStructuralField, MAX_PER_ENDPOINT, STRUCTURAL_FIELDS, valueKind } from "../src/sourceFieldInventory.js";
 
 test("kinds: number, text, boolean, null, unit_value_object, zone_list, object, list", () => {
   assert.equal(valueKind(1.5), "number");
@@ -71,4 +71,24 @@ test("the unit word is v40's unit token exactly: every character the database re
   c.observe("details.session", { players: { 1: { ...players, ok_unit: { unit: "km/h", value: 1 } } } });
   for (const row of c.rows()) assert.equal(row.unitWord, row.name === "ok_unit" ? "km/h" : null, row.name);
   assert.equal(c.rows().length, odd.length + 1);
+});
+
+test("structural keys (the Rukovodilac's decision (b)): an identifier, a reference or a timestamp is never recorded, a measured value beside it is", () => {
+  const c = createFieldCollector();
+  c.observe("athlete_session", {
+    id: 7, athlete: 101, teamsession: 5001, track: 9001, drill: null, team: 77, start_timestamp: "2026-09-14T18:08:12",
+    end_timestamp: "2026-09-14T19:19:35", created_on: "x", updated_on: "y", is_stats_valid: true, total_distance: 3000,
+  });
+  c.observe("team_thresholds", { id: 1473, team: 77, validity_start: "2025-01-01T00:00:00", validity_end: null, speed_thresholds: [5.5, 7], use_hr_min: true });
+  // A details players' map: the same names are measured values there, never on the structural list.
+  c.observe("details.session", { players: { 101: { id: 1, team: 2, tot_burst_events: { unit: "number", value: 3 } } } });
+  assert.deepEqual(c.rows().map((r) => `${r.endpoint}:${r.name}`), [
+    "athlete_session:is_stats_valid", "athlete_session:total_distance",
+    "details.session:id", "details.session:team", "details.session:tot_burst_events",
+    "team_thresholds:speed_thresholds", "team_thresholds:use_hr_min",
+  ]);
+  assert.equal(c.rejected, 0, "a structural key is skipped, not counted as a refused name");
+  assert.deepEqual(Object.keys(STRUCTURAL_FIELDS).sort(), ["athlete_session", "team_thresholds"]);
+  assert.ok(isStructuralField("athlete_session", "teamsession") && !isStructuralField("details.session", "id"));
+  assert.ok(Object.isFrozen(STRUCTURAL_FIELDS) && Object.isFrozen(STRUCTURAL_FIELDS.athlete_session));
 });
