@@ -916,6 +916,10 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
   // link on Home regardless of today's own unrated count.
   athleteWeeklyOpen: false,
   athleteWeekly: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
+  // Athlete Home (owner, 2026-11-16, item 2): the current week as Home's one "This week" row reads it, for the count of
+  // sessions waiting for her rating ("Rate your sessions (N)"). Its own slot, always this week, so the overlay's week
+  // navigation never changes what Home counts.
+  athleteHomeWeek: { weekStart: "", selectedDate: "", data: null, loading: false, error: "" },
   // (v9) Workspace-level master toggle for automatic planned-session RPE
   // (Training Load -> Schedule, top of the tab). `loaded` distinguishes
   // "not fetched yet" from a real, confirmed OFF - the toggle control

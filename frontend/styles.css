@@ -9179,7 +9179,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
      to the button the athlete just tapped, regardless of scroll position. */
   .athlete-mode .week-calendar-picker {
     position: sticky;
-    top: calc(118px + env(safe-area-inset-top, 0px));
+    /* Under the topbar and the week controls (now 44 px controls; mobile QA). */
+    top: calc(var(--athlete-topbar-height, 61px) + 61px + env(safe-area-inset-top, 0px));
     z-index: 39;
     background: var(--bg);
     padding-top: 8px;
@@ -13197,19 +13198,32 @@ button.tests-assignment-card {
   }
 }
 
-/* -------------------- Athlete: "This week" link + weekly overlay (item 4 correction) -------------------- */
+/* -------------------- Athlete: Home's "This week" row + weekly overlay (owner, 2026-11-16, item 2) --------------------
+   One week on Home: the overlay opens from a button in the row's own head, right of "This week". */
 
-.training-load-week-link {
-  display: block;
-  width: 100%;
-  text-align: left;
+.athlete-home-week-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.athlete-home-week-head .eyebrow {
+  margin: 0;
+}
+.training-load-week-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px 0 12px;
   background: none;
   border: none;
-  padding: 2px 2px 4px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--accent);
   cursor: pointer;
+  text-align: right;
+  min-width: 0;
 }
 
 .training-load-athlete-weekly-panel {
@@ -27542,11 +27556,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-later-help {
 body.mobile-nav-open:not(.login-mode) .rail-button span[hidden] {
   display: none !important;
 }
-body.athlete-mode:not(.login-mode) .training-load-week-link {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-}
 body.athlete-mode:not(.login-mode) .training-load-athlete-weekly-panel .icon-button,
 body.athlete-mode:not(.login-mode) .training-load-athlete-weekly-panel .training-load-weekly-today-button {
   min-width: 44px;
@@ -27562,3 +27571,125 @@ body.athlete-mode:not(.login-mode) .brand-mark {
   min-height: 44px;
 }
 /* End of athlete screens. */
+
+/* ==========================================================================
+   The athlete's Weekly plan on a phone (owner, 2026-11-16, item 4): one day
+   under another, each a short row (the day on the left, what is planned on
+   the right), nothing cut off or scrolled sideways; the short week range so
+   it fits; a week with nothing planned is one sentence (program-view.js).
+   ========================================================================== */
+.week-title-button .week-range-days {
+  display: none;
+}
+
+/* Rate your sessions (N): the waiting state reads as a task, not a plain link (UX review). */
+.training-load-week-button.is-waiting {
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--accent, #1f7a6f);
+  color: #fff;
+}
+
+.calendar-week-empty {
+  margin: 0;
+  padding: var(--om-space-4, 16px);
+  font-weight: 600;
+  color: var(--text, inherit);
+}
+
+@media (max-width: 760px) {
+  /* The days of the week without the year: the full range was cut off at 360-390 px (the year is the week picker's). */
+  body.athlete-mode:not(.login-mode) .week-title-button .week-range-full { display: none; }
+  body.athlete-mode:not(.login-mode) .week-title-button .week-range-days { display: block; font-size: 16px; }
+  body.athlete-mode:not(.login-mode) .week-nav-panel .week-arrow-button,
+  body.athlete-mode:not(.login-mode) .week-nav-panel .week-title-button,
+  body.athlete-mode:not(.login-mode) .week-nav-panel .week-today-button {
+    min-height: 44px;
+  }
+  body.athlete-mode:not(.login-mode) .week-nav-panel .week-arrow-button {
+    min-width: 44px;
+  }
+  /* The arrows' columns hold their 44 px (the narrow-phone rule gave them 38 px tracks; mobile QA). */
+  body.athlete-mode:not(.login-mode) .content-section .week-nav-panel {
+    grid-template-columns: 44px minmax(0, 1fr) auto 44px auto;
+  }
+
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid {
+    display: block;
+    overflow-x: visible;
+    scroll-snap-type: none;
+    padding: 0 12px;
+  }
+
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-day {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 12px;
+    min-width: 0;
+    min-height: 0;
+    padding: 10px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line, #dde3e6);
+    background: none;
+    /* A day brought into view lands below the sticky header and week controls (mobile QA). */
+    scroll-margin: calc(var(--athlete-topbar-height, 61px) + 61px + env(safe-area-inset-top, 0px) + 12px) 0 12px;
+    overflow-wrap: anywhere;
+  }
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-day:last-child {
+    border-bottom: 0;
+  }
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-day.is-today {
+    background: none;
+  }
+
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-day-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 0 0 96px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-date {
+    font-size: 15px;
+    line-height: 1.2;
+  }
+
+  /* A day's note is the first thing in the day's right column, as on a computer; what is planned follows under it
+     (UX review). */
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-note {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text, inherit);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-note + .calendar-events {
+    flex: 1 1 100%;
+    margin-left: 108px;
+    margin-top: 6px;
+  }
+
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-events {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0;
+  }
+
+  /* "Nothing planned" stays quieter than a day's note (UX review). */
+  body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-empty {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted, #5c6b72);
+    font-size: 14px;
+    font-weight: 400;
+  }
+}

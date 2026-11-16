@@ -124,17 +124,24 @@ export function renderTrainingLoadHomeCardHtml(athleteToday) {
   `;
 }
 
-// Item 4 correction: a permanent, always-visible link to the athlete's own
-// weekly training-load overlay - unlike the Home card above (which only
-// ever reflects TODAY's own unrated count and disappears entirely once
-// that's zero), this stays reachable regardless, so a not-yet-rated
-// session from yesterday or earlier always has a real UI path.
-export function renderTrainingLoadWeekLinkHtml() {
-  return `
-    <button type="button" class="training-load-week-link" data-action="training-load-athlete-weekly-open">
-      This week's training load &rsaquo;
-    </button>
-  `;
+// The sessions of the week that wait for her rating: today or earlier, not rated yet - exactly the rows the overlay
+// offers "Rate session" on (a future day's session is "Not yet" there).
+export function athleteWeekWaitingCount(week, todayIso = localDateIso()) {
+  return athleteWaitingDays(week, todayIso).reduce((n, day) => n + day.sessions.filter((s) => !s.rated).length, 0);
+}
+function athleteWaitingDays(week, todayIso) {
+  return (week?.days || []).filter((day) => day.date <= todayIso && (day.sessions || []).some((s) => !s.rated));
+}
+
+// Owner, 2026-11-16 (item 2): one week on Home. The overlay is a button in Home's own "This week" row, named for what
+// waits there - "Rate your sessions (N)" while sessions of this week wait for her rating, "Your sessions" otherwise. It
+// is always there (item 4 correction): a not-yet-rated session from an earlier week is reached through it too.
+export function renderTrainingLoadWeekButtonHtml(homeWeek) {
+  const todayIso = localDateIso();
+  const waiting = athleteWeekWaitingCount(homeWeek?.data, todayIso);
+  const first = waiting ? athleteWaitingDays(homeWeek.data, todayIso)[0].date : "";
+  const label = waiting ? `Rate your sessions (${waiting})` : "Your sessions";
+  return `<button type="button" class="plain-button training-load-week-button${waiting ? " is-waiting" : ""}" data-action="training-load-athlete-weekly-open"${first ? ` data-first-waiting="${escapeAttr(first)}"` : ""}>${escapeHtml(label)} &rsaquo;</button>`;
 }
 
 // The "more than one session waiting" list - opened from the Home card,

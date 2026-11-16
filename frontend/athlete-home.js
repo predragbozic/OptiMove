@@ -1,6 +1,6 @@
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
-import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadHomeCardHtml, renderTrainingLoadWeekLinkHtml } from "./training-load-view.js";
+import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadHomeCardHtml, renderTrainingLoadWeekButtonHtml } from "./training-load-view.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, programInitials } from "./utils.js";
 
 // Same small local formatter tests-view.js already keeps for itself (not
@@ -62,7 +62,6 @@ export function renderAthleteHomeHtml({ data, error }) {
       ${renderAthleteHomeHeader(athlete, today)}
       ${renderWellnessCard(wellness)}
       ${renderTrainingLoadHomeCardHtml(state.trainingLoad.athleteToday)}
-      ${renderTrainingLoadWeekLinkHtml()}
       ${renderTodayCard(today)}
       ${renderWeekStrip(week)}
       ${renderQuickActions()}
@@ -133,7 +132,10 @@ function renderWeekStrip(week) {
   const days = week.days || [];
   return `
     <section class="athlete-home-week">
-      <p class="eyebrow">This week</p>
+      <div class="athlete-home-week-head">
+        <p class="eyebrow">This week</p>
+        ${renderTrainingLoadWeekButtonHtml(state.trainingLoad.athleteHomeWeek)}
+      </div>
       <div class="athlete-home-week-strip">
         ${days.map(renderWeekDay).join("")}
       </div>

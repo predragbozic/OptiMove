@@ -77,7 +77,10 @@ test("6. a hidden count stays hidden in the open phone menu, and the measured at
   assert.match(block, /body\.mobile-nav-open:not\(\.login-mode\) \.rail-button span\[hidden\] \{\s*display: none !important;/);
   // It must come after the rule that shows every rail span in the open menu, or it would lose.
   assert.ok(css.indexOf("body.mobile-nav-open:not(.login-mode) .rail-button span[hidden]") > css.indexOf("body.mobile-nav-open:not(.login-mode) .rail-button span {"));
-  for (const sel of [".training-load-week-link", ".training-load-athlete-weekly-panel .icon-button", ".tests-section-tabs .tab", ".athlete-simple-view button", '[data-action="notifications-read-all"]', ".brand-mark"]) {
+  // Item 2 (owner, 2026-11-16): the old "This week's training load" link is gone; its successor in Home's "This week" row
+  // carries its own 44 px.
+  assert.match(css, /\.training-load-week-button \{[^}]*min-height: 44px;/);
+  for (const sel of [".training-load-athlete-weekly-panel .icon-button", ".tests-section-tabs .tab", ".athlete-simple-view button", '[data-action="notifications-read-all"]', ".brand-mark"]) {
     assert.ok(block.includes(sel), sel);
   }
 });

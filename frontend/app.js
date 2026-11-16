@@ -99,7 +99,7 @@ import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
-import { loadPlannedRpeSetting, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
+import { loadPlannedRpeSetting, loadTrainingLoadAthleteHomeWeek, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import "./training-load-analysis-echarts.js";
 import { els } from "./dom.js";
@@ -2529,6 +2529,8 @@ async function loadAthleteHome({ forceRefresh = false } = {}) {
   return Promise.all([
     loadAthleteHomeData({ setLoading, renderAthleteHome, forceRefresh }),
     loadTrainingLoadAthleteToday().then(renderAthleteHomeFromCache),
+    // Owner, 2026-11-16 (item 2): the "This week" row counts the sessions waiting for her rating.
+    loadTrainingLoadAthleteHomeWeek(renderAthleteHomeFromCache),
   ]);
 }
 
