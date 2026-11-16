@@ -5,7 +5,7 @@
 // `icon:` value draws a neutral placeholder. The paths come from the generated
 // library and are written into attributes escaped all the same.
 import { ICON_ALIASES, ICON_CATEGORIES, ICONS } from "./icon-library.js";
-import { escapeAttr } from "./utils.js";
+import { escapeAttr, NO_REFERRER } from "./utils.js";
 
 export { ICON_CATEGORIES, ICONS };
 export const ICON_PREFIX = "icon:";
@@ -51,7 +51,7 @@ export function renderStoredIconHtml(value, options = {}) {
 // fallback markup when there is none.
 export function renderMetricIconHtml(iconUrl, { className = "", fallback = "" } = {}) {
   if (isStoredIconValue(iconUrl)) return renderStoredIconHtml(iconUrl, { size: 16, className });
-  if (iconUrl) return `<img src="${escapeAttr(iconUrl)}" alt=""${className ? ` class="${escapeAttr(className)}"` : ""} />`;
+  if (iconUrl) return `<img src="${escapeAttr(iconUrl)}" alt="" ${NO_REFERRER}${className ? ` class="${escapeAttr(className)}"` : ""} />`;
   return fallback;
 }
 

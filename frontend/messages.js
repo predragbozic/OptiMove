@@ -1,7 +1,7 @@
 import { api } from "./api.js";
 import { els } from "./dom.js";
 import { state } from "./state.js";
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { escapeAttr, escapeHtml, NO_REFERRER } from "./utils.js";
 import { imageSources } from "./media.js";
 import { fitPanelToViewport } from "./panel-fit.js";
 
@@ -583,7 +583,7 @@ function renderAvatarMarkup(imageUrl, name) {
   const sources = imageSources(imageUrl);
   if (!sources.length) return `<span class="message-avatar">${escapeHtml(initialsText)}</span>`;
   const fallbacks = sources.slice(1);
-  return `<img class="message-avatar message-avatar-photo" src="${escapeAttr(sources[0])}" alt="" data-initials="${escapeAttr(initialsText)}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}>`;
+  return `<img class="message-avatar message-avatar-photo" src="${escapeAttr(sources[0])}" alt="" ${NO_REFERRER} data-initials="${escapeAttr(initialsText)}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}>`;
 }
 
 function initials(name) {

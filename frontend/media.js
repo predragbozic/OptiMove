@@ -1,4 +1,4 @@
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { escapeAttr, escapeHtml, NO_REFERRER } from "./utils.js";
 
 export function toDrivePreviewUrl(url, options = {}) {
   const raw = String(url || "").trim();
@@ -41,7 +41,7 @@ export function renderImage(url, className, alt = "", previewUrl = "", { lazy = 
   const sources = imageSources(url);
   if (!sources.length) return "";
   const fallbacks = sources.slice(1);
-  return `<img class="${escapeAttr(className)}" src="${escapeAttr(sources[0])}" alt="${escapeAttr(alt)}"${lazy ? ' loading="lazy" decoding="async"' : ""}${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}${previewUrl ? ` data-preview-url="${escapeAttr(previewUrl)}"` : ""}>`;
+  return `<img class="${escapeAttr(className)}" src="${escapeAttr(sources[0])}" alt="${escapeAttr(alt)}" ${NO_REFERRER}${lazy ? ' loading="lazy" decoding="async"' : ""}${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}${previewUrl ? ` data-preview-url="${escapeAttr(previewUrl)}"` : ""}>`;
 }
 
 export function renderMediaThumb(url, fallbackLabel = "Image") {
@@ -225,8 +225,10 @@ export function mediaAccessAttributes(media) {
 // An <img> for an R2 asset: no address until the resolver (media-playback.js)
 // has asked the server for the row's `slot` in a batch; data-fallbacks are
 // the public addresses to try should it get none.
+// With public fallbacks (a person's own links, walked to when the stored picture fails) it carries NO_REFERRER, like
+// every picture drawn from such a link.
 export function renderAssetImage(mediaId, accessContext, className, { alt = "", fallbacks = [], attributes = "", slot = "image" } = {}) {
-  return `<img class="${escapeAttr(className)}" alt="${escapeAttr(alt)}" data-media-id="${escapeAttr(mediaId)}" data-media-slot="${escapeAttr(slot)}" data-media-access-context="${escapeAttr(encodeAccessContext(accessContext))}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"` : ""}${attributes ? ` ${attributes}` : ""}>`;
+  return `<img class="${escapeAttr(className)}" alt="${escapeAttr(alt)}" data-media-id="${escapeAttr(mediaId)}" data-media-slot="${escapeAttr(slot)}" data-media-access-context="${escapeAttr(encodeAccessContext(accessContext))}"${fallbacks.length ? ` data-fallbacks="${escapeAttr(JSON.stringify(fallbacks))}"${attributes.includes("referrerpolicy") ? "" : ` ${NO_REFERRER}`}` : ""}${attributes ? ` ${attributes}` : ""}>`;
 }
 
 // A row's picture by its image slot: an asset through the resolver, a legacy
