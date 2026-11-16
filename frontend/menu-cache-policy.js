@@ -129,6 +129,13 @@ export const MENU_CACHE_POLICIES = {
     rationale:
       "Wired into view-cache.js in feature/athlete-home-mvp. GET /api/athlete-home is filtered exclusively by the caller's own req.authz.athleteId (never a client-supplied id) - the backend always computes \"today\"/\"this week\" itself from the server clock, so account+workspace is the whole context key (athlete-home-data.js's athleteHomeContextKey), the exact same shape as coach-home's. Invalidated at the same two builder-actions.js exit points weekly/programs already use (exitBuilderToPlanContext, builder-delete-source-plan) - both the weekly AND the programs branches now call invalidateAthleteHomeCache(), since this one view aggregates both today/this-week training AND active specific programs in a single payload, unlike coach-home (today/this-week only) or programs (specific programs only) individually.",
   },
+  "my-training": {
+    label: "My training (athlete shell)",
+    policy: "always-refresh",
+    namespace: null,
+    rationale:
+      "The athlete's own recorded sessions and values (owner, 2026-11-16; my-training-data.js). Read again on every entry: a session recorded or imported a moment ago must show at once, and the reads are hers alone (GET /api/training-activity as the athlete, the server's own scope). The entry itself is the server's GET /api/training-activity/self answer, read with Home.",
+  },
   "athlete-settings": {
     label: "Account (athlete shell)",
     policy: "static",

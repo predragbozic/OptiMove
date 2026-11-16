@@ -89,6 +89,9 @@ import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
+import { enterMyTraining, handleMyTrainingAction, handleMyTrainingBack, refreshMyTrainingEntry } from "./my-training-actions.js";
+import { resetMyTraining } from "./my-training-data.js";
+import { renderMyTrainingHtml } from "./my-training-view.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
@@ -2239,6 +2242,9 @@ function handleAppBack() {
   // at the overlay's own root day/block list.
   if (closeSpecificProgramOverlay()) return true;
 
+  // My training: an open session closes back to her list.
+  if (state.activeTab === "my-training" && handleMyTrainingBack(renderMyTraining)) return true;
+
   // Imports P4: the phone's period sheet closes before anything else of the screen (a hidden athlete list included).
   // P5: the help closes first, and the focus goes back to "How importing works".
   const backHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);
@@ -2376,6 +2382,7 @@ async function loadActiveTab() {
   if (state.activeTab === "coach-home") return loadCoachHome();
   if (state.activeTab === "central-calendar") return loadCentralCalendar();
   if (state.activeTab === "athlete-home") return loadAthleteHome();
+  if (state.activeTab === "my-training") return loadMyTraining();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
   if (state.activeTab === "templates") return loadTemplates();
@@ -2531,7 +2538,23 @@ async function loadAthleteHome({ forceRefresh = false } = {}) {
     loadTrainingLoadAthleteToday().then(renderAthleteHomeFromCache),
     // Owner, 2026-11-16 (item 2): the "This week" row counts the sessions waiting for her rating.
     loadTrainingLoadAthleteHomeWeek(renderAthleteHomeFromCache),
+    // "My training" (owner, 2026-11-16): the entry shows only once the server says she has a recorded session.
+    refreshMyTrainingEntry({ render: () => { renderLibraryNav(); renderAthleteHomeFromCache(); } }),
   ]);
+}
+
+// The athlete's own recorded sessions and values (owner, 2026-11-16), read-only.
+async function loadMyTraining() {
+  state.navStack = [];
+  els.context.textContent = "Your sessions";
+  els.title.textContent = "My training";
+  els.toolbar.innerHTML = "";
+  return enterMyTraining({ render: renderMyTraining });
+}
+
+function renderMyTraining() {
+  if (state.activeTab !== "my-training") return;
+  els.content.innerHTML = renderMyTrainingHtml();
 }
 
 // state.lastAthleteHomeData is the only way a training-load athlete action
@@ -2851,6 +2874,10 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  if (type?.startsWith("my-training-")) {
+    await handleMyTrainingAction(action, { render: renderMyTraining, pushHistory: pushAppHistory });
+    return;
+  }
   if (type?.startsWith('training-load-simple-') && action.matches('input, select, textarea')) return;
   // 3B3 UX slice: clicking anywhere in the Analysis From/To field (not just
   // the tiny native calendar-icon glyph) opens the date picker. The label
@@ -3182,6 +3209,7 @@ function renderCurrentNode() {
   if (state.activeTab === "coach-account") return renderCoachAccount();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
   if (state.activeTab === "tests") return renderTests();
+  if (state.activeTab === "my-training") return renderMyTraining();
 }
 
 function moveWeek(delta) {
@@ -3400,6 +3428,9 @@ async function onWorkspaceChanged() {
   // later re-entry into it never renders a stale cross-workspace flash
   // before its own fresh fetch lands).
   resetTrainingLoadForWorkspaceChange();
+  // My training is the athlete workspace's own: nothing of another workspace's answer is kept.
+  resetMyTraining();
+  if (state.activeTab === "my-training") state.activeTab = isAthleteMode() ? "athlete-home" : "coach-home";
   renderTabs();
   renderLibraryNav();
   if (["organization", "coach-home", "central-calendar", "coaches", "templates", "exercises", "tests", "training-load"].includes(state.activeTab)) setLoading("Loading workspace...");
