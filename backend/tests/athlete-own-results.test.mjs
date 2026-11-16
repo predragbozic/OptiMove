@@ -116,7 +116,7 @@ const list = (who) => call(`/api/training-activity?dateFrom=${DAY}&dateTo=${DAY}
 const calendar = (who) => call(`/api/training-load/calendar?dateFrom=${DAY}&dateTo=${DAY}`, { cookie: who.cookie });
 const keys = (o) => Object.keys(o).sort();
 // Ana's and Bea's values are numbers nobody else has, so a leak of the other's shows in the text.
-const ANA = { sys: 111.25, club: 222.5, team: 333.75, drill1: 444.25, drill2: 555.25, loose: 666.25 };
+const ANA = { sys: 111.25, club: 222.5, team: 333.75, drill1: 444.25, drill2: 555.25, loose: 666.25, foreign: 677.25, suggested: 688.25 };
 const BEA = { sys: 7771.5, club: 7772.5, team: 7773.5, extra: 7774.5 };
 
 async function world() {
@@ -140,6 +140,9 @@ async function world() {
   W.ema = await athleteIn(W.clubA, W.teamA1, { withUser: true });
   // Ana is also a member of the team that gets archived.
   await k.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [W.ana.id, W.clubA, W.teamA3]);
+  // The roster lists by name: Dana first and Bea last, so "the first athlete's state" is never Bea's by accident.
+  await k.query(`update public.athletes set display_name = 'Aaa Example', full_name = 'Aaa Example' where id = $1`, [W.dana.id]);
+  await k.query(`update public.athletes set display_name = 'Zzz Example', full_name = 'Zzz Example' where id = $1`, [W.bea.id]);
   for (const a of [W.ana, W.bea, W.cy]) a.name = (await one(`select display_name as n from public.athletes where id = $1`, [a.id])).n;
 
   W.sysVar = await variable(W.pa.cookie, { label: `System Load ${uid()}`, unit: "AU" });
@@ -155,13 +158,18 @@ async function world() {
   // G: a group session of A1 with Ana and Bea; Bea has one variable Ana does not.
   // Ana also has a value in each of three drills; the third drill is then left without a component.
   W.actG = await recorded(W.writerA1, [
-    [W.ana, [[W.sysVar, ANA.sys], [W.clubVar, ANA.club], [W.teamVar, ANA.team], [W.drillVar, ANA.drill1, 0], [W.drillVar, ANA.drill2, 1], [W.drillVar, ANA.loose, 2]]],
+    [W.ana, [[W.sysVar, ANA.sys], [W.clubVar, ANA.club], [W.teamVar, ANA.team], [W.drillVar, ANA.drill1, 0], [W.drillVar, ANA.drill2, 1], [W.drillVar, ANA.loose, 2], [W.drillVar, ANA.foreign, 3], [W.drillVar, ANA.suggested, 4]]],
     [W.bea, [[W.sysVar, BEA.sys], [W.clubVar, BEA.club], [W.teamVar, BEA.team], [W.clubOnlyBea, BEA.extra]]],
-  ], [{ label: "Source Drill One", order: 1 }, { label: "Source Drill Two", order: 2 }, { label: "Source Drill Three", order: 3 }]);
+  ], [{ label: "Source Drill One", order: 1 }, { label: "Source Drill Two", order: 2 }, { label: "Source Drill Three", order: 3 }, { label: "Source Drill Four", order: 4 }, { label: "Source Drill Five", order: 5 }]);
   W.drillComponents = (await k.query(`select l.activity_component_id as id, s.segment_order as n, s.id as segment_id from training.activity_component_metric_segment_links l
      join training_load.metric_event_segments s on s.id = l.metric_event_segment_id join training.activity_components c on c.id = l.activity_component_id where c.activity_id = $1 order by s.segment_order`, [W.actG])).rows;
-  assert.equal(W.drillComponents.length, 3);
+  assert.equal(W.drillComponents.length, 5);
   await k.query(`delete from training.activity_component_metric_segment_links where metric_event_segment_id = $1`, [W.drillComponents[2].segment_id]);
+  // The fifth drill's link is only a suggestion, not confirmed.
+  await k.query("begin");
+  await k.query("set local session_replication_role = replica");
+  await k.query(`update training.activity_component_metric_segment_links set link_status = 'suggested' where metric_event_segment_id = $1`, [W.drillComponents[4].segment_id]);
+  await k.query("commit");
   // The team's variable is archived after the session: her value still has its name.
   await k.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [W.teamVar.id]);
   // A drill of that session, performed by both, each with a note and a prescription.
@@ -173,6 +181,13 @@ async function world() {
   }
   // Only Bea; only Cy (another club); Ana on the team that is then archived.
   W.actBea = await recorded(W.coachA1, [[W.bea, [[W.sysVar, 7780.5]]]]);
+  // The fourth drill's link is pointed at a component of ANOTHER session (as a broken or hostile row would be).
+  W.foreignComponent = (await one(`insert into training.activity_components (activity_id, component_type_key, name_snapshot, sort_order, origin)
+     select $1, (select key from training.component_types order by key limit 1), 'Foreign drill of another session', 1, 'manual' returning id`, [W.actBea])).id;
+  await k.query("begin");
+  await k.query("set local session_replication_role = replica");
+  await k.query(`update training.activity_component_metric_segment_links set activity_component_id = $1 where metric_event_segment_id = $2`, [W.foreignComponent, W.drillComponents[3].segment_id]);
+  await k.query("commit");
   W.actCy = await recorded(W.coachB1, [[W.cy, [[W.sysVar, 8880.5]]]]);
   W.actArchived = await recorded(W.coachA3, [[W.ana, [[W.sysVar, 999.5]]]]);
   await k.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [W.bea.id, W.clubA, W.teamA3]);
@@ -190,7 +205,7 @@ test("1. the detail: only her own facts, each a fixed list of fields; names and 
   // What a coach reads (and so what exists to be hidden): both athletes, the link-only fact, the bookkeeping ids, the notes.
   assert.deepEqual(keys(coach.body), ["athleteNamesById", "canonicalActivityId", "components", "facts", "variableNamesById"]);
   assert.ok(coach.body.facts.some((f) => f.factKind === "metric_event_link" && f.athleteId === null), "the activity has a link-only fact");
-  assert.equal(coach.body.facts.filter((f) => f.factKind === "metric_value").length, 10);
+  assert.equal(coach.body.facts.filter((f) => f.factKind === "metric_value").length, 12);
   assert.ok(coach.text.includes("ana-coach-note-zeta") && coach.text.includes("bea-coach-note-omega") && coach.text.includes("occasionId") && coach.text.includes("entryMethod"));
 
   const res = await detail(W.ana, W.actG);
@@ -211,8 +226,11 @@ test("1. the detail: only her own facts, each a fixed list of fields; names and 
   assert.deepEqual(placed, [
     [W.sysVar.id, ANA.sys, "session", null, null], [W.clubVar.id, ANA.club, "session", null, null], [W.teamVar.id, ANA.team, "session", null, null],
     [W.drillVar.id, ANA.drill1, "drill", W.drillComponents[0].id, 1], [W.drillVar.id, ANA.drill2, "drill", W.drillComponents[1].id, 2], [W.drillVar.id, ANA.loose, "drill", null, 3],
+    // A link to a component that is not of this session, and a link that is not confirmed, place nothing.
+    [W.drillVar.id, ANA.foreign, "drill", null, 4], [W.drillVar.id, ANA.suggested, "drill", null, 5],
   ]);
-  assert.equal(new Set(values.map((f) => f.detail.valueKey)).size, 6, "one key per value");
+  assert.ok(!res.text.includes(W.foreignComponent) && !res.text.includes("Foreign drill"), "nothing of the other session");
+  assert.equal(new Set(values.map((f) => f.detail.valueKey)).size, 8, "one key per value");
   const again = await detail(W.ana, W.actG);
   assert.equal(again.text, res.text, "the same answer, keys included, on every read");
   for (const segment of W.drillComponents) assert.ok(!res.text.includes(segment.segment_id), "no segment id");
@@ -221,7 +239,7 @@ test("1. the detail: only her own facts, each a fixed list of fields; names and 
   assert.deepEqual(keys(performed[0]), ["detail", "factKind"]);
   assert.deepEqual(performed[0].detail, { componentId: W.drill, name: "Passing drill", componentTypeKey: performed[0].detail.componentTypeKey, status: "performed", actualDurationSeconds: 540 });
   assert.deepEqual([...new Set(res.body.facts.map((f) => f.factKind))].sort(), ["component_performance", "metric_value"], "no link-only fact, no other kind");
-  assert.equal(res.body.facts.length, 7);
+  assert.equal(res.body.facts.length, 9);
   // Names: exactly her three variables, whoever owns them (system, club, team) - three closed fields each.
   // The team's variable was archived after the session: results are history, it keeps its name.
   assert.deepEqual(res.body.variableNamesById, {
@@ -231,7 +249,7 @@ test("1. the detail: only her own facts, each a fixed list of fields; names and 
     [W.teamVar.id]: { label: W.teamVar.label, shortLabel: null, unit: "count" },
   });
   // The session's own structure.
-  assert.equal(res.body.components.length, 4, "the three drills of the recording and the one added by hand");
+  assert.equal(res.body.components.length, 6, "the five drills of the recording and the one added by hand");
   for (const c of res.body.components) assert.deepEqual(keys(c), ["actualDurationSeconds", "componentTypeKey", "id", "name", "parentComponentId", "plannedDurationSeconds", "sortOrder"]);
   assert.deepEqual(res.body.components.find((c) => c.id === W.drill), { id: W.drill, parentComponentId: null, componentTypeKey: performed[0].detail.componentTypeKey, name: "Passing drill", sortOrder: 1, plannedDurationSeconds: 600, actualDurationSeconds: null });
   for (const d of W.drillComponents.slice(0, 2)) assert.ok(res.body.components.some((c) => c.id === d.id), "a placed value points into the structure");
@@ -368,6 +386,8 @@ test("7. her attendance and how her values were recorded; a club archived later;
   assert.equal(own.body.myAttendance, "participated_no_device_data");
   const absent = await put(W.actBea, W.bea, { kind: "did_not_participate", reasonKey: "illness", note: "absent-note-kappa", expectedDecisionId: said.body.decision.id });
   assert.equal(absent.status, 200, absent.text);
+  // Another athlete of the roster (the first by name) has another state in the same session: hers is her own.
+  assert.equal((await put(W.actBea, W.dana, { kind: "participated_no_values" })).status, 200);
   own = await detail(W.bea, W.actBea);
   assert.equal(own.body.myAttendance, "did_not_participate");
   for (const hidden of ["vest-forgotten-note", "absent-note-kappa", "illness", "reasonKey", "decidedBy", W.coachA1.id, "decision"]) assert.ok(!own.text.includes(hidden), hidden);
@@ -388,6 +408,35 @@ test("7. her attendance and how her values were recorded; a club archived later;
   const items = (await calendar(W.bea)).body.days.flatMap((d) => d.items);
   assert.equal(items.find((i) => i.activityId === W.actBea).recordedBy, "device");
   assert.equal(items.find((i) => i.activityId === W.actG).recordedBy, "coach");
+  // In a session of two, the OTHER athlete's value is a device's and only the other was asked for and gave an RPE:
+  // her list and calendar still say "coach", and her RPE is her own (asked: no).
+  await k.query("begin");
+  await k.query("set local session_replication_role = replica");
+  await k.query(`update training_load.metric_measurement_occasions o set entry_method = 'api_import'
+     from training.activity_participant_metric_participant_links mpl join training.activity_participants ap on ap.id = mpl.activity_participant_id
+     where o.event_participant_id = mpl.metric_event_participant_id and ap.activity_id = $1 and ap.athlete_id = $2`, [W.actDual, W.bea.id]);
+  await k.query("commit");
+  const schedule = (await one(`insert into training_load.external_schedules (schedule_kind, timezone, start_date, opens_time, closes_time, status, event_name, created_by_user_id, owner_scope, owner_team_id)
+     values ('one_time','UTC',$1,'00:00','23:59','active','Fixture event',$2,'team',$3) returning id`, [DAY, W.coachA1.id, W.teamA1])).id;
+  const occurrence = (await one(`insert into training_load.external_schedule_occurrences (schedule_id, scheduled_date, opens_at, closes_at) values ($1,$2,$3,$4) returning id`, [schedule, DAY, `${DAY}T00:00:00Z`, `${DAY}T23:59:00Z`])).id;
+  const asked = async (athlete, rpe) => {
+    const assignment = (await one(`insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, closes_at) values ($1,$2,'UTC',$3,$4,$5) returning id`,
+      [occurrence, athlete.id, DAY, `${DAY}T00:00:00Z`, `${DAY}T23:59:00Z`])).id;
+    await k.query(`insert into training.activity_participant_session_links (activity_participant_id, athlete_id, external_assignment_id, link_method, link_status, confirmed_by_user_id, confirmed_at, created_by_user_id)
+       select ap.id, ap.athlete_id, $3, 'manual', 'confirmed', $4, now(), $4 from training.activity_participants ap where ap.activity_id = $1 and ap.athlete_id = $2`, [W.actDual, athlete.id, assignment, W.coachA1.id]);
+    if (rpe) await k.query(`insert into training_load.session_feedback (athlete_id, session_date, external_assignment_id, source, rpe, duration_minutes, event_name) values ($1,$2,$3,'scheduled_external',$4,60,'Fixture event')`, [athlete.id, DAY, assignment, rpe]);
+  };
+  await asked(W.bea, 7);
+  const dualItem = async () => (await calendar(W.dual)).body.days.flatMap((d) => d.items).find((i) => i.activityId === W.actDual);
+  assert.deepEqual([(await dualItem()).recordedBy, (await dualItem()).rpe], ["coach", null], "the other's device and the other's RPE are not hers");
+  assert.equal((await list(W.dual)).body.rows.find((r) => r.activityId === W.actDual).recordedBy, "coach");
+  assert.equal((await detail(W.dual, W.actDual)).body.recordedBy, "coach");
+  await asked(W.dual, null);
+  assert.deepEqual((await dualItem()).rpe, { requested: 1, rated: 0 }, "she was asked and has not answered; the other's answer is not counted");
+  // Bea's own RPE in that session, through the route: three fields.
+  const beaDual = await detail(W.bea, W.actDual);
+  assert.deepEqual(beaDual.body.facts.find((f) => f.factKind === "rpe"), { factKind: "rpe", detail: { rpe: 7, durationMinutes: 60, srpe: 420 } });
+  assert.deepEqual((await calendar(W.bea)).body.days.flatMap((d) => d.items).find((i) => i.activityId === W.actDual).rpe, { requested: 1, rated: 1 });
 
   // An athlete of the team with a decision about her and NO value in the session is not a participant of it: the
   // session is not hers to open (the same 404) and is not in her list. (Recorded as it is today; whether a session
