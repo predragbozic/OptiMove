@@ -26,7 +26,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
 const V66 = "202611131000_training_load_v66_club_activation_confirmation_gate.sql";
 const V66_NAME = `migrations_v2/${V66}`;
-const BEFORE_V66 = GPEXE_TEST_MIGRATIONS.filter((m) => m !== V66);
+// The rehearsal database is production's state when v66 was applied: every test migration up to v69 by FILE NAME
+// (v67-v69 reached production before v66), never v66 itself and never a later migration (v72 and on came after v66).
+// Selected by name, not by position in the list, so a migration added to the list later never moves this window.
+const LAST_BEFORE_V66 = "202611131310_training_load_v69_scale_recording_estimates.sql";
+const BEFORE_V66 = GPEXE_TEST_MIGRATIONS.filter((m) => m !== V66 && m <= LAST_BEFORE_V66);
 const V65_NAME = `migrations_v2/${BEFORE_V66.find((m) => m.includes("_v65_"))}`;
 // MT-A's migration: merged after v66 and on production before it, and later than v66 by file name. The rehearsal
 // database therefore holds it before v66 is applied, exactly as production does.
@@ -75,7 +79,9 @@ async function migrate(url, files, { extra = null } = {}) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V66), "v66 is a test migration");
-  assert.deepEqual(BEFORE_V66.slice(-4).map((m) => `migrations_v2/${m}`), [V65_NAME, V67_NAME, V68_NAME, V69_NAME], "the database v66 is applied to holds v67, v68 and v69, as production will; v66's own previous migration is v65");
+  assert.ok([V65_NAME, V67_NAME, V68_NAME, V69_NAME].every((n) => BEFORE_V66.map((m) => `migrations_v2/${m}`).includes(n)), "the database v66 is applied to holds v65, v67, v68 and v69, as production did");
+  assert.equal(`migrations_v2/${BEFORE_V66.at(-1)}`, V69_NAME, "and nothing later than v69");
+  assert.ok(!BEFORE_V66.includes(V66));
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66rb", migrations: BEFORE_V66 }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66", migrations: [...BEFORE_V66, V66] }),
