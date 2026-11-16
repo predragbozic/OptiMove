@@ -121,7 +121,7 @@ export function renderFixSheetHtml(gx, status, h) {
             : h.checkErrorText(err))
         : `Search GPEXE again${day ? ` for ${day}` : ""} to read this session before importing.`)}</p>${err ? h.errorTech(err) : ""}`;
       const running = Boolean(gx.checkStarting || gx.check?.status === "running");
-      actions = skip() + button("primary-button", "training-load-gpexe-fix-search", err ? "Search again" : day ? `Search ${day}` : "Search this day", { disabled: running || !h.day });
+      actions = skip() + button("primary-button", "training-load-gpexe-fix-search", err ? "Find new sessions again" : day ? `Find new sessions for ${day}` : "Find new sessions for this day", { disabled: running || !h.day });
     }
   } else if (view.screen === "updating") {
     body = `<p class="imports-fix-sentence" role="status">Updating the review...</p>`;

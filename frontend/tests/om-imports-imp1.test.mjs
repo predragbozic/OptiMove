@@ -216,7 +216,7 @@ test("IMP1 6: the CSS is coach-side only, its main button fill stays inside Impo
   assert.match(block, /\.imports-tab-panel \.gpexe-candidate-list > li \{\n  border-bottom: 1px solid var\(--line\);/);
 });
 
-test("IMP1 8: on Needs you the person's own step leads and one line opens Ready; a row never names an action (its group has the one button)", async () => {
+test("IMP1 8: on Needs you the person's own step leads; the counts are said in the bar and the tabs only; a row never names an action (its group has the one button)", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), unlinked(2)] }));
   await openImports();
@@ -224,18 +224,20 @@ test("IMP1 8: on Needs you the person's own step leads and one line opens Ready;
   // Fix flow (slice 1): for a coach the group's step opens the Fix sheet.
   assert.match(page, /<div class="imports-attn-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-fix"/, "the group's step is the filled button");
   assert.match(page, /class="plain-button gpexe-button imports-find-phone" data-action="training-load-gpexe-period-toggle"/, "the search is plain here");
-  assert.match(page, /1 session is ready to import\. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready<\/button>/);
+  assert.match(page, /imports-lastsearch">[^<]*· 1 ready · 1 needs you</, "the bar counts");
+  assert.doesNotMatch(page, /imports-ready-hint|ready to import\. <button/, "no inner 'N ready' line repeats them");
   assert.doesNotMatch(page, /imports-row-action/, "no label on a row");
   const calls = fetchCalls.length;
   await act("training-load-gpexe-tab", { importTab: "ready" });
   assert.equal(fetchCalls.length, calls);
   assert.equal(activeTab(), "ready");
-  // Nothing needs the person, sessions are ready: the empty tab says so and opens Ready.
+  // Nothing needs the person, sessions are ready: the empty tab says so; the tabs carry the count.
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2)] }));
   await openImports();
   await act("training-load-gpexe-tab", { importTab: "attention" });
-  assert.match(html(), /2 sessions are ready to import\.[\s\S]*Show ready[\s\S]*Nothing needs you\./);
+  assert.match(html(), /Nothing needs you\./);
+  assert.doesNotMatch(html(), /Show ready/);
 });
 
 test("IMP1 9: the Imports main button rule sets only colours (every button keeps its own size), and 'Choose sessions' reads as a fold", () => {

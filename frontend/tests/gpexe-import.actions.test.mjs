@@ -1748,24 +1748,31 @@ test("Imports: with no team in the workspace there is one sentence and the exist
   assert.ok(!/workspace-toggle/.test(html), "no button that would open nothing");
 });
 
-test("Imports: the main button's notes say 'review only' while importing is switched off, and when the viewer may not approve (U6a: once, under the button)", async () => {
-  for (const [teamStatus, phrase] of [
-    [{ enabled: false, canApprove: true }, /Review only - importing waits until it is turned on in this environment\./],
-    [{ enabled: true, canApprove: false }, /Review only - an approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
-  ]) {
+test("Imports: the Ready tab says once, at its top, why it is review only - in plain words per viewer; the platform admin keeps the rule words", async () => {
+  const cases = [
+    [null, { enabled: false, canApprove: true }, /You can review these\. Importing is not turned on yet\./],
+    [null, { enabled: true, canApprove: false }, /You can review these\. Ask your club administrator to import them\./],
+    [adminView, { enabled: true, canApprove: false }, /You can review these\. Contact OptiMove support to import them\./],
+    [platformView, { enabled: false, canApprove: true }, /Review only - importing waits until it is turned on in this environment\./],
+    [platformView, { enabled: true, canApprove: false }, /Review only - an approver imports these \(a platform admin, or a coach with approval rights for this team\)\./],
+  ];
+  for (const [as, teamStatus, phrase] of cases) {
     resetState();
+    if (as) as();
     installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: teamStatus } }));
     await openImports();
     const html = renderTrainingLoadCoachHtml();
-    const notes = html.slice(html.indexOf('class="imports-daily"'), html.indexOf("</div>", html.indexOf('class="imports-daily"')));
-    assert.match(notes, phrase);
+    const top = html.slice(html.indexOf("<h3>Ready to import"), html.indexOf('class="gpexe-candidate-list"'));
+    assert.match(top, phrase);
+    assert.equal((html.match(/class="imports-review-only"/g) || []).length, 1, "said once");
+    if (!as || as === adminView) assert.ok(!/approver|approval rights/i.test(html.replace(/data-[a-z-]+="[^"]*"/g, "")), "no 'approver' for a coach or a club admin");
   }
   // A viewer who may approve, with the switch on: no note at all.
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: true, canApprove: true } } }));
   await openImports();
   const html = renderTrainingLoadCoachHtml();
-  assert.ok(!/Review only -/.test(html), "no review-only note for an approver with the switch on");
+  assert.ok(!/imports-review-only/.test(html), "no review-only note for an approver with the switch on");
 });
 
 test("Imports: the source card shows the source name, the connection, when sessions were found and one button; ids, statuses and the server's sentence stay under Technical details", async () => {
@@ -1833,10 +1840,10 @@ test("Imports: a failed check shows its own code and message beside its status; 
   assert.ok(!/gpexe-tech/.test(ok), "P2: no Technical details for a coach");
 });
 
-test("Imports: while importing is off, or the viewer may not approve, the screen never says 'import' - it says review, once, under the main button", async () => {
+test("Imports: while importing is off, or the viewer may not approve, the Ready tab says once that it is for review, with who imports", async () => {
   for (const [teamStatus, phrase] of [
-    [{ enabled: false, canApprove: true }, /<div class="imports-daily"[^>]*><p class="muted">Review only - importing waits until it is turned on in this environment\.<\/p>/],
-    [{ enabled: true, canApprove: false }, /<div class="imports-daily"[^>]*><p class="muted">Review only - an approver imports these \(a platform admin, or a coach with approval rights for this team\)\.<\/p>/],
+    [{ enabled: false, canApprove: true }, /<p class="imports-review-only">You can review these\. Importing is not turned on yet\.<\/p>/],
+    [{ enabled: true, canApprove: false }, /<p class="imports-review-only">You can review these\. Ask your club administrator to import them\.<\/p>/],
     [{ enabled: true, canApprove: true }, /<h3>Ready to import \(1\)<\/h3>/],
   ]) {
     resetState();
@@ -1844,7 +1851,7 @@ test("Imports: while importing is off, or the viewer may not approve, the screen
     await openImports();
     const page = renderTrainingLoadCoachHtml();
     assert.match(page, phrase);
-    assert.ok((page.match(/Review only -/g) || []).length <= 1, "the reason is said once");
+    assert.ok((page.match(/You can review these/g) || []).length <= 1, "the reason is said once");
     assert.ok(!/class="gpexe-next"/.test(page));
   }
 });
@@ -3048,6 +3055,7 @@ test("P1 1: the coach and the club admin get the simple review; the platform adm
     // O5: who to ask, and who imports.
     const imports = { coach: "You can't import this session. Ask your club administrator.", "club admin": "You can't import this session. Contact OptiMove support.", "platform admin": "Approving needs a platform admin or an explicit approver grant for this team." }[who];
     assert.ok(html.includes(imports), `${who}: ${imports}`);
+    if (who !== "platform admin") assert.ok(!/approver|approval rights/i.test(html.replace(/data-[a-z-]+="[^"]*"/g, "")), `${who}: never the word 'approver'`);
     // The chips speak the tab's word.
     assert.match(html, /data-filter="needs"[^>]*>Needs you </, `${who}: Needs you`);
     assert.ok(!/Needs a person/.test(html));

@@ -24,7 +24,7 @@ import { importedActivityOf, renderEstimateTargetsHtml } from "./gpexe-estimate-
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
 import { lastImportedDay, monthCounts, periodText, renderPeriodHtml, shownMonth } from "./gpexe-period-view.js";
-import { periodOf } from "./gpexe-period-data.js";
+import { periodOf, sessionDay } from "./gpexe-period-data.js";
 import { renderImportsHelpHtml } from "./gpexe-help-view.js";
 import { renderFixSheetHtml } from "./gpexe-fix-view.js";
 import { FIX_GROUPS } from "./gpexe-fix-data.js";
@@ -554,7 +554,11 @@ function bannerText(gx, check) {
   const needs = list.filter((c) => inboxBucket(c, gx) === "attention").length;
   const when = check?.finishedAt || check?.startedAt;
   // Honest: OptiMove does not look in GPEXE by itself yet, so the banner says what the last search found, not what waits.
-  const head = when ? `Last search ${shortWhen(when) || fmtDateTime(when)}` : "No search yet";
+  // A search made on one day for earlier days says which days it read, so "Find new sessions" (from its last day to today)
+  // never seems to contradict it.
+  const win = check?.window;
+  const read = when && win?.from && win?.to && check.status === "succeeded" && win.to < sessionDay(when) ? `, for ${periodText(win.from, win.to)}` : "";
+  const head = when ? `Last search ${shortWhen(when) || fmtDateTime(when)}${read}` : "No search yet";
   // IMP3 (the sketch's "Everything from GPEXE is imported."): only after a search that succeeded, with nothing ready,
   // nothing that needs the person and at least one session imported - never after a failed, stopped or unknown search,
   // and never from a list read before that search ended.
@@ -595,28 +599,33 @@ function renderSourceCardHtml(source, gx, status) {
       ${gx.checkError ? `<div class="gpexe-error" role="alert"><p>${escapeHtml(checkErrorText(gx.checkError))}</p>${errorTech(gx.checkError)}</div>` : ""}
       ${check && check.status !== "succeeded" ? renderCheckSummaryHtml(check, source) : ""}
     </section>
-    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month) }) : ""}
-    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open, !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month)) : ""}
+    ${connected ? renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month), monthFacts: gx.candidates && !listsAllStates(status) ? monthFactsText(gx, suggested?.to || "") : "" }) : ""}
+    ${connected && gx.candidates && !listsAllStates(status) ? renderMonthLineHtml(gx, suggested?.to || "", open) : ""}
   `;
 }
 
 
 // P4c: a coach and a club admin get no Imported or Stays out list - those sessions live in the calendar. One quiet line
 // counts the month the calendar shows (it follows paging); on a phone it opens the calendar sheet.
-function renderMonthLineHtml(gx, suggestedTo, open, capped = false) {
-  const now = new Date();
-  const { month, name } = shownMonth(gx, now, suggestedTo);
+// The month the calendar shows, by state, said inside the calendar under its month name (so the month is the subject).
+// An empty month names the last import, so "nothing" never reads as "nothing ever imported" (UX review).
+function monthFactsText(gx, suggestedTo) {
+  const { month } = shownMonth(gx, new Date(), suggestedTo);
+  const n = monthCounts(gx, month);
+  const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out (not imported)` : ""].filter(Boolean).join(" · ");
+  if (facts) return `${facts} · pick a day to open one`;
+  const last = lastImportedDay(gx);
+  return `Nothing imported this month${last && !last.startsWith(month) ? ` · the last import is on ${periodText(last, last)}` : ""}`;
+}
+
+// A phone hides the calendar until "Find new sessions" opens it: one quiet button whose subject is the calendar.
+function renderMonthLineHtml(gx, suggestedTo, open) {
+  const { month, name } = shownMonth(gx, new Date(), suggestedTo);
   const n = monthCounts(gx, month);
   const facts = [n.imported ? `${n.imported} imported` : "", n.out ? `${n.out} ${n.out === 1 ? "stays" : "stay"} out` : ""].filter(Boolean).join(" · ");
-  // UX review: an empty month names the last import, so "nothing" never reads as "nothing ever imported".
-  const last = facts ? "" : lastImportedDay(gx);
-  const head = [facts ? `${facts} in ${name}` : `Nothing imported in ${name}`, last && !last.startsWith(month) ? `the last import is on ${periodText(last, last, now)}` : "", capped ? "older sessions may not be shown" : ""].filter(Boolean).join(" · ");
-  const desk = facts ? `${head} · pick a day in the calendar to open one` : head;
-  const phone = `${head} · open the calendar`;
   return `
     <p class="muted imports-month-line">
-      <span class="imports-month-desk">${escapeHtml(desk)}</span>
-      <button type="button" class="plain-button gpexe-button imports-month-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period">${escapeHtml(phone)}</button>
+      <button type="button" class="plain-button gpexe-button imports-month-phone" data-action="training-load-gpexe-period-toggle" aria-expanded="${open ? "true" : "false"}" aria-controls="imports-period">${escapeHtml(`Open the calendar · ${name}: ${facts || "nothing imported"}`)}</button>
     </p>
   `;
 }
@@ -860,11 +869,17 @@ function findAgainText(list) {
 }
 
 // Why the Ready sessions cannot be imported right now, or "" when they can.
-// U6a: said once, under the state bar's main button, so the coach never reads an
-// import instruction that the next screen refuses.
+// Said once, at the top of the Ready tab, so the coach never reads an import instruction that the next screen refuses.
+// A coach and a club admin read it in plain words, with the contact their own role has (askWho); the platform admin keeps
+// the words of the rules (environment switch, team switch, approver grant).
 function reviewOnlyText(status) {
   const sw = status.importSwitch || {};
   const viewer = status.viewer || {};
+  if (!platformViewer()) {
+    if (!sw.enabled) return "You can review these. Importing is not turned on yet.";
+    if (status.teamImportSwitch && status.teamImportSwitch.enabled !== true) return "You can review these. Importing is switched off for this team."; // the team switch line says who turns it on
+    return viewer.canApprove ? "" : `You can review these. ${AskWho()} to import them.`;
+  }
   if (!sw.enabled) return "Review only - importing waits until it is turned on in this environment.";
   // U2 (v56): the team's own switch comes before the person's right.
   if (status.teamImportSwitch && status.teamImportSwitch.enabled !== true) return "Review only - imports are switched off for this team.";
@@ -887,7 +902,7 @@ function renderNextStepHtml(gx, status, source = IMPORT_SOURCES[0]) {
   else if (gx.checkStarting || check?.status === "running") text = "Finding new sessions...";
   // U6a / U6a-2: what the state bar and the attention groups below already say is not repeated here.
   else if (stale.length || unlinkedAthletes || attention) text = "";
-  // The review-only reason is said once, under the main button (renderDailyStripHtml).
+  // The review-only reason is said once, at the top of the Ready tab.
   else if (ready.length) text = "";
   else if (!list.length && check?.status === "succeeded") text = `No sessions in ${source.name} for ${formatDate(check.window?.from)} - ${formatDate(check.window?.to)}. Choose other dates and find again.`;
   // A failed search is not "nothing found": its reason is in the box above.
@@ -921,11 +936,8 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     // U6a-2: the groups cover the whole list, like the counts.
     const allAttention = all.filter((c) => inboxBucket(c, gx) === "attention");
     const groups = attentionGroups(allAttention, gx);
-    // IMP1: what is ready waits a tab away - one quiet line says so and opens it (local, nothing is sent).
-    const readyCount = readyNow(all, gx).length;
-    const readyHint = readyCount ? `<p class="imports-ready-hint">${escapeHtml(plural(readyCount, "session is", "sessions are"))} ready to import. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-tab" data-import-tab="ready">Show ready</button></p>` : "";
+    // The counts are said once, in the bar and in the tab labels (no inner "N ready" line here).
     return `
-      ${readyHint}
       ${allAttention.length ? `
         <section class="gpexe-panel gpexe-group is-decision imports-bucket" aria-label="Needs attention">
           <div class="gpexe-panel-head imports-tab-title"><h3>Needs you (${allAttention.length})</h3></div>
@@ -942,6 +954,8 @@ function renderBucketsHtml(gx, status, tab = "ready") {
     return `
       <section class="gpexe-panel gpexe-group imports-bucket" aria-label="Ready to import">
         <div class="gpexe-panel-head imports-tab-title"><h3>Ready to import (${ready.length})</h3></div>
+        ${daily.reviewOnly ? `<p class="imports-review-only">${escapeHtml(daily.reviewOnly)}</p>` : ""}
+        ${ready.length && !choosing ? `<p class="muted imports-later-help">Later puts a session aside on this device only; it stays ready for everyone else.</p>` : ""}
         ${gx.batch?.dropped ? `<p class="gpexe-notice" role="status">${escapeHtml(gx.batch.dropped)}</p>` : ""}
         ${gx.batch?.error && !gx.batch.confirming ? `<div class="gpexe-refused" role="alert"><p>${escapeHtml(batchRefusalText(gx.batch.error))}</p>${errorTech(gx.batch.error)}</div>` : ""}
         ${laterNoticeHtml(gx)}
@@ -1204,8 +1218,6 @@ function renderDailyStripHtml(gx, ready, status = gx.status) {
   const notes = [];
   if (d.pickable.length > BATCH_MAX) notes.push(`${plural(d.pickable.length - BATCH_MAX, "more session stays", "more sessions stay")} for the next batch.`);
   if (d.allowed && d.pickable.length < ready.length) notes.push(`${plural(ready.length - d.pickable.length, "ready session has", "ready sessions have")} to be opened and reviewed on ${ready.length - d.pickable.length === 1 ? "its" : "their"} own.`);
-  // U6a: the one place the review-only reason is said, from the whole list.
-  if (d.reviewOnly) notes.push(d.reviewOnly);
   if (!notes.length) return "";
   return `<div class="imports-daily" role="group" aria-label="Import summary">${notes.map((t) => `<p class="muted">${escapeHtml(t)}</p>`).join("")}</div>`;
 }
@@ -1276,7 +1288,7 @@ function batchStoppedText(error) {
   const code = error?.code;
   const why = code === "import_switch_off" ? "importing was switched off in this environment"
     : code === "team_import_switch_off" ? "imports were switched off for this team"
-    : code === "not_an_approver" ? "you may not approve imports for this team any more"
+    : code === "not_an_approver" ? (platformViewer() ? "you may not approve imports for this team any more" : "you can't import sessions for this team any more")
     : error?.status === 404 ? "one of the sessions is not available in this team any more"
     : error?.status === 400 ? "the selection is out of date"
     : code === "internal_error" ? "the server failed"
@@ -2032,7 +2044,7 @@ function renderApprovalRecordHtml(c) {
   if (!c.approval) return "";
   const a = c.approval;
   const counts = countsText(a.import?.counts);
-  return `<p class="${c.importUndoneAt ? "muted" : "gpexe-success"}">${c.importUndoneAt ? "Was imported" : "Imported"} ${escapeHtml(fmtDateTime(a.approvedAt))} (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
+  return `<p class="${c.importUndoneAt ? "muted" : "gpexe-success"}">${c.importUndoneAt ? "Was imported" : "Imported"} ${escapeHtml(fmtDateTime(a.approvedAt))} ${platformViewer() ? ` (${a.basis === "platform_admin" ? "platform admin" : "approver grant"})` : ""}${counts ? `: ${escapeHtml(counts)}` : ""}.</p>`;
 }
 
 // The coach's reason and step for a blocked session, from the list's neutral
@@ -2878,7 +2890,7 @@ const SUBSET_ERROR_TEXT = {
   invalid_excluded_athlete: "The session changed, and one of the athletes you left out is no longer part of it. Update the review, then choose again.",
   nothing_to_import: "The athletes that remain have nothing new to import.",
   subset_blocked: "This session can't be imported right now. Update the review, then choose again.",
-  not_an_approver: "You may not approve imports for this team.",
+  get not_an_approver() { return platformViewer() ? "You may not approve imports for this team." : "You can't import this session."; },
 };
 
 function renderSubsetApproveHtml(c, detail, leave, importN, changes) {

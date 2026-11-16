@@ -18,6 +18,7 @@ export function renderImportsHelpHtml({ ask = "", findBy = "the values of the la
         <button type="button" class="plain-button gpexe-button imports-help-close" data-action="training-load-gpexe-help" aria-label="Close">×</button>
       </div>
       <ul class="imports-help-list">
+        ${item("GPEXE", "is your club's GPS system. OptiMove only reads the sessions it recorded and changes nothing there.")}
         ${item("Find new sessions", "reads GPEXE for the days you choose. It imports nothing; you choose what to import.")}
       </ul>
       <h4>The marks in the calendar</h4>
@@ -31,6 +32,7 @@ export function renderImportsHelpHtml({ ask = "", findBy = "the values of the la
       <ul class="imports-help-list">
         ${item("Linking athletes", `tells OptiMove which athlete of your team a GPEXE athlete is, for this and every later session. It is never guessed: ${findBy} only help you find them.`)}
         ${item("Later", "puts a Ready session aside on this device only. It stays Ready for everyone else; Show brings it back.")}
+        ${item("A result", "is one athlete's values for the whole session or for one drill; a session with two drills gives each athlete three.")}
         ${item("After importing", "a session shows with ✓ in the calendar here, and its results are in Training Load → Activities.")}
         ${item("Import off", "importing is not turned on for this team yet. You can still find and review sessions.")}
       </ul>

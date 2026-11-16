@@ -108,6 +108,8 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 const monthName = (ym) => MONTHS[Number(ym.slice(5, 7)) - 1] + (ym.slice(0, 4) === String(new Date().getFullYear()) ? "" : ` ${ym.slice(0, 4)}`);
 const tabs = () => [...html().matchAll(/data-import-tab="(\w+)"/g)].map((m) => m[1]);
 const line = () => (html().match(/<p class="muted imports-month-line">[\s\S]*?<\/p>/) || [""])[0];
+// The month's facts, said inside the calendar under its month name.
+const facts = () => (html().match(/<p class="muted period-month-facts">([^<]*)<\/p>/) || [null, ""])[1];
 const THIS = TODAY.slice(0, 7);
 
 
@@ -168,7 +170,7 @@ test("#540 3: a cut list: an older month shows the server's calendar (chips and 
   assert.match(cell, /aria-label="[^"]*, 4 sessions: imported, needs you, imported, imported"/);
   assert.match(dayCell(panel(), D(11)), /period-chip is-out/);
   assert.doesNotMatch(panel(), /Older sessions may not be shown/);
-  assert.match(line(), new RegExp(`imports-month-desk">3 imported · 1 stays out in ${monthName(PREV)} ·`), "the line counts the server's month");
+  assert.match(facts(), /^3 imported · 1 stays out \(not imported\) ·/, "the calendar counts the server's month");
   await act("training-load-gpexe-period-month", { delta: "1" });
   await act("training-load-gpexe-period-month", { delta: "-1" });
   await settle();

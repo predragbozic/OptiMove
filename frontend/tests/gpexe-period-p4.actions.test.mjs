@@ -184,12 +184,12 @@ test("P4 5: the first tap offers its day and asks for the last; two taps make th
   await act("training-load-gpexe-period-toggle");
   gx().period.month = b.slice(0, 7);
   await act("training-load-gpexe-period-day", { day: b });
-  assert.match(panel(), /class="period-wait" role="status">Search [0-9.]+, or tap another day to make the period longer \(at most 31 days\)\.</);
+  assert.match(panel(), /class="period-wait" role="status">Find new sessions for [0-9.]+, or tap another day to make the period longer \(at most 31 days\)\.</);
   await act("training-load-gpexe-period-day", { day: a });
   const p = panel();
   assert.ok(!/period-wait/.test(p));
   assert.match(p, /class="period-range-text">[^<]*5 days</);
-  assert.match(p, new RegExp(`class="period-range-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" data-from="${a}" data-to="${b}"[^>]*>Search [^<]+</button><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-period-clear">Clear<`), "Search first, then Clear");
+  assert.match(p, new RegExp(`class="period-range-actions"><button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-check" data-from="${a}" data-to="${b}"[^>]*>Find new sessions for [^<]+</button><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-period-clear">Clear<`), "Search first, then Clear");
   assert.match(dayCell(p, a), /is-edge/);
   assert.match(dayCell(p, b), /aria-pressed="true"/);
   assert.equal((p.match(/class="primary-button gpexe-button/g) || []).length, 1, "one main action: the chosen days' Search");
@@ -205,13 +205,19 @@ test("P4 5: the first tap offers its day and asks for the last; two taps make th
   assert.ok(!/imports-period is-open/.test(panel()), "the phone's sheet closes once the search starts");
 });
 
-test("P4 6: 'Search what's missing' carries the end of the last successful search and today; without one it searches the server's 14 days", async () => {
+test("P4 6: 'Find new sessions' carries the end of the last successful search and today; without one it searches the server's 14 days", async () => {
   resetState();
   const last = daysAgo(5);
-  installFetchMock(gpexeServer({ teamStatus: { lastSucceededCheck: { id: "chk-0", window: { from: daysAgo(18), to: last }, finishedAt: new Date().toISOString() } } }));
+  const lastCheck = { id: "chk-0", status: "succeeded", window: { from: daysAgo(18), to: last }, finishedAt: new Date().toISOString() };
+  installFetchMock(gpexeServer({ teamStatus: { lastSucceededCheck: lastCheck, lastCheck } }));
   await openImports();
+  // The action has one name; the days are said beside it and agree with the bar, which names the days the search read.
+  // dd.mm. this year, dd.mm.yyyy for an earlier year (periodText).
+  const fmt = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4) === String(new Date().getFullYear()) ? "" : d.slice(0, 4)}`;
+  assert.match(html(), new RegExp(`Last search [^<]*, for ${fmt(daysAgo(18)).replace(/\./g, "\\.")} – ${fmt(last).replace(/\./g, "\\.")}`));
   await act("training-load-gpexe-period-toggle");
-  assert.match(panel(), new RegExp(`class="primary-button gpexe-button period-missing" data-action="training-load-gpexe-check" data-from="${last}" data-to="${TODAY}" >Search from [0-9.]+ to today<`));
+  assert.match(panel(), new RegExp(`class="primary-button gpexe-button period-missing" data-action="training-load-gpexe-check" data-from="${last}" data-to="${TODAY}" aria-describedby="period-missing-days" >Find new sessions<`));
+  assert.match(panel(), new RegExp(`id="period-missing-days">Since the last search: ${fmt(last).replace(/\./g, "\\.")} – today\\.<`));
   await act("training-load-gpexe-check", { from: last, to: TODAY });
   assert.deepEqual(posts()[0].body, { from: last, to: TODAY });
 
@@ -219,7 +225,8 @@ test("P4 6: 'Search what's missing' carries the end of the last successful searc
   installFetchMock(gpexeServer({}));
   await openImports();
   await act("training-load-gpexe-period-toggle");
-  assert.match(panel(), /class="primary-button gpexe-button period-missing" data-action="training-load-gpexe-check" >Search the last 14 days</);
+  assert.match(panel(), /class="primary-button gpexe-button period-missing" data-action="training-load-gpexe-check"  aria-describedby="period-missing-days" >Find new sessions</);
+  assert.match(panel(), /id="period-missing-days">The last 14 days\.</);
   await act("training-load-gpexe-check");
   assert.deepEqual(posts()[0].body, {}, "no dates: the server's default");
 });

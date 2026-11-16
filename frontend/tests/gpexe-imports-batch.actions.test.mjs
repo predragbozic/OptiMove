@@ -192,13 +192,13 @@ test("2. only a clean Ready session with a valid previewHash can be chosen; not 
   await openImports();
   assert.equal(checkboxes().length, 0);
   assert.ok(!/imports-select-bar/.test(html()));
-  assert.match(html(), /Review only - an approver imports these/);
+  assert.match(html(), /You can review these\. Ask your club administrator to import them\./);
   // The switch off: the same.
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { enabled: false } }, candidates: [ready(1)] }));
   await openImports();
   assert.equal(checkboxes().length, 0);
-  assert.match(html(), /Review only - importing waits until it is turned on/);
+  assert.match(html(), /You can review these\. Importing is not turned on yet\./);
 });
 
 test("3. Select all / Select first 50 / Clear selection follow the list's order, stop at 50, and say how many stay for the next batch", async () => {
@@ -787,7 +787,7 @@ test("J19 U1: a batch result with batch_time_budget says it ran out of time and 
   assert.match(html(), /Not imported yet: time ran out\. Nothing was saved for this session - import it again from the Ready list\./);
 });
 
-test("J19 U1: a ready session that cannot be chosen is named under the button; review-only shows its reason under the counts", async () => {
+test("J19 U1: a ready session that cannot be chosen is named under the button; review-only shows its reason at the top of the Ready tab", async () => {
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [ready(1), ready(2, { previewHash: null })] }));
   await openImports();
@@ -797,6 +797,6 @@ test("J19 U1: a ready session that cannot be chosen is named under the button; r
   await openImports();
   const page = html();
   assert.ok(!/training-load-gpexe-import-ready/.test(page));
-  assert.match(page.slice(page.indexOf("imports-daily"), page.indexOf("imports-daily") + 900), /Review only/, "U6a: the review-only reason is said once, under the main button");
-  assert.equal((page.match(/Review only -/g) || []).length, 1, "and nowhere else");
+  assert.match(page.slice(page.indexOf("<h3>Ready to import"), page.indexOf("gpexe-candidate-list")), /You can review these/, "the review-only reason is said once, at the top of the Ready tab");
+  assert.equal((page.match(/You can review these/g) || []).length, 1, "and nowhere else");
 });

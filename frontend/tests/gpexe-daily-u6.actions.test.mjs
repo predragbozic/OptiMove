@@ -247,11 +247,14 @@ test("U6a-1 5: the notes of the main button sit right under it; with more than 5
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { canApprove: false } }, candidates: [ready(1)] }));
   await openImports();
   const ro = html();
-  assert.equal((ro.match(/[Aa]n approver imports these/g) || []).length, 1, "the review-only reason appears once");
+  // A coach reads it in plain words, once, at the top of the Ready tab (before the list), and never the word "approver".
+  assert.equal((ro.match(/You can review these\. Ask your club administrator to import them\./g) || []).length, 1, "the review-only reason appears once");
+  assert.ok(ro.indexOf('class="imports-review-only"') < ro.indexOf('class="gpexe-candidate-list"'), "it leads the Ready tab");
+  assert.ok(!/approver|approval rights/i.test(ro.replace(/data-action="[^"]*"/g, "")), "no 'approver' on a coach's screen");
   // With a session that needs the coach the reason is still said once, in the Ready tab.
   resetState();
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: { canApprove: false } }, candidates: [ready(1), ready(2, { previewStatus: "blocked", status: "blocked", blockedCode: "mixed_timezones" })] }));
   await openImports();
   await act("training-load-gpexe-tab", { importTab: "ready" });
-  assert.equal((html().match(/[Aa]n approver imports these/g) || []).length, 1, "said once");
+  assert.equal((html().match(/You can review these\./g) || []).length, 1, "said once");
 });

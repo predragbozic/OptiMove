@@ -44,7 +44,9 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         // P4: on a phone the banner's one button opens the period chooser; on a computer the chooser is on the page.
         assert.deepEqual(look.bannerButtons, width < 500 ? ["Find new sessions"] : [], "the banner's buttons");
         assert.equal(look.chooserVisible, width >= 500, "the chooser is on the page on a computer only");
-        assert.match(look.bannerText, /^Last search \d{2}\.\d{2}\. \d{2}:\d{2} · 1 ready · 1 needs you$/);
+        // The seeded search ran today for days up to 08.11.2026: the bar names those days, so "Find new sessions" (from
+        // 08.11. to today) never seems to contradict it.
+        assert.match(look.bannerText, /^Last search \d{2}\.\d{2}\. \d{2}:\d{2}, for \d{2}\.\d{2}\.(\d{4})? – 08\.11\.(2026)? · 1 ready · 1 needs you$/);
         assert.deepEqual(look.tabs, ["Needs you (1)", "Ready (1)", "Athletes (1 not linked)", "Search"], "P4c: a coach has no Imported or Stays out tab");
         assert.ok(look.tabHeights.every((h) => h >= 44), `tabs ${look.tabHeights}`);
         assert.equal(look.panels, 1, "one tab's content at a time");

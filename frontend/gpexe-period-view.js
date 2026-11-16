@@ -106,7 +106,7 @@ function dayLabel(day, items, flags) {
   return [name, found, ...flags].join(", ");
 }
 
-function gridHtml(gx, byDay, now, range, suggestedTo) {
+function gridHtml(gx, byDay, now, range, suggestedTo, monthFacts = "") {
   const month = periodMonth(gx, now, suggestedTo);
   const [y, m] = month.split("-").map(Number);
   const days = new Date(y, m, 0).getDate();
@@ -130,6 +130,7 @@ function gridHtml(gx, byDay, now, range, suggestedTo) {
       <strong class="period-month" aria-live="polite">${escapeHtml(`${MONTH_NAMES[m - 1]} ${y}`)}</strong>
       <button type="button" class="plain-button gpexe-button period-turn" data-action="training-load-gpexe-period-month" data-delta="1" aria-label="Next month">&rsaquo;</button>
     </div>
+    ${monthFacts ? `<p class="muted period-month-facts">${escapeHtml(monthFacts)}</p>` : ""}
     <div class="period-grid" role="group" aria-label="${escapeAttr(`Days of ${MONTH_NAMES[m - 1]} ${y}. Tap the first and the last day to search.`)}">
       ${WEEKDAYS.map((w) => `<span class="period-weekday" aria-hidden="true">${w}</span>`).join("")}
       ${cells.join("")}
@@ -173,17 +174,19 @@ function rangeListHtml(range, byDay, nameOf, timeOf, older = null) {
   `;
 }
 
-// "Search from 08.11. to today": what the first button covers, in plain words (UX review: "missing" alone is jargon).
+// What the first button covers, in plain words beside it (the button itself is always "Find new sessions", the action's one
+// name on every width). It starts on the last day the last search read, which the bar names.
 function missingText(missing, now) {
-  if (missing.from === missing.to) return "Search today";
-  return `Search from ${periodText(missing.from, missing.from, now)} to today`;
+  if (!missing) return "The last 14 days.";
+  if (missing.from === missing.to) return "Today.";
+  return `Since the last search: ${periodText(missing.from, missing.from, now)} – today.`;
 }
 
 // The period chooser. On a computer it is always on the page under the banner; on a phone "Find new sessions" opens it
 // as a full-screen sheet (CSS: .imports-period is hidden there unless .is-open). `running` turns every search button
 // off (one search at a time). `suggested` is the days a session needs to be found again (datesNeededFor): shown as
 // chosen until the person taps a day.
-export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, now = new Date(), suggested = null, quiet = false, capped = false } = {}) {
+export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, now = new Date(), suggested = null, quiet = false, capped = false, monthFacts = "" } = {}) {
   const s = periodOf(gx);
   const byDay = sessionsByDay(gx);
   const missing = missingWindow(status, now);
@@ -194,13 +197,14 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
   // One main action inside the chooser: the chosen days' Search once days are chosen, otherwise the first button - unless
   // a group's own step leads the screen (`quiet`, code review: one main action per screen).
   const lead = range || quiet ? "plain-button" : "primary-button";
-  const first = missing
-    ? `<button type="button" class="${lead} gpexe-button period-missing" data-action="training-load-gpexe-check" data-from="${escapeAttr(missing.from)}" data-to="${escapeAttr(missing.to)}" ${off}>${escapeHtml(missingText(missing, now))}</button>${missing.clipped ? `<p class="muted period-hint">The latest ${PERIOD_MAX_DAYS} days; tap earlier days below to search them too.</p>` : ""}`
-    : `<button type="button" class="${lead} gpexe-button period-missing" data-action="training-load-gpexe-check" ${off}>Search the last 14 days</button>`;
+  const days = missing ? `data-from="${escapeAttr(missing.from)}" data-to="${escapeAttr(missing.to)}"` : "";
+  const first = `<button type="button" class="${lead} gpexe-button period-missing" data-action="training-load-gpexe-check" ${days} aria-describedby="period-missing-days" ${off}>Find new sessions</button>`
+    + `<p class="muted period-days" id="period-missing-days">${escapeHtml(missingText(missing, now))}</p>`
+    + (missing?.clipped ? `<p class="muted period-hint">The latest ${PERIOD_MAX_DAYS} days; tap earlier days below to search them too.</p>` : "");
   const why = suggestedRange
     ? (suggested.clipped ? "The latest 31 days of the sessions that need finding again; search the earlier ones afterwards." : "These days hold the sessions that need finding again.")
     : "";
-  const search = range ? `<button type="button" class="${quiet ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" data-from="${escapeAttr(range.from)}" data-to="${escapeAttr(range.to)}" ${off}>${escapeHtml(`Search ${periodText(range.from, range.to, now)}`)}</button>` : "";
+  const search = range ? `<button type="button" class="${quiet ? "plain-button" : "primary-button"} gpexe-button" data-action="training-load-gpexe-check" data-from="${escapeAttr(range.from)}" data-to="${escapeAttr(range.to)}" ${off}>${escapeHtml(`Find new sessions for ${periodText(range.from, range.to, now)}`)}</button>` : "";
   return `
     <section class="gpexe-panel imports-period${s.open ? " is-open" : ""}" id="imports-period" ${s.open ? 'role="dialog" aria-modal="true" aria-labelledby="imports-period-title"' : 'aria-label="Find new sessions"'}>
       <div class="period-head">
@@ -209,18 +213,18 @@ export function renderPeriodHtml(gx, status, { nameOf, timeOf, running = false, 
       </div>
       <div class="period-first">${first}</div>
       <div class="period-cal">
-        ${gridHtml(gx, byDay, now, range, suggestedRange?.to || "")}
+        ${gridHtml(gx, byDay, now, range, suggestedRange?.to || "", monthFacts)}
         <ul class="period-legend" aria-hidden="true">
           <li><i class="period-chip is-needs">!</i> needs you</li>
           <li><i class="period-chip is-ready">→</i> ready</li>
           <li><i class="period-chip is-done">✓</i> imported</li>
-          <li><i class="period-chip is-out">–</i> stays out</li>
+          <li><i class="period-chip is-out">–</i> stays out (not imported)</li>
         </ul>
         ${capped ? `<p class="muted period-cap">Older sessions may not be shown.</p>` : ""}
       </div>
       <div class="period-side">
         ${s.anchor
-          ? `<p class="period-wait" role="status">${escapeHtml(`Search ${periodText(s.anchor, s.anchor, now)}, or tap another day to make the period longer (at most ${PERIOD_MAX_DAYS} days).`)}</p>`
+          ? `<p class="period-wait" role="status">${escapeHtml(`Find new sessions for ${periodText(s.anchor, s.anchor, now)}, or tap another day to make the period longer (at most ${PERIOD_MAX_DAYS} days).`)}</p>`
           : `<p class="muted period-note">Tap the first and the last day (at most ${PERIOD_MAX_DAYS} days)<span class="period-fine">, or drag across them</span>.</p>`}
         ${range ? `
           <div class="period-range" role="group" aria-label="Chosen days">

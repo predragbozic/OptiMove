@@ -356,7 +356,7 @@ test("Fix 7: Needs a new search searches the session's own day; the sheet goes o
   await act("training-load-gpexe-fix", { candidateId: "cand-5", group: "fresh" });
   let s = sheet();
   assert.match(s, /Search GPEXE again for 05\.09\.2026 to read this session before importing\./);
-  assert.match(s, /data-action="training-load-gpexe-fix-search"[^>]*>Search 05\.09\.2026</);
+  assert.match(s, /data-action="training-load-gpexe-fix-search"[^>]*>Find new sessions for 05\.09\.2026</);
   w.sessions[0].snapshot = { available: true, expiresAt: "2099-01-01T00:00:00Z" };
   await act("training-load-gpexe-fix-search");
   assert.deepEqual(posts(/\/checks$/).map((c) => c.body), [{ from: "2026-09-05", to: "2026-09-05" }]);

@@ -130,6 +130,8 @@ test("P5 2: it says each thing once: the search, the four marks with colour and 
   await act("training-load-gpexe-help");
   const h = help();
   for (const [re, what] of [
+    [/<strong>GPEXE<\/strong> is your club(?:'|&#039;)s GPS system\. OptiMove only reads the sessions it recorded and changes nothing there\./, "GPEXE, introduced once"],
+    [/<strong>A result<\/strong> is one athlete(?:'|&#039;)s values for the whole session or for one drill/, "what a result is"],
     [/Find new sessions<\/strong> reads GPEXE for the days you choose\. It imports nothing; you choose what to import\./, "the search"],
     [/period-chip is-needs" aria-hidden="true">!<\/i> <strong>Needs you<\/strong>/, "!"],
     [/period-chip is-ready" aria-hidden="true">→<\/i> <strong>Ready<\/strong>/, "→"],
