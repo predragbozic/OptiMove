@@ -82,10 +82,13 @@ A page loaded before the deploy keeps sending reports without a request or a bui
 
 ## Rollback
 
-`app-error-events-v73-rollback.sql`: one transaction; refuses while the migrator runs, when v73 is not recorded and
-when a migration with a later file name is recorded. Otherwise it locks the table, drops the five columns (their
-CHECKs go with them), restores v70's guard body (md5 `13009f97dbedc04be84380baa037ce88`) and removes the record. The
-rows stay; a row that had a request keeps the fingerprint it was stored under. The deployed commit must first no
+`app-error-events-v73-rollback.sql`: one transaction; refuses while the migrator runs, when v73 is not recorded, when
+a migration with a later file name is recorded and when the update guard's body is not the one v73 installed (md5
+`05cd59a40237bf6b443d268961409d93` - a guard changed since is never overwritten silently). Otherwise it locks the
+table, drops the five columns (their CHECKs go with them), restores v70's guard body (md5
+`13009f97dbedc04be84380baa037ce88`) and removes the record. **What the five columns held - which request, the
+server's uptime, the page's build, a late delivery - is dropped for good**: applying v73 again brings the columns
+back empty. The rows stay; a row that had a request keeps the fingerprint it was stored under. The deployed commit must first no
 longer contain the migration file or write the new columns. Pages loaded from the v73 build keep sending `request`
 and `late`, which the earlier server refuses whole (400): **their error reports are lost until the page is
 reloaded**. v70's rollback refuses while v73 is recorded, so the

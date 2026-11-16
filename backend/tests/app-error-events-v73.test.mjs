@@ -284,6 +284,14 @@ test("6. the preflight and the post-check read what they claim; the rollback ref
     await refused(/the migrator is running/);
   } finally { await holder.query("select pg_advisory_unlock(822026)"); await holder.end(); }
 
+  // A guard whose body is not v73's (changed since, by hand) is not overwritten: refused, nothing changed.
+  const v73Body = (await k.query(`select pg_get_functiondef(p.oid) as def from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'app_error_events_guard_update'`)).rows[0].def;
+  await k.query(`create or replace function public.app_error_events_guard_update() returns trigger language plpgsql as $f$ begin return new; end $f$`);
+  await refused(/the update guard is not the one v73 installed/);
+  assert.equal((await k.query(`select count(*)::int as n from information_schema.columns where table_schema = 'public' and table_name = 'app_error_events' and column_name = 'request_route'`)).rows[0].n, 1, "nothing was dropped");
+  await k.query(v73Body);
+  assert.equal(await guardMd5(), "05cd59a40237bf6b443d268961409d93");
+
   // The rollback: v70's schema and guard body; the rows stay.
   await k.query(rollback);
   assert.equal(await guardMd5(), "13009f97dbedc04be84380baa037ce88", "v70's body by md5");

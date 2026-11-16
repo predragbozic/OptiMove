@@ -10,7 +10,9 @@
 -- telemetry; the rows stay, and a row that had a request keeps the kind it was grouped under) and puts v70's update
 -- guard back. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v73 is not recorded, or a migrations_v2 migration with a later file name is.
+--   * v73 is not recorded, or a migrations_v2 migration with a later file name is;
+--   * the update guard's body is not the one v73 installed (by md5).
+-- What is in the five columns is dropped for good: applying v73 again brings the columns back empty.
 -- One transaction. Run it at a quiet moment as
 --   psql -v ON_ERROR_STOP=1 -f app-error-events-v73-rollback.sql
 begin;
@@ -26,6 +28,12 @@ begin
   end if;
   if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611151500_app_error_events_v73_request_and_restart.sql') then
     raise exception 'v73 rollback refused: later migrations are applied';
+  end if;
+  -- The guard this rollback replaces must be v73's own: a body someone changed since (a hot fix) is never overwritten
+  -- silently with v70's.
+  if (select md5(p.prosrc) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'app_error_events_guard_update')
+       is distinct from '05cd59a40237bf6b443d268961409d93' then
+    raise exception 'v73 rollback refused: the update guard is not the one v73 installed';
   end if;
 end $$;
 
