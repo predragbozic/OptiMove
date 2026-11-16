@@ -72,12 +72,15 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         const earliest = from.toISOString().slice(0, 10);
         const expectedFrom = earliest > "2026-11-08" ? earliest : "2026-11-08";
         assert.deepEqual([look.missingFrom, look.missingTo], [expectedFrom, look.today], "the missing days run from the last search to today");
-        assert.match(look.missing, /^Search from \d{2}\.\d{2}\.(\d{4})? to today$/);
-        if (expectedFrom === "2026-11-08") assert.equal(look.missing, "Search from 08.11. to today");
+        // One name for the action; the days are said beside it.
+        assert.equal(look.missing, "Find new sessions");
+        const days = (await page.textContent(".imports-period #period-missing-days")).trim();
+        assert.match(days, /^From \d{2}\.\d{2}\.(\d{4})? to today\.$/);
+        if (expectedFrom === "2026-11-08") assert.equal(days, "From 08.11. to today.");
         assert.equal(look.overflow, 0, "no horizontal page scroll");
         // Two taps, the later day first: the period runs from the earlier one.
         await page.click(DAY("2026-11-05"));
-        assert.match((await page.textContent(".imports-period .period-wait")).trim(), /^Search 05\.11\., or tap another day to make the period longer \(at most 31 days\)\.$/);
+        assert.match((await page.textContent(".imports-period .period-wait")).trim(), /^Find new sessions for 05\.11\., or tap another day to make the period longer \(at most 31 days\)\.$/);
         await page.click(DAY("2026-11-03"));
         assert.equal((await page.textContent(".imports-period .period-range-text")).trim(), "03.11. – 05.11. · 3 days");
         assert.equal(checks.length, 0, "picking sends nothing");

@@ -195,7 +195,7 @@ test("Fix 1: a coach's group button opens the sheet - Step 1 of 2, one sentence,
   const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101", "102"] } });
   await open(w);
   const group = html().match(/data-attention-group="unlinked"[\s\S]*?<\/div>\s*<\/div>/)[0];
-  assert.match(group, /data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="unlinked">Link athletes</, "the group's own button, opening Fix");
+  assert.match(group, /data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="unlinked">Fix this session</, "the group's own button, opening Fix");
   assert.ok(!/>Fix</.test(group), "no second Fix button for a coach");
   await fixFirst();
   const s = sheet();
@@ -355,8 +355,8 @@ test("Fix 7: Needs a new search searches the session's own day; the sheet goes o
   assert.match(html(), /class="gpexe-candidate" data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="fresh"/);
   await act("training-load-gpexe-fix", { candidateId: "cand-5", group: "fresh" });
   let s = sheet();
-  assert.match(s, /Search GPEXE again for 05\.09\.2026 to read this session before importing\./);
-  assert.match(s, /data-action="training-load-gpexe-fix-search"[^>]*>Search 05\.09\.2026</);
+  assert.match(s, /Find new sessions for 05\.09\.2026 to read this session again before importing\./);
+  assert.match(s, /data-action="training-load-gpexe-fix-search"[^>]*>Find new sessions for 05\.09\.2026</);
   w.sessions[0].snapshot = { available: true, expiresAt: "2099-01-01T00:00:00Z" };
   await act("training-load-gpexe-fix-search");
   assert.deepEqual(posts(/\/checks$/).map((c) => c.body), [{ from: "2026-09-05", to: "2026-09-05" }]);
@@ -370,7 +370,7 @@ test("Fix 8: the platform admin keeps the review and gets Fix beside it; rows op
   const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] } });
   await open(w);
   const group = html().match(/data-attention-group="unlinked"[\s\S]*?<\/div>\s*<\/div>/)[0];
-  assert.match(group, /data-action="training-load-gpexe-open" data-candidate-id="cand-5" data-group="unlinked">Link athletes<\/button><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="unlinked">Fix</);
+  assert.match(group, /data-action="training-load-gpexe-open" data-candidate-id="cand-5" data-group="unlinked">Open the session<\/button><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="unlinked">Fix</);
   assert.match(html(), /class="gpexe-candidate" data-action="training-load-gpexe-open" data-candidate-id="cand-5"/);
 });
 

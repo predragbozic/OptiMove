@@ -162,11 +162,11 @@ test("1. the sessions that need a person are grouped by what is in the way, in a
   assert.ok(!/gpexe-candidate-next/.test(u), "no row repeats the group's step");
   assert.equal((u.match(/<div class="imports-attn-actions">[\s\S]*?<\/div>/)[0].match(/<button/g) || []).length, 1, "one button");
   // Fix flow (slice 1): for a coach the group's button opens the step-by-step sheet (the platform admin keeps the review).
-  assert.match(u, /data-action="training-load-gpexe-fix" data-candidate-id="cand-4" data-group="unlinked">Link athletes</);
+  assert.match(u, /data-action="training-load-gpexe-fix" data-candidate-id="cand-4" data-group="unlinked">Fix these sessions</);
   assert.match(u, /<details class="imports-attn-sessions"><summary>Show the 2 sessions<\/summary>/, "several sessions are folded");
   assert.match(u, /data-candidate-id="cand-6" data-group="unlinked"/, "a row inside the group opens the review in the group");
   const f = groupHtml("fresh", page);
-  assert.match(f, /data-action="training-load-gpexe-check" data-from="2026-09-05" data-to="2026-09-05" >Find again for 05\.09\.2026</);
+  assert.match(f, /data-action="training-load-gpexe-check" data-from="2026-09-05" data-to="2026-09-05" >Find new sessions for 05\.09\.2026</);
   assert.match(f, /Search again to read this session from GPEXE before importing\./, "a group of one is spoken of in the singular");
   assert.ok(!/<details class="imports-attn-sessions">/.test(f), "a group of one shows its session");
   assert.match(groupHtml("review", page), /data-candidate-id="cand-3" data-group="review">Open the session</);
@@ -468,13 +468,13 @@ test("13. the group a review steps through is the one it was opened with: a link
   assert.match(html(), /Session 3 of 4/);
 });
 
-test("14. 'Find again for …' names the dates the search will use (clipped to the latest 31 days) and sends exactly those", async () => {
+test("14. 'Find new sessions for …' names the dates the search will use (clipped to the latest 31 days) and sends exactly those", async () => {
   resetState();
   const expired = (n, day) => ready(n, { sessionStartedAt: day, snapshot: { available: false, expiresAt: "2026-08-31T00:00:00Z" } });
   installFetchMock(gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [expired(1, "2026-08-01T10:00:00Z"), expired(2, "2026-09-14T10:00:00Z")] }));
   await openImports();
   const f = groupHtml("fresh");
-  assert.match(f, /data-from="2026-08-15" data-to="2026-09-14" >Find again for 15\.08\.2026 - 14\.09\.2026</);
+  assert.match(f, /data-from="2026-08-15" data-to="2026-09-14" >Find new sessions for 15\.08\.2026 - 14\.09\.2026</);
   const starts = [];
   const base = gpexeServer({ teamStatus: { [TEAM_A]: {} }, candidates: [] });
   installFetchMock(async (call) => {

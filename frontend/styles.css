@@ -26318,16 +26318,6 @@ body:not(.athlete-mode):not(.login-mode) .imports-choose[open] > summary::after 
   content: "\25BE";
 }
 
-/* What waits in the Ready tab, said once on the Needs you tab. */
-body:not(.athlete-mode):not(.login-mode) .imports-ready-hint {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--om-text-sm);
-}
 
 body:not(.athlete-mode):not(.login-mode) .imports-import-row {
   display: flex;
@@ -26540,6 +26530,7 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-panel.imports-period {
   min-height: var(--om-tap-target, 44px);
 }
 .imports-period .period-hint,
+.imports-period .period-days,
 .imports-period .period-note,
 .imports-period .period-wait {
   margin: 0;
@@ -26882,15 +26873,19 @@ body:not(.athlete-mode):not(.login-mode) .imports-later-aside .gpexe-button:focu
 .imports-period .period-cap {
   margin: 6px 0 0;
 }
+.imports-period .period-month-facts {
+  margin: 0;
+  font-size: 0.85rem;
+  text-align: center;
+}
+/* A phone only: the calendar is hidden there until it is opened. */
 .imports-month-line {
+  display: none;
   margin: 0;
 }
-.imports-month-phone {
-  display: none;
-}
 @media (max-width: 760px) {
-  .imports-month-desk {
-    display: none;
+  .imports-month-line {
+    display: block;
   }
   /* A quiet line, not a card: muted, underlined like a link, the whole line the 44 px target. */
   body:not(.athlete-mode):not(.login-mode) .imports-month-phone {
@@ -27516,3 +27511,11 @@ body:not(.athlete-mode):not(.login-mode) .imports-attn-actions {
   gap: 8px;
 }
 /* End of the Imports Fix flow. */
+
+/* The review-only sentence: once, at the top of the Ready tab, for whoever can't import there. */
+body:not(.athlete-mode):not(.login-mode) .imports-review-only,
+body:not(.athlete-mode):not(.login-mode) .imports-later-help {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--om-text-sm);
+}
