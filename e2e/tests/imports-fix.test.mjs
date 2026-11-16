@@ -20,9 +20,37 @@ const SHOTS = process.env.E2E_SHOTS || "";
 const CODE = /\b[a-z]+_[a-z_]+\b/;
 
 async function openNeedsYou(page) {
+  trackSheetReads(page);
   await openTrainingLoad(page);
   await page.click('[data-action="training-load-section"][data-section="imports"]');
   await page.waitForSelector('[data-attention-group="unlinked"]', { timeout: 20_000 });
+}
+
+// The sheet's own reads (the GPEXE names, the suggested pairs, the session) answer after it is drawn, and each answer repaints
+// it. The link step's select keeps no state of its own: every repaint draws it with nothing chosen. Under a loaded run such a
+// repaint could land between the pick and "Link...", which then found no athlete and never offered "Confirm link" (the
+// intermittent of 2026-11-16). So the sheet's reads are tracked, and a pick waits until none is in flight and the repaint
+// after the last one has run, then checks that the pick is still there.
+const SHEET_READS = /\/athlete-identities|\/athlete-pair-suggestions|\/candidates\/[^/?]+(\?|$)/;
+const sheetReads = new WeakMap();
+function trackSheetReads(page) {
+  if (sheetReads.has(page)) return;
+  const inFlight = new Set();
+  sheetReads.set(page, inFlight);
+  page.on("request", (r) => { if (r.method() === "GET" && SHEET_READS.test(r.url())) inFlight.add(r); });
+  for (const event of ["requestfinished", "requestfailed"]) page.on(event, (r) => inFlight.delete(r));
+}
+async function pickAthlete(page, athleteId) {
+  const select = page.locator(".imports-fix.is-open .gpexe-link select");
+  await select.waitFor({ timeout: 20_000 });
+  const inFlight = sheetReads.get(page);
+  assert.ok(inFlight, "the sheet's reads are tracked (openNeedsYou)");
+  const until = Date.now() + 20_000;
+  while (inFlight.size && Date.now() < until) await page.waitForTimeout(50);
+  assert.equal(inFlight.size, 0, "the sheet's reads have answered");
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await select.selectOption(athleteId);
+  assert.equal(await select.inputValue(), String(athleteId), "the pick is still in the select before Link...");
 }
 
 // The sheet's layout: inside the viewport, no horizontal scroll, every control at least 44 px tall.
@@ -63,7 +91,7 @@ for (const width of [1280, 390, 360]) {
         assert.equal(await coach.page.locator(".gpexe-detail-overlay").count(), 0, "the full review is not open under it");
         await checkLayout(coach.page, width);
         if (SHOTS) await coach.page.screenshot({ path: `${SHOTS}/fix-link-${width}.png` });
-        await coach.page.locator(".imports-fix.is-open select").selectOption(target);
+        await pickAthlete(coach.page, target);
         await coach.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link"]');
         assert.equal(posts.filter((p) => p.endsWith("/athlete-links")).length, 0, "Link... only asks");
         await coach.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link-confirm"]');
@@ -102,7 +130,7 @@ test("Fix (club admin, 1280 px): the same steps without a code, through to the i
       await admin.page.waitForSelector(".imports-fix.is-open .gpexe-link select");
       const text = (await admin.page.locator(".imports-fix.is-open").innerText()).replace(/\s+/g, " ");
       assert.ok(!CODE.test(text) && !/Technical details/.test(text), "no code for the club admin");
-      await admin.page.locator(".imports-fix.is-open select").selectOption(world.ids.athleteIds[3]);
+      await pickAthlete(admin.page, world.ids.athleteIds[3]);
       await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link"]');
       await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link-confirm"]');
       await admin.page.locator(".imports-fix.is-open", { hasText: "This session is ready" }).waitFor({ timeout: 20_000 });
@@ -141,7 +169,7 @@ test("Fix (platform admin, 1280 px): Fix beside the review, through the link to 
       assert.equal(await admin.page.locator('[data-attention-group="unlinked"] [data-action="training-load-gpexe-open"]').count() > 0, true, "the review is still offered");
       await admin.page.click('[data-attention-group="unlinked"] [data-action="training-load-gpexe-fix"]');
       await admin.page.waitForSelector(".imports-fix.is-open .gpexe-link select");
-      await admin.page.locator(".imports-fix.is-open select").selectOption(world.ids.athleteIds[3]);
+      await pickAthlete(admin.page, world.ids.athleteIds[3]);
       await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link"]');
       await admin.page.click('.imports-fix.is-open [data-action="training-load-gpexe-link-confirm"]');
       const approve = admin.page.locator('.imports-fix.is-open [data-action="training-load-gpexe-approve"]');
