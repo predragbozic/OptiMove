@@ -4,7 +4,7 @@
 // tabs, light cards, badges, buttons); the phone sheet is the roster's.
 import { escapeAttr, escapeHtml } from "./utils.js";
 import {
-  BOARD_ERROR, COLUMN_REASON, MAX_ROWS, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
+  BOARD_ERROR, COLUMN_REASON, MAX_ROWS, columnReasonText, displayNumber, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
   preplacedRows, sessionWords, slotOf, variableOf,
 } from "./metric-board-data.js";
 import { sourceFieldDragAvailable } from "./metric-board-drag.js";
@@ -20,7 +20,8 @@ const dateTime = (value) => {
 const dateOnly = (value) => dateTime(value).slice(0, 10);
 const teamOf = (s) => s.teams.items.find((t) => t.teamId === s.teamId) || null;
 const teamName = (s) => cleanName(s.board?.team?.name || teamOf(s)?.name || "this team");
-const withUnit = (value, unit) => (value === null || value === undefined ? "No value" : `${escapeHtml(value)}${unit ? ` ${escapeHtml(unit)}` : ""}`);
+// Rounded for reading only (displayNumber); the unit stays.
+const withUnit = (value, unit) => (value === null || value === undefined ? "No value" : `${escapeHtml(displayNumber(value))}${unit ? ` ${escapeHtml(unit)}` : ""}`);
 const busy = (s) => Boolean(s.write) || s.loading;
 
 const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest and marks the value as missing. Untick to leave it out quietly.";
@@ -75,11 +76,11 @@ function columnHtml(s, c, drag) {
   const use = columnUse(s, c.fieldId);
   const unitLine = c.unitProven ? `GPEXE sends values in ${escapeHtml(c.unit)}` : c.expectedUnit ? `Expected ${escapeHtml(c.expectedUnit)}, not confirmed` : "Unit not confirmed";
   const values = c.rawA !== null || c.rawB !== null
-    ? `<span class="mb-col-vals" aria-label="${escapeAttr(`${cleanName(board.pair.labels[0])}: ${c.rawA ?? "no value"}; ${cleanName(board.pair.labels[1])}: ${c.rawB ?? "no value"}`)}">${withUnit(c.rawA, c.unitProven ? c.unit : "")}<br>${withUnit(c.rawB, c.unitProven ? c.unit : "")}</span>` : "";
+    ? `<span class="mb-col-vals" aria-label="${escapeAttr(`${cleanName(board.pair.labels[0])}: ${c.rawA === null || c.rawA === undefined ? "no value" : `${displayNumber(c.rawA)}${c.unitProven ? ` ${c.unit}` : ""}`}; ${cleanName(board.pair.labels[1])}: ${c.rawB === null || c.rawB === undefined ? "no value" : `${displayNumber(c.rawB)}${c.unitProven ? ` ${c.unit}` : ""}`}`)}">${withUnit(c.rawA, c.unitProven ? c.unit : "")}<br>${withUnit(c.rawB, c.unitProven ? c.unit : "")}</span>` : "";
   const tech = forSupport() ? `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(c.key)}</code></details>` : "";
   const main = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small></span>`;
   if (!c.placeable && !use) {
-    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small class="mb-reason">${escapeHtml(COLUMN_REASON[c.reason] || "This column cannot be placed.")}</small></span>${values}</div>${tech}</li>`;
+    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small class="mb-reason">${escapeHtml(columnReasonText(c.reason, { platformAdmin: forSupport() }))}</small></span>${values}</div>${tech}</li>`;
   }
   if (use) {
     const badge = use === "on" ? `<span class="om-badge om-badge--success">On</span>` : use === "new" ? `<span class="om-badge om-badge--accent">Placed</span>` : `<span class="om-badge om-badge--info">Placed</span>`;
