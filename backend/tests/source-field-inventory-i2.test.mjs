@@ -355,3 +355,21 @@ test("12. structural keys written before the collector skipped them are hidden u
   const ca = await api("/field-inventory?state=all&endpoint=athlete_session", { cookie: W.ca.cookie });
   assert.ok(names(ca).includes("athlete_session:a_b") && !names(ca).some((n) => /:(id|teamsession|start_timestamp)$/.test(n)));
 });
+
+test("13. paging over an endpoint with hidden structural rows: page 1 holds 200 visible names and a cursor, the pages together hold every measured name once, in C order, and no structural key", async () => {
+  // Club C's own connection, seeded last, so the earlier tests' lists are unchanged.
+  const conn = await connection({ clubId: await club("Club C"), by: W.pa.id });
+  const measured = Array.from({ length: 205 }, (_, i) => `m${String(i).padStart(3, "0")}`);
+  await observe(conn, [...measured.map((n) => ["athlete_session", n]), ["athlete_session", "id"], ["athlete_session", "teamsession"], ["athlete_session", "track"]]);
+  const first = await api("/field-inventory?state=all&endpoint=athlete_session", { cookie: W.pa.cookie });
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.body.fields.length, 200, "a full page of visible names");
+  assert.ok(first.body.nextCursor);
+  const second = await api(`/field-inventory?state=all&endpoint=athlete_session&cursor=${first.body.nextCursor}`, { cookie: W.pa.cookie });
+  assert.equal(second.body.nextCursor, null);
+  const all = [...first.body.fields, ...second.body.fields].map((f) => f.name);
+  assert.equal(new Set(all).size, all.length, "no name twice");
+  assert.ok(measured.every((n) => all.includes(n)), "no measured name lost at the page edge");
+  assert.ok(!all.some((n) => ["id", "teamsession", "track"].includes(n)), "no structural key");
+  assert.deepEqual(all, [...all].sort((a, b) => (Buffer.from(a) < Buffer.from(b) ? -1 : Buffer.from(a) > Buffer.from(b) ? 1 : 0)), "C order");
+});
