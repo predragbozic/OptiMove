@@ -1494,7 +1494,9 @@ router.get("/calendar", async (req, res, next) => {
     if (isAthlete) {
       const athleteId = req.authz.athleteId;
       activityParams = [dateFrom, dateTo, athleteId];
-      activitySql = `exists (select 1 from training.activity_participants ap0 where ap0.activity_id = a.id and ap0.athlete_id = $3 and ap0.merge_status = 'canonical')`;
+      // Her own activities, except on an archived team (hidden from her as from everyone else).
+      activitySql = `exists (select 1 from training.activity_participants ap0 where ap0.activity_id = a.id and ap0.athlete_id = $3 and ap0.merge_status = 'canonical')
+        and not exists (select 1 from public.teams t0 where t0.id = a.owner_team_id and a.owner_scope = 'team' and t0.is_active = false)`;
       planParams = [dateFrom, dateTo, athleteId];
       plannedScopeSql = `and p.athlete_id = $3`;
       externalParams = [dateFrom, dateTo, athleteId];
@@ -1569,7 +1571,7 @@ router.get("/calendar", async (req, res, next) => {
          left join plans.plan_sessions ps on ps.logical_session_id = l.logical_session_id
          left join training_load.session_feedback sf on sf.athlete_id = ap.athlete_id
            and ((l.logical_session_id is not null and sf.logical_session_id = l.logical_session_id) or (l.external_assignment_id is not null and sf.external_assignment_id = l.external_assignment_id))
-         where ap.activity_id = a.id and ap.merge_status = 'canonical'
+         where ap.activity_id = a.id and ap.merge_status = 'canonical' ${isAthlete ? "and ap.athlete_id = $3" : ""}
        ) rc on true
        left join lateral (
          select count(distinct ap.id) as total, count(distinct ap.id) filter (where v.id is not null) as with_data
@@ -1658,6 +1660,17 @@ router.get("/calendar", async (req, res, next) => {
     for (const row of activityResult.rows) {
       const bucket = byDate.get(row.occurred_local_date instanceof Date ? row.occurred_local_date.toISOString().slice(0, 10) : String(row.occurred_local_date));
       if (!bucket) continue;
+      const rpe = Number(row.rpe_requested) > 0 ? { requested: Number(row.rpe_requested), rated: Number(row.rpe_rated) } : null;
+      // An athlete: the activity and whether SHE was asked for and gave an RPE. How many took part, how many have
+      // data, conflicts, open suggestions, where it came from and its lifecycle are the staff's (team information).
+      if (isAthlete) {
+        bucket.items.push({
+          kind: "activity", activityId: row.activity_id, name: row.name, activityTypeKey: row.activity_type_key, occurredLocalDate: row.occurred_local_date,
+          startedAt: row.started_at, timezoneSnapshot: row.timezone_snapshot, rpe,
+          sortTime: row.started_at || `${row.occurred_local_date}T00:00:00Z`,
+        });
+        continue;
+      }
       bucket.items.push({
         kind: "activity",
         activityId: row.activity_id,
@@ -1674,7 +1687,7 @@ router.get("/calendar", async (req, res, next) => {
         // Number.MAX_SAFE_INTEGER) - explicitly coerced here since none of
         // these calendar counts can realistically approach that ceiling.
         participantCount: Number(row.participant_count),
-        rpe: Number(row.rpe_requested) > 0 ? { requested: Number(row.rpe_requested), rated: Number(row.rpe_rated) } : null,
+        rpe,
         metrics: Number(row.metrics_total) > 0 ? { total: Number(row.metrics_total), withData: Number(row.metrics_with_data) } : null,
         conflictCount: Number(row.conflict_count),
         openSuggestionCount: Number(row.open_suggestion_count),

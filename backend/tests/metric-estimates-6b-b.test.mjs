@@ -995,7 +995,8 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   const own = await tapi(`/${s.activityId}`, { cookie: evaUser.cookie });
   assert.equal(own.status, 200, own.text);
   const ownEst = own.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
-  assert.ok(ownEst.length > 0 && ownEst.every((f) => String(f.athleteId) === String(eva)));
+  // Her own facts only, and (athlete-own-results.test.mjs) without ids: nothing in the answer names another athlete.
+  assert.ok(ownEst.length > 0 && !own.text.includes(String(ana)) && !own.text.includes(String(dan)) && !own.text.includes(String(fil)));
   for (const f of ownEst) {
     assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], "athlete-self: method, author, date only");
     assert.equal(f.estimate.method, "copy_athlete");
@@ -1019,9 +1020,9 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   const anaUser = await athleteUser(ana, "ana athlete");
   const source = await tapi(`/${s.activityId}`, { cookie: anaUser.cookie });
   assert.equal(source.status, 200, source.text);
-  // Every athlete fact is Ana's; session-level facts (no athleteId) belong to no athlete.
-  assert.ok(source.body.facts.some((f) => String(f.athleteId) === String(ana)), "Ana's own facts are there");
-  assert.ok(source.body.facts.every((f) => f.athleteId == null || String(f.athleteId) === String(ana)), "no other athlete's fact");
+  // Her own facts only (an athlete's answer names no athlete: athlete-own-results.test.mjs).
+  assert.ok(source.body.facts.some((f) => f.factKind === "metric_value"), "Ana's own facts are there");
+  assert.ok(!source.text.includes(String(dan)) && !source.text.includes(String(fil)), "no other athlete's fact");
   assert.ok(source.body.facts.every((f) => !("estimate" in f) && f.detail?.entryMethod !== "estimate"), "no estimate in the source's answer");
   const evaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [eva])).rows[0].n;
   assert.ok(!source.text.includes(evaName) && !source.text.includes(String(eva)), "the source never learns who copied from them");

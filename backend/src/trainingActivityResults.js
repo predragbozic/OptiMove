@@ -42,6 +42,8 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
   if (!activityRow.rowCount) throw httpError(404, "Activity not found.");
 
   if (readContext.isAthleteSelf) {
+    // An archived team's activities are hidden from her as from everyone else (the same 404).
+    if (activityRow.rows[0].owner_scope === "team" && activityRow.rows[0].owner_team_active === false) throw httpError(404, "Activity not found.");
     const owns = await query(
       `select 1 from training.activity_participants ap
        where ap.athlete_id = $1 and training.resolve_canonical_activity_id(ap.activity_id) = training.resolve_canonical_activity_id($2)`,
@@ -64,7 +66,9 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
   // group activity are stripped before the response ever leaves this
   // function — the canonical read contract itself has no concept of "my
   // own facts only", so that narrowing happens here, not in the route.
-  const scoped = readContext.isAthleteSelf ? facts.filter((f) => f.athleteId === null || String(f.athleteId) === String(readContext.athleteId)) : facts;
+  // The link-only facts (no athlete: which metric event or segment the activity is linked to) are the staff's
+  // bookkeeping and are not hers either.
+  const scoped = readContext.isAthleteSelf ? facts.filter((f) => f.athleteId !== null && String(f.athleteId) === String(readContext.athleteId)) : facts;
   const canonicalActivityId = results.rows[0]?.canonical_activity_id || (await query(`select training.resolve_canonical_activity_id($1) as id`, [activityId])).rows[0].id;
 
   // Training Load Frontend 3A — compatible, additive extension: the
@@ -173,7 +177,47 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
     }
   }
 
+  if (readContext.isAthleteSelf) return athleteSelfResults({ canonicalActivityId, facts: scoped, components });
   return { canonicalActivityId, facts: scoped, athleteNamesById, variableNamesById, components };
+}
+
+// ---- what an athlete gets of her own results (owner's decision 2026-11-16: all of them, read-only, nobody else's) ----
+// A fixed list of fields per kind of fact; whatever the canonical read adds later reaches her only when it is added
+// here. Not hers: ids of occasions, sources, versions and alias participants (import bookkeeping), how a value was
+// entered unless it is an estimate, a note or a prescription on a performed component, the link-only facts.
+const SELF_DETAIL = Object.freeze({
+  metric_value: ["metricDefinitionId", "valueNumeric", "valueBoolean", "valueText", "unitAtCapture"],
+  rpe: ["rpe", "durationMinutes", "srpe"],
+  component_performance: ["componentId", "name", "componentTypeKey", "status", "actualDurationSeconds"],
+});
+const SELF_COMPONENT = Object.freeze(["id", "parentComponentId", "componentTypeKey", "name", "sortOrder", "plannedDurationSeconds", "actualDurationSeconds"]);
+const pick = (from, keys) => Object.fromEntries(keys.map((key) => [key, from?.[key] ?? null]));
+export function athleteSelfFact(fact) {
+  const keys = SELF_DETAIL[fact.factKind];
+  if (!keys) return null;
+  const detail = pick(fact.detail, keys);
+  if (fact.factKind === "metric_value" && fact.detail?.entryMethod === "estimate") detail.entryMethod = "estimate";
+  const out = { factKind: fact.factKind, detail };
+  if (fact.estimate) out.estimate = { method: fact.estimate.method, estimatedBy: fact.estimate.estimatedBy, estimatedAt: fact.estimate.estimatedAt };
+  return out;
+}
+async function athleteSelfResults({ canonicalActivityId, facts, components }) {
+  const own = facts.map(athleteSelfFact).filter(Boolean);
+  // The name and unit of exactly the variables in her own facts, whoever owns them (a club's or a team's variable
+  // has no name in her catalog read): read by id, never the catalog, never a key, an icon, an owner or a description.
+  const definitionIds = [...new Set(own.filter((f) => f.factKind === "metric_value").map((f) => f.detail.metricDefinitionId).filter((id) => typeof id === "string" && UUID_PATTERN.test(id)))];
+  let variableNamesById = {};
+  if (definitionIds.length) {
+    const names = await query(
+      `select d.id, d.label, d.short_label, v.unit
+         from training_load.metric_definitions d
+         left join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+        where d.id = any($1::uuid[])`,
+      [definitionIds],
+    );
+    variableNamesById = Object.fromEntries(names.rows.map((r) => [r.id, { label: r.label, shortLabel: r.short_label ?? null, unit: r.unit ?? null }]));
+  }
+  return { canonicalActivityId, facts: own, variableNamesById, components: components.map((c) => pick(c, SELF_COMPONENT)) };
 }
 
 const LIST_MAX_PAGE_SIZE = 200;
@@ -211,7 +255,10 @@ export async function listActivities(readContext, { athleteId, dateFrom, dateTo,
 
   const params = [dateFrom, dateTo];
   // The READ scope (D8): a club workspace lists its active teams' activities too.
-  const scopeSql = readContext.isAthleteSelf ? "true" : activityReadScopeSqlForWorkspace(readContext.scope, "a", params);
+  // An athlete: her own, except on an archived team (hidden from her as from everyone else).
+  const scopeSql = readContext.isAthleteSelf
+    ? "not exists (select 1 from public.teams t0 where t0.id = a.owner_team_id and a.owner_scope = 'team' and t0.is_active = false)"
+    : activityReadScopeSqlForWorkspace(readContext.scope, "a", params);
   let athleteSql = "true";
   if (targetAthleteId) {
     params.push(targetAthleteId);
@@ -240,6 +287,8 @@ export async function listActivities(readContext, { athleteId, dateFrom, dateTo,
   );
 
   const hasMore = result.rows.length > pageSize;
+  // Her own rows without the staff's bookkeeping (where the activity came from, its lifecycle, whose it is).
+  const selfRow = ({ ownerScope, origin, lifecycleState, ...row }) => row;
   const rows = result.rows.slice(0, pageSize).map((r) => ({
     activityId: r.activity_id,
     participantId: r.participant_id,
@@ -257,5 +306,5 @@ export async function listActivities(readContext, { athleteId, dateFrom, dateTo,
   }));
   const last = rows[rows.length - 1];
   const nextCursor = hasMore && last ? { localDate: last.localDate, activityId: last.activityId, participantId: last.participantId } : null;
-  return { rows, nextCursor };
+  return { rows: readContext.isAthleteSelf ? rows.map(selfRow) : rows, nextCursor };
 }
