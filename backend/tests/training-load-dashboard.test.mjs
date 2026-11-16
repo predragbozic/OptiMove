@@ -5523,17 +5523,63 @@ test("S2c S13 a legacy text metric chart with a null sidecar atomically becomes 
   assert.deepEqual(await s2bDatabaseState(), beforeReplay);
 });
 
-test("Simple production HTTP mount authenticates, hides foreign dashboards and replays an atomic save", async () => {
-  const fixture = await s2aFixture("simple-production-mount");
-  const foreign = await s2aFixture("simple-production-foreign");
-  const route = (id, action) => `/api/training-load/dashboards/${id}/simple/${action}`;
-  const request = (action, body) => api(route(fixture.dashboard.id, action), {
-    cookie: fixture.coachCookie, method: body === undefined ? "GET" : "POST", body,
+test("Simple production HTTP mount authenticates, hides foreign dashboards and replays an atomic save", async testContext => {
+  const previousMode = process.env.DASHBOARD_SIMPLE_MODE;
+  process.env.DASHBOARD_SIMPLE_MODE = "off";
+  let offApp;
+  try { ({ app: offApp } = await import("../src/server.js?pilot-off-reference")); }
+  finally {
+    if (previousMode === undefined) delete process.env.DASHBOARD_SIMPLE_MODE;
+    else process.env.DASHBOARD_SIMPLE_MODE = previousMode;
+  }
+  const offServer = http.createServer(offApp);
+  await new Promise(resolve => offServer.listen(0, "127.0.0.1", resolve));
+  testContext.after(() => new Promise(resolve => offServer.close(resolve)));
+  const offOrigin = "http://127.0.0.1:" + offServer.address().port;
+  const { adminId, adminCookie } = await makePlatformAdmin("simple-pilot");
+  const dashboard = await makeDashboardHttp(adminCookie);
+  assert.ok(dashboard?.id);
+  const club = await makeClubCoach("simple-pilot-club");
+  const team = await makeTeamCoach("simple-pilot-team", { clubId: club.clubId });
+  const athlete = await makeAthleteInClub(club.clubId);
+  const base = "/api/training-load/dashboards/" + dashboard.id;
+  const request = (action, body) => api(base + "/simple/" + action, {
+    cookie: adminCookie, method: body === undefined ? "GET" : "POST", body,
   });
-  assert.equal((await api(route(fixture.dashboard.id, "capabilities"))).status, 401);
-  const missing = await api(route(crypto.randomUUID(), "capabilities"), { cookie: fixture.coachCookie });
-  assert.equal(missing.status, 404);
-  assert.deepEqual(await api(route(foreign.dashboard.id, "capabilities"), { cookie: fixture.coachCookie }), missing);
+  assert.equal((await api(base, { cookie: adminCookie })).body.simplePreview, true);
+  const routes = [["GET", "capabilities"], ["GET", "metrics"], ["POST", "validate"],
+    ["POST", "preview"], ["POST", "widgets"], ["PUT", "widgets/" + crypto.randomUUID()],
+    ["POST", "requests/status"]];
+  const { createSimplePreviewRouter } = await import("../src/dashboardSimple/previewRouter.js");
+  const { createSimpleSaveRouter } = await import("../src/dashboardSimple/saveRouter.js");
+  const unused = () => assert.fail("route inventory must not execute handlers");
+  const inventory = [
+    createSimplePreviewRouter({ service: { capabilities: unused, metrics: unused, validate: unused, preview: unused } }),
+    createSimpleSaveRouter({ service: { save: unused, status: unused } }),
+  ].flatMap(router => router.stack.flatMap(({ route }) => route
+    ? Object.keys(route.methods).map(method => method.toUpperCase() + " " + route.path.slice(1)) : []));
+  assert.deepEqual(inventory.sort(), routes.map(([method, route]) =>
+    method + " " + route.replace(/^widgets\/.+/, "widgets/:widgetId")).sort());
+  const clubDashboard = await makeDashboardHttp(club.coachCookie);
+  assert.equal(Object.hasOwn((await api("/api/training-load/dashboards/" + clubDashboard.id, { cookie: club.coachCookie })).body, "simplePreview"), false);
+  await grantClubAdmin(adminId, club.clubId);
+  await setActiveWorkspace(adminId, "club", club.clubId);
+  for (const [method, suffix] of routes) {
+    const target = base + "/simple/" + suffix;
+    for (const cookie of [adminCookie, club.coachCookie, team.coachCookie, athlete.cookie]) {
+      const headers = { Cookie: cookie, "Content-Type": "application/json" };
+      const options = { method, headers, ...(method !== "GET" ? { body: "{}" } : {}) };
+      const denied = await fetch(apiBaseUrl + target, options);
+      const absent = await fetch(offOrigin + target, options);
+      assert.equal(denied.status, 404, method + " " + suffix);
+      assert.equal(denied.status, absent.status);
+      assert.equal(await denied.text(), await absent.text());
+      const stableHeaders = response => [...response.headers].filter(([key]) => key !== "date");
+      assert.deepEqual(stableHeaders(denied), stableHeaders(absent));
+    }
+    assert.equal((await api(target, { method, ...(method !== "GET" ? { body: {} } : {}) })).status, 401);
+  }
+  await setActiveWorkspace(adminId, "platform");
   assert.equal((await request("capabilities")).status, 200);
   const input = s2bEnvelope();
   const preview = await request("preview", input);

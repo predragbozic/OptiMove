@@ -4,7 +4,7 @@ export const simpleSaveIsPending = locked;
 
 export function simpleDraftFromWidget(widget, uuid) {
   const series = widget?.series?.[0];
-  if (widget && (widget.series?.length !== 1 || series.resolution_status !== 'resolved'
+  if (widget && (widget.series?.length !== 1 || series.resolution_status !== 'resolved' || series.source_policy === 'estimate'
     || series.template_metric_key_hints || series.template_resolution_candidates
     || Object.keys(widget.local_filter_override ?? {}).some(key => !['athleteIds', 'activityId', 'componentId'].includes(key)))) return null;
   const filter = widget?.local_filter_override ?? {};

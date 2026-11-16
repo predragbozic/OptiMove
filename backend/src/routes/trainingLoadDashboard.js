@@ -14,6 +14,7 @@
 // AC/CH, no ML — this router is the backend surface only, per this
 // delivery's own explicit scope boundary.
 import { Router } from "express";
+import { canUseSimplePlatformPilot } from "../dashboardSimple/platformPilot.js";
 import { resolveActiveDataWorkspace, canManageDashboardRow, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
@@ -312,7 +313,10 @@ router.get("/:dashboardId", async (req, res, next) => {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
-    res.json(await getDashboardDetail(req, dataWorkspace, req.params.dashboardId));
+    const detail = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    const simplePreview = ['preview', 'enabled'].includes(req.app.locals.dashboardSimpleMode)
+      && canUseSimplePlatformPilot(req, dataWorkspace);
+    res.json(simplePreview ? { ...detail, simplePreview: true } : detail);
   } catch (error) {
     respondToServiceError(res, next, error);
   }

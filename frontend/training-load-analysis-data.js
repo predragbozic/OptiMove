@@ -184,6 +184,7 @@ function applyDashboardDetail(detail) {
     analysis.editMode = false;
   }
   analysis.dashboard = detail.dashboard;
+  analysis.simplePreview = detail.simplePreview === true;
   analysis.widgets = detail.widgets || [];
   analysis.selectedDashboardId = detail.dashboard?.id || "";
   analysis.layoutDraft = null;

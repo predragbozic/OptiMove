@@ -41,6 +41,8 @@ import { appErrorsRouter } from "./routes/appErrors.js";
 import { recordServerError, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, POOL_MAX } from "./db.js";
+import { canUseSimplePlatformPilot } from './dashboardSimple/platformPilot.js';
+import { resolveActiveDataWorkspace } from './trainingLoadDashboardAccess.js';
 import { createSimpleRuntime, SIMPLE_RUNTIME_PATH } from './dashboardSimple/runtime.js';
 import { queryDashboard } from './trainingLoadDashboardQuery.js';
 import { realtimeRouter } from "./realtime.js";
@@ -74,8 +76,20 @@ const corsOrigins = (process.env.CORS_ORIGIN || "")
 app.use(corsOrigins.length ? cors({ origin: corsOrigins }) : cors());
 // An error report is tiny: this route parses at most 4 KB (a larger body is 413 body_too_large from the error handler); the global parser then skips an already parsed body.
 app.use("/api/app-errors", express.json({ limit: "4kb" }));
+function missingRoute(req, res) {
+  res.status(404).json({ error: "Not found", path: req.originalUrl.split("?", 1)[0] });
+}
+
 const simpleRuntime = await createSimpleRuntime({ pool, poolMax: POOL_MAX, queryDashboard });
-if (simpleRuntime.router) app.use(SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, simpleRuntime.router);
+app.locals.dashboardSimpleMode = simpleRuntime.mode;
+if (simpleRuntime.router) {
+  app.use(SIMPLE_RUNTIME_PATH, authMiddleware, attachAuthorizationContext, requireAuth, async (req, res, next) => {
+    const workspace = await resolveActiveDataWorkspace(req);
+    if (!canUseSimplePlatformPilot(req, workspace)) return missingRoute(req, res);
+    req.simplePlatformPilot = true;
+    next();
+  }, simpleRuntime.router);
+}
 app.use(express.json());
 app.use(authMiddleware);
 app.use(attachAuthorizationContext);
@@ -227,9 +241,7 @@ app.get("/tests/check-in/:token", (_req, res) => {
   sendHtmlEntry(res, "athlete.html");
 });
 
-app.use((req, res) => {
-  res.status(404).json({ error: "Not found", path: req.path });
-});
+app.use(missingRoute);
 
 app.use((error, req, res, next) => {
   // An answer already started cannot be replaced: Express's own handler

@@ -47,6 +47,7 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
   if (!own(m, 'unit') || !['numeric', 'text', 'boolean'].includes(m.value_type)) issue('invalidCatalogMetadata', '$.metricRef');
   if (existing && (existing.series?.length !== 1 || existing.series[0].resolution_status !== 'resolved')) return { status: 'advancedRequired', issues: [{ code: 'advancedRequired', path: '$' }] };
   const previous = existing?.series[0];
+  if (previous?.source_policy === 'estimate') return { status: 'advancedRequired', issues: [{ code: 'advancedRequired', path: '$.metricRef' }] };
   if (previous?.template_metric_key_hints || previous?.template_resolution_candidates) return { status: 'advancedRequired', issues: [{ code: 'advancedRequired', path: '$.metricRef' }] };
   if (existing && Object.keys(existing.local_filter_override ?? {}).some(k => !['athleteIds', 'activityId', 'componentId'].includes(k))) return { status: 'advancedRequired', issues: [{ code: 'advancedRequired', path: '$.advancedFilter' }] };
   const view = clone(draft.view);
