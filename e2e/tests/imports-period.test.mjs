@@ -5,7 +5,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
-import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
+import { launch, openAs, openTrainingLoad, showPeriodMonth, WIDTHS } from "../lib/browser.mjs";
 
 let browser;
 before(async () => { browser = await launch(); });
@@ -37,7 +37,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
           const sheet = await page.evaluate(() => { const r = document.querySelector(".imports-period").getBoundingClientRect(); return { top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height), vw: window.innerWidth, vh: window.innerHeight }; });
           assert.deepEqual([sheet.top, sheet.left, sheet.width, sheet.height], [0, 0, sheet.vw, sheet.vh], `a full-screen sheet ${JSON.stringify(sheet)}`);
         }
-        // The month on screen is today's; the fixture's sessions are on 04.11.2026 and 05.11.2026.
+        // The chooser opens on today's month; the fixture's sessions are on 04.11.2026 and 05.11.2026, so page to them.
+        await showPeriodMonth(page, "November 2026");
         await page.waitForSelector(DAY("2026-11-05"), { timeout: 10_000 });
         const look = await page.evaluate(() => {
           const days = [...document.querySelectorAll('.imports-period [data-action="training-load-gpexe-period-day"]')];
@@ -53,6 +54,9 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
             chips5: chips("2026-11-05"),
             label5: cell("2026-11-05").getAttribute("aria-label"),
             missing: document.querySelector(".imports-period .period-missing").textContent.trim(),
+            missingFrom: document.querySelector(".imports-period .period-missing").dataset.from,
+            missingTo: document.querySelector(".imports-period .period-missing").dataset.to,
+            today: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })(),
             overflow: document.documentElement.scrollWidth - window.innerWidth,
           };
         });
@@ -62,7 +66,14 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.deepEqual(look.chips4, ["→"], "the ready session: one blue arrow");
         assert.deepEqual(look.chips5, ["!"], "the session that needs a link: one amber !");
         assert.match(look.label5, /5 November, 1 session: needs you/);
-        assert.match(look.missing, /^Search from 08\.11\. to today$/);
+        // The first button offers the days since the last search (it ended on 08.11.2026) up to today, at most 31 days.
+        const from = new Date(`${look.today}T00:00:00Z`);
+        from.setUTCDate(from.getUTCDate() - 30);
+        const earliest = from.toISOString().slice(0, 10);
+        const expectedFrom = earliest > "2026-11-08" ? earliest : "2026-11-08";
+        assert.deepEqual([look.missingFrom, look.missingTo], [expectedFrom, look.today], "the missing days run from the last search to today");
+        assert.match(look.missing, /^Search from \d{2}\.\d{2}\.(\d{4})? to today$/);
+        if (expectedFrom === "2026-11-08") assert.equal(look.missing, "Search from 08.11. to today");
         assert.equal(look.overflow, 0, "no horizontal page scroll");
         // Two taps, the later day first: the period runs from the earlier one.
         await page.click(DAY("2026-11-05"));
@@ -89,6 +100,8 @@ test("P4 (1280 px): a mouse drag across days chooses the period; the click that 
     try {
       await openTrainingLoad(page);
       await page.click('[data-action="training-load-section"][data-section="imports"]');
+      await page.waitForSelector(".imports-period .period-month", { state: "visible", timeout: 20_000 });
+      await showPeriodMonth(page, "November 2026");
       await page.waitForSelector(DAY("2026-11-06"), { state: "visible", timeout: 20_000 });
       // The screen repaints while the status is read: wait for the day, and read its box again if it was just replaced.
       const box = async (d) => {
@@ -137,6 +150,7 @@ test("P4 (390 px): the sheet is a dialog; Escape closes it; a session tapped in 
       await page.click('[data-action="training-load-gpexe-period-toggle"]');
       // A short phone: the sheet scrolls, and a tap on a day keeps it where it was (the Search button stays in view).
       await page.setViewportSize({ width: 390, height: 560 });
+      await showPeriodMonth(page, "November 2026");
       await page.click(DAY("2026-11-02"));
       await page.click(DAY("2026-11-05"));
       const kept = await page.evaluate(() => {
