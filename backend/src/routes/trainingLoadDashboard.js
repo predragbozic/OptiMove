@@ -480,12 +480,18 @@ router.patch("/:dashboardId/widgets/:widgetId/layout", async (req, res, next) =>
 // Widgets
 // ------------------------------------------------------------
 
-const CREATE_WIDGET_KEYS = ["expectedDashboardRevision", "widgetType", "title", "widgetOrder", "x", "y", "width", "height", "mobileOrder", "groupBy", "displayConfig", "localFilterOverride", "presentation"];
+async function advancedWidgetKeys(req, body, legacyKeys) {
+  if (!Object.hasOwn(body, "presentation") || !["preview", "enabled"].includes(req.app.locals.dashboardSimpleMode) || !req.user) return legacyKeys;
+  const workspace = await resolveActiveDataWorkspace(req);
+  return canUseSimplePlatformPilot(req, workspace) ? [...legacyKeys, "presentation"] : legacyKeys;
+}
+
+const CREATE_WIDGET_KEYS = ["expectedDashboardRevision", "widgetType", "title", "widgetOrder", "x", "y", "width", "height", "mobileOrder", "groupBy", "displayConfig", "localFilterOverride"];
 router.post("/:dashboardId/widgets", async (req, res, next) => {
   try {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const b = req.body || {};
-    const unknown = rejectUnknownKeys(b, CREATE_WIDGET_KEYS);
+    const unknown = rejectUnknownKeys(b, await advancedWidgetKeys(req, b, CREATE_WIDGET_KEYS));
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown}.` });
     if (!validRevision(b.expectedDashboardRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedDashboardRevision must be a positive integer." });
     if (typeof b.widgetType !== "string" || !b.widgetType.length) return res.status(400).json({ error: "invalidRequest", message: "widgetType is required." });
@@ -510,12 +516,12 @@ router.post("/:dashboardId/widgets", async (req, res, next) => {
   }
 });
 
-const UPDATE_WIDGET_CONTENT_KEYS = ["expectedWidgetRevision", "widgetType", "title", "groupBy", "state", "displayConfig", "localFilterOverride", "presentation"];
+const UPDATE_WIDGET_CONTENT_KEYS = ["expectedWidgetRevision", "widgetType", "title", "groupBy", "state", "displayConfig", "localFilterOverride"];
 router.patch("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
   try {
     if (!validUuid(req.params.dashboardId) || !validUuid(req.params.widgetId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid id." });
     const b = req.body || {};
-    const unknown = rejectUnknownKeys(b, UPDATE_WIDGET_CONTENT_KEYS);
+    const unknown = rejectUnknownKeys(b, await advancedWidgetKeys(req, b, UPDATE_WIDGET_CONTENT_KEYS));
     if (unknown) return res.status(400).json({ error: "invalidRequest", message: `Unknown field: ${unknown} (clearing localFilterOverride is done by sending it as null, not a separate clear flag).` });
     if (!validRevision(b.expectedWidgetRevision)) return res.status(400).json({ error: "invalidRequest", message: "expectedWidgetRevision must be a positive integer." });
     if (!hasAnyOtherKey(b, ["expectedWidgetRevision"])) return res.status(400).json({ error: "invalidRequest", message: "This PATCH carries no actual change." });

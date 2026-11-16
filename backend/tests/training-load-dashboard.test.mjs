@@ -5005,13 +5005,14 @@ test("S2c S12 a presentation-only save increments only the widget revision; pres
 
 test("S2c S12 Advanced presentation modes preserve omitted sidecars, reject ambiguous null and bump revision only for an actual replacement or clear", async testContext => {
   const fixture = await s2aFixture("s2c-advanced-sidecar");
+  const { adminCookie } = await makePlatformAdmin("advanced-sidecar");
   const harness = await s2cHttpHarness(testContext);
   const created = s2cReceipt(await harness.save(fixture, (await harness.preview(fixture)).body), "created");
   const sidecar = { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } };
   async function patch(body) {
     const current = await s2aStored(created.widgetId);
     return api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
-      method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: current.revision, ...body },
+      method: "PATCH", cookie: adminCookie, body: { expectedWidgetRevision: current.revision, ...body },
     });
   }
   assert.equal((await patch({ presentation: { mode: "replace", value: sidecar } })).status, 200);
@@ -5113,8 +5114,9 @@ test("S2c S13 opaque presentation versions survive title and layout edits; seman
   assert.ok(guarded.body.issues.some(issue => issue.code === "presentationRevalidationRequired"));
   assert.equal(guarded.body.previewToken, undefined);
   assert.deepEqual(await s2bDatabaseState(), before);
+  const { adminCookie } = await makePlatformAdmin("clear-sidecar");
   const cleared = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${created.widgetId}`, {
-    method: "PATCH", cookie: fixture.coachCookie, body: { expectedWidgetRevision: stored.revision, presentation: { mode: "clear" } },
+    method: "PATCH", cookie: adminCookie, body: { expectedWidgetRevision: stored.revision, presentation: { mode: "clear" } },
   });
   assert.equal(cleared.status, 200, JSON.stringify(cleared.body));
   const afterClear = await s2aStored(stored.id);
@@ -5241,10 +5243,11 @@ test("S2c S12/S13 opaque chart clear or replacement can atomically change groupi
 
 test("S2c S13 V1 chart attachment and series insertion reject current text or boolean metrics; numeric and null-sidecar legacy paths succeed", async () => {
   const fixture = await s2aFixture("s2c-numeric-chart-guard");
+  const { adminCookie } = await makePlatformAdmin("s2c-numeric-chart-guard");
   const sidecar = { schemaVersion: 1, chartComposition: "athletes-v1", chartInteractions: { tooltip: { mode: "exact" } } };
   let chartIndex = 0;
   async function chart(presentation) {
-    const created = await makeWidgetHttp(fixture.coachCookie, {
+    const created = await makeWidgetHttp(adminCookie, {
       ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id),
     }, { widgetType: "line_chart", groupBy: "day", y: chartIndex++ * 5, ...(presentation ? { presentation: { mode: "replace", value: presentation } } : {}) });
     return s2aStored(created.widgetId);
@@ -5266,7 +5269,7 @@ test("S2c S13 V1 chart attachment and series insertion reject current text or bo
     assert.equal(legacyStored.series[0].metric_definition_id, definition.metricDefinitionId);
     const beforeAttachment = await s2bDatabaseState();
     const attached = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/widgets/${legacy.id}`, {
-      method: "PATCH", cookie: fixture.coachCookie,
+      method: "PATCH", cookie: adminCookie,
       body: { expectedWidgetRevision: legacyStored.revision, presentation: { mode: "replace", value: sidecar } },
     });
     if (valueType === "numeric") {
@@ -5301,12 +5304,13 @@ test("S2c S13 V1 chart attachment and series insertion reject current text or bo
 
 test("S2c S13 the series-update binding guard rejects text and boolean under V1 charts while null-sidecar legacy resolution remains supported", async () => {
   const fixture = await s2aFixture("s2c-resolve-chart-guard");
+  const { adminCookie } = await makePlatformAdmin("s2c-resolve-chart-guard");
   const sidecar = { schemaVersion: 1, chartInteractions: { tooltip: { mode: "exact" } } };
   const numericSource = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, dailyAggregationMethod: "last", scopeLevels: ["session"] });
   let chartIndex = 0;
   for (const valueType of ["text", "boolean", "numeric"]) {
     const definition = await makeMetricDefinition({ clubId: fixture.clubId, adminId: fixture.coachId, valueType, dailyAggregationMethod: "last", scopeLevels: ["session"] });
-    const known = await makeWidgetHttp(fixture.coachCookie, {
+    const known = await makeWidgetHttp(adminCookie, {
       ...fixture.dashboard, revision: await freshRevision(fixture.coachCookie, fixture.dashboard.id),
     }, { widgetType: "line_chart", groupBy: "day", y: chartIndex++ * 5, presentation: { mode: "replace", value: sidecar } });
     const knownWidget = await s2aStored(known.widgetId);
@@ -5578,6 +5582,29 @@ test("Simple production HTTP mount authenticates, hides foreign dashboards and r
       assert.deepEqual(stableHeaders(denied), stableHeaders(absent));
     }
     assert.equal((await api(target, { method, ...(method !== "GET" ? { body: {} } : {}) })).status, 401);
+  }
+  await setActiveWorkspace(adminId, "platform");
+  const presentation = { mode: "replace", value: { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } } };
+  const sidecar = await makeWidgetHttp(adminCookie, clubDashboard, { presentation });
+  const widgetPath = "/api/training-load/dashboards/" + clubDashboard.id + "/widgets";
+  const storedSidecar = () => query("select presentation_config::text as value from training_load.dashboard_widgets where id=$1", [sidecar.widgetId]).then(result => result.rows[0].value);
+  const stored = await storedSidecar();
+  assert.ok(stored);
+  const legacyCreate = { error: "invalidRequest", message: "Unknown field: presentation." };
+  const legacyPatch = { error: "invalidRequest", message: "Unknown field: presentation (clearing localFilterOverride is done by sending it as null, not a separate clear flag)." };
+  for (const [origin, cookie] of [[offOrigin, adminCookie], [apiBaseUrl, club.coachCookie], [apiBaseUrl, team.coachCookie], [apiBaseUrl, adminCookie]]) {
+    if (origin === apiBaseUrl && cookie === adminCookie) await setActiveWorkspace(adminId, "club", club.clubId);
+    for (const [method, suffix, body, expected] of [
+      ["POST", "", { presentation }, legacyCreate],
+      ["PATCH", "/" + sidecar.widgetId, { expectedWidgetRevision: (await s2aStored(sidecar.widgetId)).revision, presentation: { mode: "clear" } }, legacyPatch],
+    ]) {
+      const response = await fetch(origin + widgetPath + suffix, {
+        method, headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), expected);
+      assert.equal(await storedSidecar(), stored);
+    }
   }
   const rawTarget = base + "/simple/preview?private=excluded";
   for (const [body, expected] of [["{", 400], [JSON.stringify("x".repeat(110 * 1024)), 413]]) {
