@@ -104,8 +104,8 @@ export function renderFixSheetHtml(gx, status, h) {
       <div class="imports-fix-head">
         <h3 id="imports-fix-title">${escapeHtml(h.title)}</h3>
         ${button("plain-button imports-fix-close", "training-load-gpexe-fix-close", "×", { disabled: busy, attrs: `aria-label="Close"` })}
+        ${counter}
       </div>
-      ${counter}
       <div class="imports-fix-body">${body}</div>
       ${actions ? `<div class="imports-fix-actions">${actions}</div>` : ""}
       ${fullReviewLink}

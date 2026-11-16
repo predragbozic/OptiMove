@@ -1495,7 +1495,10 @@ test("link: two team athletes with the same name can't be confirmed without tell
   }));
   await openImports();
   await openCandidate();
-  assert.match(renderTrainingLoadCoachHtml(), /<option value="ath-3">Dario \(same name as another athlete\)<\/option>/);
+  // The option says so before it is pressed: disabled, with one line under the chooser (#562 follow-up).
+  assert.match(renderTrainingLoadCoachHtml(), /<option value="ath-3" disabled>Dario \(same name as another athlete\)<\/option>/);
+  assert.match(renderTrainingLoadCoachHtml(), /An athlete whose name another team athlete shares can(?:'|&#039;)t be chosen\. Give them different names in Settings > Athletes, then link\./);
+  // The confirmation still refuses it (a stale or scripted choice).
   queried = { "[data-gpexe-link-select='104']": { value: "ath-3" } };
   await act("training-load-gpexe-link", { gpexeAthleteId: "104" });
   const html = renderTrainingLoadCoachHtml();

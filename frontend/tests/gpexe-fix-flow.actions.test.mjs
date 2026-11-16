@@ -177,7 +177,8 @@ test("Fix 1: a coach's group button opens the sheet - Step 1 of 2, one sentence,
   await fixFirst();
   const s = sheet();
   assert.match(s, /role="dialog" aria-modal="true" aria-labelledby="imports-fix-title"/);
-  assert.match(s, /<p class="imports-fix-count">Step 1 of 2<\/p>/);
+  assert.match(s, /<p class="imports-fix-count">Step 1 of 2<\/p>\s*<\/div>/, "the step count is in the sticky head");
+  assert.match(s, /<label><span>Team athlete<\/span>/, "the chooser's label does not repeat the sentence");
   assert.match(s, /<option value="" selected>Choose an athlete of the team<\/option>/);
   assert.equal((s.match(/ selected/g) || []).length, 1, "nothing else is preselected");
   assert.match(s, /data-action="training-load-gpexe-fix-skip" data-gpexe-athlete-id="101"[^>]*>Skip for now</);
@@ -217,9 +218,10 @@ test("Fix 3: a name two team athletes share can't be confirmed; Skip for now ski
     const w = world({ sessions: [row(5)], unlinkedBy: { "cand-5": ["101"] } });
     await open(w);
     await fixFirst();
+    assert.match(sheet(), /<option value="ath-1" disabled>Alex Example \(same name as another athlete\)<\/option>/, "the option says so before it is pressed");
     selectValues["101"] = "ath-1";
     await act("training-load-gpexe-link", { gpexeAthleteId: "101" });
-    assert.ok(!/Confirm link/.test(sheet()), "no confirmation for a shared name");
+    assert.ok(!/Confirm link/.test(sheet()), "and the confirmation still refuses it");
     assert.match(sheet(), /More than one athlete of the team is called Alex Example/);
     await act("training-load-gpexe-fix-skip", { gpexeAthleteId: "101" });
     const s = sheet();
