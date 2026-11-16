@@ -27446,4 +27446,58 @@ body:not(.athlete-mode):not(.login-mode) .imports-fix-full .imports-fix-full-lin
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+/* Slice 2: the recordings of one athlete, as 44 px rows to choose from, and the list of changes to imported results. */
+.imports-fix-choices {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.imports-fix-legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+body:not(.athlete-mode):not(.login-mode) .imports-fix-choice:has(input:checked) {
+  border-color: var(--accent, #1f6f68);
+  box-shadow: inset 0 0 0 1px var(--accent, #1f6f68);
+}
+.imports-fix-choice input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+.imports-fix-choice input:focus-visible {
+  outline: 2px solid var(--accent, #1f6f68);
+  outline-offset: 2px;
+}
+.imports-fix-changes {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+/* The platform admin's group keeps its review button and gets Fix beside it: a gap between the two. */
+body:not(.athlete-mode):not(.login-mode) .imports-attn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 /* End of the Imports Fix flow. */

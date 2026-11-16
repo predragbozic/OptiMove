@@ -26,11 +26,11 @@ function g() {
   return state.trainingLoad.gpexe;
 }
 
-function teamPath(teamId, rest = "") {
+export function teamPath(teamId, rest = "") {
   return `${BASE}/${encodeURIComponent(teamId)}${rest}`;
 }
 
-function errorInfo(error) {
+export function errorInfo(error) {
   return { status: error?.status ?? 0, code: error?.data?.error || error?.message || "error", message: error?.data?.message || "", data: error?.data || null };
 }
 

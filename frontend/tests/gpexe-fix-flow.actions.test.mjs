@@ -71,25 +71,35 @@ function row(n, o = {}) {
 }
 
 // A small world: sessions, their GPEXE athletes and the team's links. A link changes what a recompute says.
-function world({ sessions, unlinkedBy = {}, extraAthletes = {}, links = [], switchOn = true, globalOn = true, onLink, onPreview, onApprove, onCheck, onCandidate } = {}) {
-  const w = { sessions: sessions.map((s) => ({ ...s })), links: [...links], unlinkedBy };
+function world({ sessions, unlinkedBy = {}, extraAthletes = {}, multiTrack = {}, changes = {}, links = [], switchOn = true, globalOn = true, onTracks, onTrackPut, onLink, onPreview, onApprove, onCheck, onCandidate } = {}) {
+  const w = { sessions: sessions.map((s) => ({ ...s })), links: [...links], unlinkedBy, choices: {}, puts: [] };
+  // Slice 2: an athlete GPEXE recorded on more than one track, until a choice is made (track: imported; none: left out by choice).
+  const trackAthletes = (s) => Object.entries(multiTrack[s.id] || {}).map(([g, m]) => {
+    const ch = w.choices[`${s.id}:${g}`];
+    if (ch?.choice === "track") return { gpexeAthleteId: g, athleteId: m.athleteId, results: [] };
+    if (ch?.choice === "none") return { gpexeAthleteId: g, athleteId: m.athleteId, gps: { status: "not_used_by_choice" }, notImported: { code: "no_track_by_choice" }, results: [] };
+    return { gpexeAthleteId: g, athleteId: m.athleteId, gps: { status: "needs_manual_review" }, notImported: { code: "multiple_tracks" }, results: [] };
+  });
+  const openTracks = (s) => trackAthletes(s).filter((a) => a.notImported?.code === "multiple_tracks").length;
   const preview = (s) => {
     const ids = (w.unlinkedBy[s.id] || []).filter((g) => !w.links.some((l) => l.gpexeAthleteId === g));
     const linkedHere = (w.unlinkedBy[s.id] || []).filter((g) => w.links.some((l) => l.gpexeAthleteId === g));
     return {
-      version: 3, status: "ready", blocked: null, counts: s.counts, changesToImported: [], anomalies: [], unactivatedSourceMetricCount: 0,
+      version: 3, status: "ready", blocked: null, counts: s.counts, changesToImported: changes[s.id] || [], anomalies: [], unactivatedSourceMetricCount: 0,
       athletes: [
         { gpexeAthleteId: "900", athleteId: "ath-9", results: [] },
         ...linkedHere.map((g) => ({ gpexeAthleteId: g, athleteId: w.links.find((l) => l.gpexeAthleteId === g).athleteId, results: [] })),
         ...ids.map((g) => ({ gpexeAthleteId: g, athleteId: null, notImported: { code: "athlete_not_linked" }, results: [] })),
         ...(extraAthletes[s.id] || []),
+        ...trackAthletes(s),
       ],
       teamAthletesWithoutGpexeRecord: ["ath-1", "ath-2", "ath-3"].filter((a) => !w.links.some((l) => l.athleteId === a)).map((athleteId) => ({ athleteId })),
     };
   };
   const summary = (s) => {
     const ids = (w.unlinkedBy[s.id] || []).filter((g) => !w.links.some((l) => l.gpexeAthleteId === g));
-    return { ...s, reasons: ids.length ? [{ code: "athletes_not_linked", count: ids.length }] : s.reasons, counts: { ...s.counts, athletesNotImported: ids.length }, approvalBlockers: switchOn ? s.approvalBlockers : [...s.approvalBlockers, "team_import_switch_off"] };
+    const reasons = [...(ids.length ? [{ code: "athletes_not_linked", count: ids.length }] : s.reasons), ...(openTracks(s) ? [{ code: "athletes_need_manual_review", count: openTracks(s) }] : [])];
+    return { ...s, reasons, counts: { ...s.counts, athletesNotImported: ids.length }, approvalBlockers: switchOn ? s.approvalBlockers : [...s.approvalBlockers, "team_import_switch_off"] };
   };
   const detail = (s) => ({ ...summary(s), athletes: NAMES, preview: preview(s), approval: s.status === "imported" ? { id: `appr-${s.id}`, import: {} } : null });
   w.server = async (call) => {
@@ -115,6 +125,18 @@ function world({ sessions, unlinkedBy = {}, extraAthletes = {}, links = [], swit
     }
     // The real check runs, then is polled until it ends.
     if (rest === "/checks/chk-1") return { status: 200, body: { check: { id: "chk-1", status: "succeeded", startedAt: "2026-09-22T11:00:00Z", finishedAt: "2026-09-22T11:01:00Z", sessionsSeen: 1, candidatesNew: 0, candidatesChanged: 0, candidatesUnchanged: 1, error: null } } };
+    const tc = rest.match(/^\/candidates\/([^/?]+)\/track-choices(?:\/([^/?]+))?$/);
+    if (tc && call.method === "GET") {
+      if (onTracks) { const r = await onTracks(call, w); if (r) return r; }
+      if (viewer.canApprove !== true) return { status: 404, body: { error: "notFound" } };
+      return { status: 200, body: { candidateId: tc[1], athletes: Object.entries(multiTrack[tc[1]] || {}).map(([g, m]) => ({ gpexeAthleteId: g, tracks: m.tracks, choosable: true, sumOffered: false, currentChoice: w.choices[`${tc[1]}:${g}`] ? { id: "choice-1", choice: w.choices[`${tc[1]}:${g}`].choice, stale: false } : null })) } };
+    }
+    if (tc && call.method === "PUT") {
+      w.puts.push(call.body);
+      if (onTrackPut) { const r = await onTrackPut(call, w); if (r) return r; }
+      w.choices[`${tc[1]}:${tc[2]}`] = { choice: call.body.choice, trackId: call.body.trackId };
+      return { status: 201, body: { choice: { id: "choice-1", choice: call.body.choice } } };
+    }
     const pre = rest.match(/^\/candidates\/([^/?]+)\/preview$/);
     if (pre) {
       if (onPreview) { const r = await onPreview(call, w); if (r) return r; }
@@ -391,14 +413,13 @@ test("Fix 10: a lost link answer keeps the existing pattern - the review is trea
   assert.ok(!CODE.test(visibleText(s)));
 });
 
-test("Fix 11: a kind outside slice 1 has no Fix; a session that ends outside it says See why and opens the full review", async () => {
+test("Fix 11: Needs a look opens Fix for a coach; an athlete under another kind of review ends on See why and opens the full review", async () => {
   resetState();
-  const w = world({ sessions: [row(5, { reasons: [{ code: "athletes_need_manual_review", count: 1 }], counts: { created: 2, athletesNotImported: 1 } }), row(6, { changesToImported: 2 })], unlinkedBy: { "cand-6": ["101"] } });
+  const w = world({ sessions: [row(5, { reasons: [{ code: "athletes_need_manual_review", count: 1 }], counts: { created: 2, athletesNotImported: 1 } })], extraAthletes: { "cand-5": [{ gpexeAthleteId: "104", athleteId: "ath-2", gps: { status: "needs_manual_review" }, notImported: { code: "whole_session_row_count" }, results: [] }] } });
   await open(w);
   const review = html().match(/data-attention-group="review"[\s\S]*?<\/div>\s*<\/div>/)[0];
-  assert.ok(!/training-load-gpexe-fix/.test(review), "Needs a look keeps the review");
-  await fixFirst();
-  await linkTo("101", "ath-1");
+  assert.match(review, /data-action="training-load-gpexe-fix" data-candidate-id="cand-5" data-group="review">Open the session</, "slice 2: Needs a look opens Fix");
+  await fixFirst("review");
   assert.match(sheet(), /This session needs a look in its full review\./);
   await act("training-load-gpexe-fix-full");
   assert.equal(gx().detail.fix, null);
@@ -489,4 +510,160 @@ test("Fix 16: the full review is one quiet link away on every step and end (neve
   await act("training-load-gpexe-fix-full");
   assert.equal(gx().detail.fix, null);
   assert.match(html(), /gpexe-detail-overlay/);
+});
+
+// Slice 2: more than one track, and changes to imported results.
+const TRACKS = [
+  { trackId: "555001", startedAt: "2026-09-05T07:00:00Z", timezone: "Europe/Belgrade", wholeSessionSeconds: 2400, wholeSessionDistance: 3000, drillIndexes: [0] },
+  { trackId: "555002", startedAt: "2026-09-05T07:45:00Z", timezone: "Europe/Belgrade", wholeSessionSeconds: 600, wholeSessionDistance: 800, drillIndexes: [] },
+];
+const multiWorld = (over = {}) => world({ sessions: [row(5, { reasons: [{ code: "athletes_need_manual_review", count: 1 }] })], multiTrack: { "cand-5": { "131": { athleteId: "ath-2", tracks: TRACKS } } }, ...over });
+const trackPuts = () => fetchCalls.filter((c) => c.method === "PUT" && /track-choices\/131$/.test(c.url));
+const trackGets = () => fetchCalls.filter((c) => c.method === "GET" && /track-choices$/.test(c.url));
+
+test("Fix 17: an approver chooses the recording of an athlete GPEXE recorded on more than one track - one PUT, one recompute, then ready", async () => {
+  resetState();
+  const w = multiWorld();
+  await open(w);
+  await fixFirst("review");
+  let s = sheet();
+  assert.match(s, /Which recording is Blake Sample\? GPEXE recorded them on 2 tracks in this session\./);
+  assert.match(s, /<span>Recording 1 · started \d{2}:\d{2} · 40 min · 3,000 m<\/span>/);
+  assert.match(s, /<span>Recording 2 · started \d{2}:\d{2} · 10 min · 800 m<\/span>/);
+  assert.match(s, /None of them: leave Blake Sample out of this import/);
+  assert.ok(!/55500[12]</.test(s) && !/>[^<]*55500[12]/.test(visibleText(s)), "never a track id in what is read");
+  assert.match(s, /data-action="training-load-gpexe-fix-track-save"[^>]*disabled[^>]*>Save the choice</, "nothing to save before a choice");
+  assert.equal(trackGets().length, 1);
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555001" }, { renderTrainingLoad: render });
+  assert.equal(trackPuts().length, 0, "choosing sends nothing");
+  await act("training-load-gpexe-fix-track-save");
+  assert.equal(trackPuts().length, 1);
+  const body = trackPuts()[0].body;
+  assert.match(body.requestKey, /^[0-9a-f-]{36}$/);
+  assert.deepEqual({ ...body, requestKey: "k" }, { requestKey: "k", choice: "track", trackId: "555001", expectedChoiceId: null });
+  assert.equal(posts(/\/preview$/).length, 1, "one recompute");
+  s = sheet();
+  assert.match(s, /This session is ready\./);
+  assert.match(s, /data-action="training-load-gpexe-approve"[^>]*>Import 2 athletes</);
+});
+
+test("Fix 18: None of them leaves the athlete out by choice; the rest imports", async () => {
+  resetState();
+  const w = multiWorld();
+  await open(w);
+  await fixFirst("review");
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "none" }, { renderTrainingLoad: render });
+  await act("training-load-gpexe-fix-track-save");
+  assert.deepEqual({ ...trackPuts()[0].body, requestKey: "k" }, { requestKey: "k", choice: "none", expectedChoiceId: null });
+  assert.match(sheet(), /This session is ready\./);
+  assert.match(sheet(), /Import 1 athlete</);
+});
+
+test("Fix 19: a lost answer to the choice is Check the result with the same key and body - never sent again by itself; leaving asks", async () => {
+  resetState();
+  let lose = true;
+  const w = multiWorld({ onTrackPut: () => (lose ? "lost" : null) });
+  await open(w);
+  await fixFirst("review");
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555002" }, { renderTrainingLoad: render });
+  await act("training-load-gpexe-fix-track-save");
+  let s = sheet();
+  assert.match(s, /We can(?:'|&#039;)t tell whether the choice was saved\./);
+  assert.match(s, /data-action="training-load-gpexe-fix-track-check"[^>]*>Check the result</);
+  assert.ok(!/training-load-gpexe-fix-track-save/.test(s), "no second Save");
+  assert.ok(/name="fix-track-131"[^>]*disabled/.test(s), "the choice is locked");
+  assert.equal(trackPuts().length, 1);
+  confirmAnswer = false;
+  await act("training-load-gpexe-fix-close");
+  assert.match(confirmQuestions.at(-1), /A change is still on its way/);
+  assert.ok(gx().detail?.fix);
+  lose = false;
+  await act("training-load-gpexe-fix-track-check");
+  assert.equal(trackPuts().length, 2);
+  assert.deepEqual(trackPuts()[1].body, trackPuts()[0].body, "the same request key and body");
+  assert.match(sheet(), /This session is ready\./);
+});
+
+test("Fix 20: someone who may not import reads no recordings; the end says whoever imports chooses - no Import, no code", async () => {
+  resetState();
+  viewer = { canApprove: false, approvalBasis: null, isPlatformAdmin: false };
+  const w = multiWorld();
+  await open(w);
+  await fixFirst("review");
+  assert.equal(trackGets().length, 0, "the approver-only read is not asked");
+  const s = sheet();
+  assert.match(s, /This session is ready, except an athlete GPEXE recorded on more than one track: whoever imports chooses which recording to use\. Ask your club administrator to import it\./);
+  assert.ok(!/training-load-gpexe-approve/.test(s));
+  assert.ok(!CODE.test(visibleText(s)));
+});
+
+test("Fix 21: Skip for now skips that athlete's recording; the end says the session imports without them", async () => {
+  resetState();
+  const w = multiWorld();
+  await open(w);
+  await fixFirst("review");
+  await act("training-load-gpexe-fix-skip", { gpexeAthleteId: "131" });
+  const s = sheet();
+  assert.match(s, /This session can be imported without the athlete you skipped; their results are not imported\./);
+  assert.ok(!/until linked/.test(s));
+  assert.equal(trackPuts().length, 0);
+});
+
+test("Fix 22: changes to imported results are accepted in a step of their own by whoever imports, then sent with the import", async () => {
+  resetState();
+  const changes = { "cand-5": [{ athleteId: "ath-1", kind: "corrected" }, { athleteId: "ath-1", kind: "corrected" }] };
+  let w = world({ sessions: [row(5, { changesToImported: 2 })], unlinkedBy: { "cand-5": ["101"] }, changes });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-3");
+  let s = sheet();
+  assert.match(s, /Step 2 of 2/);
+  assert.match(s, /Importing this session changes 2 results that are already in OptiMove\./);
+  assert.match(s, /<li>Alex Example: 2 results<\/li>/);
+  await act("training-load-gpexe-fix-accept");
+  s = sheet();
+  assert.match(s, /This session is ready\./);
+  await act("training-load-gpexe-approve");
+  assert.equal(posts(/\/approve$/).at(-1).body.acceptChanges, true, "the import carries the acceptance");
+
+  resetState();
+  viewer = { canApprove: false, approvalBasis: null, isPlatformAdmin: false };
+  w = world({ sessions: [row(5, { changesToImported: 2 })], unlinkedBy: { "cand-5": ["101"] }, changes });
+  await open(w);
+  await fixFirst();
+  await linkTo("101", "ath-3");
+  s = sheet();
+  assert.ok(!/Accept the changes/.test(s), "only whoever imports accepts");
+  assert.match(s, /This session is ready\. Ask your club administrator to import it\./);
+});
+
+test("Fix 23: a recordings read that fails is a step of its own; Try again reads once more", async () => {
+  resetState();
+  let fail = true;
+  const w = multiWorld({ onTracks: () => (fail ? { status: 503, body: { error: "try_again" } } : null) });
+  await open(w);
+  await fixFirst("review");
+  assert.match(sheet(), /The recordings of this session could not be read\. Try again\./);
+  assert.ok(!CODE.test(visibleText(sheet())));
+  fail = false;
+  await act("training-load-gpexe-fix-tracks-reload");
+  assert.equal(trackGets().length, 2);
+  assert.match(sheet(), /Which recording is Blake Sample\?/);
+});
+
+test("Fix 24: a refused choice (409) says nothing was saved and reads the recordings again; a new choice gets a new key", async () => {
+  resetState();
+  let refuse = true;
+  const w = multiWorld({ onTrackPut: () => (refuse ? { status: 409, body: { error: "choice_changed" } } : null) });
+  await open(w);
+  await fixFirst("review");
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555001" }, { renderTrainingLoad: render });
+  await act("training-load-gpexe-fix-track-save");
+  assert.match(sheet(), /The recordings or the choice changed meanwhile\. Nothing was saved; choose again\./);
+  assert.equal(trackGets().length, 2, "read again");
+  refuse = false;
+  await handleTrainingLoadAction({ dataset: { action: "training-load-gpexe-fix-track-pick", gpexeAthleteId: "131" }, value: "555001" }, { renderTrainingLoad: render });
+  await act("training-load-gpexe-fix-track-save");
+  assert.notEqual(trackPuts()[1].body.requestKey, trackPuts()[0].body.requestKey);
+  assert.match(sheet(), /This session is ready\./);
 });

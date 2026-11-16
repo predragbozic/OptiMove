@@ -1044,6 +1044,16 @@ function renderFixHtml(gx, status) {
     errorTech: (error) => (platformViewer() ? errorTech(error) : ""),
     checkErrorText,
     linkErrorText: errorText(gx.linkError, "The link could not be changed."),
+    // Slice 2: an athlete by the team's own name (a recording choice is made for a linked athlete), else the GPEXE label.
+    athleteName: (id) => {
+      const a = (c?.preview?.athletes || []).find((x) => String(x.gpexeAthleteId) === String(id));
+      return (a?.athleteId && c?.athletes?.[a.athleteId]?.name) || gpexeAthleteLabel(id);
+    },
+    changeCount: c?.changesToImported || 0,
+    changeLines: [...changesByAthlete(c?.preview).entries()].map(([key, n]) => {
+      const name = key.startsWith("a:") ? (c?.athletes?.[key.slice(2)]?.name || "An athlete") : gpexeAthleteLabel(key.slice(2));
+      return `${name}: ${n === 1 ? "1 result" : `${n} results`}`;
+    }),
     // A refused import is said as the review says it: nothing was imported.
     refusalText: detail.outcome?.kind === "refused" && detail.outcome.error?.code !== "already_imported" ? (REFUSAL_TEXT[detail.outcome.error?.code] || "Not imported: the server refused the approval.") : "",
     teamSwitchOff: Boolean(status?.teamImportSwitch && status.teamImportSwitch.enabled !== true) || (c?.approvalBlockers || []).includes("team_import_switch_off"),
