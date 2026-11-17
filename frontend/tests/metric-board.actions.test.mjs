@@ -147,7 +147,7 @@ test("S2. the platform board's variables are OptiMove's only, with New variable;
   state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
   await actions.loadBoardSection(render);
   const t = text();
-  assert.match(t, /OptiMove's variables\. What you save here is OptiMove's mapping, switched on for this team only/);
+  assert.match(t, /OptiMove's variables\. What you save here becomes OptiMove's mapping\. It is switched on for this team only/);
   assert.ok(content.querySelector('[data-action="training-load-section"][data-section="variables"]'), "New variable leads to Variables");
   assert.match(t, /New variable/);
   assert.doesNotMatch(t, /Your club's variables|Your club has no variable/);
@@ -633,7 +633,7 @@ test("S3. one click to the other board of the same team: a platform admin's club
   render();
   assert.equal(content.querySelector("[data-mb-switch-team-id]"), null);
   // The platform board: the club's workspace is theirs, then not.
-  state.currentUser = { id: "u1", activeWorkspace: { type: "platform", scopeId: null }, availableWorkspaces: [{ type: "platform", scopeId: null }, { type: "club", scopeId: CLUB }] };
+  state.currentUser = { id: "u1", activeWorkspace: { type: "platform", scopeId: null }, availableWorkspaces: [{ type: "platform", scopeId: null }, { type: "club", scopeId: CLUB, label: "North Club" }] };
   state.trainingLoad.board = null;
   overrides = [];
   const b = platformBoard();
@@ -642,7 +642,8 @@ test("S3. one click to the other board of the same team: a platform admin's club
   state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
   await actions.loadBoardSection(render);
   const toClub = content.querySelector('[data-action="workspace-select"][data-mb-switch-team-id]');
-  assert.equal(toClub?.textContent.trim(), "Switch to the club's variables");
+  assert.equal(toClub?.textContent.trim(), "Switch to North Club's variables");
+  assert.equal(toClub.getAttribute("title"), "Opens the North Club workspace on this team.");
   assert.deepEqual([toClub.dataset.workspaceType, toClub.dataset.workspaceScopeId, toClub.dataset.mbSwitchTeamId], ["club", CLUB, TEAM]);
   state.currentUser.availableWorkspaces = [{ type: "platform", scopeId: null }];
   render();
@@ -686,4 +687,59 @@ test("S5. New variable leads to Variables' create form and keeps one click back 
   await actions.loadBoardSection(render);
   assert.equal(calls.filter((c) => c.url.startsWith(`${B}/board?`)).length, before + 1, "read again");
   assert.equal(data.boardState().teamId, TEAM);
+});
+
+test("S6. on the platform board a column the club fills with its own variable says so and points to the club's variables, never to a variable that is not there", async () => {
+  asUser("platform", null);
+  const b = platformBoard();
+  b.on = [{ activationId: "a-1", mappingVersionId: "v-1", fieldId: FIELD, variableId: "club-var", requirement: "required", badge: "club_mapping", levels: { session: true, drill: true } }];
+  platformWorld(b);
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  assert.match(text(), /On for the team as the club's own variable\. To change it, switch to the club's variables\./);
+  assert.doesNotMatch(text(), /Switch it off under Variables to place it again/);
+  assert.equal(data.placementRefusal({ code: "variable_hidden" }), "This team's club hides this OptiMove variable. It must be shown in that club's Variables first.");
+});
+
+test("S7. the platform board stores no check: its review says so, never that the athletes' values are kept, and it has no History tab", async () => {
+  asUser("platform", null);
+  const b = platformBoard();
+  b.variables.push({ ...FX.board.board.variables.find((v) => v.id === TARGET), ownerScope: "system", placeable: true });
+  platformWorld(b);
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  assert.equal(content.querySelector('[data-action="metric-board-tab"]'), null, "no Map / History tabs");
+  await place();
+  await click(`[data-action="metric-board-compare"][data-field-id="${FIELD}"]`);
+  tick("[data-mb-tick]", true);
+  await click('[data-action="metric-board-keep"]');
+  await click('[data-action="metric-board-review"]');
+  const note = content.querySelector("#mb-review-note").textContent;
+  assert.match(note, /Your check is not stored: OptiMove's mapping is switched on for this team, and the audit records who switched it on and when\./);
+  assert.doesNotMatch(note, /evidence|90 days/);
+  // The club board keeps its tabs.
+  asUser("club");
+  overrides = [];
+  state.trainingLoad.board = null;
+  await open();
+  assert.equal(content.querySelectorAll('[data-action="metric-board-tab"]').length, 2);
+});
+
+test("S8. the workspace switch's hooks: a switch that failed forgets the remembered team, and a switch through any other link replaces it with nothing", async () => {
+  const { handleWorkspaceAction } = await import("../workspace-actions.js");
+  const hooks = { beforeSwitch: actions.boardBeforeSwitch, afterSwitchFailed: actions.boardSwitchFailed, onWorkspaceChanged: async () => {} };
+  const link = (extra = {}) => ({ dataset: { action: "workspace-select", workspaceType: "platform", workspaceScopeId: "", ...extra }, getAttribute: () => null });
+  asUser("club");
+  state.workspaceSwitcher = { open: false, pending: false, error: "" };
+  overrides.push((c) => (c.url === "/api/auth/workspace" ? { status: 409, body: { error: "WORKSPACE_NOT_AVAILABLE" } } : null));
+  await handleWorkspaceAction(link({ mbSwitchTeamId: TEAM }), hooks);
+  assert.equal(state.workspaceSwitcher.pending, false);
+  assert.ok(calls.some((c) => c.url === "/api/auth/workspace"), "the switch was sent");
+  assert.equal(actions.takeBoardAfterSwitch({ type: "platform", scopeId: null }), null, "the failed switch left nothing behind");
+  // A board link, then the ordinary workspace menu: the second switch remembers nothing.
+  actions.boardBeforeSwitch(link({ mbSwitchTeamId: TEAM }));
+  actions.boardBeforeSwitch(link());
+  assert.equal(actions.takeBoardAfterSwitch({ type: "platform", scopeId: null }), null);
+  actions.boardBeforeSwitch(link({ mbSwitchTeamId: TEAM }));
+  assert.equal(actions.takeBoardAfterSwitch({ type: "platform", scopeId: null }), TEAM);
 });

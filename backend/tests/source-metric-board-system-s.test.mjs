@@ -573,3 +573,84 @@ test("S9. the answer names the team's own club (the other board's workspace); a 
     await k.query(`update public.clubs set is_active = true where id = $1`, [t.clubId]);
   }
 });
+
+test("S10. two platform saves of two teams (two clubs) that create the same OptiMove mapping at once: one is saved, the other answers board_changed - one mapping, one version, never a deadlock or a 500", async () => {
+  const saveService = await import("../src/sourceMetricBoardSaveService.js");
+  const a = await freshTeam();
+  const tB = await gpexeTeam(W.clubB);
+  for (const n of [1, 2]) await link(tB, n, `Club B race ${uid()}`);
+  const candB = await candidate(tB);
+  const f = await field("time");
+  const target = await variable(W.pa, { unit: "min", label: `OptiMove race ${uid()}` });
+  const rowA = await systemRow(a.t, a.cand, f, target);
+  // Another platform admin: one admin's own saves already run one at a time (the per-user write lock answers try_again).
+  const pa2 = await platformAdmin(["platform", null], "second-platform-admin");
+  const rowB = await newRow(pa2, tB, candB, f, target);
+  // Save A holds after every lock and its recompute, before its first write; save B runs to its COMMIT meanwhile.
+  let resB = null;
+  saveService.setBoardSaveHoldForTests(async (_client, at) => {
+    if (at === "before_writes" && resB === null) {
+      resB = "running";
+      resB = await save(pa2, tB, candB, [rowB]);
+    }
+  });
+  let resA;
+  try { resA = await save(W.pa, a.t, a.cand, [rowA]); } finally { saveService.setBoardSaveHoldForTests(null); }
+  assert.equal(resB.status, 200, `B: ${resB.text}`);
+  refused(resA, 409, "board_changed");
+  assert.equal((await one(`select count(*)::int n from ${T3} where source_metric_definition_id = $1 and metric_definition_id = $2`, [f.fieldId, target.id])).n, 1);
+  assert.equal((await one(`select count(*)::int n from ${T4} where source_metric_definition_id = $1 and metric_definition_id = $2`, [f.fieldId, target.id])).n, 1);
+  // Read again, team A's admin switches the same OptiMove mapping on for team A: a reuse, no second version.
+  const again = ok(await save(W.pa, a.t, a.cand, [await systemRow(a.t, a.cand, f, target)]));
+  assert.equal(again.confirmation.rows[0].versionId, resB.body.confirmation.rows[0].versionId);
+});
+
+test("S11. the COMMIT of a platform save: an answer lost after the COMMIT is 200 verified_after_commit_error through the keyed start (one start, no confirmation), and the same key replays it; a COMMIT that never reached the database is 503 outcome_unknown and the same key then saves once", async () => {
+  const service = await import("../src/sourceMetricMappingService.js");
+  const setup = async () => {
+    const x = await freshTeam();
+    const f = await field("time");
+    const target = await variable(W.pa, { unit: "min", label: `OptiMove commit ${uid()}` });
+    return { ...x, f, target, rows: [await systemRow(x.t, x.cand, f, target)] };
+  };
+  let s = await setup();
+  let requestKey = key();
+  const t9 = (await counts()).t9;
+  service.setMappingCommitForTests({ fault: (c) => c.query("commit").then(() => { throw new Error("answer lost"); }), timeoutMs: 2_000 });
+  let res;
+  try { res = await save(W.pa, s.t, s.cand, s.rows, { requestKey }); } finally { service.setMappingCommitForTests(); }
+  const verified = ok(res);
+  assert.deepEqual([verified.commitConfirmation, verified.replayed, verified.confirmation.owner, verified.confirmation.rows.length], ["verified_after_commit_error", false, "system", 1]);
+  assert.equal((await one(`select count(*)::int n from ${T5} where source_team_binding_id = $1 and metric_definition_id = $2`, [s.t.bindingId, s.target.id])).n, 1);
+  assert.equal((await counts()).t9, t9, "no confirmation");
+  assert.deepEqual(ok(await save(W.pa, s.t, s.cand, s.rows, { requestKey })).confirmation, verified.confirmation);
+  // The COMMIT never reached the database.
+  s = await setup();
+  requestKey = key();
+  service.setMappingCommitForTests({ fault: (c) => c.query("rollback").then(() => { throw new Error("connection lost"); }), timeoutMs: 2_000 });
+  try { res = await save(W.pa, s.t, s.cand, s.rows, { requestKey }); } finally { service.setMappingCommitForTests(); }
+  refused(res, 503, "outcome_unknown");
+  assert.equal((await one(`select count(*)::int n from ${T5} where source_team_binding_id = $1 and metric_definition_id = $2`, [s.t.bindingId, s.target.id])).n, 0);
+  const saved = ok(await save(W.pa, s.t, s.cand, s.rows, { requestKey }));
+  assert.equal(saved.replayed, false);
+  assert.equal((await one(`select count(*)::int n from ${T5} where source_team_binding_id = $1 and metric_definition_id = $2`, [s.t.bindingId, s.target.id])).n, 1);
+});
+
+test("S12. a platform save that replaces what the club had on (its own mapping of the column) is a replacement, not a switch-off: the club board does not list the club's mapping as switched off", async () => {
+  const { t, cand } = await freshTeam();
+  const f = await field("dist");
+  const clubVar = await variable(W.caA, { unit: "m", label: `Club distance ${uid()}` });
+  const clubV = await activeVersion(W.caA, f, clubVar);
+  ok(await start(W.paA, clubV, t), 201);
+  const open = await openOn(clubV, t);
+  assert.ok(open, "the club's mapping is on for the team");
+  const sysVar = await variable(W.pa, { unit: "m", label: `OptiMove distance ${uid()}` });
+  const p = await placementOf(W.pa, t, cand, f, sysVar);
+  assert.equal(p.placeable, true, JSON.stringify(p));
+  assert.deepEqual(p.collisions.map((c) => c.activationId), [open.id], "the club's activation is in the way");
+  ok(await save(W.pa, t, cand, [await systemRow(t, cand, f, sysVar)]));
+  assert.ok((await one(`select ended_at from ${T5} where id = $1`, [open.id])).ended_at, "the club's activation ended");
+  const club = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  assert.ok(!club.switchedOff.some((x) => x.mappingVersionId === clubV.versionId), "not shown as switched off");
+  assert.ok(club.on.some((o) => o.variableId === sysVar.id && o.badge === "optimove_mapping"));
+});

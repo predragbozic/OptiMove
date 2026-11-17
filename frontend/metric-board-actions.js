@@ -44,6 +44,15 @@ let afterSwitch = null;
 export function rememberBoardAfterSwitch({ teamId, type, scopeId }) {
   afterSwitch = teamId ? { teamId: String(teamId), type: String(type || ""), scopeId: scopeId ? String(scopeId) : "" } : null;
 }
+// The workspace switch's hooks: every switch replaces what an earlier one remembered (a link of the board's
+// own remembers its team; any other switch remembers nothing), and a switch that failed forgets it.
+export function boardBeforeSwitch(action) {
+  const d = action?.dataset || {};
+  rememberBoardAfterSwitch({ teamId: d.mbSwitchTeamId, type: d.workspaceType, scopeId: d.workspaceScopeId });
+}
+export function boardSwitchFailed() {
+  afterSwitch = null;
+}
 export function takeBoardAfterSwitch(activeWorkspace) {
   const wanted = afterSwitch;
   afterSwitch = null;

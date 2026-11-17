@@ -293,7 +293,11 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
        left join public.users u on u.id = x.ended_by_user_id
       where x.end_reason = 'admin_ended'
         and not exists (select 1 from training_load.source_metric_audit e
-                          join training_load.source_metric_audit mc on mc.operation_id = e.operation_id and mc.action = 'mapping_confirmation'
+                          join training_load.source_metric_audit mc on mc.operation_id = e.operation_id
+                           and (mc.action = 'mapping_confirmation'
+                                -- S: a platform-board save stores no confirmation; an end in the same operation as a start
+                                -- is that save's replacement (an administrator's end alone starts nothing).
+                                or mc.action = 'activation_start')
                          where e.activation_id = x.id and e.action = 'activation_end')`,
     [team.binding_id],
   )).rows;

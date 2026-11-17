@@ -159,6 +159,7 @@ export async function handleWorkspaceAction(action, handlers = {}) {
       renderWorkspaceSwitcher();
       await handlers.onWorkspaceChanged?.();
     } catch (error) {
+      handlers.afterSwitchFailed?.();
       state.workspaceSwitcher.pending = false;
       state.workspaceSwitcher.error = error?.message === "WORKSPACE_NOT_AVAILABLE"
         ? "That workspace is no longer available."

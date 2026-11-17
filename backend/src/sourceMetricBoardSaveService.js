@@ -323,7 +323,9 @@ export async function saveConfirmation({ ctx, body }) {
       // The team's club (the workspace's on a club board; the chosen team's on the platform board) and the owner of
       // the mappings this save writes (J1: the workspace's).
       const clubId = seen.clubId;
-      const ownerSql = system ? `m.owner_scope = 'system' and $3::uuid is not null /* $3 unused: OptiMove's mappings have no club */` : `m.owner_scope = 'club' and m.owner_club_id = $3::uuid`;
+      // The board's own mappings of the new rows: OptiMove's on the platform board, the club's on a club board.
+      const ownerSql = system ? `m.owner_scope = 'system'` : `m.owner_scope = 'club' and m.owner_club_id = $3::uuid`;
+      const ownerArgs = (fields, variables) => (system ? [fields, variables] : [fields, variables, clubId]);
       // Every listed activation is one of this binding (open or not): any other id is the identical 404.
       const replaced = [...new Set(rows.flatMap((r) => r.replaces))].sort();
       if (replaced.length > 0) {
@@ -338,7 +340,7 @@ export async function saveConfirmation({ ctx, body }) {
            from training_load.source_metric_mappings m
           where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))
             and ${ownerSql}`,
-        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId), clubId],
+        ownerArgs(first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId)),
       )).rows.map((m) => [`${m.field_id}:${m.variable_id}`, m.id]));
       await hold(client, "before_locks");
 
@@ -417,7 +419,7 @@ export async function saveConfirmation({ ctx, body }) {
            from training_load.source_metric_mappings m
           where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))
             and ${ownerSql}`,
-        [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId), clubId],
+        ownerArgs(first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId)),
       )).rows;
       if (nowExisting.length !== existing.size) throw boardChanged();
       const { plan, pair } = evaluate(world, pairIndex, rows);

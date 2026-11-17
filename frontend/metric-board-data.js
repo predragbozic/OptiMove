@@ -251,6 +251,7 @@ export function placementRefusal(p, { column, variable } = {}) {
   if (boardContext()?.platform) {
     if (code === "source_metric_target_taken") return "This column already fills another OptiMove variable. Change that in Mappings.";
     if (code === "mapping_version_active") return "OptiMove already maps this column to this variable in another way. Disable it in Mappings first.";
+    if (code === "variable_hidden") return "This team's club hides this OptiMove variable. It must be shown in that club's Variables first.";
   }
   switch (code) {
     case "conversion_unavailable":

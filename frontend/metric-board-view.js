@@ -65,8 +65,10 @@ function switchLink(s) {
     ? available.find((w) => w?.type === "club" && String(w.scopeId) === String(clubId))
     : available.find((w) => w?.type === "platform");
   if (!target) return "";
-  const label = onPlatform() ? "Switch to the club's variables" : "Switch to OptiMove's variables";
-  return `<button type="button" class="om-btn om-btn--ghost" data-action="workspace-select" data-workspace-type="${escapeAttr(target.type)}" data-workspace-scope-id="${escapeAttr(target.scopeId || "")}" data-mb-switch-team-id="${escapeAttr(String(s.teamId))}" ${s.write ? "disabled" : ""}>${label}</button>`;
+  const club = cleanName(target.label || "") || "the club";
+  const label = onPlatform() ? `Switch to ${club}'s variables` : "Switch to OptiMove's variables";
+  const title = onPlatform() ? `Opens the ${club} workspace on this team.` : "Opens the platform workspace on this team.";
+  return `<button type="button" class="om-btn om-btn--ghost" data-action="workspace-select" data-workspace-type="${escapeAttr(target.type)}" data-workspace-scope-id="${escapeAttr(target.scopeId || "")}" data-mb-switch-team-id="${escapeAttr(String(s.teamId))}" title="${escapeAttr(title)}" ${s.write ? "disabled" : ""}>${escapeHtml(label)}</button>`;
 }
 
 function whichTeam(s) {
@@ -106,7 +108,10 @@ function columnHtml(s, c, drag) {
   }
   if (use) {
     const badge = use === "on" ? `<span class="om-badge om-badge--success">On</span>` : use === "new" ? `<span class="om-badge om-badge--accent">Placed</span>` : `<span class="om-badge om-badge--info">Placed</span>`;
-    const why = use === "on" ? "Already on for the team. Switch it off under Variables to place it again." : "Placed. Remove it under Variables to place it elsewhere.";
+    // S: on the platform board a column the club fills with its own variable is on, but that variable is not here.
+    const onAsClubs = use === "on" && onPlatform() && (board.on || []).some((o) => o.fieldId === c.fieldId && o.badge === "club_mapping");
+    const why = onAsClubs ? "On for the team as the club's own variable. To change it, switch to the club's variables."
+      : use === "on" ? "Already on for the team. Switch it off under Variables to place it again." : "Placed. Remove it under Variables to place it elsewhere.";
     const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small>${why}</small></span>`;
     return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;
   }
@@ -185,7 +190,7 @@ function boardCards(s) {
       <section class="om-card mb-card" aria-labelledby="mb-variables-title">
         <div class="om-card__header"><h3 class="om-card__title" id="mb-variables-title">Variables</h3></div>
         ${onPlatform() ? `
-        <p class="muted mb-note">OptiMove's variables. What you save here is OptiMove's mapping, switched on for this team only; other clubs can switch it on for their teams.</p>
+        <p class="muted mb-note">OptiMove's variables. What you save here becomes OptiMove's mapping. It is switched on for this team only; other teams will see it offered without a check and can switch it on.</p>
         <p><button type="button" class="om-btn om-btn--ghost" data-action="training-load-section" data-section="variables" data-dc-view="variables" data-mb-new-variable data-mb-return-team-id="${escapeAttr(String(s.teamId || ""))}" data-mb-return-team-name="${escapeAttr(teamOf(s)?.name || "")}" ${busy(s) ? "disabled" : ""}>New variable</button></p>
         <p class="muted mb-note">No variable fits? Create it, then go back to this board in one click.</p>
         ${system.length ? `<ul class="mb-list">${list(system)}</ul>` : `<p class="muted">OptiMove has no variable yet.</p>`}` : `
@@ -328,6 +333,7 @@ function reviewBody(s) {
     ${group("OptiMove mappings (no check needed)", pre.filter((p) => p.badge !== "club_mapping"))}
     ${group("Your club's mappings (no check needed)", pre.filter((p) => p.badge === "club_mapping"))}
     <p class="muted" id="mb-review-note">${unticked.length ? `Tick every new column to save: ${unticked.map((p) => name(columnOf(s.board, p.fieldId)?.label)).join(", ")}.`
+    : onPlatform() ? "Your check is not stored: OptiMove's mapping is switched on for this team, and the audit records who switched it on and when."
     : "Saved with it: who confirmed, when, and the two athletes' values of the columns you checked. That is the evidence. The values are kept for 90 days, then removed."}</p>
     ${s.write?.kind === "save" ? writeHtml(s) : ""}
     <div class="om-card__actions">${send}<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-review-close" ${s.write ? "disabled" : ""}>Back</button></div>`;
@@ -431,7 +437,7 @@ export function renderBoardHtml() {
   const sheetOpen = isPhone() && (s.switchOff || s.review || s.panel || s.picked);
   return `<section class="mb-screen ${sheetOpen ? "has-sheet" : ""}" data-mb-board>
     ${header(s)}
-    ${!s.teamId ? whichTeam(s) : `${tabs(s)}${s.tab === "history" ? historyTab(s) : mapTab(s)}`}
+    ${!s.teamId ? whichTeam(s) : onPlatform() ? mapTab(s) : `${tabs(s)}${s.tab === "history" ? historyTab(s) : mapTab(s)}`}
     <p class="visually-hidden" aria-live="polite" id="mb-live">${escapeHtml(s.live || "")}</p>
   </section>`;
 }
