@@ -8,7 +8,7 @@ import { estimateTargetsOf, reviewHasWorkInFlight } from "./gpexe-estimate-link.
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
-import { emptyVariablesState } from "./metric-variables-data.js";
+import { emptyVariablesState, openForm as openVariableForm } from "./metric-variables-data.js";
 import { loadSourceFieldsSection, resetSourceFields, sourceFieldsMayBeLeft, sourceFieldsUnloadShouldWarn } from "./source-fields-actions.js";
 import { dropMappingsForms, loadMappingsSection, mappingsMayBeLeft, mappingsUnloadShouldWarn, requestMappingsOpen, resetMappings } from "./metric-mappings-actions.js";
 import { boardMayBeLeft, boardUnloadShouldWarn, dropBoardForms, loadBoardSection, requestBoardOpen, resetBoard, takeBoardAfterSwitch } from "./metric-board-actions.js";
@@ -1011,7 +1011,16 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       if (!state.trainingLoad.variables) state.trainingLoad.variables = emptyVariablesState();
       state.trainingLoad.variables.view = "variables";
       state.trainingLoad.variables.node = null;
+      // S: the board's "New variable" opens the create form and keeps the way back to the same team's board.
+      if (action.dataset.mbNewVariable !== undefined && action.dataset.mbReturnTeamId) {
+        const v = state.trainingLoad.variables;
+        v.boardReturn = { teamId: action.dataset.mbReturnTeamId, teamName: action.dataset.mbReturnTeamName || "" };
+        v.notice = "";
+        if (!v.form) v.form = openVariableForm("create");
+      }
     }
+    // S: the way back from Variables to the board it was opened from (the board is read again, with the new variable).
+    if (action.dataset.section === "board" && action.dataset.mbBoardReturn !== undefined && state.trainingLoad.variables) state.trainingLoad.variables.boardReturn = null;
     // 7i-B2: "Use for your teams" and "See the teams using it" on one of
     // OptiMove's variables open a given mapping (and its switch-on panel).
     if (action.dataset.section === "mappings" && action.dataset.mmOpenMapping) {

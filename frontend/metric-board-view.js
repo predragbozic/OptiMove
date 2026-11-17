@@ -186,7 +186,8 @@ function boardCards(s) {
         <div class="om-card__header"><h3 class="om-card__title" id="mb-variables-title">Variables</h3></div>
         ${onPlatform() ? `
         <p class="muted mb-note">OptiMove's variables. What you save here is OptiMove's mapping, switched on for this team only; other clubs can switch it on for their teams.</p>
-        <p><button type="button" class="om-btn om-btn--ghost" data-action="training-load-section" data-section="variables" ${busy(s) ? "disabled" : ""}>New variable</button> <span class="muted">No variable fits? Create it in Variables, then come back.</span></p>
+        <p><button type="button" class="om-btn om-btn--ghost" data-action="training-load-section" data-section="variables" data-dc-view="variables" data-mb-new-variable data-mb-return-team-id="${escapeAttr(String(s.teamId || ""))}" data-mb-return-team-name="${escapeAttr(teamOf(s)?.name || "")}" ${busy(s) ? "disabled" : ""}>New variable</button></p>
+        <p class="muted mb-note">No variable fits? Create it, then go back to this board in one click.</p>
         ${system.length ? `<ul class="mb-list">${list(system)}</ul>` : `<p class="muted">OptiMove has no variable yet.</p>`}` : `
         <p class="muted mb-note">OptiMove's variables are here at once. Your club can add its own.</p>
         ${club.length ? `<p class="om-eyebrow">Your club's variables</p><ul class="mb-list">${list(club)}</ul>` : `<p class="muted">Your club has no variable of its own yet. Create one in Variables.</p>`}

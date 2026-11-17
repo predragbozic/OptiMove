@@ -659,3 +659,31 @@ test("S4. the switch remembers the team for the workspace the link named only: t
   actions.rememberBoardAfterSwitch({ teamId: TEAM, type: "club", scopeId: CLUB });
   assert.equal(actions.takeBoardAfterSwitch(null), null, "a failed switch");
 });
+
+test("S5. New variable leads to Variables' create form and keeps one click back to the same team's board; back on the board it is read again", async () => {
+  asUser("platform", null);
+  platformWorld(platformBoard());
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  const button = content.querySelector("[data-mb-new-variable]");
+  assert.ok(button);
+  assert.deepEqual([button.dataset.section, button.dataset.dcView, button.dataset.mbReturnTeamId], ["variables", "variables", TEAM]);
+  // What the Variables screen shows when it was opened from the board.
+  const { renderVariablesHtml } = await import("../metric-variables-view.js");
+  const v = variablesState();
+  v.boardReturn = { teamId: TEAM, teamName: "North Club · First Team" };
+  v.form = null;
+  const host = document.createElement("div");
+  host.innerHTML = renderVariablesHtml();
+  const back = host.querySelector("[data-mb-board-return]");
+  assert.ok(back, "the way back is offered");
+  assert.deepEqual([back.dataset.action, back.dataset.section, back.dataset.mbTeamId], ["training-load-section", "board", TEAM]);
+  assert.match(back.textContent, /Back to Map by drag and drop · North Club · First Team/);
+  v.boardReturn = null;
+  // Leaving the board keeps the team and drops what was read, so the next visit reads the board again.
+  const before = calls.filter((c) => c.url.startsWith(`${B}/board?`)).length;
+  actions.dropBoardForms();
+  await actions.loadBoardSection(render);
+  assert.equal(calls.filter((c) => c.url.startsWith(`${B}/board?`)).length, before + 1, "read again");
+  assert.equal(data.boardState().teamId, TEAM);
+});
