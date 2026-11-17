@@ -715,7 +715,7 @@ test("S7. the platform board stores no check: its review says so, never that the
   await click('[data-action="metric-board-keep"]');
   await click('[data-action="metric-board-review"]');
   const note = content.querySelector("#mb-review-note").textContent;
-  assert.match(note, /Your check is not stored: OptiMove's mapping is switched on for this team, and the audit records who switched it on and when\./);
+  assert.match(note, /Saving switches OptiMove's mapping on for this team\. OptiMove records who switched it on and when\. Your tick and the two athletes' values are not kept\./);
   assert.doesNotMatch(note, /evidence|90 days/);
   // The club board keeps its tabs.
   asUser("club");

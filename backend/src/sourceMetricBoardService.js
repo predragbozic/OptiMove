@@ -295,9 +295,13 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
         and not exists (select 1 from training_load.source_metric_audit e
                           join training_load.source_metric_audit mc on mc.operation_id = e.operation_id
                            and (mc.action = 'mapping_confirmation'
-                                -- S: a platform-board save stores no confirmation; an end in the same operation as a start
-                                -- is that save's replacement (an administrator's end alone starts nothing).
-                                or mc.action = 'activation_start')
+                                -- S: a platform-board save stores no confirmation; its replacement is an end in the same
+                                -- operation as the start of an OptiMove (system) mapping. The 7i move to a club's copy also
+                                -- ends and starts in one operation, but it starts the club's copy, so it stays a switch-off.
+                                or (mc.action = 'activation_start'
+                                    and exists (select 1 from training_load.source_metric_mapping_versions sv
+                                                  join training_load.source_metric_mappings sm on sm.id = sv.mapping_id
+                                                 where sv.id = mc.mapping_version_id and sm.owner_scope = 'system')))
                          where e.activation_id = x.id and e.action = 'activation_end')`,
     [team.binding_id],
   )).rows;

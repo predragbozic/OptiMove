@@ -333,7 +333,7 @@ function reviewBody(s) {
     ${group("OptiMove mappings (no check needed)", pre.filter((p) => p.badge !== "club_mapping"))}
     ${group("Your club's mappings (no check needed)", pre.filter((p) => p.badge === "club_mapping"))}
     <p class="muted" id="mb-review-note">${unticked.length ? `Tick every new column to save: ${unticked.map((p) => name(columnOf(s.board, p.fieldId)?.label)).join(", ")}.`
-    : onPlatform() ? "Your check is not stored: OptiMove's mapping is switched on for this team, and the audit records who switched it on and when."
+    : onPlatform() ? "Saving switches OptiMove's mapping on for this team. OptiMove records who switched it on and when. Your tick and the two athletes' values are not kept."
     : "Saved with it: who confirmed, when, and the two athletes' values of the columns you checked. That is the evidence. The values are kept for 90 days, then removed."}</p>
     ${s.write?.kind === "save" ? writeHtml(s) : ""}
     <div class="om-card__actions">${send}<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-review-close" ${s.write ? "disabled" : ""}>Back</button></div>`;

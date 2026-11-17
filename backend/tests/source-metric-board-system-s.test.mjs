@@ -654,3 +654,23 @@ test("S12. a platform save that replaces what the club had on (its own mapping o
   assert.ok(!club.switchedOff.some((x) => x.mappingVersionId === clubV.versionId), "not shown as switched off");
   assert.ok(club.on.some((o) => o.variableId === sysVar.id && o.badge === "optimove_mapping"));
 });
+
+test("S13. a move to the club's copy (7i) stays a switch-off on the club board: only a platform-board start of an OptiMove mapping makes an end a replacement", async () => {
+  const { t, cand } = await freshTeam();
+  const f = await field("time");
+  const sysVar = await variable(W.pa, { unit: "min", label: `OptiMove time ${uid()}` });
+  const sysV = await activeVersion(W.pa, f, sysVar);
+  ok(await start(W.caA, sysV, t), 201);
+  const oldId = (await openOn(sysV, t)).id;
+  const expectedSourceVersionId = (await one(`select current_version_id from training_load.metric_definitions where id = $1`, [sysVar.id])).current_version_id;
+  const clubVar = ok(await post(`/variables/${sysVar.id}/copy`, W.caA, { requestKey: key(), expectedSourceVersionId }), 201).variable;
+  const draft = await one(`select l.club_version_id, v.mapping_id from training_load.source_metric_mapping_version_copies l
+     join training_load.source_metric_mapping_versions v on v.id = l.club_version_id
+    where v.metric_definition_id = $1 and l.system_version_id = $2`, [clubVar.id, sysV.versionId]);
+  ok(await post(`/mappings/${draft.mapping_id}/versions/${draft.club_version_id}/submit`, W.caA, { requestKey: key() }));
+  ok(await post(`/mappings/${draft.mapping_id}/versions/${draft.club_version_id}/activate`, await activatorOf(W.caA), { requestKey: key(), expectedActiveVersionId: null }));
+  ok(await post(`/activations/${oldId}/switch-to-copy`, W.caA, { requestKey: key(), expectedState: "open", toVersionId: draft.club_version_id, reason: `Switch ${uid()}.` }));
+  const board = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  assert.ok(board.switchedOff.some((x) => x.mappingVersionId === sysV.versionId), "the system mapping the move ended reads as switched off");
+  assert.ok(!board.replaceable.some((r) => r.mappingVersionId === sysV.versionId), "never offered as a board replacement");
+});

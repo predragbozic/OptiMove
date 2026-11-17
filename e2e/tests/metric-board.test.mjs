@@ -6,6 +6,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
 import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
@@ -145,5 +146,83 @@ test("18-4c. a coach is offered nothing: no card, no board, and the routes answe
       }
       assert.equal(await coach.page.getByText("Map by drag and drop").count(), 0);
     } finally { await coach.context.close(); }
+  } finally { await world.stop(); }
+});
+
+test("18-4d. (1280 px, S) a platform admin in the platform workspace: a column onto an OptiMove variable, the review says nothing is kept, no History; New variable and back; one click to the club's board of the same team", async () => {
+  const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "board" } });
+  try {
+    const setup = await prepareImports(world);
+    // The platform admin is also the club's admin, so the club's workspace (and the link to it) is theirs.
+    const db = new pg.Client({ connectionString: world.databaseUrl });
+    await db.connect();
+    try {
+      const pa = world.accounts.find((a) => a.role === "platform_admin");
+      await db.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [pa.id, world.ids.clubA]);
+    } finally { await db.end(); }
+    const board = (await setup.call("platform_admin", "GET", `${M}/board?teamId=${setup.teamId}`)).body.board;
+    assert.equal(board.owner, "system");
+    const column = board.columns.find((c) => c.key === "athlete_session.total_distance");
+    const on = board.on.find((o) => o.fieldId === column.fieldId);
+    // Every seeded column already fills an OptiMove variable, so this world frees TotDist: OptiMove's version of it is
+    // disabled (A2), and a new OptiMove variable takes it on the board.
+    const db2 = new pg.Client({ connectionString: world.databaseUrl });
+    await db2.connect();
+    let mappingId;
+    try { mappingId = (await db2.query(`select mapping_id from training_load.source_metric_mapping_versions where id = $1`, [on.mappingVersionId])).rows[0].mapping_id; } finally { await db2.end(); }
+    const off = await setup.call("platform_admin", "POST", `${M}/mappings/${mappingId}/versions/${on.mappingVersionId}/disable`, { requestKey: randomUUID(), expectedStatus: "active", reason: "Free the column for the e2e board." });
+    assert.equal(off.status, 200, JSON.stringify(off.body));
+    const made = await setup.call("platform_admin", "POST", `${M}/variables`, { requestKey: randomUUID(), label: "OptiMove distance e2e", levels: ["session", "drill"], unit: "m", dailyAggregationMethod: "sum" });
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    const target = { id: made.body.variable.id };
+    const admin = await openAs(browser, world, "platform_admin", WIDTHS.desktop);
+    try {
+      const page = admin.page;
+      await openTrainingLoad(page);
+      await page.click('[data-action="training-load-section"][data-section="variables"]');
+      await page.click('[data-action="training-load-section"][data-section="board"]');
+      // The world has one linked team, so the board opens on it without a question (the "Club · Team" picker of two or
+      // more is frontend test S1).
+      await page.waitForSelector("[data-mb-board] .mb-slot", { timeout: 20_000 });
+      assert.equal(await page.locator('[data-action="metric-board-team"]').count(), 0);
+      assert.match((await page.locator("[data-mb-board]").innerText()).replace(/\s+/g, " "), /OptiMove's variables/);
+      assert.equal(await page.locator('[data-action="metric-board-tab"]').count(), 0, "no Map / History tabs");
+      assert.ok(await page.locator("[data-mb-new-variable]").count(), "New variable is offered");
+      const drag = `[data-mb-drag-field][data-field-id="${column.fieldId}"]`;
+      await page.waitForSelector(drag, { timeout: 20_000 });
+      // OptiMove's eleven variables reach below the fold; the drop target must be in view for a synthetic drag.
+      await page.setViewportSize({ width: 1280, height: 2400 });
+      await page.dragAndDrop(drag, `[data-mb-drop-variable][data-variable-id="${target.id}"]`);
+      await page.locator(".mb-panel [data-mb-tick]").waitFor({ timeout: 20_000 });
+      await page.locator(".mb-panel [data-mb-tick]").check();
+      await page.click('.mb-panel [data-action="metric-board-keep"]');
+      await page.click('[data-action="metric-board-review"]');
+      const note = (await page.locator("#mb-review-note").innerText()).replace(/\s+/g, " ");
+      assert.match(note, /Saving switches OptiMove's mapping on for this team\. OptiMove records who switched it on and when\. Your tick and the two athletes' values are not kept\./);
+      await page.click('[data-action="metric-board-save"]:visible');
+      await page.locator(".mb-notice.is-success").waitFor({ timeout: 20_000 });
+      const after = (await setup.call("platform_admin", "GET", `${M}/board?teamId=${setup.teamId}`)).body.board;
+      assert.ok(after.on.some((o) => o.fieldId === column.fieldId && o.variableId === target.id), "OptiMove's mapping is on again for the team");
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0, "no horizontal overflow");
+      // New variable: Variables' create form, and one click back to the same team's board.
+      await page.click("[data-mb-new-variable]");
+      await page.waitForSelector('[data-metric-variables-form="create"]', { timeout: 20_000 });
+      await page.click('[data-action="metric-variables-cancel"]:visible');
+      const back = page.locator("[data-mb-board-return]");
+      await back.waitFor({ timeout: 20_000 });
+      await back.click();
+      await page.waitForSelector("[data-mb-board] .mb-slot", { timeout: 20_000 });
+      // One click to the club's board of the same team.
+      const toClub = page.locator('[data-action="workspace-select"][data-mb-switch-team-id]');
+      assert.match(await toClub.innerText(), /^Switch to .+'s variables$/);
+      await toClub.click();
+      await page.waitForSelector('[data-action="metric-board-tab"][data-board-tab="history"]', { timeout: 20_000 });
+      await page.locator('[data-action="workspace-select"][data-mb-switch-team-id]', { hasText: "Switch to OptiMove's variables" }).waitFor({ timeout: 20_000 });
+      const club = (await page.locator("[data-mb-board]").innerText()).replace(/\s+/g, " ");
+      assert.match(club, /First team/, "the club's board of the same team");
+      assert.match(club, /Switch to OptiMove's variables/, "and the link back");
+      assert.equal(await page.locator('[data-action="metric-board-team"]').count(), 0);
+      assert.deepEqual(admin.pageErrors, []);
+    } finally { await admin.context.close(); }
   } finally { await world.stop(); }
 });
