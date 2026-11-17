@@ -28,7 +28,12 @@ export function inventoryBundles(sourceTeam = 7001) {
   return importsBundles(sourceTeam).map((bundle) => {
     bundle.athleteSessions.forEach((row, i) => { row.e2e_hsr_distance = 100 + i; });
     for (const part of [bundle.details.full, ...Object.values(bundle.details.drills)]) {
-      for (const values of Object.values(part.players)) values.e2e_metabolic_power = { unit: "power", value: 12.5 };
+      Object.values(part.players).forEach((values, i) => {
+        values.e2e_metabolic_power = { unit: "power", value: 12.5 };
+        // G1b-2: two names whose values differ by athlete, so the platform can compare two of them with the GPEXE screen.
+        values.e2e_metabolic_energy = { unit: "energy", value: 410.5 + 20 * i };
+        values.e2e_work_energy = { unit: "energy_std", value: 1200 + 75 * i };
+      });
     }
     return bundle;
   });

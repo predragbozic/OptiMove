@@ -23,6 +23,7 @@ import * as service from "../sourceMetricMappingService.js";
 import * as variables from "../canonicalVariableAdminService.js";
 import * as fields from "../sourceFieldVerificationService.js";
 import * as fieldCreate from "../sourceFieldCreateService.js";
+import * as fieldObservation from "../sourceFieldObservationService.js";
 import * as revisions from "../sourceRevisionLifecycleService.js";
 import * as classification from "../canonicalClassificationService.js";
 import * as conversions from "../unitConversionService.js";
@@ -535,6 +536,32 @@ router.post("/fields", handle(async (req, res) => {
   if (!fieldCreate.mayCreateFields(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await fieldCreate.createField({ ctx, body: req.body }), 201);
+}));
+
+// G1b-2 (docs/ai/gpexe-field-inventory-plan.md, section 8.2; J18's routes 8, 9 and 10): the platform's comparison of a
+// generic field. An active platform admin in the platform workspace only - everyone else the same 404, before the query
+// or the body is looked at.
+router.get("/fields/:fieldId/observation", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!fieldObservation.mayObserve(ctx)) return notFound(res);
+  res.json(await fieldObservation.readObservation({ ctx, fieldId: req.params.fieldId, queryString: rawQuery(req) }));
+}));
+
+router.get("/fields/:fieldId/observations", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!fieldObservation.mayObserve(ctx)) return notFound(res);
+  if (rawQuery(req) !== "") return res.status(400).json({ error: "invalid_query", message: fieldObservation.OBSERVATION_TEXT.invalid_query });
+  res.json(await fieldObservation.listObservations({ ctx, fieldId: req.params.fieldId }));
+}));
+
+router.post("/fields/:fieldId/revisions/:revisionId/observed-confirmation", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!fieldObservation.mayObserve(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await fieldObservation.confirmObserved({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 201);
 }));
 
 // The source-field revision lifecycle (J5): L1 creates a draft revision (201);

@@ -230,10 +230,12 @@ function entry(fields) {
     checkParameters(sourceParameters) {
       return parse(sourceParameters) === null ? UNSUPPORTED : null;
     },
-    extract(input, sourceParameters) {
+    // `context` (G1b-2): what the version proves about the unit, for an entry that reads a unit word -
+    // { sourceUnit, unitWords } (the version's proven source unit token, and GPEXE's seeded words, word -> token).
+    extract(input, sourceParameters, context) {
       const parsed = parse(sourceParameters);
       if (parsed === null) throw new ExtractorError(UNSUPPORTED, "The version's source parameters do not fit this source field.");
-      return read(input ?? {}, parsed);
+      return read(input ?? {}, parsed, context ?? null);
     },
   });
 }
@@ -320,19 +322,65 @@ function genericRowNumber(key, field) {
   });
 }
 
+// G1b-2 (plan sections 8.10 and 9.3, rule (b)): the word GPEXE sends with the value is a quantity kind, not a unit. The
+// entry takes exactly the words whose seeded unit token (training_load.source_unit_words) is the version's proven source
+// unit; any other word, an unknown word, or a read without that context is unexpected_unit - a shape refusal, which
+// blocks the session (never a silent skip). The value stays in that source unit (rule (c)): the version's conversion
+// does the rest, and T6 keeps the raw value.
+function unitWordFits(word, context) {
+  if (typeof word !== "string" || context === null || typeof context !== "object") return false;
+  const { sourceUnit, unitWords } = context;
+  return typeof sourceUnit === "string" && unitWords instanceof Map && unitWords.get(word) === sourceUnit;
+}
+
 function genericDetailsNumber(key, field) {
   return entry({
     key, valueShape: "unit_value_object", parameterKind: "none", zone: null, direction: null,
     parse: (p) => (noParameters(p) === null ? {} : null),
-    read: ({ playerDetails }) => {
+    read: ({ playerDetails }, _parsed, context) => {
       if (!playerDetails) return { skip: "details_not_fetched" };
       const value = own(playerDetails, field);
       if (!value) return { skip: "field_missing" };
-      if (own(value, "unit") !== "number") return { skip: "unexpected_unit" };
+      if (!unitWordFits(own(value, "unit"), context)) return { skip: "unexpected_unit" };
       const number = finiteNumber(own(value, "value"));
       return number === null ? { skip: "value_missing" } : { value: number };
     },
   });
+}
+
+// Whether a key is read by the generic details entry (a created field of the details prefix): its reads need the
+// unit words (unitWordsNeeded), read once per plan from source_unit_words.
+export function isGenericDetailsKey({ sourceSystem, apiFamily, sourceMetricKey } = {}) {
+  if (typeof sourceMetricKey !== "string" || `${sourceSystem}/${apiFamily}/` !== GPEXE_REST_V1) return false;
+  if (Object.hasOwn(EXTRACTORS, `${GPEXE_REST_V1}${sourceMetricKey}`)) return false;
+  const prefix = Object.keys(GENERIC_PREFIXES).find((p) => sourceMetricKey.startsWith(p));
+  return Boolean(prefix) && GENERIC_PREFIXES[prefix] === "details" && genericExtractor(sourceMetricKey) !== null;
+}
+
+// G1b-2, routes 8 and O (plan section 8.2): what one athlete's stored answer says for a generic field - the raw value
+// and the unit word GPEXE sent with it (a details value), or the value alone (an athlete-row value: GPEXE sends no
+// word). Read only through the athlete's own property of that name, as the entries above; nothing is converted. For the
+// platform's comparison only - never for an import.
+export function genericObservationExtract(sourceMetricKey) {
+  if (typeof sourceMetricKey !== "string") return null;
+  const prefix = Object.keys(GENERIC_PREFIXES).find((p) => sourceMetricKey.startsWith(p));
+  if (!prefix) return null;
+  const name = sourceMetricKey.slice(prefix.length);
+  if (!GENERIC_NAME.test(name) || GENERIC_DANGEROUS.has(name)) return null;
+  if (GENERIC_PREFIXES[prefix] === "row") {
+    return ({ row }) => {
+      const value = finiteNumber(own(row, name));
+      return value === null ? { skip: "field_missing" } : { value: { word: null, value } };
+    };
+  }
+  return ({ playerDetails }) => {
+    const value = own(playerDetails, name);
+    if (!value) return { skip: "field_missing" };
+    const number = finiteNumber(own(value, "value"));
+    if (number === null) return { skip: "value_missing" };
+    const word = own(value, "unit");
+    return { value: { word: typeof word === "string" ? word : null, value: number } };
+  };
 }
 
 const genericEntries = new Map();
@@ -365,23 +413,9 @@ export function extractorFor({ sourceSystem, apiFamily, sourceMetricKey } = {}) 
 // reads - a later revision may change them) or "parameters_unsupported" (the
 // entry refuses the parameters). A test entry that declares no shape (null)
 // accepts every revision.
-// G1b-1's interim rule (the Rukovodilac, 2026-11-17): the generic details entry reads only the unit word `number`, so
-// a created details field (not a seeded key) is importable only with the proven unit `count` until G1b-2 teaches the
-// extractor the other words. A version of one with another unit would block every session of its team
-// (source_shape_mismatch), so it is never created, activated or previewed. `sourceUnit` undefined: not asked.
-export const UNIT_NOT_IMPORTABLE = "unit_not_importable";
-export function unitImportableCode({ sourceSystem, apiFamily, sourceMetricKey, sourceUnit }) {
-  if (sourceUnit === undefined || typeof sourceMetricKey !== "string") return null;
-  if (`${sourceSystem}/${apiFamily}/` !== GPEXE_REST_V1 || Object.hasOwn(EXTRACTORS, `${sourceSystem}/${apiFamily}/${sourceMetricKey}`)) return null;
-  if (!sourceMetricKey.startsWith("details.players.")) return null;
-  return sourceUnit === "count" ? null : UNIT_NOT_IMPORTABLE;
-}
-
-export function extractabilityCode({ sourceSystem, apiFamily, sourceMetricKey, valueShape, parameterKind, sourceParameters, sourceUnit }) {
+export function extractabilityCode({ sourceSystem, apiFamily, sourceMetricKey, valueShape, parameterKind, sourceParameters }) {
   const extractor = extractorFor({ sourceSystem, apiFamily, sourceMetricKey });
   if (!extractor) return "source_metric_unsupported";
-  const unitCode = unitImportableCode({ sourceSystem, apiFamily, sourceMetricKey, sourceUnit });
-  if (unitCode) return unitCode;
   if (extractor.valueShape !== null && (extractor.valueShape !== valueShape || extractor.parameterKind !== parameterKind)) {
     return "source_metric_unsupported";
   }

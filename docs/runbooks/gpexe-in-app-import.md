@@ -1536,7 +1536,7 @@ waiting (each is caught and logged; a purge runs again on its schedule).
 - **Record:** the settings history row (`configured_by_user_id`, reason). No new column.
 - **Known, accepted risks of U2a (security review, 2026-11-04):** (1) the server does not check that the GPEXE team id is one the club's credential sees (that would need the last Test's list stored: a migration, out of scope); the bind does check it. A club admin could therefore pre-claim a GPEXE team id of another club on one of their own unpaired teams ("squatting"); the other club's platform admin then gets `gpexe_team_taken` until a platform admin changes the squatter's pair under Data sources (F3b, with a reason). The squatter cannot bind it. (2) To keep the response from being an existence oracle, a club admin gets the neutral `409 pair_not_available` whenever the GPEXE team is already paired anywhere; a platform admin gets `gpexe_team_taken`. (3) A club admin's pair is self-approved: the boundary is what the club's own credential sees, so a second club is released only after it has its own GPEXE account.
 
-## Created source fields in a check (G2, G1b-1)
+## Created source fields in a check (G2, G1b-1, G1b-2)
 
 A field a platform admin created through Source fields (route C, `docs/ai/gpexe-field-inventory-plan.md` section 8.1)
 is kept by every check of every team: its values are stored in the snapshot beside the importer's own fields (the
@@ -1553,7 +1553,18 @@ pinned set, plan section 9.1). Only a field with an active revision is kept.
 - **A check stops with `pinned_fields_too_many`.** More than 64 fields of one kind are active (only by a row written by
   hand: route C refuses the 65th). Retire the active revision of fields until 64 are left; the retention run projects
   nothing meanwhile.
-- **Until G1b-2: a created whole-session or drill field imports only a count.** A mapping version of such a field whose
-  proven unit is not `count` is refused (`409 unit_not_importable`, "This field's unit cannot be imported yet."), so no
-  team's sessions can be blocked by a unit the importer cannot read yet. G1b-2 lifts this when the extractor learns
-  GPEXE's unit words.
+- **GPEXE's unit word with each value (G1b-2).** A created whole-session or drill field is read only where the word
+  GPEXE sends with the value is one of the seeded words whose unit is the field's proven unit
+  (`training_load.source_unit_words`: `energy` and `energy_std` for J/kg, `time` and `duration` for s, `number` for a
+  count, and so on). Any other word, or a word OptiMove does not know, blocks the session as `source_shape_mismatch` -
+  never a silent skip. The value is stored in the field's unit and converted by the mapping version, as every value is.
+  - *A session of a team is blocked as `source_shape_mismatch` on a created field.* GPEXE sent that field with another
+    word for at least one athlete (another account may send the same name differently). Remedy: retire the field's
+    active revision (L5, as above), or end the field's activation on that team; a new field (or a new revision) is
+    confirmed for the other word.
+  - The interim refusal of G1b-1 (`409 unit_not_importable`) is gone.
+- **Confirming a created field's unit on the board (G1b-2).** A platform admin, in the platform workspace, opens the field
+  in Source fields and chooses *Compare with GPEXE*: a team, then two named athletes of its newest saved session with the
+  number GPEXE should show. If both match the GPEXE screen, the tick saves the unit GPEXE states and GPEXE's own label as
+  the meaning (`source_stated`). The two compared numbers are kept for 90 days (v65's removal) and shown only to platform
+  admins. A per-athlete field carries no word: its unit is confirmed with a document (*Confirm the unit*).

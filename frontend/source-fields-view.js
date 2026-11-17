@@ -10,6 +10,7 @@ import {
   ENDPOINT_LABEL, INVENTORY_ENDPOINTS, KIND_LABEL,
   currentRevision, hasBound, inventoryMatches, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
   unitActOffered, createOffered, createNextStep, FIELD_LABEL_MAX,
+  DURATION_HOURS_NOTE, observationLines, observationReasonText, observationWordText, observeOffered,
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -258,6 +259,9 @@ function renderRevisionHtml(revision, field, ctx, stale) {
   ];
   const unitOffered = !stale && unitActOffered(ctx, field, revision);
   const meaningOffered = !stale && meaningActOffered(ctx, field, revision);
+  // G1b-2: GPEXE states this field's unit with each value, so one comparison of two athletes on the board proves the
+  // unit and the meaning together; the document acts stay offered beside it.
+  const observeOn = !stale && observeOffered(ctx, field, revision);
   return `
     <li class="metric-variables-version source-fields-revision">
       <div class="source-fields-revision-head">
@@ -268,7 +272,9 @@ function renderRevisionHtml(revision, field, ctx, stale) {
       <dl class="metric-variables-facts">
         ${facts.map(([name, value, wide]) => `<div${wide ? ` class="source-fields-wide"` : ""}><dt>${name}</dt><dd>${value}</dd></div>`).join("")}
       </dl>
-      ${unitOffered || meaningOffered ? `<div class="metric-variables-actions source-fields-acts">
+      ${observeOn ? `<p class="muted source-fields-observe-note">GPEXE sends this value with its unit. Compare two athletes with the GPEXE screen to confirm the unit and the meaning together.</p>` : ""}
+      ${unitOffered || meaningOffered || observeOn ? `<div class="metric-variables-actions source-fields-acts">
+        ${observeOn ? `<button class="plain-button data-sources-primary" type="button" data-action="source-fields-observe-open" data-revision-id="${escapeAttr(revision.id)}">Compare with GPEXE</button>` : ""}
         ${unitOffered ? `<button class="plain-button" type="button" data-action="source-fields-act-open" data-act="unit" data-revision-id="${escapeAttr(revision.id)}">Confirm the unit</button>` : ""}
         ${meaningOffered ? `<button class="plain-button" type="button" data-action="source-fields-act-open" data-act="meaning" data-revision-id="${escapeAttr(revision.id)}">Confirm the meaning</button>` : ""}
       </div>` : ""}
@@ -313,6 +319,7 @@ function renderDetailHtml(s, ctx) {
         <span>Revision ${escapeHtml(String(revisionNumber.get(v.revisionId) ?? "?"))} · ${actWords(v, field)} · ${escapeHtml(fmtDate(v.at))}</span>
         ${v.evidenceRef ? `<span class="muted">Evidence ${code(v.evidenceRef)}</span>` : ""}
       </li>`).join("")}</ul>` : `<p class="muted">Nothing checked or confirmed yet.</p>`}
+    ${ctx.mayVerify ? observationsHtml(d) : ""}
     <details class="data-sources-tech"><summary>Technical details</summary><dl>
       <div><dt>Key</dt><dd>${escapeHtml(field.key || "")}</dd></div>
       <div><dt>Data family</dt><dd>${familyLabel(field)}</dd></div>
@@ -320,6 +327,21 @@ function renderDetailHtml(s, ctx) {
       ${(field.revisions || []).map((r) => `<div><dt>Revision ${escapeHtml(String(r.revisionNumber ?? ""))} id</dt><dd>${escapeHtml(r.id)}</dd></div>`).join("")}
     </dl></details>
   `;
+}
+
+// G1b-2: the field's comparisons on the board (route 10), for a platform admin: the team, when, the word and the unit,
+// and the two numbers compared while they are kept. Never an athlete's name or id.
+function observationsHtml(d) {
+  if (d.observationsError) return `<h3>Compared on the board</h3><p class="muted">${escapeHtml(d.observationsError)}</p>`;
+  const list = d.observations || [];
+  if (!list.length) return "";
+  return `
+    <h3>Compared on the board</h3>
+    <ul class="metric-variables-versions source-fields-history">${list.map((o) => `
+      <li class="metric-variables-version">
+        <span>${escapeHtml(fmtDate(o.confirmedAt))} · ${escapeHtml(o.team?.name || "A team")}${o.team?.clubName ? ` (${escapeHtml(o.team.clubName)})` : ""} · GPEXE's word ${code(o.word || "")} read as ${code(o.unit || "")}</span>
+        <span class="muted">${o.values ? `Numbers compared: ${escapeHtml(o.values.a)} and ${escapeHtml(o.values.b)} ${escapeHtml(o.unit || "")} (kept until ${escapeHtml(fmtDate(o.valuesExpireAt))})` : "The compared numbers are no longer kept."}${o.confirmedBy ? ` · ${escapeHtml(o.confirmedBy)}` : ""}</span>
+      </li>`).join("")}</ul>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +366,7 @@ function textInput(form, field, label, { max, hint = "" } = {}) {
 function unconfirmedHtml(form) {
   return `
     <div class="metric-variables-unconfirmed" role="alert">
-      <p><strong>Result not confirmed.</strong> No answer arrived, so it is not known whether ${form.act === "create" ? "the field was created" : "the confirmation was saved"}. Check result sends the same request again: it is never saved twice.</p>
+      <p><strong>Result not confirmed.</strong> No answer arrived, so it is not known whether ${form.act === "create" ? "the field was created" : form.act === "observe" ? "the comparison was saved" : "the confirmation was saved"}. Check result sends the same request again: it is never saved twice.</p>
       ${form.checkNote ? `<p>${escapeHtml(form.checkNote)}</p>` : ""}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="button" data-action="source-fields-check-result" ${form.busy ? "disabled" : ""}>${form.busy ? "Checking..." : "Check result"}</button>
@@ -412,9 +434,73 @@ function renderCreateFormHtml(s) {
     </form>`;
 }
 
+// G1b-2: the comparison of a generic field with the GPEXE screen (plan sections 8.2 and 8.10). The team, then the server's
+// comparison of two named athletes in one saved session, each with the number GPEXE should show; the tick only with both
+// numbers on the screen; the three outcomes of every write.
+function renderObserveFormHtml(s) {
+  const form = s.form;
+  const locked = form.busy || form.unconfirmed;
+  const o = form.observation;
+  const teams = form.teams;
+  const teamError = form.errors.teamId ? `<span class="metric-variables-field-error" id="sf-err-teamId">${escapeHtml(form.errors.teamId)}</span>` : "";
+  const teamPicker = teams.loading ? `<p class="muted" role="status">Loading the teams...</p>`
+    : teams.error ? `<p class="error" role="alert">${escapeHtml(teams.error)}</p>`
+    : !teams.items.length ? `<p class="muted">No team is linked to GPEXE yet.</p>`
+    : `
+      <label class="search-field"><span>Team</span>
+        <select data-sf-field="teamId" ${locked || form.observationLoading ? "disabled" : ""}${form.errors.teamId ? ` aria-invalid="true" aria-describedby="sf-err-teamId"` : ""}>
+          <option value="" ${form.draft.teamId ? "" : "selected"}>Choose a team...</option>
+          ${teams.items.map((t) => `<option value="${escapeAttr(t.teamId)}" ${form.draft.teamId === t.teamId ? "selected" : ""}>${escapeHtml(t.clubName)} · ${escapeHtml(t.teamName)}</option>`).join("")}
+        </select>
+        <span class="muted">OptiMove reads the team's newest saved session with two athletes it can name.</span>
+        ${teamError}
+      </label>
+      ${teams.truncated ? `<p class="muted">Only the first teams are listed.</p>` : ""}
+      <div class="data-sources-form-actions">
+        <button class="plain-button" type="button" data-action="source-fields-observe-load" ${locked || form.observationLoading ? "disabled" : ""}>${form.observationLoading ? "Reading..." : "Show the comparison"}</button>
+      </div>`;
+  const lines = observationLines(o);
+  const comparison = !o ? (form.observationError ? `<p class="error" role="alert">${escapeHtml(form.observationError)}</p>` : "") : `
+      <div class="source-fields-observe" aria-live="polite">
+        <p><strong>${escapeHtml(o.session?.label || "Saved session")}</strong> <span class="muted">${escapeHtml(fmtDate(o.session?.startedAt))} · ${escapeHtml(o.team?.name || "")}</span></p>
+        ${o.word ? `<p class="metric-variables-field-note">${escapeHtml(observationWordText(o))}</p>` : ""}
+        <p>Open this session in GPEXE and find these two athletes:</p>
+        <ul class="source-fields-observe-athletes">
+          ${lines.map((l) => `<li><strong>${escapeHtml(l.name)}</strong>: ${escapeHtml(l.text)}</li>`).join("")}
+        </ul>
+        ${o.displayRule === "duration_mmss" ? `<p class="muted">${escapeHtml(DURATION_HOURS_NOTE)}</p>` : ""}
+        ${o.pair?.count > 1 ? `<button class="plain-button ghost" type="button" data-action="source-fields-observe-other" ${locked || form.observationLoading ? "disabled" : ""}>Other athletes (${escapeHtml(String(o.pair.index + 1))} of ${escapeHtml(String(o.pair.count))})</button>` : ""}
+        ${o.confirmable ? `
+        <label class="source-fields-choice source-fields-attest">
+          <input type="checkbox" data-sf-field="attested" ${form.draft.attested ? "checked" : ""} ${locked ? "disabled" : ""}${form.errors.attested ? ` aria-invalid="true" aria-describedby="sf-err-attested"` : ""}>
+          <span>I compared both athletes with the GPEXE screen, and the numbers match.</span>
+        </label>
+        ${form.errors.attested ? `<span class="metric-variables-field-error" id="sf-err-attested">${escapeHtml(form.errors.attested)}</span>` : ""}`
+        : `<p class="error" role="alert">${escapeHtml(observationReasonText(o))}</p>`}
+      </div>`;
+  return `
+    <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="observe" novalidate autocomplete="off">
+      <h2 id="source-fields-title">Compare ${escapeHtml(form.fieldName)} with GPEXE</h2>
+      <p class="metric-variables-field-note">If both athletes' numbers match the GPEXE screen, OptiMove saves the unit GPEXE states and GPEXE's own label as the meaning. It is saved once and never changed: a correction is a new revision.</p>
+      ${teamPicker}
+      ${comparison}
+      ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
+      ${form.unconfirmed ? unconfirmedHtml(form) : `
+      <div class="data-sources-form-actions">
+        ${o?.confirmable ? `<button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Saving..." : `Save: unit ${escapeHtml(o.unit)}`}</button>` : ""}
+        <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
+      </div>`}
+      <details class="data-sources-tech"><summary>Technical details</summary><dl>
+        <div><dt>Key</dt><dd>${escapeHtml(form.fieldKey || "")}</dd></div>
+        ${o?.displayRule ? `<div><dt>Display rule</dt><dd>${escapeHtml(o.displayRule)}</dd></div>` : ""}
+      </dl></details>
+    </form>`;
+}
+
 function renderFormHtml(s) {
   const form = s.form;
   if (form.act === "create") return renderCreateFormHtml(s);
+  if (form.act === "observe") return renderObserveFormHtml(s);
   const name = `${escapeHtml(form.fieldName)} (revision ${escapeHtml(String(form.revisionNumber ?? ""))})`;
   const bound = form.parameterKind === "zone_bounds" || form.parameterKind === "event_threshold";
   const locked = form.busy || form.unconfirmed;

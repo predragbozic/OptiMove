@@ -422,7 +422,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   if (!mapping || mapping.block) {
     blocked = block(mapping?.block ?? "mapping_not_usable");
   } else {
-    const built = mappedMetricSpecs(mapping.rows);
+    const built = mappedMetricSpecs(mapping.rows, { unitWords: mapping.unitWords });
     if (built.block) blocked = block(built.block);
     else {
       specs = built.specs;

@@ -374,14 +374,15 @@ test("14. G2, the generic extractors: athlete_session.<name> reads one row numbe
   assert.deepEqual(row.extract({}, {}), { skip: "field_missing" });
   const inherited = Object.create({ hsr_distance: 99 });
   assert.deepEqual(row.extract({ row: inherited }, {}), { skip: "field_missing" }, "an inherited property is never read");
-  // Details.
-  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "number", value: 7 } } }, {}), { value: 7 });
-  assert.deepEqual(det.extract({ playerDetails: null }, {}), { skip: "details_not_fetched" });
-  assert.deepEqual(det.extract({ playerDetails: {} }, {}), { skip: "field_missing" });
-  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "s", value: 7 } } }, {}), { skip: "unexpected_unit" });
-  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "number", value: "x" } } }, {}), { skip: "value_missing" });
-  assert.deepEqual(det.extract({ playerDetails: { jumps: Object.create({ unit: "number", value: 7 }) } }, {}), { skip: "unexpected_unit" }, "an inherited unit is never read");
-  assert.deepEqual(det.extract({ playerDetails: Object.create({ jumps: { unit: "number", value: 7 } }) }, {}), { skip: "field_missing" });
+  // Details (G1b-2: read with the version's proven unit and GPEXE's words; test 15 holds the word rule).
+  const COUNT = { sourceUnit: "count", unitWords: new Map([["number", "count"]]) };
+  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "number", value: 7 } } }, {}, COUNT), { value: 7 });
+  assert.deepEqual(det.extract({ playerDetails: null }, {}, COUNT), { skip: "details_not_fetched" });
+  assert.deepEqual(det.extract({ playerDetails: {} }, {}, COUNT), { skip: "field_missing" });
+  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "s", value: 7 } } }, {}, COUNT), { skip: "unexpected_unit" });
+  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "number", value: "x" } } }, {}, COUNT), { skip: "value_missing" });
+  assert.deepEqual(det.extract({ playerDetails: { jumps: Object.create({ unit: "number", value: 7 }) } }, {}, COUNT), { skip: "unexpected_unit" }, "an inherited unit is never read");
+  assert.deepEqual(det.extract({ playerDetails: Object.create({ jumps: { unit: "number", value: 7 } }) }, {}, COUNT), { skip: "field_missing" });
   for (const code of ["field_missing", "unexpected_unit", "value_missing", "details_not_fetched"]) assert.ok(SKIP_CATEGORY[code], code);
   // No parameters.
   assert.equal(row.checkParameters({}), null);
@@ -400,17 +401,34 @@ test("14. G2, the generic extractors: athlete_session.<name> reads one row numbe
   assert.equal(G2("details.players.tot_burst_events"), G("details.players.tot_burst_events"));
 });
 
-test("15. G1b-1's interim rule: a created details field (a generic details.players key) is importable only with the proven unit count until G1b-2; a seeded details field, a created row field and a call that does not name the unit are unchanged", async () => {
-  const { extractabilityCode, unitImportableCode, UNIT_NOT_IMPORTABLE } = await import("../src/sourceMetricExtractors.js");
-  const created = { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "details.players.g1b_energy", valueShape: "unit_value_object", parameterKind: "none", sourceParameters: {} };
-  for (const unit of ["J/kg", "W/kg", "m/s", "m", "s", "m/s2"]) {
-    assert.equal(extractabilityCode({ ...created, sourceUnit: unit }), UNIT_NOT_IMPORTABLE, unit);
-    assert.equal(unitImportableCode({ ...created, sourceUnit: unit }), UNIT_NOT_IMPORTABLE, unit);
+test("15. G1b-2, rule (b): a created details field reads exactly the words whose seeded unit token is its version's proven source unit - any other word, an unknown word, a missing context or a non-string word is unexpected_unit (a shape refusal, never a skip); the value stays in the source unit; no unit refusal is left in extractabilityCode", async () => {
+  const { extractabilityCode, isGenericDetailsKey } = await import("../src/sourceMetricExtractors.js");
+  const words = new Map([["number", "count"], ["energy", "J/kg"], ["energy_std", "J/kg"], ["time", "s"], ["duration", "s"], ["speed", "m/s"]]);
+  const det = G2("details.players.g1b_energy");
+  const at = (unit, value = 412.5) => ({ playerDetails: { g1b_energy: { unit, value } } });
+  // The words of the version's unit, and only those.
+  assert.deepEqual(det.extract(at("energy"), {}, { sourceUnit: "J/kg", unitWords: words }), { value: 412.5 });
+  assert.deepEqual(det.extract(at("energy_std"), {}, { sourceUnit: "J/kg", unitWords: words }), { value: 412.5 }, "two words of one token");
+  assert.deepEqual(det.extract(at("time"), {}, { sourceUnit: "s", unitWords: words }), { value: 412.5 });
+  assert.deepEqual(det.extract(at("duration"), {}, { sourceUnit: "s", unitWords: words }), { value: 412.5 });
+  assert.deepEqual(det.extract(at("number", 7), {}, { sourceUnit: "count", unitWords: words }), { value: 7 }, "number keeps working for count");
+  for (const [word, unit, why] of [["number", "J/kg", "a word of another token"], ["energy", "count", "a word of another token"], ["power", "J/kg", "a word not seeded"],
+    ["J/kg", "J/kg", "a unit token is not a word"], ["", "J/kg", "an empty word"], [7, "J/kg", "a non-string word"], [null, "J/kg", "no word"]]) {
+    assert.deepEqual(det.extract(at(word), {}, { sourceUnit: unit, unitWords: words }), { skip: "unexpected_unit" }, why);
   }
-  assert.equal(extractabilityCode({ ...created, sourceUnit: "count" }), null);
-  assert.equal(extractabilityCode(created), null, "not asked: the unit is not named");
-  const seeded = { ...created, sourceMetricKey: "details.players.tot_burst_events" };
-  assert.equal(extractabilityCode({ ...seeded, sourceUnit: "J/kg" }), null, "a seeded key keeps its own entry");
-  const row = { ...created, sourceMetricKey: "athlete_session.g1b_hsr", valueShape: "number" };
-  assert.equal(extractabilityCode({ ...row, sourceUnit: "m" }), null, "a created row field reads its number in any proven unit");
+  for (const context of [undefined, null, {}, { sourceUnit: "J/kg" }, { unitWords: words }, { sourceUnit: "J/kg", unitWords: Object.fromEntries(words) }]) {
+    assert.deepEqual(det.extract(at("energy"), {}, context), { skip: "unexpected_unit" }, `context ${JSON.stringify(context)}`);
+  }
+  assert.equal(SKIP_CATEGORY.unexpected_unit, "shape", "a word that does not fit blocks the session");
+  // A seeded details key keeps its own entry (the word number only), whatever the context says.
+  assert.deepEqual(G("details.players.tot_burst_events").extract({ playerDetails: { tot_burst_events: { unit: "number", value: 3 } } }, {}), { value: 3 });
+  // isGenericDetailsKey: a created details key only.
+  assert.equal(isGenericDetailsKey({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "details.players.g1b_energy" }), true);
+  for (const key of ["details.players.tot_burst_events", "athlete_session.g1b_hsr", "details.players.__proto__", "details.players.a.b"]) {
+    assert.equal(isGenericDetailsKey({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: key }), false, key);
+  }
+  assert.equal(isGenericDetailsKey({ sourceSystem: "gpexe", apiFamily: "api", sourceMetricKey: "details.players.g1b_energy" }), false);
+  // G1b-1's interim refusal is gone: a created details field in any unit is extractable (the word rule decides each value).
+  const created = { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "details.players.g1b_energy", valueShape: "unit_value_object", parameterKind: "none", sourceParameters: {} };
+  for (const unit of ["J/kg", "W/kg", "m/s", "count"]) assert.equal(extractabilityCode({ ...created, sourceUnit: unit }), null, unit);
 });

@@ -17,6 +17,8 @@
 //
 // Errors carry fixed messages only: no id, value, key or name.
 
+import { unitWordsFor } from "./sourceUnitWords.js";
+
 export class ImportMappingChangedError extends Error {
   constructor() {
     super("The mapping activations changed while the import read them.");
@@ -301,7 +303,7 @@ export function setImportMappingHoldForTests(fn) { mappingHold = fn ?? null; }
 // unactivated }; throws only ImportMappingChangedError (a difference under the
 // locks) and the database's own errors.
 export async function prepareImportMapping(client, { teamId, bindingId, sessionExternalId, sourceTeamIdOfBundle }) {
-  const empty = { binding: null, connection: null, rows: [], activationSet: [], unactivated: [] };
+  const empty = { binding: null, connection: null, rows: [], activationSet: [], unactivated: [], unitWords: new Map() };
   if (!bindingId) return { ...empty, block: "mapping_not_usable", blockReason: "legacy_path" };
   const binding = await readImportBinding(client, { teamId, bindingId });
   if (!binding) return { ...empty, block: "mapping_not_usable", blockReason: "binding_not_active" };
@@ -314,8 +316,10 @@ export async function prepareImportMapping(client, { teamId, bindingId, sessionE
   if (mappingHold) await mappingHold(client);
   const rows = await lockActivations(client, binding.id, unlocked);
   const unactivated = await unactivatedLabels(client, binding);
+  // G1b-2 (rule (b)): GPEXE's unit words, once for this plan, only when a generic details field is read.
+  const unitWords = await unitWordsFor(client, rows);
   const activationSet = rows.map((r) => [r.activationId, r.mappingVersionId]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const base = { binding, rows, activationSet, unactivated, connection: null };
+  const base = { binding, rows, activationSet, unactivated, unitWords, connection: null };
   if (rows.length === 0) return { ...base, block: "no_mapped_values", blockReason: "no_activation" };
   if (!(await capabilitiesHold(client, rows))) return { ...base, block: "mapping_not_usable", blockReason: "scope_capability" };
   const instance = await lockSourceInstance(client, { teamId, binding, sessionExternalId });

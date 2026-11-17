@@ -8,6 +8,7 @@ import { state } from "./state.js";
 import {
   CLOSES_FORM, createNextStep, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, createOffered, createSourceField,
   emptyInventory, emptySourceFieldsState, errorInfo, fetchField, openCreateFieldForm,
+  confirmObservedField, fetchBoardTeams, fetchObservation, fetchObservations, observationReadText, observeOffered, openObserveForm, REREADS_OBSERVATION,
   fetchFields, fetchInventory, inventoryMatches, meaningActOffered, newRequestKey, openSourceFieldForm, outcomeUnknown, sourceFieldCodeText, sourceFieldsContext,
   sourceFieldsState, unitActOffered, verifyMeaning, verifyUnit,
 } from "./source-fields-data.js";
@@ -66,6 +67,19 @@ export async function loadSourceField(id, render) {
     if (sourceFieldsState().generation !== generation || s.detail.id !== id) return;
     s.detail.field = data?.field || null;
     s.detail.verifications = Array.isArray(data?.verifications) ? data.verifications : [];
+    // G1b-2: the field's comparisons on the board (route 10), for a platform admin only.
+    if (sourceFieldsContext()?.mayVerify && s.detail.field) {
+      try {
+        const listed = await fetchObservations(id);
+        if (sourceFieldsState().generation !== generation || s.detail.id !== id) return;
+        s.detail.observations = Array.isArray(listed?.observations) ? listed.observations : [];
+        s.detail.observationsError = null;
+      } catch {
+        if (sourceFieldsState().generation !== generation || s.detail.id !== id) return;
+        s.detail.observations = null;
+        s.detail.observationsError = "The comparisons could not be loaded.";
+      }
+    }
   } catch (error) {
     if (sourceFieldsState().generation !== generation || s.detail.id !== id) return;
     const info = errorInfo(error);
@@ -187,6 +201,12 @@ export function sourceFieldsMayBeLeft() {
     if (form.dirty) return confirmAsk("Discard the field you have not created?");
     return true;
   }
+  if (form.act === "observe") {
+    if (form.busy) return confirmAsk("The comparison is still being saved. Leave anyway? Its result will not be shown.");
+    if (form.unconfirmed) return confirmAsk("It is not known whether the comparison was saved. Leave without checking? Open the field later to see.");
+    if (form.dirty) return confirmAsk("Discard the comparison you have not saved?");
+    return true;
+  }
   if (form.busy) return confirmAsk("A confirmation is still being saved. Leave anyway? Its result will not be shown.");
   if (form.unconfirmed) return confirmAsk("The result of the last confirmation is not known. Leave without checking? Open the field later to see whether it was saved.");
   if (form.dirty) return confirmAsk("Discard the confirmation you have not saved?");
@@ -294,7 +314,8 @@ export async function handleSourceFieldsAction(action, { render }) {
     }
     render();
     // Back where the form was opened from.
-    if (form) focus(`[data-action="source-fields-act-open"][data-act="${form.act}"][data-revision-id="${form.revisionId}"]`);
+    if (form?.act === "observe") focus(`[data-action="source-fields-observe-open"][data-revision-id="${cssValue(form.revisionId)}"]`);
+    else if (form) focus(`[data-action="source-fields-act-open"][data-act="${form.act}"][data-revision-id="${form.revisionId}"]`);
     return true;
   }
   if (type === "source-fields-check-result") {
@@ -311,6 +332,39 @@ export async function handleSourceFieldsAction(action, { render }) {
     render();
     toTitle();
     focus(".source-fields-form [data-sf-field]:not([disabled])");
+    return true;
+  }
+  if (type === "source-fields-observe-open") {
+    // G1b-2: the comparison, only where the view offers it (the same helper decides both).
+    if (s.form || s.detail.loading || s.detail.error) return true;
+    const field = s.detail.field;
+    const revision = (field?.revisions || []).find((r) => r.id === action.dataset.revisionId) || null;
+    if (!observeOffered(ctx, field, revision)) return true;
+    s.notice = "";
+    s.form = openObserveForm({ field, revision });
+    render();
+    toTitle();
+    await loadObserveTeams(render);
+    focus(".source-fields-form [data-sf-field]:not([disabled])");
+    return true;
+  }
+  if (type === "source-fields-observe-load") {
+    const form = s.form;
+    if (form?.act !== "observe" || form.busy || form.unconfirmed || form.observationLoading) return true;
+    if (!form.draft.teamId) {
+      form.errors = { teamId: "Choose a team." };
+      render();
+      focus('.source-fields-form select[data-sf-field="teamId"]');
+      return true;
+    }
+    await loadObservation(render, { pair: 0 });
+    return true;
+  }
+  if (type === "source-fields-observe-other") {
+    const form = s.form;
+    const o = form?.observation;
+    if (form?.act !== "observe" || !o || form.busy || form.unconfirmed || form.observationLoading || !(o.pair?.count > 1)) return true;
+    await loadObservation(render, { pair: (o.pair.index + 1) % o.pair.count, candidateId: o.session.candidateId });
     return true;
   }
   if (type === "source-fields-act-open") {
@@ -333,9 +387,60 @@ export async function handleSourceFieldsAction(action, { render }) {
 }
 
 // ---------------------------------------------------------------------------
+// G1b-2: the comparison's reads - the teams (once), then one comparison (route 8). Read-only.
+// ---------------------------------------------------------------------------
+async function loadObserveTeams(render) {
+  const s = sourceFieldsState();
+  const form = s.form;
+  if (form?.act !== "observe" || form.teams.loading || form.teams.loaded) return;
+  form.teams.loading = true;
+  form.teams.error = "";
+  render();
+  try {
+    const data = await fetchBoardTeams();
+    if (s.form !== form) return;
+    form.teams.items = Array.isArray(data?.teams) ? data.teams : [];
+    form.teams.truncated = data?.truncated === true;
+    form.teams.loaded = true;
+  } catch (error) {
+    if (s.form !== form) return;
+    form.teams.error = errorInfo(error).code === "try_again" ? "The server was busy. Try again in a moment." : "The teams could not be loaded.";
+  } finally {
+    if (s.form === form) form.teams.loading = false;
+  }
+  render();
+}
+async function loadObservation(render, { pair = 0, candidateId = null, keepError = false } = {}) {
+  const s = sourceFieldsState();
+  const form = s.form;
+  if (form?.act !== "observe") return;
+  const teamId = form.draft.teamId;
+  form.observationLoading = true;
+  form.observationError = "";
+  form.errors = {};
+  if (!keepError) form.error = "";
+  form.draft.attested = false;
+  render();
+  try {
+    const data = await fetchObservation(form.fieldId, { teamId: candidateId ? null : teamId, candidateId, pair });
+    if (s.form !== form || form.draft.teamId !== teamId) return;
+    form.observation = data?.observation || null;
+    // The comparison is of this field's revision only; another one closes nothing here, the tick would refuse it.
+    if (form.observation && form.observation.revisionId !== form.revisionId) form.observation = null;
+  } catch (error) {
+    if (s.form !== form || form.draft.teamId !== teamId) return;
+    form.observation = null;
+    form.observationError = observationReadText(errorInfo(error));
+  } finally {
+    if (s.form === form) form.observationLoading = false;
+  }
+  render();
+}
+
+// ---------------------------------------------------------------------------
 // Typing: the form's values live in state, so a repaint never loses them.
 // ---------------------------------------------------------------------------
-export function handleSourceFieldsInput(target) {
+export function handleSourceFieldsInput(target, { render = null } = {}) {
   if (target.matches?.("[data-sf-inv-search]")) {
     sourceFieldsState().inventory.search = target.value;
     applyInventorySearch(target.value);
@@ -351,11 +456,26 @@ export function handleSourceFieldsInput(target) {
   if (field.type === "checkbox") {
     if (form.act === "create" && name === "supportsDrill" && form.drillLocked) return true;
     form.draft[name] = field.checked === true;
+    if (form.errors.attested) {
+      delete form.errors.attested;
+      globalThis.document?.getElementById?.("sf-err-attested")?.remove?.();
+    }
     if (form.errors.levels) {
       delete form.errors.levels;
       globalThis.document?.getElementById?.("sf-err-levels")?.remove?.();
     }
     form.dirty = true;
+    return true;
+  }
+  // G1b-2: another team drops the comparison on the screen (it was of the other team); the admin asks for the new one.
+  if (form.act === "observe" && name === "teamId") {
+    if (form.draft.teamId === field.value) return true;
+    form.draft.teamId = field.value;
+    form.observation = null;
+    form.observationError = "";
+    form.draft.attested = false;
+    form.errors = {};
+    if (render) render();
     return true;
   }
   form.draft[name] = field.value;
@@ -408,6 +528,7 @@ async function send(render) {
   let data;
   try {
     data = form.act === "create" ? await createSourceField(form.sentBody)
+      : form.act === "observe" ? await confirmObservedField(form.fieldId, form.revisionId, form.sentBody)
       : await (form.act === "unit" ? verifyUnit : verifyMeaning)(form.fieldId, form.revisionId, form.sentBody);
   } catch (error) {
     if (sourceFieldsState().generation !== generation || s.form !== form) return;
@@ -426,7 +547,10 @@ async function send(render) {
     focusNotice();
     return;
   }
-  setNotice(s, `${form.act === "unit" ? "The unit was confirmed." : "The meaning was confirmed."}${data?.readError ? " It could not be read back; the field below is read again." : ""}`, "");
+  const saved = form.act === "observe"
+    ? `The unit (${form.observation?.unit}, stated by GPEXE) and the meaning (GPEXE's own label) were saved from the comparison.`
+    : form.act === "unit" ? "The unit was confirmed." : "The meaning was confirmed.";
+  setNotice(s, `${saved}${data?.readError ? " It could not be read back; the field below is read again." : ""}`, "");
   s.list = { ...emptySourceFieldsState().list };
   await loadSourceField(form.fieldId, render);
   focusNotice();
@@ -469,6 +593,15 @@ async function refused(form, info, { render, check }) {
     return;
   }
   if (form.act === "create" && info.code === "invalid_body") form.errors.label = "Check this value.";
+  if (form.act === "observe" && REREADS_OBSERVATION.has(info.code)) {
+    // The comparison no longer stands: it is read again (the same team), and the tick starts over.
+    form.error = sourceFieldCodeText(info, form);
+    form.requestKey = newRequestKey();
+    form.draft.attested = false;
+    render();
+    await loadObservation(render, { pair: 0, keepError: true });
+    return;
+  }
   if (CLOSES_FORM.has(info.code)) {
     // The form was made from a revision that changed: it is closed and the
     // field read again, so the screen shows it as it is now.

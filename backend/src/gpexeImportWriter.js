@@ -706,7 +706,7 @@ export async function importGpexeBundleLocked(client, bundle, ctx, hooks = {}) {
     teamId: ctx.ownerTeamId, bindingId, sessionExternalId: gates.event.sourceExternalId, sourceTeamIdOfBundle: gates.gpexeTeamId,
   });
   if (mapping.block) throw new GpexeImportError(mapping.block, "The session cannot be imported through the team's mapping activations.");
-  const specs = mappedMetricSpecs(mapping.rows);
+  const specs = mappedMetricSpecs(mapping.rows, { unitWords: mapping.unitWords });
   if (specs.block) throw new GpexeImportError(specs.block, "The session cannot be imported through the team's mapping activations.");
   const full = buildGpexeImportPlan(bundle, { metricSpecs: specs.specs, teamTimezone });
   const athleteIdByGpexeId = ctx.athleteIdByGpexeId instanceof Map ? ctx.athleteIdByGpexeId : new Map(Object.entries(ctx.athleteIdByGpexeId || {}));

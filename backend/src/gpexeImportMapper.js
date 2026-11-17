@@ -176,7 +176,9 @@ const REQUIREMENTS = new Set(["required", "optional"]);
 // written as it stands, "source_unit_mismatch" when the version's source unit
 // is not its revision's proven unit (defence in depth beside the T6 guard).
 // Never a bound, threshold or factor from code: every one is the version's.
-export function mappedMetricSpecs(rows) {
+// unitWords (G1b-2, rule (b)): GPEXE's seeded unit words, word -> unit token, read once per plan
+// (sourceUnitWords.js); a generic details field reads only a word whose token is its version's proven source unit.
+export function mappedMetricSpecs(rows, { unitWords = new Map() } = {}) {
   if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
   const notUsable = (blockReason) => ({ block: "mapping_not_usable", blockReason });
   const seen = new Set();
@@ -192,7 +194,6 @@ export function mappedMetricSpecs(rows) {
     if (extractabilityCode({
       sourceSystem: activation.sourceSystem, apiFamily: activation.apiFamily, sourceMetricKey: activation.sourceMetricKey,
       valueShape: activation.revisionValueShape, parameterKind: activation.revisionParameterKind, sourceParameters: activation.sourceParameters,
-      sourceUnit: activation.revisionSourceUnit,
     }) !== null) return notUsable("not_extractable");
     for (const [level, covered] of [["full", activation.appliesToSession], ["drill", activation.appliesToDrill]]) {
       if (!covered) continue;
@@ -230,7 +231,7 @@ export function mappedMetricSpecs(rows) {
         min: activation.minValue === null || activation.minValue === undefined ? null : canonicalDecimal(activation.minValue),
         max: activation.maxValue === null || activation.maxValue === undefined ? null : canonicalDecimal(activation.maxValue),
       }),
-      extract: (input) => extractor.extract(input, sourceParameters),
+      extract: (input) => extractor.extract(input, sourceParameters, { sourceUnit: activation.revisionSourceUnit, unitWords }),
     });
   });
   return { block: null, specs };

@@ -41,7 +41,7 @@ export function emptySourceFieldsState() {
     // Bumped on every reset: an answer for an older view is dropped.
     generation: 0,
     list: { items: [], loaded: false, loading: false, error: null },
-    detail: { id: null, field: null, verifications: [], loading: false, error: null },
+    detail: { id: null, field: null, verifications: [], observations: null, observationsError: null, loading: false, error: null },
     form: null,
     // I2 / I3: the names GPEXE sent that no source field covers yet (read-only).
     inventory: emptyInventory(),
@@ -101,6 +101,18 @@ export const verifyUnit = (fieldId, revisionId, body) => write(actPath(fieldId, 
 export const verifyMeaning = (fieldId, revisionId, body) => write(actPath(fieldId, revisionId, "meaning"), body);
 // G1b: route C, a field created from a name of the inventory (platform admin, platform workspace).
 export const createSourceField = (body) => write(BASE, body);
+// G1b-2 (plan section 8.2): the platform's comparison of a generic field - the teams (the platform board's list), one
+// comparison (route 8), the tick (route O) and the stored comparisons (route 10).
+export const fetchBoardTeams = () => api("/api/training-load/sources/metrics/board/teams");
+export function fetchObservation(fieldId, { teamId = null, candidateId = null, pair = null } = {}) {
+  const query = new URLSearchParams();
+  if (teamId) query.set("teamId", teamId);
+  if (candidateId) query.set("candidateId", candidateId);
+  if (pair !== null && pair !== undefined) query.set("pair", String(pair));
+  return api(`${BASE}/${encodeURIComponent(fieldId)}/observation?${query.toString()}`);
+}
+export const confirmObservedField = (fieldId, revisionId, body) => write(`${BASE}/${encodeURIComponent(fieldId)}/revisions/${encodeURIComponent(revisionId)}/observed-confirmation`, body);
+export const fetchObservations = (fieldId) => api(`${BASE}/${encodeURIComponent(fieldId)}/observations`);
 
 // ---------------------------------------------------------------------------
 // What a revision is (v34's value sets)
@@ -153,6 +165,15 @@ export function unitActOffered(ctx, field, revision) {
 }
 export function meaningActOffered(ctx, field, revision) {
   return Boolean(ctx?.mayVerify && field?.state === "active" && revision && revision.state !== "retired" && !revision.meaningVerifiedAt);
+}
+
+// G1b-2: the comparison is offered on the active revision of a created whole-session or drill field (a value GPEXE sends
+// with its unit word) whose unit and meaning are not proven yet. A per-athlete value carries no word: a document
+// confirms it. The server decides again.
+export function observeOffered(ctx, field, revision) {
+  return Boolean(ctx?.mayVerify && field?.state === "active" && String(field?.key || "").startsWith("details.players.")
+    && revision && revision.state === "active" && revision.evidenceStatus === "unproven" && revision.parameterKind === "none"
+    && !revision.unitVerifiedAt && !revision.meaningVerifiedAt);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +232,62 @@ export function openCreateFieldForm(item, siblings = []) {
   };
 }
 
+// G1b-2: the comparison form - a team, then the comparison the server reads (route 8), then the tick (route O).
+export function openObserveForm({ field, revision }) {
+  return {
+    act: "observe",
+    requestKey: newRequestKey(),
+    busy: false,
+    unconfirmed: false,
+    checkNote: "",
+    dirty: false,
+    errors: {},
+    error: "",
+    fieldId: field.id,
+    fieldName: field.label || field.key || "",
+    fieldKey: field.key || "",
+    revisionId: revision.id,
+    revisionNumber: revision.revisionNumber,
+    expectedSourceUnit: revision.expectedSourceUnit || "",
+    teams: { items: [], loaded: false, loading: false, error: "", truncated: false },
+    observation: null,
+    observationLoading: false,
+    observationError: "",
+    draft: { teamId: "", attested: false },
+  };
+}
+
+// What the admin compares (plan section 8.10): each athlete's number as GPEXE should show it, never more than that. The
+// two athletes are named by OptiMove's own link or GPEXE's name; their ids never reach the screen.
+export const RULE_SCREEN = { duration_mmss: "minutes:seconds" };
+export function observationLines(o) {
+  if (!o) return [];
+  const names = o.pair?.labels || [];
+  return [o.values?.a, o.values?.b].map((side, i) => {
+    const name = names[i] || `Athlete ${i + 1}`;
+    if (!side || side.raw === null) return { name, text: "No value." };
+    if (o.displayRule === "as_sent") return { name, text: `GPEXE may show this rounded or in another unit. Compare the number: ${side.raw} ${o.unit}.` };
+    if (o.displayRule === "duration_mmss") return { name, text: `GPEXE should show ${side.shown} (minutes:seconds).` };
+    return { name, text: `GPEXE should show ${side.shown} ${o.displayUnit}.` };
+  });
+}
+export const DURATION_HOURS_NOTE = "For a long value GPEXE may show hours as well: 1:36:30 is 96:30.";
+export function observationWordText(o) {
+  if (!o?.word) return "";
+  return `GPEXE sends the unit word "${o.word}" with this value; OptiMove reads it as ${o.unit}.`;
+}
+// Why a comparison cannot be ticked (unit_not_stated's reasons; the server's codes, in plain words).
+export function observationReasonText(o) {
+  const words = (o?.words || []).map((w) => (w === null || w === undefined ? "none" : `"${w}"`));
+  switch (o?.reason) {
+    case "words_disagree": return `The two athletes' values carry different unit words (${words.join(" and ")}), so this session cannot confirm the unit. Choose other athletes or another session.`;
+    case "word_unknown": return `GPEXE sends a unit word OptiMove does not know (${words[0] || "none"}). Only a document can confirm this field's unit (Confirm the unit).`;
+    case "expected_unit_differs": return `GPEXE sends this value here as ${words[0] || "an unknown word"}, which is not the unit the field was created with${o.expectedUnit ? ` (${o.expectedUnit})` : ""}. Another GPEXE account may send it differently: confirm the unit with a document.`;
+    case "no_unit_word": return "GPEXE sends no unit with this value. A platform administrator confirms it with a document (Confirm the unit).";
+    default: return "";
+  }
+}
+
 export function openSourceFieldForm(act, { field, revision }) {
   return {
     act,
@@ -256,6 +333,12 @@ export function buildSourceFieldRequest(form) {
   const d = form.draft;
   const errors = {};
   const set = (field, message) => { if (message) errors[field] = message; };
+  if (form.act === "observe") {
+    const o = form.observation;
+    if (!o || !o.confirmable || !o.values?.a?.raw || !o.values?.b?.raw) return { body: null, errors: { attested: "Show a comparison of two athletes first." } };
+    if (d.attested !== true) return { body: null, errors: { attested: "Tick this only after comparing both athletes with the GPEXE screen." } };
+    return { errors, body: { requestKey: form.requestKey, session: { candidateId: o.session.candidateId, pairs: [...o.pair.positions], placementHash: o.placementHash }, attested: true } };
+  }
   if (form.act === "create") {
     // The label is sent without the blanks around it; the server checks the same rule (one line, visible characters).
     const label = String(d.label ?? "").trim();
@@ -296,6 +379,9 @@ const SETTLED_ON_CHECK = new Set([
   "operator_required", "operator_not_allowed", "unit_already_verified", "meaning_already_verified", "revision_retired",
   // Route C's refusals, decided from the body and the inventory before anything is written.
   "name_not_observed", "name_not_supported", "shape_not_generic", "field_exists", "too_many_fields", "value_not_number",
+  // Route O's refusals: nothing is written with them.
+  "field_has_parameters", "revision_not_active", "unit_not_stated", "board_changed", "binding_not_active", "pair_not_comparable",
+  "not_enough_athletes", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "candidate_too_large", "session_start_unknown",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
@@ -347,7 +433,42 @@ const CREATE_CODE_TEXT = {
   internal_error: "The server could not create it. Nothing was created. Try again.",
   request_key_reused: "An earlier save of this form may already be stored. Cancel and look at the source fields before saving again.",
 };
+// Route O's refusals (G1b-2), in the words of the comparison.
+const OBSERVE_CODE_TEXT = {
+  notFound: "It is not available in this workspace now. Whether the comparison was saved is not known: open the field from the platform workspace to see.",
+  invalid_body: "Not saved: the server refused the comparison. Read it again and tick once more.",
+  board_changed: "Not saved: the session or the field changed since you compared. The comparison is read again; compare once more.",
+  unit_not_stated: "Not saved: GPEXE does not state a unit OptiMove can read for this field in this session.",
+  unit_already_verified: "Not saved: this field's unit is already confirmed, perhaps by someone else in the meantime. The field is read again.",
+  field_has_parameters: "Not saved: this field has parameters; its unit is confirmed with a document.",
+  revision_not_active: "Not saved: this revision is no longer the field's active one. The field is read again.",
+  binding_not_active: "Not saved: the team is no longer linked to GPEXE. Choose another team.",
+  pair_not_comparable: "Not saved: these two athletes can no longer be compared. The comparison is read again.",
+  try_again: "The server was busy. Nothing was saved. Try again.",
+  internal_error: "The server could not save it. Nothing was saved. Try again.",
+  request_key_reused: "An earlier save of this comparison may already be stored. Close and look at the field before saving again.",
+};
+// A comparison the server could not read (route 8), in plain words.
+export function observationReadText(info) {
+  const texts = {
+    notFound: "This team or field is not available now.",
+    no_stored_session: "This team has no saved session yet. Run a search in Imports first.",
+    no_comparable_session: "None of this team's latest saved sessions has two named athletes with different values of this field. Choose another team, or link the team's athletes in Imports.",
+    not_enough_athletes: "OptiMove needs two athletes it can name, with different values of this field. Link the team's athletes in Imports (Link athletes).",
+    unit_not_stated: "GPEXE sends no unit with this value. A platform administrator confirms it with a document (Confirm the unit).",
+    unit_already_verified: "This field's unit is already confirmed.",
+    field_has_parameters: "This field has parameters; its unit is confirmed with a document.",
+    snapshot_expired: "The saved session is no longer available. Run a new search in Imports.",
+    candidate_source_mismatch: "This session was not read through the team's current GPEXE link.",
+    candidate_not_importable: "The import would not take this GPEXE session.",
+    candidate_too_large: "The saved session is too large to read.",
+    pair_out_of_range: "No other pair of athletes has different values of this field.",
+    try_again: "The server was busy. Try again in a moment.",
+  };
+  return texts[info.code] || (info.status ? "The comparison could not be read." : "No answer from the server.");
+}
 export function sourceFieldCodeText(info, form = null) {
+  if (form?.act === "observe") return OBSERVE_CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
   if (form?.act === "create") return CREATE_CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was created." : "No answer from the server.");
   if (form?.parameterKind === "zone_bounds" && ZONE_CODE_TEXT[info.code]) return ZONE_CODE_TEXT[info.code];
   return CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
@@ -357,10 +478,18 @@ export function sourceFieldCodeText(info, form = null) {
 export const CLOSES_FORM = new Set([
   "notFound", "bound_unit_required", "bound_unit_not_allowed", "operator_required", "operator_not_allowed",
   "unit_already_verified", "meaning_already_verified", "revision_retired",
+  // Route O (G1b-2): the comparison no longer fits the field.
+  "field_has_parameters", "revision_not_active",
 ]);
+// Route O's refusals after which the comparison is read again (the form stays).
+export const REREADS_OBSERVATION = new Set(["board_changed", "pair_not_comparable", "unit_not_stated", "binding_not_active"]);
 // The last question before a write-once act (OptiMove asks before every act
 // it cannot take back: Bind, Reconnect, Unbind).
 export function confirmQuestion(form, body) {
+  if (form.act === "observe") {
+    const o = form.observation;
+    return `Save the unit of ${form.fieldName} as ${o.unit} (GPEXE's word "${o.word}") and its meaning as GPEXE's own label, from this comparison of two athletes? It is saved once and never changed; a correction is a new revision.`;
+  }
   if (form.act === "create") {
     return `Create the source field "${body.label}" from GPEXE's name ${body.name} (${ENDPOINT_LABEL[body.endpoint] || body.endpoint})? Once created, the field cannot be removed here.`;
   }
