@@ -1073,6 +1073,7 @@ export const createInitialState = () => ({
   // renderAthleteHomeFromCache for why a training-load athlete action needs
   // this to redraw the whole Home surface without a re-fetch.
   lastAthleteHomeData: null,
+  lastAthleteHomeError: "",
   lastProgramBundle: null,
   lastTemplates: [],
   templateAllowedScopes: TEMPLATE_SCOPES,

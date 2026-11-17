@@ -111,7 +111,7 @@ function drillSectionHtml(drill, names) {
   const rows = [...drill.facts].sort((a, b) => labelOf(a, names).localeCompare(labelOf(b, names)) || String(a.detail?.valueKey).localeCompare(String(b.detail?.valueKey)));
   return `
     <details class="panel my-training-values my-training-drill">
-      <summary><h4>${escapeHtml(drill.title)}</h4><span class="muted">${rows.length} ${rows.length === 1 ? "value" : "values"}</span></summary>
+      <summary><span class="my-training-drill-title">${escapeHtml(drill.title)}</span><span class="muted">${rows.length} ${rows.length === 1 ? "value" : "values"}</span></summary>
       <dl>
         ${rows.map((fact) => valueRowHtml(fact, names)).join("")}
       </dl>

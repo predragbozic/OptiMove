@@ -9168,6 +9168,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     border-bottom: 1px solid var(--line);
   }
 
+  /* Its height: 8 px padding, 44 px controls, 8 px padding and a 1 px line. The week picker sits under it and a day
+     scrolled into view lands below it; one number for both (code review). */
+  body.athlete-mode {
+    --athlete-week-nav-height: 61px;
+  }
+
   /* hotfix/athlete-mobile-navigation: .week-calendar-picker is
      .week-nav-panel's sibling inside .week-nav-wrap (display: contents
      above), so in normal flow it renders right after the nav row's
@@ -9180,7 +9186,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .athlete-mode .week-calendar-picker {
     position: sticky;
     /* Under the topbar and the week controls (now 44 px controls; mobile QA). */
-    top: calc(var(--athlete-topbar-height, 61px) + 61px + env(safe-area-inset-top, 0px));
+    top: calc(var(--athlete-topbar-height, 61px) + var(--athlete-week-nav-height) + env(safe-area-inset-top, 0px));
     z-index: 39;
     background: var(--bg);
     padding-top: 8px;
@@ -26889,7 +26895,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-later-aside .gpexe-button:focu
 /* End of Imports P4b. */
 
 /* Imports P4c: a coach and a club admin find imported and "stays out" sessions in the calendar only. A quiet grey
-   mark for "stays out"; one quiet line under the chooser counts the month shown (on a phone it is a button that opens
+   mark for "stays out"; one quiet line in the chooser counts the month shown (on a phone it is a button that opens
    the calendar sheet); "Older sessions may not be shown." when the list read is full. */
 .imports-period .period-chip.is-out {
   background: var(--surface-soft);
@@ -27627,7 +27633,7 @@ body.athlete-mode:not(.login-mode) .brand-mark {
     border-bottom: 1px solid var(--line, #dde3e6);
     background: none;
     /* A day brought into view lands below the sticky header and week controls (mobile QA). */
-    scroll-margin: calc(var(--athlete-topbar-height, 61px) + 61px + env(safe-area-inset-top, 0px) + 12px) 0 12px;
+    scroll-margin: calc(var(--athlete-topbar-height, 61px) + var(--athlete-week-nav-height) + env(safe-area-inset-top, 0px) + 12px) 0 12px;
     overflow-wrap: anywhere;
   }
   body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-day:last-child {
@@ -27712,9 +27718,10 @@ body.athlete-mode:not(.login-mode) .brand-mark {
   min-height: 44px;
   cursor: pointer;
 }
-.my-training-drill summary h4 {
-  margin: 0;
+.my-training-drill-title {
   flex: 1 1 auto;
+  font-weight: 700;
+  font-size: 15px;
 }
 /* A chevron says a drill opens (UX review); the browser's own marker is hidden (a flex summary has none in Chromium). */
 .my-training-drill summary {

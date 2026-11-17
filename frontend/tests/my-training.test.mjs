@@ -99,7 +99,7 @@ test("5. a session: the whole session first, then each drill in its order (two d
   state.myTraining.openId = "a1";
   state.myTraining.detail = { activityId: "a1", loading: false, error: "", data: { myAttendance: "participated", recordedBy: "device", facts, components: [{ id: "c1", name: "Small-sided game" }], variableNamesById: { v1: { label: "Max speed", unit: "km/h" }, v2: { label: "Total distance", unit: "m" } } } };
   const html = view.renderMyTrainingHtml();
-  const order = [...html.matchAll(/<h4>([^<]*)<\/h4>/g)].map((m) => m[1]);
+  const order = [...html.matchAll(/<(?:h4|span class="my-training-drill-title")>([^<]*)<\/(?:h4|span)>/g)].map((m) => m[1]);
   assert.deepEqual(order, ["Whole session", "Small-sided game", "Drill 2", "Drill 3"]);
   assert.match(html, /3,000 m/);
   assert.match(html, /data-value-key="k4"/);
@@ -107,7 +107,8 @@ test("5. a session: the whole session first, then each drill in its order (two d
   // The whole session reads first; each drill folds under its name with its count (UX review).
   assert.equal((html.match(/<details class="panel my-training-values my-training-drill">/g) || []).length, 3);
   assert.doesNotMatch(html, /<details[^>]* open/, "drills start folded");
-  assert.match(html, /<summary><h4>Small-sided game<\/h4><span class="muted">1 value<\/span><\/summary>/);
+  // The drill's name is the summary's label, not a heading inside the control (code review of #583).
+  assert.match(html, /<summary><span class="my-training-drill-title">Small-sided game<\/span><span class="muted">1 value<\/span><\/summary>/);
 });
 
 test("6 (owner, 2026-11-16): only measured values - an estimated value is never shown, whatever the server sends", () => {

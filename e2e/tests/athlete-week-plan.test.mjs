@@ -99,6 +99,10 @@ for (const width of [360, 390]) {
       assert.match(await noteDay.innerText(), /Match day/);
       assert.doesNotMatch(await noteDay.innerText(), /Nothing planned/);
       assert.deepEqual(await planned.under44(".week-nav-panel button"), [], "the week controls");
+      // A day brought into view lands below the sticky header and week controls: the shared height variable resolves
+      // (an undefined variable would make the whole margin 0).
+      const margin = await planned.page.evaluate(() => parseFloat(getComputedStyle(document.querySelector(".calendar-day")).scrollMarginTop));
+      assert.ok(margin >= 61 + 12, `scroll margin ${margin}px`);
       assert.equal(await planned.overflow(), 0);
       assert.deepEqual(planned.pageErrors, []);
     } finally { await planned.context.close(); }
