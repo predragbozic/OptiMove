@@ -1349,23 +1349,56 @@ test("B7.7b architecture guard for drills: the mapper reads no drill player metr
   assert.deepEqual([...touched], [], "no other drill metric is read");
 });
 
+test("B7.7c G2, the generic details extractor on drills: with a created details.players.<name> field mapped, the mapper reads that name and nothing else of a drill athlete's details - every other key access, enumeration or descriptor read fails this test", () => {
+  const bundle = makeBundle({ sessionId: 5002, gpexeTeamId: 77, athletes: standardAthletes(), detailsDrills: [0] });
+  const touched = new Set();
+  let wrapped = 0;
+  for (const drill of Object.values(bundle.details.drills)) {
+    for (const [id, values] of Object.entries(drill.players)) {
+      wrapped += 1;
+      drill.players[id] = new Proxy({ ...values, g2_jumps: { unit: "number", value: 5 } }, {
+        get(target, prop, receiver) { if (prop !== "g2_jumps") touched.add(`get:${String(prop)}`); return Reflect.get(target, prop, receiver); },
+        has(target, prop) { if (prop !== "g2_jumps") touched.add(`has:${String(prop)}`); return Reflect.has(target, prop); },
+        ownKeys(target) { touched.add("ownKeys"); return Reflect.ownKeys(target); },
+        getOwnPropertyDescriptor(target, prop) { if (prop !== "g2_jumps") touched.add(`descriptor:${String(prop)}`); return Reflect.getOwnPropertyDescriptor(target, prop); },
+      });
+    }
+  }
+  assert.ok(wrapped > 0, "the bundle carries drill details");
+  const out = mappedMetricSpecs([activationRowFor("gpexe_burst_events", { sourceMetricKey: "details.players.g2_jumps", sourceLabel: "g2_jumps", definitionKey: "g2_jumps", sourceParameterFingerprint: "fp-g2" }, 0)]);
+  assert.equal(out.block, null);
+  const plan = buildGpexeImportPlan(bundle, { metricSpecs: out.specs });
+  assert.ok(plan.participants.some((p) => p.results.some((r) => r.level !== "full" && r.values.some((v) => v.sourceMetricKey === "details.players.g2_jumps" && Number(v.value ?? v.sourceValue) === 5))), JSON.stringify(plan.participants.map((p) => p.results.map((r) => r.values))).slice(0, 400));
+  assert.deepEqual([...touched], [], "no other drill metric is read");
+});
+
 test("B7.8 static architecture guard: no consumer outside the adapter, the mapper and the extractor registry reads the stored details (JS or SQL), the registry reads only the consumed fields, and the mapper's own reads are exactly the whole-session / drill / athlete lookup that hands one athlete's details to the registry (9-B: no field read of its own)", async () => {
   const srcDir = path.resolve(ROOT, "backend/src");
   const files = (await fsp.readdir(srcDir, { recursive: true })).filter((f) => f.endsWith(".js")).map((f) => path.join(srcDir, f));
   const DETAILS_READ = /\bdetails\??\.(full|drills|players)\b|->>?\s*'details'|\[\s*['"]details['"]\s*\]/;
+  // G1a / G2: a source field's KEY names "details.players.<name>" (route C, the pinned set, the generic extractors). A
+  // quoted key literal or prefix and a comment line are not a lookup of the stored details; everything else still is.
+  const KEY_LITERAL = /["'`]details\.players\.[A-Za-z_]*["'`]/g;
+  const codeOnly = (text) => text.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n").replace(KEY_LITERAL, "");
   for (const file of files) {
     if (/gpexeRestV1Adapter\.js$|gpexeImportMapper\.js$|sourceMetricExtractors\.js$/.test(file)) continue;
-    assert.doesNotMatch(await fsp.readFile(file, "utf8"), DETAILS_READ, `${path.relative(ROOT, file)} reads the stored details`);
+    assert.doesNotMatch(codeOnly(await fsp.readFile(file, "utf8")), DETAILS_READ, `${path.relative(ROOT, file)} reads the stored details`);
   }
   // Phase 7f: the extractor registry names the two consumed fields in its keys
   // ("details.players.<field>") and reads exactly those, through the one athlete's
   // details it is given - never the bundle's details object.
   const registry = await fsp.readFile(path.resolve(srcDir, "sourceMetricExtractors.js"), "utf8");
-  assert.equal((registry.match(new RegExp(DETAILS_READ.source, "g")) || []).length, (registry.match(/"details\.players\.[a-z_]+"/g) || []).length,
+  assert.equal((codeOnly(registry).match(new RegExp(DETAILS_READ.source, "g")) || []).length, 0,
     "the registry never looks up the stored details: its only matches are its own key strings");
   assert.deepEqual([...registry.matchAll(/detailsEntry\("details\.players\.([a-z_]+)", "([a-z_]+)"\)/g)].map((m) => [m[1], m[2]]),
-    DETAILS_CONSUMED_FIELDS.map((f) => [f, f]), "the registry's details entries are exactly the consumed fields");
-  assert.equal((registry.match(/\bdetails\.players\./g) || []).length, DETAILS_CONSUMED_FIELDS.length, "no other details key");
+    DETAILS_CONSUMED_FIELDS.map((f) => [f, f]), "the registry's seeded details entries are exactly the consumed fields");
+  const registryCode = registry.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.equal((registryCode.match(/\bdetails\.players\./g) || []).length, DETAILS_CONSUMED_FIELDS.length + 1, "no other details key: the two seeded ones and G2's one generic prefix");
+  assert.equal((registryCode.match(/"details\.players\.": "details"/g) || []).length, 1, "G2's generic details prefix");
+  // G2: the generic extractors read one own property of the row or of the athlete's details, by the field's own name.
+  assert.equal((registryCode.match(/\bown\(row, field\)/g) || []).length, 1, "the generic row read");
+  assert.equal((registryCode.match(/\bown\(playerDetails, field\)/g) || []).length, 1, "the generic details read");
+  assert.match(registryCode, /const own = \(object, field\) => \(object !== null && typeof object === "object" && Object\.hasOwn\(object, field\)/, "own properties only");
   assert.equal((registry.match(/\bplayerDetails\[/g) || []).length, 1, "detailsNumber's one field read");
   assert.equal((registry.match(/\bplayerDetails\??\./g) || []).length, 0, "no other property of an athlete's details is read");
   const mapper = await fsp.readFile(path.resolve(srcDir, "gpexeImportMapper.js"), "utf8");
@@ -1384,7 +1417,7 @@ test("B7.8 static architecture guard: no consumer outside the adapter, the mappe
   // The stored-snapshot projections never touch an imported candidate: both SQL statements of each path name only unimported statuses.
   const svc = await fsp.readFile(path.resolve(srcDir, "gpexeImportService.js"), "utf8");
   // Since v33 the supersede projection runs in the check's finalization.
-  const supersedeBlock = svc.slice(svc.indexOf("// 5. What was superseded keeps only the consumed fields."), svc.indexOf("// 6. The publication"));
+  const supersedeBlock = svc.slice(svc.indexOf("// 5. What was superseded keeps only the consumed fields"), svc.indexOf("// 6. The publication"));
   assert.ok(supersedeBlock.length > 100, "the finalization's projection step is found");
   assert.equal((supersedeBlock.match(/status = 'superseded'/g) || []).length, 2, "the supersede projection selects and writes superseded rows only");
   const retentionBlock = svc.slice(svc.indexOf("export async function projectUnimportedSnapshots"), svc.indexOf("export const RETENTION_INTERVAL_HOURS"));

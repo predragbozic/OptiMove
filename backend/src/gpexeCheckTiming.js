@@ -43,6 +43,8 @@ export const CHECK_TIMING_CODES = Object.freeze([
   "drill_parameter_effect_not_distinguishable", "check_finalize_busy", "check_finalize_failed",
   "check_finalize_outcome_unknown", "source_team_mismatch", "context_not_issued", "check_preview_busy",
   "check_preview_interrupted",
+  // G2's pinned set (sourcePinnedFields.js)
+  "pinned_field_invalid", "pinned_fields_too_many",
   // the rest_v1 adapter and the adapter registry
   "athlete_row_not_confirmed", "athlete_row_not_listed", "credential_missing", "drills_count_out_of_range",
   "duplicate_param", "invalid_bound_team", "invalid_drill_index", "invalid_id", "invalid_options", "path_not_allowed",

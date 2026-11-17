@@ -1063,3 +1063,37 @@ test("14. G1a: only a field_unit row names a GPEXE unit word; a mapping row that
     (e) => e.code === "23514" && /^source_metric_confirmation_items: a compared row names a display rule and a unit of that rule$/.test(e.message));
   assert.ok(await confirm(caE, t, cand, [{ v: vOther, checked: true, rule: "as_sent", displayUnit: "s" }]), "as sent in the row's own unit");
 });
+
+test("15. G2: a field created by route C whose unit is not proven shows no athlete's value on the club board - no raw value in its column, nothing of it anywhere in the answer, and a placement on it is refused without values; a created proven field and a seeded unproven field are shown as before", async () => {
+  const mk = async (key, proven) => {
+    const fieldId = (await one(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,$2,$3) returning id`, [key, `G2 ${key}`, W.pa.id])).id;
+    const revId = await writeRevision(k, { fieldId, by: W.pa.id, valueShape: "number", parameterKind: "none", evidenceRef: COMPAT, ...(proven ? { unit: "m", unitRef: UNIT_REF, meaning: true, meaningRef: MEANING_REF } : {}), state: "active" });
+    return { fieldId, revId };
+  };
+  const hidden = await mk("athlete_session.g2_board_hidden", false);
+  const shown = await mk("athlete_session.g2_board_shown", true);
+  const before = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [W.cA.id])).raw_bundle;
+  const planted = structuredClone(before);
+  planted.athleteSessions.forEach((r, i) => Object.assign(r, { g2_board_hidden: 918273.25 + i, g2_board_shown: 300 + i }));
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [W.cA.id, planted]);
+  try {
+    const res = await boardOf(W.caA, W.tA);
+    const { board } = ok(res);
+    const col = board.columns.find((c) => c.key === "athlete_session.g2_board_hidden");
+    assert.ok(col, "the column is listed");
+    assert.deepEqual([col.placeable, col.reason, col.unitProven, col.rawA, col.rawB], [false, "field_not_confirmed", false, null, null]);
+    assert.ok(!JSON.stringify(res.body).includes("918273"), "no value of the unproven created field anywhere in the answer");
+    const okCol = board.columns.find((c) => c.key === "athlete_session.g2_board_shown");
+    assert.ok(okCol.rawA !== null && okCol.rawB !== null, "a created proven field is shown");
+    const seeded = board.columns.find((c) => c.key === "athlete_session.total_time");
+    assert.equal(seeded.reason, "field_not_confirmed");
+    assert.ok(seeded.rawA !== null, "a seeded unproven field keeps its values (unchanged)");
+    const target = await variable(W.caA, { unit: "m" });
+    const placed = await placement(W.caA, W.tA, W.cA.id, hidden.fieldId, target.id);
+    assert.equal(placed.status, 200, placed.text);
+    assert.equal(placed.body.placement.placeable, false);
+    assert.ok(!JSON.stringify(placed.body).includes("918273"), "a placement carries none of its values");
+  } finally {
+    await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [W.cA.id, before]);
+  }
+});
