@@ -1056,7 +1056,7 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   const coachBoth = await tapi(`/${s.activityId}`, { cookie: team.coach.cookie });
   const danForCoach = coachBoth.body.facts.filter((f) => String(f.athleteId) === String(dan) && f.detail.metricDefinitionId === String(distanceDef.id)).map((f) => f.detail.entryMethod).sort();
   assert.deepEqual(danForCoach, ["estimate", "manual"], "the coach reads both, the estimate with its label");
-  // "My training": a session whose only values of hers are estimates does not count. Fil has nothing else: no entry.
+  // "My training": the participation an estimate made is not hers. Fil has nothing else: no entry.
   // Dan was measured in the earlier sessions: he has one. Eva, like Fil, has only an estimate.
   const filUser = await athleteUser(fil, "fil again");
   const selfOf = async (cookie) => (await tapi("/self", { cookie })).body;
@@ -1105,6 +1105,58 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   const foreignRead = await tapi(`/${s.activityId}`, { cookie: other.coach.cookie });
   const missingRead = await tapi(`/00000000-0000-4000-8000-000000000000`, { cookie: other.coach.cookie });
   assert.deepEqual([foreignRead.status, foreignRead.text], [missingRead.status, missingRead.text], "activities read: identical");
+});
+
+test("17z. the invariant: every athlete read answers as if no estimate had ever been written - byte for byte, before and after the coach estimates her", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9731, hour: 10, ids: [101, 102, 104] }));
+  const day = (await admin.query(`select occurred_local_date::text d from training.activities where id = $1`, [s.activityId])).rows[0].d;
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const { runDashboardBatchQuery } = await import("../src/trainingLoadDashboardQuery.js");
+  const [absent, present] = [team.athleteIds[EVA], team.athleteIds[5]];
+  // `present` took part without a device: a participant of the session with no value. `absent` is not in it at all.
+  await admin.query(`insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status, merge_status)
+     select a.id, $2, a.occurred_local_date, a.timezone_snapshot, 'participated', 'canonical' from training.activities a where a.id = $1`, [s.activityId, present]);
+  const users = { absent: await athleteUser(absent, "absent athlete"), present: await athleteUser(present, "present athlete") };
+  const readsOf = async (athleteId, cookie) => {
+    const get = async (base, path) => { const res = await call(base, path, { cookie }); return `${res.status} ${res.text}`; };
+    const dashboards = await runDashboardBatchQuery(
+      { dataWorkspaceType: "athlete", dataWorkspaceScopeId: null, dataWorkspaceUserId: null, athleteWorkspaceAthleteId: athleteId, dateFrom: day, dateTo: day },
+      [...["all_with_conflicts", "estimate", "manual", "api_import"].map((sourcePolicy) => ({ widgetId: "w", seriesId: sourcePolicy, metricDefinitionId: distance, dataScopeLevel: "session", groupBy: "athlete", analyticalAggregation: "sum", sourcePolicy, sourceConnectionId: null })),
+        { widgetId: "w", seriesId: "count", builtInSeriesKey: "session_count", dataScopeLevel: "day", groupBy: "athlete", analyticalAggregation: "sum" },
+        { widgetId: "w", seriesId: "last", builtInSeriesKey: "last_session_date", dataScopeLevel: "day", groupBy: "athlete", analyticalAggregation: "last" }],
+    );
+    return {
+      detail: await get("/api/training-activity", `/${s.activityId}`),
+      list: await get("/api/training-activity", `?dateFrom=${day}&dateTo=${day}`),
+      calendar: await get("/api/training-load", `/calendar?dateFrom=${day}&dateTo=${day}`),
+      self: await get("/api/training-activity", "/self"),
+      results: await get("/api/training-load/metrics", `/results?dateFrom=${day}&dateTo=${day}`),
+      dashboards: JSON.stringify(dashboards),
+    };
+  };
+  const before = { absent: await readsOf(absent, users.absent.cookie), present: await readsOf(present, users.present.cookie) };
+  // What each sees before any estimate: the absent athlete nothing; the present one her session, with nothing recorded.
+  assert.ok(before.absent.detail.startsWith("404 "), before.absent.detail);
+  assert.ok(before.present.detail.startsWith("200 ") && before.present.list.includes(s.activityId) && before.present.calendar.includes(s.activityId), "her session, before");
+  assert.ok(!before.absent.list.includes(s.activityId) && !before.absent.calendar.includes(s.activityId));
+  assert.equal(before.absent.self, `200 ${JSON.stringify({ hasRecordedSessions: false })}`);
+  assert.equal(before.present.self, `200 ${JSON.stringify({ hasRecordedSessions: true })}`, "she took part in a recorded session");
+  assert.ok(before.present.dashboards.includes(present) && !before.absent.dashboards.includes(absent), "her session counts on her dashboard; the absent athlete has none");
+
+  // The coach estimates both (two methods), and reads both estimates.
+  assert.equal((await save(team, s, { athleteId: absent, method: "team_average" })).status, 201);
+  assert.equal((await save(team, s, { athleteId: present, method: "copy_athlete", sourceAthleteId: team.athleteIds[ANA] })).status, 201);
+  const coachRead = await tapi(`/${s.activityId}`, { cookie: team.coach.cookie });
+  for (const id of [absent, present]) assert.ok(coachRead.body.facts.some((f) => String(f.athleteId) === String(id) && f.detail.entryMethod === "estimate" && f.estimate), "the coach reads the estimate");
+
+  const after = { absent: await readsOf(absent, users.absent.cookie), present: await readsOf(present, users.present.cookie) };
+  for (const who of ["absent", "present"]) {
+    for (const read of Object.keys(before[who])) assert.equal(after[who][read], before[who][read], `${who} athlete, ${read}: identical before and after the estimate`);
+  }
+  // And a second estimate (a replacement) changes nothing either.
+  assert.equal((await save(team, s, { athleteId: present, method: "team_average", note: "again" })).status, 201);
+  assert.deepEqual(await readsOf(present, users.present.cookie), before.present);
 });
 
 test("18. 6b-D: the dashboards leave an estimate out under every policy - all sources and calculated values included - and show it only under 'estimate', which shows estimates alone", async () => {

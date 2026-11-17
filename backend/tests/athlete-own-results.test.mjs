@@ -544,7 +544,8 @@ test("8. whether she has a recorded session: one boolean, hers alone; drills of 
   assert.deepEqual((await list(q)).body.rows.map((r) => [r.activityId, r.recordedBy]), [[onlyEstimates, null]]);
   // The estimated athlete was also asked to rate that session (a confirmed link ties her to it apart from the
   // estimate): the session is hers again - and still says nothing of the estimate: no value, recorded by nobody, no
-  // attendance drawn from it; and a third athlete's measured value in it does not make it count for her.
+  // attendance drawn from it; once a third athlete has a measured value in it, it counts for her as for anyone who
+  // took part without a value - exactly as if her estimate were not there.
   const schedule = (await one(`insert into training_load.external_schedules (schedule_kind, timezone, start_date, opens_time, closes_time, status, event_name, created_by_user_id, owner_scope, owner_team_id)
      values ('one_time','UTC',$1,'00:00','23:59','active','Fixture rating',$2,'team',$3) returning id`, [DAY, W.coachA1.id, W.teamA1])).id;
   const occurrence = (await one(`insert into training_load.external_schedule_occurrences (schedule_id, scheduled_date, opens_at, closes_at) values ($1,$2,$3,$4) returning id`, [schedule, DAY, `${DAY}T00:00:00Z`, `${DAY}T23:59:00Z`])).id;
@@ -562,7 +563,7 @@ test("8. whether she has a recorded session: one boolean, hers alone; drills of 
   const add = await call("/api/training-load/metrics/events", { method: "POST", cookie: W.coachA1.cookie, body: { requestKey: `k-${uid()}`, occurredDate: DAY, scopeLevel: "session", activityId: onlyEstimates,
     participants: [{ athleteId: third.id, timezone: "UTC", values: [{ metricDefinitionId: W.sysVar.id, metricDefinitionVersionId: W.sysVar.versionId, value: 62.5 }] }] } });
   assert.equal(add.status, 201, add.text);
-  assert.deepEqual([await has(third), await has(q), await has(p)], [true, true, false], "measured for one, taken part without a value, and only an estimate of her own");
+  assert.deepEqual([await has(third), await has(q), await has(p)], [true, true, true], "measured for one; the other two took part without a measured value - an estimate of her own changes nothing");
   // Outside an athlete workspace the route does not exist: the unknown route's own answer.
   const coach = await self(W.coachA1);
   const unknown = await call("/api/training-activity-nope/self", { cookie: W.coachA1.cookie });

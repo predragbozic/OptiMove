@@ -117,12 +117,14 @@ export function canReadActivityInScope(scope, activity) {
 }
 
 // An athlete's own participation, as far as it is hers to see (owner, 2026-11-16: "the athlete sees only data that
-// was really measured; there are no estimates on the athlete's side"). Saving an estimate for an athlete who was not
-// in the recording creates her participant row; such a participation exists ONLY because of the estimate, and showing
-// her the session - even empty - would tell her that one was made. So for an athlete-self read a participant is hers
-// when it is NOT estimate-only: it is, when every measurement linked to it (her alias participants after a merge
-// included; superseded ones too) is an estimate and nothing else ties her to the session - no planned session or
-// rating request linked to it. A participant with no linked measurement at all stays hers, as before.
+// was really measured; there are no estimates on the athlete's side"). The invariant: every athlete read answers as
+// if no estimate had ever been written. Saving an estimate for an athlete who was not in the recording creates her
+// participant row in the same transaction; such a participation exists ONLY because of the estimate, and showing her
+// the session - even empty - would tell her that one was made. So for an athlete-self read a participant is hers
+// unless it is estimate-made: every measurement linked to it (her alias participants after a merge included;
+// superseded ones too) is an estimate, no planned session or rating request ties her to the session, AND the
+// participant row is not older than its first estimate (a row that was there before the estimate - she took part,
+// without a value - was hers before and stays hers). A participant with no linked measurement stays hers, as before.
 // `participantIdSql` is a SQL expression of the participant's id (a column reference written in this code, never
 // a value from a request). Returns a SQL boolean.
 export function athleteOwnParticipationSql(participantIdSql) {
@@ -133,5 +135,8 @@ export function athleteOwnParticipationSql(participantIdSql) {
         exists (select 1 ${occasions})
         and not exists (select 1 ${occasions} where own_o.entry_method <> 'estimate')
         and not exists (select 1 from training.participant_alias_ids(${participantIdSql}) own_sp
-                          join training.activity_participant_session_links own_sl on own_sl.activity_participant_id = own_sp.participant_id and own_sl.link_status = 'confirmed'))`;
+                          join training.activity_participant_session_links own_sl on own_sl.activity_participant_id = own_sp.participant_id and own_sl.link_status = 'confirmed')
+        and (select min(own_ap.created_at) from training.participant_alias_ids(${participantIdSql}) own_ax
+               join training.activity_participants own_ap on own_ap.id = own_ax.participant_id)
+            >= (select min(own_o.created_at) ${occasions}))`;
 }

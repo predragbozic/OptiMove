@@ -325,11 +325,12 @@ export function recordedBySql(participantIdSql) {
 }
 
 // Whether she has at least one recorded session (owner, 2026-11-16: "My training" is shown only then): she is a
-// participant of a session that holds measured values - a device's, or entered by hand by a coach; never an
-// estimate (a session whose only values are estimates does not count) - hers or
+// participant of a session that holds measured values - a device's, or entered by hand by a coach - hers or
 // another participant's of that same session ("you took part; no data of yours was recorded" is such a session). A
 // planned session she only rated does not count. One boolean: no count, no date, the same answer for every reason
-// she has none. Sessions on a team or club archived later count (her history stays hers).
+// she has none. Sessions on a team or club archived later count (her history stays hers). Estimates are not there
+// for her: the answer is what it would be had none been written - a session whose only values are estimates holds
+// nothing, and a participation an estimate made is not hers.
 export async function athleteHasRecordedSessions(athleteId) {
   const found = await query(
     `select exists (
@@ -338,16 +339,6 @@ export async function athleteHasRecordedSessions(athleteId) {
          join training.activities a on a.id = ap.activity_id
         where ap.athlete_id = $1 and ap.merge_status = 'canonical' and a.lifecycle_state <> 'superseded'
           and ${athleteOwnParticipationSql("ap.id")}
-          -- A session whose only values of HERS are estimates does not count (the Rukovodilac's rule, 2026-11-16).
-          and not exists (
-            select 1
-              from training.participant_alias_ids(ap.id) pa
-              join training.activity_participant_metric_participant_links ml on ml.activity_participant_id = pa.participant_id and ml.link_status = 'confirmed'
-              join training_load.metric_measurement_occasions eo on eo.event_participant_id = ml.metric_event_participant_id
-              join training_load.metric_values ev on ev.occasion_id = eo.id
-             where eo.superseded_by_occasion_id is null and eo.import_conflict_status is null
-               and (eo.source_identity_id is null or exists (select 1 from training_load.metric_source_identities esi where esi.id = eo.source_identity_id and esi.current_occasion_id = eo.id))
-            having bool_or(eo.entry_method = 'estimate') and not bool_or(eo.entry_method <> 'estimate'))
           and exists (
             select 1
               from training.activity_alias_ids(a.id) aa
