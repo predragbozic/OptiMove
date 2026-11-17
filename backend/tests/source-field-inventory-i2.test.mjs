@@ -155,7 +155,7 @@ test("1. a platform admin in the platform workspace: every connection's names th
     "more.complementary_data:a_b",
   ]);
   const ab = r.body.fields.find((f) => f.endpoint === "athlete_session" && f.name === "a_b");
-  assert.deepEqual(ab, { endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, answersSeen: 7, lastSeenOn: "2026-11-14", covered: false, connectionCount: 2 });
+  assert.deepEqual(ab, { endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, answersSeen: 7, lastSeenOn: "2026-11-14", covered: false, connectionCount: 2, creatable: true });
   assert.equal(r.body.fields.find((f) => f.name === "custom_secret_unit").unitWord, "xyzzy", "a platform admin sees the word as recorded");
   assert.equal(r.body.nextCursor, null);
   const all = await api("/field-inventory?state=all", { cookie: W.pa.cookie });
@@ -392,5 +392,76 @@ test("14. the order is the \"C\" collation's even when the column collates other
     assert.deepEqual(r.body.fields.map((f) => f.name).filter((n) => order.includes(n)), order, "C order, byte by byte");
   } finally {
     await q(`alter table training_load.source_field_observations alter column field_name type text collate "default"`);
+  }
+});
+
+test("15. G1b: a platform admin in the platform workspace reads which names route C would create (creatable) - not covered, a generic endpoint, a name route C takes, every observation a kind a check keeps; a club scope never gets the flag", async () => {
+  // Planted on club B's connection only for this test, removed after it.
+  const planted = [["athlete_session", "g1b_text_kind", { kind: "text" }], ["details.session", "g1b_plain_number", { kind: "number" }], ["athlete_session", "g1b_mixed", { kind: "number" }], ["athlete_session", "G1b_Upper", { kind: "number" }]];
+  await observe(W.connB, planted);
+  await observe(W.connTeamB, [["athlete_session", "g1b_mixed", { kind: "boolean" }]]);
+  try {
+    // One read per endpoint (test 7 planted more athlete-row names than one page holds).
+    const rows = [];
+    for (const endpoint of ["athlete_session", "details.session", "details.drill", "more.events", "more.complementary_data"]) {
+      let cursor = null;
+      do {
+        const r = await api(`/field-inventory?state=all&endpoint=${endpoint}${cursor ? `&cursor=${cursor}` : ""}`, { cookie: W.pa.cookie });
+        assert.equal(r.status, 200, r.text);
+        rows.push(...r.body.fields);
+        cursor = r.body.nextCursor;
+      } while (cursor);
+    }
+    const r = { body: { fields: rows } };
+    const flag = Object.fromEntries(r.body.fields.map((f) => [`${f.endpoint}:${f.name}`, f.creatable]));
+    assert.deepEqual({
+      ab: flag["athlete_session:a_b"], drill: flag["details.drill:speed_known"], session: flag["details.session:metabolic_power"],
+      covered: flag["athlete_session:total_distance"], zones: flag["more.complementary_data:a_b"], events: flag["more.events:acceleration_events_count"],
+      text: flag["athlete_session:g1b_text_kind"], plainNumberInDetails: flag["details.session:g1b_plain_number"], mixed: flag["athlete_session:g1b_mixed"],
+      // A number route C still refuses: a capital letter cannot be in a key (decision (e)).
+      upper: flag["athlete_session:G1b_Upper"],
+    }, { ab: true, drill: true, session: true, covered: false, zones: false, events: false, text: false, plainNumberInDetails: false, mixed: false, upper: false });
+    assert.ok(r.body.fields.every((f) => typeof f.creatable === "boolean"), "every row says it, for the platform admin");
+    // A key route C would refuse as field_exists: a retired T2a row of the same key (plan 8.1, any state).
+    {
+      const c = new pg.Client({ connectionString: db.url });
+      await c.connect();
+      try {
+        await c.query("set session_replication_role = replica");
+        await c.query(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id, state, retired_by_user_id, retired_at, retired_reason)
+                       values ('gpexe','rest_v1','athlete_session.g1b_retired_key','Retired', $1, 'retired', $1, now(), 'G1b test')`, [W.pa.id]);
+      } finally {
+        await c.end();
+      }
+    }
+    await observe(W.connB, [["athlete_session", "g1b_retired_key", { kind: "number" }]]);
+    const retired = await api("/field-inventory?endpoint=athlete_session&state=all", { cookie: W.pa.cookie });
+    let page = retired.body;
+    let found = page.fields.find((f) => f.name === "g1b_retired_key");
+    while (!found && page.nextCursor) {
+      page = (await api(`/field-inventory?endpoint=athlete_session&state=all&cursor=${page.nextCursor}`, { cookie: W.pa.cookie })).body;
+      found = page.fields.find((f) => f.name === "g1b_retired_key");
+    }
+    assert.deepEqual([found?.covered, found?.creatable], [false, false], "a retired key is not covered, and route C would refuse it");
+    // A platform admin in a club's workspace is a club scope: no flag either.
+    const paClub = await user("platform-admin-in-club-g1b");
+    await q(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [paClub]);
+    await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [paClub, W.clubA]);
+    await workspace(paClub, "club", W.clubA);
+    for (const cookie of [W.ca.cookie, W.caB.cookie, await cookieFor(paClub)]) {
+      const club = await api("/field-inventory?state=all", { cookie });
+      assert.equal(club.status, 200, club.text);
+      assert.ok(club.body.fields.length > 0 && club.body.fields.every((f) => !("creatable" in f)), "a club scope never gets the flag");
+    }
+  } finally {
+    // Observations are append-only (I1): removed past the guard, as the world wrote them.
+    const c = new pg.Client({ connectionString: db.url });
+    await c.connect();
+    try {
+      await c.query("set session_replication_role = replica");
+      await c.query(`delete from training_load.source_field_observations where field_name in ('g1b_text_kind', 'g1b_plain_number', 'g1b_mixed', 'G1b_Upper', 'g1b_retired_key')`);
+    } finally {
+      await c.end();
+    }
   }
 });

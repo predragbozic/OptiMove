@@ -192,6 +192,7 @@ export function mappedMetricSpecs(rows) {
     if (extractabilityCode({
       sourceSystem: activation.sourceSystem, apiFamily: activation.apiFamily, sourceMetricKey: activation.sourceMetricKey,
       valueShape: activation.revisionValueShape, parameterKind: activation.revisionParameterKind, sourceParameters: activation.sourceParameters,
+      sourceUnit: activation.revisionSourceUnit,
     }) !== null) return notUsable("not_extractable");
     for (const [level, covered] of [["full", activation.appliesToSession], ["drill", activation.appliesToDrill]]) {
       if (!covered) continue;

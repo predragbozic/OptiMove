@@ -23,7 +23,7 @@ import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMappe
 import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
-import { canonicalDecimal, compareDecimal, extractorFor } from "./sourceMetricExtractors.js";
+import { canonicalDecimal, compareDecimal, extractorFor, unitImportableCode } from "./sourceMetricExtractors.js";
 import { removeExpiredBatch as removeExpiredValuesBatch, setRemovalFaultForTests } from "./sourceMetricConfirmationRemoval.js";
 import { DISPLAY_REGISTRY_VERSION, displayRuleFor, displayValue, distinctPair, placementHash, rankPairs } from "./sourceMetricBoard.js";
 
@@ -369,6 +369,8 @@ function columnsOf(world) {
     const rule = proven ? displayRuleFor({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key, sourceUnit: f.source_unit }) : null;
     let reason = null;
     if (!extractor || (extractor.valueShape !== null && (extractor.valueShape !== f.value_shape || extractor.parameterKind !== f.parameter_kind))) reason = "source_metric_unsupported";
+    // G1b-1's interim rule: a created details field whose proven unit is not a count cannot be imported yet.
+    else if (proven && unitImportableCode({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key, sourceUnit: f.source_unit })) reason = "source_metric_unsupported";
     else if (f.parameter_kind !== "none") reason = "field_has_parameters";
     else if (!proven) reason = "field_not_confirmed";
     else if (!rule) reason = "display_rule_missing";

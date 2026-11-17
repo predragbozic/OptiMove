@@ -9,7 +9,7 @@ import {
   ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
   ENDPOINT_LABEL, INVENTORY_ENDPOINTS, KIND_LABEL,
   currentRevision, hasBound, inventoryMatches, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
-  unitActOffered,
+  unitActOffered, createOffered, createNextStep, FIELD_LABEL_MAX,
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -78,14 +78,22 @@ function intro(ctx) {
     ? "The fields each data source delivers, and how far each one's unit and meaning are proven."
     : "The fields each data source delivers; a platform administrator confirms their units and meanings.";
 }
+// G1 (8.4): a source_stated revision is never "confirmed" - its unit is GPEXE's own word and its meaning GPEXE's own
+// label, each checked by an administrator on the board.
+const stated = (revision) => revision?.evidenceStatus === "source_stated";
+// An athlete-row value carries no unit word, so only a document confirms it.
+const ROW_NO_UNIT = "GPEXE sends no unit with this value, so a platform administrator confirms it with a document.";
+const rowField = (field) => typeof field?.key === "string" && field.key.startsWith("athlete_session.");
 function meaningSummary(revision) {
+  if (stated(revision)) return "Meaning: GPEXE's own label, checked on the board";
   return revision.meaningVerifiedAt ? "Meaning confirmed" : "Meaning not confirmed";
 }
-function unitSummary(revision) {
+function unitSummary(revision, field) {
   if (!revision) return "No revision";
+  if (revision.sourceUnit && stated(revision)) return `Unit ${escapeHtml(revision.sourceUnit)} stated by GPEXE, checked on the board`;
   if (revision.sourceUnit) return `Unit ${escapeHtml(revision.sourceUnit)} (confirmed)`;
   if (revision.expectedSourceUnit) return `Expected unit ${escapeHtml(revision.expectedSourceUnit)} (not proven)`;
-  return "Unit not known yet";
+  return rowField(field) ? "Unit not known yet: GPEXE sends none with this value" : "Unit not known yet";
 }
 function evidenceBadge(revision) {
   if (!revision) return "";
@@ -124,7 +132,7 @@ function renderListHtml(s, ctx) {
               <button type="button" class="metric-variables-item dc-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
                 ${fieldTileHtml(revision)}
                 <span class="metric-variables-item-name">${fieldName(field)} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</span>
-                <span class="metric-variables-item-facts muted">${unitSummary(revision)} · ${revision ? `${meaningSummary(revision)} · ` : ""}${escapeHtml(levelsText(revision))}</span>
+                <span class="metric-variables-item-facts muted">${unitSummary(revision, field)} · ${revision ? `${meaningSummary(revision)} · ` : ""}${escapeHtml(levelsText(revision))}</span>
                 ${evidenceBadge(revision)}
               </button>
             </li>`;
@@ -150,11 +158,16 @@ function inventoryFacts(item, ctx, { withEndpoint = true } = {}) {
   ].filter(Boolean).map(escapeHtml).join(" · ");
 }
 function inventoryRowHtml(item, index, ctx, search) {
+  // G1b: Create field only where the server said route C would take the name.
+  const create = createOffered(ctx, item)
+    ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Create a field from ${escapeAttr(item.name)}">Create field</button>`
+    : "";
   return `
     <li data-sf-inv-row="${index}"${inventoryMatches(item, search) ? "" : " hidden"}>
       <div class="source-fields-inventory-item">
         <span class="metric-variables-item-name"><code class="source-fields-code">${escapeHtml(item.name)}</code>${item.covered ? ` <span class="item-badge">Already used</span>` : ""}</span>
         <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx)}</span>
+        ${create}
       </div>
     </li>`;
 }
@@ -183,7 +196,9 @@ function renderInventoryHtml(s, ctx) {
   return `
     <section class="metric-classification-section source-fields-inventory" aria-labelledby="sf-inventory-title">
       <h3 id="sf-inventory-title">Available in GPEXE, not supported yet</h3>
-      <p class="muted">${ctx.mayVerify ? "GPEXE also sends these values in the clubs' sessions." : "GPEXE also sends these values in your sessions."} OptiMove does not use them yet, so they are not imported. There is nothing to do here: this list shows what could be added later.</p>
+      <p class="muted">${ctx.mayVerify
+        ? "GPEXE also sends these values in the clubs' sessions. OptiMove does not use them yet, so they are not imported. Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet."
+        : "GPEXE also sends these values in your sessions. OptiMove does not use them yet, so they are not imported. There is nothing to do here: this list shows what could be added later."}</p>
       <div class="source-fields-inventory-tools">
         <label class="source-fields-inventory-search"><span class="visually-hidden">Search the GPEXE names</span>
           <input type="search" data-sf-inv-search placeholder="Search the GPEXE names" value="${escapeAttr(inv.search)}" autocomplete="off">
@@ -206,10 +221,11 @@ function renderInventoryHtml(s, ctx) {
 // ---------------------------------------------------------------------------
 // One field with its revisions and its history
 // ---------------------------------------------------------------------------
-function unitText(revision) {
+function unitText(revision, field) {
+  if (revision.sourceUnit && stated(revision)) return `${code(revision.sourceUnit)} <span class="muted">Unit stated by GPEXE, checked on the board ${escapeHtml(fmtDate(revision.unitVerifiedAt))}</span>`;
   if (revision.sourceUnit) return `${code(revision.sourceUnit)} <span class="muted">confirmed ${escapeHtml(fmtDate(revision.unitVerifiedAt))}</span>`;
   if (revision.expectedSourceUnit) return `Not confirmed <span class="muted">(expected ${code(revision.expectedSourceUnit)}, not proven)</span>`;
-  return "Not confirmed";
+  return rowField(field) ? `Not confirmed <span class="muted">${escapeHtml(ROW_NO_UNIT)}</span>` : "Not confirmed";
 }
 function boundUnitText(revision) {
   if (revision.sourceBoundUnit) return code(revision.sourceBoundUnit);
@@ -217,6 +233,7 @@ function boundUnitText(revision) {
   return "Not confirmed";
 }
 function meaningText(revision) {
+  if (stated(revision)) return `GPEXE's own label, checked on the board${revision.meaningVerifiedAt ? ` <span class="muted">${escapeHtml(fmtDate(revision.meaningVerifiedAt))}</span>` : ""}`;
   if (revision.meaningVerifiedAt) return `Confirmed <span class="muted">${escapeHtml(fmtDate(revision.meaningVerifiedAt))}</span>`;
   return "Not confirmed";
 }
@@ -230,7 +247,7 @@ function renderRevisionHtml(revision, field, ctx, stale) {
     ["Value", escapeHtml(VALUE_SHAPE_LABEL[revision.valueShape] || revision.valueShape || "")],
     ["Recorded for", escapeHtml(levelsText(revision))],
     ["Parameter", escapeHtml(PARAMETER_KIND_LABEL[revision.parameterKind] || revision.parameterKind || "")],
-    ["Unit", unitText(revision)],
+    ["Unit", unitText(revision, field)],
     ...(hasBound(revision) ? [[boundUnitLabel(revision), boundUnitText(revision)]] : []),
     ...(hasBound(revision) ? [["Operator", operatorText(revision)]] : []),
     ["Meaning", meaningText(revision)],
@@ -258,6 +275,13 @@ function renderRevisionHtml(revision, field, ctx, stale) {
     </li>`;
 }
 
+// A history row of a source_stated revision says how it was checked, never "confirmed".
+function actWords(v, field) {
+  const revision = (field.revisions || []).find((r) => r.id === v.revisionId);
+  if (stated(revision)) return v.act === "unit" ? "Unit stated by GPEXE, checked on the board" : "Meaning: GPEXE's own label, checked on the board";
+  return v.act === "unit" ? "Unit confirmed" : "Meaning confirmed";
+}
+
 function renderDetailHtml(s, ctx) {
   const d = s.detail;
   const back = `<button class="plain-button ghost metric-variables-back" type="button" data-action="source-fields-back">← All source fields</button>`;
@@ -283,12 +307,12 @@ function renderDetailHtml(s, ctx) {
     ${ctx.mayVerify ? "" : `<p class="muted">Read only here: a platform administrator confirms units and meanings in the platform workspace.</p>`}
     <h3>Revisions</h3>
     ${(field.revisions || []).length ? `<ol class="metric-variables-versions">${field.revisions.map((r) => renderRevisionHtml(r, field, ctx, stale)).join("")}</ol>` : `<p class="muted">No revisions.</p>`}
-    <h3>Confirmations</h3>
+    <h3>Checks and confirmations</h3>
     ${d.verifications.length ? `<ul class="metric-variables-versions source-fields-history">${d.verifications.map((v) => `
       <li class="metric-variables-version">
-        <span>Revision ${escapeHtml(String(revisionNumber.get(v.revisionId) ?? "?"))} · ${v.act === "unit" ? "Unit confirmed" : "Meaning confirmed"} · ${escapeHtml(fmtDate(v.at))}</span>
+        <span>Revision ${escapeHtml(String(revisionNumber.get(v.revisionId) ?? "?"))} · ${actWords(v, field)} · ${escapeHtml(fmtDate(v.at))}</span>
         ${v.evidenceRef ? `<span class="muted">Evidence ${code(v.evidenceRef)}</span>` : ""}
-      </li>`).join("")}</ul>` : `<p class="muted">Nothing confirmed yet.</p>`}
+      </li>`).join("")}</ul>` : `<p class="muted">Nothing checked or confirmed yet.</p>`}
     <details class="data-sources-tech"><summary>Technical details</summary><dl>
       <div><dt>Key</dt><dd>${escapeHtml(field.key || "")}</dd></div>
       <div><dt>Data family</dt><dd>${familyLabel(field)}</dd></div>
@@ -320,7 +344,7 @@ function textInput(form, field, label, { max, hint = "" } = {}) {
 function unconfirmedHtml(form) {
   return `
     <div class="metric-variables-unconfirmed" role="alert">
-      <p><strong>Result not confirmed.</strong> No answer arrived, so it is not known whether the confirmation was saved. Check result sends the same request again: it is never saved twice.</p>
+      <p><strong>Result not confirmed.</strong> No answer arrived, so it is not known whether ${form.act === "create" ? "the field was created" : "the confirmation was saved"}. Check result sends the same request again: it is never saved twice.</p>
       ${form.checkNote ? `<p>${escapeHtml(form.checkNote)}</p>` : ""}
       <div class="data-sources-form-actions">
         <button class="plain-button data-sources-primary" type="button" data-action="source-fields-check-result" ${form.busy ? "disabled" : ""}>${form.busy ? "Checking..." : "Check result"}</button>
@@ -348,8 +372,49 @@ function zoneOperatorHtml(form, locked) {
 const EVIDENCE_HINT = `A path under docs/ with one heading anchor, for example ${EVIDENCE_EXAMPLE}. The document must already be merged.`;
 const SOURCE_NAME_TEXT = (form, withFamily) => `${SOURCE_LABEL[form.sourceSystem] || form.sourceSystem}${withFamily ? ` · ${FAMILY_LABEL[form.apiFamily] || form.apiFamily}` : ""}`;
 
+function renderCreateFormHtml(s) {
+  const form = s.form;
+  const locked = form.busy || form.unconfirmed;
+  const levelsError = form.errors.levels ? `<span class="metric-variables-field-error" id="sf-err-levels">${escapeHtml(form.errors.levels)}</span>` : "";
+  const box = (name, label, { lockedOn = false } = {}) => `
+          <label class="source-fields-choice">
+            <input type="checkbox" data-sf-field="${name}" ${form.draft[name] ? "checked" : ""} ${locked || lockedOn ? "disabled" : ""}>
+            <span>${escapeHtml(label)}</span>
+          </label>`;
+  return `
+    <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="create" novalidate autocomplete="off">
+      <h2 id="source-fields-title">Create a field from ${code(form.name)}</h2>
+      <p class="muted source-fields-summary">GPEXE · ${escapeHtml(ENDPOINT_LABEL[form.endpoint] || form.endpoint)} · ${escapeHtml(KIND_LABEL[form.kind] || form.kind || "")}${form.unitWord ? ` (GPEXE says: ${escapeHtml(form.unitWord)})` : ""}</p>
+      <p class="metric-variables-field-note">${escapeHtml(createNextStep(form.endpoint))}</p>
+      <label class="search-field"><span>Name in OptiMove</span>
+        <input type="text" data-sf-field="label" value="${escapeAttr(form.draft.label ?? "")}" maxlength="${FIELD_LABEL_MAX}" autocomplete="off" ${locked ? "disabled" : ""}${described(form, "label", "hint")}${invalid(form, "label")}>
+        <span class="muted" id="sf-hint-label">How the field is named on OptiMove's screens, for example High-speed distance. At most ${FIELD_LABEL_MAX} characters.</span>
+        ${fieldError(form, "label")}
+      </label>
+      <fieldset class="metric-variables-fieldset">
+        <legend>Recorded for</legend>
+        <div${form.errors.levels ? ` aria-describedby="sf-err-levels"` : ""}>
+          ${box("supportsSession", "The whole session")}
+          ${box("supportsDrill", "Each drill", { lockedOn: form.drillLocked })}
+        </div>
+        ${form.drillLocked ? `<span class="muted">GPEXE sends this name per drill, so the field is always recorded for each drill.</span>`
+          : form.bothLevels ? `<span class="muted">GPEXE sends this name for the whole session and per drill; one field records both.</span>`
+          : form.endpoint === "details.session" ? `<span class="muted">Tick Each drill only if GPEXE also sends this value for each drill.</span>` : ""}
+        ${levelsError}
+      </fieldset>
+      <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>
+      ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
+      ${form.unconfirmed ? unconfirmedHtml(form) : `
+      <div class="data-sources-form-actions">
+        <button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Creating..." : "Create field"}</button>
+        <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
+      </div>`}
+    </form>`;
+}
+
 function renderFormHtml(s) {
   const form = s.form;
+  if (form.act === "create") return renderCreateFormHtml(s);
   const name = `${escapeHtml(form.fieldName)} (revision ${escapeHtml(String(form.revisionNumber ?? ""))})`;
   const bound = form.parameterKind === "zone_bounds" || form.parameterKind === "event_threshold";
   const locked = form.busy || form.unconfirmed;

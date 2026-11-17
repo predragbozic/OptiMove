@@ -5,7 +5,7 @@
 // (created by a platform admin, from a name the inventory observed) or as a seed; a seeded name is already in the
 // adapter's own lists and the union changes nothing for it.
 //
-// Only active (not retired) fields are pinned. A stored key whose name is not an identifier or is a dangerous key is
+// Only active (not retired) fields with an active revision are pinned. A stored key whose name is not an identifier or is a dangerous key is
 // left out of the set (and counted in a log line, never named): one bad row never fails every team's check. More
 // than PINNED_FIELDS_MAX names for one endpoint (route C refuses the 65th) stops the check with a stable code, and a
 // retention run then keeps only the consumed fields. Nothing is kept that was not named here.
@@ -31,9 +31,13 @@ export const EMPTY_PINNED_FIELDS = Object.freeze({ athleteSession: Object.freeze
 export const PINNED_FIELDS_SQL = `
   select source_metric_key from (
     select source_metric_key, row_number() over (partition by split_part(source_metric_key, '.', 1) order by source_metric_key) as n
-      from training_load.source_metric_definitions
+      from training_load.source_metric_definitions d
      where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active'
        and (starts_with(source_metric_key, 'athlete_session.') or starts_with(source_metric_key, 'details.players.'))
+       -- G1b-1 (the Rukovodilac's remedy (i)): a field with no active revision is not kept; retiring the field's active
+       -- revision (L5) is how a platform admin stops every check from keeping it.
+       and exists (select 1 from training_load.source_metric_definition_versions r
+                     where r.source_metric_definition_id = d.id and r.state = 'active')
   ) k where n <= ${PINNED_FIELDS_MAX + 1} order by source_metric_key`;
 
 const validName = (name) => typeof name === "string" && NAME.test(name) && !DANGEROUS.has(name);

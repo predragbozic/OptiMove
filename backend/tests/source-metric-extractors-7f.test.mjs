@@ -399,3 +399,18 @@ test("14. G2, the generic extractors: athlete_session.<name> reads one row numbe
   assert.equal(G2("athlete_session.total_time"), G("athlete_session.total_time"));
   assert.equal(G2("details.players.tot_burst_events"), G("details.players.tot_burst_events"));
 });
+
+test("15. G1b-1's interim rule: a created details field (a generic details.players key) is importable only with the proven unit count until G1b-2; a seeded details field, a created row field and a call that does not name the unit are unchanged", async () => {
+  const { extractabilityCode, unitImportableCode, UNIT_NOT_IMPORTABLE } = await import("../src/sourceMetricExtractors.js");
+  const created = { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "details.players.g1b_energy", valueShape: "unit_value_object", parameterKind: "none", sourceParameters: {} };
+  for (const unit of ["J/kg", "W/kg", "m/s", "m", "s", "m/s2"]) {
+    assert.equal(extractabilityCode({ ...created, sourceUnit: unit }), UNIT_NOT_IMPORTABLE, unit);
+    assert.equal(unitImportableCode({ ...created, sourceUnit: unit }), UNIT_NOT_IMPORTABLE, unit);
+  }
+  assert.equal(extractabilityCode({ ...created, sourceUnit: "count" }), null);
+  assert.equal(extractabilityCode(created), null, "not asked: the unit is not named");
+  const seeded = { ...created, sourceMetricKey: "details.players.tot_burst_events" };
+  assert.equal(extractabilityCode({ ...seeded, sourceUnit: "J/kg" }), null, "a seeded key keeps its own entry");
+  const row = { ...created, sourceMetricKey: "athlete_session.g1b_hsr", valueShape: "number" };
+  assert.equal(extractabilityCode({ ...row, sourceUnit: "m" }), null, "a created row field reads its number in any proven unit");
+});

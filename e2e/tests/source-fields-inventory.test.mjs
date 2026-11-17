@@ -13,7 +13,7 @@ let browser;
 let world;
 before(async () => {
   browser = await launch();
-  world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "imports" } });
+  world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "inventory" } });
   await prepareImports(world);
 });
 after(async () => {
@@ -72,6 +72,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.fill("[data-sf-inv-search]", "zzz-no-such-name");
       await page.waitForSelector("#sf-inv-no-match:not([hidden])");
       assert.equal(writes.length, 0, "the list only reads");
+      assert.equal(await page.locator('[data-action="source-fields-create-open"]').count(), 0, "G1b: a club never creates a field");
     } finally {
       await context.close();
     }
@@ -107,3 +108,52 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
     await other.context.close();
   }
 });
+
+// G1b-1: the platform admin creates a field from a name the server marked creatable, in the browser, at 1280 and 390 px.
+for (const [label, width, nth] of [["1280 px", WIDTHS.desktop, 0], ["390 px", WIDTHS.phone, 1]]) {
+  test(`G1b (${label}) the platform admin creates a source field from a GPEXE name: the form within the screen, 44 px targets, the field opens with the next step`, async () => {
+    const { context, page } = await openAs(browser, world, "platform_admin", width);
+    page.on("dialog", (d) => d.accept());
+    const posts = [];
+    page.on("request", (r) => { if (r.method() === "POST" && /sources\/metrics\/fields$/.test(r.url())) posts.push(r.postDataJSON()); });
+    try {
+      await openSourceFields(page);
+      const buttons = page.locator('[data-action="source-fields-create-open"]');
+      assert.ok(await buttons.count() > nth, "the check recorded names route C would create");
+      const name = await buttons.nth(nth).getAttribute("data-sf-inv-name");
+      const endpoint = await buttons.nth(nth).getAttribute("data-sf-inv-endpoint");
+      const buttonHeight = await buttons.nth(nth).evaluate((b) => Math.round(b.getBoundingClientRect().height));
+      assert.ok(buttonHeight >= 44, `Create field is 44 px (${buttonHeight})`);
+      await buttons.nth(nth).click();
+      await page.waitForSelector('[data-source-fields-form="create"]');
+      const form = await page.evaluate(() => {
+        const input = document.querySelector('[data-sf-field="label"]');
+        const sizes = [...document.querySelectorAll(".source-fields-form .source-fields-choice, .source-fields-form .data-sources-form-actions button")].map((e) => Math.round(e.getBoundingClientRect().height));
+        return {
+          overflow: document.documentElement.scrollWidth - window.innerWidth,
+          inputHeight: Math.round(input.getBoundingClientRect().height),
+          inputFont: getComputedStyle(input).fontSize,
+          sizes,
+          text: document.querySelector(".source-fields-form").innerText.replace(/\s+/g, " "),
+        };
+      });
+      assert.ok(form.overflow <= 0, `nothing wider than the screen (${form.overflow})`);
+      assert.ok(form.inputHeight >= 44 && form.inputFont === "16px", `the name field is 44 px and 16 px text (${form.inputHeight}, ${form.inputFont})`);
+      assert.ok(form.sizes.every((h) => h >= 44), `choices and buttons are 44 px (${form.sizes})`);
+      // The next step by where the value comes from: a per-athlete value has no unit word, so a document confirms it.
+      assert.match(form.text, endpoint === "athlete_session"
+        ? /This field has no values yet\. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document\./
+        : /This field has no values yet\. Its unit is confirmed on the board once new sessions carry it\./);
+      await page.fill('[data-sf-field="label"]', `E2E field ${width}`);
+      await page.click('[data-source-fields-form="create"] button[type="submit"]');
+      await page.waitForFunction(() => /The field was created\./.test(document.querySelector(".source-fields")?.innerText || ""), null, { timeout: 20_000 });
+      assert.equal(posts.length, 1, "one request");
+      assert.equal(posts[0].name, name);
+      const detail = await page.locator(".source-fields").innerText();
+      assert.match(detail, new RegExp(`E2E field ${width}`));
+      assert.match(detail, /Evidence: Not proven/);
+    } finally {
+      await context.close();
+    }
+  });
+}

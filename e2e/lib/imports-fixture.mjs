@@ -22,6 +22,18 @@ export function importsBundles(sourceTeam = 7001) {
   return [mk(SESSION_READY, "2026-11-04", [101, 102, 103]), mk(SESSION_NEEDS_LINK, "2026-11-05", [101, 102, 121])];
 }
 
+// G1b-1: the Imports sessions with one more per-athlete number and one more details value, names no source field covers,
+// so Source fields offers "Create field" on them (the source fields scenario only; the importer keeps neither).
+export function inventoryBundles(sourceTeam = 7001) {
+  return importsBundles(sourceTeam).map((bundle) => {
+    bundle.athleteSessions.forEach((row, i) => { row.e2e_hsr_distance = 100 + i; });
+    for (const part of [bundle.details.full, ...Object.values(bundle.details.drills)]) {
+      for (const values of Object.values(part.players)) values.e2e_metabolic_power = { unit: "power", value: 12.5 };
+    }
+    return bundle;
+  });
+}
+
 // U6a-3: three sessions with only linked athletes (101..103), all Ready - the batch series scenario.
 export const SERIES_SESSIONS = [9111, 9112, 9113];
 export function seriesBundles(sourceTeam = 7001) {

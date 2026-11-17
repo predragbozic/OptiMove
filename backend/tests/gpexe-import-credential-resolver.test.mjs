@@ -2375,10 +2375,19 @@ test("40. a drill answer's own drills_count is ignored end to end: every drill a
 // G2 (docs/ai/gpexe-field-inventory-plan.md section 9): the pinned set. A T2a row of a generic key, written here as route C
 // leaves it (created by a platform admin; without an acting user, the C74-class path), is kept by the next check.
 // T2a is global, so every G2 test removes its rows again (session_replication_role = replica, test cleanup only).
-const g2Field = async (key, by) => (await q(
-  `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,$2,$3) returning id`,
-  [key, `G2 ${key}`, by],
-))[0].id;
+// A field as route C writes it: the T2a row and (unless the test writes its own) an active, unproven revision 1 - the
+// pinned set keeps only a field with an active revision (G1b-1).
+const g2Field = async (key, by, { revision = true } = {}) => {
+  const id = (await q(
+    `insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,$2,$3) returning id`,
+    [key, `G2 ${key}`, by],
+  ))[0].id;
+  if (revision) {
+    const { writeRevision } = await import("./support/source-revisions.mjs");
+    await writeRevision(admin, { fieldId: id, by, valueShape: key.startsWith("details.") ? "unit_value_object" : "number", evidenceStatus: "unproven" });
+  }
+  return id;
+};
 const g2Remove = async (keys) => {
   await admin.query("set session_replication_role = replica");
   try {
@@ -2614,8 +2623,8 @@ test("47. G2, end to end: a created row field whose unit is proven, mapped onto 
   const o = await org();
   const ctx = { userId: String(o.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } };
   const rk = () => crypto.randomUUID();
-  const provenId = await g2Field(keys[0], o.padmin.id);
-  const unprovenId = await g2Field(keys[1], o.padmin.id);
+  const provenId = await g2Field(keys[0], o.padmin.id, { revision: false });
+  const unprovenId = await g2Field(keys[1], o.padmin.id, { revision: false });
   const ref = "docs/ai/test-evidence.md#unit-of-the-field";
   const provenRev = await writeRevision(admin, { fieldId: provenId, by: o.padmin.id, unit: "m", unitRef: ref, meaning: true, meaningRef: "docs/ai/test-evidence.md#meaning-of-the-field", evidenceRef: ref });
   const unprovenRev = await writeRevision(admin, { fieldId: unprovenId, by: o.padmin.id, evidenceRef: ref });
@@ -2805,7 +2814,7 @@ test("50. G2 review fix: the 7e aggregate preview never shows a value of a creat
   const o = await org();
   const ctx = { userId: String(o.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } };
   const rk = () => crypto.randomUUID();
-  const fieldId = await g2Field(key, o.padmin.id);
+  const fieldId = await g2Field(key, o.padmin.id, { revision: false });
   const rev = await writeRevision(admin, { fieldId, by: o.padmin.id, unit: "m", unitRef: "docs/ai/test-evidence.md#unit", evidenceRef: "docs/ai/test-evidence.md#unit" });
   try {
     const status = (await q(`select evidence_status, source_unit from training_load.source_metric_definition_versions where id = $1`, [rev.revisionId ?? rev]))[0];
@@ -2829,5 +2838,63 @@ test("50. G2 review fix: the 7e aggregate preview never shows a value of a creat
     assert.ok(!JSON.stringify(refused.e?.body ?? refused.e ?? {}).includes("8642"), "no value of the field in the answer");
   } finally {
     await g2Remove([key]);
+  }
+});
+
+test("51. G1b-1, the retire remedy: a field whose active revision is retired (L5) is no longer pinned, so the next check does not keep it; a pending snapshot keeps the values it has until the retention run projects them away", async () => {
+  const lifecycle = await import("../src/sourceRevisionLifecycleService.js");
+  const { readPinnedFields } = await import("../src/sourcePinnedFields.js");
+  const key = "details.players.g1b_retire";
+  const o = await org();
+  const ctx = { userId: String(o.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } };
+  const fieldId = await g2Field(key, o.padmin.id);
+  try {
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    g2Plant(src.state.bundle, { details: () => ({ g1b_retire: { unit: "number", value: 7 } }) });
+    const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+    const kept = (rows) => Object.values(rows[0].raw_bundle.details.full.players).some((values) => Object.hasOwn(values, "g1b_retire"));
+    assert.equal(kept(await g2Stored(o.teamId)), true, "kept while the field has an active revision");
+    const [revision] = await q(`select id from training_load.source_metric_definition_versions where source_metric_definition_id = $1 and state = 'active'`, [fieldId]);
+    await lifecycle.retireRevision({ ctx, fieldId, revisionId: revision.id, body: { requestKey: crypto.randomUUID(), expectedState: "active", reason: "A check cannot keep this field." } });
+    assert.ok(!(await readPinnedFields(admin)).details.includes("g1b_retire"), "no longer pinned");
+    // Until the retention run projects it away, the pending snapshot keeps what it had.
+    assert.equal(kept(await g2Stored(o.teamId)), true, "the pending snapshot keeps it until retention");
+    await importer.projectUnimportedSnapshots();
+    assert.equal(kept(await g2Stored(o.teamId)), false, "the retention run projects it away");
+  } finally {
+    await g2Remove([key]);
+  }
+});
+
+test("52. G1b-1's interim rule through the services: a created details field proven in J/kg gets no mapping version (409 unit_not_importable, nothing written), so no team's sessions can be blocked; the same field proven as a count does", async () => {
+  const { writeRevision } = await import("./support/source-revisions.mjs");
+  const variablesSvc = await import("../src/canonicalVariableAdminService.js");
+  const mappingsSvc = await import("../src/sourceMetricMappingService.js");
+  const keys = ["details.players.g1b_energy", "details.players.g1b_count"];
+  const o = await org();
+  const ctx = { userId: String(o.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } };
+  const rk = () => crypto.randomUUID();
+  const ref = "docs/ai/test-evidence.md#unit-of-the-field";
+  try {
+    const versionFor = async (key, unit) => {
+      const fieldId = await g2Field(key, o.padmin.id, { revision: false });
+      const rev = await writeRevision(admin, { fieldId, by: o.padmin.id, valueShape: "unit_value_object", unit, unitRef: ref, meaning: true, meaningRef: "docs/ai/test-evidence.md#meaning-of-the-field", evidenceRef: ref });
+      const variable = (await variablesSvc.createVariable({ ctx, body: { requestKey: rk(), label: `G1b ${unit} ${crypto.randomBytes(3).toString("hex")}`, unit, levels: ["session", "drill"], dailyAggregationMethod: "sum" } })).variable;
+      const mapping = (await mappingsSvc.createMapping({ ctx, body: { requestKey: rk(), sourceMetricId: fieldId, metricDefinitionId: variable.id } })).mapping;
+      return mappingsSvc.createVersion({ ctx, mappingId: mapping.id, body: { requestKey: rk(), sourceRevisionId: rev.revisionId ?? rev, appliesToSession: true, appliesToDrill: true } }).then((a) => ({ version: a.version }), (e) => ({ e, mappingId: mapping.id }));
+    };
+    const energy = await versionFor(keys[0], "J/kg");
+    assert.deepEqual([energy.e?.status, energy.e?.code], [409, "unit_not_importable"], JSON.stringify(energy.e ?? energy));
+    assert.equal(energy.e.message, "This field's unit cannot be imported yet.");
+    assert.equal((await q(`select count(*)::int n from training_load.source_metric_mapping_versions where mapping_id = $1`, [energy.mappingId]))[0].n, 0, "nothing written");
+    const count = await versionFor(keys[1], "count");
+    assert.ok(count.version?.id, JSON.stringify(count.e ?? count));
+  } finally {
+    await g2Remove(keys);
   }
 });

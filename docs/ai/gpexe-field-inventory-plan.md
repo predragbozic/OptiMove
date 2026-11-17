@@ -461,7 +461,9 @@ Also accepted:
 - **One write:**
   - a T2a row with `created_by_user_id`;
   - T2b revision 1: `state = 'active'`, `evidence_status = 'unproven'`, `parameter_kind = 'none'`;
-  - `expected_source_unit` = the latest unit word the inventory saw, if it passes the unit-token rule, otherwise null.
+  - `expected_source_unit` = the seeded unit token of the latest unit word the inventory saw (`source_unit_words`,
+    8.10), otherwise null: a word without a row is never guessed. (Before 8.10 this line said the word itself, if it
+    passed the unit-token rule; G1a built the 8.10 rule.)
     It is a hypothesis, never `source_unit`;
   - its T8 row `source_field_created`.
 - **Replay:** idempotent by `requestKey` (the M2 request record), with the bounded COMMIT and the
@@ -716,6 +718,49 @@ The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_sour
 
 **Not yet tested:** v52's activation gate on a `source_stated` revision (mutation M10 survives). A mapping version of a
 created field needs its extractor (J12), which is G2's; G2's or G1b's tests cover it.
+
+### 8.9b As built (G1b-1; the executor, 2026-11-17)
+
+- **"Create field" on Source fields.** It sits on an inventory row and calls route C. It is offered only where the
+  inventory answer says `creatable: true`, a flag only route C's audience (a platform admin in the platform workspace)
+  gets, computed by the read from route C's own rules: not covered, a generic endpoint, a name `deriveField` takes, and
+  every observation a value kind a check keeps (`KEPT_VALUE_KINDS`: a number, or a value with its unit, or no value).
+  Route C decides again on the request.
+  - The form takes the name in OptiMove and the levels the endpoint allows (a per-drill name always keeps the drill). It
+    says once what happens next: "This field has no values yet. Its unit is confirmed on the board once new sessions
+    carry it."
+  - The three outcomes: created (the new field opens); a coded refusal (nothing was created, the form stays); a lost
+    answer (Result not confirmed; Check result sends the same request and key). `field_exists` opens the existing field.
+- **The status words (8.4).** A `source_stated` revision is never "confirmed": its unit reads "stated by GPEXE, checked
+  on the board" and its meaning "GPEXE's own label, checked on the board", in the list, the revision and its history.
+  An athlete-row field without a unit says that GPEXE sends none and that a platform administrator confirms it with a
+  document.
+- **Route C's audience test** (`source-field-create-g1` test 4) now covers a coach and an athlete, and a text/plain body
+  and an array body, each the identical 404 before the body is read.
+- **After the reviews of G1b-1** (code, ux, mobile: READY WITH NON-BLOCKING NOTES):
+  - a details name GPEXE sends both for the whole session and per drill is one key (`details.players.<name>`), so its
+    form opens with both levels and says so (code MEDIUM); a whole-session name says to tick Each drill only if GPEXE also
+    sends it per drill;
+  - `creatable` is false when the derived key exists in any state (route C answers `field_exists` for a retired key too);
+    a `field_exists` without the existing field (the losing writer of a race) says the field exists and reads the list
+    again;
+  - a per-athlete name's next step says that a document confirms its unit, since GPEXE sends no unit with it (ux MEDIUM;
+    the wording approved by the *Rukovodilac*, 2026-11-17); the detail's history heading is "Checks and confirmations".
+- **After G2's merge (the *Rukovodilac*'s orders of 2026-11-17):**
+  - **The interim refusal.** Until G1b-2, a created details field (a generic `details.players.` key) whose proven unit
+    is not `count` gets no mapping version: `extractabilityCode` answers `unit_not_importable` ("This field's unit cannot
+    be imported yet."), so T4, A1, the copy (7i), the 7e preview and the importer's plan all refuse it, and the board
+    shows such a column as unsupported. The generic details entry reads only the word `number`; any other word would
+    block every session of the team (`source_shape_mismatch`). G1b-2 removes the refusal in the PR that teaches the
+    extractor the unit words. Proof: `source-metric-extractors-7f` test 15, resolver test 52.
+  - **The retire remedy (i).** The pinned set keeps only a field with an active revision, so retiring the active
+    revision (L5) stops every check from keeping it; a pending snapshot keeps its values until the retention run
+    projects them away. Proof: resolver test 51. The runbook (`docs/runbooks/gpexe-in-app-import.md`, "Created source
+    fields in a check") says how.
+  - Route C's value-kind rule and the inventory's `creatable` share `KEPT_VALUE_KINDS`.
+- **Two connections.** Two GPEXE accounts may send the same name with different unit words. The expected unit of a
+  created field comes from the latest observation only, as a hypothesis. Route O's refusal of a word that differs from
+  the revision's expected unit (`unit_not_stated`, carry-over 5) is G1b-2's.
 
 ### 8.10 GPEXE's unit words are kinds, not units (the *Rukovodilac*'s amendment, accepted 2026-11-16)
 

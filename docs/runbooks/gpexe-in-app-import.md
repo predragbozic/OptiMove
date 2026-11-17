@@ -1535,3 +1535,25 @@ waiting (each is caught and logged; a purge runs again on its schedule).
 - **Condition for a second club (owner/*Rukovodilac* decision 2026-11-04):** the club first connects its OWN GPEXE account. With one shared account every club admin would see the same teams and the first to approve a GPEXE team blocks the others (`gpexe_team_taken`). The code does not detect a shared account; a platform admin can remove a wrong pair through the F3b path.
 - **Record:** the settings history row (`configured_by_user_id`, reason). No new column.
 - **Known, accepted risks of U2a (security review, 2026-11-04):** (1) the server does not check that the GPEXE team id is one the club's credential sees (that would need the last Test's list stored: a migration, out of scope); the bind does check it. A club admin could therefore pre-claim a GPEXE team id of another club on one of their own unpaired teams ("squatting"); the other club's platform admin then gets `gpexe_team_taken` until a platform admin changes the squatter's pair under Data sources (F3b, with a reason). The squatter cannot bind it. (2) To keep the response from being an existence oracle, a club admin gets the neutral `409 pair_not_available` whenever the GPEXE team is already paired anywhere; a platform admin gets `gpexe_team_taken`. (3) A club admin's pair is self-approved: the boundary is what the club's own credential sees, so a second club is released only after it has its own GPEXE account.
+
+## Created source fields in a check (G2, G1b-1)
+
+A field a platform admin created through Source fields (route C, `docs/ai/gpexe-field-inventory-plan.md` section 8.1)
+is kept by every check of every team: its values are stored in the snapshot beside the importer's own fields (the
+pinned set, plan section 9.1). Only a field with an active revision is kept.
+
+- **A check fails naming a created field.** The failed check's administrator line reads `source_answer_unexpected`
+  with `field_shape_unknown` and the field's GPEXE name, because GPEXE sent that name in another shape than the one the
+  field was created for (a text where a number was expected, for example). Remedy: retire the field's active revision
+  (L5), as a platform admin in the platform workspace:
+  `POST /api/training-load/sources/metrics/fields/:fieldId/revisions/:revisionId/retire` with
+  `{ "requestKey": "<new uuid>", "expectedState": "active", "reason": "GPEXE sends this name in another shape." }`.
+  The next check no longer keeps the field and runs again. A pending snapshot keeps the values it already has until the
+  retention run projects them away (every check, the 6-hour schedule).
+- **A check stops with `pinned_fields_too_many`.** More than 64 fields of one kind are active (only by a row written by
+  hand: route C refuses the 65th). Retire the active revision of fields until 64 are left; the retention run projects
+  nothing meanwhile.
+- **Until G1b-2: a created whole-session or drill field imports only a count.** A mapping version of such a field whose
+  proven unit is not `count` is refused (`409 unit_not_importable`, "This field's unit cannot be imported yet."), so no
+  team's sessions can be blocked by a unit the importer cannot read yet. G1b-2 lifts this when the extractor learns
+  GPEXE's unit words.

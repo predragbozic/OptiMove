@@ -8,6 +8,13 @@ import { DANGEROUS_FIELD_NAMES } from "./sourcePinnedFields.js";
 
 export const LABEL_MAX_LENGTH = 80;
 // The generic plain shapes (Q4): one row number, one details {unit, value}. Zones and events stay code.
+// The value kinds a check keeps for each generic shape (the inventory's kinds, sourceFieldInventory.js): a number in an
+// athlete row, a value with its unit in the details, or no value. G1b's "Create field" is offered only for a name every
+// connection saw in one of these.
+export const KEPT_VALUE_KINDS = Object.freeze({
+  number: Object.freeze(["number", "null"]),
+  unit_value_object: Object.freeze(["unit_value_object", "null"]),
+});
 export const GENERIC_ENDPOINTS = Object.freeze({
   athlete_session: Object.freeze({ prefix: "athlete_session.", valueShape: "number" }),
   "details.session": Object.freeze({ prefix: "details.players.", valueShape: "unit_value_object" }),

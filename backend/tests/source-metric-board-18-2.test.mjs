@@ -1097,3 +1097,29 @@ test("15. G2: a field created by route C whose unit is not proven shows no athle
     await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [W.cA.id, before]);
   }
 });
+
+test("16. G1b-1's interim rule on the board: a created details field proven in a unit other than count is shown as a column OptiMove cannot read yet - not placeable, no values; the same field proven as a count is not refused for that", async () => {
+  const mk = async (key, unit) => {
+    const fieldId = (await one(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,$2,$3) returning id`, [key, `G1b ${key}`, W.pa.id])).id;
+    await writeRevision(k, { fieldId, by: W.pa.id, valueShape: "unit_value_object", parameterKind: "none", evidenceRef: COMPAT, unit, unitRef: UNIT_REF, meaning: true, meaningRef: MEANING_REF, state: "active" });
+    return fieldId;
+  };
+  await mk("details.players.g1b_board_energy", "J/kg");
+  await mk("details.players.g1b_board_count", "count");
+  const before = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [W.cA.id])).raw_bundle;
+  const planted = structuredClone(before);
+  for (const values of Object.values(planted.details.full.players)) Object.assign(values, { g1b_board_energy: { unit: "energy", value: 735.5 }, g1b_board_count: { unit: "number", value: 4 } });
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [W.cA.id, planted]);
+  try {
+    const res = await boardOf(W.caA, W.tA);
+    const { board } = ok(res);
+    const energy = board.columns.find((c) => c.key === "details.players.g1b_board_energy");
+    assert.ok(energy, "the column is listed");
+    assert.deepEqual([energy.placeable, energy.reason, energy.rawA, energy.rawB], [false, "source_metric_unsupported", null, null]);
+    assert.ok(!JSON.stringify(res.body).includes("735.5"), "none of its values in the answer");
+    const count = board.columns.find((c) => c.key === "details.players.g1b_board_count");
+    assert.notEqual(count.reason, "source_metric_unsupported", JSON.stringify(count));
+  } finally {
+    await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [W.cA.id, before]);
+  }
+});
