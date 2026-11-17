@@ -459,7 +459,7 @@ begin
   insert into training_load.import_deletion_log
     (deleted_by_user_id, authorized_via, reason, event_id, source_system, source_connection_id, source_external_id,
      owner_team_id, occurred_date, reference_set_external_id, removed_counts, removed_total, roster_work_removed)
-  values (p_actor, v_basis, v_reason, v_event_id, -- v76: the basis derived above v_scope ->> 'sourceSystem', (v_scope ->> 'connectionId')::uuid,
+  values (p_actor, v_basis /* v76: derived above */, v_reason, v_event_id, v_scope ->> 'sourceSystem', (v_scope ->> 'connectionId')::uuid,
           v_scope ->> 'externalId', (v_scope ->> 'ownerTeamId')::uuid, (v_scope ->> 'occurredDate')::date,
           v_scope ->> 'referenceSetExternalId', v_removed, v_total, v_roster_removed)
   returning id into v_log;
@@ -506,6 +506,8 @@ begin
 end;
 $function$;
 
+comment on function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, text) is
+  'v76: the sanctioned undo of one imported GPEXE session, its roster work and estimates included, by whoever may import it (lock_gpexe_session_undo_right). See migrations_v2/202611171000_training_load_v76_undo_by_importer.sql.';
 CREATE OR REPLACE FUNCTION training_load.validate_import_deletion_log_v60()
  RETURNS trigger
  LANGUAGE plpgsql
