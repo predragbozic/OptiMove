@@ -27400,6 +27400,12 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
   background: var(--surface);
   overflow-wrap: anywhere;
 }
+/* G1b: Create field on a name route C would take (platform workspace). A 44px target, at the row's start. */
+.source-fields-inventory-item .source-fields-create {
+  justify-self: start;
+  min-height: 44px;
+  margin-top: 6px;
+}
 .source-fields-inventory-thresholds {
   margin-top: 12px;
 }

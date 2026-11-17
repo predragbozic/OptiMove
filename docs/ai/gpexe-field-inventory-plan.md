@@ -461,7 +461,9 @@ Also accepted:
 - **One write:**
   - a T2a row with `created_by_user_id`;
   - T2b revision 1: `state = 'active'`, `evidence_status = 'unproven'`, `parameter_kind = 'none'`;
-  - `expected_source_unit` = the latest unit word the inventory saw, if it passes the unit-token rule, otherwise null.
+  - `expected_source_unit` = the seeded unit token of the latest unit word the inventory saw (`source_unit_words`,
+    8.10), otherwise null: a word without a row is never guessed. (Before 8.10 this line said the word itself, if it
+    passed the unit-token rule; G1a built the 8.10 rule.)
     It is a hypothesis, never `source_unit`;
   - its T8 row `source_field_created`.
 - **Replay:** idempotent by `requestKey` (the M2 request record), with the bounded COMMIT and the
@@ -716,6 +718,28 @@ The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_sour
 
 **Not yet tested:** v52's activation gate on a `source_stated` revision (mutation M10 survives). A mapping version of a
 created field needs its extractor (J12), which is G2's; G2's or G1b's tests cover it.
+
+### 8.9b As built (G1b-1; the executor, 2026-11-17)
+
+- **"Create field" on Source fields.** It sits on an inventory row and calls route C. It is offered only where the
+  inventory answer says `creatable: true`, a flag only route C's audience (a platform admin in the platform workspace)
+  gets, computed by the read from route C's own rules: not covered, a generic endpoint, a name `deriveField` takes, and
+  every observation a value kind a check keeps (`KEPT_VALUE_KINDS`: a number, or a value with its unit, or no value).
+  Route C decides again on the request.
+  - The form takes the name in OptiMove and the levels the endpoint allows (a per-drill name always keeps the drill). It
+    says once what happens next: "This field has no values yet. Its unit is confirmed on the board once new sessions
+    carry it."
+  - The three outcomes: created (the new field opens); a coded refusal (nothing was created, the form stays); a lost
+    answer (Result not confirmed; Check result sends the same request and key). `field_exists` opens the existing field.
+- **The status words (8.4).** A `source_stated` revision is never "confirmed": its unit reads "stated by GPEXE, checked
+  on the board" and its meaning "GPEXE's own label, checked on the board", in the list, the revision and its history.
+  An athlete-row field without a unit says that GPEXE sends none and that a platform administrator confirms it with a
+  document.
+- **Route C's audience test** (`source-field-create-g1` test 4) now covers a coach and an athlete, and a text/plain body
+  and an array body, each the identical 404 before the body is read.
+- **Two connections.** Two GPEXE accounts may send the same name with different unit words. The expected unit of a
+  created field comes from the latest observation only, as a hypothesis. Route O's refusal of a word that differs from
+  the revision's expected unit (`unit_not_stated`, carry-over 5) is G1b-2's.
 
 ### 8.10 GPEXE's unit words are kinds, not units (the *Rukovodilac*'s amendment, accepted 2026-11-16)
 

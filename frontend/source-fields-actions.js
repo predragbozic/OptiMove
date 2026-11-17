@@ -6,7 +6,8 @@
 // server replays a saved act and never saves twice.
 import { state } from "./state.js";
 import {
-  CLOSES_FORM, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, emptyInventory, emptySourceFieldsState, errorInfo, fetchField,
+  CLOSES_FORM, CREATE_NEXT_STEP, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, createOffered, createSourceField,
+  emptyInventory, emptySourceFieldsState, errorInfo, fetchField, openCreateFieldForm,
   fetchFields, fetchInventory, inventoryMatches, meaningActOffered, newRequestKey, openSourceFieldForm, outcomeUnknown, sourceFieldCodeText, sourceFieldsContext,
   sourceFieldsState, unitActOffered, verifyMeaning, verifyUnit,
 } from "./source-fields-data.js";
@@ -16,6 +17,8 @@ const confirmAsk = (question) => Boolean(globalThis.window?.confirm?.(question))
 // long list on a phone would otherwise leave the new view scrolled).
 const toTitle = () => globalThis.document?.getElementById?.("source-fields-title")?.scrollIntoView?.({ block: "start" });
 const focus = (selector) => globalThis.document?.querySelector?.(selector)?.focus?.();
+// A value inside a quoted attribute selector.
+const cssValue = (value) => String(value ?? "").replace(/["\\]/g, "\\$&");
 
 export function resetSourceFields() {
   const generation = (state.trainingLoad.sourceFields?.generation || 0) + 1;
@@ -178,10 +181,21 @@ export function loadSourceFieldsSection(render) {
 export function sourceFieldsMayBeLeft() {
   const form = state.trainingLoad.sourceFields?.form;
   if (!form) return true;
+  if (form.act === "create") {
+    if (form.busy) return confirmAsk("The new field is still being created. Leave anyway? Its result will not be shown.");
+    if (form.unconfirmed) return confirmAsk("It is not known whether the new field was created. Leave without checking? Open Source fields later to see.");
+    if (form.dirty) return confirmAsk("Discard the field you have not created?");
+    return true;
+  }
   if (form.busy) return confirmAsk("A confirmation is still being saved. Leave anyway? Its result will not be shown.");
   if (form.unconfirmed) return confirmAsk("The result of the last confirmation is not known. Leave without checking? Open the field later to see whether it was saved.");
   if (form.dirty) return confirmAsk("Discard the confirmation you have not saved?");
   return true;
+}
+// The list and the names read again after a field was (or may have been) created.
+function readAgainAfterCreate(s) {
+  s.list = { ...emptySourceFieldsState().list };
+  s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
 }
 export function sourceFieldsUnloadShouldWarn() {
   if (state.activeTab !== "training-load" || state.trainingLoad.section !== "source-fields") return false;
@@ -256,6 +270,19 @@ export async function handleSourceFieldsAction(action, { render }) {
   if (type === "source-fields-cancel") {
     const form = s.form;
     if (!leaveForm()) return true;
+    if (form?.act === "create") {
+      if (form.unconfirmed) {
+        // A field left without a check may still have been created: the list and the names are read again.
+        setNotice(s, "The result was not checked. The source fields below are as they are saved now.", "warning");
+        readAgainAfterCreate(s);
+        await loadSourceFieldsSection(render);
+        focusNotice();
+        return true;
+      }
+      render();
+      focus(`[data-action="source-fields-create-open"][data-sf-inv-endpoint="${cssValue(form.endpoint)}"][data-sf-inv-name="${cssValue(form.name)}"]`);
+      return true;
+    }
     if (form?.unconfirmed) {
       // A confirmation left without a check may still have landed: the field
       // is read again, so the screen never shows it as missing.
@@ -272,6 +299,18 @@ export async function handleSourceFieldsAction(action, { render }) {
   }
   if (type === "source-fields-check-result") {
     await send(render);
+    return true;
+  }
+  if (type === "source-fields-create-open") {
+    // Only on a name the server marked creatable, in the platform workspace; route C decides again.
+    if (s.form || s.detail.id) return true;
+    const item = s.inventory.items.find((i) => i.endpoint === action.dataset.sfInvEndpoint && i.name === action.dataset.sfInvName) || null;
+    if (!createOffered(ctx, item)) return true;
+    s.notice = "";
+    s.form = openCreateFieldForm(item);
+    render();
+    toTitle();
+    focus(".source-fields-form [data-sf-field]:not([disabled])");
     return true;
   }
   if (type === "source-fields-act-open") {
@@ -308,6 +347,17 @@ export function handleSourceFieldsInput(target) {
   if (!form || form.busy || form.unconfirmed) return true;
   const name = field.dataset.sfField;
   if (!(name in form.draft)) return true;
+  // A level of a new field is a checkbox; the drill of a per-drill name never changes.
+  if (field.type === "checkbox") {
+    if (form.act === "create" && name === "supportsDrill" && form.drillLocked) return true;
+    form.draft[name] = field.checked === true;
+    if (form.errors.levels) {
+      delete form.errors.levels;
+      globalThis.document?.getElementById?.("sf-err-levels")?.remove?.();
+    }
+    form.dirty = true;
+    return true;
+  }
   form.draft[name] = field.value;
   form.dirty = true;
   if (form.error) {
@@ -357,7 +407,8 @@ async function send(render) {
   render();
   let data;
   try {
-    data = await (form.act === "unit" ? verifyUnit : verifyMeaning)(form.fieldId, form.revisionId, form.sentBody);
+    data = form.act === "create" ? await createSourceField(form.sentBody)
+      : await (form.act === "unit" ? verifyUnit : verifyMeaning)(form.fieldId, form.revisionId, form.sentBody);
   } catch (error) {
     if (sourceFieldsState().generation !== generation || s.form !== form) return;
     form.busy = false;
@@ -366,6 +417,15 @@ async function send(render) {
   }
   if (sourceFieldsState().generation !== generation || s.form !== form) return;
   s.form = null;
+  if (form.act === "create") {
+    // Created (or a Check result found it created): the new field opens; the list and the names are read again later.
+    setNotice(s, `The field was created. ${CREATE_NEXT_STEP}`, "");
+    readAgainAfterCreate(s);
+    const id = typeof data?.field?.id === "string" ? data.field.id : null;
+    if (id) await loadSourceField(id, render); else await loadSourceFieldsSection(render);
+    focusNotice();
+    return;
+  }
   setNotice(s, `${form.act === "unit" ? "The unit was confirmed." : "The meaning was confirmed."}${data?.readError ? " It could not be read back; the field below is read again." : ""}`, "");
   s.list = { ...emptySourceFieldsState().list };
   await loadSourceField(form.fieldId, render);
@@ -393,6 +453,22 @@ async function refused(form, info, { render, check }) {
   form.unconfirmed = false;
   form.checkNote = "";
   if (info.code === "request_key_reused") form.requestKey = newRequestKey();
+  if (form.act === "create" && (info.code === "field_exists" || info.code === "notFound")) {
+    // The field is there already (someone created it meanwhile): it opens. A 404 closes the form and reads the list again.
+    s.form = null;
+    readAgainAfterCreate(s);
+    const existing = typeof info.current?.fieldId === "string" ? info.current.fieldId : null;
+    if (info.code === "field_exists" && existing) {
+      setNotice(s, "This field already exists, so nothing was created. It is shown below.", "");
+      await loadSourceField(existing, render);
+    } else {
+      setNotice(s, sourceFieldCodeText(info, form), "warning");
+      await loadSourceFieldsSection(render);
+    }
+    focusNotice();
+    return;
+  }
+  if (form.act === "create" && info.code === "invalid_body") form.errors.label = "Check this value.";
   if (CLOSES_FORM.has(info.code)) {
     // The form was made from a revision that changed: it is closed and the
     // field read again, so the screen shows it as it is now.

@@ -99,6 +99,8 @@ function write(path, body) {
 const actPath = (fieldId, revisionId, act) => `${BASE}/${encodeURIComponent(fieldId)}/revisions/${encodeURIComponent(revisionId)}/${act === "unit" ? "unit-verification" : "meaning-verification"}`;
 export const verifyUnit = (fieldId, revisionId, body) => write(actPath(fieldId, revisionId, "unit"), body);
 export const verifyMeaning = (fieldId, revisionId, body) => write(actPath(fieldId, revisionId, "meaning"), body);
+// G1b: route C, a field created from a name of the inventory (platform admin, platform workspace).
+export const createSourceField = (body) => write(BASE, body);
 
 // ---------------------------------------------------------------------------
 // What a revision is (v34's value sets)
@@ -163,6 +165,42 @@ export const EVIDENCE_REF_MAX = 300;
 export const EVIDENCE_EXAMPLE = "docs/ai/gpexe-evidence.md#total-distance";
 export const evidenceRefOk = (value) => typeof value === "string" && value.length >= 1 && value.length <= EVIDENCE_REF_MAX && EVIDENCE_REF.test(value);
 
+// ---------------------------------------------------------------------------
+// G1b: creating a field from a name GPEXE sent (route C, docs/ai/gpexe-field-inventory-plan.md section 8.1)
+// ---------------------------------------------------------------------------
+// What happens next, said once on the form and once after the save (the Rukovodilac's wording).
+export const CREATE_NEXT_STEP = "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.";
+export const FIELD_LABEL_MAX = 80;
+// The levels a name's endpoint allows, and the one a per-drill name must keep.
+export function createLevels(endpoint) {
+  if (endpoint === "details.drill") return { supportsSession: false, supportsDrill: true, drillLocked: true };
+  if (endpoint === "details.session") return { supportsSession: true, supportsDrill: false, drillLocked: false };
+  return { supportsSession: true, supportsDrill: true, drillLocked: false };
+}
+// Offered only where the server said route C would take the name (never guessed here).
+export const createOffered = (ctx, item) => Boolean(ctx?.mayVerify && item && item.creatable === true && item.covered === false);
+export function openCreateFieldForm(item) {
+  const levels = createLevels(item.endpoint);
+  return {
+    act: "create",
+    requestKey: newRequestKey(),
+    busy: false,
+    unconfirmed: false,
+    checkNote: "",
+    dirty: false,
+    errors: {},
+    error: "",
+    endpoint: item.endpoint,
+    name: item.name,
+    kind: item.kind || "",
+    unitWord: item.unitWord || "",
+    drillLocked: levels.drillLocked,
+    fieldId: null,
+    fieldName: item.name,
+    draft: { label: "", supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
+  };
+}
+
 export function openSourceFieldForm(act, { field, revision }) {
   return {
     act,
@@ -208,6 +246,16 @@ export function buildSourceFieldRequest(form) {
   const d = form.draft;
   const errors = {};
   const set = (field, message) => { if (message) errors[field] = message; };
+  if (form.act === "create") {
+    // The label is sent without the blanks around it; the server checks the same rule (one line, visible characters).
+    const label = String(d.label ?? "").trim();
+    set("label", !label ? "Required." : [...label].length > FIELD_LABEL_MAX ? `At most ${FIELD_LABEL_MAX} characters.` : /[\r\n\t]/.test(label) ? "One line." : "");
+    const supportsDrill = form.drillLocked ? true : d.supportsDrill === true;
+    const supportsSession = d.supportsSession === true;
+    if (!supportsSession && !supportsDrill) errors.levels = "Choose the session, the drill or both.";
+    if (Object.keys(errors).length) return { body: null, errors };
+    return { errors, body: { requestKey: form.requestKey, endpoint: form.endpoint, name: form.name, label, supportsSession, supportsDrill } };
+  }
   const evidenceRef = String(d.evidenceRef ?? "").trim();
   set("evidenceRef", evidenceError(evidenceRef));
   if (form.act === "unit") {
@@ -236,6 +284,8 @@ export function buildSourceFieldRequest(form) {
 const SETTLED_ON_CHECK = new Set([
   "invalid_body", "invalid_unit", "invalid_evidence_ref", "bound_unit_required", "bound_unit_not_allowed", "invalid_operator",
   "operator_required", "operator_not_allowed", "unit_already_verified", "meaning_already_verified", "revision_retired",
+  // Route C's refusals, decided from the body and the inventory before anything is written.
+  "name_not_observed", "name_not_supported", "shape_not_generic", "field_exists", "too_many_fields", "value_not_number",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
@@ -272,7 +322,21 @@ const ZONE_CODE_TEXT = {
   invalid_operator: "Not saved: a zone is either a closed zone (between) or the open top zone (>=).",
   operator_required: "Not saved: this revision is a zone, so its operator is confirmed together with the meaning. The revision is read again.",
 };
+// Route C's refusals (G1b), in the words of creating a field.
+const CREATE_CODE_TEXT = {
+  notFound: "It is not available in this workspace now. Whether the field was created is not known: open Source fields in the platform workspace to see.",
+  invalid_body: "Not created: the server refused a value. Check the name and the levels, and save again.",
+  name_not_observed: "Not created: GPEXE has not sent this name as a measured value. Find new sessions first.",
+  name_not_supported: "Not created: this GPEXE name cannot become a field.",
+  shape_not_generic: "Not created: only a number per athlete, or a whole-session or drill value with its unit, can become a field here.",
+  value_not_number: "Not created: GPEXE sends this name as something other than a number, so a check could not keep it.",
+  too_many_fields: "Not created: a check already keeps the most fields of this kind it can (64).",
+  try_again: "The server was busy. Nothing was created. Try again.",
+  internal_error: "The server could not create it. Nothing was created. Try again.",
+  request_key_reused: "An earlier save of this form may already be stored. Cancel and look at the source fields before saving again.",
+};
 export function sourceFieldCodeText(info, form = null) {
+  if (form?.act === "create") return CREATE_CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was created." : "No answer from the server.");
   if (form?.parameterKind === "zone_bounds" && ZONE_CODE_TEXT[info.code]) return ZONE_CODE_TEXT[info.code];
   return CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
 }
@@ -285,6 +349,9 @@ export const CLOSES_FORM = new Set([
 // The last question before a write-once act (OptiMove asks before every act
 // it cannot take back: Bind, Reconnect, Unbind).
 export function confirmQuestion(form, body) {
+  if (form.act === "create") {
+    return `Create the source field "${body.label}" from GPEXE's name ${body.name} (${ENDPOINT_LABEL[body.endpoint] || body.endpoint})? A field is kept: it cannot be removed here once it is created.`;
+  }
   const what = `${form.fieldName} (revision ${form.revisionNumber})`;
   const value = form.act === "unit"
     ? `as "${body.sourceUnit}"${body.sourceBoundUnit ? ` with bounds in "${body.sourceBoundUnit}"` : ""}`

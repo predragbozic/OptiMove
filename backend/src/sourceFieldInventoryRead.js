@@ -12,6 +12,8 @@
 import { refusal } from "./sourceMetricAccess.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { FIELD_ENDPOINTS, STRUCTURAL_FIELDS } from "./sourceFieldInventory.js";
+import { deriveField, FieldCreateRefusal, KEPT_VALUE_KINDS } from "./sourceFieldCreate.js";
+import { mayCreateFields } from "./sourceFieldCreateService.js";
 
 export const INVENTORY_PAGE_SIZE = 200;
 const STATES = new Set(["not_supported", "covered", "all"]);
@@ -84,7 +86,11 @@ const INVENTORY_SQL = `
            (array_agg(o.unit_word order by o.last_seen_at desc, o.source_connection_id) filter (where o.unit_word is not null))[1] as unit_word,
            sum(o.answers_seen)::bigint as answers,
            to_char(max(o.last_seen_at) at time zone 'UTC', 'YYYY-MM-DD') as last_seen_on,
-           count(distinct o.source_connection_id)::int as connections
+           count(distinct o.source_connection_id)::int as connections,
+           -- G1b: every observation of the name is a value kind a check keeps for its endpoint's shape.
+           bool_and(case when o.endpoint = 'athlete_session' then o.value_kind = any($9::text[])
+                         when o.endpoint in ('details.session', 'details.drill') then o.value_kind = any($10::text[])
+                         else false end) as kinds_kept
       from training_load.source_field_observations o
       join visible v on v.id = o.source_connection_id
      where o.api_family = 'rest_v1'
@@ -107,12 +113,25 @@ const INVENTORY_SQL = `
            ) as unit_known
       from grouped g
   )
-  select endpoint, field_name, kind, unit_word, unit_known, answers::text as answers, last_seen_on, connections, covered
+  select endpoint, field_name, kind, unit_word, unit_known, answers::text as answers, last_seen_on, connections, covered, kinds_kept
     from marked
    where ($3::text = 'all' or endpoint = '${THRESHOLDS}' or covered = ($3::text = 'covered'))
      and ($4::text is null or (endpoint collate "C", field_name collate "C") > ($4::text collate "C", $5::text collate "C"))
    order by endpoint collate "C", field_name collate "C"
    limit $6`;
+
+// Route C would create this name: not covered yet, a generic endpoint, a name route C derives a key from, and every
+// observation a value kind a check keeps. Route C decides again on the request.
+function creatable(row) {
+  if (row.covered !== false || row.kinds_kept !== true) return false;
+  try {
+    deriveField({ endpoint: row.endpoint, name: row.field_name, supportsSession: row.endpoint !== "details.drill", supportsDrill: true });
+    return true;
+  } catch (error) {
+    if (error instanceof FieldCreateRefusal) return false;
+    throw error;
+  }
+}
 
 export async function listFieldInventory({ ctx, query }) {
   const parsed = parseInventoryQuery(query, ctx);
@@ -122,8 +141,10 @@ export async function listFieldInventory({ ctx, query }) {
   const params = [
     platform ? null : ctx.owner.clubId, parsed.endpoint, parsed.state,
     parsed.after?.endpoint ?? null, parsed.after?.name ?? null, INVENTORY_PAGE_SIZE + 1,
-    STRUCTURAL_ENDPOINTS, STRUCTURAL_NAMES,
+    STRUCTURAL_ENDPOINTS, STRUCTURAL_NAMES, [...KEPT_VALUE_KINDS.number], [...KEPT_VALUE_KINDS.unit_value_object],
   ];
+  // G1b: whether route C would take this name (its own derivation, never a guess of the screen), for its audience only.
+  const mayCreate = mayCreateFields(ctx);
   const r = await boundedRead((client) => client.query(INVENTORY_SQL, params));
   const rows = r.rows.slice(0, INVENTORY_PAGE_SIZE);
   const fields = rows.map((row) => ({
@@ -135,6 +156,7 @@ export async function listFieldInventory({ ctx, query }) {
     lastSeenOn: row.last_seen_on,
     covered: row.covered,
     ...(platform ? { connectionCount: row.connections } : {}),
+    ...(mayCreate ? { creatable: creatable(row) } : {}),
   }));
   const last = rows[rows.length - 1];
   return { fields, nextCursor: r.rows.length > INVENTORY_PAGE_SIZE ? encodeCursor(ctx, parsed, { endpoint: last.endpoint, name: last.field_name }) : null };

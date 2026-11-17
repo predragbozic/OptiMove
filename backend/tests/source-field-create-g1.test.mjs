@@ -192,13 +192,32 @@ test("3. route C's refusals, each before anything is written: not generic, not o
   assert.equal((await one(`select count(*)::int n from training_load.source_metric_definitions`)).n, before);
 });
 
-test("4. route C's audience: a club admin and a platform admin in a club's workspace get the identical 404, before the body; no session is the app-wide 401", async () => {
+test("4. route C's audience: a club admin, a platform admin in a club's workspace, a team coach and an athlete get the identical 404, before the body - a JSON object, a text/plain body or an array alike; no session is the app-wide 401", async () => {
   const missing = await api("/no-such-route-g1", { cookie: W.pa.cookie });
-  for (const cookie of [W.ca.cookie, W.paClub.cookie]) {
+  // G1b (carry-overs 1 and 4): a coach of the club's team and an athlete, in their own workspaces.
+  const team = (await one(`insert into public.teams (club_id, name) values ($1,$2) returning id`, [W.club, `Team ${uid()}`])).id;
+  const coach = await user("coach");
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [coach, team]);
+  await workspace(coach, "team", team);
+  const athleteUser = await user("athlete");
+  const athlete = (await one(`insert into public.athletes (user_id, full_name, display_name, device_timezone) values ($1,$2,$2,'UTC') returning id`, [athleteUser, `Athlete ${uid()}`])).id;
+  await q(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [athlete, W.club, team]);
+  await workspace(athleteUser, "athlete", null);
+  const raw = async (cookie, contentType, text) => {
+    const res = await fetch(`${apiBase}${PREFIX}/fields`, { method: "POST", headers: { Cookie: cookie, "Content-Type": contentType }, body: text });
+    return { status: res.status, text: await res.text() };
+  };
+  const before = (await one(`select count(*)::int n from training_load.source_metric_definitions`)).n;
+  for (const [who, cookie] of [["club admin", W.ca.cookie], ["platform admin in a club", W.paClub.cookie], ["coach", await cookieFor(coach)], ["athlete", await cookieFor(athleteUser)]]) {
     const r = await api("/fields", { cookie, method: "POST", body: body({ name: "never_seen_either" }) });
-    assert.equal(r.status, 404);
-    assert.equal(r.text, missing.text, "byte for byte the answer of a missing route");
+    assert.equal(r.status, 404, who);
+    assert.equal(r.text, missing.text, `${who}: byte for byte the answer of a missing route`);
+    for (const [contentType, text] of [["text/plain", "not json"], ["application/json", JSON.stringify([body()])]]) {
+      const odd = await raw(cookie, contentType, text);
+      assert.deepEqual([odd.status, odd.text], [404, missing.text], `${who}, ${contentType}: the same 404 before the body is read`);
+    }
   }
+  assert.equal((await one(`select count(*)::int n from training_load.source_metric_definitions`)).n, before, "nothing written");
   const none = await api("/fields", { method: "POST", body: body() });
   assert.equal(none.status, 401);
 });
