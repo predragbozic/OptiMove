@@ -399,7 +399,7 @@ test("1. the audience: the club's admin and a platform admin in the club's works
 test("2. the board: the columns with their unit state, their reason and two athletes' raw values; the club's variables then OptiMove's; OptiMove's active mappings pre-placed; the pair named live and stable", async () => {
   const { board } = ok(await boardOf(W.caA, W.tA));
   assert.equal(board.displayRegistryVersion, 2, "2 since G1's as_sent rule");
-  assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId });
+  assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId, clubId: W.tA.clubId });
   assert.equal(board.session.candidateId, W.cA.id);
   assert.equal(new Date(board.session.startedAt).toISOString(), "2026-09-14T18:08:12.000Z");
   // The pair: the first two of the three named athletes, in the server's own order.
