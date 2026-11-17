@@ -1159,6 +1159,68 @@ test("17z. the invariant: every athlete read answers as if no estimate had ever 
   assert.deepEqual(await readsOf(present, users.present.cookie), before.present);
 });
 
+test("17y. what an athlete's reads rest on: an estimate's participant row and its occasions are written in one transaction (same created_at, same xmin); through a merged-away session nothing is written at all", async () => {
+  // The rows an estimate wrote for one athlete in one session: her activity participant row(s) and the estimate's occasions.
+  const written = async (activityId, athleteId) => ({
+    participants: (await admin.query(
+      `select ap.id, ap.activity_id, ap.created_at, ap.xmin::text as xmin from training.activity_participants ap
+        where ap.athlete_id = $2 and training.resolve_canonical_activity_id(ap.activity_id) = training.resolve_canonical_activity_id($1)`, [activityId, athleteId])).rows,
+    occasions: (await admin.query(
+      `select o.id, o.created_at, o.xmin::text as xmin, o.entry_method
+         from training.activity_participants ap
+         join training.activity_participant_metric_participant_links l on l.activity_participant_id = ap.id and l.link_status = 'confirmed'
+         join training_load.metric_measurement_occasions o on o.event_participant_id = l.metric_event_participant_id
+        where ap.athlete_id = $2 and training.resolve_canonical_activity_id(ap.activity_id) = training.resolve_canonical_activity_id($1)`, [activityId, athleteId])).rows,
+  });
+  const sameTransaction = (rows, what) => {
+    assert.equal(rows.participants.length, 1, `${what}: one participant row`);
+    assert.ok(rows.occasions.length > 0 && rows.occasions.every((o) => o.entry_method === "estimate"), `${what}: only the estimate's occasions`);
+    const p = rows.participants[0];
+    for (const o of rows.occasions) {
+      assert.equal(new Date(o.created_at).getTime(), new Date(p.created_at).getTime(), `${what}: the same created_at (what athleteOwnParticipationSql compares)`);
+      assert.equal(o.xmin, p.xmin, `${what}: written by the same transaction`);
+    }
+  };
+  const hiddenFor = async (athleteId, activityId, what) => {
+    const me = await athleteUser(athleteId, `${what} athlete`);
+    const res = await tapi(`/${activityId}`, { cookie: me.cookie });
+    const missing = await tapi(`/${crypto.randomUUID()}`, { cookie: me.cookie });
+    assert.deepEqual([res.status, res.text], [404, missing.text], `${what}: the session is not hers`);
+    assert.deepEqual((await tapi("/self", { cookie: me.cookie })).body, { hasRecordedSessions: false }, what);
+  };
+
+  // 1. An athlete who was not in the recording.
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9741, hour: 10, ids: [101, 102, 104] }));
+  const absent = team.athleteIds[EVA];
+  assert.deepEqual((await written(s.activityId, absent)).participants, [], "before: she has no participant row");
+  assert.equal((await save(team, s, { athleteId: absent, method: "team_average" })).status, 201);
+  sameTransaction(await written(s.activityId, absent), "not in the recording");
+  await hiddenFor(absent, s.activityId, "not in the recording");
+
+  // 2. The same through a merged-away session: the recording's session was merged into another one, and the coach
+  // estimates an absent athlete on the surviving session.
+  const other = await setupTeam();
+  const imported = await importSession(other, bundleOf({ sessionId: 9742, hour: 10, ids: [101, 102, 104] }));
+  const columns = (await admin.query(`select string_agg(quote_ident(column_name), ',') as c from information_schema.columns where table_schema = 'training' and table_name = 'activities' and column_name <> 'id' and is_generated = 'NEVER'`)).rows[0].c;
+  const survivor = String((await admin.query(`insert into training.activities (${columns}) select ${columns} from training.activities where id = $1 returning id`, [imported.activityId])).rows[0].id);
+  await admin.query("begin");
+  await admin.query(`select set_config('training.allow_supersede_write', 'on', true)`);
+  await admin.query(`update training.activities set superseded_by_activity_id = $2, lifecycle_state = 'superseded' where id = $1`, [imported.activityId, survivor]);
+  await admin.query("commit");
+  const absent2 = other.athleteIds[EVA];
+  // Today such an estimate cannot be written at all: the recording's event is linked to the merged-away session, and
+  // the database refuses a participant link on another one (the whole save rolls back; the coach is told nothing
+  // was saved). So no participant row exists for her - there is nothing an athlete read could show. Pinned as it is:
+  // if this save ever starts to succeed, the rows it writes must pass sameTransaction() here before it ships.
+  const saved = await save(other, { activityId: survivor }, { athleteId: absent2, method: "team_average" });
+  assert.deepEqual([saved.status, saved.body.error], [500, "internal_error"], saved.text);
+  const rows = await written(survivor, absent2);
+  assert.deepEqual([rows.participants, rows.occasions], [[], []], "nothing was written for her, on either session");
+  await hiddenFor(absent2, survivor, "through a merged-away session");
+  await hiddenFor(absent2, imported.activityId, "through a merged-away session, by the old id");
+});
+
 test("18. 6b-D: the dashboards leave an estimate out under every policy - all sources and calculated values included - and show it only under 'estimate', which shows estimates alone", async () => {
   const team = await setupTeam();
   const s = await importSession(team, bundleOf({ sessionId: 9721, hour: 10, ids: [101, 102, 104] }));

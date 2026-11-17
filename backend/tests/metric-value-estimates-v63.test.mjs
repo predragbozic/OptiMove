@@ -688,7 +688,11 @@ test("4c. M3 through the real import: a re-import that records the athlete super
   const rows = (await admin.query(`select fact_kind, detail from training.canonical_activity_results($1) where athlete_id = $2`, [s.activityId, athleteC])).rows;
   assert.ok(rows.length > 0, "the canonical reader shows athlete B's imported values");
   assert.equal(JSON.stringify(rows).includes("estimate"), false, "and no estimate");
-  assert.equal(JSON.stringify(rows).includes("1234"), false);
+  // The estimated number itself is in no value: compared on the value field, never as a substring of the whole row
+  // (a random id can contain "1234").
+  const values = rows.filter((x) => x.fact_kind === "metric_value");
+  assert.ok(values.length > 0);
+  assert.ok(values.every((x) => x.detail.entryMethod !== "estimate" && Number(x.detail.valueNumeric) !== 1234), "not the estimated value");
 });
 
 test("5. M3 lock order, both orders: an import writing the athlete's value and an estimate save serialize on the participant; whoever commits first wins, the other is refused or superseded, and nothing deadlocks", async () => {
