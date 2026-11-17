@@ -16,22 +16,24 @@ let requestBoundMs = 45_000;
 export function setTimezoneBoundForTests(ms) {
   requestBoundMs = ms;
 }
-function bounded(options = {}) {
+export function bounded(options = {}) {
   const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(requestBoundMs) : undefined;
   return signal ? { ...options, signal } : options;
 }
 
 const g = () => state.trainingLoad.gpexe;
-const path = (teamId) => `${BASE}/${encodeURIComponent(teamId)}/session-timezone`;
+// Shared with Settings > Source connections (source-connections-timezone.js): one path, one bound, one refusal rule.
+export const timezonePath = (teamId) => `${BASE}/${encodeURIComponent(teamId)}/session-timezone`;
+const path = timezonePath;
 
-function errorInfo(error) {
+export function timezoneErrorInfo(error) {
   return { status: error?.status ?? 0, code: error?.data?.error || "", message: error?.data?.message || "" };
 }
 
 // "Nothing was saved" only for the refusals the route itself gives before any write (PR #587), and the pool's busy answer.
 // Every other answer - no answer, a gateway, ANY other 5xx (the global handler's own 500 has a code too: a COMMIT whose
 // answer was lost lands there) - may have saved, so it is not confirmed (code review).
-function definiteRefusal(info) {
+export function definiteRefusal(info) {
   if (info.status === 400) return info.code === "reason_required" || info.code === "invalid_timezone";
   if (info.status === 409) return info.code === "gpexe_change_busy";
   if (info.status === 403 || info.status === 404) return true;
@@ -107,7 +109,7 @@ export async function openTimezone(render, gx = g()) {
   } catch (error) {
     if (gx.tz !== tz) return;
     tz.step = "readFailed";
-    tz.error = errorInfo(error);
+    tz.error = timezoneErrorInfo(error);
   }
   render();
 }
@@ -153,7 +155,7 @@ export async function saveTimezone(render, gx = g()) {
     tz.step = "saved";
   } catch (error) {
     if (gx.tz !== tz) return;
-    const info = errorInfo(error);
+    const info = timezoneErrorInfo(error);
     tz.error = info;
     tz.step = definiteRefusal(info) ? "open" : "unknown";
   }

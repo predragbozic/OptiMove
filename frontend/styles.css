@@ -18174,6 +18174,36 @@ p.muted.gpexe-approve-note {
   display: grid;
   gap: 10px;
 }
+/* A bound team's session time zone (after PR #587): its line and its form take the row's width. */
+.source-connections-bound-list li > div {
+  flex: 1 1 260px;
+}
+.source-connections-zone {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.source-connections-zone p {
+  margin: 0;
+}
+.source-connections-zone textarea {
+  font-family: inherit;
+}
+/* The row's ghost buttons are red for Unbind; the zone's Cancel is neutral, and only Clear keeps the warning colour. */
+.source-connections-zone .plain-button.ghost {
+  border-color: var(--line-strong);
+  color: inherit;
+}
+.source-connections-zone .plain-button.ghost[data-action="source-connections-zone-clear"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* With the time zone in it, a row is taller: Unbind stays at the top, beside the team's name. */
+.source-connections-bound-list li {
+  align-items: flex-start;
+}
 .source-connections-attempt > p,
 .source-connections-bound > p,
 .source-connections-teams p {

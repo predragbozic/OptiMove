@@ -11,7 +11,9 @@
 //   * undo (undoImport): requestKey (a UUID chosen by the client for this one undo) makes it idempotent; the COMMIT is
 //     awaited at most 15 s and once sent the answer never says "nothing was removed": an unanswered one is
 //     `503 outcome_unknown`, and repeating the same request returns the saved outcome.
-// The first version is for an active platform admin only (J19-U5 section 9, Q1); the route decides the audience.
+// The first version was for an active platform admin only (J19-U5 section 9, Q1). Since v76 (the owner's decision of
+// 2026-11-17) whoever may approve an import of the team may undo one: the route decides the audience from the approval
+// right, and the database function derives it again under its locks (lock_gpexe_session_undo_right).
 //
 // v60 (O1 of J20): the undo also removes the session's roster work. What the import itself wrote (requests with origin
 // 'import') never blocks; LATER roster work (the Roster tab) is removed only with the fingerprint of exactly the list
@@ -51,13 +53,13 @@ const SENTENCES = {
   event_team_mismatch: [409, "The stored import does not belong to this team; contact a platform administrator."],
   event_session_mismatch: [409, "The stored import does not match this session; contact a platform administrator."],
   two_events_for_session: [409, "Two imports exist for this session. They have to be resolved by a platform administrator first."],
-  manual_occasion: [409, "Some results of this session were corrected by hand. Removing hand-entered values is a separate decision."],
+  manual_occasion: [409, "Some results of this session were entered by hand, so its imported data cannot be deleted here. Ask a platform administrator to delete it."],
   shared_activity: [409, "This session's activity also holds data from another source, so it cannot be removed here."],
   other_event_link: [409, "This session's activity is also linked to another event, so it cannot be removed here."],
-  entangled_activity: [409, "This session's activity was merged or moved, so it cannot be removed here."],
+  entangled_activity: [409, "This session was merged with another session, so its imported data cannot be deleted here. Ask a platform administrator to delete it."],
   roster_work_needs_confirmation: [409, "Coaches changed this session's attendance after the import. Confirm that these later changes are removed too, then undo again."],
   roster_work_changed: [409, "The session's attendance changed since you reviewed it. Nothing was removed. Review the undo again."],
-  calendar_link_exists: [409, "This session is attached to a calendar event. Remove it from the calendar event first, then undo the import."],
+  calendar_link_exists: [409, "This session is attached to a calendar event. Remove it from the calendar event first, then delete it again."],
   manual_write_request_exists: [409, "A manual entry refers to this session's data, so it cannot be removed here."],
   referenced_elsewhere: [409, "Other records still refer to this session's data. Nothing was removed."],
   request_key_reused: [409, "This request key was used for a different undo. Start the undo again."],
@@ -68,7 +70,8 @@ function parseDetail(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-function mapDatabaseError(error) {
+// Exported for the tests: the mapping a refusal of the database function takes to the HTTP answer.
+export function mapDatabaseError(error) {
   if (error instanceof GpexeImportServiceError) return error;
   const message = String(error?.message || "");
   if (error?.code === "55000" && message.startsWith("session_undo:")) {
@@ -217,6 +220,35 @@ function shapeResult(row) {
 }
 
 // The read-only scope: what the undo would remove, or the refusal it would raise. Nothing is kept.
+// v76: the imported candidate behind an activity of this team (the calendar and Activities open the undo from a session):
+// the activity's whole alias set, the import events it reaches (a direct link or its participants' metric links), and the
+// newest approval of this team whose candidate is imported and not undone. Null when there is none - the route answers the
+// identical 404. A read only; the undo itself decides everything again.
+export async function importCandidateOfActivity(teamId, activityId) {
+  const row = (await pool.query(
+    `with act as (
+       select aa.activity_id from training.activity_alias_ids(training.resolve_canonical_activity_id($2::uuid)) aa
+     ), ev as (
+       select l.metric_event_id as event_id from training.activity_metric_event_links l where l.activity_id in (select activity_id from act)
+       union
+       select p.event_id
+         from training.activity_participants ap
+         join training.activity_participant_metric_participant_links mpl on mpl.activity_participant_id = ap.id
+         join training_load.metric_event_participants p on p.id = mpl.metric_event_participant_id
+        where ap.activity_id in (select activity_id from act)
+     )
+     select c.id
+       from training_load.gpexe_import_approvals a
+       join training_load.gpexe_import_candidates c on c.id = a.candidate_id
+      where a.metric_event_id in (select event_id from ev)
+        and a.owner_team_id = $1 and c.owner_team_id = $1 and c.status = 'imported' and c.import_undone_at is null
+      order by a.approved_at desc, c.id desc
+      limit 1`,
+    [teamId, activityId],
+  )).rows[0];
+  return row ? String(row.id) : null;
+}
+
 export async function undoPreview(teamId, candidateId, { userId }) {
   let preview;
   try {

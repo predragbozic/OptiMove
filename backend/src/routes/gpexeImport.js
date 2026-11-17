@@ -160,6 +160,9 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     viewer: {
       canApprove: approval.canApprove, hasApprovalRight: approval.hasRight, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin,
       ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}),
+      // v76: whether this viewer may delete (undo) an imported session of the team - the approval right's basis, whatever
+      // the switch. Only when true; the undo routes and the database decide again.
+      ...(approval.basis ? { undoImport: true } : {}),
       // Whether this viewer may read and set the team's session time zone (a platform admin; the team's own club admin in
       // that club's workspace). Only when true, as identityAdmin; the session-timezone routes decide again.
       ...(sessionTimezoneBasis(req, access) ? { sessionTimezoneAdmin: true } : {}),
@@ -598,17 +601,31 @@ router.get("/teams/:teamId/athlete-pair-suggestions", async (req, res, next) => 
   }
 });
 
-// U5 (J19-U5, v57): the in-app undo of one imported session. The first version is for an active platform admin only
-// (the owner's Q1; the final state, whoever may make athlete links, is a second step): everyone else - the club's admin
-// and a coach included - gets the identical 404, as for a missing candidate. The database function derives and locks the
-// right again.
-async function undoAccess(req, res) {
+// U5 (J19-U5, v57): the in-app undo of one imported session. Since v76 (the owner's decision of 2026-11-17) whoever may
+// approve an import of the team may undo one - the approval right's basis (platform_admin, team_grant, and club_admin /
+// team_coach in mode 'team'), without the switch's on/off, so a wrong import stays deletable with the switch off. Everyone
+// else gets the identical 404, as for a missing candidate. The database function derives and locks the right again.
+async function undoBasis(req, access) {
+  return (await canApproveGpexeImport({ query }, req.user.id, access.teamId)).basis;
+}
+async function undoAccess(req, res, param = "candidateId") {
   const access = await teamAccess(req, res);
   if (!access) return null;
-  if (identity.identityAdminBasis(req, access) !== "platform_admin") { notFound(res); return null; }
-  if (!UUID.test(req.params.candidateId)) { notFound(res); return null; }
+  if (!(await undoBasis(req, access))) { notFound(res); return null; }
+  if (!UUID.test(req.params[param])) { notFound(res); return null; }
   return access;
 }
+
+// v76: the import behind a session of the calendar or Activities, so the undo can be opened from the session itself. A
+// read only: { importUndo: { candidateId } }, or the identical 404 (no right, not imported, already undone, another team).
+router.get("/teams/:teamId/activities/:activityId/import-undo", handle(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const access = await undoAccess(req, res, "activityId");
+  if (!access) return;
+  const candidateId = await sessionUndo.importCandidateOfActivity(access.teamId, req.params.activityId);
+  if (!candidateId) return notFound(res);
+  res.json({ importUndo: { candidateId } });
+}));
 
 router.get("/teams/:teamId/candidates/:candidateId/undo-preview", handle(async (req, res) => {
   res.set("Cache-Control", "no-store");

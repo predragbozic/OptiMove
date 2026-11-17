@@ -20,6 +20,7 @@
 // write sets its busy flag before its first await.
 import { api } from "./api.js";
 import { state } from "./state.js";
+import { loadTeamZones, zoneWriteHeld } from "./source-connections-timezone.js";
 
 export const SOURCE_SYSTEM = "gpexe";
 export const SOURCE_NAME = "GPEXE";
@@ -162,6 +163,7 @@ function resetClubState(clubId) {
   d.teamsOpen = "";
   d.unconfirmed = null;
   d.staleAfterWrite = "";
+  d.zones = {};
   resetSourceConnectionsForms();
 }
 
@@ -206,7 +208,7 @@ export function loadedForActiveClub() {
 // the screen now would lose the only view of that outcome.
 export function writeInFlight() {
   const d = sc();
-  return Boolean(d.pairBusy || d.createBusy || d.credentialBusy || d.testBusy || d.bindBusy || d.unbindBusy || d.checkBusy || d.unconfirmed);
+  return Boolean(d.pairBusy || d.createBusy || d.credentialBusy || d.testBusy || d.bindBusy || d.unbindBusy || d.checkBusy || d.unconfirmed) || zoneWriteHeld();
 }
 
 export async function selectSourceConnectionsClub(clubId, render) {
@@ -248,6 +250,8 @@ export async function loadSourceConnections(render) {
       render();
     }
   }
+  // Each bound team's session time zone, once the list is on screen (a helper read: its failure never hides the list).
+  if (generation === d.generation && d.connections) await loadTeamZones(render);
 }
 
 function replaceConnection(connection) {

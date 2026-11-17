@@ -31,6 +31,7 @@ import {
   writeInFlight,
 } from "./source-connections-data.js";
 import { validateFilterableSelects } from "./organization-select.js";
+import { cancelZoneForm, checkZone, handleZoneInput, loadTeamZones, openZoneForm, retryZone, saveZone } from "./source-connections-timezone.js";
 import { state } from "./state.js";
 
 function sc() {
@@ -49,12 +50,41 @@ function clearNotice(d) {
   d.ended = null;
 }
 
-export async function handleSourceConnectionsAction(action, { render, openDataSources } = {}) {
+// The bound teams can change with a write (a bind, an Unbind, a Test or Reconnect answer): a team that has no session time
+// zone line yet gets its read then (code review).
+export async function handleSourceConnectionsAction(action, ctx = {}) {
+  const handled = await handleSourceConnectionsActionInner(action, ctx);
+  if (handled && !String(action?.dataset?.action || "").startsWith("source-connections-zone-") && state.sourceConnections.connections && ctx.render) await loadTeamZones(ctx.render, { onlyMissing: true });
+  return handled;
+}
+
+export { handleZoneInput as handleSourceConnectionsInput };
+
+async function handleSourceConnectionsActionInner(action, { render, openDataSources } = {}) {
   const type = action.dataset.action;
   if (!type || !type.startsWith("source-connections-")) return false;
   const d = sc();
   const connectionId = action.dataset.connectionId || "";
 
+  // The session time zone of a bound team (source-connections-timezone.js; the server decides on every request).
+  if (type === "source-connections-zone-change" || type === "source-connections-zone-clear") {
+    // One form at a time on the whole screen: not while another connection's form is open either (code review).
+    if (writeInFlight() || d.createOpen || d.credentialOpen || d.bindReview || d.pairReview || d.unbindOpen) return true;
+    if (openZoneForm(action.dataset.teamId, type === "source-connections-zone-clear" ? "clear" : "change")) render();
+    return true;
+  }
+  if (type === "source-connections-zone-cancel") {
+    if (cancelZoneForm(action.dataset.teamId)) render();
+    return true;
+  }
+  if (type === "source-connections-zone-check") {
+    await checkZone(String(action.dataset.teamId), render);
+    return true;
+  }
+  if (type === "source-connections-zone-retry") {
+    await retryZone(action.dataset.teamId, render);
+    return true;
+  }
   if (type === "source-connections-create-open") {
     if (writeInFlight()) return true;
     resetSourceConnectionsForms();
@@ -198,6 +228,11 @@ function clearField(form, name) {
 }
 
 export async function submitSourceConnectionsForm(form, { render }) {
+  await submitSourceConnectionsFormInner(form, { render });
+  if (form?.dataset?.sourceConnectionsForm !== "zone" && state.sourceConnections.connections) await loadTeamZones(render, { onlyMissing: true });
+}
+
+async function submitSourceConnectionsFormInner(form, { render }) {
   const kind = form.dataset.sourceConnectionsForm;
   const d = sc();
 
@@ -258,6 +293,13 @@ export async function submitSourceConnectionsForm(form, { render }) {
     } finally {
       username = password = "";
     }
+    return;
+  }
+
+  if (kind === "zone") {
+    // One write at a time: never while another write of this screen runs or waits for its check (code review).
+    if (writeInFlight()) return;
+    await saveZone(String(form.dataset.teamId), { timezone: fieldValue(form, "timezone"), reason: fieldValue(form, "reason") }, render);
     return;
   }
 
