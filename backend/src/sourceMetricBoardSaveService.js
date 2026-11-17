@@ -18,7 +18,7 @@
 import { adminWriteKit, classifyDatabaseError, SourceMetricMappingError, STATEMENT_TIMEOUT_MS } from "./sourceMetricMappingService.js";
 import { bindingClubHolds } from "./sourceMetricAccess.js";
 import { lockHides, lockListedBindings } from "./sourceMetricActivationSteps.js";
-import { boardKit, mayUseBoard } from "./sourceMetricBoardService.js";
+import { boardKit, isSystemBoard, mayUseBoard } from "./sourceMetricBoardService.js";
 import { DISPLAY_REGISTRY_VERSION } from "./sourceMetricBoard.js";
 
 const { runWrite, rightsStillHold, refusal, NOT_FOUND, plainObject, uuidField, hashOf } = adminWriteKit;
@@ -183,6 +183,7 @@ function evaluate(world, pairIndex, rows) {
 // ---------------------------------------------------------------------------
 async function savedConfirmation(executor, ctx, operationId) {
   if (!mayUseBoard(ctx)) return null;
+  if (isSystemBoard(ctx)) return savedSystemSave(executor, operationId);
   const c = (await executor.query(
     `select c.id, c.team_id, c.confirmed_at
        from training_load.source_metric_confirmations c
@@ -204,6 +205,32 @@ async function savedConfirmation(executor, ctx, operationId) {
     [operationId],
   )).rows;
   return { confirmation: { id: c.id, teamId: c.team_id, confirmedAt: c.confirmed_at, rows } };
+}
+
+// S: a platform-board save stores no confirmation (the Rukovodilac's (a1), 2026-11-17): its answer is the starts of
+// its operation, on a team that is still active in an active club, under FOR SHARE. Anything else is null (the
+// identical 404).
+async function savedSystemSave(executor, operationId) {
+  const starts = (await executor.query(
+    `select a.source_metric_definition_id as "fieldId", a.metric_definition_id as "variableId", a.mapping_id as "mappingId",
+            a.mapping_version_id as "versionId", a.id as "activationId", a.requirement, a.team_id, a.activated_at
+       from training_load.source_metric_audit e
+       join training_load.source_metric_mapping_activations a on a.id = e.activation_id
+       join training_load.source_metric_mappings m on m.id = a.mapping_id and m.owner_scope = 'system'
+      where e.operation_id = $1 and e.action = 'activation_start'
+      order by a.mapping_version_id`,
+    [operationId],
+  )).rows;
+  if (starts.length === 0) return null;
+  const teamId = starts[0].team_id;
+  const team = (await executor.query(
+    `select t.id from public.teams t join public.clubs cl on cl.id = t.club_id
+      where t.id = $1 and coalesce(t.is_active, true) and coalesce(cl.is_active, true) for share of t, cl`,
+    [teamId],
+  )).rows[0];
+  if (!team) return null;
+  const rows = starts.map(({ team_id: _t, activated_at: _a, ...row }) => row);
+  return { confirmation: { id: null, owner: "system", teamId, confirmedAt: starts[0].activated_at, rows } };
 }
 
 const SAVE_REQUESTS = Object.freeze({
@@ -274,14 +301,15 @@ export async function saveConfirmation({ ctx, body }) {
   if (!Number.isInteger(body.pair) || body.pair < 0 || body.pair > 9999) throw invalid();
   const pairIndex = body.pair;
   const rows = rowsOf(body.rows);
-  const requestHash = hashOf({ op: "mapping_confirmation", teamId, candidateId, pair: pairIndex, rows: rows.map(identityOf) });
+  // S: the platform board writes OptiMove's mappings and stores no confirmation; its request record is its last start.
+  const system = isSystemBoard(ctx);
+  const requestHash = hashOf({ op: system ? "board_system_save" : "mapping_confirmation", teamId, candidateId, pair: pairIndex, rows: rows.map(identityOf) });
 
   return runWrite({
-    ctx, where: "board_save", requestKey, requestHash, action: "mapping_confirmation", requests: SAVE_REQUESTS, classify: classifySaveError,
+    ctx, where: "board_save", requestKey, requestHash, action: system ? "activation_start" : "mapping_confirmation", requests: SAVE_REQUESTS, classify: classifySaveError,
     idsOf: (written) => ({ confirmationId: written.confirmation_id ?? null }),
     reread: (executor, record) => savedConfirmation(executor, ctx, record.operation_id),
     body: async (client, operationId) => {
-      const clubId = ctx.owner.clubId;
       const actor = [ctx.userId, ctx.basis];
       const audit = (action, columns, values) => client.query(
         `insert into training_load.source_metric_audit (action, ${columns.join(", ")}, performed_by_user_id, basis, operation_id)
@@ -292,6 +320,10 @@ export async function saveConfirmation({ ctx, body }) {
       // Steps 5 and 6: plain reads, and the recompute. A stale or refused row
       // is answered here, before any lock.
       const seen = await loadWorld(client, ctx, { teamId, candidateId });
+      // The team's club (the workspace's on a club board; the chosen team's on the platform board) and the owner of
+      // the mappings this save writes (J1: the workspace's).
+      const clubId = seen.clubId;
+      const ownerSql = system ? `m.owner_scope = 'system' and $3::uuid is not null /* $3 unused: OptiMove's mappings have no club */` : `m.owner_scope = 'club' and m.owner_club_id = $3::uuid`;
       // Every listed activation is one of this binding (open or not): any other id is the identical 404.
       const replaced = [...new Set(rows.flatMap((r) => r.replaces))].sort();
       if (replaced.length > 0) {
@@ -305,7 +337,7 @@ export async function saveConfirmation({ ctx, body }) {
         `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
            from training_load.source_metric_mappings m
           where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))
-            and m.owner_scope = 'club' and m.owner_club_id = $3::uuid`,
+            and ${ownerSql}`,
         [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId), clubId],
       )).rows.map((m) => [`${m.field_id}:${m.variable_id}`, m.id]));
       await hold(client, "before_locks");
@@ -362,7 +394,8 @@ export async function saveConfirmation({ ctx, body }) {
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (!(await bindingClubHolds(client, [clubId]))) throw NOT_FOUND();
       await hold(client, "before_hide_locks");
-      await lockHides(client, first.plan.filter((p) => p.system).map((p) => ({ clubId, definitionId: p.variableId })));
+      // On the platform board every row is an OptiMove variable (S): the team's club's hide of each is locked too.
+      await lockHides(client, first.plan.filter((p) => p.system || system).map((p) => ({ clubId, definitionId: p.variableId })));
       // Last, one save at a time per binding: two admins' saves with crossed rows would otherwise meet on T5's
       // open-row indexes in two orders (40P01). Only a save takes this key, after its last row lock, so it adds no
       // cycle; the second save then reads what the first wrote and answers board_changed.
@@ -373,7 +406,7 @@ export async function saveConfirmation({ ctx, body }) {
       if (locked.get(seen.team.binding_id).state !== "active") throw refusal(409, "binding_not_active", MESSAGES.binding_not_active);
       const boardChanged = () => refusal(409, "board_changed", MESSAGES.board_changed);
       const world = await loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing: boardChanged });
-      if (world.team.binding_id !== seen.team.binding_id) throw refusal(409, "binding_not_active", MESSAGES.binding_not_active);
+      if (world.team.binding_id !== seen.team.binding_id || world.clubId !== clubId) throw refusal(409, "binding_not_active", MESSAGES.binding_not_active);
       if (world.candidate.bundle_hash !== seen.candidate.bundle_hash || world.candidate.last_seen_check_id !== seen.candidate.last_seen_check_id
           || world.candidate.status !== seen.candidate.status) throw boardChanged();
       const ended = ending.findIndex((e) => e.ended_at !== null);
@@ -383,7 +416,7 @@ export async function saveConfirmation({ ctx, body }) {
         `select m.id, m.source_metric_definition_id as field_id, m.metric_definition_id as variable_id
            from training_load.source_metric_mappings m
           where (m.source_metric_definition_id, m.metric_definition_id) in (select * from unnest($1::uuid[], $2::uuid[]))
-            and m.owner_scope = 'club' and m.owner_club_id = $3::uuid`,
+            and ${ownerSql}`,
         [first.plan.filter((p) => p.kind === "new").map((p) => p.fieldId), first.plan.filter((p) => p.kind === "new").map((p) => p.variableId), clubId],
       )).rows;
       if (nowExisting.length !== existing.size) throw boardChanged();
@@ -405,8 +438,8 @@ export async function saveConfirmation({ ctx, body }) {
         if (!p.mappingId) {
           p.mappingId = (await client.query(
             `insert into training_load.source_metric_mappings (source_metric_definition_id, source_system, api_family, metric_definition_id, owner_scope, owner_club_id, created_by_user_id)
-             select d.id, d.source_system, d.api_family, $2, 'club', $3, $4 from training_load.source_metric_definitions d where d.id = $1 returning id`,
-            [p.fieldId, p.variableId, clubId, ctx.userId],
+             select d.id, d.source_system, d.api_family, $2, $5, $3, $4 from training_load.source_metric_definitions d where d.id = $1 returning id`,
+            [p.fieldId, p.variableId, system ? null : clubId, ctx.userId, system ? "system" : "club"],
           )).rows[0].id;
           await audit("mapping_create", ["mapping_id"], [p.mappingId]);
         }
@@ -448,8 +481,12 @@ export async function saveConfirmation({ ctx, body }) {
       }
       // Step 16.3: the confirmation, its session, its rows. The database sets
       // the time and the expiry, computes each digest and checks each stored
-      // value against the raw one.
-      const confirmationId = (await client.query(
+      // value against the raw one. Not on the platform board (S, (a1)): its
+      // comparison was ticked (rowsOf refuses a new row without it) and is
+      // named in the starts' reason, but not stored.
+      let confirmationId = null;
+      if (!system) {
+      confirmationId = (await client.query(
         `insert into training_load.source_metric_confirmations
            (operation_id, kind, owner_scope, owner_club_id, binding_id, team_id, credential_connection_id, confirmed_by_user_id, confirmed_basis,
             confirmed_at, attested, display_registry_version, values_expire_at)
@@ -484,6 +521,7 @@ export async function saveConfirmation({ ctx, body }) {
         );
       }
       await client.query(`set local statement_timeout = '${STATEMENT_TIMEOUT_MS}ms'`);
+      }
       // Step 16.4: each new version becomes active (the gate reads its row above).
       for (const p of fresh) {
         await client.query(
@@ -495,7 +533,7 @@ export async function saveConfirmation({ ctx, body }) {
       }
       // Step 16.5: the starts on the one binding, ascending version id.
       const starting = [...plan].sort((a, b) => (a.versionId < b.versionId ? -1 : 1));
-      for (const p of starting) {
+      for (const [index, p] of starting.entries()) {
         const reason = p.kind === "new" ? SAVE_REASONS.checked : p.system ? SAVE_REASONS.system : SAVE_REASONS.club;
         const activationId = (await client.query(
           `insert into training_load.source_metric_mapping_activations
@@ -506,8 +544,14 @@ export async function saveConfirmation({ ctx, body }) {
              from training_load.source_metric_mapping_versions v where v.id = $1 returning id`,
           [p.versionId, world.team.binding_id, world.team.id, p.row.requirement, ...actor, reason],
         )).rows[0].id;
-        await audit("activation_start", ["mapping_version_id", "activation_id", "team_id", "reason"], [p.versionId, activationId, world.team.id, reason]);
+        // On the platform board the last start is the keyed request record (as S1's start is), since no confirmation is stored.
+        if (system && index === starting.length - 1) {
+          await audit("activation_start", ["mapping_version_id", "activation_id", "team_id", "reason", "request_key", "request_hash"], [p.versionId, activationId, world.team.id, reason, requestKey, requestHash]);
+        } else {
+          await audit("activation_start", ["mapping_version_id", "activation_id", "team_id", "reason"], [p.versionId, activationId, world.team.id, reason]);
+        }
       }
+      if (system) return { operation_id: operationId, confirmation_id: null };
       // Step 16.6: the keyed request record, last.
       await client.query(
         `insert into training_load.source_metric_audit (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash)
