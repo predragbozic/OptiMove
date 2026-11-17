@@ -9,6 +9,9 @@ import { estimateLabelFor, readEstimateLabels } from "./estimateLabels.js";
 import { query } from "./db.js";
 import { activityReadScopeSqlForWorkspace, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
 
+// An estimated value (migration v63): never part of an athlete's own read.
+export const isEstimateFact = (fact) => fact?.factKind === "metric_value" && fact.detail?.entryMethod === "estimate";
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function httpError(status, message) {
@@ -72,7 +75,13 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
   // own facts only", so that narrowing happens here, not in the route.
   // The link-only facts (no athlete: which metric event or segment the activity is linked to) are the staff's
   // bookkeeping and are not hers either.
-  const scoped = readContext.isAthleteSelf ? facts.filter((f) => f.athleteId !== null && String(f.athleteId) === String(readContext.athleteId)) : facts;
+  // And an estimate is not hers to see at all (owner, 2026-11-16: "the athlete sees only data that was really
+  // measured; there are no estimates on the athlete's side"): dropped here, on the server, before anything is built
+  // from her facts - no value, no label, no name of its variable, no trace that one exists. A value a coach entered by
+  // hand as a measurement (entry method manual) is a measured value and stays.
+  const scoped = readContext.isAthleteSelf
+    ? facts.filter((f) => f.athleteId !== null && String(f.athleteId) === String(readContext.athleteId) && !isEstimateFact(f))
+    : facts;
   const canonicalActivityId = results.rows[0]?.canonical_activity_id || (await query(`select training.resolve_canonical_activity_id($1) as id`, [activityId])).rows[0].id;
 
   // Training Load Frontend 3A — compatible, additive extension: the
@@ -173,11 +182,8 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
     const namesLower = new Map(Object.entries(athleteNamesById).map(([id, name]) => [String(id).toLowerCase(), name]));
     for (const fact of estimateFacts) {
       const estimate = estimateLabelFor(labels.get(String(fact.detail?.occasionId)), (id) => namesLower.get(String(id).toLowerCase()) ?? null);
-      // An athlete reading their own results gets the method, the author and the date only: no basis number (a team
-      // average's athlete count is team information) and never the copy source.
-      if (estimate) fact.estimate = readContext.isAthleteSelf
-        ? { method: estimate.method, estimatedBy: estimate.estimatedBy, estimatedAt: estimate.estimatedAt }
-        : estimate;
+      // A coach's read only: an athlete's facts hold no estimate by now (dropped above).
+      if (estimate) fact.estimate = estimate;
     }
   }
 
@@ -188,7 +194,8 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
 // ---- what an athlete gets of her own results (owner's decision 2026-11-16: all of them, read-only, nobody else's) ----
 // A fixed list of fields per kind of fact; whatever the canonical read adds later reaches her only when it is added
 // here. Not hers: ids of occasions, sources, versions and alias participants (import bookkeeping), how a value was
-// entered unless it is an estimate, a note or a prescription on a performed component, the link-only facts.
+// entered, an estimated value (not shown to her at all), a note or a prescription on a performed component, the
+// link-only facts.
 const SELF_DETAIL = Object.freeze({
   metric_value: ["metricDefinitionId", "valueNumeric", "valueBoolean", "valueText", "unitAtCapture"],
   rpe: ["rpe", "durationMinutes", "srpe"],
@@ -213,12 +220,13 @@ export function athleteSelfFact(fact, place = () => ({ componentId: null, drillO
     // Which drill, as a key that says nothing: two drills are two keys even when neither has a component.
     detail.drillKey = segmentId ? crypto.createHash("sha256").update(`athlete-drill|${segmentId}`).digest("hex").slice(0, 16) : null;
     // A key for a row on the screen, the same on every read, that says nothing: two values of one variable in one
-    // place (a re-measurement, an estimate beside a measurement) are told apart by it.
+    // place (a re-measurement) are told apart by it.
     detail.valueKey = crypto.createHash("sha256").update(`athlete-value|${fact.detail?.occasionId ?? ""}|${fact.detail?.metricDefinitionId ?? ""}`).digest("hex").slice(0, 16);
-    if (fact.detail?.entryMethod === "estimate") detail.entryMethod = "estimate";
   }
+  // No word about how a value was entered and no estimate label: an estimate never reaches this function's caller
+  // (it is dropped from her facts first), and a fact that is one is refused here as well.
+  if (isEstimateFact(fact)) return null;
   const out = { factKind: fact.factKind, detail };
-  if (fact.estimate) out.estimate = { method: fact.estimate.method, estimatedBy: fact.estimate.estimatedBy, estimatedAt: fact.estimate.estimatedAt };
   return out;
 }
 // Her own attendance in a session: a value of hers means she took part (whatever an older decision says - the coach
@@ -295,7 +303,8 @@ async function athleteSelfResults({ canonicalActivityId, facts, components, athl
 }
 
 // How HER values of a session came to be recorded, for an athlete: by a device (an imported value), by a coach
-// (entered by hand or estimated), or neither (no value of hers: a planned or rated session). Never the source's name.
+// (entered by hand as a measurement), or neither (no measured value of hers: a planned or rated session, or one
+// where her only values are estimates). Never the source's name.
 // Read from her own effective values, not from the activity's origin, which does not tell the two apart.
 export function recordedByOf({ device, any }) {
   if (device) return "device";
@@ -310,12 +319,13 @@ export function recordedBySql(participantIdSql) {
             join training_load.metric_measurement_occasions o on o.event_participant_id = mpl.metric_event_participant_id
             join training_load.metric_values v on v.occasion_id = o.id
            where mpl.activity_participant_id in (select pa.participant_id from training.participant_alias_ids(${participantIdSql}) pa) and mpl.link_status = 'confirmed'
-             and o.superseded_by_occasion_id is null and o.import_conflict_status is null
+             and o.superseded_by_occasion_id is null and o.import_conflict_status is null and o.entry_method <> 'estimate'
              and (o.source_identity_id is null or exists (select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id)))`;
 }
 
 // Whether she has at least one recorded session (owner, 2026-11-16: "My training" is shown only then): she is a
-// participant of a session that holds recorded values - a device's, or entered or estimated by a coach - hers or
+// participant of a session that holds measured values - a device's, or entered by hand by a coach; never an
+// estimate (a session whose only values are estimates does not count) - hers or
 // another participant's of that same session ("you took part; no data of yours was recorded" is such a session). A
 // planned session she only rated does not count. One boolean: no count, no date, the same answer for every reason
 // she has none. Sessions on a team or club archived later count (her history stays hers).
@@ -326,6 +336,15 @@ export async function athleteHasRecordedSessions(athleteId) {
          from training.activity_participants ap
          join training.activities a on a.id = ap.activity_id
         where ap.athlete_id = $1 and ap.merge_status = 'canonical' and a.lifecycle_state <> 'superseded'
+          -- A session whose only values of HERS are estimates does not count (the Rukovodilac's rule, 2026-11-16).
+          and not exists (
+            select 1
+              from training.participant_alias_ids(ap.id) pa
+              join training.activity_participant_metric_participant_links ml on ml.activity_participant_id = pa.participant_id and ml.link_status = 'confirmed'
+              join training_load.metric_measurement_occasions eo on eo.event_participant_id = ml.metric_event_participant_id
+              join training_load.metric_values ev on ev.occasion_id = eo.id
+             where eo.superseded_by_occasion_id is null and eo.import_conflict_status is null
+            having bool_or(eo.entry_method = 'estimate') and not bool_or(eo.entry_method <> 'estimate'))
           and exists (
             select 1
               from training.activity_alias_ids(a.id) aa
@@ -333,7 +352,7 @@ export async function athleteHasRecordedSessions(athleteId) {
               join training.activity_participant_metric_participant_links mpl on mpl.activity_participant_id = ap2.id and mpl.link_status = 'confirmed'
               join training_load.metric_measurement_occasions o on o.event_participant_id = mpl.metric_event_participant_id
               join training_load.metric_values v on v.occasion_id = o.id
-             where o.superseded_by_occasion_id is null and o.import_conflict_status is null
+             where o.superseded_by_occasion_id is null and o.import_conflict_status is null and o.entry_method <> 'estimate'
                and (o.source_identity_id is null or exists (select 1 from training_load.metric_source_identities si where si.id = o.source_identity_id and si.current_occasion_id = o.id)))
      ) as has`,
     [athleteId],

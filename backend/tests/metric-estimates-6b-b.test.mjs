@@ -990,35 +990,87 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
     for (const f of read.body.facts.filter((x) => x.detail?.entryMethod !== "estimate")) assert.ok(!("estimate" in f), "no estimate field on another fact");
   }
 
-  // Eva reads her own results: the copy is labelled by its method only, never whose values were copied.
+  // An athlete sees only what was really measured (owner, 2026-11-16): no estimate on her side - no value, no label,
+  // no method, no name of its variable, no trace that one exists - on every read her session can reach.
+  const day = (await admin.query(`select occurred_local_date::text d from training.activities where id = $1`, [s.activityId])).rows[0].d;
+  const mapi = (path, opts) => call("/api/training-load/metrics", path, opts);
+  const estimateOccasions = async (athleteId) => (await admin.query(
+    `select o.id from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.athlete_id = $1 and o.entry_method = 'estimate'`, [athleteId])).rows.map((r) => String(r.id));
+  const TRACES = ["estimate", "copy_athlete", "proportional", "team_average", "estimatedBy", "estimatedAt", "entryMethod"];
   const evaUser = await athleteUser(eva, "eva athlete");
   const own = await tapi(`/${s.activityId}`, { cookie: evaUser.cookie });
-  assert.equal(own.status, 200, own.text);
-  const ownEst = own.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
-  // Her own facts only, and (athlete-own-results.test.mjs) without ids: nothing in the answer names another athlete.
-  assert.ok(ownEst.length > 0 && !own.text.includes(String(ana)) && !own.text.includes(String(dan)) && !own.text.includes(String(fil)));
-  for (const f of ownEst) {
-    assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], "athlete-self: method, author, date only");
-    assert.equal(f.estimate.method, "copy_athlete");
-    // The author is a coach's display name, never an id; the date is a timestamp.
-    assert.ok(typeof f.estimate.estimatedBy === "string" && f.estimate.estimatedBy.length > 0 && !/[0-9a-f]{8}-[0-9a-f]{4}-/i.test(f.estimate.estimatedBy), `estimatedBy: ${f.estimate.estimatedBy}`);
-    assert.ok(!Number.isNaN(Date.parse(f.estimate.estimatedAt)));
-    assert.deepEqual(Object.keys(f.detail).sort(), ["componentId", "drillKey", "drillOrdinal", "entryMethod", "level", "metricDefinitionId", "unitAtCapture", "valueBoolean", "valueKey", "valueNumeric", "valueText"]);
-    assert.equal(f.detail.entryMethod, "estimate");
-  }
-  // The Independent's M1: every method reads as method, author and date only for its own athlete - no basis number (a team
-  // average's athlete count is team information).
-  for (const [id, method, label] of [[dan, "proportional", "dan athlete"], [fil, "team_average", "fil athlete"]]) {
-    const self = await athleteUser(id, label);
-    const read = await tapi(`/${s.activityId}`, { cookie: self.cookie });
-    assert.equal(read.status, 200, read.text);
-    const mine = read.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
-    assert.ok(mine.length > 0, `${method}: athlete-self sees the estimate`);
-    for (const f of mine) {
-      assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], `${method}: athlete-self keys`);
-      assert.equal(f.estimate.method, method);
+  let selfReads = 0;
+  const coachRead = await tapi(`/${s.activityId}`, { cookie: team.coach.cookie });
+  assert.equal(coachRead.status, 200, coachRead.text);
+  for (const [id, method, label, user] of [[eva, "copy_athlete", "eva athlete", evaUser], [dan, "proportional", "dan athlete", null], [fil, "team_average", "fil athlete", null]]) {
+    const self = user ?? await athleteUser(id, label);
+    // (c) The coach still reads her estimate, with its label.
+    const coachFacts = coachRead.body.facts.filter((f) => String(f.athleteId) === String(id) && f.detail.entryMethod === "estimate");
+    assert.ok(coachFacts.length > 0 && coachFacts.every((f) => f.estimate?.method === method), `${method}: the coach's read is unchanged`);
+    // (a) Her only values in this session are estimates: the session is hers (she took part), with nothing recorded.
+    const detail = await tapi(`/${s.activityId}`, { cookie: self.cookie });
+    assert.equal(detail.status, 200, detail.text);
+    assert.deepEqual(detail.body.facts.filter((f) => f.factKind === "metric_value"), [], `${method}: no value`);
+    assert.deepEqual([detail.body.recordedBy, detail.body.variableNamesById, detail.body.components], [null, {}, []], `${method}: nothing recorded, no variable named, no drill`);
+    for (const trace of TRACES) assert.ok(!detail.text.includes(trace), `${method}: no "${trace}" in her answer`);
+    for (const other of [ana, dan, eva, fil].filter((x) => x !== id)) assert.ok(!detail.text.includes(String(other)), "nobody else");
+    // The list and the calendar: the session, recorded by nobody.
+    const rows = (await call("/api/training-activity", `?dateFrom=${day}&dateTo=${day}`, { cookie: self.cookie })).body.rows.filter((r) => r.activityId === s.activityId);
+    assert.deepEqual(rows.map((r) => r.recordedBy), [null], `${method}: list`);
+    const items = (await call("/api/training-load", `/calendar?dateFrom=${day}&dateTo=${day}`, { cookie: self.cookie })).body.days.flatMap((d) => d.items).filter((i) => i.activityId === s.activityId);
+    assert.deepEqual(items.map((i) => i.recordedBy), [null], `${method}: calendar`);
+    // Metrics Core: her results hold no estimate, and an estimate's own occasion answers as one that does not exist.
+    const results = await mapi(`/results?dateFrom=${day}&dateTo=${day}`, { cookie: self.cookie });
+    assert.equal(results.status, 200, results.text);
+    for (const trace of TRACES.filter((t) => t !== "entryMethod")) assert.ok(!results.text.includes(trace), `${method}: results carry no "${trace}"`);
+    const occasions = await estimateOccasions(id);
+    assert.ok(occasions.length > 0);
+    const missing = await mapi(`/occasions/${crypto.randomUUID()}`, { cookie: self.cookie });
+    for (const occasionId of occasions) {
+      assert.ok(!results.text.includes(occasionId), "not among her results");
+      for (const path of [`/occasions/${occasionId}`, `/occasions/${occasionId}/history`]) {
+        const res = await mapi(path, { cookie: self.cookie });
+        const none = await mapi(path.replace(occasionId, "00000000-0000-4000-8000-000000000000"), { cookie: self.cookie });
+        assert.deepEqual([res.status, res.text], [none.status, none.text], `${method}: ${path.includes("history") ? "history" : "occasion"} identical to a missing one`);
+      }
+      // The coach still opens it.
+      assert.equal((await mapi(`/occasions/${occasionId}`, { cookie: team.coach.cookie })).status, 200);
     }
+    assert.equal(missing.status, 404);
+    selfReads += 1;
   }
+  assert.equal(selfReads, 3);
+  // (b) An estimate beside a value a coach then entered by hand as a measurement, on the same variable of the same
+  // session: she gets the measured value alone (a hand-entered measurement is a measured value); the coach reads both.
+  const distanceDef = (await admin.query(`select d.id, d.current_version_id as version from training_load.metric_definitions d where d.owner_scope = 'system' and d.label like 'GPEXE total distance %'`)).rows[0];
+  const danEstimateOnDistance = coachRead.body.facts.filter((f) => String(f.athleteId) === String(dan) && f.detail.entryMethod === "estimate" && f.detail.metricDefinitionId === String(distanceDef.id));
+  assert.equal(danEstimateOnDistance.length, 1, "the fixture: Dan has an estimate of the distance");
+  const byHand = await mapi("/events", { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), occurredDate: day, scopeLevel: "session", activityId: s.activityId,
+    participants: [{ athleteId: dan, timezone: "UTC", values: [{ metricDefinitionId: distanceDef.id, metricDefinitionVersionId: distanceDef.version, value: 4321.5 }] }] } });
+  assert.equal(byHand.status, 201, byHand.text);
+  const danBoth = await tapi(`/${s.activityId}`, { cookie: (await athleteUser(dan, "dan measured")).cookie });
+  assert.equal(danBoth.status, 200, danBoth.text);
+  assert.deepEqual(danBoth.body.facts.filter((f) => f.factKind === "metric_value").map((f) => [f.detail.metricDefinitionId, Number(f.detail.valueNumeric)]), [[String(distanceDef.id), 4321.5]]);
+  assert.deepEqual([danBoth.body.recordedBy, danBoth.body.myAttendance, Object.keys(danBoth.body.variableNamesById)], ["coach", "participated", [String(distanceDef.id)]]);
+  for (const trace of TRACES) assert.ok(!danBoth.text.includes(trace), `beside a measured value: no "${trace}"`);
+  assert.ok(!danBoth.text.includes(String(Number(danEstimateOnDistance[0].detail.valueNumeric))) || Number(danEstimateOnDistance[0].detail.valueNumeric) === 4321.5, "not the estimated number");
+  const coachBoth = await tapi(`/${s.activityId}`, { cookie: team.coach.cookie });
+  const danForCoach = coachBoth.body.facts.filter((f) => String(f.athleteId) === String(dan) && f.detail.metricDefinitionId === String(distanceDef.id)).map((f) => f.detail.entryMethod).sort();
+  assert.deepEqual(danForCoach, ["estimate", "manual"], "the coach reads both, the estimate with its label");
+  // "My training": a session whose only values of hers are estimates does not count. Fil has nothing else: no entry.
+  // Dan was measured in the earlier sessions: he has one. Eva, like Fil, has only an estimate.
+  const filUser = await athleteUser(fil, "fil again");
+  const selfOf = async (cookie) => (await tapi("/self", { cookie })).body;
+  const measuredElsewhere = async (athleteId) => (await admin.query(
+    `select count(*)::int n from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.athlete_id = $1 and o.entry_method <> 'estimate' and o.superseded_by_occasion_id is null`, [athleteId])).rows[0].n;
+  assert.equal(await measuredElsewhere(fil), 0, "the fixture: Fil has only estimates");
+  assert.deepEqual(await selfOf(filUser.cookie), { hasRecordedSessions: false });
+  assert.ok((await measuredElsewhere(dan)) > 0, "the fixture: Dan was measured in the earlier sessions");
+  assert.deepEqual(await selfOf((await athleteUser(dan, "dan again")).cookie), { hasRecordedSessions: true });
+  assert.equal(await measuredElsewhere(eva), 0, "the fixture: Eva has only an estimate");
+  assert.deepEqual(await selfOf(evaUser.cookie), { hasRecordedSessions: false });
   const anaName = (await admin.query(`select coalesce(nullif(display_name, ''), full_name) as n from public.athletes where id = $1`, [ana])).rows[0].n;
   assert.ok(!own.text.includes(anaName), "the copy source's name never reaches the athlete");
   // The other direction: Ana, the source, reading her own results learns nothing of Eva's estimate.
@@ -1086,6 +1138,19 @@ test("18. 6b-D: the dashboards leave an estimate out under every policy - all so
     assert.ok(!(await run(policy)).some((x) => x.athleteId === dan), `${policy}: the estimate is left out`);
   }
   assert.deepEqual((await run("estimate")).map((x) => [x.athleteId, Number(x.value)]), [[dan, estimated]], "estimate: the estimate alone");
+  // An athlete's own dashboards read only what was really measured: under no policy - 'estimate' included - is her
+  // estimate shown; a measured athlete's own value is still hers.
+  const asAthlete = async (athleteId, sourcePolicy) => {
+    const [result] = await runDashboardBatchQuery(
+      { dataWorkspaceType: "athlete", dataWorkspaceScopeId: null, dataWorkspaceUserId: null, athleteWorkspaceAthleteId: athleteId, dateFrom: day, dateTo: day },
+      [{ widgetId: "w", seriesId: sourcePolicy, metricDefinitionId: distance, dataScopeLevel: "session", groupBy: "athlete", analyticalAggregation: "sum", sourcePolicy, sourceConnectionId: null }],
+    );
+    assert.equal(result.status, "ok", JSON.stringify(result));
+    return result.data.current;
+  };
+  for (const policy of ["estimate", "all_with_conflicts", "manual", "api_import", "derived"]) assert.deepEqual(await asAthlete(dan, policy), [], `athlete, ${policy}: no estimate`);
+  assert.deepEqual((await asAthlete(team.athleteIds[ANA], "all_with_conflicts")).map((x) => x.athleteId), [team.athleteIds[ANA]], "a measured value is still hers");
+  assert.deepEqual(await asAthlete(team.athleteIds[ANA], "estimate"), []);
 });
 
 test("18b. 6b-D: the series routes take 'estimate' - a new series and a change of an existing one store it, with no connection", async () => {

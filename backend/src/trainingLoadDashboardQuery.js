@@ -325,6 +325,13 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     }
   }
 
+  // An athlete's own dashboards read only what was really measured (owner, 2026-11-16): the estimates are taken out
+  // of what the range holds, so no source policy - 'estimate' included - can show her one.
+  if (dataWorkspaceType === "athlete") {
+    for (const facts of [metricFactsByDefinition, dayLevelFactsByDefinition]) {
+      for (const [definitionId, list] of facts) facts.set(definitionId, list.filter((f) => f.entryMethod !== "estimate"));
+    }
+  }
   return { authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };
 }
 
