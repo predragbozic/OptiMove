@@ -1500,7 +1500,7 @@ test("athlete-own: a value written by a real import reads 'device' in her detail
   assert.equal(detail.body.myAttendance, "participated");
   const values = detail.body.facts.filter((f) => f.factKind === "metric_value");
   assert.ok(values.length > 0, "her imported values");
-  assert.ok(values.every((f) => !("entryMethod" in f.detail)), "how a value was entered is not hers unless it is an estimate");
+  assert.ok(values.every((f) => !("entryMethod" in f.detail) && !("estimate" in f)), "how a value was entered is not hers");
   for (const hidden of ["api_import", "sourceIdentityId", "occasionId", team.ids[102], team.ids[103], team.names[102], team.names[103]]) assert.ok(!detail.text.includes(hidden), hidden);
   assert.deepEqual(Object.keys(detail.body.variableNamesById).sort(), [...new Set(values.map((f) => f.detail.metricDefinitionId))].sort());
 
@@ -1515,12 +1515,12 @@ test("athlete-own: a value written by a real import reads 'device' in her detail
   // for her, and the others' values are not hers.
   const pending = await athleteLogin(team.ids[103], "pending athlete");
   const hers = await ownDetail(summary.activityId, pending);
-  if (hers.status === 200) {
-    assert.deepEqual([hers.body.recordedBy, hers.body.facts.filter((f) => f.factKind === "metric_value")], [null, []]);
-    for (const hidden of [team.ids[101], team.names[101]]) assert.ok(!hers.text.includes(hidden), hidden);
-  } else {
-    assert.equal(hers.status, 404);
-  }
+  // The import writes nothing for her until the coach has checked her record, so she is not a participant of the
+  // session: it is not hers to open - the identical 404 of a missing one - and she has no recorded session.
+  assert.equal((await q(`select count(*)::int as n from training.activity_participants where activity_id = $1 and athlete_id = $2`, [summary.activityId, team.ids[103]]))[0].n, 0, "the fixture: no participant row for her");
+  const missing = await ownDetail(crypto.randomUUID(), pending);
+  assert.deepEqual([hers.status, hers.text], [404, missing.text]);
+  assert.deepEqual((await api("/api/training-activity/self", { cookie: pending.cookie })).body, { hasRecordedSessions: false });
 });
 
 test("athlete-own: two alias sessions that disagree about her say nothing; when they agree, that one word", async () => {
