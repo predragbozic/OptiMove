@@ -121,6 +121,7 @@ for (const [label, width, nth] of [["1280 px", WIDTHS.desktop, 0], ["390 px", WI
       const buttons = page.locator('[data-action="source-fields-create-open"]');
       assert.ok(await buttons.count() > nth, "the check recorded names route C would create");
       const name = await buttons.nth(nth).getAttribute("data-sf-inv-name");
+      const endpoint = await buttons.nth(nth).getAttribute("data-sf-inv-endpoint");
       const buttonHeight = await buttons.nth(nth).evaluate((b) => Math.round(b.getBoundingClientRect().height));
       assert.ok(buttonHeight >= 44, `Create field is 44 px (${buttonHeight})`);
       await buttons.nth(nth).click();
@@ -139,7 +140,10 @@ for (const [label, width, nth] of [["1280 px", WIDTHS.desktop, 0], ["390 px", WI
       assert.ok(form.overflow <= 0, `nothing wider than the screen (${form.overflow})`);
       assert.ok(form.inputHeight >= 44 && form.inputFont === "16px", `the name field is 44 px and 16 px text (${form.inputHeight}, ${form.inputFont})`);
       assert.ok(form.sizes.every((h) => h >= 44), `choices and buttons are 44 px (${form.sizes})`);
-      assert.match(form.text, /This field has no values yet\. Its unit is confirmed on the board once new sessions carry it\./);
+      // The next step by where the value comes from: a per-athlete value has no unit word, so a document confirms it.
+      assert.match(form.text, endpoint === "athlete_session"
+        ? /This field has no values yet\. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document\./
+        : /This field has no values yet\. Its unit is confirmed on the board once new sessions carry it\./);
       await page.fill('[data-sf-field="label"]', `E2E field ${width}`);
       await page.click('[data-source-fields-form="create"] button[type="submit"]');
       await page.waitForFunction(() => /The field was created\./.test(document.querySelector(".source-fields")?.innerText || ""), null, { timeout: 20_000 });
