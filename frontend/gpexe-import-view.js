@@ -578,10 +578,15 @@ function bannerText(gx, check) {
   return parts.join(" · ");
 }
 
+// A search is starting or running (the one rule the source card, the chooser and a group's own button share).
+function searchRunning(gx, status) {
+  return Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
+}
+
 function renderSourceCardHtml(source, gx, status) {
   const connected = Boolean(status.settings);
   const check = gx.check || status.lastCheck;
-  const running = Boolean(gx.checkStarting || check?.status === "running");
+  const running = searchRunning(gx, status);
   const canFind = connected && !running;
   // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page, after the work list (owner, 2026-11-16); on a phone
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
@@ -624,8 +629,7 @@ function monthFactsText(gx, suggestedTo) {
 function renderSourcePeriodHtml(gx, status) {
   const connected = Boolean(status.settings);
   if (!connected) return "";
-  const check = gx.check || status.lastCheck;
-  const running = Boolean(gx.checkStarting || check?.status === "running");
+  const running = searchRunning(gx, status);
   const suggested = datesNeededFor(gx.candidates || [], gx);
   return `
     ${renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month), monthFacts: gx.candidates && !listsAllStates(status) ? monthFactsText(gx, suggested?.to || "") : "" })}
@@ -1020,7 +1024,7 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
   if (grp.key === "fresh") {
     const dated = datesNeededFor(gx.candidates || [], gx);
     const range = dated ? (dated.from === dated.to ? formatDate(dated.from) : `${formatDate(dated.from)} - ${formatDate(dated.to)}`) : "";
-    const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
+    const running = searchRunning(gx, status);
     button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find new sessions for ${range}` : "Find new sessions")}</button>`;
   } else {
     // Fix flow (slice 1): the coach and the club admin fix the group one problem at a time; the platform admin keeps the

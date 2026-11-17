@@ -239,7 +239,9 @@ test("styles.css: .week-calendar-picker sticks directly below .week-nav-panel (n
   const block = cssBlock(cssSource, ".athlete-mode .week-calendar-picker {");
   assert.match(block, /position:\s*sticky;/);
   // Under the topbar and the week controls (8 + 44 + 8 + 1 = 61 px since the controls are 44 px; owner, 2026-11-16, item 4).
-  assert.match(block, /top:\s*calc\(var\(--athlete-topbar-height, 61px\) \+ 61px \+ env\(safe-area-inset-top, 0px\)\);/);
+  assert.match(block, /top:\s*calc\(var\(--athlete-topbar-height, 61px\) \+ var\(--athlete-week-nav-height\) \+ env\(safe-area-inset-top, 0px\)\);/);
+  // The variable is defined once, for the athlete shell (the controls' 8 + 44 + 8 + 1 px).
+  assert.match(cssSource, /body\.athlete-mode \{\s*--athlete-week-nav-height: 61px;/);
 });
 
 // Programs overhaul item 2: the Specific Program detail is now a real

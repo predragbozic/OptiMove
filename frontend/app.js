@@ -2528,6 +2528,8 @@ async function loadAthleteHome({ forceRefresh = false } = {}) {
   els.context.textContent = "Home";
   els.title.textContent = "Home";
   els.toolbar.innerHTML = "";
+  // A new load starts at "loading": an earlier failure is not shown while this one runs (only its own failure is).
+  state.lastAthleteHomeError = "";
   // Training load's own Session feedback card is deliberately NOT part of
   // the cached GET /api/athlete-home payload (see training-load-data.js's
   // own header comment - rated/not-rated status changes on nearly every
@@ -2563,12 +2565,16 @@ function renderMyTraining() {
 // its own card) without re-fetching GET /api/athlete-home itself.
 function renderAthleteHome({ data, error }) {
   if (data) state.lastAthleteHomeData = data;
+  // Kept for the repaints that follow (the week's count, My training): a failed Home read stays said, never replaced by
+  // "Loading your home..." (code review of #583).
+  state.lastAthleteHomeError = data ? "" : error || "";
   els.content.innerHTML = renderAthleteHomeHtml({ data, error });
 }
 
 function renderAthleteHomeFromCache() {
   if (state.activeTab !== "athlete-home") return;
-  els.content.innerHTML = renderAthleteHomeHtml({ data: state.lastAthleteHomeData, error: "" });
+  const data = state.lastAthleteHomeData;
+  els.content.innerHTML = renderAthleteHomeHtml({ data, error: data ? "" : state.lastAthleteHomeError || "" });
 }
 
 // Coach "Training load" tab (Schedule / Data & Analysis) - own weekly fetch,

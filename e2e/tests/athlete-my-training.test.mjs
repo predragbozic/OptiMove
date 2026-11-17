@@ -86,7 +86,7 @@ test("an imported session: Home and the menu lead to her sessions; a session sho
         await row.click();
         await a.page.locator(".my-training-values").first().waitFor({ timeout: 15_000 });
         const look = await a.page.evaluate(() => ({
-          sections: [...document.querySelectorAll(".my-training-values h4")].map((h) => h.textContent.trim()),
+          sections: [...document.querySelectorAll(".my-training-values > h4, .my-training-drill-title")].map((h) => h.textContent.trim()),
           values: document.querySelectorAll(".my-training-value").length,
           keys: [...document.querySelectorAll(".my-training-value")].map((v) => v.dataset.valueKey),
           text: document.querySelector(".my-training").innerText,
