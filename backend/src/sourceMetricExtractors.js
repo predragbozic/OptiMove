@@ -18,6 +18,8 @@
 //   25.0, 2.5 equals "2.50", and 2.5 never equals 2.4999999. Nothing here is a
 //   binary floating-point comparison.
 
+import { DANGEROUS_FIELD_NAMES } from "./sourcePinnedFields.js";
+
 export class ExtractorError extends Error {
   constructor(code, message) {
     super(message);
@@ -303,7 +305,7 @@ export function setExtractorFallbackForTests(fn) { testFallback = fn ?? null; }
 // key reaches a mapping only through its T2a row (a version names its revision, C90), and since v74 such a row exists
 // only through route C; its values are in the stored snapshot only when the check kept them (the pinned set).
 const GENERIC_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-const GENERIC_DANGEROUS = new Set(["__proto__", "constructor", "prototype", "hasOwnProperty", "toString", "valueOf"]);
+const GENERIC_DANGEROUS = DANGEROUS_FIELD_NAMES;
 const GENERIC_PREFIXES = Object.freeze({ "athlete_session.": "row", "details.players.": "details" });
 const own = (object, field) => (object !== null && typeof object === "object" && Object.hasOwn(object, field) ? object[field] : undefined);
 

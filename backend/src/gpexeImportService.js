@@ -27,7 +27,7 @@ import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCa
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { createFieldCollector } from "./sourceFieldInventory.js";
-import { PinnedFieldsError, PINNED_FIELDS_SQL, pinnedFieldsFromKeys, readPinnedFields } from "./sourcePinnedFields.js";
+import { EMPTY_PINNED_FIELDS, PinnedFieldsError, PINNED_FIELDS_SQL, pinnedFieldsFromKeys, readPinnedFields } from "./sourcePinnedFields.js";
 import { candidateState } from "./gpexeImportState.js";
 import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./gpexeImportAudience.js";
 import {
@@ -609,8 +609,11 @@ export async function projectUnimportedSnapshots() {
         try {
           pinnedFields = pinnedFieldsFromKeys((await run(PINNED_FIELDS_SQL, [])).rows.map((r) => r.source_metric_key));
         } catch (error) {
-          if (error instanceof PinnedFieldsError) throw new ProjectionStepError("projection_failed");
-          throw error;
+          if (!(error instanceof PinnedFieldsError)) throw error;
+          // The set cannot be read as one: this run keeps only the consumed fields (the next check reads the rest
+          // again), says so with the stable code, and goes on.
+          console.warn(`[gpexe] retention: the pinned set was refused (${error.code}); this run keeps only the consumed fields`);
+          pinnedFields = EMPTY_PINNED_FIELDS;
         }
       }
       const rows = (await run(

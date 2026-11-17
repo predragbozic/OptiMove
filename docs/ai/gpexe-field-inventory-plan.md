@@ -780,21 +780,30 @@ everything G2 needs in the database.
 ### 9.1 The pinned set (`backend/src/sourcePinnedFields.js`)
 
 - **What it is.** The GPEXE field names a check keeps in the stored snapshot besides the importer's own consumed fields.
-  They come from T2a: the gpexe / rest_v1 rows whose key is `athlete_session.<name>` (a row number) or
-  `details.players.<name>` (a details `{unit, value}`). Never from a GPEXE answer.
+  They come from T2a: the **active** gpexe / rest_v1 rows whose key is `athlete_session.<name>` (a row number) or
+  `details.players.<name>` (a details `{unit, value}`). Never from a GPEXE answer; a retired field is not pinned.
   - Since v74 such a row exists only through route C, or as a seed.
   - A seeded name is already in the adapter's lists, so the union changes nothing for it.
-- **Bounds, fail closed:**
-  - every name is an identifier (the projection's `METRIC_NAME`) and never a dangerous key;
-  - at most 64 names per endpoint (`PINNED_FIELDS_MAX`);
-  - otherwise the check stops with `pinned_field_invalid` or `pinned_fields_too_many`, before any GPEXE read. Both codes
-    are administrator-only (a coach reads the sentence to contact an administrator).
+- **Bounds:**
+  - every name is an identifier (the projection's `METRIC_NAME`) and never a dangerous key
+    (`DANGEROUS_FIELD_NAMES`, the one list route C, the inventory, the extractor registry and the set share). A stored
+    key that breaks this rule is **left out** of the set and counted in one log line that names no key: one bad row never
+    fails every team's check (security review of G2, MEDIUM). Route C never creates such a name;
+  - at most 64 names per endpoint (`PINNED_FIELDS_MAX`). Route C refuses the 65th active field of a kind
+    (`too_many_fields`), two creates of one kind serialized by a transaction advisory lock. A set over the bound
+    (written past route C) stops a check with `pinned_fields_too_many` before any GPEXE read; the code is
+    administrator-only (a coach reads the sentence to contact an administrator). `pinned_field_invalid` stays for a
+    malformed set handed to the adapter;
+  - a pinned row value is a finite number or null; anything else (a text included) fails the answer closed as
+    `field_shape_unknown` (code review of G2, LOW: data minimisation).
 - **Where it is read:**
   - **A check** reads it once, before its first request, and freezes it in its adapter. A field created while the check
     runs is not kept by that check; the next check keeps it.
-  - **Retention** reads it with the first id page of every run. Until it is known, nothing is projected; a failed read
-    stops the run as `projection_failed`.
-  - **The supersede step** of a check's finalization reads it inside the finalization's transaction.
+  - **Retention** reads it with the first id page of every run. Until it is known, nothing is projected. A set refused
+    as a whole (over the bound) does not stop the run: that run keeps only the consumed fields (the next check reads the
+    rest again) and logs the code (database review of G2, MEDIUM); a failed read is `projection_failed` as before.
+  - **The supersede step** of a check's finalization reads it inside the finalization's transaction; a set refused there
+    fails the check with `check_finalize_failed` before its COMMIT, nothing of it written.
 - **Both proven and unproven created fields are pinned.** Their values accumulate for the comparison that proves them
   (G1b's route O and route 8).
 
@@ -811,6 +820,9 @@ everything G2 needs in the database.
 - **MT-0** (`gpexeImportMapper.js`) compares every stored row field apart from the row's identity (`id`, `athlete`,
   `track`, `teamsession`). A created field that differs between two tracks makes them two recordings, never one
   (fail closed).
+  - **Stated limit (code review of G2, LOW):** the legacy e03 path stores raw rows unprojected, so for it MT-0 now also
+    compares fields such as timestamps, and two identical tracks whose other fields differ are no longer merged (the
+    `multiple_tracks` anomaly). This fails closed, and production has no `GPEXE_API_TOKEN`; F3c4 retires that path.
 
 ### 9.3 The generic extractors (J12 amended; `backend/src/sourceMetricExtractors.js`)
 
@@ -839,6 +851,9 @@ everything G2 needs in the database.
   - Its column has no raw value, and nothing of it is anywhere in the answer.
   - A placement on it is refused with no values.
 - **Unchanged.** A created proven field and a seeded unproven field are shown as before.
+- **The same gate on the 7e aggregate preview** (code review of G2, LOW): a mapping version of a created field whose
+  revision is not proven (a unit set, the evidence not proven) answers `409 unit_not_proven` and its bundle is never read
+  (`sourceMetricPreviewService.js`).
 - **Where the comparison happens.** The platform's comparison that proves a created field is G1b's.
 
 ### 9.5 Effects, as decided
@@ -858,14 +873,19 @@ everything G2 needs in the database.
 
 - `backend/tests/source-pinned-fields-g2.unit.test.mjs`: the set, the bound of 64 and its refusals, the union, both
   projections.
-- `gpexe-import-credential-resolver` tests 41–48, end to end with the fake source:
+- `gpexe-import-credential-resolver` tests 41–50, end to end with the fake source:
   - 41: the pinned names kept, the unpinned ones not stored;
   - 42: a field created mid-check is not kept by it;
-  - 43: a pinned value of an unknown shape fails closed;
-  - 44: exactly 64 pass, the 65th and an invalid name stop the check before any session read;
+  - 43: a pinned value of an unknown shape (an object, a text) fails closed;
+  - 44: exactly 64 pass, the 65th stops the check before any session read; a stored invalid name is left out;
   - 45: retention keeps the pinned names;
   - 46: the supersede path keeps them too;
   - 47: a proven, mapped created field is imported, and an unproven one is never activated and never imported;
-  - 48: the inbox after the one-time "changed".
+  - 48: the inbox after the one-time "changed";
+  - 49: a retired field is not pinned; the supersede step refusing the set fails the check with `check_finalize_failed`
+    and changes nothing; retention with the set refused keeps the consumed fields only;
+  - 50: the 7e preview of a created, unproven field is `409 unit_not_proven` with no value.
+- `source-field-create-g1` test 14: route C refuses `constructor` / `prototype` and the 65th active field of a kind, and
+  a second create held behind the first at 63 is refused (the bound's lock).
 - `source-metric-board-18-2` test 15 (the board guard), `source-metric-extractors-7f` test 14 (the generic extractors),
   `gpexe-duplicate-tracks-mt0` (a created row field on two tracks), and the adapter suite's B7.7c and B7.8.

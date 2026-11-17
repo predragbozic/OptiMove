@@ -2457,13 +2457,14 @@ test("42. G2: the pinned set is frozen when the check starts - a field created w
   }
 });
 
-test("43. G2: a pinned value of a shape the importer does not read fails the check closed and records nothing - an object in a row field, and a details value that is not a unit-and-value object", async () => {
+test("43. G2: a pinned value of a shape the importer does not read fails the check closed and records nothing - an object or a text in a row field (a pinned row field is a number or null), and a details value that is not a unit-and-value object", async () => {
   const keys = ["athlete_session.g2_shape", "details.players.g2_shape_d"];
   const o0 = await org();
   for (const key of keys) await g2Field(key, o0.padmin.id);
   try {
     for (const [label, plant] of [
       ["a row field", { row: { g2_shape: { nested: 1 } } }],
+      ["a text in a row field", { row: { g2_shape: "abc" } }],
       ["a details field", { details: () => ({ g2_shape_d: { unit: "number", value: { deep: [1] } } }) }],
     ]) {
       const o = await org();
@@ -2483,7 +2484,7 @@ test("43. G2: a pinned value of a shape the importer does not read fails the che
   }
 });
 
-test("44. G2: the bound - 64 pinned names of one endpoint are kept, the 65th stops the check before any GPEXE read with pinned_fields_too_many; a name a check cannot keep stops it with pinned_field_invalid; an administrator reads the code, nothing is recorded", async () => {
+test("44. G2: the bound - 64 pinned names of one endpoint are kept, the 65th stops the check before any GPEXE read with pinned_fields_too_many (an administrator reads the code, nothing is recorded); a stored name a check cannot keep is left out of the set and never fails the check", async () => {
   const o = await org();
   const seeded = (await q(`select count(*)::int n from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and starts_with(source_metric_key, 'athlete_session.')`))[0].n;
   const many = Array.from({ length: 64 - seeded }, (_, i) => `athlete_session.g2_n${String(i).padStart(3, "0")}`);
@@ -2498,7 +2499,7 @@ test("44. G2: the bound - 64 pinned names of one endpoint are kept, the 65th sto
     src.serve(o.sourceTeamId);
     const ok = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
     assert.equal(ok.status, "succeeded", `exactly 64: ${JSON.stringify(ok.error)}`);
-    for (const [key, code] of [[extra, "pinned_fields_too_many"], [invalid, "pinned_field_invalid"]]) {
+    for (const [key, code] of [[extra, "pinned_fields_too_many"], [invalid, null]]) {
       await g2Field(key, o.padmin.id);
       try {
         const o2 = await org();
@@ -2508,6 +2509,11 @@ test("44. G2: the bound - 64 pinned names of one endpoint are kept, the 65th sto
         src.serve(o2.sourceTeamId);
         const callsBefore = src.calls.length;
         const view = await importer.startCheck(o2.teamId, { userId: o2.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+        if (code === null) {
+          // The bad name is left out (the inventory never offers it; a raw row is not a reason to stop every team).
+          assert.equal(view.status, "succeeded", `${key}: ${JSON.stringify(view.error)}`);
+          continue;
+        }
         assert.deepEqual([view.status, view.error.code], ["failed", code], key);
         assert.ok(src.calls.slice(callsBefore).every((c) => !c.key.includes("team_session")), `${key}: no session was read`);
         assert.deepEqual(await g2Stored(o2.teamId), [], `${key}: nothing recorded`);
@@ -2713,6 +2719,108 @@ test("48. G2, the one-time \"changed\" (the Rukovodilac's (a)): an imported sess
     assert.deepEqual([thirdRow.candidates_changed, thirdRow.candidates_unchanged], [0, 1], "then unchanged");
   } finally {
     delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    await g2Remove([key]);
+  }
+});
+
+test("49. G2 review fixes: a retired field is not pinned; a retention run whose pinned set is refused keeps only the consumed fields and goes on (no error); the supersede step refusing the set fails the check with check_finalize_failed and changes nothing of the old candidate", async () => {
+  const o = await org();
+  const seeded = (await q(`select count(*)::int n from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active' and starts_with(source_metric_key, 'details.players.')`))[0].n;
+  const keep = "details.players.g2_r_keep";
+  const retired = "details.players.g2_r_retired";
+  const many = Array.from({ length: 64 - seeded - 1 }, (_, i) => `details.players.g2_r${String(i).padStart(3, "0")}`);
+  const extra = "details.players.g2_r999";
+  await g2Field(keep, o.padmin.id);
+  await g2Field(retired, o.padmin.id);
+  await admin.query("set session_replication_role = replica");
+  try {
+    await q(`update training_load.source_metric_definitions set state = 'retired', retired_by_user_id = $2, retired_at = now(), retired_reason = 'G2 test retirement' where source_metric_key = $1`, [retired, o.padmin.id]);
+  } finally {
+    await admin.query("set session_replication_role = origin");
+  }
+  const { readPinnedFields } = await import("../src/sourcePinnedFields.js");
+  assert.ok(!(await readPinnedFields(admin)).details.includes("g2_r_retired"), "a retired field is not pinned");
+  assert.ok((await readPinnedFields(admin)).details.includes("g2_r_keep"));
+  const originalUpdatedOn = src.state.bundle.teamSession.updated_on;
+  useSource();
+  try {
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    g2Plant(src.state.bundle, { details: () => ({ g2_r_keep: { unit: "number", value: 4 }, g2_r_retired: { unit: "number", value: 3 } }) });
+    const first = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(first.status, "succeeded", JSON.stringify(first.error));
+    const [a] = await g2Stored(o.teamId);
+    for (const values of Object.values(a.raw_bundle.details.full.players)) {
+      assert.deepEqual(values.g2_r_keep, { unit: "number", value: 4 });
+      assert.ok(!("g2_r_retired" in values), "the retired field's values are not kept");
+    }
+    // The set over its bound (64 active details names plus one, written past route C).
+    for (const key of [...many, extra]) await g2Field(key, o.padmin.id);
+    // The supersede step: a check that sees changed content, the set refused at finalization (the 65th lands after
+    // the check read its own set) - check_finalize_failed, the old candidate byte for byte as it was.
+    await g2Remove([extra]);
+    src.state.bundle.teamSession.updated_on = "2026-09-14T23:00:00";
+    src.state.gates.list = gate();
+    const callsBefore = src.calls.length;
+    const started = await startCheck(o, o.cadmin.cookie);
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    await waitFor(() => src.calls.slice(callsBefore).some((c) => c.key.includes("/team_session/?team=")));
+    await g2Field(extra, o.padmin.id);
+    src.state.gates.list.release();
+    await started.done.p;
+    src.state.gates.list = null;
+    const [check] = await q(`select status, error_code from training_load.gpexe_import_checks where id = $1`, [started.body.check.id]);
+    assert.deepEqual([check.status, check.error_code], ["failed", "check_finalize_failed"]);
+    const after = await g2Stored(o.teamId);
+    assert.deepEqual(after.map((r) => [r.id, r.status]), [[a.id, a.status]], "no new candidate, the old one unchanged");
+    assert.deepEqual(after[0].raw_bundle, a.raw_bundle, "the old snapshot byte for byte");
+    // Retention with the set refused: no error, only the consumed fields kept.
+    const result = await importer.projectUnimportedSnapshots();
+    assert.equal(result?.error ?? null, null, JSON.stringify(result));
+    const [projected] = await g2Stored(o.teamId);
+    for (const values of Object.values(projected.raw_bundle.details.full.players)) {
+      assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), JSON.stringify(Object.keys(values)));
+    }
+  } finally {
+    src.state.bundle.teamSession.updated_on = originalUpdatedOn;
+    await g2Remove([keep, retired, ...many, extra]);
+  }
+});
+
+test("50. G2 review fix: the 7e aggregate preview never shows a value of a created field whose revision is not proven (a unit set, the evidence not proven): 409 unit_not_proven, and no value in the answer", async () => {
+  const { writeRevision } = await import("./support/source-revisions.mjs");
+  const variablesSvc = await import("../src/canonicalVariableAdminService.js");
+  const mappingsSvc = await import("../src/sourceMetricMappingService.js");
+  const previewSvc = await import("../src/sourceMetricPreviewService.js");
+  const key = "athlete_session.g2_preview_unproven";
+  const o = await org();
+  const ctx = { userId: String(o.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } };
+  const rk = () => crypto.randomUUID();
+  const fieldId = await g2Field(key, o.padmin.id);
+  const rev = await writeRevision(admin, { fieldId, by: o.padmin.id, unit: "m", unitRef: "docs/ai/test-evidence.md#unit", evidenceRef: "docs/ai/test-evidence.md#unit" });
+  try {
+    const status = (await q(`select evidence_status, source_unit from training_load.source_metric_definition_versions where id = $1`, [rev.revisionId ?? rev]))[0];
+    assert.equal(status.source_unit, "m");
+    assert.ok(!["verified", "source_stated"].includes(status.evidence_status), JSON.stringify(status));
+    useSource();
+    await bound(o);
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    g2Plant(src.state.bundle, { row: (r, i) => ({ g2_preview_unproven: 864200 + i }) });
+    const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+    const [cand] = await g2Stored(o.teamId);
+    const variable = (await variablesSvc.createVariable({ ctx, body: { requestKey: rk(), label: `G2 preview ${crypto.randomBytes(3).toString("hex")}`, unit: "m", levels: ["session", "drill"], dailyAggregationMethod: "sum" } })).variable;
+    const mapping = (await mappingsSvc.createMapping({ ctx, body: { requestKey: rk(), sourceMetricId: fieldId, metricDefinitionId: variable.id } })).mapping;
+    const version = (await mappingsSvc.createVersion({ ctx, mappingId: mapping.id, body: { requestKey: rk(), sourceRevisionId: rev.revisionId ?? rev, appliesToSession: true, appliesToDrill: true } })).version;
+    const refused = await previewSvc.previewVersion({ ctx, mappingId: mapping.id, versionId: version.id, queryString: `candidateId=${cand.id}` }).then((x) => ({ ok: x }), (e) => ({ e }));
+    assert.equal(refused.e?.status, 409, JSON.stringify(refused));
+    assert.equal(refused.e?.code, "unit_not_proven", JSON.stringify(refused.e));
+    assert.ok(!JSON.stringify(refused.e?.body ?? refused.e ?? {}).includes("8642"), "no value of the field in the answer");
+  } finally {
     await g2Remove([key]);
   }
 });

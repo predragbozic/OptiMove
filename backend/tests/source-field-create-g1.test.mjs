@@ -622,3 +622,61 @@ test("13. the database review's MEDIUM-2: a field_unit row's word is final (an u
                          from training_load.source_metric_confirmation_items i where i.confirmation_id = $1`, [res.value]);
   assert.deepEqual(d, { stored_is_recomputed: true, word_covered: true, wordless_is_v65: true });
 });
+
+test("14. G2 review fixes on route C: a lower-case name no check could keep (constructor, prototype) is never created; a check keeps at most 64 active fields of one kind, so route C refuses the 65th with too_many_fields (a retired field does not count) and two creates at 63 never both pass", async () => {
+  const before = (await one(`select count(*)::int n from training_load.source_metric_definitions`)).n;
+  await observe(W.conn, [["athlete_session", "constructor"], ["athlete_session", "prototype"]]);
+  for (const name of ["constructor", "prototype"]) {
+    const r = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ endpoint: "athlete_session", name, label: `Name ${name}` }) });
+    assert.deepEqual([r.status, r.body.error], [409, "name_not_supported"], r.text);
+  }
+  assert.equal((await one(`select count(*)::int n from training_load.source_metric_definitions`)).n, before);
+  // Fill athlete_session.* up to 62 active fields (written past route C), plus one retired that must not count.
+  const active = (await one(`select count(*)::int n from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active' and starts_with(source_metric_key, 'athlete_session.')`)).n;
+  const filler = Array.from({ length: 62 - active }, (_, i) => `athlete_session.g2_fill_${String(i).padStart(3, "0")}`);
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  try {
+    await c.query("set session_replication_role = replica");
+    for (const k of [...filler, "athlete_session.g2_fill_retired"]) {
+      await c.query(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,$2,$3)`, [k, `Fill ${k}`, W.pa.id]);
+    }
+    await c.query(`update training_load.source_metric_definitions set state = 'retired', retired_by_user_id = $1, retired_at = now(), retired_reason = 'G2 test' where source_metric_key = 'athlete_session.g2_fill_retired'`, [W.pa.id]);
+  } finally {
+    await c.end();
+  }
+  // At 62: two creates at once take 63 and 64 - or, held at the bound, exactly one passes when only one slot is left.
+  const names = [`g2_bound_a_${uid()}`, `g2_bound_b_${uid()}`, `g2_bound_c_${uid()}`];
+  await observe(W.conn, names.map((n) => ["athlete_session", n]));
+  const first = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ endpoint: "athlete_session", name: names[0], label: "Bound A" }) });
+  assert.equal(first.status, 201, first.text);
+  // At 63, one slot left: the first create is held inside its write, after its count and before its insert; the second
+  // is sent meanwhile and must wait for it (the bound's lock), then count 64 and be refused.
+  const pa2Id = await user("platform-admin-two");
+  await q(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [pa2Id]);
+  await workspace(pa2Id, "platform", null);
+  const pa2 = { id: pa2Id, cookie: await cookieFor(pa2Id) };
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let reached;
+  const inside = new Promise((r) => { reached = r; });
+  let holds = 0;
+  createService.setFieldCreateHoldForTests(async () => { holds += 1; if (holds === 1) { reached(); await held; } });
+  try {
+    const a = api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ endpoint: "athlete_session", name: names[1], label: "Bound held" }) });
+    await inside;
+    let bDone = false;
+    // Another platform admin (the per-user lock of one admin would serialize the two anyway).
+    const b = api("/fields", { cookie: pa2.cookie, method: "POST", body: body({ endpoint: "athlete_session", name: names[2], label: "Bound second" }) }).finally(() => { bDone = true; });
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(bDone, false, "the second create waits for the first one's write");
+    release();
+    const [ra, rb] = await Promise.all([a, b]);
+    assert.equal(ra.status, 201, ra.text);
+    assert.deepEqual([rb.status, rb.body.error], [409, "too_many_fields"], rb.text);
+  } finally {
+    release();
+    createService.setFieldCreateHoldForTests(null);
+  }
+  assert.equal((await one(`select count(*)::int n from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active' and starts_with(source_metric_key, 'athlete_session.')`)).n, 64);
+});

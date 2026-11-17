@@ -7,7 +7,8 @@
 // key, a name outside T2a's key rule or a taken key is refused before anything is written.
 import { adminWriteKit, SourceMetricMappingError } from "./sourceMetricMappingService.js";
 import { mayVerify } from "./sourceFieldVerificationService.js";
-import { deriveField, FieldCreateRefusal, LABEL_MAX_LENGTH, parseCreateFieldBody } from "./sourceFieldCreate.js";
+import { deriveField, FieldCreateRefusal, GENERIC_ENDPOINTS, LABEL_MAX_LENGTH, parseCreateFieldBody } from "./sourceFieldCreate.js";
+import { PINNED_FIELDS_MAX } from "./sourcePinnedFields.js";
 
 const { runWrite, rightsStillHold, refusal, NOT_FOUND, MESSAGES, hashOf, REVISION_COLUMNS, revisionOut } = adminWriteKit;
 
@@ -17,6 +18,7 @@ export const mayCreateFields = mayVerify;
 const TEXT = {
   name_not_observed: "GPEXE has not sent this name through any connection yet; find new sessions first.",
   field_exists: "A source field with this key already exists.",
+  too_many_fields: `A check keeps at most ${PINNED_FIELDS_MAX} source fields of this kind; this one cannot be added.`,
   invalid_label: `label is one line of 1-${LABEL_MAX_LENGTH} visible characters without surrounding spaces.`,
 };
 
@@ -105,6 +107,16 @@ export async function createField({ ctx, body }) {
         [derived.sourceMetricKey],
       )).rows[0];
       if (taken) throw refusal(409, "field_exists", TEXT.field_exists, { current: { fieldId: taken.id } });
+      // G2: every active field of this kind is kept by every check (the pinned set, sourcePinnedFields.js), at most
+      // PINNED_FIELDS_MAX; two creates of one kind are serialized here so neither passes the bound with the other.
+      const prefix = GENERIC_ENDPOINTS[endpoint].prefix;
+      await client.query(`select pg_advisory_xact_lock(hashtext('training_load.source_field_create:' || $1))`, [prefix]);
+      const kept = (await client.query(
+        `select count(*)::int as n from training_load.source_metric_definitions
+          where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active' and starts_with(source_metric_key, $1)`,
+        [prefix],
+      )).rows[0].n;
+      if (kept >= PINNED_FIELDS_MAX) throw refusal(409, "too_many_fields", TEXT.too_many_fields);
       if ((await client.query(`select training_load.source_metric_text_ok($1, $2) as ok`, [label, LABEL_MAX_LENGTH])).rows[0].ok !== true) {
         throw refusal(400, "invalid_body", TEXT.invalid_label);
       }

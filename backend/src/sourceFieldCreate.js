@@ -4,6 +4,7 @@
 // The key is never typed: it is built from the endpoint and the observed name only.
 import { boundedText } from "./metricTextRules.js";
 import { isStructuralField } from "./sourceFieldInventory.js";
+import { DANGEROUS_FIELD_NAMES } from "./sourcePinnedFields.js";
 
 export const LABEL_MAX_LENGTH = 80;
 // The generic plain shapes (Q4): one row number, one details {unit, value}. Zones and events stay code.
@@ -42,6 +43,8 @@ export function deriveField({ endpoint, name, supportsSession, supportsDrill }) 
   const generic = Object.prototype.hasOwnProperty.call(GENERIC_ENDPOINTS, endpoint) ? GENERIC_ENDPOINTS[endpoint] : null;
   if (!generic) throw new FieldCreateRefusal(409, "shape_not_generic", "Only a per-athlete number or a whole-session or drill value with its unit can be created here; zones and events are added in code.");
   if (isStructuralField(endpoint, name)) throw new FieldCreateRefusal(409, "name_not_observed", "This name is an identifier or a time, not a value GPEXE measured.");
+  // G2: a name a check could never keep (an object key of every JavaScript object) is never created.
+  if (DANGEROUS_FIELD_NAMES.has(name)) throw new FieldCreateRefusal(409, "name_not_supported", "This GPEXE name cannot become a field.");
   const key = `${generic.prefix}${name}`;
   if (!T2A_KEY.test(key)) throw new FieldCreateRefusal(409, "name_not_supported", "This GPEXE name cannot become a field yet (only lower-case names are supported).");
   if (endpoint === "details.drill" && !supportsDrill) throw bad("A name GPEXE sends per drill supports the drill level.");

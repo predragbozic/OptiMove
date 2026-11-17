@@ -5,13 +5,17 @@
 // (created by a platform admin, from a name the inventory observed) or as a seed; a seeded name is already in the
 // adapter's own lists and the union changes nothing for it.
 //
-// Fail closed: a name that is not an identifier, a dangerous key, or more than PINNED_FIELDS_MAX names for one
-// endpoint stops the check (or the retention run) with a stable code; nothing is kept that was not named here.
+// Only active (not retired) fields are pinned. A stored key whose name is not an identifier or is a dangerous key is
+// left out of the set (and counted in a log line, never named): one bad row never fails every team's check. More
+// than PINNED_FIELDS_MAX names for one endpoint (route C refuses the 65th) stops the check with a stable code, and a
+// retention run then keeps only the consumed fields. Nothing is kept that was not named here.
 
 export const PINNED_FIELDS_MAX = 64;
 export const PINNED_PREFIXES = Object.freeze({ athleteSession: "athlete_session.", details: "details.players." });
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-const DANGEROUS = new Set(["__proto__", "constructor", "prototype", "hasOwnProperty", "toString", "valueOf"]);
+// The one list of names no generic field may carry (route C, the inventory, the extractor registry and this set).
+export const DANGEROUS_FIELD_NAMES = Object.freeze(new Set(["__proto__", "constructor", "prototype", "hasOwnProperty", "toString", "valueOf"]));
+const DANGEROUS = DANGEROUS_FIELD_NAMES;
 
 export class PinnedFieldsError extends Error {
   constructor(code, message) {
@@ -28,23 +32,26 @@ export const PINNED_FIELDS_SQL = `
   select source_metric_key from (
     select source_metric_key, row_number() over (partition by split_part(source_metric_key, '.', 1) order by source_metric_key) as n
       from training_load.source_metric_definitions
-     where source_system = 'gpexe' and api_family = 'rest_v1'
+     where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active'
        and (starts_with(source_metric_key, 'athlete_session.') or starts_with(source_metric_key, 'details.players.'))
   ) k where n <= ${PINNED_FIELDS_MAX + 1} order by source_metric_key`;
 
 const validName = (name) => typeof name === "string" && NAME.test(name) && !DANGEROUS.has(name);
 
 // The pinned set from T2a keys: { athleteSession: [...], details: [...] }, sorted, unique and frozen.
-export function pinnedFieldsFromKeys(keys) {
+// A key that is not text, or whose name is not one a check can keep, is left out (never named in the log).
+export function pinnedFieldsFromKeys(keys, { log = console } = {}) {
   const sets = { athleteSession: new Set(), details: new Set() };
+  let skipped = 0;
   for (const key of keys ?? []) {
-    if (typeof key !== "string") throw new PinnedFieldsError("pinned_field_invalid", "A source field's key is not text.");
+    if (typeof key !== "string") { skipped += 1; continue; }
     const endpoint = Object.keys(PINNED_PREFIXES).find((e) => key.startsWith(PINNED_PREFIXES[e]));
     if (!endpoint) continue;
     const name = key.slice(PINNED_PREFIXES[endpoint].length);
-    if (!validName(name)) throw new PinnedFieldsError("pinned_field_invalid", "A source field's name is not one a check can keep.");
+    if (!validName(name)) { skipped += 1; continue; }
     sets[endpoint].add(name);
   }
+  if (skipped > 0) log?.warn?.(`[gpexe] pinned set: ${skipped} source field key(s) left out (pinned_field_invalid)`);
   return checkedPinnedFields({ athleteSession: [...sets.athleteSession], details: [...sets.details] });
 }
 

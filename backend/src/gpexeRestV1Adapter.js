@@ -101,9 +101,11 @@ const scalar = (v) => v === null || typeof v === "boolean" || (typeof v === "num
 // A projected value is a scalar (null, boolean, finite number, short one-line
 // string); the three number lists are arrays of finite numbers or nulls.
 // Anything else — an object, a long text, a nested array — refuses the answer.
-const pick = (object, keys) => Object.fromEntries(keys.filter((k) => Object.prototype.hasOwnProperty.call(object, k)).map((k) => {
+// G2: a pinned name (numberOnly) is a row number: only a finite number or null is kept, anything else refuses.
+const pick = (object, keys, numberOnly = null) => Object.fromEntries(keys.filter((k) => Object.prototype.hasOwnProperty.call(object, k)).map((k) => {
   const v = object[k];
-  const ok = NUMBER_LIST_FIELDS.has(k) ? Array.isArray(v) && v.length <= 32 && v.every((x) => x === null || (typeof x === "number" && Number.isFinite(x))) : scalar(v);
+  const ok = numberOnly?.has(k) ? v === null || (typeof v === "number" && Number.isFinite(v))
+    : NUMBER_LIST_FIELDS.has(k) ? Array.isArray(v) && v.length <= 32 && v.every((x) => x === null || (typeof x === "number" && Number.isFinite(x))) : scalar(v);
   if (!ok) throw unexpected("A field of the source answer has a shape the importer does not read.", { reason: "field_shape_unknown", field: k });
   return [k, v];
 }));
@@ -794,9 +796,11 @@ export function createGpexeRestV1Adapter({
 } = {}) {
   let rowFields;
   let detailsFields;
+  let pinnedRowNumbers;
   try {
     rowFields = athleteSessionFieldsOf(pinnedFields);
     detailsFields = detailsFieldsOf(pinnedFields);
+    pinnedRowNumbers = new Set(rowFields.filter((k) => !BUNDLE_FIELDS.athleteSession.includes(k)));
   } catch (error) {
     if (error instanceof PinnedFieldsError) throw new SourceAdapterError(error.code, error.message);
     throw error;
@@ -1555,7 +1559,7 @@ export function createGpexeRestV1Adapter({
         if (rowId === null) throw unexpected("An athlete row of the source answer names itself in an unknown way.");
         ids.add(rowId);
       }
-      const projected = rows.map((row) => pick(row, rowFields));
+      const projected = rows.map((row) => pick(row, rowFields, pinnedRowNumbers));
       for (const row of rows) observed("athlete_session", row);
       listedAthleteRows.set(parent.id, ids);
       return { rows: projected, total };
@@ -1580,7 +1584,7 @@ export function createGpexeRestV1Adapter({
       const trackId = body.track === undefined || body.track === null ? null : canonicalId(body.track);
       if (body.track !== undefined && body.track !== null && trackId === null) throw unexpected("The source server's athlete row names its track in an unknown way.");
       // I1: an athlete row is counted once, from its session's list; its own read adds no answer (answers_seen = list rows).
-      const out = pick(body, rowFields);
+      const out = pick(body, rowFields, pinnedRowNumbers);
       confirmedAthleteRows.set(id, { sessionId: parent.id, trackId });
       if (trackId !== null) { confirmedTracks.add(trackId); trackOwner.set(trackId, parent.id); }
       return out;
@@ -1814,7 +1818,7 @@ export function createGpexeRestV1Adapter({
     for (const [i, row] of rows.entries()) {
       const speed = speedOf(row);
       if (speed === undefined) { out.push(await readRow(row)); continue; }
-      const fromList = pick({ ...row, max_v: speed }, rowFields);
+      const fromList = pick({ ...row, max_v: speed }, rowFields, pinnedRowNumbers);
       if (!canaryHeld) {
         const canary = await readRow(row);
         if (JSON.stringify(canary) !== JSON.stringify(fromList)) {

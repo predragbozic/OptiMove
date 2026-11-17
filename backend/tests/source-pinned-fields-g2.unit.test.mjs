@@ -19,11 +19,15 @@ test("1. the pinned set from T2a keys: only the two generic prefixes, names sort
   assert.deepEqual(checkedPinnedFields(null), EMPTY_PINNED_FIELDS);
 });
 
-test("2. fail closed: a name that is not an identifier or is a dangerous key, a malformed set, or more than the bound for one endpoint is refused with a stable code; exactly the bound is accepted", () => {
-  for (const key of ["athlete_session.g2.x", "athlete_session.9x", "athlete_session.", "details.players.__proto__", "athlete_session.constructor", "details.players.has-dash", `athlete_session.${"a".repeat(65)}`]) {
-    assert.throws(() => pinnedFieldsFromKeys([key]), refusal("pinned_field_invalid"), key);
-  }
-  assert.throws(() => pinnedFieldsFromKeys([42]), refusal("pinned_field_invalid"));
+test("2. a stored name a check cannot keep (not an identifier, a dangerous key, not text) is left out of the set and counted in one log line that names none; a malformed set given to the adapter, or more than the bound for one endpoint, is refused with a stable code; exactly the bound is accepted", () => {
+  const warnings = [];
+  const log = { warn: (line) => warnings.push(line) };
+  const bad = ["athlete_session.g2.x", "athlete_session.9x", "athlete_session.", "details.players.__proto__", "athlete_session.constructor", "details.players.has-dash", `athlete_session.${"a".repeat(65)}`, 42];
+  assert.deepEqual(pinnedFieldsFromKeys([...bad, "athlete_session.g2_ok"], { log }), { athleteSession: ["g2_ok"], details: [] });
+  assert.deepEqual(warnings, [`[gpexe] pinned set: ${bad.length} source field key(s) left out (pinned_field_invalid)`]);
+  assert.ok(!warnings[0].includes("__proto__") && !warnings[0].includes("constructor"), "the log names no key");
+  assert.deepEqual(pinnedFieldsFromKeys(["athlete_session.g2_ok"], { log }), { athleteSession: ["g2_ok"], details: [] });
+  assert.equal(warnings.length, 1, "nothing left out, nothing logged");
   for (const bad of [[], { athleteSession: "x" }, { other: [] }, { details: ["ok", "toString"] }]) {
     assert.throws(() => checkedPinnedFields(bad), refusal("pinned_field_invalid"), JSON.stringify(bad));
   }

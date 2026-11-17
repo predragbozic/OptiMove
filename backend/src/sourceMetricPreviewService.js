@@ -24,6 +24,7 @@ import { extractabilityCode, extractorFor } from "./sourceMetricExtractors.js";
 import { GPEXE_SOURCE_SYSTEM, gpexeLevelValues } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { PREVIEW_MINIMUM_ATHLETES, previewLevel } from "./sourceMetricPreview.js";
+import { revisionProven } from "./sourceFieldEvidence.js";
 
 const { boundedRead, refusal, NOT_FOUND, MESSAGES, UUID, PARAMS_AS_TEXT } = adminWriteKit;
 
@@ -41,6 +42,7 @@ const PREVIEW_MESSAGES = {
   candidate_too_large: "The saved GPEXE session of this candidate is too large to preview.",
   candidate_source_mismatch: "This candidate was read from another source than the mapping version's field.",
   candidate_not_importable: "The import would not take this GPEXE session.",
+  unit_not_proven: "The source field's unit is not confirmed yet, so its values are not shown.",
 };
 
 // J11 section 2.2-2.3: the path ids and the one query parameter, read from
@@ -68,7 +70,8 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
       `select v.id, v.source_unit, v.target_unit,
               trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
               v.parameter_kind, ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters, v.applies_to_session, v.applies_to_drill,
-              d.source_system, d.api_family, d.source_metric_key, r.value_shape
+              d.source_system, d.api_family, d.source_metric_key, r.value_shape,
+              d.created_by_user_id is not null as created, r.evidence_status, r.source_unit as revision_unit
          from training_load.source_metric_mapping_versions v
          join training_load.source_metric_mappings m on m.id = v.mapping_id
          join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -84,7 +87,10 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
       sourceSystem: version.source_system, apiFamily: version.api_family, sourceMetricKey: version.source_metric_key,
       valueShape: version.value_shape, parameterKind: version.parameter_kind, sourceParameters: version.source_parameters,
     });
-    const mayRead = version.source_system === GPEXE_SOURCE_SYSTEM && registryCode === null;
+    // G2 (the board's guard, everywhere a value of the field is read): a field created through route C whose revision is
+    // not proven never lets an athlete's value leave the server.
+    const unproven = version.created === true && !revisionProven({ evidence_status: version.evidence_status, source_unit: version.revision_unit });
+    const mayRead = version.source_system === GPEXE_SOURCE_SYSTEM && registryCode === null && !unproven;
     // The candidate inside the scope, in one statement (R1, R6): its team and
     // the team's club active; the platform workspace any club's candidate,
     // club X's workspace club X's only. A missing candidate, a missing,
@@ -126,6 +132,7 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
       throw refusal(409, "candidate_source_mismatch", PREVIEW_MESSAGES.candidate_source_mismatch);
     }
     if (registryCode) throw refusal(409, registryCode, MESSAGES[registryCode]);
+    if (unproven) throw refusal(409, "unit_not_proven", PREVIEW_MESSAGES.unit_not_proven);
     // v62: the candidate team's session time zone, read in the same transaction, so a mixed session passes the import's gates.
     return { v: version, bundle: candidate.raw_bundle, teamTimezone: await teamSessionTimezone(client, candidate.owner_team_id) };
   });
