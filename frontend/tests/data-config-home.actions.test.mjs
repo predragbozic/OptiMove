@@ -99,7 +99,7 @@ beforeEach(() => {
   content.innerHTML = "";
 });
 
-test("1. Data configuration opens on the start screen: five cards for an administrator, each with its count and its rows, from one read each", async () => {
+test("1. Data configuration opens on the start screen: five cards for an administrator, and (S) the platform workspace's Map by drag and drop, each with its count and its rows, from one read each", async () => {
   assert.equal(variablesState().view, "home", "a fresh screen starts on the start screen");
   await loadVariablesSection(render);
   assert.deepEqual(gets().sort(), [CB, FB, MB, `${VB}?scope=own&state=active`].sort(), "the tree, the list, the fields and the mappings: one read each, no read of its own");
@@ -110,6 +110,7 @@ test("1. Data configuration opens on the start screen: five cards for an adminis
     { title: "Categories", summary: "1 category · 1 archived", rows: ["Aerobic capacity"] },
     { title: "Source fields", summary: "2 fields", rows: ["Total time", "Distance <x>"] },
     { title: "Mappings", summary: "1 mapping", rows: ["Time <z>"] },
+    { title: "Map by drag and drop", summary: "Drag a GPEXE column onto an OptiMove variable, for any linked team, and compare two athletes.", rows: [] },
   ]);
   assert.ok(content.innerHTML.includes("Sprint &lt;i&gt;distance&lt;/i&gt;") && content.innerHTML.includes("Endurance &lt;b&gt;") && content.innerHTML.includes("Distance &lt;x&gt;") && content.innerHTML.includes("Time &lt;z&gt;"), "every name is escaped");
   assert.equal(content.querySelectorAll("i, b, x, z").length, 0);
@@ -177,7 +178,7 @@ test("3. a card says what it can: loading, a failed read, a list that holds more
   resetMappings();
   respond = (call) => (call.url === FB || call.url === MB || call.url === CB || call.url.startsWith(`${VB}?`) ? { status: 500, body: { error: "internal_error" } } : base(call));
   await loadVariablesSection(render);
-  assert.deepEqual(cards().map((c) => c.summary), ["Could not be loaded. Open the list to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again."]);
+  assert.deepEqual(cards().map((c) => c.summary), ["Could not be loaded. Open the list to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Could not be loaded. Open to try again.", "Drag a GPEXE column onto an OptiMove variable, for any linked team, and compare two athletes."], "the board's card reads nothing of its own");
 
   resetVariables();
   resetSourceFields();

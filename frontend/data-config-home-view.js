@@ -109,10 +109,10 @@ function mappingsCard() {
   return card({ attrs: `data-action="training-load-section" data-section="mappings"`, tile: fieldTileHtml({ valueShape: "number" }), title: "Mappings", summary: escapeHtml(mappingsCardSummary(list)), rows });
 }
 
-// Map by drag and drop (J18): in a club workspace only, beside Mappings.
+// Map by drag and drop (J18): in a club workspace beside Mappings; in the platform workspace onto OptiMove's variables (S).
 function boardCard() {
   return card({ attrs: `data-action="training-load-section" data-section="board"`, tile: fieldTileHtml({ valueShape: "number" }), title: "Map by drag and drop",
-    summary: "Drag a GPEXE column onto your variable and compare two athletes.", rows: [] });
+    summary: boardContext()?.platform ? "Drag a GPEXE column onto an OptiMove variable, for any linked team, and compare two athletes." : "Drag a GPEXE column onto your variable and compare two athletes.", rows: [] });
 }
 
 export function renderDataConfigHomeHtml(s, ctx) {

@@ -123,6 +123,8 @@ export async function handleWorkspaceAction(action, handlers = {}) {
     const reload = nextType === "athlete" || isAthleteMode();
     if (handlers.confirmLeave && !handlers.confirmLeave({ reload })) return true;
 
+    // A link that switches and then opens a screen of the new workspace (the boards' own switch, S) says so here.
+    handlers.beforeSwitch?.(action);
     state.workspaceSwitcher.pending = true;
     state.workspaceSwitcher.error = "";
     renderWorkspaceSwitcher();
@@ -157,6 +159,7 @@ export async function handleWorkspaceAction(action, handlers = {}) {
       renderWorkspaceSwitcher();
       await handlers.onWorkspaceChanged?.();
     } catch (error) {
+      handlers.afterSwitchFailed?.();
       state.workspaceSwitcher.pending = false;
       state.workspaceSwitcher.error = error?.message === "WORKSPACE_NOT_AVAILABLE"
         ? "That workspace is no longer available."

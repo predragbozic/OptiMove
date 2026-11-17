@@ -15,11 +15,14 @@ const BASE = "/api/training-load/sources/metrics";
 const CONNECTIONS = "/api/training-load/sources/gpexe/connections";
 export const MAX_ROWS = 20;
 
-// Who is offered the board (section 4.1): a club workspace only - the club's
-// admin, or a platform admin working in the club. Never the platform
-// workspace, never a team workspace. The server decides again.
+// Who is offered the board (section 4.1): in a club workspace the club's admin, or a platform admin working in the
+// club (the club's variables, and OptiMove's where OptiMove's mapping fills them); S (the owner, 2026-11-17): in the
+// platform workspace a platform admin, for any club's team, onto OptiMove's variables. Never a team workspace. The
+// server decides again.
 export function boardContext(user = state.currentUser) {
   const ws = user?.activeWorkspace || null;
+  // A platform workspace exists only for an active platform admin.
+  if (ws?.type === "platform") return { platform: true, clubId: null, clubName: "", isPlatformAdmin: true };
   if (!ws || ws.type !== "club" || !ws.scopeId) return null;
   // A platform workspace exists only for an active platform admin: only they are shown keys, codes and source ids.
   const available = Array.isArray(user?.availableWorkspaces) ? user.availableWorkspaces : [];
@@ -78,7 +81,13 @@ const query = (params) => Object.entries(params).filter(([, v]) => v !== undefin
 
 // The club's teams that can open a board: an active team with an active
 // binding of the club's connection, each with the GPEXE team it is linked to.
-export async function fetchBoardTeams(clubId) {
+// On the platform board every club's linked teams, named "Club · Team", in one step (S).
+export async function fetchBoardTeams(clubId, { platform = false } = {}) {
+  if (platform) {
+    const answer = await api(`${BASE}/board/teams`);
+    return (Array.isArray(answer?.teams) ? answer.teams : [])
+      .map((t) => ({ teamId: String(t.teamId), name: `${String(t.clubName || "")} · ${String(t.teamName || "")}`, sourceTeamId: "" }));
+  }
   const answer = await api(`${CONNECTIONS}?clubId=${encodeURIComponent(clubId)}`);
   const teams = [];
   for (const c of Array.isArray(answer?.connections) ? answer.connections : []) {
@@ -238,6 +247,12 @@ export const COLUMN_REASON = {
 export function placementRefusal(p, { column, variable } = {}) {
   const code = p?.code || "";
   const name = variable?.label || "this variable";
+  // On the platform board the mappings are OptiMove's (S).
+  if (boardContext()?.platform) {
+    if (code === "source_metric_target_taken") return "This column already fills another OptiMove variable. Change that in Mappings.";
+    if (code === "mapping_version_active") return "OptiMove already maps this column to this variable in another way. Disable it in Mappings first.";
+    if (code === "variable_hidden") return "This team's club hides this OptiMove variable. It must be shown in that club's Variables first.";
+  }
   switch (code) {
     case "conversion_unavailable":
       return `The units do not match: GPEXE sends values in ${p.sourceUnit}, and the variable is in ${p.targetUnit}. Choose another variable or create a new one in a fitting unit.`;

@@ -444,8 +444,11 @@ test("2. the body and the audience: the right is asked before the body; a malfor
     coach.cookie = await cookieFor(coach.id);
     for (const who of [coach, W.caB, W.pa]) {
       assert.deepEqual(shape(await post("/confirmations", who, body())), NOT_FOUND);
-      if (who !== W.caB) assert.deepEqual(shape(await post("/confirmations", who, { nonsense: true })), NOT_FOUND);
+      if (who === coach) assert.deepEqual(shape(await post("/confirmations", who, { nonsense: true })), NOT_FOUND);
     }
+    // S: a platform admin in the platform workspace is the platform board's audience (OptiMove's variables only): a club's
+    // row is outside that board (the identical 404 above), and a malformed body is theirs to hear about.
+    refused(await post("/confirmations", W.pa, { nonsense: true }), 400, "invalid_body");
     assert.equal((await api("/confirmations", { method: "POST", body: body() })).status, 401);
     // Not JSON.
     const text = await fetch(`${apiBase}${PREFIX}/confirmations`, { method: "POST", headers: { "Content-Type": "text/plain", Cookie: W.caA.cookie }, body: "x" });

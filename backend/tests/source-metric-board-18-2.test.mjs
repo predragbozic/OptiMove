@@ -338,7 +338,11 @@ test("1. the audience: the club's admin and a platform admin in the club's works
   ok(await boardOf(W.paA, W.tA));
   const placeUrl = `/board/placement?${qs({ teamId: W.tA.teamId, candidateId: W.cA.id, pair: 0, fieldId: W.fTime.fieldId, targetId: W.vMin.id })}`;
   ok(await get(placeUrl, W.caA));
-  for (const [label, who] of [["a coach", W.coach], ["no role", W.plain], ["another club's admin", W.caB], ["a platform admin in the platform workspace", W.pa]]) {
+  // S: a platform admin in the platform workspace gets the platform board (OptiMove's variables only), where a club's
+  // variable is outside the board: the identical 404 on its placement.
+  assert.equal(ok(await boardOf(W.pa, W.tA)).board.owner, "system");
+  assert.deepEqual(shape(await get(placeUrl, W.pa)), NOT_FOUND, "a club variable on the platform board");
+  for (const [label, who] of [["a coach", W.coach], ["no role", W.plain], ["another club's admin", W.caB]]) {
     assert.deepEqual(shape(await boardOf(who, W.tA)), NOT_FOUND, `board: ${label}`);
     assert.deepEqual(shape(await get(placeUrl, who)), NOT_FOUND, `placement: ${label}`);
     // Not even a malformed query tells them apart.
@@ -384,7 +388,8 @@ test("1. the audience: the club's admin and a platform admin in the club's works
   // The two audience rules themselves.
   const ctx = (scope, basis) => ({ owner: { scope, clubId: scope === "club" ? W.clubA : null }, basis });
   assert.deepEqual([["club", "club_admin"], ["club", "platform_admin"], ["system", "platform_admin"], ["club", "team_coach"], ["system", "club_admin"], ["team", "club_admin"]].map(([sc, b]) => [boardService.mayUseBoard(ctx(sc, b)), boardService.mayReadConfirmations(ctx(sc, b))]),
-    [[true, true], [true, true], [false, true], [false, false], [false, false], [false, false]]);
+    // S (2026-11-17): a platform admin in the platform workspace uses the platform board.
+    [[true, true], [true, true], [true, true], [false, false], [false, false], [false, false]]);
   assert.deepEqual([boardService.mayUseBoard(null), boardService.mayReadConfirmations(undefined)], [false, false]);
 });
 
@@ -394,7 +399,7 @@ test("1. the audience: the club's admin and a platform admin in the club's works
 test("2. the board: the columns with their unit state, their reason and two athletes' raw values; the club's variables then OptiMove's; OptiMove's active mappings pre-placed; the pair named live and stable", async () => {
   const { board } = ok(await boardOf(W.caA, W.tA));
   assert.equal(board.displayRegistryVersion, 2, "2 since G1's as_sent rule");
-  assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId });
+  assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId, clubId: W.tA.clubId });
   assert.equal(board.session.candidateId, W.cA.id);
   assert.equal(new Date(board.session.startedAt).toISOString(), "2026-09-14T18:08:12.000Z");
   // The pair: the first two of the three named athletes, in the server's own order.

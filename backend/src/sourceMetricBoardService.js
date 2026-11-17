@@ -89,8 +89,12 @@ function readQuery(queryString, allowed, required) {
   return out;
 }
 
-// The board's audience: a club workspace only (section 4.1).
-export const mayUseBoard = (ctx) => ctx?.owner?.scope === "club" && (ctx.basis === "club_admin" || ctx.basis === "platform_admin");
+// The board's audience (section 4.1): in a club workspace, the club's admin or a platform admin there (the club's
+// variables, and OptiMove's where OptiMove's own mapping fills them); S (the owner, 2026-11-17): in the platform
+// workspace, an active platform admin for any club's team, onto OptiMove's (system) variables only. The owner of
+// what a save writes is always the workspace's (J1): the club's on a club board, OptiMove's on the platform board.
+export const isSystemBoard = (ctx) => ctx?.owner?.scope === "system" && ctx.basis === "platform_admin";
+export const mayUseBoard = (ctx) => (ctx?.owner?.scope === "club" && (ctx.basis === "club_admin" || ctx.basis === "platform_admin")) || isSystemBoard(ctx);
 // The stored confirmations: the board's audience, and a platform admin in the platform workspace.
 export const mayReadConfirmations = (ctx) => mayUseBoard(ctx) || (ctx?.owner?.scope === "system" && ctx.basis === "platform_admin");
 
@@ -105,18 +109,23 @@ const IDENTITY = Object.freeze({ scale: "1", divisor: "1", offset: "0" });
 // REPEATABLE READ READ ONLY transaction. Plain reads, no lock.
 // ---------------------------------------------------------------------------
 async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing = NOT_FOUND }) {
-  // The team, its one active GPEXE binding, and the binding's connection owned by the workspace's club.
+  const systemBoard = isSystemBoard(ctx);
+  // The team, its one active GPEXE binding, and the binding's connection owned by the team's club - the workspace's
+  // club on a club board; any active club on the platform board (S).
   const team = (await client.query(
-    `select t.id, t.name, b.id as binding_id, b.connection_id, b.source_team_id, h.api_family
+    `select t.id, t.name, t.club_id, b.id as binding_id, b.connection_id, b.source_team_id, h.api_family
        from public.teams t
        join public.clubs cl on cl.id = t.club_id and coalesce(cl.is_active, true)
        join training_load.source_team_bindings b on b.team_id = t.id and b.state = 'active' and b.source_system = $3
        join training_load.source_credential_connections c on c.id = b.connection_id and c.owner_scope = 'club' and c.owner_club_id = t.club_id
        join training_load.source_host_catalog h on h.source_system = c.source_system and h.host_key = c.host_key
-      where t.id = $1 and t.club_id = $2 and coalesce(t.is_active, true)`,
-    [teamId, ctx.owner.clubId, GPEXE_SOURCE_SYSTEM],
+      where t.id = $1 and ($2::uuid is null or t.club_id = $2::uuid) and coalesce(t.is_active, true)`,
+    [teamId, systemBoard ? null : ctx.owner.clubId, GPEXE_SOURCE_SYSTEM],
   )).rows[0];
   if (!team) throw NOT_FOUND();
+  // The team's club (its hides of OptiMove's variables apply on both boards); the owner of what a save writes.
+  const clubId = String(team.club_id);
+  const ownerKey = systemBoard ? "system" : clubId;
 
   const teamTimezone = await teamSessionTimezone(client, team.id);
 
@@ -231,7 +240,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   } else if (candidate.session_started_at === null) sessionRefusal = refusal(409, "session_start_unknown", BOARD_MESSAGES.session_start_unknown);
   else if (candidate.raw_bundle === null || typeof candidate.raw_bundle !== "object") throw new Error("board bundle missing");
 
-  // The variables: the club's own, then OptiMove's (section 3.3).
+  // The variables: the club's own, then OptiMove's (section 3.3); on the platform board OptiMove's only.
   const variables = (await client.query(
     `select d.id, d.owner_scope, d.key, d.label, v.id as version_id, v.value_type, v.unit,
             coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
@@ -242,12 +251,12 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
                      where h.club_id = $1::uuid and h.metric_definition_id = d.id and h.shown_at is null) as hidden
        from training_load.metric_definitions d
        join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
-      where d.state = 'active' and ((d.owner_scope = 'club' and d.owner_club_id = $1::uuid) or d.owner_scope = 'system')
+      where d.state = 'active' and ((d.owner_scope = 'club' and d.owner_club_id = $1::uuid and not $2::boolean) or d.owner_scope = 'system')
       order by (d.owner_scope = 'system'), d.label collate "C", d.id`,
-    [ctx.owner.clubId],
+    [clubId, systemBoard],
   )).rows;
 
-  // The active mapping versions the club can use: OptiMove's and its own.
+  // The active mapping versions the club can use: OptiMove's and its own; on the platform board OptiMove's only.
   const versions = (await client.query(
     `select v.id, v.mapping_id, v.owner_key, v.source_metric_definition_id as field_id, v.metric_definition_id as variable_id,
             v.source_metric_version_id as revision_id, v.metric_definition_version_id as target_version_id,
@@ -257,7 +266,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
        from training_load.source_metric_mapping_versions v
       where v.status = 'active' and v.owner_key = any($1::text[])
       order by v.id`,
-    [["system", ctx.owner.clubId]],
+    [systemBoard ? ["system"] : ["system", clubId]],
   )).rows;
 
   // What is switched on for the team, and what an administrator switched off on this binding (Q9).
@@ -284,7 +293,15 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
        left join public.users u on u.id = x.ended_by_user_id
       where x.end_reason = 'admin_ended'
         and not exists (select 1 from training_load.source_metric_audit e
-                          join training_load.source_metric_audit mc on mc.operation_id = e.operation_id and mc.action = 'mapping_confirmation'
+                          join training_load.source_metric_audit mc on mc.operation_id = e.operation_id
+                           and (mc.action = 'mapping_confirmation'
+                                -- S: a platform-board save stores no confirmation; its replacement is an end in the same
+                                -- operation as the start of an OptiMove (system) mapping. The 7i move to a club's copy also
+                                -- ends and starts in one operation, but it starts the club's copy, so it stays a switch-off.
+                                or (mc.action = 'activation_start'
+                                    and exists (select 1 from training_load.source_metric_mapping_versions sv
+                                                  join training_load.source_metric_mappings sm on sm.id = sv.mapping_id
+                                                 where sv.id = mc.mapping_version_id and sm.owner_scope = 'system')))
                          where e.activation_id = x.id and e.action = 'activation_end')`,
     [team.binding_id],
   )).rows;
@@ -312,7 +329,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   for (const row of identities) if (typeof row.display_name === "string" && row.display_name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.display_name);
   for (const row of linked) if (typeof row.name === "string" && row.name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.name);
 
-  return { clubId: ctx.owner.clubId, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
+  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +505,10 @@ function boardOf(world, pairIndex) {
   return {
     board: {
       displayRegistryVersion: DISPLAY_REGISTRY_VERSION,
-      team: { id: world.team.id, name: world.team.name, sourceTeamId: world.team.source_team_id },
+      // Whose mappings a save writes: the club's, or OptiMove's on the platform board (S).
+      owner: world.systemBoard ? "system" : "club",
+      // clubId: the team's own club (the other board's workspace, for its switch link).
+      team: { id: world.team.id, name: world.team.name, sourceTeamId: world.team.source_team_id, clubId: world.clubId },
       // newerNotUsable: with no session named, how many newer stored sessions were passed by because the import would not take them.
       session: { candidateId: world.candidate.id, label: world.candidate.session_label ?? null, startedAt: world.candidate.session_started_at, newerNotUsable: world.defaultSkipped },
       pair: { index: pair.index, count: pair.count, labels: pair.labels },
@@ -509,8 +529,9 @@ function boardOf(world, pairIndex) {
       variables: world.variables.filter((v) => !(v.owner_scope === "system" && v.hidden)).map((v) => ({
         id: v.id, ownerScope: v.owner_scope, key: v.key, label: v.label, versionId: v.version_id,
         unit: v.unit_is_token ? v.unit : null,
-        // A club variable takes a column; an OptiMove variable only where its system mapping of a column fills it (C61).
-        placeable: v.owner_scope === "club" ? v.value_type === "numeric" && v.unit_is_token === true : fedBySystem.has(v.id),
+        // A club variable takes a column; an OptiMove variable only where its system mapping of a column fills it (C61) -
+        // except on the platform board, where OptiMove's variables are the owner's own and take a column (S).
+        placeable: v.owner_scope === "club" || world.systemBoard ? v.value_type === "numeric" && v.unit_is_token === true : fedBySystem.has(v.id),
         filledByFieldIds: v.owner_scope === "system" ? fedBySystem.get(v.id) ?? [] : [],
       })),
       on: world.open.map((o) => ({
@@ -520,6 +541,29 @@ function boardOf(world, pairIndex) {
       })),
       preplaced, replaceable, switchedOff,
     },
+  };
+}
+
+// S: the platform board's "Which team?" in one step - every active team of an active club with an active GPEXE binding
+// of its club's connection, with its club's name. An active platform admin in the platform workspace only; everyone else
+// the identical 404. Bounded; never an athlete, a source id or a value.
+export const BOARD_TEAMS_MAX = 500;
+export async function listBoardTeams({ ctx }) {
+  if (!isSystemBoard(ctx)) throw NOT_FOUND();
+  const rows = await boundedRead(async (client) => (await client.query(
+    `select cl.id as club_id, cl.name as club_name, t.id as team_id, t.name as team_name
+       from public.teams t
+       join public.clubs cl on cl.id = t.club_id and coalesce(cl.is_active, true)
+       join training_load.source_team_bindings b on b.team_id = t.id and b.state = 'active' and b.source_system = $1
+       join training_load.source_credential_connections c on c.id = b.connection_id and c.owner_scope = 'club' and c.owner_club_id = t.club_id
+      where coalesce(t.is_active, true)
+      order by cl.name collate "C", cl.id, t.name collate "C", t.id
+      limit ${BOARD_TEAMS_MAX + 1}`,
+    [GPEXE_SOURCE_SYSTEM],
+  )).rows);
+  return {
+    teams: rows.slice(0, BOARD_TEAMS_MAX).map((r) => ({ clubId: r.club_id, clubName: r.club_name ?? "", teamId: r.team_id, teamName: r.team_name ?? "" })),
+    truncated: rows.length > BOARD_TEAMS_MAX,
   };
 }
 
@@ -554,8 +598,8 @@ function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
   const pair = shared ? shared.pairOf() : choosePair(world, columns, pairIndex);
   const refuse = (code, extra = {}) => ({ placement: { placeable: false, code, fieldId, targetId, ...extra } });
 
-  if (variable.owner_scope === "system") {
-    // An OptiMove variable is filled only by OptiMove's own mapping of this column (C61).
+  if (variable.owner_scope === "system" && !world.systemBoard) {
+    // On a club board an OptiMove variable is filled only by OptiMove's own mapping of this column (C61).
     const v = world.versions.find((x) => x.owner_key === "system" && x.field_id === fieldId && x.variable_id === targetId && x.parameter_kind === "none"
       && x.revision_id === col.field.revision_id && x.target_version_id === variable.version_id);
     if (!v || !col.readable) return refuse("target_scope_mismatch");
@@ -572,8 +616,8 @@ function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
   const scopes = variable.scopes ?? [];
   const levels = { session: col.field.supports_session === true && scopes.includes("session"), drill: col.field.supports_drill === true && scopes.includes("component") };
   if (!levels.session) return refuse("level_not_allowed");
-  // C33: another mapping of the club with an active version of this column.
-  const own = world.versions.filter((v) => v.owner_key === world.clubId && v.field_id === fieldId && v.parameter_fingerprint === "");
+  // C33: another mapping of the board's owner (the club, or OptiMove on the platform board) with an active version of this column.
+  const own = world.versions.filter((v) => v.owner_key === world.ownerKey && v.field_id === fieldId && v.parameter_fingerprint === "");
   if (own.some((v) => v.variable_id !== targetId)) return refuse("source_metric_target_taken");
   const active = own.find((v) => v.variable_id === targetId) ?? null;
   // The mapping's active version is reused only when it is this very contract (section 4.3 step 10).

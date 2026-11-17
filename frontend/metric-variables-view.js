@@ -23,12 +23,18 @@ const fmtDate = (iso) => {
 };
 const cut = (item, text) => `${escapeHtml(text || "")}${item?.truncated ? "…" : ""}`;
 
+// S: opened from the drag-and-drop board's "New variable" - one click back to that team's board, read again.
+function boardReturnHtml(r) {
+  return `<p class="metric-variables-board-return"><button type="button" class="om-btn" data-action="training-load-section" data-section="board" data-mb-team-id="${escapeAttr(r.teamId)}" data-mb-board-return>← Back to Map by drag and drop${r.teamName ? ` · ${escapeHtml(r.teamName)}` : ""}</button></p>`;
+}
+
 export function renderVariablesHtml() {
   const ctx = variablesContext();
   if (!ctx) return `<section class="metric-variables"><p class="empty">Variables are available in the platform workspace, in a club workspace and in a team workspace of a club.</p></section>`;
   const s = variablesState();
   return `
     <section class="metric-variables" aria-labelledby="metric-variables-title">
+      ${!s.form && s.boardReturn ? boardReturnHtml(s.boardReturn) : ""}
       ${s.form ? (isClassificationMode(s.form.mode) ? renderClassificationFormHtml(s, ctx) : renderFormHtml(s, ctx))
         : s.view === "home" ? renderDataConfigHomeHtml(s, ctx)
         : s.view === "domains" || s.view === "categories" ? renderClassificationHtml(s, ctx)
