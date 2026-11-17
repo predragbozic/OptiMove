@@ -17062,6 +17062,55 @@ p.muted.gpexe-source-fields {
 .gpexe-undo .gpexe-button {
   min-height: 44px;
 }
+/* PR #587: the team's session time zone in the review of a mixed-time-zones session (whoever may set it). */
+.gpexe-tz {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.gpexe-tz p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.gpexe-tz-field {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 0;
+}
+.gpexe-tz-field select,
+.gpexe-tz-field textarea {
+  font-family: inherit;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  /* 16px: iOS does not zoom into the field. */
+  font-size: 16px;
+  font-weight: 400;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+.gpexe-tz-field select {
+  min-height: 44px;
+}
+.gpexe-tz-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.gpexe-tz-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gpexe-tz .gpexe-button {
+  min-height: 44px;
+  justify-self: start;
+}
 .gpexe-undo-later-list {
   margin: 4px 0;
   padding-left: 18px;

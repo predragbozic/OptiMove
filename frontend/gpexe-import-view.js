@@ -20,6 +20,8 @@ import { guideSteps } from "./gpexe-guide-steps.js";
 import { ATTENTION_TEXT, attentionGroups, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
+import { timezoneAdmin, timezoneBusy, timezoneSet } from "./gpexe-timezone-data.js";
+import { renderTimezoneFixHtml, timezoneAskSentence } from "./gpexe-timezone-view.js";
 import { importedActivityOf, renderEstimateTargetsHtml } from "./gpexe-estimate-link.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
@@ -1982,7 +1984,7 @@ function renderGroupNavHtml(gx, detail) {
   const next = nextInGroup(detail, gx.candidates || [], gx);
   const busy = reviewMustStay(gx, detail);
   // Back to Imports is the dialog's Close: it waits for exactly what Close waits for.
-  const closeBusy = detail.approving || detail.verifying || undoBusy(gx);
+  const closeBusy = detail.approving || detail.verifying || undoBusy(gx) || timezoneBusy(gx);
   if (!next) return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`This is the last session in "${title}".`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-close" ${closeBusy ? "disabled" : ""}>Back to Imports</button></div>`;
   return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`Session ${at + 1} of ${ids.length} in "${title}"`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-group-next" ${busy ? "disabled" : ""}>Next session</button></div>`;
 }
@@ -1991,7 +1993,7 @@ function renderCandidateDetailHtml(gx, status) {
   const detail = gx.detail;
   const c = detail.candidate;
   // Not closable while an approval runs: its answer must be seen.
-  const busy = detail.approving || detail.verifying || undoBusy(gx) ? "disabled" : "";
+  const busy = detail.approving || detail.verifying || undoBusy(gx) || timezoneBusy(gx) ? "disabled" : "";
   const title = c ? `${niceSessionName(c)}${c.sessionStartedAt ? ` · ${fmtDateTime(c.sessionStartedAt)}` : ""}` : "Session";
   return `
     <div class="builder-athlete-overlay gpexe-detail-overlay">
@@ -2116,7 +2118,12 @@ export function blockedCoachText(c) {
   // administrator's Technical details.
   if (c.blockedSourceCode === "mixed_timezones" || c.preview?.blocked?.code === "mixed_timezones") {
     const day = c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : "";
-    return { reason: "GPEXE reports this session's GPS units in more than one time zone, so OptiMove can't tell when it took place.", step: platformViewer() ? `It is not imported until the team has a time zone. Ask a platform administrator to set it in Settings > Data sources, then find new sessions again${day}.` : `It is not imported until the team has a time zone. ${AskWho()}, then find new sessions again${day}.` };
+    // PR #587: whoever the status marks with sessionTimezoneAdmin (a platform admin; the team's club admin in the club's
+    // workspace) sets the zone right here, in the review; everyone else asks the club's admin.
+    return { reason: "GPEXE reports this session's GPS units in more than one time zone, so OptiMove can't tell when it took place.", step: !timezoneAdmin() ? timezoneAskSentence(day)
+      // Once she saved the zone here, every such session of the team needs only the new search.
+      : timezoneSet() ? `Find new sessions again${day}, so this session is read in the team's time zone.`
+      : `It is not imported until the team has a time zone. Set the team's time zone, then find new sessions again${day}.`, timezoneFix: true };
   }
   const precise = setupBlockCode(c);
   if (precise) {
@@ -2158,7 +2165,8 @@ function renderBlockedHtml(preview, c) {
     <div class="gpexe-blocked" role="note">
       <p><strong>${text.excluded ? "Not imported." : "Can't be imported yet."}</strong> ${escapeHtml(text.reason)}</p>
       <p><strong>What to do:</strong> ${escapeHtml(text.step)}</p>
-      ${steps.length ? `<ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
+      ${steps.length && !text.timezoneFix ? `<ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
+      ${text.timezoneFix ? renderTimezoneFixHtml(state.trainingLoad.gpexe, isoDay(c.sessionStartedAt)) : ""}
       ${reviewTechHtml([["Code", preview.blocked.code], ["Server message", preview.blocked.message], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
     </div>
   `;
