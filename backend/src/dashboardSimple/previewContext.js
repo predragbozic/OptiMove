@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { loadAuthorizationContext } from '../authz.js';
 import { resolveActiveWorkspaceReadOnly } from '../workspace.js';
 import { canManageDashboardRow, dataWorkspaceMatches, dataWorkspaceForActiveWorkspace } from '../trainingLoadDashboardAccess.js';
+import { canUseSimplePlatformPilot } from './platformPilot.js';
 import { isUuid } from './schema.js';
 import { previewError } from './previewTransaction.js';
 
@@ -19,6 +20,7 @@ export async function authorizePreviewTarget(queryRunner, req, dashboardId, { re
   if (!resolved.workspace) throw previewError('workspaceSelectionRequired', 409);
   const serverReq = { user, authz };
   const workspace = dataWorkspaceForActiveWorkspace(resolved.workspace, serverReq);
+  if (req.simplePlatformPilot && !canUseSimplePlatformPilot(serverReq, workspace)) throw previewError('notFound', 404);
   if (!isUuid(dashboardId)) throw previewError('notFound', 404);
   const dashboard = (await queryRunner('select * from training_load.dashboards where id=$1', [dashboardId])).rows[0];
   if (!dashboard || !canManageDashboardRow(serverReq, dashboard) || !dataWorkspaceMatches(workspace, dashboard)) throw previewError('notFound', 404);

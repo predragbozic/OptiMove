@@ -1,6 +1,7 @@
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
 import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadHomeCardHtml, renderTrainingLoadWeekButtonHtml } from "./training-load-view.js";
+import { renderMyTrainingHomeEntryHtml } from "./my-training-view.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, programInitials } from "./utils.js";
 
 // Same small local formatter tests-view.js already keeps for itself (not
@@ -64,6 +65,7 @@ export function renderAthleteHomeHtml({ data, error }) {
       ${renderTrainingLoadHomeCardHtml(state.trainingLoad.athleteToday)}
       ${renderTodayCard(today)}
       ${renderWeekStrip(week)}
+      ${renderMyTrainingHomeEntryHtml()}
       ${renderQuickActions()}
     </section>
     ${renderTrainingLoadAthleteOverlaysHtml()}

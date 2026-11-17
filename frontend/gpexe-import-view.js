@@ -20,6 +20,8 @@ import { guideSteps } from "./gpexe-guide-steps.js";
 import { ATTENTION_TEXT, attentionGroups, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
 import { renderUndoHtml, renderUndoneNoteHtml } from "./gpexe-undo-view.js";
 import { undoBusy } from "./gpexe-undo-data.js";
+import { timezoneAdmin, timezoneBusy, timezoneSet } from "./gpexe-timezone-data.js";
+import { renderTimezoneFixHtml, timezoneAskSentence } from "./gpexe-timezone-view.js";
 import { importedActivityOf, renderEstimateTargetsHtml } from "./gpexe-estimate-link.js";
 import { renderTeamSwitchLineHtml, renderTeamSwitchPanelHtml } from "./team-import-switch-view.js";
 import { escapeAttr, escapeHtml, formatDate, renderOption } from "./utils.js";
@@ -578,10 +580,15 @@ function bannerText(gx, check) {
   return parts.join(" · ");
 }
 
+// A search is starting or running (the one rule the source card, the chooser and a group's own button share).
+function searchRunning(gx, status) {
+  return Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
+}
+
 function renderSourceCardHtml(source, gx, status) {
   const connected = Boolean(status.settings);
   const check = gx.check || status.lastCheck;
-  const running = Boolean(gx.checkStarting || check?.status === "running");
+  const running = searchRunning(gx, status);
   const canFind = connected && !running;
   // P4 (manager, 2026-11-13): on a computer the period chooser is always on the page, after the work list (owner, 2026-11-16); on a phone
   // "Find new sessions" opens it as a full-screen sheet (the button is the phone's only, CSS imports-find-phone).
@@ -624,8 +631,7 @@ function monthFactsText(gx, suggestedTo) {
 function renderSourcePeriodHtml(gx, status) {
   const connected = Boolean(status.settings);
   if (!connected) return "";
-  const check = gx.check || status.lastCheck;
-  const running = Boolean(gx.checkStarting || check?.status === "running");
+  const running = searchRunning(gx, status);
   const suggested = datesNeededFor(gx.candidates || [], gx);
   return `
     ${renderPeriodHtml(gx, status, { nameOf: niceSessionName, timeOf: sessionTimeText, running, suggested, quiet: groupLeads(gx, status), capped: !periodMonthComplete(gx, shownMonth(gx, new Date(), suggested?.to || "").month), monthFacts: gx.candidates && !listsAllStates(status) ? monthFactsText(gx, suggested?.to || "") : "" })}
@@ -1020,7 +1026,7 @@ function renderAttentionGroupHtml(grp, gx, status, rows, lead = false) {
   if (grp.key === "fresh") {
     const dated = datesNeededFor(gx.candidates || [], gx);
     const range = dated ? (dated.from === dated.to ? formatDate(dated.from) : `${formatDate(dated.from)} - ${formatDate(dated.to)}`) : "";
-    const running = Boolean(gx.checkStarting || (gx.check || status.lastCheck)?.status === "running");
+    const running = searchRunning(gx, status);
     button = `<button type="button" class="${cls} gpexe-button" data-action="training-load-gpexe-check"${dated ? ` data-from="${escapeAttr(dated.from)}" data-to="${escapeAttr(dated.to)}"` : ""} ${status.settings && !running ? "" : "disabled"}>${escapeHtml(range ? `Find new sessions for ${range}` : "Find new sessions")}</button>`;
   } else {
     // Fix flow (slice 1): the coach and the club admin fix the group one problem at a time; the platform admin keeps the
@@ -1978,7 +1984,7 @@ function renderGroupNavHtml(gx, detail) {
   const next = nextInGroup(detail, gx.candidates || [], gx);
   const busy = reviewMustStay(gx, detail);
   // Back to Imports is the dialog's Close: it waits for exactly what Close waits for.
-  const closeBusy = detail.approving || detail.verifying || undoBusy(gx);
+  const closeBusy = detail.approving || detail.verifying || undoBusy(gx) || timezoneBusy(gx);
   if (!next) return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`This is the last session in "${title}".`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-close" ${closeBusy ? "disabled" : ""}>Back to Imports</button></div>`;
   return `<div class="imports-group-nav"><span class="muted">${escapeHtml(`Session ${at + 1} of ${ids.length} in "${title}"`)}</span><button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-group-next" ${busy ? "disabled" : ""}>Next session</button></div>`;
 }
@@ -1987,7 +1993,7 @@ function renderCandidateDetailHtml(gx, status) {
   const detail = gx.detail;
   const c = detail.candidate;
   // Not closable while an approval runs: its answer must be seen.
-  const busy = detail.approving || detail.verifying || undoBusy(gx) ? "disabled" : "";
+  const busy = detail.approving || detail.verifying || undoBusy(gx) || timezoneBusy(gx) ? "disabled" : "";
   const title = c ? `${niceSessionName(c)}${c.sessionStartedAt ? ` · ${fmtDateTime(c.sessionStartedAt)}` : ""}` : "Session";
   return `
     <div class="builder-athlete-overlay gpexe-detail-overlay">
@@ -2112,7 +2118,12 @@ export function blockedCoachText(c) {
   // administrator's Technical details.
   if (c.blockedSourceCode === "mixed_timezones" || c.preview?.blocked?.code === "mixed_timezones") {
     const day = c.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : "";
-    return { reason: "GPEXE reports this session's GPS units in more than one time zone, so OptiMove can't tell when it took place.", step: platformViewer() ? `It is not imported until the team has a time zone. Ask a platform administrator to set it in Settings > Data sources, then find new sessions again${day}.` : `It is not imported until the team has a time zone. ${AskWho()}, then find new sessions again${day}.` };
+    // PR #587: whoever the status marks with sessionTimezoneAdmin (a platform admin; the team's club admin in the club's
+    // workspace) sets the zone right here, in the review; everyone else asks the club's admin.
+    return { reason: "GPEXE reports this session's GPS units in more than one time zone, so OptiMove can't tell when it took place.", step: !timezoneAdmin() ? timezoneAskSentence(day)
+      // Once she saved the zone here, every such session of the team needs only the new search.
+      : timezoneSet() ? `Find new sessions again${day}, so this session is read in the team's time zone.`
+      : `It is not imported until the team has a time zone. Set the team's time zone, then find new sessions again${day}.`, timezoneFix: true };
   }
   const precise = setupBlockCode(c);
   if (precise) {
@@ -2154,7 +2165,8 @@ function renderBlockedHtml(preview, c) {
     <div class="gpexe-blocked" role="note">
       <p><strong>${text.excluded ? "Not imported." : "Can't be imported yet."}</strong> ${escapeHtml(text.reason)}</p>
       <p><strong>What to do:</strong> ${escapeHtml(text.step)}</p>
-      ${steps.length ? `<ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
+      ${steps.length && !text.timezoneFix ? `<ol>${steps.map((s) => `<li>${escapeHtml(coachStep(s, c))}</li>`).join("")}</ol>` : ""}
+      ${text.timezoneFix ? renderTimezoneFixHtml(state.trainingLoad.gpexe, isoDay(c.sessionStartedAt)) : ""}
       ${reviewTechHtml([["Code", preview.blocked.code], ["Server message", preview.blocked.message], ...steps.map((s, i) => [`Step ${i + 1} (server)`, `${s.action}: ${s.step}`])])}
     </div>
   `;

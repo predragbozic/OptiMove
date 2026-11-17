@@ -105,6 +105,8 @@ export function renderLibraryNav() {
     const isCalendar = tab === "calendar" && state.activeTab === "weekly";
     const isDirectTab = tab !== "calendar" && tab === state.activeTab;
     button.classList.toggle("is-active", isCalendar || isDirectTab);
+    // "My training" is in the menu only once the server said she has a recorded session (owner, 2026-11-16).
+    if (tab === "my-training") button.hidden = state.myTraining?.available !== true;
   });
   document.querySelector("#athletesToggle")?.classList.toggle("is-active", state.athletesExpanded);
   // The rail's Calendar is the central calendar (K1b, D1).

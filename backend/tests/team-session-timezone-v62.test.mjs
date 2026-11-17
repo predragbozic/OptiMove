@@ -289,9 +289,9 @@ test("4. the route refuses, writing nothing: no reason, a blank or too long reas
   assert.equal(await historyCount(team.teamId), 0);
 });
 
-test("5. who: a coach and a club admin get the settings' 403 (read and write); another team, a missing team and an archived team get the identical 404", async () => {
+test("5. who: the team's coach gets the settings' 403 (read and write; the club's admin may, test 17); another team, a missing team and an archived team get the identical 404", async () => {
   const team = await setupTeam();
-  for (const who of [team.coach, team.cadmin]) {
+  for (const who of [team.coach]) {
     assert.equal((await api(tzPath(team), { cookie: who.cookie })).status, 403);
     assert.equal((await setZone(team, "Europe/Sarajevo", { cookie: who.cookie })).status, 403);
   }
@@ -537,4 +537,120 @@ test("11. migration v62: the preflight passes on v61, the post-check on v62, the
     await admin.query(`insert into public.schema_migrations select * from tz62_later`);
   }
   assert.deepEqual(await catalogOf(admin), before, "the refused rollback changed nothing");
+});
+
+test("17. the owner's decision of 2026-11-16: the active admin of the team's own club, in that club's workspace, reads, sets and clears the zone; the history names them; the right is checked again under the lock; everyone else the 403 (sees the team) or the identical 404", async () => {
+  const team = await setupTeam();
+  const missing = await api(`/teams/00000000-0000-4000-8000-000000000000/session-timezone`, { cookie: team.cadmin.cookie });
+  assert.equal(missing.status, 404);
+  const flag = async (who) => (await api(`/teams/${team.teamId}/status`, { cookie: who.cookie })).body.viewer;
+  // The status flag the frontend reads: the platform admin and the club's admin, never the coach.
+  assert.equal((await flag(team.padmin)).sessionTimezoneAdmin, true);
+  assert.equal((await flag(team.cadmin)).sessionTimezoneAdmin, true);
+  assert.equal(Object.hasOwn(await flag(team.coach), "sessionTimezoneAdmin"), false, "no trace for the coach");
+  // The club's admin reads, sets, changes and clears; the same value writes nothing; the history names them.
+  let r = await api(tzPath(team), { cookie: team.cadmin.cookie });
+  assert.deepEqual([r.status, r.body.sessionTimezone], [200, { current: null, history: [] }]);
+  r = await setZone(team, "Europe/Sarajevo", { cookie: team.cadmin.cookie, reason: "home matches" });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.body.sessionTimezone.current.timezone, r.body.sessionTimezone.current.setByName], ["Europe/Sarajevo", "club admin"]);
+  assert.equal((await setZone(team, "Europe/Sarajevo", { cookie: team.cadmin.cookie, reason: "again" })).status, 200);
+  assert.equal(await historyCount(team.teamId), 1, "the same value writes nothing");
+  r = await setZone(team, null, { cookie: team.cadmin.cookie, reason: "not needed" });
+  assert.deepEqual([r.status, r.body.sessionTimezone.current.timezone], [200, null]);
+  // A platform admin keeps the right, in the platform and in the club's workspace; their name is in the history the club admin reads.
+  assert.equal((await setZone(team, "Europe/Belgrade", { reason: "support" })).status, 200);
+  await setWorkspace(team.padmin.id, "club", team.clubId);
+  assert.equal((await setZone(team, "Europe/Sarajevo", { reason: "support again" })).status, 200);
+  await setWorkspace(team.padmin.id, "platform", null);
+  const read = await api(tzPath(team), { cookie: team.cadmin.cookie });
+  assert.deepEqual(read.body.sessionTimezone.history.map((h) => h.setByName), ["platform admin", "platform admin", "club admin", "club admin"]);
+  const count = await historyCount(team.teamId);
+
+  // The coach sees the team: a 403 that names who may, and nothing of the zone, its history or a name (the body whole).
+  const FORBIDDEN = { error: "forbidden", message: "Only a platform administrator, or the admin of this team's club working in the club's workspace, can see or set this team's time zone." };
+  for (const res of [await api(tzPath(team), { cookie: team.coach.cookie }), await setZone(team, "Europe/Paris", { cookie: team.coach.cookie })]) {
+    assert.equal(res.status, 403);
+    assert.deepEqual(res.body, FORBIDDEN);
+  }
+  // The club's admin who also coaches the team, acting in the team's workspace (not the club's): the 403 too. A club admin
+  // without a coach role has no team workspace, and their preference falls back to the club's.
+  await admin.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [team.cadmin.id, team.teamId]);
+  await setWorkspace(team.cadmin.id, "team", team.teamId);
+  for (const res of [await api(tzPath(team), { cookie: team.cadmin.cookie }), await setZone(team, "Europe/Paris", { cookie: team.cadmin.cookie })]) {
+    assert.deepEqual([res.status, res.body], [403, FORBIDDEN]);
+  }
+  assert.equal(Object.hasOwn((await api(`/teams/${team.teamId}/status`, { cookie: team.cadmin.cookie })).body.viewer, "sessionTimezoneAdmin"), false);
+  await admin.query(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [team.cadmin.id, team.teamId]);
+  await setWorkspace(team.cadmin.id, "club", team.clubId);
+
+  // The identical 404: another club's admin; an admin of two clubs in the other club's workspace; this club's admin naming a
+  // team of another club (id guessing); an athlete of the team; a user with no role.
+  const other = await setupTeam();
+  const twoClubs = await clubAdminOf(other.clubId);
+  await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [twoClubs.id, team.clubId]);
+  const athleteUser = await makeUser("athlete user");
+  await admin.query(`update public.athletes set user_id = $1 where id = $2`, [athleteUser, team.athleteIds[0]]);
+  const athlete = { id: athleteUser, cookie: `optimove_session=${await createSession(athleteUser)}` };
+  const nobodyId = await makeUser("nobody");
+  const nobody = { id: nobodyId, cookie: `optimove_session=${await createSession(nobodyId)}` };
+  for (const [label, who, path] of [
+    ["another club's admin", other.cadmin, tzPath(team)],
+    ["an admin of two clubs in the other club's workspace", twoClubs, tzPath(team)],
+    ["this club's admin, a team of another club", team.cadmin, tzPath(other)],
+    ["an athlete", athlete, tzPath(team)],
+    ["no role", nobody, tzPath(team)],
+  ]) {
+    const get = await api(path, { cookie: who.cookie });
+    const put = await api(path, { method: "PUT", cookie: who.cookie, body: { timezone: "Europe/Paris", reason: "r" } });
+    assert.deepEqual([get.status, put.status], [404, 404], label);
+    assert.equal(get.text, missing.text, `${label}: the identical 404`);
+    assert.equal(put.text, missing.text, `${label}: the identical 404`);
+  }
+  // An archived team and a team of an archived club: the identical 404 for the club's admin.
+  await admin.query(`update public.teams set is_active = false where id = $1`, [other.teamId]);
+  assert.equal((await setZone(other, "Europe/Paris", { cookie: other.cadmin.cookie })).text, missing.text);
+  await admin.query(`update public.teams set is_active = true where id = $1`, [other.teamId]);
+  await admin.query(`update public.clubs set is_active = false where id = $1`, [other.clubId]);
+  assert.equal((await setZone(other, "Europe/Paris", { cookie: other.cadmin.cookie })).text, missing.text);
+  await admin.query(`update public.clubs set is_active = true where id = $1`, [other.clubId]);
+  assert.equal(await historyCount(other.teamId), 0);
+
+  // The right lost during the write (after the team's lock, before the re-check): the identical 404, nothing written. Then
+  // the team archived, then the club archived, the same way.
+  const tz = await import("../src/gpexeTeamTimezone.js");
+  for (const [label, lose, restore] of [
+    ["the club-admin role revoked", `update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, `update public.user_club_roles set is_active = true where user_id = $1 and club_id = $2`],
+    ["the team archived", `update public.teams set is_active = false where id = (select id from public.teams where club_id = $2 and id = '${team.teamId}') and $1::uuid is not null`, `update public.teams set is_active = true where id = '${team.teamId}' and $1::uuid is not null and $2::uuid is not null`],
+    ["the club archived", `update public.clubs set is_active = false where id = $2 and $1::uuid is not null`, `update public.clubs set is_active = true where id = $2 and $1::uuid is not null`],
+  ]) {
+    tz.setTimezoneWriteHoldForTests(async () => { await admin.query(lose, [team.cadmin.id, team.clubId]); });
+    let res;
+    try {
+      res = await setZone(team, "Europe/Paris", { cookie: team.cadmin.cookie, reason: "lost" });
+    } finally {
+      tz.setTimezoneWriteHoldForTests(null);
+      await admin.query(restore, [team.cadmin.id, team.clubId]);
+    }
+    assert.equal(res.status, 404, `${label}: ${res.text}`);
+    assert.equal(res.text, missing.text, `${label}: the identical 404`);
+    assert.equal(await historyCount(team.teamId), count, `${label}: nothing written`);
+  }
+  // With the right held, the same write goes through.
+  assert.equal((await setZone(team, "Europe/Paris", { cookie: team.cadmin.cookie, reason: "kept" })).status, 200);
+});
+
+test("18. the right's re-check inside the write locks in the revocations' order: the users row, then the role, then the team, then the club, each FOR SHARE, after the team's import lock (the recorded SQL order)", () => {
+  const src = fs.readFileSync(new URL("../src/gpexeTeamTimezone.js", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("async function rightStillHolds"), src.indexOf("export async function readTeamSessionTimezone"));
+  const at = (re) => { const m = body.search(re); assert.ok(m >= 0, String(re)); return m; };
+  const users = at(/from public\.users where id = \$1 and is_active = true for share/);
+  const global = at(/from public\.user_global_roles .* for share/);
+  const clubRole = at(/from public\.user_club_roles .* for share/);
+  const team = at(/from public\.teams .* for share/);
+  const club = at(/from public\.clubs .* for share/);
+  assert.ok(users < global && users < clubRole && Math.max(global, clubRole) < team && team < club, "users, role, team, club");
+  const write = src.slice(src.indexOf("export async function setTeamSessionTimezone"));
+  assert.ok(write.indexOf("lockTeamForImport(client, teamId)") < write.indexOf("rightStillHolds(client"), "after the team's import lock");
+  assert.ok(write.indexOf("rightStillHolds(client") < write.indexOf("insert into training_load.gpexe_team_session_timezones"), "before the write");
 });

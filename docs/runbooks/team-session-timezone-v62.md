@@ -30,7 +30,18 @@ A GPEXE session whose GPS units report more than one time zone (for example one 
   never a silent move.
 - **Who sets it:** a platform admin, in Settings > Data sources, next to the GPEXE pair, with a mandatory reason
   (`GET` / `PUT /api/training-load/gpexe/teams/:teamId/session-timezone` with `{ timezone, reason }`; `timezone: null`
-  clears it). A coach and a club admin get the settings' 403; another, missing or archived team the identical 404.
+  clears it). Since the owner's decision of 2026-11-16 also the active admin of the team's own club, acting in that club's
+  workspace. The status answer's `viewer.sessionTimezoneAdmin: true` (only when true) says the viewer may.
+  - The write checks the right again after the team's import lock, FOR SHARE: users row, role, team, club. A right, team or
+    club lost meanwhile answers the identical 404 and writes nothing.
+  - Whoever sees the team without the right (its coach, a club admin in the team's workspace) gets the settings' 403,
+    with no zone, history or name. Another club's team, a missing or archived team, or an archived club: the identical 404.
+  - The history keeps who set each value (the name), when and why; the basis is not stored (no migration).
+  - **Known limit:** the right is enforced by the application, not by the database (v62 has no actor guard, unlike v35). A
+    raw database writer, or a future route that writes the table, is not stopped by it; the history still names who wrote.
+    A database actor guard would be a later migration.
+  - What a change does: nothing imported is rewritten. The next check, or a review's recompute, rebuilds the preview of a
+    pending mixed-zone session with the new zone, so it reads as changed and needs the review again.
 - **Concurrency:** the write takes the team's import lock (`lock_timeout` 3 s, then `409 gpexe_change_busy`), and the
   database trigger holds it too (`hold_gpexe_team_lock`), so a zone never changes under a running check, preview or
   approval of that team. Every importer path reads the zone under that lock.

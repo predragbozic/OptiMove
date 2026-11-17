@@ -328,7 +328,7 @@ test("3. a replay of the same request answers the saved outcome; the same key wi
   assert.deepEqual(await allRowCounts(), rowsAfterFirst);
 });
 
-test("4. only an active platform admin reaches the undo; everyone else gets the identical 404 (preview and undo)", async () => {
+test("4. in pilot mode only an active platform admin (in any workspace that resolves the team, as the approval) reaches the undo; a coach and the club admin without a grant, another team's coach - the identical 404 (preview and undo); v76's other bases: undo-by-importer-v76", async () => {
   const team = await setupTeam();
   const other = await setupTeam();
   const s = await importSession(team, 9104);
@@ -352,9 +352,9 @@ test("4. only an active platform admin reaches the undo; everyone else gets the 
     assert.deepEqual([post.status, post.text], [404, missing.text], `${who} POST`);
     assert.deepEqual([get.status, get.text], [404, missing.text], `${who} GET`);
   }
-  // A platform admin in a team workspace, and a malformed id.
-  const inTeam = await undo(team, s, { cookie: padminInTeam.cookie });
-  assert.deepEqual([inTeam.status, inTeam.text], [404, missing.text]);
+  // A platform admin in a team workspace may (v76: the approval's audience); the preview answers. A malformed id: 404.
+  const inTeam = await api(previewPath(team, s.candidateId), { cookie: padminInTeam.cookie });
+  assert.equal(inTeam.status, 200, inTeam.text);
   const bad = await api(`/teams/${team.teamId}/candidates/not-a-uuid/undo-import`, { method: "POST", cookie: team.padmin.cookie, body: {} });
   assert.deepEqual([bad.status, bad.text], [404, missing.text]);
   // A candidate of another team through this team's route.

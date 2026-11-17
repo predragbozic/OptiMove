@@ -9168,6 +9168,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     border-bottom: 1px solid var(--line);
   }
 
+  /* Its height: 8 px padding, 44 px controls, 8 px padding and a 1 px line. The week picker sits under it and a day
+     scrolled into view lands below it; one number for both (code review). */
+  body.athlete-mode {
+    --athlete-week-nav-height: 61px;
+  }
+
   /* hotfix/athlete-mobile-navigation: .week-calendar-picker is
      .week-nav-panel's sibling inside .week-nav-wrap (display: contents
      above), so in normal flow it renders right after the nav row's
@@ -9180,7 +9186,7 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .athlete-mode .week-calendar-picker {
     position: sticky;
     /* Under the topbar and the week controls (now 44 px controls; mobile QA). */
-    top: calc(var(--athlete-topbar-height, 61px) + 61px + env(safe-area-inset-top, 0px));
+    top: calc(var(--athlete-topbar-height, 61px) + var(--athlete-week-nav-height) + env(safe-area-inset-top, 0px));
     z-index: 39;
     background: var(--bg);
     padding-top: 8px;
@@ -17056,6 +17062,55 @@ p.muted.gpexe-source-fields {
 .gpexe-undo .gpexe-button {
   min-height: 44px;
 }
+/* PR #587: the team's session time zone in the review of a mixed-time-zones session (whoever may set it). */
+.gpexe-tz {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.gpexe-tz p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.gpexe-tz-field {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 0;
+}
+.gpexe-tz-field select,
+.gpexe-tz-field textarea {
+  font-family: inherit;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  /* 16px: iOS does not zoom into the field. */
+  font-size: 16px;
+  font-weight: 400;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+.gpexe-tz-field select {
+  min-height: 44px;
+}
+.gpexe-tz-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.gpexe-tz-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gpexe-tz .gpexe-button {
+  min-height: 44px;
+  justify-self: start;
+}
 .gpexe-undo-later-list {
   margin: 4px 0;
   padding-left: 18px;
@@ -18075,6 +18130,36 @@ p.muted.gpexe-approve-note {
 .source-connections-bound {
   display: grid;
   gap: 10px;
+}
+/* A bound team's session time zone (after PR #587): its line and its form take the row's width. */
+.source-connections-bound-list li > div {
+  flex: 1 1 260px;
+}
+.source-connections-zone {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.source-connections-zone p {
+  margin: 0;
+}
+.source-connections-zone textarea {
+  font-family: inherit;
+}
+/* The row's ghost buttons are red for Unbind; the zone's Cancel is neutral, and only Clear keeps the warning colour. */
+.source-connections-zone .plain-button.ghost {
+  border-color: var(--line-strong);
+  color: inherit;
+}
+.source-connections-zone .plain-button.ghost[data-action="source-connections-zone-clear"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* With the time zone in it, a row is taller: Unbind stays at the top, beside the team's name. */
+.source-connections-bound-list li {
+  align-items: flex-start;
 }
 .source-connections-attempt > p,
 .source-connections-bound > p,
@@ -26895,7 +26980,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-later-aside .gpexe-button:focu
 /* End of Imports P4b. */
 
 /* Imports P4c: a coach and a club admin find imported and "stays out" sessions in the calendar only. A quiet grey
-   mark for "stays out"; one quiet line under the chooser counts the month shown (on a phone it is a button that opens
+   mark for "stays out"; one quiet line in the chooser counts the month shown (on a phone it is a button that opens
    the calendar sheet); "Older sessions may not be shown." when the list read is full. */
 .imports-period .period-chip.is-out {
   background: var(--surface-soft);
@@ -27633,7 +27718,7 @@ body.athlete-mode:not(.login-mode) .brand-mark {
     border-bottom: 1px solid var(--line, #dde3e6);
     background: none;
     /* A day brought into view lands below the sticky header and week controls (mobile QA). */
-    scroll-margin: calc(var(--athlete-topbar-height, 61px) + 61px + env(safe-area-inset-top, 0px) + 12px) 0 12px;
+    scroll-margin: calc(var(--athlete-topbar-height, 61px) + var(--athlete-week-nav-height) + env(safe-area-inset-top, 0px) + 12px) 0 12px;
     overflow-wrap: anywhere;
   }
   body.athlete-mode:not(.login-mode) .content-section .calendar-grid .calendar-day:last-child {
@@ -27693,3 +27778,208 @@ body.athlete-mode:not(.login-mode) .brand-mark {
     font-weight: 400;
   }
 }
+
+/* ==========================================================================
+   My training (owner, 2026-11-16): the athlete's own recorded sessions and
+   values, read-only. A list of her sessions (44 px rows), one session with
+   the whole session's values first, then each drill; only measured values
+   (an estimate is never shown to her).
+   ========================================================================== */
+.my-training {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  max-width: 760px;
+}
+.my-training-title {
+  margin: 0;
+}
+.my-training-drill summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.my-training-drill-title {
+  flex: 1 1 auto;
+  font-weight: 700;
+  font-size: 15px;
+}
+/* A chevron says a drill opens (UX review); the browser's own marker is hidden (a flex summary has none in Chromium). */
+.my-training-drill summary {
+  list-style: none;
+}
+.my-training-drill summary::-webkit-details-marker {
+  display: none;
+}
+.my-training-drill summary::after {
+  content: "\203A";
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted, #5c6b72);
+  transform: rotate(90deg);
+}
+.my-training-drill[open] summary::after {
+  transform: rotate(-90deg);
+}
+.my-training-drill[open] summary {
+  margin-bottom: 8px;
+}
+.my-training-intro {
+  margin: 0;
+}
+.my-training-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.my-training-list li + li {
+  border-top: 1px solid var(--line, #dde3e6);
+}
+.my-training-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 14px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .my-training-row:hover {
+    background: var(--surface-muted, #f4f7f8);
+  }
+}
+.my-training-row:focus-visible {
+  outline-offset: -2px;
+}
+.my-training-row-date {
+  flex: 0 0 104px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.my-training-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.my-training-row-name {
+  font-weight: 600;
+}
+.my-training-row-sub {
+  font-size: 13px;
+}
+.my-training-row-go,
+.my-training-home-go {
+  font-size: 22px;
+  color: var(--muted, #5c6b72);
+}
+.my-training-more,
+.my-training-back {
+  align-self: flex-start;
+  min-height: 44px;
+}
+.my-training-head h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.my-training-head p {
+  margin: 4px 0 0;
+}
+.my-training-note {
+  margin: 0;
+  padding: 12px 14px;
+}
+.my-training-values {
+  padding: 12px 14px;
+}
+.my-training-values h4 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.my-training-values dl {
+  margin: 0;
+}
+.my-training-value {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line, #dde3e6);
+}
+.my-training-value:first-child {
+  border-top: 0;
+}
+.my-training-value dt {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.my-training-value dd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+/* A long text value wraps instead of widening a phone's page (code review); a number and its unit stay together. */
+/* A text value (a sentence) goes under its label, left-aligned, instead of squeezing it (mobile QA). */
+.my-training-value.is-text {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.my-training-value.is-text dd {
+  align-items: flex-start;
+  text-align: left;
+  white-space: normal;
+}
+.my-training-error {
+  padding: 12px 14px;
+}
+.my-training-error .plain-button {
+  min-height: 44px;
+}
+.my-training-home {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #dde3e6);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.my-training-home-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.my-training-home-title {
+  font-weight: 700;
+}
+/* End of My training. */

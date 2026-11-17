@@ -160,6 +160,12 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     viewer: {
       canApprove: approval.canApprove, hasApprovalRight: approval.hasRight, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin,
       ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}),
+      // v76: whether this viewer may delete (undo) an imported session of the team - the approval right's basis, whatever
+      // the switch. Only when true; the undo routes and the database decide again.
+      ...(approval.basis ? { undoImport: true } : {}),
+      // Whether this viewer may read and set the team's session time zone (a platform admin; the team's own club admin in
+      // that club's workspace). Only when true, as identityAdmin; the session-timezone routes decide again.
+      ...(sessionTimezoneBasis(req, access) ? { sessionTimezoneAdmin: true } : {}),
       // The GPEXE names of the team's athletes (an administrator: all; the team's own coach in its workspace: the unlinked
       // ones). Only when true; the list route decides again.
       ...(identity.pairSuggestionBasis(req, access) ? { identityNames: true } : {}),
@@ -233,25 +239,44 @@ router.get("/teams/:teamId/settings/history", handle(async (req, res) => {
 }));
 
 // v62 (mixed_timezones (b)): the team's session time zone, used by the importer only for a session whose GPS units report
-// several zones. A platform admin reads and sets it (with a reason); everyone else who sees the team gets the 403 of the
-// settings, and a foreign or archived team the identical 404 of teamAccess.
+// several zones. A platform admin reads and sets it (with a reason), and since the owner's decision of 2026-11-16 also the
+// active admin of the team's own club acting in that club's workspace. Everyone else who sees the team (its coach, a club
+// admin in the team's workspace) gets the 403 of the settings, with nothing of the zone; a foreign or archived team, or a
+// team of another club, the identical 404 of teamAccess. The write checks the right again under the team's lock.
+// The 403 of the two time zone routes: it names who may, never the zone, its history or a name.
+export const SESSION_TIMEZONE_FORBIDDEN = Object.freeze({
+  error: "forbidden",
+  message: "Only a platform administrator, or the admin of this team's club working in the club's workspace, can see or set this team's time zone.",
+});
+function sessionTimezoneForbidden(res) {
+  return res.status(403).json(SESSION_TIMEZONE_FORBIDDEN);
+}
+
+function sessionTimezoneBasis(req, access) {
+  if (access.platformAdmin) return "platform_admin";
+  return identity.identityAdminBasis(req, access) === "club_admin" ? "club_admin" : null;
+}
+
 router.get("/teams/:teamId/session-timezone", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  if (!access.platformAdmin) return forbidden(res);
+  if (!sessionTimezoneBasis(req, access)) return sessionTimezoneForbidden(res);
   res.json({ sessionTimezone: await teamTimezone.readTeamSessionTimezone(access.teamId) });
 }));
 
 router.put("/teams/:teamId/session-timezone", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  if (!access.platformAdmin) return forbidden(res);
+  const basis = sessionTimezoneBasis(req, access);
+  if (!basis) return sessionTimezoneForbidden(res);
   const body = req.body && typeof req.body === "object" ? req.body : {};
   try {
     const timezone = body.timezone === null ? null : body.timezone;
     if (timezone !== null && typeof timezone !== "string") return res.status(400).json({ error: "invalid_timezone", message: "Choose a time zone from the list (for example Europe/Sarajevo)." });
-    res.json({ sessionTimezone: await teamTimezone.setTeamSessionTimezone(access.teamId, { timezone, reason: body.reason, userId: req.user.id }) });
+    res.json({ sessionTimezone: await teamTimezone.setTeamSessionTimezone(access.teamId, { timezone, reason: body.reason, userId: req.user.id, basis, clubId: access.clubId }) });
   } catch (error) {
+    // A right, team or club lost during the write: the identical 404 of teamAccess, nothing written.
+    if (error instanceof teamTimezone.TeamTimezoneError && error.status === 404) return notFound(res);
     if (error instanceof teamTimezone.TeamTimezoneError) return res.status(error.status).json({ error: error.code, message: error.message });
     throw error;
   }
@@ -576,17 +601,31 @@ router.get("/teams/:teamId/athlete-pair-suggestions", async (req, res, next) => 
   }
 });
 
-// U5 (J19-U5, v57): the in-app undo of one imported session. The first version is for an active platform admin only
-// (the owner's Q1; the final state, whoever may make athlete links, is a second step): everyone else - the club's admin
-// and a coach included - gets the identical 404, as for a missing candidate. The database function derives and locks the
-// right again.
-async function undoAccess(req, res) {
+// U5 (J19-U5, v57): the in-app undo of one imported session. Since v76 (the owner's decision of 2026-11-17) whoever may
+// approve an import of the team may undo one - the approval right's basis (platform_admin, team_grant, and club_admin /
+// team_coach in mode 'team'), without the switch's on/off, so a wrong import stays deletable with the switch off. Everyone
+// else gets the identical 404, as for a missing candidate. The database function derives and locks the right again.
+async function undoBasis(req, access) {
+  return (await canApproveGpexeImport({ query }, req.user.id, access.teamId)).basis;
+}
+async function undoAccess(req, res, param = "candidateId") {
   const access = await teamAccess(req, res);
   if (!access) return null;
-  if (identity.identityAdminBasis(req, access) !== "platform_admin") { notFound(res); return null; }
-  if (!UUID.test(req.params.candidateId)) { notFound(res); return null; }
+  if (!(await undoBasis(req, access))) { notFound(res); return null; }
+  if (!UUID.test(req.params[param])) { notFound(res); return null; }
   return access;
 }
+
+// v76: the import behind a session of the calendar or Activities, so the undo can be opened from the session itself. A
+// read only: { importUndo: { candidateId } }, or the identical 404 (no right, not imported, already undone, another team).
+router.get("/teams/:teamId/activities/:activityId/import-undo", handle(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const access = await undoAccess(req, res, "activityId");
+  if (!access) return;
+  const candidateId = await sessionUndo.importCandidateOfActivity(access.teamId, req.params.activityId);
+  if (!candidateId) return notFound(res);
+  res.json({ importUndo: { candidateId } });
+}));
 
 router.get("/teams/:teamId/candidates/:candidateId/undo-preview", handle(async (req, res) => {
   res.set("Cache-Control", "no-store");

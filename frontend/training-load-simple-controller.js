@@ -4,7 +4,7 @@ export const simpleSaveIsPending = locked;
 
 export function simpleDraftFromWidget(widget, uuid) {
   const series = widget?.series?.[0];
-  if (widget && (widget.series?.length !== 1 || series.resolution_status !== 'resolved'
+  if (widget && (widget.series?.length !== 1 || series.resolution_status !== 'resolved' || series.source_policy === 'estimate'
     || series.template_metric_key_hints || series.template_resolution_candidates
     || Object.keys(widget.local_filter_override ?? {}).some(key => !['athleteIds', 'activityId', 'componentId'].includes(key)))) return null;
   const filter = widget?.local_filter_override ?? {};
@@ -134,7 +134,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
       await complete(target, result, run);
     } catch (error) {
       if (!currentTarget(target, run)) return;
-      const definiteRejection = error.status >= 400 && error.status < 500 && ['invalidRequest', 'invalidDraft', 'payloadTooLarge', 'staleRevision', 'previewRequired', 'catalogChanged', 'advancedRequired', 'pagesClientRequired', 'dashboardArchived', 'templateRequiresClone'].includes(error?.data?.error);
+      const definiteRejection = error.status >= 400 && error.status < 500 && ['invalidRequest', 'invalid_json', 'invalidDraft', 'payloadTooLarge', 'body_too_large', 'staleRevision', 'previewRequired', 'catalogChanged', 'advancedRequired', 'pagesClientRequired', 'dashboardArchived', 'templateRequiresClone'].includes(error?.data?.error);
       if (!definiteRejection) {
         target.saveState = 'unknown'; target.saveError = '';
       } else if (retry) {

@@ -442,7 +442,7 @@ test("undo: a run that fails after the removal leaves neither the removal nor a 
   assert.equal((await deletionLog(summary.eventId)).length, 0, "the log row went with the rolled-back removal");
 });
 
-test("database: the deletion log is append-only and only records removals that happened, by an active platform admin", async () => {
+test("database: the deletion log is append-only and only records removals that happened, by a user whose right to undo is the basis the row names (v76)", async () => {
   const org = await setupTeam();
   const summary = await runImport(org, makeBundle({ sessionId: 6204, athletes: standardAthletes() }));
   const connectionId = summary.connectionId;
@@ -454,24 +454,31 @@ test("database: the deletion log is append-only and only records removals that h
   );
   // An event that still exists: a log row is a record of a removal, not a plan.
   await assert.rejects(insertLog(summary.eventId, org.userId), /still exists/);
-  // A user who is not an active platform admin cannot be recorded as the one
-  // who did it: not a coach, not a revoked admin, not a disabled account.
+  // A user without the right to undo cannot be recorded as the one who did it: not a user with no role, not a revoked
+  // admin, not a disabled account (v76: the right is derived again from the roles, never taken from the row).
   const coach = (await admin.query(`insert into public.users (email, full_name) values ($1, 'Coach') returning id`, [`c2-${org.teamId}@example.test`])).rows[0].id;
   const revoked = (await admin.query(`insert into public.users (email, full_name) values ($1, 'Revoked') returning id`, [`r2-${org.teamId}@example.test`])).rows[0].id;
   await admin.query(`insert into public.user_global_roles (user_id, role, is_active, revoked_at) values ($1, 'platform_admin', false, now())`, [revoked]);
   const disabled = (await admin.query(`insert into public.users (email, full_name, is_active) values ($1, 'Disabled', false) returning id`, [`d2-${org.teamId}@example.test`])).rows[0].id;
   await admin.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1, 'platform_admin', true)`, [disabled]);
   for (const userId of [coach, revoked, disabled]) {
-    await assert.rejects(insertLog("00000000-0000-4000-8000-000000000001", userId), (e) => e.code === "42501" && /is not an active platform admin/.test(e.message));
+    await assert.rejects(insertLog("00000000-0000-4000-8000-000000000001", userId), (e) => e.code === "42501" && /may not undo an imported session/.test(e.message));
   }
-  // Empty reason, empty counts, a non-positive total, another basis: refused by the table itself.
+  // Empty reason, empty counts, a non-positive total: refused by the table itself; an unknown basis: refused.
   await assert.rejects(insertLog("00000000-0000-4000-8000-000000000002", org.userId, { reason: " " }), /check constraint/);
   await assert.rejects(insertLog("00000000-0000-4000-8000-000000000003", org.userId, { counts: "{}" }), /check constraint/);
   await assert.rejects(insertLog("00000000-0000-4000-8000-000000000004", org.userId, { total: 0 }), /check constraint/);
   await assert.rejects(
     admin.query(`insert into training_load.import_deletion_log (deleted_by_user_id, authorized_via, reason, event_id, source_system, source_connection_id, source_external_id, owner_team_id, occurred_date, removed_counts, removed_total)
-                 values ($1,'team_coach','x','00000000-0000-4000-8000-000000000005','gpexe',$2,'x',$3,'2026-09-14','{"a":1}',1)`, [org.userId, connectionId, org.teamId]),
-    /check constraint/,
+                 values ($1,'owner','x','00000000-0000-4000-8000-000000000005','gpexe',$2,'x',$3,'2026-09-14','{"a":1}',1)`, [org.userId, connectionId, org.teamId]),
+    // The insert trigger runs before the CHECK, so an unknown basis is refused as not the user's (v76); the CHECK is the backstop.
+    /on that basis|check constraint/,
+  );
+  // A basis the table takes, but not the user's: a platform admin's row naming team_coach is refused (v76).
+  await assert.rejects(
+    admin.query(`insert into training_load.import_deletion_log (deleted_by_user_id, authorized_via, reason, event_id, source_system, source_connection_id, source_external_id, owner_team_id, occurred_date, removed_counts, removed_total)
+                 values ($1,'team_coach','x','00000000-0000-4000-8000-000000000006','gpexe',$2,'x',$3,'2026-09-14','{"a":1}',1)`, [org.userId, connectionId, org.teamId]),
+    (e) => e.code === "42501" && /may not undo an imported session on that basis/.test(e.message),
   );
 
   // A real row, then: it can be neither changed nor removed.

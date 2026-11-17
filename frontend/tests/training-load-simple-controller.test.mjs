@@ -736,3 +736,15 @@ test('a valid preview still requires atomic-save capability and a preview token'
   assert.equal(c.model.canSave, false);
   assert.equal(h.of('save').length, 0);
 });
+
+for (const [status, code] of [[400, 'invalid_json'], [413, 'body_too_large']]) {
+  test('parser refusal clears the pending save: ' + code, async () => {
+    const h = harness();
+    await ready(h);
+    h.reply('save', () => Promise.reject(apiError(status, code)));
+    await h.controller.save();
+    assert.equal(h.controller.model.saveState, 'idle');
+    assert.equal(h.controller.model.pending, null);
+    assert.equal(h.controller.model.pendingBody, null);
+  });
+}
