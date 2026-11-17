@@ -1466,9 +1466,10 @@ test("18. the import switch off - unset and explicitly 'false' - never touches a
   }
 });
 
-// The planted number 24680.1357 as a JSON number token, never a digit run inside a random id (an id has no dot, and
-// the lookarounds refuse a longer number around it): an exact check, where a "24680" substring could match a UUID.
-const PLANTED_NUMBER = /(?<![0-9.])24680\.1357(?![0-9])/;
+// The planted number 24680.1357 as a JSON number token, also rounded or cut (24680, 24680.14), never a digit run
+// inside a random id: in a UUID a run of five digits always has a hex digit or a dash beside it, which the lookarounds
+// refuse - where a plain "24680" substring could match a UUID.
+const PLANTED_NUMBER = /(?<![0-9a-fA-F.-])24680(?:\.[0-9]+)?(?![0-9a-fA-F])/;
 
 test("19. the whole-session details are projected to the consumed fields (the F3c3 pilot's diagnostic): an unconsumed 5-16-key object metric no longer refuses the check - it completes, and that metric is absent from the candidate, its preview and the retained snapshot; a malformed tot_burst_events or tot_brake_events, a dangerous metric key and an invalid players container still fail closed with nothing recorded; the switch off still refuses single and batch approval; the environment token is never sent", async () => {
   const MARKER_METRIC = "markerUnconsumedObjZq";
@@ -1507,7 +1508,7 @@ test("19. the whole-session details are projected to the consumed fields (the F3
   }
   const everything = JSON.stringify({ candidates, row });
   for (const leak of [MARKER_METRIC, MARKER_TEXT]) assert.ok(!everything.includes(leak), `${leak} is absent from the candidate, its preview, the snapshot and the check row`);
-      assert.ok(!PLANTED_NUMBER.test(everything), `${MARKER_NUMBER} is absent from the candidate, its preview, the snapshot and the check row`);
+  assert.ok(!PLANTED_NUMBER.test(everything), `${MARKER_NUMBER} is absent from the candidate, its preview, the snapshot and the check row`);
   assert.ok(candidates[0].preview && candidates[0].preview_hash, "the preview was computed");
   assert.equal(candidates[0].status, "pending", "with the binding's activations the candidate is not blocked");
   // The switch is off: a successful check / preview is allowed, approving is not.

@@ -766,8 +766,10 @@ test("S9. S-2: a platform save that replaces the club's own mapping says so by n
   await click('[data-action="metric-board-keep"]');
   await click('[data-action="metric-board-review"]');
   assert.match(text(), new RegExp(`Replaces North Club's own mapping: ${column} → Club distance\\.`));
-  // A name that cannot be read: the club's own mapping of this column, never an empty arrow.
-  assert.equal(replacesPhrase(b, { ...collision, variableLabel: null }), "the club's own mapping of this column");
+  // A name that cannot be read: a readable column is still named, "this column" only when no column name can be read;
+  // never an empty arrow.
+  assert.equal(replacesPhrase(b, { ...collision, variableLabel: null }), `North Club's own mapping of ${column}`);
+  assert.equal(replacesPhrase(b, { ...collision, fieldId: "no-such-column" }), "the club's own mapping of this column");
   assert.equal(replacesPhrase({ ...b, team: { ...b.team, clubName: null } }, collision), `the club's own mapping: ${column} → Club distance`);
   assert.equal(replacesPhrase(b, { activationId: "x", fieldId: "no-such-column", variableId: TARGET, owner: "system" }), "OptiMove's mapping of this column");
 });
@@ -781,6 +783,18 @@ test("S10. S-2: on the club board, the club's own mapping that OptiMove's replac
   b.replaceable = [own];
   overrides.push((c) => (c.url.startsWith(`${B}/board?`) ? { status: 200, body: { board: b } } : null));
   await open();
-  assert.match(text(), /Replaced by OptiMove's mapping on 17\.11\.2026 · From /);
+  assert.match(text(), /Replaced by OptiMove's mapping on 17\.11\.2026 · From .* · Add puts it back for First team instead of OptiMove's mapping/);
   assert.ok(content.querySelector(`[data-action="metric-board-pre-add"][data-version-id="${own.mappingVersionId}"]`), "Add puts it back");
+});
+
+test("S11. S-2: once OptiMove's mapping that replaced it is off again, the club's own mapping comes back pre-placed and still says when it was replaced", async () => {
+  const b = structuredClone(FX.board.board);
+  const own = { ...(b.preplaced[0] ?? {}), mappingVersionId: "e1e1e1e1-0000-4000-8000-000000000002", fieldId: FIELD, variableId: TARGET, badge: "club_mapping", placementHash: "h",
+    replaces: [], replacedBy: { owner: "system", at: "2026-11-16T09:00:00Z" } };
+  b.preplaced = [own];
+  b.on = [];
+  b.replaceable = [];
+  overrides.push((c) => (c.url.startsWith(`${B}/board?`) ? { status: 200, body: { board: b } } : null));
+  await open();
+  assert.match(text(), /Replaced by OptiMove's mapping on 16\.11\.2026 · From .* · no check needed/);
 });

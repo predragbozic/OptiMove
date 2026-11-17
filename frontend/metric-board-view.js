@@ -78,8 +78,13 @@ export function replacesPhrase(board, c) {
   const variable = cleanName(c.variableLabel ?? variableOf(board, c.variableId)?.label);
   const club = cleanName(board?.team?.clubName || "");
   const whose = c.owner === "club" ? (club ? `${club}'s own mapping` : "the club's own mapping") : "OptiMove's mapping";
-  return col && variable ? `${whose}: ${col} → ${variable}` : c.owner === "club" ? "the club's own mapping of this column" : "OptiMove's mapping of this column";
+  if (col && variable) return `${whose}: ${col} → ${variable}`;
+  // Never an empty name: a readable column is still named; "this column" only when no column name can be read.
+  if (col) return `${whose} of ${col}`;
+  return c.owner === "club" ? "the club's own mapping of this column" : "OptiMove's mapping of this column";
 }
+// S-2: the club's own mapping that a save of OptiMove's mapping replaced on this team, with the day.
+const replacedOn = (pre) => (pre?.replacedBy ? `Replaced by OptiMove's mapping on ${escapeHtml(dateOnly(pre.replacedBy.at))} · ` : "");
 const replacesList = (board, collisions) => collisions.map((c) => escapeHtml(replacesPhrase(board, c))).join("; ");
 
 function whichTeam(s) {
@@ -156,14 +161,15 @@ function slotHtml(s, v, drag) {
   if (slot.kind === "preplaced") {
     const badge = slot.pre.badge === "club_mapping" ? "Your club's mapping" : "OptiMove mapping";
     const replaces = slot.pre.replaces?.length ? " · replaces what is on" : "";
-    return `<li class="mb-slot is-pre">${head(`From ${col} · no check needed${replaces}`)}${unit}<span class="om-badge om-badge--info">${badge}</span>
+    return `<li class="mb-slot is-pre">${head(`${replacedOn(slot.pre)}From ${col} · no check needed${replaces}`)}${unit}<span class="om-badge om-badge--info">${badge}</span>
       <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-pre-remove" data-version-id="${escapeAttr(slot.pre.mappingVersionId)}" ${off}>Remove</button></li>`;
   }
   if (slot.kind === "removed" || slot.kind === "replaceable") {
     const badge = slot.pre.badge === "club_mapping" ? "Your club's mapping" : "OptiMove mapping";
-    // S-2: the club's own mapping that OptiMove's replaced says when; Add puts it back, as before.
-    const replacedBy = slot.kind === "replaceable" && slot.pre.replacedBy ? `Replaced by OptiMove's mapping on ${escapeHtml(dateOnly(slot.pre.replacedBy.at))} · ` : "";
-    const sub = slot.kind === "removed" ? `From ${col} · removed from this save` : `${replacedBy}From ${col} · would replace what is on for ${name(teamName(s))}`;
+    // S-2: the club's own mapping that OptiMove's replaced says when; Add puts it back, instead of OptiMove's mapping.
+    const sub = slot.kind === "removed" ? `From ${col} · removed from this save`
+      : slot.pre.replacedBy ? `${replacedOn(slot.pre)}From ${col} · Add puts it back for ${name(teamName(s))} instead of OptiMove's mapping`
+        : `From ${col} · would replace what is on for ${name(teamName(s))}`;
     return `<li class="mb-slot is-idle">${head(sub)}${unit}<span class="om-badge">${badge}</span>
       <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-pre-add" data-version-id="${escapeAttr(slot.pre.mappingVersionId)}" ${off}>Add</button></li>`;
   }
