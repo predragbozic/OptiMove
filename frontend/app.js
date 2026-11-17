@@ -36,7 +36,7 @@ import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storag
 import { ensureDriveImportStatus, handleDriveImportAction, handleDriveImportBeforeUnload, handleDriveImportChange, handleDriveImportPointer, handleDriveImportToggle } from "./drive-import-actions.js";
 import { resetDriveImportForWorkspaceChange } from "./drive-import-data.js";
 import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storageAdminNeedsLoad } from "./media-storage-admin-data.js";
-import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
+import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, handleSourceConnectionsInput, submitSourceConnectionsForm } from "./source-connections-actions.js";
 import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
 import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./icon-picker.js";
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
@@ -99,6 +99,7 @@ import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
 import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
 import { closeFixFromKey } from "./gpexe-import-actions.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
+import { handleTimezoneInput } from "./gpexe-timezone-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
 import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
@@ -1401,6 +1402,8 @@ function handleContentInput(event) {
   if (handleTestsLibraryInput(event.target)) return;
   // Data configuration -> Variables: the form's values and the list filter.
   if (handleUndoReasonInput(event.target)) return;
+  if (handleTimezoneInput(event.target)) return;
+  if (handleSourceConnectionsInput(event.target)) return;
   if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;
   // Data configuration -> Source fields: the confirmation form's values.
   if (handleSourceFieldsInput(event.target)) return;
@@ -2551,7 +2554,7 @@ async function loadMyTraining() {
   els.context.textContent = "Your sessions";
   els.title.textContent = "My training";
   els.toolbar.innerHTML = "";
-  return enterMyTraining({ render: renderMyTraining });
+  return enterMyTraining({ render: renderMyTraining, renderNav: renderLibraryNav });
 }
 
 function renderMyTraining() {

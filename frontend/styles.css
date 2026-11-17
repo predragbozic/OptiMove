@@ -17062,6 +17062,55 @@ p.muted.gpexe-source-fields {
 .gpexe-undo .gpexe-button {
   min-height: 44px;
 }
+/* PR #587: the team's session time zone in the review of a mixed-time-zones session (whoever may set it). */
+.gpexe-tz {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.gpexe-tz p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.gpexe-tz-field {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 0;
+}
+.gpexe-tz-field select,
+.gpexe-tz-field textarea {
+  font-family: inherit;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  /* 16px: iOS does not zoom into the field. */
+  font-size: 16px;
+  font-weight: 400;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+.gpexe-tz-field select {
+  min-height: 44px;
+}
+.gpexe-tz-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.gpexe-tz-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gpexe-tz .gpexe-button {
+  min-height: 44px;
+  justify-self: start;
+}
 .gpexe-undo-later-list {
   margin: 4px 0;
   padding-left: 18px;
@@ -18081,6 +18130,36 @@ p.muted.gpexe-approve-note {
 .source-connections-bound {
   display: grid;
   gap: 10px;
+}
+/* A bound team's session time zone (after PR #587): its line and its form take the row's width. */
+.source-connections-bound-list li > div {
+  flex: 1 1 260px;
+}
+.source-connections-zone {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.source-connections-zone p {
+  margin: 0;
+}
+.source-connections-zone textarea {
+  font-family: inherit;
+}
+/* The row's ghost buttons are red for Unbind; the zone's Cancel is neutral, and only Clear keeps the warning colour. */
+.source-connections-zone .plain-button.ghost {
+  border-color: var(--line-strong);
+  color: inherit;
+}
+.source-connections-zone .plain-button.ghost[data-action="source-connections-zone-clear"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* With the time zone in it, a row is taller: Unbind stays at the top, beside the team's name. */
+.source-connections-bound-list li {
+  align-items: flex-start;
 }
 .source-connections-attempt > p,
 .source-connections-bound > p,

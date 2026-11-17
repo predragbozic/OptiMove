@@ -764,6 +764,8 @@ export const emptyGpexeImportState = () => ({
   detail: null,
   // U5b: the undo of the open review's imported session ({ id, step, preview, reason, requestKey, result, error }); in memory only.
   undo: null,
+  // PR #587: the team's session time zone form in a mixed-time-zones review ({ teamId, step, current, timezone, reason, ... }).
+  tz: null,
   // Approvals whose result is not confirmed yet, by candidate id: the last
   // unknown outcome, shown again when the session is reopened.
   uncertain: {},
@@ -1120,6 +1122,8 @@ export const createInitialState = () => ({
     bindReview: null, bindBusy: false, bindError: null,
     unbindOpen: null, unbindBusy: false, unbindError: null,
     checkBusy: false, unconfirmed: null, staleAfterWrite: "",
+    // Each bound team's session time zone, by team id (source-connections-timezone.js).
+    zones: {},
   },
   organizationEditor: { open: false, type: "", row: null },
   // Settings -> Storage (R2 media, PR 5), platform admin only: the defaults

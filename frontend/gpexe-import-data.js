@@ -125,6 +125,7 @@ function resetGpexeTeamState(teamId) {
   gx.error = null;
   gx.detail = null;
   gx.undo = null;
+  gx.tz = null;
   gx.notice = "";
   gx.uncertain = {};
   gx.linkConfirm = null;
@@ -1616,6 +1617,8 @@ export function importsUnloadShouldWarn(gx = g()) {
   if (gx?.guide?.write?.sending || gx?.guide?.write?.unknown) return true;
   // U5b: an undo in flight, or its last answer not confirmed.
   if (gx?.undo?.step === "sending" || gx?.undo?.step === "unknown") return true;
+  // PR #587: a time zone save in flight, or its answer not confirmed.
+  if (gx?.tz?.step === "saving" || gx?.tz?.step === "checking" || gx?.tz?.step === "unknown") return true;
   // A mark counts while its session is listed and still unresolved; a mark
   // whose session the list no longer shows (replaced by newer data, hidden)
   // cannot be resolved on this screen and must not block leaving forever.

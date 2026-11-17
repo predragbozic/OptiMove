@@ -14,8 +14,9 @@ let listGeneration = 0;
 let detailGeneration = 0;
 let availabilityGeneration = 0;
 
-// The entry's one rule: the server says whether she has a recorded session. Never guessed on the client; a failed read
-// leaves the entry as it was (hidden until the server has said yes). Once yes, it stays for this sign-in.
+// The entry's one rule: the server says whether she has a recorded session (owner: hidden for an athlete with none).
+// Never guessed on the client: every real answer is followed, a "no" after a "yes" included (an imported session can be
+// deleted); a failed read changes nothing.
 export async function loadMyTrainingAvailability() {
   const generation = ++availabilityGeneration;
   try {
@@ -23,7 +24,13 @@ export async function loadMyTrainingAvailability() {
     // An answer for a workspace that was left meanwhile is not this one's (code review).
     if (generation !== availabilityGeneration) return g().available;
     if (hasRecordedSessions === true) g().available = true;
-    else if (g().available !== true) g().available = false;
+    else if (hasRecordedSessions === false) {
+      g().available = false;
+      // Her stored sessions are forgotten with the "no", and a list read on its way is dropped: a later "yes" reads them
+      // again, so Home never names a session that was deleted (code review).
+      listGeneration += 1;
+      g().list = { rows: [], nextCursor: null, loaded: false, loading: false, error: "" };
+    }
   } catch {
     // Unknown: nothing is shown or taken away.
   }
