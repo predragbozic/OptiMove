@@ -70,12 +70,13 @@ function resetState() {
   laterBox = null;
 }
 
-function status({ admin = true, identityAdmin = admin } = {}) {
+function status({ admin = true, identityAdmin = admin, undoImport = admin } = {}) {
   return {
     settings: { gpexeTeamId: "980" },
     importSwitch: { enabled: false, message: "off" },
     lastCheck: null,
-    viewer: { canApprove: admin, approvalBasis: admin ? "platform_admin" : null, isPlatformAdmin: admin, ...(identityAdmin ? { identityAdmin: true } : {}) },
+    // v76: viewer.undoImport, present only when this viewer may delete an imported session of the team.
+    viewer: { canApprove: admin, approvalBasis: admin ? "platform_admin" : null, isPlatformAdmin: admin, ...(identityAdmin ? { identityAdmin: true } : {}), ...(undoImport ? { undoImport: true } : {}) },
     approvalAvailable: true,
   };
 }
@@ -149,7 +150,7 @@ const undoCalls = () => fetchCalls.filter((c) => /undo-import$/.test(c.url));
 const previewCalls = () => fetchCalls.filter((c) => /undo-preview$/.test(c.url));
 const outsideTech = (page) => page.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "");
 function undoSection(page = html()) {
-  const start = page.indexOf('aria-label="Undo this import"');
+  const start = page.indexOf('aria-label="Delete imported data"');
   return start < 0 ? "" : page.slice(start, page.indexOf("</section>", start));
 }
 
@@ -167,14 +168,15 @@ function performUndo() {
 const okUndo = (extra = {}) => ({ replayed: false, eventId: EVENT, removedCounts: SCOPE.removedCounts, removedTotal: 160, deletionLogId: "log-1", newCandidateId: NEW_CAND, undoneCandidateIds: ["cand-imp"], offeredAgain: true, previewReady: true, ...extra });
 
 // ---------------------------------------------------------------------------
-test("1. the offer: a platform admin sees 'Undo this import...' on an imported, not-undone session; nobody else, and no other session", async () => {
+test("1. the offer: whoever the status marks with undoImport sees 'Delete imported data...' on an imported, not-undone session; nobody else, and no other session", async () => {
   setup();
   await openImports();
   await openCandidate("cand-imp");
-  assert.match(undoSection(), /Undo this import\.\.\./);
+  assert.match(undoSection(), /Delete imported data\.\.\./);
+  assert.match(undoSection(), /correct the athlete links in Imports, then import it again/, "the offer names the links");
   assert.equal(previewCalls().length, 0, "nothing is read until the button is pressed");
 
-  // A club admin (identityAdmin without being a platform admin), a coach: the server would answer the identical 404, so nothing is offered.
+  // A club admin (identityAdmin without being a platform admin) and a coach WITHOUT undoImport: nothing is offered.
   setup({ statusOver: { admin: false, identityAdmin: true } });
   await openImports();
   await openCandidate("cand-imp");
@@ -183,7 +185,7 @@ test("1. the offer: a platform admin sees 'Undo this import...' on an imported, 
   await openImports();
   await openCandidate("cand-imp");
   assert.equal(undoSection(), "", "a coach");
-  assert.doesNotMatch(html(), /Undo this import/);
+  assert.doesNotMatch(html(), /Delete imported data/);
 
   // Not imported: nothing to undo.
   setup({ candidates: [pendingRow()] });
@@ -209,14 +211,14 @@ test("2. the scope is read first (read-only), names what goes, every approved ve
   assert.match(previewCalls()[0].url, new RegExp(`/teams/${TEAM_A}/candidates/cand-imp/undo-preview$`));
   assert.equal(undoCalls().length, 0);
   const s = undoSection();
-  assert.match(s, /13 athletes&#039; records, 117 imported values, 2 drills, 1 activity/);
-  assert.match(s, /This can&#039;t be undone here|This can't be undone here/);
-  assert.match(s, /imported more than once with different data[\s\S]*all 2 imports together/, "both versions named");
-  assert.match(s, /offered again for review/);
-  assert.match(s, /Why is this import undone\? \(required\)/);
+  assert.match(s, /This removes the session from the calendar and deletes its imported data: 13 athletes, 117 values, 2 drills\./);
+  assert.match(s, /Deleted data can(?:&#039;|')t be restored\./);
+  assert.match(s, /imported more than once with different data[\s\S]*All 2 imports are deleted together/, "both versions named");
+  assert.match(s, /To get it back, import the session again from Imports\./);
+  assert.match(s, /Why are you deleting it\? \(required\)[\s\S]*It is saved with the deletion\./);
   assert.match(s, /maxlength="500"/);
   assert.match(s, /data-action="training-load-gpexe-undo-confirm"/);
-  assert.equal(removedSummary({ metric_values: 1, activities: 1, metric_event_participants: 1 }), "1 athlete's record, 1 imported value, 1 activity");
+  assert.equal(removedSummary({ metric_values: 1, activities: 1, metric_event_participants: 1 }), "1 athlete, 1 value");
 });
 
 test("3. the reason is mandatory: nothing is asked or sent without it; too long or with control characters is refused locally", async () => {
@@ -228,7 +230,7 @@ test("3. the reason is mandatory: nothing is asked or sent without it; too long 
   await act("training-load-gpexe-undo-confirm");
   assert.equal(undoCalls().length, 0);
   assert.equal(confirmAsked.length, 0, "no question without a reason");
-  assert.match(html(), /Write why the import is undone\./);
+  assert.match(html(), /Write why the imported data is deleted\./);
   assert.equal(undoReasonProblem("x".repeat(UNDO_REASON_MAX + 1)).includes("too long"), true);
   assert.notEqual(undoReasonProblem("a\u0001b"), "");
   assert.equal(undoReasonProblem("Wrong athlete linked"), "");
@@ -246,7 +248,7 @@ test("4. the explicit question: declining sends nothing; accepting sends one req
   confirmAnswer = false;
   await act("training-load-gpexe-undo-confirm");
   assert.equal(confirmAsked.length, 1);
-  assert.match(confirmAsked[0], /Remove 160 records of FULL TRAINING 05\.10\. from OptiMove\? This can't be undone here/);
+  assert.match(confirmAsked[0], /^Delete the imported data of FULL TRAINING 05\.10\.\? The session leaves the calendar\. Deleted data can't be restored/);
   assert.equal(undoCalls().length, 0, "declined");
   confirmAnswer = true;
   await act("training-load-gpexe-undo-confirm");
@@ -257,9 +259,10 @@ test("4. the explicit question: declining sends nothing; accepting sends one req
   assert.equal(call.body.reason, "Linked to the wrong athlete");
   assert.deepEqual(call.body.expected, { eventId: EVENT });
   const s = undoSection();
-  assert.match(s, /Import undone\./);
-  assert.match(s, /Removed: 13 athletes&#039; records/);
-  assert.match(s, new RegExp(`data-action="training-load-gpexe-open" data-candidate-id="${NEW_CAND}"`), "the offered session can be opened");
+  assert.match(s, /The imported data is deleted\. The session is back in Imports: correct the athlete links if they were wrong, then import it again there\./);
+  assert.match(s, /Deleted: 13 athletes, 117 values, 2 drills\./);
+  // v76 contract: no re-import button; a new search in Imports brings the session back.
+  assert.doesNotMatch(s, /data-action="training-load-gpexe-open"/, "no re-import button");
   // The review was read again: the session is history now, never Imported; the list was read again too.
   assert.equal(isImportUndone(gx().detail.candidate), true);
   assert.doesNotMatch(html(), /gpexe-badge is-imported/);
@@ -288,7 +291,7 @@ test("5. an undone row is history, never 'Imported': hidden by default, under re
   assert.match(page, /gpexe-badge is-superseded">Import undone</);
   await openCandidate("cand-undone");
   const review = html();
-  assert.match(review, /This import was undone\./);
+  assert.match(review, /This session(?:'|&#0?39;)s imported data was deleted\./);
   assert.match(review, /gpexe-badge is-superseded">Import undone</);
   assert.doesNotMatch(review, /gpexe-badge is-imported/);
   assert.match(review, /Was imported 07\.10\.2026/);
@@ -314,8 +317,8 @@ test("6. a lost answer is 'not confirmed', never 'nothing was removed': the key 
   await act("training-load-gpexe-undo-confirm");
   assert.equal(gx().undo.step, "unknown");
   let s = undoSection();
-  assert.match(s, /We can't tell yet whether the import was undone/);
-  assert.doesNotMatch(s, /Nothing was removed|Import undone\./);
+  assert.match(s, /We can't tell yet whether the imported data was deleted/);
+  assert.doesNotMatch(s, /Nothing was removed|The imported data is deleted\./);
   assert.match(s, /Check the result/);
   assert.equal(importsUnloadShouldWarn(gx()), true, "leaving asks");
   // Another undo cannot be started meanwhile.
@@ -325,7 +328,7 @@ test("6. a lost answer is 'not confirmed', never 'nothing was removed': the key 
   assert.equal(undoCalls().length, 2);
   assert.deepEqual(undoCalls()[1].body, undoCalls()[0].body, "the identical request, key included");
   s = undoSection();
-  assert.match(s, /Import undone\./);
+  assert.match(s, /The imported data is deleted\. The session is back in Imports: correct the athlete links if they were wrong, then import it again there\./);
   assert.match(s, /answer saved for the same request/);
   assert.equal(importsUnloadShouldWarn(gx()), false);
 });
@@ -372,7 +375,7 @@ test("8. a refusal says nothing was removed, shows the server's sentence and the
   await act("training-load-gpexe-undo-confirm");
   assert.equal(undoCalls().length, 2);
   assert.notEqual(undoCalls()[1].body.requestKey, firstKey, "a refused key is never reused");
-  assert.match(undoSection(), /Import undone\./);
+  assert.match(undoSection(), /The imported data is deleted\. The session is back in Imports: correct the athlete links if they were wrong, then import it again there\./);
 });
 
 test("9. the preview refused (404, or a refusal the function would raise): no form, the sentence, nothing written", async () => {
@@ -380,7 +383,7 @@ test("9. the preview refused (404, or a refusal the function would raise): no fo
   await openImports();
   await openCandidate("cand-imp");
   await act("training-load-gpexe-undo-open");
-  assert.match(undoSection(), /not available for an undo/);
+  assert.match(undoSection(), /can no longer be deleted here/);
   assert.doesNotMatch(html(), /data-gpexe-undo-reason/);
   setup({ preview: () => ({ status: 409, body: { error: "calendar_link_exists", message: "This session is attached to a calendar event. Remove it from the calendar event first, then undo the import.", calendarLinks: 2 } }) });
   await openImports();
@@ -402,7 +405,7 @@ test("10. already undone (409 already_undone) is settled, not an error: the revi
   typedReason = "Wrong link";
   await act("training-load-gpexe-undo-confirm");
   assert.equal(gx().undo.step, "settled");
-  assert.match(undoSection(), /This import was already undone\./);
+  assert.match(undoSection(), /This session(?:'|&#0?39;)s imported data was already deleted\./);
   assert.equal(isImportUndone(gx().detail.candidate), true);
 });
 
@@ -417,7 +420,7 @@ test("11. nothing leaves the screen over a write: the review cannot be closed wh
   const running = act("training-load-gpexe-undo-confirm");
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(gx().undo.step, "sending");
-  assert.match(undoSection(), /disabled>Undoing\.\.\./);
+  assert.match(undoSection(), /disabled>Deleting\.\.\./);
   await act("training-load-gpexe-close");
   assert.ok(gx().detail, "not closable while the write runs");
   const before = gx().teamId;
@@ -459,7 +462,7 @@ test("13. a team's undo state never shows on another session's review", async ()
   await act("training-load-gpexe-undo-cancel");
   await act("training-load-gpexe-close");
   await openCandidate("cand-other");
-  assert.match(undoSection(), /Undo this import\.\.\./, "the other session starts from the offer");
+  assert.match(undoSection(), /Delete imported data\.\.\./, "the other session starts from the offer");
   assert.equal(gx().undo, null);
 });
 
@@ -545,7 +548,7 @@ test("14. leaving Training Load asks over an undo that is running or not confirm
   gx().undo.step = "sending";
   confirmAnswer = false;
   assert.equal(confirmLeaveTrainingLoad("settings"), false);
-  assert.match(confirmAsked.at(-1), /being undone/);
+  assert.match(confirmAsked.at(-1), /Imported data is being deleted/);
 });
 
 test("15. an undone session does not count as imported in the setup guide", async () => {
@@ -567,13 +570,13 @@ test("16. another session's undo that is not confirmed: no dead button on a seco
   await act("training-load-gpexe-close");
   await openCandidate("cand-b");
   assert.doesNotMatch(undoSection(), /undo-open/);
-  assert.match(undoSection(), /undo for another session is not finished or not confirmed/);
+  assert.match(undoSection(), /Deleting the imported data of [^<]+ is not confirmed yet\. Open that session and press Check the result first\./);
   await act("training-load-gpexe-close");
   // The first one, if it had committed, never shows "This import was undone" next to "We can't tell yet".
   world.candidates[0].importUndoneAt = "2026-11-08T07:00:00Z";
   await openCandidate("cand-imp");
   assert.match(html(), /We can't tell yet/);
-  assert.doesNotMatch(html(), /This import was undone\./);
+  assert.doesNotMatch(html(), /This session(?:'|&#0?39;)s imported data was deleted\./);
 });
 
 test("17. what is typed is kept when the dialog is painted again", async () => {
@@ -610,7 +613,7 @@ test("18. states the import set: one warning with the count, no checkbox, and th
   await openCandidate("cand-imp");
   await act("training-load-gpexe-undo-open");
   const s = undoSection();
-  assert.match(s, /The undo also removes the 5 attendance states the import set\./);
+  assert.match(s, /Deleting also removes the 5 attendance states the import set\./);
   assert.doesNotMatch(s, /data-gpexe-undo-later-confirm/);
   typedReason = "Wrong link";
   await act("training-load-gpexe-undo-confirm");
@@ -628,7 +631,7 @@ test("19. later changes: a second, separate warning lists them (names escaped, D
   await openCandidate("cand-imp");
   await act("training-load-gpexe-undo-open");
   let s = undoSection();
-  assert.match(s, /The undo also removes the 2 attendance states the import set\./);
+  assert.match(s, /Deleting also removes the 2 attendance states the import set\./);
   assert.match(s, /Attendance was changed in the Roster tab after the import: 1 change\./);
   assert.match(s, /class="gpexe-undo-later-list" tabindex="0" aria-label="Later attendance changes"/, "the scrolling list is reachable by keyboard");
   assert.match(s, /Athlete &lt;0&gt;/, "a name is escaped");
@@ -653,7 +656,7 @@ test("19. later changes: a second, separate warning lists them (names escaped, D
   assert.equal(undoCalls().length, 1);
   assert.equal(undoCalls()[0].body.laterRosterFingerprint, FP, "sending the fingerprint is the confirmation");
   assert.equal(undoCalls()[0].body.confirmLaterRosterWork, undefined);
-  assert.match(undoSection(), /Import undone\./);
+  assert.match(undoSection(), /The imported data is deleted\. The session is back in Imports: correct the athlete links if they were wrong, then import it again there\./);
 });
 
 test("20. the list changed meanwhile (roster_work_changed): nothing removed, the scope is read again and shown unticked with its note, and the next attempt sends the new fingerprint with a new key", async () => {
@@ -744,7 +747,7 @@ test("23. the change count is the server's: past the 60 listed it says how many 
 
 test("24. the removed summary names the attendance states too", async () => {
   const { removedSummary } = await import("../gpexe-undo-view.js");
-  assert.equal(removedSummary({ metric_event_participants: 2, activity_athlete_decisions: 3 }), "2 athletes' records, 3 attendance states");
+  assert.equal(removedSummary({ metric_event_participants: 2, activity_athlete_decisions: 3 }), "2 athletes, 3 attendance states");
 });
 
 test("25. sendUndo itself keeps each problem in its own place: a missing tick is the checkbox's, never the reason field's; nothing is sent", async () => {
@@ -761,4 +764,20 @@ test("25. sendUndo itself keeps each problem in its own place: a missing tick is
   assert.equal(noReason, false);
   assert.match(gx().undo.reasonProblem, /Write why/);
   assert.equal(gx().undo.laterProblem, "", "the reason comes first; the tick is asked once the reason is right");
+});
+
+test("19 (v76). a coach who may import (undoImport, not a platform admin) has the delete in the review too, in plain sentences: no code, no Technical details", async () => {
+  setup({
+    statusOver: { admin: false, identityAdmin: false, undoImport: true },
+    undo: () => ({ status: 409, body: { error: "manual_occasion", message: "Some results of this session were entered by hand, so its imported data cannot be deleted here. Ask a platform administrator to delete it." } }),
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  assert.match(undoSection(), /Delete imported data\.\.\./);
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong athletes";
+  await act("training-load-gpexe-undo-confirm");
+  const s = undoSection();
+  assert.match(s, /Nothing was removed\.<\/strong> Some results of this session were entered by hand, so its imported data cannot be deleted here\. Ask a platform administrator to delete it\./);
+  assert.doesNotMatch(s, /Technical details|manual_occasion|HTTP status/);
 });

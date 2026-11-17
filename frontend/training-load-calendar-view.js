@@ -6,6 +6,7 @@ import { buildWeeklyCalendarMonth } from "./weekly-plan.js";
 import { formatSrpe } from "./training-load-view.js";
 import { renderActivityRosterHtml, rosterTabLabel } from "./activity-roster-view.js";
 import { pickable, pickerName } from "./metric-picker-visibility.js";
+import { renderSessionImportUndoHtml } from "./training-load-import-undo.js";
 
 // Training Load Frontend 3A — Activities → activity detail → results table. Deliberately
 // its own module, imported by training-load-view.js's own coach root
@@ -842,6 +843,7 @@ function renderActivitySectionHtml(nav, detail, athleteNamesById) {
         </div>
         ${renderResultsTableHtml(nav, detail, athleteNamesById)}
       </div>`}
+      ${renderSessionImportUndoHtml(nav.selectedActivityId)}
     </div>
   `;
 }
