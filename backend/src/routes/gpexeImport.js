@@ -160,6 +160,9 @@ router.get("/teams/:teamId/status", handle(async (req, res) => {
     viewer: {
       canApprove: approval.canApprove, hasApprovalRight: approval.hasRight, approvalBasis: approval.basis, isPlatformAdmin: access.platformAdmin,
       ...(identity.identityAdminBasis(req, access) ? { identityAdmin: true } : {}),
+      // Whether this viewer may read and set the team's session time zone (a platform admin; the team's own club admin in
+      // that club's workspace). Only when true, as identityAdmin; the session-timezone routes decide again.
+      ...(sessionTimezoneBasis(req, access) ? { sessionTimezoneAdmin: true } : {}),
       // The GPEXE names of the team's athletes (an administrator: all; the team's own coach in its workspace: the unlinked
       // ones). Only when true; the list route decides again.
       ...(identity.pairSuggestionBasis(req, access) ? { identityNames: true } : {}),
@@ -233,25 +236,35 @@ router.get("/teams/:teamId/settings/history", handle(async (req, res) => {
 }));
 
 // v62 (mixed_timezones (b)): the team's session time zone, used by the importer only for a session whose GPS units report
-// several zones. A platform admin reads and sets it (with a reason); everyone else who sees the team gets the 403 of the
-// settings, and a foreign or archived team the identical 404 of teamAccess.
+// several zones. A platform admin reads and sets it (with a reason), and since the owner's decision of 2026-11-16 also the
+// active admin of the team's own club acting in that club's workspace. Everyone else who sees the team (its coach, a club
+// admin in the team's workspace) gets the 403 of the settings, with nothing of the zone; a foreign or archived team, or a
+// team of another club, the identical 404 of teamAccess. The write checks the right again under the team's lock.
+function sessionTimezoneBasis(req, access) {
+  if (access.platformAdmin) return "platform_admin";
+  return identity.identityAdminBasis(req, access) === "club_admin" ? "club_admin" : null;
+}
+
 router.get("/teams/:teamId/session-timezone", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  if (!access.platformAdmin) return forbidden(res);
+  if (!sessionTimezoneBasis(req, access)) return forbidden(res);
   res.json({ sessionTimezone: await teamTimezone.readTeamSessionTimezone(access.teamId) });
 }));
 
 router.put("/teams/:teamId/session-timezone", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  if (!access.platformAdmin) return forbidden(res);
+  const basis = sessionTimezoneBasis(req, access);
+  if (!basis) return forbidden(res);
   const body = req.body && typeof req.body === "object" ? req.body : {};
   try {
     const timezone = body.timezone === null ? null : body.timezone;
     if (timezone !== null && typeof timezone !== "string") return res.status(400).json({ error: "invalid_timezone", message: "Choose a time zone from the list (for example Europe/Sarajevo)." });
-    res.json({ sessionTimezone: await teamTimezone.setTeamSessionTimezone(access.teamId, { timezone, reason: body.reason, userId: req.user.id }) });
+    res.json({ sessionTimezone: await teamTimezone.setTeamSessionTimezone(access.teamId, { timezone, reason: body.reason, userId: req.user.id, basis, clubId: access.clubId }) });
   } catch (error) {
+    // A right, team or club lost during the write: the identical 404 of teamAccess, nothing written.
+    if (error instanceof teamTimezone.TeamTimezoneError && error.status === 404) return notFound(res);
     if (error instanceof teamTimezone.TeamTimezoneError) return res.status(error.status).json({ error: error.code, message: error.message });
     throw error;
   }
