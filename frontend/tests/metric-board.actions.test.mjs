@@ -92,8 +92,8 @@ async function place() {
   assert.ok(content.querySelector("[data-mb-tick]"), "the panel with the tick is open");
 }
 
-test("1. the board is offered in a club workspace only: no card, no context and no request elsewhere", async () => {
-  for (const type of ["team", "platform", "private_coach", "athlete"]) {
+test("1. the board is offered in a club workspace and (S) the platform workspace only: no card, no context and no request elsewhere", async () => {
+  for (const type of ["team", "private_coach", "athlete"]) {
     asUser(type);
     assert.equal(data.boardContext(), null, type);
     assert.ok(!home().includes('data-section="board"'), `${type}: no card`);
@@ -105,6 +105,54 @@ test("1. the board is offered in a club workspace only: no card, no context and 
   asUser("club");
   assert.deepEqual(data.boardContext(), { clubId: CLUB, clubName: "Example Club", isPlatformAdmin: false });
   assert.ok(home().includes('data-section="board"'));
+  asUser("platform", null);
+  assert.deepEqual(data.boardContext(), { platform: true, clubId: null, clubName: "", isPlatformAdmin: true });
+  assert.ok(home().includes('data-section="board"'));
+  assert.match(home(), /onto an OptiMove variable, for any linked team/);
+});
+
+// S: the platform board (the owner, 2026-11-17).
+function platformWorld(board) {
+  overrides.push((call) => {
+    if (call.url === `${B}/board/teams`) return { status: 200, body: { teams: [
+      { clubId: "c-1", clubName: "North Club", teamId: TEAM, teamName: "First Team" },
+      { clubId: "c-2", clubName: "South Club", teamId: "t-2", teamName: "Juniors" },
+    ], truncated: false } };
+    if (call.url.startsWith(`${B}/board?`)) return { status: 200, body: { board } };
+    return null;
+  });
+}
+const platformBoard = () => {
+  const b = structuredClone(FX.board.board);
+  b.owner = "system";
+  b.variables = b.variables.filter((v) => v.ownerScope === "system").map((v) => ({ ...v, placeable: true }));
+  return b;
+};
+
+test("S1. the platform board asks one question - which team - over every club's linked teams, named club and team; never the club's connection list", async () => {
+  asUser("platform", null);
+  platformWorld(platformBoard());
+  await actions.loadBoardSection(render);
+  assert.ok(calls.some((c) => c.url === `${B}/board/teams`), "the platform board's team list");
+  assert.ok(!calls.some((c) => c.url.startsWith("/api/training-load/sources/gpexe/connections")), "no club connection list");
+  const teams = [...content.querySelectorAll('[data-action="metric-board-team"]')].map((b) => b.textContent.replace(/\s+/g, " ").trim());
+  assert.deepEqual(teams, ["North Club · First Team", "South Club · Juniors"]);
+  await click(`[data-action="metric-board-team"][data-team-id="${TEAM}"]`);
+  assert.ok(calls.some((c) => c.url.startsWith(`${B}/board?`) && c.url.includes(`teamId=${TEAM}`)));
+});
+
+test("S2. the platform board's variables are OptiMove's only, with New variable; the club's sentences are not shown", async () => {
+  asUser("platform", null);
+  platformWorld(platformBoard());
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  const t = text();
+  assert.match(t, /OptiMove's variables\. What you save here is OptiMove's mapping, switched on for this team only/);
+  assert.ok(content.querySelector('[data-action="training-load-section"][data-section="variables"]'), "New variable leads to Variables");
+  assert.match(t, /New variable/);
+  assert.doesNotMatch(t, /Your club's variables|Your club has no variable/);
+  assert.match(t, /onto an OptiMove variable|then an OptiMove variable/);
+  assert.equal(data.placementRefusal({ code: "source_metric_target_taken" }), "This column already fills another OptiMove variable. Change that in Mappings.");
 });
 
 test("2. one team: the board opens at once, with the columns, the two athletes and what is on", async () => {

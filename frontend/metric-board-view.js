@@ -42,19 +42,22 @@ function header(s) {
       <div>
         <p class="om-eyebrow">Data configuration</p>
         <h2 class="om-page-header__title" id="metric-board-title" tabindex="-1">Map by drag and drop</h2>
-        <p class="muted mb-lead">${sourceFieldDragAvailable() && !isPhone() ? "Drag a GPEXE column onto your variable" : "Tap a GPEXE column, then your variable"}, compare two athletes with the GPEXE screen, and save.</p>
+        <p class="muted mb-lead">${sourceFieldDragAvailable() && !isPhone() ? `Drag a GPEXE column onto ${onPlatform() ? "an OptiMove variable" : "your variable"}` : `Tap a GPEXE column, then ${onPlatform() ? "an OptiMove variable" : "your variable"}`}, compare two athletes with the GPEXE screen, and save.</p>
       </div>
       ${team ? `<div class="om-page-header__actions"><span class="om-badge om-badge--accent">${name(team.name)}${gpexeTeam(team.sourceTeamId)}</span>
         ${s.teams.items.length > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-change-team" ${s.write ? "disabled" : ""}>Change team</button>` : ""}</div>` : ""}
     </header>`;
 }
 
+// S: the platform board (OptiMove's variables, any club's team).
+const onPlatform = () => boardContext()?.platform === true;
+
 function whichTeam(s) {
-  if (s.teams.loading || !s.teams.loaded) return `<p class="muted" role="status">Loading the club's teams...</p>`;
+  if (s.teams.loading || !s.teams.loaded) return `<p class="muted" role="status">${onPlatform() ? "Loading the teams..." : "Loading the club's teams..."}</p>`;
   if (s.teams.error?.code === "notFound") return `<div class="om-empty" role="status"><p class="om-empty__title">${BOARD_ERROR.notFound}</p></div>`;
   if (s.teams.error) return `<div class="om-empty" role="status"><p class="om-empty__title">The teams could not be read.</p><div class="om-empty__actions"><button type="button" class="om-btn" data-action="metric-board-reload">Try again</button></div></div>`;
   if (s.teams.items.length === 0) {
-    return `<div class="om-empty" role="status"><p class="om-empty__title">No team of your club is linked to GPEXE yet.</p><p class="om-empty__text">Link one in Settings &gt; Source connections.</p></div>`;
+    return `<div class="om-empty" role="status"><p class="om-empty__title">${onPlatform() ? "No team is linked to GPEXE yet." : "No team of your club is linked to GPEXE yet."}</p><p class="om-empty__text">Link one in Settings &gt; Source connections.</p></div>`;
   }
   return `
     <section class="om-card" aria-labelledby="mb-which-team">
@@ -164,9 +167,13 @@ function boardCards(s) {
       </section>
       <section class="om-card mb-card" aria-labelledby="mb-variables-title">
         <div class="om-card__header"><h3 class="om-card__title" id="mb-variables-title">Variables</h3></div>
+        ${onPlatform() ? `
+        <p class="muted mb-note">OptiMove's variables. What you save here is OptiMove's mapping, switched on for this team only; other clubs can switch it on for their teams.</p>
+        <p><button type="button" class="om-btn om-btn--ghost" data-action="training-load-section" data-section="variables" ${busy(s) ? "disabled" : ""}>New variable</button> <span class="muted">No variable fits? Create it in Variables, then come back.</span></p>
+        ${system.length ? `<ul class="mb-list">${list(system)}</ul>` : `<p class="muted">OptiMove has no variable yet.</p>`}` : `
         <p class="muted mb-note">OptiMove's variables are here at once. Your club can add its own.</p>
         ${club.length ? `<p class="om-eyebrow">Your club's variables</p><ul class="mb-list">${list(club)}</ul>` : `<p class="muted">Your club has no variable of its own yet. Create one in Variables.</p>`}
-        ${system.length ? `<p class="om-eyebrow">OptiMove's variables</p><ul class="mb-list">${list(system)}</ul>` : ""}
+        ${system.length ? `<p class="om-eyebrow">OptiMove's variables</p><ul class="mb-list">${list(system)}</ul>` : ""}`}
       </section>
     </div>`;
 }

@@ -82,7 +82,7 @@ export async function loadBoardSection(render) {
     s.teams = { ...s.teams, loading: true, error: null };
     render();
     try {
-      const items = await fetchBoardTeams(ctx.clubId);
+      const items = await fetchBoardTeams(ctx.clubId, { platform: ctx.platform === true });
       if (!live(s, generation)) return;
       s.teams = { items, loaded: true, loading: false, error: null };
       // One team: no question to ask.
