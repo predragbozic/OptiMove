@@ -126,7 +126,7 @@ test("2. one step is open: the first that is not done; another opens on a click;
   assert.match(openStep(guideHtml()), /Use the OptiMove GPEXE set/, "the click during the review was not kept: Variables stays open after Back");
 });
 
-test("3. Variables (S5): the OptiMove GPEXE set is the primary; Choose my own opens the drag-and-drop board for the team in a club workspace (J18), Mappings in the platform workspace", async () => {
+test("3. Variables (S5): the OptiMove GPEXE set is the primary; Choose my own opens the drag-and-drop board for the team in a club workspace (J18) and (S) the platform board in the platform workspace; Mappings where no board is offered", async () => {
   reset({ athletes: [athlete(1, "linked")] });
   await open();
   const step = openStep(guideHtml());
@@ -135,7 +135,9 @@ test("3. Variables (S5): the OptiMove GPEXE set is the primary; Choose my own op
   const user = state.currentUser;
   state.currentUser = { ...user, activeWorkspace: { type: "platform" } };
   try {
-    assert.match(openStep(guideHtml()), /data-action="training-load-section" data-section="mappings"[^>]*>Choose my own</);
+    assert.match(openStep(guideHtml()), new RegExp(`data-action="training-load-section" data-section="board" data-mb-team-id="${TEAM}"[^>]*>Choose my own<`), "the platform board of the same team");
+    state.currentUser = { ...user, activeWorkspace: { type: "team", scopeId: TEAM } };
+    assert.match(openStep(guideHtml()), /data-action="training-load-section" data-section="mappings"[^>]*>Choose my own</, "no board: Mappings");
   } finally { state.currentUser = user; }
 });
 

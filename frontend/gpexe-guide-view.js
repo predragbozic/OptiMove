@@ -88,8 +88,8 @@ function variablesBodyHtml(gx, variables, busy) {
   const purpose = variables.state === "next" ? `<p class="muted">These decide which numbers (for example distance) are taken from GPEXE.</p>` : "";
   const offer = variables.state === "next" && !g.confirm && !g.write;
   const primary = offer ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-guide-vars-open" aria-describedby="gpexe-guide-recommended" ${variables.canSwitchOn && !busy ? "" : "disabled"}>Use the OptiMove GPEXE set</button><span class="gpexe-guide-tag" id="gpexe-guide-recommended">Recommended</span>` : "";
-  // "Choose my own" opens the drag-and-drop board for this team in a club workspace (J18, section 15.4); in the
-  // platform workspace, where the board is not offered, it stays the Mappings screen.
+  // "Choose my own" opens the drag-and-drop board for this team (J18, section 15.4): the club's board in a club
+  // workspace, OptiMove's (S, section 16) in the platform workspace; where no board is offered, the Mappings screen.
   const ownTarget = boardContext() && gx.teamId ? `data-section="board" data-mb-team-id="${escapeAttr(String(gx.teamId))}"` : `data-section="mappings"`;
   const own = variables.state !== "waiting" && variables.state !== "unknown" && !g.confirm && !g.write
     ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-section" ${ownTarget} ${busy ? "disabled" : ""}>Choose my own</button>` : "";
