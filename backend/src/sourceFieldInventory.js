@@ -9,6 +9,7 @@
 // training_load.source_metric_unit_token_ok), so no word the database refuses ever reaches the write.
 
 import { unitTokenOk } from "./metricTextRules.js";
+import { DANGEROUS_FIELD_NAMES } from "./sourcePinnedFields.js";
 
 export const FIELD_ENDPOINTS = Object.freeze(["athlete_session", "more.events", "more.complementary_data", "details.session", "details.drill", "team_thresholds"]);
 export const VALUE_KINDS = Object.freeze(["number", "text", "boolean", "null", "unit_value_object", "zone_list", "object", "list"]);
@@ -28,7 +29,7 @@ const STRUCTURAL = new Set(Object.entries(STRUCTURAL_FIELDS).flatMap(([endpoint,
 export const isStructuralField = (endpoint, name) => STRUCTURAL.has(`${endpoint}\u0000${name}`);
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-const PROTOTYPE_KEYS = new Set(["__proto__", "constructor", "prototype", "hasOwnProperty", "toString", "valueOf"]);
+const PROTOTYPE_KEYS = DANGEROUS_FIELD_NAMES;
 
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 

@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  EXTRACTORS, ExtractorError, canonicalDecimal, compareDecimal, extractabilityCode, extractorFor, sameDecimal, setExtractorFallbackForTests,
+  EXTRACTORS, ExtractorError, SKIP_CATEGORY, canonicalDecimal, compareDecimal, extractabilityCode, extractorFor, sameDecimal, setExtractorFallbackForTests,
 } from "../src/sourceMetricExtractors.js";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
 import { LEGACY_SPECS } from "./support/gpexe-legacy-specs.mjs";
@@ -24,6 +24,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(__dirname, "../src");
 
 const G = (sourceMetricKey) => extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey });
+const G2 = G;
 const zone = (lower, upper, operator = upper === null ? ">=" : "between", unit = "W/kg") => ({ lower, operator, unit, upper });
 const threshold = (thresholdValue, durationSeconds, operator, unit = "m/s2") => ({ duration_seconds: durationSeconds, operator, threshold_value: thresholdValue, unit });
 
@@ -41,7 +42,7 @@ const TABLE = [
   ["details.players.tot_brake_events", "unit_value_object", "none", null, null],
 ];
 
-test("1. the registry holds exactly the ten gpexe / rest_v1 fields, frozen, each with its shape, kind, zone and direction; nothing else is found", () => {
+test("1. the registry holds exactly the ten gpexe / rest_v1 fields, frozen, each with its shape, kind, zone and direction; nothing else is found (G2: a generic created key is test 14's)", () => {
   assert.deepEqual(Object.keys(EXTRACTORS).sort(), TABLE.map(([k]) => `gpexe/rest_v1/${k}`).sort());
   assert.ok(Object.isFrozen(EXTRACTORS));
   assert.equal(Object.getPrototypeOf(EXTRACTORS), null, "no inherited key can be found");
@@ -56,7 +57,12 @@ test("1. the registry holds exactly the ten gpexe / rest_v1 fields, frozen, each
   for (const bad of [
     { sourceSystem: "gpexe", apiFamily: "api", sourceMetricKey: "athlete_session.total_time" },
     { sourceSystem: "catapult", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.total_time" },
-    { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.unknown" },
+    { sourceSystem: "gpexe", apiFamily: "api", sourceMetricKey: "athlete_session.unknown" },
+    { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.__proto__" },
+    { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "details.players.constructor" },
+    { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.a.b" },
+    { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session." },
+    { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "more.events.unknown" },
     { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "toString" },
     { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "__proto__" },
     { sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "m2.test.f1234" },
@@ -318,7 +324,7 @@ test("12. the test seam: it serves only a synthetic \"<suite>.test.<id>\" key, n
     assert.equal(extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "m2.test.f1a2b" }), synthetic);
     assert.equal(extractorFor({ sourceSystem: "gpexe", apiFamily: "api", sourceMetricKey: "v48.test.f00" }), synthetic);
     assert.equal(extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.total_time" }), G("athlete_session.total_time"), "a seeded key is the registry's");
-    for (const k of ["athlete_session.unknown", "test.f1", "m2.testf1", "m2.test.", "M2.test.f1"]) {
+    for (const k of ["athlete_session.__proto__", "test.f1", "m2.testf1", "m2.test.", "M2.test.f1"]) {
       assert.equal(extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: k }), null, k);
     }
     assert.equal(extractabilityCode({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "m2.test.f1", valueShape: "number", parameterKind: "zone_bounds", sourceParameters: zone(1, 2) }), null);
@@ -350,4 +356,46 @@ test("13. architecture: no module of backend/src sets the test seam; only the re
   const fieldsService = fs.readFileSync(path.join(SRC, "sourceFieldVerificationService.js"), "utf8");
   assert.match(fieldsService, /extractorAvailable: extractorFor\(/);
   assert.match(service, /extractorAvailable: extractorFor\(/);
+});
+
+test("14. G2, the generic extractors: athlete_session.<name> reads one row number and details.players.<name> one details {unit: number, value}, only as the row's or the athlete's own property; no parameters; never for another family, a dangerous or a dotted name", () => {
+  const row = G2("athlete_session.hsr_distance");
+  const det = G2("details.players.jumps");
+  assert.deepEqual([row.key, row.valueShape, row.parameterKind, row.zone, row.direction], ["athlete_session.hsr_distance", "number", "none", null, null]);
+  assert.deepEqual([det.key, det.valueShape, det.parameterKind, det.zone, det.direction], ["details.players.jumps", "unit_value_object", "none", null, null]);
+  assert.ok(Object.isFrozen(row) && Object.isFrozen(det));
+  assert.equal(G2("athlete_session.hsr_distance"), row, "one entry per key");
+  // Row numbers.
+  assert.deepEqual(row.extract({ row: { hsr_distance: 512.5 } }, {}), { value: 512.5 });
+  assert.deepEqual(row.extract({ row: { hsr_distance: "512.5" } }, {}), G("athlete_session.total_time").extract({ row: { total_time: "512.5" } }, {}), "the seeded rows' own number rule");
+  assert.deepEqual(row.extract({ row: { hsr_distance: "fast" } }, {}), { skip: "field_missing" });
+  assert.deepEqual(row.extract({ row: { hsr_distance: null } }, {}), { skip: "field_missing" });
+  assert.deepEqual(row.extract({ row: {} }, {}), { skip: "field_missing" });
+  assert.deepEqual(row.extract({}, {}), { skip: "field_missing" });
+  const inherited = Object.create({ hsr_distance: 99 });
+  assert.deepEqual(row.extract({ row: inherited }, {}), { skip: "field_missing" }, "an inherited property is never read");
+  // Details.
+  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "number", value: 7 } } }, {}), { value: 7 });
+  assert.deepEqual(det.extract({ playerDetails: null }, {}), { skip: "details_not_fetched" });
+  assert.deepEqual(det.extract({ playerDetails: {} }, {}), { skip: "field_missing" });
+  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "s", value: 7 } } }, {}), { skip: "unexpected_unit" });
+  assert.deepEqual(det.extract({ playerDetails: { jumps: { unit: "number", value: "x" } } }, {}), { skip: "value_missing" });
+  assert.deepEqual(det.extract({ playerDetails: { jumps: Object.create({ unit: "number", value: 7 }) } }, {}), { skip: "unexpected_unit" }, "an inherited unit is never read");
+  assert.deepEqual(det.extract({ playerDetails: Object.create({ jumps: { unit: "number", value: 7 } }) }, {}), { skip: "field_missing" });
+  for (const code of ["field_missing", "unexpected_unit", "value_missing", "details_not_fetched"]) assert.ok(SKIP_CATEGORY[code], code);
+  // No parameters.
+  assert.equal(row.checkParameters({}), null);
+  assert.equal(row.checkParameters({ x: 1 }), "parameters_unsupported");
+  assert.throws(() => det.extract({ playerDetails: {} }, { x: 1 }), /do not fit/);
+  assert.equal(extractabilityCode({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.hsr_distance", valueShape: "number", parameterKind: "none", sourceParameters: {} }), null);
+  assert.equal(extractabilityCode({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.hsr_distance", valueShape: "unit_value_object", parameterKind: "none", sourceParameters: {} }), "source_metric_unsupported", "another shape");
+  // Never for another family or source, or a name that is not an identifier.
+  for (const bad of ["athlete_session.__proto__", "athlete_session.constructor", "details.players.hasOwnProperty", "athlete_session.a.b", "athlete_session.9x", "athlete_session.", "details.players.", "athlete_session.x-y"]) {
+    assert.equal(extractorFor({ sourceSystem: "gpexe", apiFamily: "rest_v1", sourceMetricKey: bad }), null, bad);
+  }
+  assert.equal(extractorFor({ sourceSystem: "gpexe", apiFamily: "api", sourceMetricKey: "athlete_session.hsr_distance" }), null);
+  assert.equal(extractorFor({ sourceSystem: "catapult", apiFamily: "rest_v1", sourceMetricKey: "athlete_session.hsr_distance" }), null);
+  // The seeded keys stay the registry's own entries.
+  assert.equal(G2("athlete_session.total_time"), G("athlete_session.total_time"));
+  assert.equal(G2("details.players.tot_burst_events"), G("details.players.tot_burst_events"));
 });

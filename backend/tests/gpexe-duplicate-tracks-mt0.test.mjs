@@ -69,6 +69,9 @@ test("3. fail closed: one difference in any compared field - the track's start, 
     "/more/ zones": (b) => { b.more[String(firstOf(b, 9207).id)].complementary_data.power[0].distance += 1; },
     "/more/ missing": (b) => { delete b.more[String(firstOf(b, 9207).id)]; },
     "a track not fetched": (b) => { delete b.tracks["9207"]; },
+    // G2: a row field a check kept for a created field (the pinned set) is compared too.
+    "a created row field differs": (b) => { for (const r of rowsOf(b, 106)) r.g2_hsr = 10; firstOf(b, 9207).g2_hsr = 11; },
+    "a created row field only on one track": (b) => { firstOf(b, 9207).g2_hsr = 10; },
   };
   for (const [name, tweak] of Object.entries(cases)) {
     const bundle = bundleWithDuplicate({ tweak });
@@ -105,4 +108,9 @@ test("5. a session without a duplicate gives a plan with no duplicateTracks anyw
   const plan = buildGpexeImportPlan(makeBundle({ athletes: standardAthletes() }), { metricSpecs: oracle });
   assert.equal(JSON.stringify(plan).includes("duplicateTracks"), false);
   assert.deepEqual(plan.anomalies.map((a) => [a.kind, a.gpexeAthleteId]), [["multiple_tracks", "103"]]);
+});
+
+test("6. G2: a created row field kept by the check and equal on both tracks keeps them one recording", () => {
+  const plan = buildGpexeImportPlan(bundleWithDuplicate({ tweak: (b) => { for (const r of rowsOf(b, 106)) r.g2_hsr = 10; } }), { metricSpecs: oracle });
+  assert.deepEqual(plan.participants.find((x) => x.gpexeAthleteId === "106").duplicateTracks, { count: 2, usedTrackId: "9206", ignoredTrackIds: ["9207"] });
 });

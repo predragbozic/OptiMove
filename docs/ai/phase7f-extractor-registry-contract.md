@@ -335,3 +335,16 @@ service's lines since, and the code below is named by function.
   property of an athlete's details (`playerDetails[`), never another.
 - **Not built here (section 6):** the test that "the importer never writes a value without an extractor" belongs to
   M4, which is the first importer that reads through the registry.
+
+## 12. Amended by G2 (2026-11-17)
+
+The registry also answers a field created by route C (G1a), with two generic plain entries. It is still pure: no
+database, network or file access.
+
+- **The entries.** `gpexe/rest_v1/athlete_session.<name>` is one row number; `gpexe/rest_v1/details.players.<name>` is
+  one details number in the unit word `number`.
+- **What they read.** Only the own property of that name, by `Object.hasOwn`.
+- **What has no entry.** A name that is not an identifier, a dangerous or dotted name, another family or another source.
+- **Unchanged.** The seeded entries stay as section 11 describes; zones and events stay code.
+- **Where it is recorded.** `docs/ai/gpexe-field-inventory-plan.md` section 9.3, with the tests and the B7.7c / B7.8
+  guards.
