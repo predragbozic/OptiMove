@@ -499,7 +499,8 @@ function boardOf(world, pairIndex) {
       displayRegistryVersion: DISPLAY_REGISTRY_VERSION,
       // Whose mappings a save writes: the club's, or OptiMove's on the platform board (S).
       owner: world.systemBoard ? "system" : "club",
-      team: { id: world.team.id, name: world.team.name, sourceTeamId: world.team.source_team_id },
+      // clubId: the team's own club (the other board's workspace, for its switch link).
+      team: { id: world.team.id, name: world.team.name, sourceTeamId: world.team.source_team_id, clubId: world.clubId },
       // newerNotUsable: with no session named, how many newer stored sessions were passed by because the import would not take them.
       session: { candidateId: world.candidate.id, label: world.candidate.session_label ?? null, startedAt: world.candidate.session_started_at, newerNotUsable: world.defaultSkipped },
       pair: { index: pair.index, count: pair.count, labels: pair.labels },

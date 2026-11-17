@@ -36,6 +36,21 @@ export function resetBoard() {
 let pendingTeamId = null;
 export function requestBoardOpen({ teamId }) { pendingTeamId = teamId ? String(teamId) : null; }
 
+// S: the switch between the club board and the platform board of the same team ("Switch to OptiMove's variables" /
+// "Switch to the club's variables"). The link is a workspace switch; the team and the target workspace are remembered
+// here and taken by the Training Load reset of that switch, so the board opens again on the same team - and only when
+// the workspace that became active is the one the link named (a failed or another switch takes nothing).
+let afterSwitch = null;
+export function rememberBoardAfterSwitch({ teamId, type, scopeId }) {
+  afterSwitch = teamId ? { teamId: String(teamId), type: String(type || ""), scopeId: scopeId ? String(scopeId) : "" } : null;
+}
+export function takeBoardAfterSwitch(activeWorkspace) {
+  const wanted = afterSwitch;
+  afterSwitch = null;
+  if (!wanted || !activeWorkspace) return null;
+  return activeWorkspace.type === wanted.type && String(activeWorkspace.scopeId || "") === wanted.scopeId ? wanted.teamId : null;
+}
+
 // ---------------------------------------------------------------------------
 // Leaving
 // ---------------------------------------------------------------------------

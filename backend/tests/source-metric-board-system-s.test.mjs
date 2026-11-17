@@ -552,3 +552,24 @@ test("S8. the lock order of a platform save, from the SQL it sends: the same ord
   assert.ok(commitAt > firstWrite, "the save commits");
   assert.ok(!trimmed.slice(firstWrite, commitAt).some((x) => /\bfor (share|update|no key update|key share)\b|pg_advisory_xact_lock/i.test(x)), "no locking clause between the first write and the COMMIT");
 });
+
+test("S9. the answer names the team's own club (the other board's workspace); a replay of a platform save after the team or its club was archived is the identical 404", async () => {
+  const { t, cand } = await freshTeam();
+  assert.equal(ok(await boardOf(W.pa, t)).board.team.clubId, t.clubId);
+  assert.equal(ok(await boardOf(W.caA, t)).board.team.clubId, t.clubId);
+  const f = await field("time");
+  const target = await variable(W.pa, { unit: "min", label: `OptiMove replay ${uid()}` });
+  const requestKey = key();
+  const row = await systemRow(t, cand, f, target);
+  ok(await save(W.pa, t, cand, [row], { requestKey }));
+  await k.query(`update public.teams set is_active = false where id = $1`, [t.teamId]);
+  assert.deepEqual(shape(await save(W.pa, t, cand, [row], { requestKey })), NOT_FOUND, "an archived team");
+  await k.query(`update public.teams set is_active = true where id = $1`, [t.teamId]);
+  assert.equal(ok(await save(W.pa, t, cand, [row], { requestKey })).replayed, true);
+  await k.query(`update public.clubs set is_active = false where id = $1`, [t.clubId]);
+  try {
+    assert.deepEqual(shape(await save(W.pa, t, cand, [row], { requestKey })), NOT_FOUND, "an archived club");
+  } finally {
+    await k.query(`update public.clubs set is_active = true where id = $1`, [t.clubId]);
+  }
+});

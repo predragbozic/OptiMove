@@ -11,7 +11,7 @@ import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBe
 import { emptyVariablesState } from "./metric-variables-data.js";
 import { loadSourceFieldsSection, resetSourceFields, sourceFieldsMayBeLeft, sourceFieldsUnloadShouldWarn } from "./source-fields-actions.js";
 import { dropMappingsForms, loadMappingsSection, mappingsMayBeLeft, mappingsUnloadShouldWarn, requestMappingsOpen, resetMappings } from "./metric-mappings-actions.js";
-import { boardMayBeLeft, boardUnloadShouldWarn, dropBoardForms, loadBoardSection, requestBoardOpen, resetBoard } from "./metric-board-actions.js";
+import { boardMayBeLeft, boardUnloadShouldWarn, dropBoardForms, loadBoardSection, requestBoardOpen, resetBoard, takeBoardAfterSwitch } from "./metric-board-actions.js";
 import { addDaysIso, addMonthsIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthStartIso, weekMondayIso } from "./utils.js";
 import {
   captureTrainingLoadAthleteWeeklyMutationContext,
@@ -2882,8 +2882,13 @@ export function resetTrainingLoadForWorkspaceChange() {
   resetVariables();
   resetSourceFields();
   resetMappings();
+  // S: a switch made from a board's own link lands on the other board of the same team.
+  const boardTeam = takeBoardAfterSwitch(state.currentUser?.activeWorkspace);
   resetBoard();
-  if (state.trainingLoad.section === "variables" || state.trainingLoad.section === "source-fields" || state.trainingLoad.section === "mappings" || state.trainingLoad.section === "board") setTrainingLoadSection(state.trainingLoad.lastDataAnalysisSection || "today");
+  if (boardTeam) {
+    requestBoardOpen({ teamId: boardTeam });
+    setTrainingLoadSection("board");
+  } else if (state.trainingLoad.section === "variables" || state.trainingLoad.section === "source-fields" || state.trainingLoad.section === "mappings" || state.trainingLoad.section === "board") setTrainingLoadSection(state.trainingLoad.lastDataAnalysisSection || "today");
   // GPEXE imports: the old object's generation is bumped first, so a check
   // still being polled for the OLD workspace's team stops by itself.
   state.trainingLoad.gpexe.generation += 1;

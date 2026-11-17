@@ -8,6 +8,7 @@ import {
   preplacedRows, sessionWords, slotOf, variableOf,
 } from "./metric-board-data.js";
 import { sourceFieldDragAvailable } from "./metric-board-drag.js";
+import { state } from "./state.js";
 
 export const isPhone = () => Boolean(globalThis.matchMedia?.("(max-width: 760px)").matches);
 const name = (value) => escapeHtml(cleanName(value));
@@ -45,12 +46,28 @@ function header(s) {
         <p class="muted mb-lead">${sourceFieldDragAvailable() && !isPhone() ? `Drag a GPEXE column onto ${onPlatform() ? "an OptiMove variable" : "your variable"}` : `Tap a GPEXE column, then ${onPlatform() ? "an OptiMove variable" : "your variable"}`}, compare two athletes with the GPEXE screen, and save.</p>
       </div>
       ${team ? `<div class="om-page-header__actions"><span class="om-badge om-badge--accent">${name(team.name)}${gpexeTeam(team.sourceTeamId)}</span>
-        ${s.teams.items.length > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-change-team" ${s.write ? "disabled" : ""}>Change team</button>` : ""}</div>` : ""}
+        ${s.teams.items.length > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-change-team" ${s.write ? "disabled" : ""}>Change team</button>` : ""}
+        ${switchLink(s)}</div>` : ""}
     </header>`;
 }
 
 // S: the platform board (OptiMove's variables, any club's team).
 const onPlatform = () => boardContext()?.platform === true;
+
+// S: one click to the other board of the same team - the club's variables (the club workspace) or OptiMove's (the
+// platform workspace). Offered only when that workspace is one of this user's: a platform admin has a club's workspace
+// only as that club's admin too. The switch asks first when there is something unsaved (the app's leave guard).
+function switchLink(s) {
+  const clubId = s.board?.team?.clubId;
+  if (!s.teamId || !clubId) return "";
+  const available = Array.isArray(state.currentUser?.availableWorkspaces) ? state.currentUser.availableWorkspaces : [];
+  const target = onPlatform()
+    ? available.find((w) => w?.type === "club" && String(w.scopeId) === String(clubId))
+    : available.find((w) => w?.type === "platform");
+  if (!target) return "";
+  const label = onPlatform() ? "Switch to the club's variables" : "Switch to OptiMove's variables";
+  return `<button type="button" class="om-btn om-btn--ghost" data-action="workspace-select" data-workspace-type="${escapeAttr(target.type)}" data-workspace-scope-id="${escapeAttr(target.scopeId || "")}" data-mb-switch-team-id="${escapeAttr(String(s.teamId))}" ${s.write ? "disabled" : ""}>${label}</button>`;
+}
 
 function whichTeam(s) {
   if (s.teams.loading || !s.teams.loaded) return `<p class="muted" role="status">${onPlatform() ? "Loading the teams..." : "Loading the club's teams..."}</p>`;

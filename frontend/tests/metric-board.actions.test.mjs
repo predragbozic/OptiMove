@@ -616,3 +616,46 @@ test("28. which session the board shows, and what it says when none can be used:
   assert.equal(/cannot read/.test(text()), false);
   for (const sentence of Object.values(data.BOARD_ERROR)) assert.equal(/cannot read/i.test(sentence), false, sentence);
 });
+
+test("S3. one click to the other board of the same team: a platform admin's club board offers \"Switch to OptiMove's variables\", the platform board \"Switch to the club's variables\" where the club's workspace is theirs; never when that workspace is not", async () => {
+  // The club board, a platform admin working in the club.
+  state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "Example Club" }, availableWorkspaces: [{ type: "platform", scopeId: null }, { type: "club", scopeId: CLUB }] };
+  const clubBoard = structuredClone(FX.board);
+  clubBoard.board.team.clubId = CLUB;
+  overrides.push((call) => (call.url.startsWith(`${B}/board?`) ? { status: 200, body: clubBoard } : null));
+  await open();
+  const toPlatform = content.querySelector('[data-action="workspace-select"][data-mb-switch-team-id]');
+  assert.ok(toPlatform, "the link is offered");
+  assert.equal(toPlatform.textContent.trim(), "Switch to OptiMove's variables");
+  assert.deepEqual([toPlatform.dataset.workspaceType, toPlatform.dataset.workspaceScopeId, toPlatform.dataset.mbSwitchTeamId], ["platform", "", TEAM]);
+  // A club admin who is no platform admin: no link.
+  state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "Example Club" }, availableWorkspaces: [{ type: "club", scopeId: CLUB }] };
+  render();
+  assert.equal(content.querySelector("[data-mb-switch-team-id]"), null);
+  // The platform board: the club's workspace is theirs, then not.
+  state.currentUser = { id: "u1", activeWorkspace: { type: "platform", scopeId: null }, availableWorkspaces: [{ type: "platform", scopeId: null }, { type: "club", scopeId: CLUB }] };
+  state.trainingLoad.board = null;
+  overrides = [];
+  const b = platformBoard();
+  b.team.clubId = CLUB;
+  platformWorld(b);
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  const toClub = content.querySelector('[data-action="workspace-select"][data-mb-switch-team-id]');
+  assert.equal(toClub?.textContent.trim(), "Switch to the club's variables");
+  assert.deepEqual([toClub.dataset.workspaceType, toClub.dataset.workspaceScopeId, toClub.dataset.mbSwitchTeamId], ["club", CLUB, TEAM]);
+  state.currentUser.availableWorkspaces = [{ type: "platform", scopeId: null }];
+  render();
+  assert.equal(content.querySelector("[data-mb-switch-team-id]"), null, "not a club admin there: no link");
+});
+
+test("S4. the switch remembers the team for the workspace the link named only: the board of the same team opens after that switch; a failed or another switch opens nothing", () => {
+  actions.rememberBoardAfterSwitch({ teamId: TEAM, type: "platform", scopeId: "" });
+  assert.equal(actions.takeBoardAfterSwitch({ type: "platform", scopeId: null }), TEAM);
+  assert.equal(actions.takeBoardAfterSwitch({ type: "platform", scopeId: null }), null, "taken once");
+  actions.rememberBoardAfterSwitch({ teamId: TEAM, type: "club", scopeId: CLUB });
+  assert.equal(actions.takeBoardAfterSwitch({ type: "club", scopeId: "another-club" }), null, "another workspace became active");
+  assert.equal(actions.takeBoardAfterSwitch({ type: "club", scopeId: CLUB }), null, "and nothing is left for a later switch");
+  actions.rememberBoardAfterSwitch({ teamId: TEAM, type: "club", scopeId: CLUB });
+  assert.equal(actions.takeBoardAfterSwitch(null), null, "a failed switch");
+});
