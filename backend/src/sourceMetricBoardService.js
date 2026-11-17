@@ -309,7 +309,8 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   )).rows;
 
   // S-2: a club board's mapping whose latest activation on this binding a platform-board save ended (an end in the same
-  // operation as the start of an OptiMove mapping): the club reads when OptiMove's mapping replaced it.
+  // operation as the start of an OptiMove mapping, with no club confirmation in it): the club reads when OptiMove's
+  // mapping replaced it.
   const replacedBySystem = systemBoard ? [] : (await client.query(
     `select x.mapping_id, x.ended_at
        from (select distinct on (a.mapping_id) a.id, a.mapping_id, a.ended_at, a.end_reason
@@ -321,7 +322,11 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
                       join training_load.source_metric_audit mc on mc.operation_id = e.operation_id and mc.action = 'activation_start'
                       join training_load.source_metric_mapping_versions sv on sv.id = mc.mapping_version_id
                       join training_load.source_metric_mappings sm on sm.id = sv.mapping_id and sm.owner_scope = 'system'
-                     where e.activation_id = x.id and e.action = 'activation_end')`,
+                     where e.activation_id = x.id and e.action = 'activation_end'
+                       -- A club-board save stores the club's confirmation in the same operation: the club itself switched
+                       -- OptiMove's mapping on, so its own mapping is not "replaced by OptiMove's mapping".
+                       and not exists (select 1 from training_load.source_metric_audit c
+                                     where c.operation_id = e.operation_id and c.action = 'mapping_confirmation'))`,
     [team.binding_id],
   )).rows;
 

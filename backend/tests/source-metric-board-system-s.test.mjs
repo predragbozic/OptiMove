@@ -710,3 +710,26 @@ test("S14. S-2: a club-board save that replaces the club's own mapping (another 
   assert.ok(row, "the club's earlier mapping is offered again");
   assert.equal(row.replacedBy, undefined, "the club replaced it itself");
 });
+
+test("S15. S-2 (b): a club-board save in which the club itself switches OptiMove's mapping on over its own mapping never reads as replaced by OptiMove", async () => {
+  const { t, cand } = await freshTeam();
+  const f = await field("dist");
+  const own = await variable(W.caA, { unit: "m", label: `Club distance ${uid()}` });
+  const ownV = await activeVersion(W.caA, f, own);
+  ok(await start(W.caA, ownV, t), 201);
+  const was = await openOn(ownV, t);
+  const sysVar = await variable(W.pa, { unit: "m", label: `OptiMove distance ${uid()}` });
+  const sysV = await activeVersion(W.pa, f, sysVar);
+  const before = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  const offered = before.replaceable.find((x) => x.mappingVersionId === sysV.versionId);
+  assert.ok(offered, "OptiMove's mapping is offered over the club's own");
+  assert.deepEqual(offered.replaces.map((c) => [c.activationId, c.owner]), [[was.id, "club"]]);
+  ok(await save(W.caA, t, cand, [await preplacedRow(W.caA, t, cand, sysV)]));
+  assert.ok((await one(`select ended_at from ${T5} where id = $1`, [was.id])).ended_at, "the club's own activation ended");
+  const board = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  assert.ok(board.on.some((o) => o.variableId === sysVar.id), "OptiMove's mapping is on");
+  assert.ok(!board.switchedOff.some((x) => x.mappingVersionId === ownV.versionId), "a replacement, not a switch-off");
+  const row = [...board.replaceable, ...board.preplaced].find((x) => x.mappingVersionId === ownV.versionId);
+  assert.ok(row, "the club's own mapping is offered again");
+  assert.equal(row.replacedBy, undefined, "the club switched OptiMove's mapping on itself");
+});
