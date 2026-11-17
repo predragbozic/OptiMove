@@ -595,7 +595,16 @@ export async function saveEstimate(ctx, activityId, body) {
     }
 
     // The writes: the acting user for v63's guards, the participant in the event's zone, its activity link, the values.
+    // ONE TRANSACTION, AND IT MUST STAY ONE: an athlete's own reads hide a participation that an estimate made
+    // (trainingActivityAccess.js athleteOwnParticipationSql) by comparing created_at of the activity participant row
+    // written here (step 2, inside materialize_activity_group_from_metric_event) with created_at of the estimate's
+    // occasions (step 3). Both default to now() - the transaction's start - so they are equal only while the three
+    // writes below share a transaction. Writing the participant earlier (another transaction, a background job, a
+    // retry that reuses a row) would show the athlete a session that exists for her only because she was estimated.
+    // metric-estimates-6b-b.test.mjs (17y) pins this. The robust form is a provenance mark on
+    // training.activity_participants (a migration), to be made before ESTIMATES_ENABLED is switched on.
     await client.query(`select set_config('optimove.estimate_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [ctx.userId]);
+    // Step 1 of 3 (see above).
     await client.query(
       `insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1, $2, $3)
        on conflict (event_id, athlete_id) do nothing`,
@@ -604,6 +613,7 @@ export async function saveEstimate(ctx, activityId, body) {
     const participantId = (await client.query(
       `select id from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [event.id, input.athleteId],
     )).rows[0].id;
+    // Step 2 of 3 (see above): this creates the athlete's activity participant row when she has none.
     const linked = (await client.query(
       `select training.materialize_activity_group_from_metric_event($1, $2, $3, $4) as id`,
       [event.id, target.activity.activity_type_key, target.activity.name, ctx.userId],
@@ -611,6 +621,7 @@ export async function saveEstimate(ctx, activityId, body) {
     const linkedCanonical = (await client.query(`select training.resolve_canonical_activity_id($1) as id`, [linked])).rows[0].id;
     if (String(linkedCanonical) !== canonicalId) throw new Error("the event's activity is not this session");
     for (const entry of toWrite) {
+      // Step 3 of 3 (see above): the estimate's occasion, in the same transaction as the participant row.
       const occasionId = (await client.query(
         `insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id)
          values ($1, 'estimate', $2) returning id`,

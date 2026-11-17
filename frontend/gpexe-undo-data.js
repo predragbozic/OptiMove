@@ -41,9 +41,15 @@ function bounded(options) {
   return { ...options, cache: "no-store", ...(signal ? { signal } : {}) };
 }
 
-// Only the platform admin the server recognises may even ask. The server decides again.
+// v76 (the owner, 2026-11-17): whoever may approve an import of the team may delete one - the status says so with
+// viewer.undoImport (absent otherwise). The server decides again on every request.
 export function undoViewer(gx = g()) {
-  return gx.status?.viewer?.isPlatformAdmin === true && gx.status?.viewer?.identityAdmin === true;
+  return gx.status?.viewer?.undoImport === true;
+}
+
+// Codes, ids and Technical details only for a platform admin; everyone else reads a sentence and one next step.
+export function undoAdminViewer(status = g().status) {
+  return status?.viewer?.isPlatformAdmin === true;
 }
 
 // The review of an imported session that is not undone, for that viewer.
@@ -75,25 +81,32 @@ export function scrollUndoIntoView() {
   }
 }
 
-export async function openUndo(candidateId, render) {
+// `teamId` and `origin`: the Imports review (the screen's own team) or a session of the Activities view (its own team,
+// v76); `admin` whether this viewer reads codes and Technical details; `afterSettled` what a settled delete refreshes.
+export async function openUndo(candidateId, render, { teamId = g().teamId, origin = "imports", admin = undoAdminViewer(), activityId = null, label = "", day = "", afterSettled = null } = {}) {
   const gx = g();
-  if (undoBusy(gx) || !candidateId) return;
-  const generation = gx.generation;
-  const undo = { id: candidateId, step: "previewing", preview: null, error: null, reason: "", requestKey: null, result: null, checks: 0, laterConfirmed: false, body: null };
+  if (undoBusy(gx) || !candidateId || !teamId) return;
+  const undo = { id: candidateId, teamId, origin, admin, activityId, label, day, afterSettled, generation: origin === "imports" ? gx.generation : null, step: "previewing", preview: null, error: null, reason: "", requestKey: null, result: null, checks: 0, laterConfirmed: false, body: null };
   gx.undo = undo;
   render();
   try {
-    const { undoPreview } = await api(candidatePath(gx.teamId, candidateId, "/undo-preview"), bounded({}));
-    if (generation !== gx.generation || gx.undo !== undo) return;
+    const { undoPreview } = await api(candidatePath(undo.teamId, candidateId, "/undo-preview"), bounded({}));
+    if (!current(undo)) return;
     undo.preview = undoPreview;
     undo.step = "ready";
   } catch (error) {
-    if (generation !== gx.generation || gx.undo !== undo) return;
+    if (!current(undo)) return;
     undo.error = errorInfo(error);
     undo.step = "refused";
   }
   render();
   scrollUndoIntoView();
+}
+
+// The undo on screen is still this one (and, from Imports, still the Imports team's).
+function current(undo) {
+  const gx = g();
+  return gx.undo === undo && (undo.generation === null || undo.generation === gx.generation);
 }
 
 // Back out of the question or the answer; never while a write is in flight or unconfirmed.
@@ -146,23 +159,22 @@ export function undoLaterProblem(undo, confirmed) {
 // The reason is the one thing the person types; checked here before anything is asked or sent.
 export function undoReasonProblem(reason) {
   const text = normalizeUndoReason(reason);
-  if (!text) return "Write why the import is undone.";
+  if (!text) return "Write why the imported data is deleted.";
   if (text.length > UNDO_REASON_MAX) return `The reason is too long (${text.length} of ${UNDO_REASON_MAX} characters).`;
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(text)) return "The reason cannot contain control characters.";
   return "";
 }
 
-async function settle(undo, generation, body, render) {
-  const gx = g();
+async function settle(undo, body, render) {
   try {
-    const { undo: result } = await api(candidatePath(gx.teamId, undo.id, "/undo-import"), bounded({ method: "POST", body: JSON.stringify(body) }));
-    if (generation !== gx.generation || gx.undo !== undo) return;
+    const { undo: result } = await api(candidatePath(undo.teamId, undo.id, "/undo-import"), bounded({ method: "POST", body: JSON.stringify(body) }));
+    if (!current(undo)) return;
     undo.result = result;
     undo.error = null;
     undo.step = "done";
   } catch (error) {
-    if (generation !== gx.generation || gx.undo !== undo) return;
+    if (!current(undo)) return;
     const info = errorInfo(error);
     undo.error = info;
     // A resend of an unconfirmed request is answered "busy" or "not found" while the first one may still be running or
@@ -178,8 +190,8 @@ async function settle(undo, generation, body, render) {
       undo.laterConfirmed = false;
       undo.laterNote = info.code === "roster_work_changed"
         ? "Attendance changed since you opened this. Nothing was removed. The list below now shows the current changes; tick the box again to remove them too."
-        : "Nothing was removed. Tick the box, then press Undo this import again.";
-      undo.refusalNote = Number(info.data.rosterWork.laterWork?.total) > 0 ? "" : "The session's attendance changed since you reviewed it. Review the undo again.";
+        : "Nothing was removed. Tick the box, then press Delete imported data again.";
+      undo.refusalNote = Number(info.data.rosterWork.laterWork?.total) > 0 ? "" : "The session's attendance changed since you opened this. Check what is removed below, then delete again.";
       undo.rereadPreview = true;
       undo.step = "ready";
     } else if (isDefiniteRefusal(info) && info.code === "try_again") {
@@ -196,29 +208,32 @@ async function settle(undo, generation, body, render) {
       undo.step = "unknown";
     }
   }
-  if (generation === gx.generation) {
+  if (current(undo)) {
     render();
     scrollUndoIntoView();
     if (undo.rereadPreview) {
       // The attendance changed under the question: read the whole scope again (the totals moved with it).
       undo.rereadPreview = false;
-      await rereadPreview(undo, generation);
+      await rereadPreview(undo);
       render();
     }
-    // The session moved on either way: read the list again, and the open review when it is settled.
+    // The session moved on either way: from Imports the list and the open review are read again; from a session, its own
+    // view refreshes (the activity is gone).
+    // Wherever it was opened, an open Imports review of the same session and a loaded list are read again (code review);
+    // a delete opened from a session also refreshes that session's own view.
     if (undo.step === "done" || undo.step === "settled") {
-      await refreshReviewedCandidate(undo, generation);
+      await refreshReviewedCandidate(undo);
       render();
-      void reloadGpexeCandidates(render);
+      if (g().candidates) void reloadGpexeCandidates(render);
+      if (typeof undo.afterSettled === "function") void undo.afterSettled(undo);
     }
   }
 }
 
-async function rereadPreview(undo, generation) {
-  const gx = g();
+async function rereadPreview(undo) {
   try {
-    const { undoPreview } = await api(candidatePath(gx.teamId, undo.id, "/undo-preview"), bounded({}));
-    if (generation === gx.generation && gx.undo === undo && undo.step === "ready" && undoPreview) {
+    const { undoPreview } = await api(candidatePath(undo.teamId, undo.id, "/undo-preview"), bounded({}));
+    if (current(undo) && undo.step === "ready" && undoPreview) {
       const before = undo.preview?.rosterWork?.laterWork?.fingerprint ?? null;
       undo.preview = undoPreview;
       // A list that moved again is a new list: the tick never carries over.
@@ -229,13 +244,13 @@ async function rereadPreview(undo, generation) {
   }
 }
 
-async function refreshReviewedCandidate(undo, generation) {
+async function refreshReviewedCandidate(undo) {
   const gx = g();
   const detail = gx.detail;
   if (!detail || detail.id !== undo.id) return;
   try {
-    const { candidate } = await api(candidatePath(gx.teamId, undo.id, ""), bounded({}));
-    if (generation === gx.generation && gx.detail === detail) detail.candidate = candidate;
+    const { candidate } = await api(candidatePath(undo.teamId, undo.id, ""), bounded({}));
+    if (current(undo) && gx.detail === detail) detail.candidate = candidate;
   } catch {
     // The result stands on its own; the review shows the undo state it holds.
   }
@@ -273,7 +288,7 @@ export async function sendUndo(reason, render, { laterConfirmed = undefined } = 
     ...(later ? { laterRosterFingerprint: later.fingerprint } : {}),
   };
   render();
-  await settle(undo, gx.generation, undo.body, render);
+  await settle(undo, undo.body, render);
   return true;
 }
 
@@ -286,6 +301,6 @@ export async function checkUndo(render) {
   undo.stillUnknown = false;
   undo.step = "sending";
   render();
-  await settle(undo, gx.generation, undo.body || { requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId } }, render);
+  await settle(undo, undo.body || { requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId } }, render);
   return true;
 }

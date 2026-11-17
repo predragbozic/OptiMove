@@ -228,3 +228,43 @@ test("source labels use reported provenance rather than configured connections a
     assert.doesNotMatch(body.textContent, /configured-only|Source actual-one/);
   }
 });
+
+test("saved and preview single-metric tables render the same safe names, date, unit and values", async () => {
+  const { renderSimpleEditorHtml } = await import("../training-load-simple-view.js");
+  const alpha = "11911111-1111-4111-8111-111111111111";
+  const zeta = "22922222-2222-4222-8222-222222222222";
+  const unknown = "33933333-3333-4333-8333-333333333333";
+  const analysis = setup("table", [
+    row(1819.7196044920001, { athleteId: zeta, bucketKey: "2026-10-23", unit: "m", rawCount: 9 }),
+    row(0, { athleteId: alpha, bucketKey: "2026-10-23", unit: "m" }),
+    row(null, { athleteId: unknown, bucketKey: "2026-10-23", unit: "m" }),
+  ], { config: { schemaVersion: 2, numberFormat: { maximumFractionDigits: 2 } } });
+  const widget = analysis.widgets[0];
+  widget.group_by = "day";
+  const athletes = [{ id: zeta, name: "Zeta" }, { id: alpha, name: "Alpha" }];
+  state.trainingLoad.orgPickerData = { athletes };
+  const result = analysis.queryResult.widgets[0];
+  const savedTable = rendered().querySelector(".tl-analysis-table");
+  const preview = renderSimpleEditorHtml({ open: true, step: 3, athletes, selectedMetric: { label: "sRPE" },
+    preview: { status: "valid", normalizedWidget: widget, widgetResult: result } });
+  const previewTable = new JSDOM(preview).window.document.querySelector(".tl-analysis-table");
+  assert.equal(savedTable.outerHTML, previewTable.outerHTML);
+  assert.deepEqual([...savedTable.querySelectorAll("th")].map(cell => cell.textContent), ["Athlete", "Date", "sRPE (m)"]);
+  assert.deepEqual([...savedTable.querySelectorAll("tbody tr")].map(tr => [...tr.cells].map(cell => cell.textContent)),
+    [["Alpha", "23.10.2026", "0"], ["Athlete name unavailable", "23.10.2026", "—"], ["Zeta", "23.10.2026", "1819.72"]]);
+  assert.doesNotMatch(savedTable.outerHTML, /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/i);
+  assert.doesNotMatch(preview, /rawCount|tl-simple-raw/);
+});
+
+test("shared athlete/date tables show conflicting units without merging readings", () => {
+  const analysis = setup("table", [
+    row(12, { athleteId: "athlete-a", bucketKey: "2026-10-23", unit: "m" }),
+    row(24, { athleteId: "athlete-a", bucketKey: "2026-10-23", unit: "km" }),
+  ]);
+  analysis.widgets[0].group_by = "day";
+  const table = rendered().querySelector(".tl-analysis-table-wrap");
+  assert.match(table.textContent, /Values use different or unknown units/);
+  assert.equal(table.querySelectorAll("tbody tr").length, 1);
+  assert.match(table.querySelector("tbody").textContent, /Unit conflict/);
+  assert.doesNotMatch(table.querySelector("tbody").textContent, /\b12\b|\b24\b/);
+});

@@ -64,7 +64,18 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         await admin.page.waitForSelector("[data-gpexe-undo-later-confirm]", { timeout: 20_000 });
         const section = async () => (await admin.page.locator(".gpexe-undo").innerText()).replace(/\s+/g, " ");
         let text = await section();
-        assert.match(text, /The undo also removes the 2 attendance states the import set\./);
+        assert.match(text, /Deleting also removes the 2 attendance states the import set\./);
+        // The delete button is red in the Imports review too (mobile review).
+        const red = await admin.page.evaluate(() => {
+          const b = document.querySelector('.gpexe-undo [data-action="training-load-gpexe-undo-confirm"]');
+          const probe = document.createElement("span");
+          probe.style.color = "var(--danger)";
+          document.body.append(probe);
+          const danger = getComputedStyle(probe).color;
+          probe.remove();
+          return getComputedStyle(b).backgroundColor === danger;
+        });
+        assert.ok(red, "the delete button is red in the Imports review");
         assert.match(text, /Attendance was changed in the Roster tab after the import: 1 change\./);
         assert.match(text, /Did not participate · Illness/);
         assert.doesNotMatch(text, /[0-9a-f]{8}-[0-9a-f]{4}-/, "no ids on the screen");
@@ -81,7 +92,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
 
         await admin.page.check("[data-gpexe-undo-later-confirm]");
         await admin.page.click('[data-action="training-load-gpexe-undo-confirm"]');
-        await admin.page.waitForFunction(() => /Import undone\./.test(document.body.innerText), null, { timeout: 30_000 });
+        await admin.page.waitForFunction(() => /The imported data is deleted\./.test(document.body.innerText), null, { timeout: 30_000 });
         assert.equal(dialogs.length, 1);
         assert.match(dialogs[0], /This also removes 1 later attendance change made in the Roster tab\./);
         assert.equal(undoPosts.length, 1);

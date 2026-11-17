@@ -62,7 +62,9 @@ Run `docs/runbooks/generic-source-fields-v74-postcheck.sql` read-only.
 
 `docs/runbooks/generic-source-fields-v74-rollback.sql`, one transaction. It refuses once any field was created or
 observed: the evidence is append-only, so the way forward is a new migration. It also refuses once any
-`field_unit` row names a GPEXE unit word, and when a later migration is recorded. It drops `source_unit_words` with its
+`field_unit` row names a GPEXE unit word, and when a later migration other than v76 is recorded. v76 (the undo by the
+importer) reached production before v74 and shares no object with it, so the preflight expects it, the post-check and
+the rollback do not count it, and the rollback leaves it in place. It drops `source_unit_words` with its
 rows. It restores every body and CHECK exactly.
 
 It is rehearsed in `backend/tests/source-field-create-g1.test.mjs` test 11:

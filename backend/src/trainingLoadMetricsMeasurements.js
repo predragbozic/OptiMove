@@ -924,6 +924,9 @@ export async function getOccasionDetail(readContext, occasionId) {
   if (!row) return null;
   const isOwnAthlete = readContext.isAthleteSelf && String(readContext.athleteId) === String(row.athlete_id);
   if (!isOwnAthlete && !canManageMetricEventInScope(readContext.scope, row)) return null;
+  // An athlete sees only what was really measured (owner, 2026-11-16): an estimate of her own value answers as an
+  // occasion that does not exist, and a history that reaches one stops before it.
+  if (readContext.isAthleteSelf && row.entry_method === "estimate") return null;
   const values = await query(
     `select v.*, d.label, d.short_label, d.icon_url from training_load.metric_values v
      join training_load.metric_definitions d on d.id = v.metric_definition_id
@@ -1005,6 +1008,8 @@ export async function queryResults(readContext, filters = {}) {
   if (readContext.isAthleteSelf) {
     params.push(readContext.athleteId);
     conditions.push(`p.athlete_id = $${params.length}`);
+    // An athlete sees only what was really measured (owner, 2026-11-16): never an estimate.
+    conditions.push("o.entry_method <> 'estimate'");
   } else {
     conditions.push(metricEventScopeSqlForWorkspace(readContext.scope, "ev", params));
   }

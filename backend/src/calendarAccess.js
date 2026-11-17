@@ -32,7 +32,7 @@
 // activityScopeSqlForWorkspace). Nothing here writes.
 import { resolveActiveWorkspace } from "./workspace.js";
 import { query } from "./db.js";
-import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace } from "./trainingActivityAccess.js";
+import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace, athleteOwnParticipationSql } from "./trainingActivityAccess.js";
 
 // { type: "coach", workspace, activityScope, userId } for a coach-capable
 // workspace; { type: "athlete", workspace, athleteId, userId } for the
@@ -127,7 +127,9 @@ export function calendarAthleteScopeSql(ctx, alias, params, fromExpr, toExpr = f
 export function calendarActivityScopeSql(ctx, alias, params) {
   if (ctx.type === "athlete") {
     params.push(ctx.athleteId);
-    return `exists (select 1 from training.activity_participants ap_s where ap_s.activity_id = ${alias}.id and ap_s.athlete_id = $${params.length} and ap_s.merge_status = 'canonical')`;
+    // Her own participations, never one that exists only because of an estimate (trainingActivityAccess.js).
+    return `exists (select 1 from training.activity_participants ap_s where ap_s.activity_id = ${alias}.id and ap_s.athlete_id = $${params.length} and ap_s.merge_status = 'canonical'
+      and ${athleteOwnParticipationSql("ap_s.id")})`;
   }
   return activityReadScopeSqlForWorkspace(ctx.activityScope, alias, params);
 }

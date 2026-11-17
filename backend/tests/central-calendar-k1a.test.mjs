@@ -1577,3 +1577,35 @@ test("24. a terminal assignment: an external or test day whose unanswered entrie
   assert.deepEqual(testCard.results, { expected: 2, completed: 1, missed: 1 });
   assert.equal(testCard.status, "missed");
 });
+
+test("athlete: a session she is in only because a coach estimated her is not on her calendar; her teammate's own card stays", async () => {
+  const team = await gpexeTeam("est own");
+  const result = await importDirect(team, bundleFor(5901, team.sourceTeamId));
+  const activityId = result.activityId || (await q(`select id from training.activities where owner_team_id = $1 and origin in ('api_import','source_import') order by created_at desc limit 1`, [team.teamId]))[0].id;
+  const onCalendar = async (athlete) => {
+    const res = await calendar(athlete.cookie, { from: GPEXE_DAY, to: GPEXE_DAY });
+    assert.equal(res.status, 200, res.text);
+    return res.text.includes(activityId);
+  };
+  assert.deepEqual([await onCalendar(team.members[101]), await onCalendar(team.members[102])], [true, true], "both were recorded");
+  // Athlete 101's values become estimates (as if she had not been recorded and the coach estimated her): every
+  // measurement that ties her to the session is an estimate. The fixture turns the imported occasions in place.
+  const client = new pg.Client({ connectionString: db.url });
+  await client.connect();
+  try {
+    await client.query("begin");
+    await client.query("set local session_replication_role = replica");
+    const changed = await client.query(
+      `update training_load.metric_measurement_occasions o set entry_method = 'estimate'
+         from training.activity_participant_metric_participant_links l join training.activity_participants ap on ap.id = l.activity_participant_id
+        where o.event_participant_id = l.metric_event_participant_id and ap.activity_id = $1 and ap.athlete_id = $2`, [activityId, team.ids[101]]);
+    assert.ok(changed.rowCount > 0);
+    await client.query("commit");
+  } finally {
+    await client.end();
+  }
+  assert.equal(await onCalendar(team.members[101]), false, "nothing tells her that an estimate was made");
+  assert.equal(await onCalendar(team.members[102]), true, "her teammate's card is as it was");
+  const coach = await coachOf(team.teamId, "est own coach");
+  assert.equal(await onCalendar(coach), true, "the coach's calendar is unchanged");
+});

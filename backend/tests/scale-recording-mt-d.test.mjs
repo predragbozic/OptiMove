@@ -494,9 +494,15 @@ test("3. a scaled athlete is imported with its max only; the preview lists the s
   await setWorkspace(selfId, "athlete", team.athleteIds[1]);
   const selfRead = await tapi(`/${activityId}`, { cookie: `optimove_session=${await createSession(selfId)}` });
   assert.equal(selfRead.status, 200, selfRead.text);
-  const selfEst = selfRead.body.facts.filter((f) => f.detail?.entryMethod === "estimate");
-  assert.ok(selfEst.length > 0);
-  for (const f of selfEst) assert.deepEqual(Object.keys(f.estimate).sort(), ["estimatedAt", "estimatedBy", "method"], "athlete-self: method, author, date only");
+  // An athlete sees only what was really measured (owner, 2026-11-16): her imported max stays; the scaled sums - which
+  // are estimates - are not hers to see, in any form.
+  const selfValues = selfRead.body.facts.filter((f) => f.factKind === "metric_value");
+  const coachMeasured = coachRead.body.facts.filter((f) => String(f.athleteId) === String(team.athleteIds[1]) && f.factKind === "metric_value" && f.detail.entryMethod !== "estimate");
+  assert.ok(coachMeasured.length > 0, "the fixture: she has a measured value (the max)");
+  assert.deepEqual(selfValues.map((f) => f.detail.metricDefinitionId).sort(), coachMeasured.map((f) => f.detail.metricDefinitionId).sort(), "exactly her measured values");
+  assert.equal(selfRead.body.recordedBy, "device");
+  for (const trace of ["estimate", "scale_recording", "estimatedBy", "entryMethod", "recordedMinutes", "targetMinutes"]) assert.ok(!selfRead.text.includes(trace), `athlete-self: no "${trace}"`);
+  assert.deepEqual(Object.keys(selfRead.body.variableNamesById).sort(), [...new Set(selfValues.map((f) => f.detail.metricDefinitionId))].sort());
 
   const none = await tapi(`/${activityId}/estimates`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), athleteId: team.athleteIds[0], method: "scale_recording" } });
   assert.deepEqual([none.status, none.body.error], [409, "scale_not_chosen"]);

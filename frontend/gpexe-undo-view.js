@@ -1,8 +1,8 @@
 // Imports: the undo of one imported session, as the review of an imported session shows it (J19-U5b).
 // Data and rules: gpexe-undo-data.js. The server's sentences are shown as they are; the codes stay under Technical details.
 import { isImportUndone } from "./gpexe-import-data.js";
-import { UNDO_REASON_MAX, laterChangeCount, laterRosterWork, undoBusy, undoFor, undoOffered } from "./gpexe-undo-data.js";
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { UNDO_REASON_MAX, laterChangeCount, laterRosterWork, undoAdminViewer, undoBusy, undoFor, undoOffered } from "./gpexe-undo-data.js";
+import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -11,10 +11,10 @@ export function removedSummary(counts) {
   const c = counts && typeof counts === "object" ? counts : {};
   const n = (key) => (Number.isInteger(c[key]) && c[key] > 0 ? c[key] : 0);
   const parts = [];
-  if (n("metric_event_participants")) parts.push(plural(n("metric_event_participants"), "athlete's record", "athletes' records"));
-  if (n("metric_values")) parts.push(plural(n("metric_values"), "imported value", "imported values"));
+  // The session itself is named in the sentence ("removes the session from the calendar"), so its activity is not counted.
+  if (n("metric_event_participants")) parts.push(plural(n("metric_event_participants"), "athlete", "athletes"));
+  if (n("metric_values")) parts.push(plural(n("metric_values"), "value", "values"));
   if (n("metric_event_segments")) parts.push(plural(n("metric_event_segments"), "drill", "drills"));
-  if (n("activities")) parts.push(plural(n("activities"), "activity", "activities"));
   if (n("activity_athlete_decisions")) parts.push(plural(n("activity_athlete_decisions"), "attendance state", "attendance states"));
   return parts.join(", ");
 }
@@ -39,7 +39,7 @@ function fmtWhen(value) {
 function importStatesHtml(rosterWork) {
   const n = Number(rosterWork?.importWritten?.decisions) || 0;
   if (n <= 0) return "";
-  return `<p class="muted" role="note">${escapeHtml(`The undo also removes the ${plural(n, "attendance state", "attendance states")} the import set.`)}</p>`;
+  return `<p class="muted" role="note">${escapeHtml(`Deleting also removes the ${plural(n, "attendance state", "attendance states")} the import set.`)}</p>`;
 }
 
 // Later attendance changes (the Roster tab): listed, with their own confirmation.
@@ -58,7 +58,7 @@ function laterWorkHtml(u, { disabled }) {
   return `
     <div class="gpexe-warning gpexe-undo-later" role="note">
       ${u.laterNote ? `<p class="gpexe-error" role="alert">${escapeHtml(u.laterNote)}</p>` : ""}
-      <p><strong>${escapeHtml(`Attendance was changed in the Roster tab after the import: ${plural(changes, "change", "changes")}.`)}</strong> They are removed too if you undo.</p>
+      <p><strong>${escapeHtml(`Attendance was changed in the Roster tab after the import: ${plural(changes, "change", "changes")}.`)}</strong> They are removed too if you delete.</p>
       <ul class="gpexe-undo-later-list" tabindex="0" aria-label="${escapeAttr("Later attendance changes")}">${rows}</ul>
       ${more}
       <label class="gpexe-undo-later-confirm"><input type="checkbox" data-gpexe-undo-later-confirm ${u.laterConfirmed ? "checked" : ""} ${disabled ? "disabled" : ""}> Remove these later changes too</label>
@@ -66,29 +66,38 @@ function laterWorkHtml(u, { disabled }) {
     </div>`;
 }
 
-function techHtml(entries) {
+function techHtml(entries, admin) {
+  if (!admin) return "";
   const rows = entries.filter(([, v]) => v !== undefined && v !== null && v !== "");
   if (!rows.length) return "";
   return `<details class="gpexe-tech"><summary>Technical details</summary><dl>${rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl></details>`;
 }
 
-function errorTech(error) {
+function errorTech(error, admin) {
   if (!error) return "";
-  return techHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]]);
+  return techHtml([["HTTP status", error.status || "no answer"], ["Code", error.code], ["Server message", error.message]], admin);
 }
 
-// A refusal the function raised for a reason the person can act on: its own sentence, plus the counts it carries (never the records themselves).
-function refusalHtml(error) {
-  if (error?.status === 404) return `<p class="gpexe-refused" role="alert">This session is not available for an undo.</p>${errorTech(error)}`;
+// The success sentence (the manager, 2026-11-17): no re-import button; what is true now. When the server offered the session
+// again with its review ready it is already in Imports; otherwise a new search for the session's own day brings it back.
+export function undoDoneSentence(result, day) {
+  if (result?.offeredAgain && result?.previewReady) return "The imported data is deleted. The session is back in Imports: correct the athlete links if they were wrong, then import it again there.";
+  return `The imported data is deleted. To import it again, find new sessions in Imports${day ? ` with dates that include ${formatDate(day)}` : ""}.`;
+}
+
+// A refusal the server explains: its own sentence (v76 gives a coach one sentence and one next step), never a code.
+function refusalHtml(error, admin) {
+  if (error?.status === 404) return `<p class="gpexe-refused" role="alert">This session's imported data can no longer be deleted here. It may have been deleted already.</p>${errorTech(error, admin)}`;
   const calendar = error?.data?.calendarLinks;
   const extra = [];
-  if (Number.isInteger(calendar) && calendar > 0) extra.push(`${plural(calendar, "calendar event is", "calendar events are")} attached.`);
+  if (admin && Number.isInteger(calendar) && calendar > 0) extra.push(`${plural(calendar, "calendar event is", "calendar events are")} attached.`);
+  const known = error?.status >= 400 && error?.status < 500 && error?.message;
   return `
     <div class="gpexe-refused" role="alert">
-      <p><strong>Nothing was removed.</strong> ${escapeHtml(error?.message || "The undo was refused.")}</p>
+      <p><strong>Nothing was removed.</strong> ${escapeHtml(known ? error.message : "The delete was refused. Try again in a moment.")}</p>
       ${extra.length ? `<p class="muted">${escapeHtml(extra.join(" "))}</p>` : ""}
     </div>
-    ${errorTech(error)}`;
+    ${errorTech(error, admin)}`;
 }
 
 function scopeHtml(u, { disabled = false } = {}) {
@@ -96,68 +105,54 @@ function scopeHtml(u, { disabled = false } = {}) {
   const summary = removedSummary(p.removedCounts);
   const versions = Array.isArray(p.undoneCandidateIds) ? p.undoneCandidateIds.length : 1;
   return `
-    <p>This removes from OptiMove: ${summary ? escapeHtml(summary) : "this session's results and activity"}.</p>
-    <p><strong>This can't be undone here.</strong> To get the data back, import the session again.</p>
-    ${versions > 1 ? `<p class="gpexe-warning" role="note"><strong>This session was imported more than once with different data.</strong> Undoing removes all ${versions} imports together.</p>` : ""}
+    <p>This removes the session from the calendar and deletes its imported data${summary ? `: ${escapeHtml(summary)}` : ""}.</p>
+    <p><strong>Deleted data can't be restored.</strong> To get it back, import the session again from Imports.</p>
+    ${versions > 1 ? `<p class="gpexe-warning" role="note"><strong>This session was imported more than once with different data.</strong> All ${versions} imports are deleted together.</p>` : ""}
     ${importStatesHtml(p.rosterWork)}
-    ${laterWorkHtml(u, { disabled })}
-    <p class="muted">${p.wouldOfferAgain
-      ? "Afterwards the session is offered again for review, so you can import it under the corrected athlete links."
-      : "Afterwards the session is not offered again right away. Find new sessions to bring it back for review."}</p>`;
+    ${laterWorkHtml(u, { disabled })}`;
 }
 
 function sectionHtml(body) {
-  return `<section class="gpexe-undo" aria-label="Undo this import"><h4>Undo this import</h4>${body}</section>`;
+  return `<section class="gpexe-undo" aria-label="Delete imported data"><h4>Delete imported data</h4>${body}</section>`;
 }
 
-// An undone import: history, never "Imported" (the server keeps the approval as a record).
+// A deleted import: history, never "Imported" (the server keeps the approval as a record).
 export function renderUndoneNoteHtml(c, gx) {
   if (!isImportUndone(c)) return "";
-  // The undo section above already says it right after the undo itself.
+  // The section above already says it right after the delete itself.
   const u = undoFor(c.id, gx);
   if (u && (u.step === "done" || u.step === "settled" || u.step === "unknown")) return "";
-  return `<p class="gpexe-warning" role="note"><strong>This import was undone.</strong> Its data is no longer in OptiMove. If the session was offered again, it is listed again for review; otherwise find new sessions.</p>`;
+  return `<p class="gpexe-warning" role="note"><strong>This session's imported data was deleted.</strong> To import it again, find new sessions${c?.sessionStartedAt ? ` with dates that include ${formatDate(c.sessionStartedAt)}` : ""}.</p>`;
 }
 
-// The undo section of a review. Nothing for anyone who may not undo, or for a session that is not imported.
-export function renderUndoHtml(c, gx) {
-  const u = undoFor(c?.id, gx);
-  if (!u) {
-    if (!undoOffered(c, gx)) return "";
-    // Another session's undo is still not confirmed: say so instead of offering a button that cannot work.
-    if (undoBusy(gx)) return sectionHtml(`<p class="muted">An undo for another session is not finished or not confirmed yet. Open that session and check its result first.</p>`);
-    return sectionHtml(`
-      <p class="muted">Imported under a wrong athlete link? Undo removes this session's imported data so it can be imported again once the links are right.</p>
-      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-undo-open">Undo this import...</button>`);
-  }
-  if (u.step === "previewing") return sectionHtml(`<p class="muted" role="status">Checking what would be removed...</p>`);
+// The open delete, wherever it was opened (the Imports review or a session of Activities): its whole state.
+export function renderUndoBodyHtml(u) {
+  const admin = u.admin === true;
+  if (u.step === "previewing") return sectionHtml(`<p class="muted" role="status">Checking what would be deleted...</p>`);
   if (u.step === "refused") {
-    return sectionHtml(`${refusalHtml(u.error)}<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-undo-cancel">Close</button>`);
+    return sectionHtml(`${refusalHtml(u.error, admin)}<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-undo-cancel">Close</button>`);
   }
   if (u.step === "settled") {
-    return sectionHtml(`<p class="gpexe-success" role="status"><strong>This import was already undone.</strong> The review below shows it as it is now.</p>${errorTech(u.error)}`);
+    return sectionHtml(`<p class="gpexe-success" role="status"><strong>This session's imported data was already deleted.</strong> To import it again, find new sessions in Imports.</p>${errorTech(u.error, admin)}`);
   }
   if (u.step === "done") {
     const r = u.result || {};
     const summary = removedSummary(r.removedCounts);
-    const again = r.offeredAgain
-      ? `<p>Fix the athlete links, then review the session again: it is offered again${r.previewReady ? "" : "; its review is not ready yet, so find new sessions to refresh it"}.</p>${r.newCandidateId ? `<button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-open" data-candidate-id="${escapeAttr(r.newCandidateId)}">Review the offered session</button>` : ""}`
-      : `<p>The session is not offered again right away. Find new sessions to bring it back for review.</p>`;
-    // The next step is the point of the undo.
     return sectionHtml(`
       <div class="gpexe-success" role="status">
-        <p><strong>Import undone.</strong> ${summary ? escapeHtml(`Removed: ${summary}.`) : ""}${r.replayed ? " This was the answer saved for the same request." : ""}</p>
-        ${again}
+        <p><strong>${escapeHtml(undoDoneSentence(r, u.day))}</strong></p>
+        ${summary ? `<p class="muted">${escapeHtml(`Deleted: ${summary}.`)}</p>` : ""}
+        ${admin && r.replayed ? `<p class="muted">This was the answer saved for the same request.</p>` : ""}
       </div>`);
   }
   if (u.step === "unknown") {
     return sectionHtml(`
       <div class="gpexe-unknown" role="alert">
-        <p><strong>We can't tell yet whether the import was undone.</strong> Press Check the result. It is safe to press again: it never undoes twice.</p>
+        <p><strong>We can't tell yet whether the imported data was deleted.</strong> Press Check the result. It is safe to press again: it never deletes twice.</p>
         ${u.stillUnknown ? `<p class="muted">Still not confirmed: the server was busy. Check again in a moment.</p>` : ""}
         <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-undo-check">Check the result</button>
-        ${u.checks >= 3 ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> Reload the page and look at the session. If it still shows as imported and the problem stays, report it with the Technical details.</p>` : ""}
-        ${errorTech(u.error)}
+        ${u.checks >= 3 ? `<p><strong>Still not confirmed after ${u.checks} checks.</strong> ${admin ? "Reload the page and look at the session. If it still shows as imported and the problem stays, report it with the Technical details." : "Reload the page and look at the session. If it is still there, contact OptiMove support (a platform administrator)."}</p>` : ""}
+        ${errorTech(u.error, admin)}
       </div>`);
   }
   // ready / sending: the scope, then the reason and the explicit button.
@@ -165,12 +160,39 @@ export function renderUndoHtml(c, gx) {
   return sectionHtml(`
     ${scopeHtml(u, { disabled: sending })}
     ${u.refusalNote ? `<p class="gpexe-error" role="alert"><strong>Nothing was removed.</strong> ${escapeHtml(u.refusalNote)}</p>` : ""}
-    <label class="gpexe-undo-reason">Why is this import undone? (required)
-      <textarea data-gpexe-undo-reason maxlength="${UNDO_REASON_MAX}" rows="3" ${sending ? "disabled" : ""}>${escapeHtml(u.reason || "")}</textarea>
+    <label class="gpexe-undo-reason">Why are you deleting it? (required)
+      <span class="muted">It is saved with the deletion.</span>
+      <textarea data-gpexe-undo-reason maxlength="${UNDO_REASON_MAX}" rows="3" placeholder="For example: imported with the wrong athletes" ${sending ? "disabled" : ""}>${escapeHtml(u.reason || "")}</textarea>
     </label>
     ${u.reasonProblem ? `<p class="gpexe-error" role="alert">${escapeHtml(u.reasonProblem)}</p>` : ""}
     <div class="gpexe-undo-actions">
-      <button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-undo-confirm" ${sending ? "disabled" : ""}>${sending ? "Undoing..." : "Undo this import"}</button>
+      <button type="button" class="primary-button gpexe-button gpexe-danger" data-action="training-load-gpexe-undo-confirm" ${sending ? "disabled" : ""}>${sending ? "Deleting..." : "Delete imported data"}</button>
       <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-undo-cancel" ${sending ? "disabled" : ""}>Cancel</button>
     </div>`);
+}
+
+// The delete section of an Imports review. Nothing for anyone who may not delete, or for a session that is not imported.
+export function renderUndoHtml(c, gx) {
+  const u = undoFor(c?.id, gx);
+  if (!u) {
+    if (!undoOffered(c, gx)) return "";
+    // Another session's delete is still not confirmed: say so instead of offering a button that cannot work.
+    if (undoBusy(gx)) return sectionHtml(`<p class="muted">${escapeHtml(undoBusyNote(gx))}</p>`);
+    return sectionHtml(`
+      <p class="muted">${escapeHtml(UNDO_OFFER_SENTENCE)}</p>
+      <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-undo-open">Delete imported data...</button>`);
+  }
+  return renderUndoBodyHtml(u);
+}
+
+export { undoAdminViewer };
+
+export const UNDO_OFFER_SENTENCE = "Imported with the wrong athletes or values? Delete this session's imported data, correct the athlete links in Imports, then import it again.";
+
+// Another session's delete is not finished: name it, so the step can be taken.
+export function undoBusyNote(gx) {
+  const label = gx?.undo?.label;
+  return label
+    ? `Deleting the imported data of ${label} is not confirmed yet. Open that session and press Check the result first.`
+    : "Deleting another session's imported data is not confirmed yet. Open that session and press Check the result first.";
 }
