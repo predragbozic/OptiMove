@@ -67,6 +67,7 @@ import { bringBack, clearLaterNotice, isLater, laterOpen, putLater, setLaterOpen
 const LATER_REPEAT_MS = 400;
 let laterTappedAt = 0;
 export function resetLaterTapForTests() { laterTappedAt = 0; }
+import { changeTimezone, checkTimezone, closeTimezone, leaveTimezoneReview, openTimezone, saveTimezone, timezoneBusy, timezoneHeld } from "./gpexe-timezone-data.js";
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -169,7 +170,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // (the select is disabled; this guards a stale change), and only after
     // a question while sessions are chosen but not imported.
     if (String(action.value) === gx.teamId) return true;
-    if (gx.batch.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown || undoBusy(gx)) {
+    if (gx.batch.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown || undoBusy(gx) || timezoneHeld(gx)) {
       renderTrainingLoad();
       return true;
     }
@@ -362,6 +363,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (!next || next.id === detail.id) return true;
     const refresh = closeGpexeCandidate();
     if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
+    leaveTimezoneReview(gx);
     await openGpexeCandidate(next.id, renderTrainingLoad, { group: detail.group, groupIds: detail.groupIds });
     if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
     return true;
@@ -372,8 +374,11 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (gx.detail?.approving || gx.detail?.verifying) return true;
     // U5b: an undo in flight must be seen; a result not confirmed stays for Check the result when the session is reopened.
     if (gx.undo?.step === "sending") return true;
+    // PR #587: a time zone save in flight is seen to its end; a result not confirmed stays for Check.
+    if (timezoneBusy(gx)) return true;
     const refresh = closeGpexeCandidate();
     if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
+    leaveTimezoneReview(gx);
     renderTrainingLoad();
     // The session was imported but the list still shows it as pending:
     // read the list again so it moves under Imported.
@@ -448,11 +453,32 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     await saveImportStates(gx.detail, approval, renderTrainingLoad);
     return true;
   }
+  // PR #587: the team's session time zone, from the review of a mixed-time-zones session (the server decides again).
+  if (type === "training-load-gpexe-tz-open") {
+    await openTimezone(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-change") {
+    if (changeTimezone()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-cancel") {
+    if (closeTimezone()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-save") {
+    await saveTimezone(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-check") {
+    await checkTimezone(renderTrainingLoad);
+    return true;
+  }
   // U5b: undoing an imported session (platform admin; the server decides again).
   if (type === "training-load-gpexe-undo-open") {
     const candidate = gx.detail?.candidate;
     if (!undoOffered(candidate, gx)) return true;
-    await openUndo(candidate.id, renderTrainingLoad);
+    await openUndo(candidate.id, renderTrainingLoad, { label: candidate.label || "", day: candidate.sessionStartedAt || "" });
     return true;
   }
   if (type === "training-load-gpexe-undo-cancel") {
@@ -477,13 +503,12 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
       return true;
     }
     u.laterProblem = "";
-    const label = gx.detail?.candidate?.label || "this session";
+    const label = u.label || gx.detail?.candidate?.label || "this session";
     const later = laterRosterWork(u);
     const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
-    const total = Number(u.preview?.removedTotal) || 0;
     const changes = laterChangeCount(later);
     const laterText = later ? ` This also removes ${changes === 1 ? "1 later attendance change" : `${changes} later attendance changes`} made in the Roster tab.` : "";
-    const question = `Remove ${total ? `${total} records` : "the imported data"} of ${label} from OptiMove${versions > 1 ? ` (all ${versions} imports of this session)` : ""}?${laterText} This can't be undone here; to get the data back, import the session again.`;
+    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText} Deleted data can't be restored; to get it back, import the session again from Imports.`;
     u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
     await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);

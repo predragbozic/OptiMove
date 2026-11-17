@@ -2,12 +2,16 @@
 -- Run each block in a read-only transaction (begin transaction read only; ... rollback;). Every block names its expected
 -- value; anything else is a stop. Block 6's two values are kept: the post-check compares them.
 
--- 1. PostgreSQL and the migrations: v72 recorded, v74 not; v73 (App health) may be recorded or not. Expected: v72 = 1,
---    v74 = 0, later_than_v74 = 0.
+-- 1. PostgreSQL and the migrations: v72 recorded, v74 not; v73 (App health) may be recorded or not. v76 (the undo by
+--    the importer, 2026-11-17) sorts after v74 and is on production before it: it shares no object with v74, so it is
+--    expected and not counted as later. Expected: v72 = 1, v74 = 0, v76 = 1, later_than_v74 = 0 (any other later
+--    migration is a stop).
 select current_setting('server_version_num') as server_version_num,
        (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611151200_training_load_v72_source_field_observations.sql') as v72,
        (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') as v74,
-       (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') as later_than_v74;
+       (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611171000_training_load_v76_undo_by_importer.sql') as v76,
+       (select count(*) from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'
+          and migration_name <> 'migrations_v2/202611171000_training_load_v76_undo_by_importer.sql') as later_than_v74;
 
 -- 2. The fourteen bodies v74 replaces are the ones it was written on. Expected: 14 rows, every ok = true.
 with expected(name, md5) as (values

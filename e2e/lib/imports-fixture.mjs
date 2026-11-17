@@ -58,3 +58,16 @@ export function multiTrackBundles(sourceTeam = 7001) {
     category: "FULL TRAINING", athletes, detailsDrills: [0, 1],
   })];
 }
+
+// PR #587: one session whose GPS units report two time zones (athlete 101's track in Europe/Stockholm, the others in the
+// fixtures' own zone): it stays out of the import (mixed_timezones) until the team has a session time zone.
+export const SESSION_MIXED_TZ = 9141;
+export function mixedTimezoneBundles(sourceTeam = 7001) {
+  const bundle = makeBundle({
+    sessionId: SESSION_MIXED_TZ, gpexeTeamId: Number(sourceTeam), start: "2026-11-04T09:08:12", updatedOn: "2026-11-04T11:18:09.337",
+    category: "FULL TRAINING", athletes: [101, 102, 103].map((id) => athlete(id, SESSION_MIXED_TZ)), detailsDrills: [0, 1],
+  });
+  const first = Object.keys(bundle.tracks).sort()[0];
+  bundle.tracks[first].timezone = bundle.tracks[first].timezone === "Europe/Stockholm" ? "Europe/Sarajevo" : "Europe/Stockholm";
+  return [bundle];
+}

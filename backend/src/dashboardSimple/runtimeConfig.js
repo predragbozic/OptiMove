@@ -13,6 +13,7 @@ function decode(value, field) {
 }
 export function readSimpleRuntimeConfig(env = process.env) {
   const mode = env.DASHBOARD_SIMPLE_MODE ?? 'off';
+  if ((env.DASHBOARD_SIMPLE_AUDIENCE ?? 'platform-pilot') !== 'platform-pilot') refuse('DASHBOARD_SIMPLE_AUDIENCE');
   if (!modes.has(mode)) refuse('DASHBOARD_SIMPLE_MODE');
   if (mode === 'off' || mode === 'drain') return Object.freeze({ mode });
   if (env.DASHBOARD_SIMPLE_BUDGET_VERIFIED !== 'true') refuse('DASHBOARD_SIMPLE_BUDGET_VERIFIED');

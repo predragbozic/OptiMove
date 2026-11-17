@@ -764,6 +764,8 @@ export const emptyGpexeImportState = () => ({
   detail: null,
   // U5b: the undo of the open review's imported session ({ id, step, preview, reason, requestKey, result, error }); in memory only.
   undo: null,
+  // PR #587: the team's session time zone form in a mixed-time-zones review ({ teamId, step, current, timezone, reason, ... }).
+  tz: null,
   // Approvals whose result is not confirmed yet, by candidate id: the last
   // unknown outcome, shown again when the session is reopened.
   uncertain: {},
@@ -1073,6 +1075,7 @@ export const createInitialState = () => ({
   // renderAthleteHomeFromCache for why a training-load athlete action needs
   // this to redraw the whole Home surface without a re-fetch.
   lastAthleteHomeData: null,
+  lastAthleteHomeError: "",
   lastProgramBundle: null,
   lastTemplates: [],
   templateAllowedScopes: TEMPLATE_SCOPES,
@@ -1119,6 +1122,8 @@ export const createInitialState = () => ({
     bindReview: null, bindBusy: false, bindError: null,
     unbindOpen: null, unbindBusy: false, unbindError: null,
     checkBusy: false, unconfirmed: null, staleAfterWrite: "",
+    // Each bound team's session time zone, by team id (source-connections-timezone.js).
+    zones: {},
   },
   organizationEditor: { open: false, type: "", row: null },
   // Settings -> Storage (R2 media, PR 5), platform admin only: the defaults
@@ -1173,6 +1178,7 @@ export const createInitialState = () => ({
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   tests: emptyTestsState(),
   trainingLoad: emptyTrainingLoadState(),
+  myTraining: emptyMyTrainingState(),
   checkIn: emptyCheckInState(),
   // feature/mobile-messages-fullscreen: menuOpen is the mobile thread
   // header's 3-dot overflow menu (Hide/Block live there on mobile instead
@@ -1195,5 +1201,17 @@ export const createInitialState = () => ({
   athleteExitConfirmOpen: false,
   realtimeOffline: false,
 });
+
+// The athlete's "My training" (owner, 2026-11-16): her own recorded sessions and values, read-only. `available` is the
+// server's answer to whether she has any recorded session (GET /api/training-activity/self); null until it is read, and
+// the entry (Home and the menu) shows only on true.
+export function emptyMyTrainingState() {
+  return {
+    available: null,
+    list: { rows: [], nextCursor: null, loaded: false, loading: false, error: "" },
+    openId: "",
+    detail: { activityId: "", data: null, loading: false, error: "" },
+  };
+}
 
 export const state = createInitialState();

@@ -489,7 +489,9 @@ async function migrateTo(url, files) {
 
 test("11. the preflight on v72, v74, the post-check (a verified revision's digest unchanged), the rollback to v72's catalog exactly, v74 again; the rollback refuses once a field was created", async () => {
   // Production's state when v74 is applied: every test migration and App health's v70 and v73, which reached
-  // production first. v73 sorts before v74 by file name, so no "later than v74" check counts it.
+  // production first. v73 sorts before v74 by file name, so no "later than v74" check counts it. v76 (the undo by the
+  // importer) sorts after v74 but reached production first too: it shares no object with v74, so the preflight expects
+  // it, the post-check and the rollback do not count it, and only another later migration is a stop.
   const withAppHealth = [...GPEXE_TEST_MIGRATIONS, "202611131400_app_error_events_v70_device_and_keyed_hash.sql", "202611151500_app_error_events_v73_request_and_restart.sql"].sort();
   const before72 = withAppHealth.filter((m) => m !== V74);
   const rdb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "g1rb", migrations: before72 });
@@ -505,7 +507,7 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
                    values ($1, 1, 'unit_value_object', 'none', true, true, 'active', $2, now(), 'count', $2, now(), 'docs/ai/x.md#u', $2, now(), 'docs/ai/x.md#m', 'verified', 'docs/ai/x.md#u', $2)`, [fid, pa]);
     await c.query("set session_replication_role = origin");
     const pre = await readOnly(c, RUNBOOK("generic-source-fields-v74-preflight.sql"));
-    assert.deepEqual([pre[0][0].v72, pre[0][0].v74, pre[0][0].later_than_v74], ["1", "0", "0"]);
+    assert.deepEqual([pre[0][0].v72, pre[0][0].v74, pre[0][0].v76, pre[0][0].later_than_v74], ["1", "0", "1", "0"], "v76 recorded, as on production");
     assert.equal((await c.query(`select count(*)::int n from public.schema_migrations where migration_name = 'migrations_v2/202611151500_app_error_events_v73_request_and_restart.sql'`)).rows[0].n, 1, "v73 is recorded, as on production");
     assert.ok(pre[1].length === 14 && pre[1].every((r) => r.ok === true), "the fourteen bodies are the ones v74 was written on");
     assert.deepEqual(pre[2][0], { functions: "0", columns: "0", words_table: "0" });
@@ -539,6 +541,15 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
                    values (gen_random_uuid(), $1, 1, 1, 'field_unit', true, $2, 'count', 'session', 'as_sent', 'count', 12, 17, uuid_send(gen_random_uuid()), encode(sha256('x'), 'hex'), 'number')`, [wConf, wRev]);
     await c.query("set session_replication_role = origin");
     await assert.rejects(c.query(RUNBOOK("generic-source-fields-v74-rollback.sql")), /v74 rollback refused: a row names a GPEXE unit word/);
+    await c.query("rollback").catch(() => {});
+    // Any later migration but v76 is a stop for the rollback, and for the preflight and the post-check counts.
+    const later = "migrations_v2/209901010000_a_later_migration.sql";
+    await c.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ($1,$2,0,'test')`, [later, "0".repeat(64)]);
+    await assert.rejects(c.query(RUNBOOK("generic-source-fields-v74-rollback.sql")), /v74 rollback refused: a later migration is recorded/);
+    await c.query("rollback").catch(() => {});
+    assert.equal((await readOnly(c, RUNBOOK("generic-source-fields-v74-postcheck.sql")))[0][0].later, "1", "the post-check counts it");
+    assert.equal((await readOnly(c, RUNBOOK("generic-source-fields-v74-preflight.sql")))[0][0].later_than_v74, "1", "the preflight counts it");
+    await c.query(`delete from public.schema_migrations where migration_name = $1`, [later]);
     await c.query("rollback").catch(() => {});
     assert.deepEqual((await c.query(CATALOG)).rows.map((r) => r.x), catalogW, "nothing changed");
     await c.query("set session_replication_role = replica");

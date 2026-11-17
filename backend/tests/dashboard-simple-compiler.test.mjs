@@ -134,3 +134,14 @@ test('relative compilation with absent or invalid server time returns a controll
   const d = draft();d.periodIntent = { mode: 'replacePageRuntime', periodConfig: { schemaVersion: 1, mode: 'relative', preset: 'today', timeZone: 'UTC' } };
   for (const evaluatedAt of [undefined, null, 'not-a-date']) { const c = context();c.evaluatedAt = evaluatedAt;const r = compile(d, snapshot(), c);assert.equal(r.status, 'invalid');has(r, 'serverTimeRequired'); }
 });
+
+test('Estimates only requires Advanced and preserves the stored source policy', () => {
+  const { d, s } = metricCase();
+  const existing = compile(d, s).widget;
+  existing.series[0].source_policy = 'estimate';
+  d.display = { mode: 'preserve' };
+  d.presentation = { mode: 'preserve' };
+  const before = structuredClone(existing);
+  assert.equal(compile(d, s, context(), existing).status, 'advancedRequired');
+  assert.deepEqual(existing, before);
+});

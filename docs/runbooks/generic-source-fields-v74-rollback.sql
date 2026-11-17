@@ -14,7 +14,8 @@
 -- nothing, when
 --   * the migrator is running (advisory lock 822026, as backend/src/migrate.js);
 --   * v74 is not recorded, or a later migrations_v2 migration is (v73 may be recorded or not, in either order: its
---     name sorts before v74's);
+--     name sorts before v74's). v76 (the undo by the importer) is the one later migration allowed: it reached production
+--     before v74 and shares no object with it (no body, table or CHECK v74 touches), so this rollback leaves it as it is;
 --   * any row v74 made possible exists: a source_metric_create row (a field created by route C), a field observation,
 --     a field_unit or as_sent row of T9i, a source_stated revision or an observation id, an observed T8 row (once one
 --     exists the way forward is a new migration: the evidence is append-only);
@@ -39,7 +40,8 @@ begin
   if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') then
     raise exception 'v74 rollback refused: v74 is not recorded on this database';
   end if;
-  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql') then
+  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611161200_training_load_v74_generic_source_fields.sql'
+               and migration_name <> 'migrations_v2/202611171000_training_load_v76_undo_by_importer.sql') then
     raise exception 'v74 rollback refused: a later migration is recorded; roll it back first';
   end if;
 end $$;
