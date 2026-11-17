@@ -61,6 +61,8 @@ export const simpleEditor = createSimpleEditorController({ request: api, paint,
   saved: async (receipt, target) => {
     const a = analysis();
     await refreshDashboard(target.context.dashboardId);
+    a.editMode = false;
+    a.layoutDraft = null;
     a.notice = 'Widget saved.';
     if (simpleEditor.model === target) simpleEditor.close();
   },

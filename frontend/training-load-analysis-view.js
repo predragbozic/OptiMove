@@ -1,6 +1,7 @@
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
+import { formatDashboardValue as formatValue, renderDashboardMetricTable } from "./training-load-dashboard-table.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
@@ -416,12 +417,6 @@ function seriesLabel(series) {
   return hint?.key || "Choose a metric";
 }
 
-function formatValue(value, model) {
-  if (Array.isArray(value)) return JSON.stringify(value);
-  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(model.config.effective.numberFormat.maximumFractionDigits);
-  return String(value);
-}
-
 function displayStatusLabel(status, reasons = []) {
   if (status === "loading") return "Loading...";
   if (status === "unresolved") return "Choose a metric";
@@ -517,9 +512,14 @@ function renderWidgetBodyHtml(widget, results) {
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
-  if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
+  if (model.status === "error") return analysis.simpleWorkspaceRequired ? "" : renderDisplayStatusHtml("error", model.reasons);
   if (widget.widget_type === "kpi") return renderKpiHtml(model);
-  if (widget.widget_type === "table") return renderTableHtml(model);
+  if (widget.widget_type === "table") {
+    if (model.series.length === 1 && model.series[0].status === "ready" && ["day", "athlete"].includes(model.groupBy)) {
+      return renderDashboardMetricTable(model, state.trainingLoad.orgPickerData?.athletes ?? [], seriesLabel(model.series[0].definition));
+    }
+    return renderTableHtml(model);
+  }
   return renderChartHtml(model);
 }
 
@@ -898,6 +898,7 @@ export function renderTrainingLoadAnalysisHtml() {
     <div class="tl-analysis">
       <div${a.simpleEditor?.open ? ' inert' : ''}>
       ${renderTopBarHtml()}
+      ${a.simpleWorkspaceRequired ? '<p role="status">This club dashboard is outside your active workspace, so open a platform dashboard to use Simple.</p>' : ""}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}
       ${a.listError ? `<p class="builder-error" role="alert">${escapeHtml(a.listError)}</p>` : ""}

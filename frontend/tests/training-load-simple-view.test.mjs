@@ -179,7 +179,7 @@ test("save requires capability and canSave, with accurate advanced discard confi
   assert.match(control(unavailable, "save"), /disabled/);
   assert.match(control(unavailable, "preview"), /disabled/);
   assert.match(unavailable, /Live preview is temporarily unavailable\./);
-  assert.match(unavailable, /Saving is not available right now/);
+  assert.match(unavailable, /Preview is unavailable. Try again later/);
   assert.doesNotMatch(unavailable, /on this backend/);
   input.advancedRequired = true;
   input.draft = null;

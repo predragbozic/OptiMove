@@ -316,6 +316,9 @@ router.get("/:dashboardId", async (req, res, next) => {
     const detail = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
     const simplePreview = ['preview', 'enabled'].includes(req.app?.locals?.dashboardSimpleMode)
       && canUseSimplePlatformPilot(req, dataWorkspace);
+    if (simplePreview && detail.dashboard.data_workspace_type === "club") {
+      return res.json({ ...detail, simpleWorkspaceRequired: true });
+    }
     res.json(simplePreview ? { ...detail, simplePreview: true } : detail);
   } catch (error) {
     respondToServiceError(res, next, error);

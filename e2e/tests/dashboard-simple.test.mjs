@@ -130,3 +130,40 @@ for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
     } finally { await context.close(); }
   });
 }
+
+for (const role of ["team_coach", "club_admin"]) {
+  test(role + " never renders preview diagnostics, including in collapsed DOM", async () => {
+    const { context, page } = await openAs(browser, world, role, 360);
+    try {
+      const result = await page.evaluate(async () => {
+        const { state } = await import("/state.js");
+        const { renderTrainingLoadAnalysisHtml } = await import("/training-load-analysis-view.js");
+        const athleteId = "e05eb4b1-4dc6-479c-8eb9-47653fbb7c23";
+        const widget = { id: "test-widget", title: "Duration", widget_type: "table", group_by: "day",
+          series: [{ id: "test-series", resolution_status: "resolved" }] };
+        state.trainingLoad.analysis.simpleEditor = {
+          open: true, step: 3, selectedMetric: { label: "Duration" },
+          preview: {
+            status: "invalid", previewToken: "secret-preview-token", semanticFingerprint: "secret-fingerprint",
+            issues: [{ code: "required", path: "$.draft.view.dataScopeLevel", athleteId }],
+            normalizedWidget: widget,
+            widgetResult: { widgetId: widget.id, series: [{ seriesId: "test-series", status: "ok",
+              data: { current: [{ athleteId, bucketKey: "2026-10-23", unit: "min", value: 25.758, rawCount: 99 }] } }] },
+          },
+        };
+        const shell = document.createElement("div");
+        document.body.append(shell);
+        shell.innerHTML = renderTrainingLoadAnalysisHtml();
+        const editor = shell.querySelector(".tl-simple-editor");
+        const table = editor.querySelector(".tl-analysis-table-wrap");
+        return { markup: editor.outerHTML, width: table.clientWidth, contentWidth: table.scrollWidth,
+          overflow: getComputedStyle(table).overflowX };
+      });
+      assert.match(result.markup, /Choose which measurements to use/);
+      assert.match(result.markup, /Athlete name unavailable/);
+      assert.doesNotMatch(result.markup, /e05eb4b1|secret-preview-token|secret-fingerprint|rawCount|\.draft\.view|tl-simple-raw|<pre>/);
+      assert.ok(result.width > 0 && result.width <= 360);
+      assert.ok(result.contentWidth <= result.width || ["auto", "scroll"].includes(result.overflow));
+    } finally { await context.close(); }
+  });
+}
