@@ -15,7 +15,7 @@ import {
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
-import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace } from "../trainingActivityAccess.js";
+import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace, athleteOwnParticipationSql } from "../trainingActivityAccess.js";
 import { recordedByOf, recordedBySql } from "../trainingActivityResults.js";
 import { countSessionResults, writePublishedSessionFlags } from "../plannedSessionFlags.js";
 
@@ -1495,7 +1495,9 @@ router.get("/calendar", async (req, res, next) => {
     if (isAthlete) {
       const athleteId = req.authz.athleteId;
       activityParams = [dateFrom, dateTo, athleteId];
-      activitySql = `exists (select 1 from training.activity_participants ap0 where ap0.activity_id = a.id and ap0.athlete_id = $3 and ap0.merge_status = 'canonical')`;
+      // Her own participations, never one that exists only because of an estimate.
+      activitySql = `exists (select 1 from training.activity_participants ap0 where ap0.activity_id = a.id and ap0.athlete_id = $3 and ap0.merge_status = 'canonical'
+        and ${athleteOwnParticipationSql("ap0.id")})`;
       planParams = [dateFrom, dateTo, athleteId];
       plannedScopeSql = `and p.athlete_id = $3`;
       externalParams = [dateFrom, dateTo, athleteId];

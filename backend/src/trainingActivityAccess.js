@@ -115,3 +115,23 @@ export function canReadActivityInScope(scope, activity) {
     && String(activity.owner_team_club_id) === String(scope.clubId)
     && activity.owner_team_active !== false;
 }
+
+// An athlete's own participation, as far as it is hers to see (owner, 2026-11-16: "the athlete sees only data that
+// was really measured; there are no estimates on the athlete's side"). Saving an estimate for an athlete who was not
+// in the recording creates her participant row; such a participation exists ONLY because of the estimate, and showing
+// her the session - even empty - would tell her that one was made. So for an athlete-self read a participant is hers
+// when it is NOT estimate-only: it is, when every measurement linked to it (her alias participants after a merge
+// included; superseded ones too) is an estimate and nothing else ties her to the session - no planned session or
+// rating request linked to it. A participant with no linked measurement at all stays hers, as before.
+// `participantIdSql` is a SQL expression of the participant's id (a column reference written in this code, never
+// a value from a request). Returns a SQL boolean.
+export function athleteOwnParticipationSql(participantIdSql) {
+  const occasions = `from training.participant_alias_ids(${participantIdSql}) own_pa
+          join training.activity_participant_metric_participant_links own_ml on own_ml.activity_participant_id = own_pa.participant_id and own_ml.link_status = 'confirmed'
+          join training_load.metric_measurement_occasions own_o on own_o.event_participant_id = own_ml.metric_event_participant_id`;
+  return `not (
+        exists (select 1 ${occasions})
+        and not exists (select 1 ${occasions} where own_o.entry_method <> 'estimate')
+        and not exists (select 1 from training.participant_alias_ids(${participantIdSql}) own_sp
+                          join training.activity_participant_session_links own_sl on own_sl.activity_participant_id = own_sp.participant_id and own_sl.link_status = 'confirmed'))`;
+}

@@ -1008,18 +1008,16 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
     // (c) The coach still reads her estimate, with its label.
     const coachFacts = coachRead.body.facts.filter((f) => String(f.athleteId) === String(id) && f.detail.entryMethod === "estimate");
     assert.ok(coachFacts.length > 0 && coachFacts.every((f) => f.estimate?.method === method), `${method}: the coach's read is unchanged`);
-    // (a) Her only values in this session are estimates: the session is hers (she took part), with nothing recorded.
+    // (a) She was not in the recording: her place in this session exists ONLY because the coach estimated her. The
+    // session is not hers to see - the identical 404 of a missing one - and is in neither her list nor her calendars,
+    // so nothing tells her that an estimate was made.
     const detail = await tapi(`/${s.activityId}`, { cookie: self.cookie });
-    assert.equal(detail.status, 200, detail.text);
-    assert.deepEqual(detail.body.facts.filter((f) => f.factKind === "metric_value"), [], `${method}: no value`);
-    assert.deepEqual([detail.body.recordedBy, detail.body.variableNamesById, detail.body.components], [null, {}, []], `${method}: nothing recorded, no variable named, no drill`);
-    for (const trace of TRACES) assert.ok(!detail.text.includes(trace), `${method}: no "${trace}" in her answer`);
-    for (const other of [ana, dan, eva, fil].filter((x) => x !== id)) assert.ok(!detail.text.includes(String(other)), "nobody else");
-    // The list and the calendar: the session, recorded by nobody.
+    const missingActivity = await tapi(`/${crypto.randomUUID()}`, { cookie: self.cookie });
+    assert.deepEqual([detail.status, detail.text], [404, missingActivity.text], `${method}: the session answers as a missing one`);
     const rows = (await call("/api/training-activity", `?dateFrom=${day}&dateTo=${day}`, { cookie: self.cookie })).body.rows.filter((r) => r.activityId === s.activityId);
-    assert.deepEqual(rows.map((r) => r.recordedBy), [null], `${method}: list`);
+    assert.deepEqual(rows, [], `${method}: not in her list`);
     const items = (await call("/api/training-load", `/calendar?dateFrom=${day}&dateTo=${day}`, { cookie: self.cookie })).body.days.flatMap((d) => d.items).filter((i) => i.activityId === s.activityId);
-    assert.deepEqual(items.map((i) => i.recordedBy), [null], `${method}: calendar`);
+    assert.deepEqual(items, [], `${method}: not in her training calendar`);
     // Metrics Core: her results hold no estimate, and an estimate's own occasion answers as one that does not exist.
     const results = await mapi(`/results?dateFrom=${day}&dateTo=${day}`, { cookie: self.cookie });
     assert.equal(results.status, 200, results.text);
@@ -1149,6 +1147,14 @@ test("18. 6b-D: the dashboards leave an estimate out under every policy - all so
     return result.data.current;
   };
   for (const policy of ["estimate", "all_with_conflicts", "manual", "api_import", "derived"]) assert.deepEqual(await asAthlete(dan, policy), [], `athlete, ${policy}: no estimate`);
+  // Once he also has a measured value in that session (entered by hand, on another variable) the session is his to
+  // see - and his estimate of the distance still is not, under any policy.
+  const timeDef = (await admin.query(`select d.id, d.current_version_id as version from training_load.metric_definitions d where d.owner_scope = 'system' and d.label like 'GPEXE time min %'`)).rows[0];
+  const byHand = await call("/api/training-load/metrics", "/events", { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), occurredDate: day, scopeLevel: "session", activityId: s.activityId,
+    participants: [{ athleteId: dan, timezone: "UTC", values: [{ metricDefinitionId: timeDef.id, metricDefinitionVersionId: timeDef.version, value: 33 }] }] } });
+  assert.equal(byHand.status, 201, byHand.text);
+  for (const policy of ["estimate", "all_with_conflicts", "manual", "api_import"]) assert.deepEqual(await asAthlete(dan, policy), [], `athlete with a measured value, ${policy}: still no estimate of the distance`);
+  assert.deepEqual((await run("estimate")).map((x) => x.athleteId), [dan], "the coach's dashboard still shows it");
   assert.deepEqual((await asAthlete(team.athleteIds[ANA], "all_with_conflicts")).map((x) => x.athleteId), [team.athleteIds[ANA]], "a measured value is still hers");
   assert.deepEqual(await asAthlete(team.athleteIds[ANA], "estimate"), []);
 });

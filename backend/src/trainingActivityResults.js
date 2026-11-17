@@ -7,7 +7,7 @@
 import crypto from "node:crypto";
 import { estimateLabelFor, readEstimateLabels } from "./estimateLabels.js";
 import { query } from "./db.js";
-import { activityReadScopeSqlForWorkspace, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
+import { activityReadScopeSqlForWorkspace, athleteOwnParticipationSql, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
 
 // An estimated value (migration v63): never part of an athlete's own read.
 export const isEstimateFact = (fact) => fact?.factKind === "metric_value" && fact.detail?.entryMethod === "estimate";
@@ -53,7 +53,8 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
     // her own results", 2026-11-16). Everything else on that team is the same 404 as before.
     const owns = await query(
       `select 1 from training.activity_participants ap
-       where ap.athlete_id = $1 and training.resolve_canonical_activity_id(ap.activity_id) = training.resolve_canonical_activity_id($2)`,
+       where ap.athlete_id = $1 and training.resolve_canonical_activity_id(ap.activity_id) = training.resolve_canonical_activity_id($2)
+         and ${athleteOwnParticipationSql("ap.id")}`,
       [readContext.athleteId, activityId],
     );
     if (!owns.rowCount || !activityRow.rowCount) throw httpError(404, "Activity not found.");
@@ -336,6 +337,7 @@ export async function athleteHasRecordedSessions(athleteId) {
          from training.activity_participants ap
          join training.activities a on a.id = ap.activity_id
         where ap.athlete_id = $1 and ap.merge_status = 'canonical' and a.lifecycle_state <> 'superseded'
+          and ${athleteOwnParticipationSql("ap.id")}
           -- A session whose only values of HERS are estimates does not count (the Rukovodilac's rule, 2026-11-16).
           and not exists (
             select 1
@@ -344,6 +346,7 @@ export async function athleteHasRecordedSessions(athleteId) {
               join training_load.metric_measurement_occasions eo on eo.event_participant_id = ml.metric_event_participant_id
               join training_load.metric_values ev on ev.occasion_id = eo.id
              where eo.superseded_by_occasion_id is null and eo.import_conflict_status is null
+               and (eo.source_identity_id is null or exists (select 1 from training_load.metric_source_identities esi where esi.id = eo.source_identity_id and esi.current_occasion_id = eo.id))
             having bool_or(eo.entry_method = 'estimate') and not bool_or(eo.entry_method <> 'estimate'))
           and exists (
             select 1
@@ -395,7 +398,8 @@ export async function listActivities(readContext, { athleteId, dateFrom, dateTo,
 
   const params = [dateFrom, dateTo];
   // The READ scope (D8): a club workspace lists its active teams' activities too.
-  const scopeSql = readContext.isAthleteSelf ? "true" : activityReadScopeSqlForWorkspace(readContext.scope, "a", params);
+  // An athlete: her own participations, never one that exists only because of an estimate.
+  const scopeSql = readContext.isAthleteSelf ? athleteOwnParticipationSql("ap.id") : activityReadScopeSqlForWorkspace(readContext.scope, "a", params);
   let athleteSql = "true";
   if (targetAthleteId) {
     params.push(targetAthleteId);

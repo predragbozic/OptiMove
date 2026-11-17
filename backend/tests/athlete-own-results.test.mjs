@@ -278,7 +278,7 @@ test("1. the detail: only her own facts, each a fixed list of fields; names and 
   for (const hidden of [W.ana.id, ...Object.values(ANA).map(String)]) assert.ok(!bea.text.includes(hidden));
 });
 
-test("2. the projection itself: an imported value, an RPE and an estimate keep only what is hers to read", async () => {
+test("2. the projection itself: an imported value and an RPE keep only what is hers to read; an estimate is refused", async () => {
   const { athleteSelfFact } = await import("../src/trainingActivityResults.js");
   const imported = { canonicalActivityId: "a", canonicalParticipantId: "p", athleteId: "me", factKind: "metric_value",
     detail: { occasionId: "o", sourceIdentityId: "src-1", entryMethod: "import", metricDefinitionId: "d", metricDefinitionVersionId: "v", valueNumeric: 5, valueBoolean: null, valueText: null, unitAtCapture: "m",
@@ -532,9 +532,37 @@ test("8. whether she has a recorded session: one boolean, hers alone; drills of 
   await k.query("commit");
   assert.equal(await has(q), false, "once it is an estimate, nothing measured is left in that session");
   assert.equal(await has(p), false, "nor for the athlete whose only value it is");
+  // The athlete whose only tie to the session is that estimate: the session is not hers to see at all - the 404 of
+  // a missing one, and not in her list or calendar. The other, who took part without any value, still has it, empty.
   const hidden = await detail(p, onlyEstimates);
-  assert.deepEqual([hidden.status, hidden.body.facts, hidden.body.recordedBy, hidden.body.variableNamesById], [200, [], null, {}]);
-  assert.ok(!hidden.text.includes("61.5") && !hidden.text.includes("estimate"));
+  assert.deepEqual([hidden.status, hidden.text], [404, JSON.stringify({ error: "Activity not found." })]);
+  assert.deepEqual((await list(p)).body.rows, []);
+  assert.deepEqual((await calendar(p)).body.days.flatMap((d) => d.items).filter((i) => i.kind === "activity"), []);
+  const still = await detail(q, onlyEstimates);
+  assert.deepEqual([still.status, still.body.facts, still.body.recordedBy, still.body.variableNamesById], [200, [], null, {}]);
+  assert.ok(!still.text.includes("61.5") && !still.text.includes("estimate"));
+  assert.deepEqual((await list(q)).body.rows.map((r) => [r.activityId, r.recordedBy]), [[onlyEstimates, null]]);
+  // The estimated athlete was also asked to rate that session (a confirmed link ties her to it apart from the
+  // estimate): the session is hers again - and still says nothing of the estimate: no value, recorded by nobody, no
+  // attendance drawn from it; and a third athlete's measured value in it does not make it count for her.
+  const schedule = (await one(`insert into training_load.external_schedules (schedule_kind, timezone, start_date, opens_time, closes_time, status, event_name, created_by_user_id, owner_scope, owner_team_id)
+     values ('one_time','UTC',$1,'00:00','23:59','active','Fixture rating',$2,'team',$3) returning id`, [DAY, W.coachA1.id, W.teamA1])).id;
+  const occurrence = (await one(`insert into training_load.external_schedule_occurrences (schedule_id, scheduled_date, opens_at, closes_at) values ($1,$2,$3,$4) returning id`, [schedule, DAY, `${DAY}T00:00:00Z`, `${DAY}T23:59:00Z`])).id;
+  const assignment = (await one(`insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, closes_at) values ($1,$2,'UTC',$3,$4,$5) returning id`,
+    [occurrence, p.id, DAY, `${DAY}T00:00:00Z`, `${DAY}T23:59:00Z`])).id;
+  await k.query(`insert into training.activity_participant_session_links (activity_participant_id, athlete_id, external_assignment_id, link_method, link_status, confirmed_by_user_id, confirmed_at, created_by_user_id)
+     select ap.id, ap.athlete_id, $3, 'manual', 'confirmed', $4, now(), $4 from training.activity_participants ap where ap.activity_id = $1 and ap.athlete_id = $2`, [onlyEstimates, p.id, assignment, W.coachA1.id]);
+  const tied = await detail(p, onlyEstimates);
+  assert.equal(tied.status, 200, tied.text);
+  assert.deepEqual([tied.body.facts, tied.body.recordedBy, tied.body.myAttendance, tied.body.variableNamesById, tied.body.components], [[], null, null, {}, []]);
+  assert.ok(!tied.text.includes("61.5") && !tied.text.includes("estimate"));
+  assert.deepEqual((await list(p)).body.rows.map((r) => [r.activityId, r.recordedBy]), [[onlyEstimates, null]]);
+  assert.deepEqual((await calendar(p)).body.days.flatMap((d) => d.items).filter((i) => i.kind === "activity").map((i) => [i.activityId, i.recordedBy]), [[onlyEstimates, null]]);
+  const third = await athleteIn(W.clubA, W.teamA1, { withUser: true });
+  const add = await call("/api/training-load/metrics/events", { method: "POST", cookie: W.coachA1.cookie, body: { requestKey: `k-${uid()}`, occurredDate: DAY, scopeLevel: "session", activityId: onlyEstimates,
+    participants: [{ athleteId: third.id, timezone: "UTC", values: [{ metricDefinitionId: W.sysVar.id, metricDefinitionVersionId: W.sysVar.versionId, value: 62.5 }] }] } });
+  assert.equal(add.status, 201, add.text);
+  assert.deepEqual([await has(third), await has(q), await has(p)], [true, true, false], "measured for one, taken part without a value, and only an estimate of her own");
   // Outside an athlete workspace the route does not exist: the unknown route's own answer.
   const coach = await self(W.coachA1);
   const unknown = await call("/api/training-activity-nope/self", { cookie: W.coachA1.cookie });

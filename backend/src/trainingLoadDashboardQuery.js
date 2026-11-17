@@ -35,6 +35,10 @@
 //    history — nothing here checks metric_definitions.state at query
 //    time, only at BINDING time (schema triggers).
 import { query } from "./db.js";
+import { athleteOwnParticipationSql } from "./trainingActivityAccess.js";
+
+// How a value an athlete may see was entered (v63): by hand or by an import - never an estimate.
+const MEASURED_ENTRY_METHODS = new Set(["manual", "api_import", "csv_import"]);
 
 const RECOGNIZED_DATA_WORKSPACE_TYPES = ["platform", "club", "team", "private_coach", "athlete"];
 
@@ -70,7 +74,9 @@ async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScop
   let athleteSql = "true";
   if (effectiveAthleteIds?.length) {
     params.push(effectiveAthleteIds);
-    athleteSql = `exists (select 1 from training.activity_participants p where p.activity_id=a.id and p.athlete_id = any($${params.length}::uuid[]) and p.merge_status='canonical')`;
+    // An athlete's own dashboards: her own participations, never one that exists only because of an estimate.
+    const ownSql = dataWorkspaceType === "athlete" ? ` and ${athleteOwnParticipationSql("p.id")}` : "";
+    athleteSql = `exists (select 1 from training.activity_participants p where p.activity_id=a.id and p.athlete_id = any($${params.length}::uuid[]) and p.merge_status='canonical'${ownSql})`;
   }
   const r = await queryRunner(
     `select a.id from training.activities a where a.occurred_local_date between $1 and $2 and a.lifecycle_state <> 'superseded' and (${scopeSql}) and (${athleteSql})`,
@@ -329,7 +335,9 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
   // of what the range holds, so no source policy - 'estimate' included - can show her one.
   if (dataWorkspaceType === "athlete") {
     for (const facts of [metricFactsByDefinition, dayLevelFactsByDefinition]) {
-      for (const [definitionId, list] of facts) facts.set(definitionId, list.filter((f) => f.entryMethod !== "estimate"));
+      // Kept only when the way it was entered is a known measured one: a fact that does not say how it was entered
+      // is left out too (closed, not open).
+      for (const [definitionId, list] of facts) facts.set(definitionId, list.filter((f) => MEASURED_ENTRY_METHODS.has(f.entryMethod)));
     }
   }
   return { authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };
