@@ -296,11 +296,64 @@ const SYNTHETIC_TEST_KEY = /^[a-z0-9]+\.test\.[a-z0-9_.]+$/;
 let testFallback = null;
 export function setExtractorFallbackForTests(fn) { testFallback = fn ?? null; }
 
+// G2 (J12 amended; docs/ai/gpexe-field-inventory-plan.md section 9): the generic plain extractors of a field created by
+// route C - `athlete_session.<name>`, one row number, and `details.players.<name>`, one details {unit, value} - for a name
+// that is an identifier and never a dangerous key. They read only the row's or the athlete's own property of that name
+// (Object.hasOwn), never anything else, and they convert nothing. Zones and events stay code entries above. A generic
+// key reaches a mapping only through its T2a row (a version names its revision, C90), and since v74 such a row exists
+// only through route C; its values are in the stored snapshot only when the check kept them (the pinned set).
+const GENERIC_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const GENERIC_DANGEROUS = new Set(["__proto__", "constructor", "prototype", "hasOwnProperty", "toString", "valueOf"]);
+const GENERIC_PREFIXES = Object.freeze({ "athlete_session.": "row", "details.players.": "details" });
+const own = (object, field) => (object !== null && typeof object === "object" && Object.hasOwn(object, field) ? object[field] : undefined);
+
+function genericRowNumber(key, field) {
+  return entry({
+    key, valueShape: "number", parameterKind: "none", zone: null, direction: null,
+    parse: (p) => (noParameters(p) === null ? {} : null),
+    read: ({ row }) => {
+      const value = finiteNumber(own(row, field));
+      return value === null ? { skip: "field_missing" } : { value };
+    },
+  });
+}
+
+function genericDetailsNumber(key, field) {
+  return entry({
+    key, valueShape: "unit_value_object", parameterKind: "none", zone: null, direction: null,
+    parse: (p) => (noParameters(p) === null ? {} : null),
+    read: ({ playerDetails }) => {
+      if (!playerDetails) return { skip: "details_not_fetched" };
+      const value = own(playerDetails, field);
+      if (!value) return { skip: "field_missing" };
+      if (own(value, "unit") !== "number") return { skip: "unexpected_unit" };
+      const number = finiteNumber(own(value, "value"));
+      return number === null ? { skip: "value_missing" } : { value: number };
+    },
+  });
+}
+
+const genericEntries = new Map();
+function genericExtractor(sourceMetricKey) {
+  const prefix = Object.keys(GENERIC_PREFIXES).find((p) => sourceMetricKey.startsWith(p));
+  if (!prefix) return null;
+  const name = sourceMetricKey.slice(prefix.length);
+  if (!GENERIC_NAME.test(name) || GENERIC_DANGEROUS.has(name)) return null;
+  if (!genericEntries.has(sourceMetricKey)) {
+    genericEntries.set(sourceMetricKey, GENERIC_PREFIXES[prefix] === "row" ? genericRowNumber(sourceMetricKey, name) : genericDetailsNumber(sourceMetricKey, name));
+  }
+  return genericEntries.get(sourceMetricKey);
+}
+
 // The entry of a source field, or null (source_metric_unsupported).
 export function extractorFor({ sourceSystem, apiFamily, sourceMetricKey } = {}) {
   if (typeof sourceSystem !== "string" || typeof apiFamily !== "string" || typeof sourceMetricKey !== "string") return null;
   const key = `${sourceSystem}/${apiFamily}/${sourceMetricKey}`;
   if (Object.hasOwn(EXTRACTORS, key)) return EXTRACTORS[key];
+  if (`${sourceSystem}/${apiFamily}/` === GPEXE_REST_V1) {
+    const generic = genericExtractor(sourceMetricKey);
+    if (generic) return generic;
+  }
   return testFallback && SYNTHETIC_TEST_KEY.test(sourceMetricKey) ? testFallback({ sourceSystem, apiFamily, sourceMetricKey }) ?? null : null;
 }
 

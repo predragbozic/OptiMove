@@ -27,6 +27,7 @@ import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCa
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { createFieldCollector } from "./sourceFieldInventory.js";
+import { PinnedFieldsError, PINNED_FIELDS_SQL, pinnedFieldsFromKeys, readPinnedFields } from "./sourcePinnedFields.js";
 import { candidateState } from "./gpexeImportState.js";
 import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./gpexeImportAudience.js";
 import {
@@ -583,6 +584,8 @@ export async function projectUnimportedSnapshots() {
     await run(`set local lock_timeout = '${Math.max(1, Math.floor(b.lockTimeoutMs))}ms'`);
     await run(`set local idle_in_transaction_session_timeout = '${Math.max(1, Math.floor(b.idleInTransactionMs))}ms'`);
   };
+  // G2: the pinned set of this run, read with its first id page; until it is known nothing is projected.
+  let pinnedFields = null;
   // The id page: a short read-only transaction. Any failure closes the
   // client (a read: nothing to keep or confirm).
   const readIdPage = async (cursor) => {
@@ -601,6 +604,14 @@ export async function projectUnimportedSnapshots() {
         const held = Promise.resolve().then(() => projectionPageFault(client));
         held.catch(() => {});
         await withinBound(held, op.cap(statementBound));
+      }
+      if (pinnedFields === null) {
+        try {
+          pinnedFields = pinnedFieldsFromKeys((await run(PINNED_FIELDS_SQL, [])).rows.map((r) => r.source_metric_key));
+        } catch (error) {
+          if (error instanceof PinnedFieldsError) throw new ProjectionStepError("projection_failed");
+          throw error;
+        }
       }
       const rows = (await run(
         `select id from training_load.gpexe_import_candidates
@@ -650,7 +661,7 @@ export async function projectUnimportedSnapshots() {
       )).rows[0];
       let wrote = 0;
       if (row) {
-        const next = projectStoredDetails(row.raw_bundle);
+        const next = projectStoredDetails(row.raw_bundle, pinnedFields);
         if (canonicalJson(next) !== canonicalJson(row.raw_bundle)) {
           // The row is locked by this transaction: the status guard is the
           // last word, never an imported row.
@@ -1024,9 +1035,18 @@ export async function startCheck(teamId, { userId, window, wait = false, adminVi
   if (facts.path === PATH_SOURCE_CONNECTION) {
     try {
       fieldInventory = { collector: createFieldCollector(), connectionId: facts.connectionId };
+      // G2: the pinned set, read once before the first request and frozen for this check (a field created while it
+      // runs is not kept by it). A name a check cannot keep, or too many, stops the check here.
+      let pinnedFields;
+      try {
+        pinnedFields = await readPinnedFields(query);
+      } catch (error) {
+        if (error instanceof PinnedFieldsError) throw importRefusal(error.code);
+        throw error;
+      }
       // A check honours the source's rate limit once (Retry-After within the
       // resolver's maximum); an identity load never waits.
-      source = openImportSource(facts, { meter, rateLimitRetry: true, checkBundle: { maxSpeedFromDetails: maxSpeedFromDetailsForTests ?? true }, observeFields: fieldInventory.collector.observe });
+      source = openImportSource(facts, { meter, rateLimitRetry: true, checkBundle: { maxSpeedFromDetails: maxSpeedFromDetailsForTests ?? true }, observeFields: fieldInventory.collector.observe, pinnedFields });
       client = importClientFor(source, { meter });
     } catch (error) {
       const code = error instanceof SourceImportResolveError ? error.code : "internal_error";
@@ -2458,15 +2478,22 @@ async function finalizeCheck(checkId, { teamId, window, withdraw, source = null,
         returning id`,
       [teamId, checkId, window.from, window.to],
     )).rows : [];
-    // 5. What was superseded keeps only the consumed fields.
+    // 5. What was superseded keeps only the consumed fields and (G2) the pinned set, read in this transaction.
     const supersededIds = [...byCandidate, ...byCheck].map((r) => r.id);
     if (supersededIds.length) {
+      let pinnedFields;
+      try {
+        pinnedFields = pinnedFieldsFromKeys((await run(PINNED_FIELDS_SQL, [])).rows.map((r) => r.source_metric_key));
+      } catch (error) {
+        if (error instanceof PinnedFieldsError) throw finalizeError("check_finalize_failed");
+        throw error;
+      }
       const rows = (await run(
         `select id, raw_bundle from training_load.gpexe_import_candidates where id = any($1::uuid[]) and status = 'superseded' and raw_bundle is not null`,
         [supersededIds],
       )).rows;
       for (const row of rows) {
-        const projected = projectStoredDetails(row.raw_bundle);
+        const projected = projectStoredDetails(row.raw_bundle, pinnedFields);
         if (canonicalJson(projected) !== canonicalJson(row.raw_bundle)) {
           await run(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1 and status = 'superseded'`, [row.id, projected]);
         }

@@ -124,7 +124,8 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   const fields = (await client.query(
     `select d.id, d.source_system, d.api_family, d.source_metric_key, d.source_label,
             r.id as revision_id, r.value_shape, r.parameter_kind, r.supports_session, r.supports_drill,
-            r.source_unit, r.expected_source_unit, r.evidence_status
+            r.source_unit, r.expected_source_unit, r.evidence_status,
+            d.created_by_user_id is not null as created
        from training_load.source_metric_definitions d
        join training_load.source_metric_definition_versions r on r.source_metric_definition_id = d.id and r.state = 'active'
       where d.source_system = $1 and d.api_family = $2 and d.state = 'active'
@@ -331,7 +332,10 @@ function columnsOf(world) {
     else if (!proven) reason = "field_not_confirmed";
     else if (!rule) reason = "display_rule_missing";
     // A column can be read (its values shown, a system mapping of it switched on) without being placeable as a new row.
-    const readable = Boolean(extractor) && reason !== "source_metric_unsupported" && f.parameter_kind === "none";
+    // G2 (the Rukovodilac's rule, security MEDIUM 2 of G1a): a field created by route C whose unit is not proven yet is
+    // never readable on this board - no athlete's value of it leaves the server; the platform's comparison (G1b) is
+    // where it is proven. A seeded field keeps today's rule.
+    const readable = Boolean(extractor) && reason !== "source_metric_unsupported" && f.parameter_kind === "none" && !(f.created === true && !proven);
     return { field: f, extractor, rule, reason, readable };
   });
 }

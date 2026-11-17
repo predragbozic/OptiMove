@@ -105,6 +105,9 @@ const MESSAGES = Object.freeze({
   check_preview_interrupted: "The database ended the preview of a session before it finished; nothing of the check was published. Run the check again.",
   source_team_mismatch: "The check asked for a source team other than the bound one; nothing was read.",
   context_not_issued: "The source context was not issued by the resolver; nothing was read.",
+  // G2: the pinned set (sourcePinnedFields.js) a check keeps besides the importer's own fields.
+  pinned_field_invalid: "A source field created in OptiMove has a name a check cannot keep; nothing was read.",
+  pinned_fields_too_many: "Too many source fields created in OptiMove would be kept by a check; nothing was read.",
 });
 
 // The service raises the check-finalization and legacy drill-parameter
@@ -131,6 +134,9 @@ const CONNECTION_CONFIGURATION_CODES = new Set([
   // 2026-10-11): a coach gets no proof or reason of the drill-parameter guard,
   // only the sentence to contact an administrator.
   "drill_parameter_effect_not_distinguishable",
+  // G2: the pinned set is an administrator's configuration (fields created in Settings); a coach gets the sentence to
+  // contact an administrator.
+  "pinned_field_invalid", "pinned_fields_too_many",
 ]);
 export const isConnectionConfigurationCode = (code) => CONNECTION_CONFIGURATION_CODES.has(code);
 // For the tests only (the Set itself stays private, so no importer can change
@@ -329,7 +335,7 @@ export function preflightImportSource(facts) {
 // 2026-10-23 and 2026-10-24): no drill labels, because the check strips them
 // before storing, and the rows from the athlete list with max_v from the
 // details (one canary row read per session) unless it says otherwise.
-export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false, checkBundle = null, observeFields = null } = {}) {
+export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalThis.fetch, timeoutMs = 90_000, meter = NOOP_CHECK_METER, rateLimitRetry = false, checkBundle = null, observeFields = null, pinnedFields = null } = {}) {
   requireIssued(facts);
   if (facts.path !== PATH_SOURCE_CONNECTION || !facts.credential) throw fail("binding_ambiguous");
   let keyring;
@@ -384,9 +390,10 @@ export function openImportSource(facts, { fetchImpl = fetchForImport ?? globalTh
         },
       } : null;
       const bundlePlan = checkBundle === null ? {} : { bundleDrillLabels: false, bundleMaxSpeedFromDetails: checkBundle.maxSpeedFromDetails !== false };
-      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...bundlePlan, ...(observeFields ? { observeFields } : {}), ...(sleepForImport ? { sleep: sleepForImport } : {}) });
+      adapter = createSourceAdapter({ sourceSystem: facts.sourceSystem, hostKey: facts.hostKey, catalogRow: facts.catalogRow, credential: token, boundSourceTeamId: facts.sourceTeamId, fetchImpl: trackedFetch, timeoutMs, attempts: 1, rateLimit, ...bundlePlan, ...(observeFields ? { observeFields } : {}), ...(pinnedFields ? { pinnedFields } : {}), ...(sleepForImport ? { sleep: sleepForImport } : {}) });
     } catch (error) {
       if (error?.code === "adapter_not_available") throw fail("adapter_not_available");
+      if (error?.code === "pinned_field_invalid" || error?.code === "pinned_fields_too_many") throw fail(error.code);
       if (error?.code === "host_not_allowed" || error?.code === "path_not_allowed") throw fail("host_not_allowed");
       if (error?.code === "credential_missing" || error?.code === "invalid_bound_team" || error?.code === "invalid_options") throw fail("credential_unreadable", { status: 503 });
       throw error;

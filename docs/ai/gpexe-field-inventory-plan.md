@@ -771,3 +771,101 @@ by the *Rukovodilac*: not documentation. This is the same class as the burst / b
     Compare the number: <value> <unit>.";
   - for `duration_mmss` it says that GPEXE may show hours for long values.
 - **The rollback of v74** refuses once any T9i row carries a `source_unit_word`.
+
+## 9. G2: the pinned set, the generic extractors and the club-board guard (as built, 2026-11-17)
+
+The plan of section 5 ("G2") and the *Rukovodilac*'s GO of 2026-11-17. One pull request, **no migration**: v74 holds
+everything G2 needs in the database.
+
+### 9.1 The pinned set (`backend/src/sourcePinnedFields.js`)
+
+- **What it is.** The GPEXE field names a check keeps in the stored snapshot besides the importer's own consumed fields.
+  They come from T2a: the gpexe / rest_v1 rows whose key is `athlete_session.<name>` (a row number) or
+  `details.players.<name>` (a details `{unit, value}`). Never from a GPEXE answer.
+  - Since v74 such a row exists only through route C, or as a seed.
+  - A seeded name is already in the adapter's lists, so the union changes nothing for it.
+- **Bounds, fail closed:**
+  - every name is an identifier (the projection's `METRIC_NAME`) and never a dangerous key;
+  - at most 64 names per endpoint (`PINNED_FIELDS_MAX`);
+  - otherwise the check stops with `pinned_field_invalid` or `pinned_fields_too_many`, before any GPEXE read. Both codes
+    are administrator-only (a coach reads the sentence to contact an administrator).
+- **Where it is read:**
+  - **A check** reads it once, before its first request, and freezes it in its adapter. A field created while the check
+    runs is not kept by that check; the next check keeps it.
+  - **Retention** reads it with the first id page of every run. Until it is known, nothing is projected; a failed read
+    stops the run as `projection_failed`.
+  - **The supersede step** of a check's finalization reads it inside the finalization's transaction.
+- **Both proven and unproven created fields are pinned.** Their values accumulate for the comparison that proves them
+  (G1b's route O and route 8).
+
+### 9.2 The projection (`backend/src/gpexeRestV1Adapter.js`)
+
+- **Athlete rows.** They keep `BUNDLE_FIELDS.athleteSession` plus the run's pinned row names (`athleteSessionFieldsOf`),
+  with the same scalar rule. A pinned value of another shape fails the check (`field_shape_unknown`).
+- **Details** (the whole session and every drill). They keep `DETAILS_CONSUMED_FIELDS` plus the pinned details names
+  (`detailsFieldsOf`), each validated by `metricValue` and copied as `{unit, value}` only. A pinned value of another
+  shape fails the whole-session read, or ends the drill set.
+- **`projectStoredDetails(bundle, pinnedFields)`** keeps the same union. Without the run's set it keeps the consumed
+  fields only, as before.
+- **Nothing else of the snapshot changed:** no other key, no retention period, no hash rule.
+- **MT-0** (`gpexeImportMapper.js`) compares every stored row field apart from the row's identity (`id`, `athlete`,
+  `track`, `teamsession`). A created field that differs between two tracks makes them two recordings, never one
+  (fail closed).
+
+### 9.3 The generic extractors (J12 amended; `backend/src/sourceMetricExtractors.js`)
+
+- **The two entries.**
+  - `gpexe/rest_v1/athlete_session.<name>` is one row number (`number`, no parameters).
+  - `gpexe/rest_v1/details.players.<name>` is one details number (`unit_value_object`, unit word `number`, no
+    parameters).
+- **What they read.** Only the row's or the athlete's **own** property of that name (`Object.hasOwn`); they convert
+  nothing.
+- **What they refuse.** A name that is not an identifier, a dangerous name, a dotted name, another family or another
+  source has no entry.
+- **Unchanged.** The seeded keys keep their own entries; zones and events stay code.
+- **Why no database read is needed.** A version needs its T2a revision (C90), and a version of an unproven field is never
+  activated (v52's gate). So an unproven created field is never in the importer's plan, even though its values are in
+  the snapshot.
+- **Architecture guards:**
+  - B7.8 now treats a quoted `details.players.` key literal and a comment line as what they are, not a lookup. B7.8 had
+    failed on `main` since G1a, inside the known-failing adapter suite, because of route C's key prefix.
+  - B7.8 pins the registry's one generic prefix and its two own-property reads.
+  - B7.7c proves the mapper reads nothing of a drill athlete's details but the mapped generic name.
+
+### 9.4 The club-board guard (`backend/src/sourceMetricBoardService.js`)
+
+- **The rule.** A field created by route C (`created_by_user_id` set) whose revision is not proven is **never readable**
+  on the board.
+  - Its column has no raw value, and nothing of it is anywhere in the answer.
+  - A placement on it is refused with no values.
+- **Unchanged.** A created proven field and a seeded unproven field are shown as before.
+- **Where the comparison happens.** The platform's comparison that proves a created field is G1b's.
+
+### 9.5 Effects, as decided
+
+- **(a) The one-time "changed".** Once a created field carries values, the next check reads every session that has them
+  as changed once.
+  - **A pending candidate** is superseded by one that holds the new field.
+  - **An imported session** gets a new candidate whose preview writes nothing. The inbox shows it as imported (nothing
+    new), not as needing review, unless the session has a reason of its own.
+  - Verified by the resolver suite's test 48; no fix was needed.
+- **(b) No backfill.** A field's values are only in snapshots read after it was created. **Create the field, then find
+  sessions again for a day that carries it.**
+- **(c) Imported sessions are not rewritten.** A mapping switched on later does not write into an already imported
+  session by itself; that needs an undo and a new import.
+
+### 9.6 Tests (G2)
+
+- `backend/tests/source-pinned-fields-g2.unit.test.mjs`: the set, the bound of 64 and its refusals, the union, both
+  projections.
+- `gpexe-import-credential-resolver` tests 41–48, end to end with the fake source:
+  - 41: the pinned names kept, the unpinned ones not stored;
+  - 42: a field created mid-check is not kept by it;
+  - 43: a pinned value of an unknown shape fails closed;
+  - 44: exactly 64 pass, the 65th and an invalid name stop the check before any session read;
+  - 45: retention keeps the pinned names;
+  - 46: the supersede path keeps them too;
+  - 47: a proven, mapped created field is imported, and an unproven one is never activated and never imported;
+  - 48: the inbox after the one-time "changed".
+- `source-metric-board-18-2` test 15 (the board guard), `source-metric-extractors-7f` test 14 (the generic extractors),
+  `gpexe-duplicate-tracks-mt0` (a created row field on two tracks), and the adapter suite's B7.7c and B7.8.

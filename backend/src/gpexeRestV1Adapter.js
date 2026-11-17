@@ -48,6 +48,7 @@ import { createHash } from "node:crypto";
 import { redactGpexe } from "./gpexeClient.js";
 import { identityFromAnswer } from "./gpexeAthleteIdentity.js";
 import { resolveApprovedSourceHost, sourceApiUrl, sourceHost } from "./sourceHosts.js";
+import { checkedPinnedFields, PinnedFieldsError } from "./sourcePinnedFields.js";
 
 export const ADAPTER_SOURCE = "gpexe";
 export const ADAPTER_API_FAMILY = "rest_v1";
@@ -437,6 +438,10 @@ export const DIAGNOSTIC_MARK = " Diagnostic: ";
 // a test pins this list to the mapper's metric specs.
 export const DETAILS_CONSUMED_FIELDS = Object.freeze(["tot_burst_events", "tot_brake_events"]);
 const METRIC_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+// G2: the fields a run keeps - the importer's own and the pinned set's (sourcePinnedFields.js), in a fixed order.
+const union = (base, extra) => Object.freeze([...base, ...extra.filter((n) => !base.includes(n))]);
+export const detailsFieldsOf = (pinnedFields) => union(DETAILS_CONSUMED_FIELDS, checkedPinnedFields(pinnedFields).details);
+export const athleteSessionFieldsOf = (pinnedFields) => union(BUNDLE_FIELDS.athleteSession, checkedPinnedFields(pinnedFields).athleteSession);
 
 // The kind of one value, as a fixed word - never the value.
 function valueKind(v) {
@@ -599,7 +604,9 @@ function projectConsumedValue(value) {
 // not the parent's drill count: it is neither compared, returned, stored nor
 // used as a bound - the only drill count is the confirmed parent's. The
 // whole-session answer keeps its comparison and its count.
-export function projectSessionDetails(body, expectedDrillsCount = null, { what = "the whole-session details", op = "session_details", drillAnswer = false } = {}) {
+// G2: `fields` is the details fields kept - DETAILS_CONSUMED_FIELDS and the run's pinned details names
+// (detailsFieldsOf); each is validated and copied by the same rule.
+export function projectSessionDetails(body, expectedDrillsCount = null, { what = "the whole-session details", op = "session_details", drillAnswer = false, fields = DETAILS_CONSUMED_FIELDS } = {}) {
   if (!isPlainObject(body)) throw unexpected(`The source server did not answer ${what} as an object.`, { reason: "answer_not_object" });
   const players = body.players;
   if (!isPlainObject(players)) throw unexpected(`The source answer to ${what} carries no players map.`, { reason: "players_missing" });
@@ -625,7 +632,7 @@ export function projectSessionDetails(body, expectedDrillsCount = null, { what =
       }
     }
     const projected = {};
-    for (const field of DETAILS_CONSUMED_FIELDS) {
+    for (const field of fields) {
       if (!Object.prototype.hasOwnProperty.call(values, field)) continue;
       const value = values[field];
       if (!metricValue(value)) {
@@ -664,15 +671,17 @@ export function projectSessionDetails(body, expectedDrillsCount = null, { what =
 // `drills_count` (a legacy answer's top-level aggregates are dropped too).
 // Pure: a fresh object, the input untouched; a `players` that is not a map is
 // left as it is (the stored snapshot was validated when it was read).
-export function projectStoredDetails(bundle) {
+export function projectStoredDetails(bundle, pinnedFields = null) {
   if (!isPlainObject(bundle) || !isPlainObject(bundle.details)) return bundle;
+  // G2: the run's pinned details names are kept too (the retention run and the supersede path read the set themselves).
+  const fields = detailsFieldsOf(pinnedFields);
   const players = (map) => {
     if (!isPlainObject(map)) return map;
     const out = {};
     for (const [id, values] of Object.entries(map)) {
       if (!isPlainObject(values)) { out[id] = values; continue; }
       const kept = {};
-      for (const field of DETAILS_CONSUMED_FIELDS) {
+      for (const field of fields) {
         if (Object.prototype.hasOwnProperty.call(values, field)) kept[field] = projectConsumedValue(values[field]);
       }
       out[id] = kept;
@@ -779,7 +788,19 @@ export function createGpexeRestV1Adapter({
   // I1 (docs/ai/gpexe-field-inventory-plan.md): called with (endpoint, raw answer) right after an answer was accepted,
   // so a check can record the NAMES of the fields GPEXE sends. It reads nothing, sends nothing and never fails a read.
   observeFields = null,
+  // G2: the pinned set of this run, read from the database before the adapter is made (sourcePinnedFields.js). Frozen
+  // here: a field created while the check runs is not kept by it.
+  pinnedFields = null,
 } = {}) {
+  let rowFields;
+  let detailsFields;
+  try {
+    rowFields = athleteSessionFieldsOf(pinnedFields);
+    detailsFields = detailsFieldsOf(pinnedFields);
+  } catch (error) {
+    if (error instanceof PinnedFieldsError) throw new SourceAdapterError(error.code, error.message);
+    throw error;
+  }
   // The gate: the key's own approved catalog row, and the family this file is for.
   const probeUrl = sourceApiUrl(ADAPTER_SOURCE, hostKey, catalogRow, "team/");
   const host = sourceHost(ADAPTER_SOURCE, hostKey);
@@ -1448,7 +1469,7 @@ export function createGpexeRestV1Adapter({
       const { body } = await read(`team_session/${parent.id}/details/`, "whole_details");
       refreshedDuring(parent.id, epoch);
       // Projected to the consumed fields (drills too, since 2026-10-09).
-      const projected = projectSessionDetails(body, parent.drillsCount);
+      const projected = projectSessionDetails(body, parent.drillsCount, { fields: detailsFields });
       observed("details.session", body);
       if (bundleMaxSpeedFromDetails) rememberMaxSpeeds(parent.id, "whole", body.players);
       return projected;
@@ -1463,7 +1484,7 @@ export function createGpexeRestV1Adapter({
       const parent = confirmed(sessionId);
       if (parent.drillsCount < 1) throw new SourceAdapterError("invalid_drill_index", "That session has no drills.");
       const { body } = await readDrill(parent.id, drillIndex, parent.drillsCount);
-      const projected = projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true });
+      const projected = projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true, fields: detailsFields });
       observed("details.drill", body);
       return projected;
     },
@@ -1488,7 +1509,7 @@ export function createGpexeRestV1Adapter({
           const epoch = epochOf(parent.id);
           const { body } = await readDrill(parent.id, index, parent.drillsCount);
           refreshedDuring(parent.id, epoch);
-          const details = projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true });
+          const details = projectSessionDetails(body, null, { what: "the drill details", op: "session_drill_details", drillAnswer: true, fields: detailsFields });
           observed("details.drill", body);
           // The full map passed the projection's guards (canonical athlete
           // ids, metric names, bounds) before it is fingerprinted.
@@ -1534,7 +1555,7 @@ export function createGpexeRestV1Adapter({
         if (rowId === null) throw unexpected("An athlete row of the source answer names itself in an unknown way.");
         ids.add(rowId);
       }
-      const projected = rows.map((row) => pick(row, BUNDLE_FIELDS.athleteSession));
+      const projected = rows.map((row) => pick(row, rowFields));
       for (const row of rows) observed("athlete_session", row);
       listedAthleteRows.set(parent.id, ids);
       return { rows: projected, total };
@@ -1559,7 +1580,7 @@ export function createGpexeRestV1Adapter({
       const trackId = body.track === undefined || body.track === null ? null : canonicalId(body.track);
       if (body.track !== undefined && body.track !== null && trackId === null) throw unexpected("The source server's athlete row names its track in an unknown way.");
       // I1: an athlete row is counted once, from its session's list; its own read adds no answer (answers_seen = list rows).
-      const out = pick(body, BUNDLE_FIELDS.athleteSession);
+      const out = pick(body, rowFields);
       confirmedAthleteRows.set(id, { sessionId: parent.id, trackId });
       if (trackId !== null) { confirmedTracks.add(trackId); trackOwner.set(trackId, parent.id); }
       return out;
@@ -1793,7 +1814,7 @@ export function createGpexeRestV1Adapter({
     for (const [i, row] of rows.entries()) {
       const speed = speedOf(row);
       if (speed === undefined) { out.push(await readRow(row)); continue; }
-      const fromList = pick({ ...row, max_v: speed }, BUNDLE_FIELDS.athleteSession);
+      const fromList = pick({ ...row, max_v: speed }, rowFields);
       if (!canaryHeld) {
         const canary = await readRow(row);
         if (JSON.stringify(canary) !== JSON.stringify(fromList)) {

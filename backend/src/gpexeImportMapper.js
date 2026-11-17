@@ -36,9 +36,12 @@ export const GPEXE_SOURCE_SYSTEM = "gpexe";
 // MT-0 (the owner's yes, 2026-11-12; docs/ai/mt-multiple-tracks-plan.md section 11): an athlete whose tracks are identical
 // copies of one recording is imported once, from the lowest track id. Its details (burst, brake: one entry per athlete) are
 // read as for any athlete: E1 is decided (2026-11-12) - GPEXE counts a duplicate track once (the parity evidence of section 11).
-// The athlete-session fields the mapper consumes (BUNDLE_FIELDS.athleteSession without the identity fields), compared across
-// the tracks; the /more/ of each row is compared whole, apart from its own identity keys.
-const DUPLICATE_ROW_FIELDS = Object.freeze(["is_stats_valid", "total_time", "total_distance", "max_v", "drill"]);
+// The athlete-session fields compared across the tracks: every field of the stored row apart from its identity
+// (BUNDLE_FIELDS.athleteSession without id, athlete, track and teamsession, and since G2 the pinned names a check kept
+// too - a created field that differs between two tracks makes them two recordings, never one). The /more/ of each row
+// is compared whole, apart from its own identity keys.
+const DUPLICATE_ROW_IDENTITY = new Set(["id", "athlete", "track", "teamsession"]);
+const duplicateRowFields = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((f) => !DUPLICATE_ROW_IDENTITY.has(f));
 const DUPLICATE_TRACK_FIELDS = Object.freeze(["utc_timestamp", "timestamp", "timezone"]);
 
 // Only categories whose meaning is confirmed for the pilot are importable.
@@ -265,7 +268,8 @@ export function identicalTracks(bundle, athleteRows, trackIds) {
     if (levels.size !== first.size || [...levels.keys()].some((k) => !first.has(k))) return null;
     for (const [key, row] of levels) {
       const other = first.get(key);
-      if (DUPLICATE_ROW_FIELDS.some((f) => canonicalJson(row[f]) !== canonicalJson(other[f]))) return null;
+      if (duplicateRowFields(row, other).some((f) => canonicalJson(Object.hasOwn(row, f) ? row[f] : null) !== canonicalJson(Object.hasOwn(other, f) ? other[f] : null)
+        || Object.hasOwn(row, f) !== Object.hasOwn(other, f))) return null;
       const moreA = bundle.more?.[String(row.id)];
       const moreB = bundle.more?.[String(other.id)];
       if (!moreA || !moreB) return null;
