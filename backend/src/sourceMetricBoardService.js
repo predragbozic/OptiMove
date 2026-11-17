@@ -113,7 +113,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   // The team, its one active GPEXE binding, and the binding's connection owned by the team's club - the workspace's
   // club on a club board; any active club on the platform board (S).
   const team = (await client.query(
-    `select t.id, t.name, t.club_id, b.id as binding_id, b.connection_id, b.source_team_id, h.api_family
+    `select t.id, t.name, t.club_id, cl.name as club_name, b.id as binding_id, b.connection_id, b.source_team_id, h.api_family
        from public.teams t
        join public.clubs cl on cl.id = t.club_id and coalesce(cl.is_active, true)
        join training_load.source_team_bindings b on b.team_id = t.id and b.state = 'active' and b.source_system = $3
@@ -272,9 +272,11 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   // What is switched on for the team, and what an administrator switched off on this binding (Q9).
   const open = (await client.query(
     `select a.id, a.mapping_version_id, a.source_metric_definition_id as field_id, a.metric_definition_id as variable_id,
-            a.parameter_fingerprint, a.applies_to_session, a.applies_to_drill, a.requirement, m.owner_scope
+            a.parameter_fingerprint, a.applies_to_session, a.applies_to_drill, a.requirement, m.owner_scope,
+            md.label as variable_label
        from training_load.source_metric_mapping_activations a
        join training_load.source_metric_mappings m on m.id = a.mapping_id
+       left join training_load.metric_definitions md on md.id = a.metric_definition_id
       where a.source_team_binding_id = $1 and a.ended_at is null
       order by a.id`,
     [team.binding_id],
@@ -306,6 +308,28 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     [team.binding_id],
   )).rows;
 
+  // S-2: a club board's mapping whose latest activation on this binding a platform-board save ended (an end in the same
+  // operation as the start of an OptiMove mapping, with no club confirmation in it): the club reads when OptiMove's
+  // mapping replaced it.
+  const replacedBySystem = systemBoard ? [] : (await client.query(
+    `select x.mapping_id, x.ended_at
+       from (select distinct on (a.mapping_id) a.id, a.mapping_id, a.ended_at, a.end_reason
+               from training_load.source_metric_mapping_activations a
+              where a.source_team_binding_id = $1
+              order by a.mapping_id, a.activated_at desc, a.id desc) x
+      where x.end_reason = 'admin_ended'
+        and exists (select 1 from training_load.source_metric_audit e
+                      join training_load.source_metric_audit mc on mc.operation_id = e.operation_id and mc.action = 'activation_start'
+                      join training_load.source_metric_mapping_versions sv on sv.id = mc.mapping_version_id
+                      join training_load.source_metric_mappings sm on sm.id = sv.mapping_id and sm.owner_scope = 'system'
+                     where e.activation_id = x.id and e.action = 'activation_end'
+                       -- A club-board save stores the club's confirmation in the same operation: the club itself switched
+                       -- OptiMove's mapping on, so its own mapping is not "replaced by OptiMove's mapping".
+                       and not exists (select 1 from training_load.source_metric_audit c
+                                     where c.operation_id = e.operation_id and c.action = 'mapping_confirmation'))`,
+    [team.binding_id],
+  )).rows;
+
   const conversions = (await client.query(
     `select from_unit, to_unit, trim_scale(scale)::text as scale, trim_scale(scale_divisor)::text as scale_divisor, trim_scale("offset")::text as "offset"
        from training_load.unit_conversions where state = 'active'`,
@@ -329,7 +353,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   for (const row of identities) if (typeof row.display_name === "string" && row.display_name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.display_name);
   for (const row of linked) if (typeof row.name === "string" && row.name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.name);
 
-  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, conversions, names };
+  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, replacedBySystem, conversions, names };
 }
 
 // ---------------------------------------------------------------------------
@@ -440,7 +464,8 @@ function collisionsOf(world, { fieldId, variableId, levels }) {
   return world.open
     .filter((o) => (o.field_id === fieldId && o.parameter_fingerprint === "")
       || (o.variable_id === variableId && ((levels.session && o.applies_to_session) || (levels.drill && o.applies_to_drill))))
-    .map((o) => ({ activationId: o.id, fieldId: o.field_id, variableId: o.variable_id }));
+    // S-2: whose mapping is on (the club's own or OptiMove's) and its variable's name, so a review can say what it replaces.
+    .map((o) => ({ activationId: o.id, fieldId: o.field_id, variableId: o.variable_id, owner: o.owner_scope === "system" ? "system" : "club", variableLabel: o.variable_label ?? null }));
 }
 
 // A row of an active version (OptiMove's, or the club's own): pre-placed, never compared.
@@ -472,6 +497,7 @@ function boardOf(world, pairIndex) {
   const colById = new Map(columns.map((c) => [c.field.id, c]));
   const variableById = new Map(world.variables.map((v) => [v.id, v]));
   const offByMapping = new Map(world.switchedOff.map((s) => [s.mapping_id, s]));
+  const replacedByMapping = new Map((world.replacedBySystem ?? []).map((r) => [r.mapping_id, r]));
   const openVersionIds = new Set(world.open.map((o) => o.mapping_version_id));
 
   const preplaced = [];
@@ -498,8 +524,11 @@ function boardOf(world, pairIndex) {
       continue;
     }
     const replaces = collisionsOf(world, { fieldId: v.field_id, variableId: v.variable_id, levels: row.levels });
-    if (replaces.length > 0) replaceable.push({ ...row, replaces });
-    else preplaced.push(row);
+    // S-2: the club's own mapping that OptiMove's replaced on this team says so, with the day; it can be put back as before.
+    const replaced = v.owner_key !== "system" ? replacedByMapping.get(v.mapping_id) : null;
+    const marked = replaced ? { ...row, replacedBy: { owner: "system", at: replaced.ended_at } } : row;
+    if (replaces.length > 0) replaceable.push({ ...marked, replaces });
+    else preplaced.push(marked);
   }
 
   return {
@@ -508,7 +537,7 @@ function boardOf(world, pairIndex) {
       // Whose mappings a save writes: the club's, or OptiMove's on the platform board (S).
       owner: world.systemBoard ? "system" : "club",
       // clubId: the team's own club (the other board's workspace, for its switch link).
-      team: { id: world.team.id, name: world.team.name, sourceTeamId: world.team.source_team_id, clubId: world.clubId },
+      team: { id: world.team.id, name: world.team.name, sourceTeamId: world.team.source_team_id, clubId: world.clubId, clubName: world.team.club_name ?? null },
       // newerNotUsable: with no session named, how many newer stored sessions were passed by because the import would not take them.
       session: { candidateId: world.candidate.id, label: world.candidate.session_label ?? null, startedAt: world.candidate.session_started_at, newerNotUsable: world.defaultSkipped },
       pair: { index: pair.index, count: pair.count, labels: pair.labels },
