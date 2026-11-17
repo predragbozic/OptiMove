@@ -402,10 +402,7 @@ I2 (the read route, ★★ without a migration) → I3 (the screen) → the G1 c
 
 ## 8. G1: creating a generic field and its `source_stated` evidence (contract, 2026-11-16)
 
-**Status: Proposed.** Accepted only by the *Rukovodilac*'s GO on this section.
-
-**PENDING (8.0):** decision (a), the meaning, waits for the owner's explicit word. The *Rukovodilac* is asking him. The
-migration file is not started before the *Rukovodilac* relays that word.
+**Status: Accepted** (the *Rukovodilac*, 2026-11-16; merged as PR #564). The owner decided (a) the same day (8.0).
 
 G1 is J18's reserved slice 18-P (`docs/ai/c112-drag-mapping-contract.md`, sections 5.1 note, 5.7, 15.2 and C114),
 reshaped by D-INV-2 (section 6.1).
@@ -420,10 +417,10 @@ reshaped by D-INV-2 (section 6.1).
 
 | | Decision |
 |---|---|
-| (a) | **The meaning.** For generic fields only, the board's tick is also the meaning act. The screen reads "Meaning: GPEXE's own label, checked on the board". **PENDING the owner's word**, because C97 asks for official documentation or a written support answer. If the owner says no, the act confirms the unit only and the meaning stays an M2b document act. |
+| (a) | **The meaning: the owner's decision, 2026-11-16.** The *Rukovodilac* described the flow: drop a column, compare two athletes with the GPEXE screen, tick, save. It asked whether that one tick replaces both the unit and the meaning confirmation, with the meaning recorded as what GPEXE calls the field, checked on the board, without documents. The owner answered „taj način je dobar" (yes), as the *Rukovodilac* relays it. **For generic plain fields only**, the board's tick is the unit act and the meaning act together. The screen reads "Meaning: GPEXE's own label, checked on the board". **C97 is changed accordingly for these fields:** their evidence is `source_stated`, never `verified`, and never shown as "Verified". Every other field keeps C97 and the M2b document acts. |
 | (b) | **One session, two athletes.** This is D-INV-2's wording and the owner's standing C97 decision ("one session instead of two", `docs/ai/gpexe-c97-unit-evidence.md#owner-decision`). It departs from C116 (J18: two sessions for a global confirmation) on the owner's decisions. The act stores which session, so a later, stricter rule can re-check it. |
 | (c) | **Only a platform admin** raises a field to `source_stated`, and only in the platform workspace. A club admin's tick stays what it is today: one per save (C112). **Open point** for the day a second club exists: the owner wants clubs to map what they want, so a per-club path will be asked for then. |
-| (d) | **`number → count`** is a seed row of `unit_conversions` (scale 1, divisor 1, offset 0) in G1's migration. Its note points to section 6.1 of this plan. It asserts that GPEXE's word `number` is a count for **every** `{unit: "number"}` field; the two-athlete tick is what checks it, field by field. The rollback removes the row only while it is unchanged and unused. |
+| (d) | **Superseded by 8.10 (the *Rukovodilac*, 2026-11-16).** It first read: `number → count` as a seed row of `unit_conversions`. It is not a conversion: GPEXE's unit words are quantity kinds, and they are mapped by `source_unit_words` (8.10). No `unit_conversions` row is seeded. |
 | (e) | **Capitalised GPEXE names** are refused with `409 name_not_supported`, because T2a's key CHECK is lower case only. I3 lists them as they are. This is revisited when the production inventory shows whether any exist; the executor reports the count after the owner's first search on the deployed build. |
 | (f) | **Typed foreign-key columns** hold the proof. `training_load.source_metric_evidence_ref_ok` stays docs-only. |
 
@@ -505,15 +502,14 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
   - T2b:
     - `source_unit` = the word, with `unit_verified_by_user_id`, `unit_verified_at` and
       `unit_observation_id` = the T9 row;
-    - and, under (a), the same for the meaning (`meaning_observation_id`);
+    - and the same for the meaning (`meaning_observation_id`), decision (a);
     - `evidence_status = 'source_stated'`;
   - two T8 rows, `source_metric_unit_observed` and `source_metric_meaning_observed`, linked by `confirmation_id`.
-    Without (a), only the unit row is written, and the status stays `unproven` until the M2b meaning act.
 - **Who sees the values:** platform admins only, in the platform workspace, through J18's route 10
   (`GET /fields/:fieldId/observations`; C119 (c)). A club admin sees "Unit stated by GPEXE, checked on the board" on the
   field, never the values.
 
-### 8.3 The schema (migration v74; its prefix is later than `202611151500`, confirmed with the *Rukovodilac* on the day)
+### 8.3 The schema (migration v74, `migrations_v2/202611161200_training_load_v74_…sql`; the prefix is the *Rukovodilac*'s of 2026-11-16)
 
 - **T2b:**
   - `evidence_status` gains `source_stated`;
@@ -564,7 +560,7 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
   its tick per save (C112) stays.
 - **Source fields:**
   - "Create field" on an inventory row (route C), and the status words "Unit stated by GPEXE, checked on the board";
-  - under (a), "Meaning: GPEXE's own label, checked on the board". It is never "Verified".
+  - "Meaning: GPEXE's own label, checked on the board" (decision (a)). It is never "Verified".
   - For an `athlete_session` row: "GPEXE sends no unit with this value, so a platform administrator confirms it with a
     document."
 - **The revision lifecycle** (`sourceRevisionLifecycleService.js` around line 509): replacing `source_stated` with
@@ -589,7 +585,6 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
   - one write with every row of 8.2;
   - no athlete id anywhere, and the values only in T9i;
   - the deferred checks (a second session, a missing item, T2b not naming the row);
-  - with and without (a).
 - **The gates:** a `source_stated` revision activates a T4 version and is placeable on the club's board; a club admin
   never reads `field_observation` values (route 10 is 404 for a club admin).
 - **The lifecycle:** `source_stated → verified` through R+1, and `verified → source_stated` refused.
@@ -605,3 +600,174 @@ and its read, J18's route 8: `GET /fields/:fieldId/observation?candidateId=…&p
 - No zone or event field (Z0 / Z1).
 - No club-scoped raising of a field (decision (c), an open point).
 - The revisions already verified by documents are not touched.
+
+### 8.7 The generic display rule `as_sent` (the *Rukovodilac*'s addition, 2026-11-16)
+
+**Found on production on 2026-11-16.** The owner confirmed `details.players.tot_burst_events` and `tot_brake_events` by
+documents: unit `count`, plus the meaning. Both are `verified`, yet the board still refused them with
+`display_rule_missing`. The display registry knew only the three athlete-row columns:
+- in code, `RULES` in `backend/src/sourceMetricBoard.js`;
+- in the database, v65's `training_load.source_metric_display_unit_ok`, which checks every T9i's `gpexe_display_rule`.
+
+So no proven field beyond those three could ever be compared or placed, and that would also block every `source_stated`
+field.
+
+**The rule:**
+- **`as_sent`:** the value exactly as GPEXE sends it, in the field's own proven unit.
+  - Its unit is the revision's `source_unit`, which must be a unit token.
+  - It shows the canonical decimal text of the raw value with **no rounding**: a whole number stays whole, otherwise
+    GPEXE's own digits.
+  - The comparison sentence on the board names this rule.
+- **`displayRuleFor`:** a specific rule still wins, and only in its own unit (a specific column proven in another unit
+  is still `display_rule_missing`). A field with no specific rule falls back to `as_sent`.
+- **`DISPLAY_REGISTRY_VERSION`** goes from 1 to 2. The placement hash's inputs carry no registry version, so the hashes
+  of the three specific rules do not change. A test pins one of them from `main`.
+- **v74** replaces `source_metric_display_unit_ok`'s body behind its md5 check. It keeps the three cases byte for byte
+  and adds `when 'as_sent' then training_load.source_metric_unit_token_ok(p_unit)`. The rollback restores the v65
+  body, and refuses once any T9i row carries `as_sent`.
+- **Burst and brake** become placeable through it with unit `count`. Their placement still needs an active conversion
+  to the variable's unit.
+
+**Tests:**
+- the two real keys are placeable after v74, with a disposable world on v74;
+- an unproven field is still `field_not_confirmed`;
+- the three specific rules and a pinned placement hash are unchanged;
+- the database function refuses a non-token unit, and the three old cases answer as in v65;
+- a board save with an `as_sent` placement is refused before v74 (v65's function) and accepted after it.
+
+**Built before v74 (branch `feature/gpexe-field-create-g1`):** the code half, with its unit tests and the board suites
+updated. It ships only with v74: until then a board save with an `as_sent` column would be refused by v65's database
+function.
+
+### 8.8 Backlog: a sentence for a system variable on the club's board (wording only, later)
+
+The owner created his "Burst" variable in the platform workspace, so it is a system variable. The club's board then
+says "OptiMove does not fill this variable from a column of this session", which is correct, but it does not tell him
+what to do. A proposal for a platform admin on such a slot, three lines:
+
+> This is an OptiMove variable, so a club does not fill it by dragging.
+> To fill it for this club, create the variable in the club's workspace and drag the column onto it there.
+> To fill it for every club, a platform administrator maps it in Data configuration > Mappings.
+
+### 8.9 As built (G1a; the executor, 2026-11-16)
+
+The migration is v74, `migrations_v2/202611161200_training_load_v74_generic_source_fields.sql`, with its runbook
+`docs/runbooks/generic-source-fields-v74.md` (preflight, post-check, rollback). Route C is
+`backend/src/sourceFieldCreateService.js`. The tests are `backend/tests/source-field-create-g1.test.mjs` and
+`source-field-create-g1-unit.test.mjs`. Where it departs from 8.1–8.3, and why:
+
+- **T2a is guarded only when a write carries an acting user.** v37 never guarded a T2a insert, and the test suites
+  write raw T2a fixtures without an actor. So a write with an acting user (every application write sets one) is held
+  to route C's contract:
+  - a platform admin, in their own name;
+  - a generic key;
+  - its `source_metric_create` row at COMMIT.
+
+  A write without an actor stays as before v74. This is a known limit of the same kind as C74.
+- **Route C reuses existing chains.** It reuses v34's reserved action `source_metric_create` (its chain is built here)
+  instead of a new action. Revision 1 is created through v39's own chains (a draft, then its activation), so it ends
+  active and unproven, as 8.1 says. That makes three T8 rows; the keyed one, `source_metric_create`, is the request
+  record.
+- **One `field_unit` row, not two.** A field observation holds exactly one `field_unit` T9i row carrying both athletes'
+  raw values (`raw_a`, `raw_b`), in T9i's existing per-row shape for one session.
+- **Route O comes after G2.** Route O reads the two values from the stored snapshot, and the snapshot holds only the
+  importer's consumed fields (PR #141, #149) until G2 projects the pinned set of active fields. So route O, routes 8
+  and 10, the platform-workspace board and "Create field" are **G1b**, after G2. v74 already holds their whole database
+  chain, and tests 8 and 9 write it by SQL as route O will.
+- **The function bodies are generated, not copied.** They come from `pg_get_functiondef` of the bodies in force, with
+  checked replacements.
+- **The rollback is proven exact.** It restores the catalog of v72 exactly (test 11).
+
+- **The unit words (8.10) replace decision (d).** v74 seeds `source_unit_words` (nine rows), not a `unit_conversions`
+  row. A `field_unit` row names its word, and v74's T9i guard takes the unit, rule and screen unit from it; a mapping
+  row that names a word is refused. The rollback refuses while a row names a word (test 11). Proof: test 6 (the nine
+  rows, seed-only and append-only), test 8 (four words, each with its own rule), test 9 (a word not in the table, a unit
+  or rule not the word's), and `source-metric-board-18-2` test 14.
+
+- **The words table's unit column is `source_unit`,** the name T2b and T9i already use for a unit token. It was first
+  `unit_token`, and the legacy-schema dump scanner (`tools/legacy-schema/scan.mjs`) read `unit_token = 'm/s'` as a
+  literal secret.
+- **The test list "before the confirmation gate" stops at v69 by name.** `GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE`
+  (`backend/tests/_gpexe-disposable-db.mjs`) was the whole list minus v66, so it held v74 without v66. v66's md5 gate
+  rightly refuses that state, because v74 replaces a body v66 checks, and production never has it. It now follows the
+  v66 suite's rule (PR #565): every migration up to v69 by file name, except v66. The suites of 7h, LO-1 and 9-B pass.
+
+- **After the internal reviews of `76fb65c1`** (db, security, code, mobile; no BLOCKER or HIGH):
+  - v74 takes every lock it needs before its first change, in the writers' order (T4, T2a, T2b, T9, T9i, then T8
+    NOWAIT), with `lock_timeout` 5 s (db MEDIUM-1). A test reads the file's statements and pins that order, the
+    timeout first and every lock before the first change (`source-field-create-g1-unit`, the rule of PR #346; code LOW).
+    The 5 s replaces the runner's 30 s lock wait for the whole of v74: a busy table fails the deploy fast, nothing applied.
+  - A `field_unit` row's word is final, by v65's update guard, and inside its values digest; a row without a word keeps
+    v65's digest (db MEDIUM-2, test 13). Fourteen bodies are now replaced.
+  - Route C's `source_metric_create` row must carry its request key, since it is the request record (db LOW-1,
+    test 5).
+  - A mapping row shown `as_sent` is accepted only in its own source unit (security 2a, db LOW-3, `source-metric-board-18-2`
+    test 14).
+  - The importer treats `source_stated` as proven through `statusProven`, as every other consumer does (security 1,
+    code 2; `gpexe-import-mapped-plan-9b` test 2).
+  - Route C's lost answer is proven through the route: a verified COMMIT answers 200 `verified_after_commit_error`; an
+    unknown one answers 503 `outcome_unknown`, and the same key then creates the field once (code 1, test 12).
+  - Recorded, not built: the club board shows the raw values of every readable column, proven or not. Once G2 gives
+    created keys an extractor, a club admin would see two athletes' values of an unproven created field from the club's
+    own session. G2 decides that (security 2). Also recorded: a structural name answers `name_not_observed` as 8.1
+    says; the losing writer of a race gets `field_exists` without `current`; the levels are declared by the admin; the
+    expected unit may come from another club's observation, and is only a hypothesis; T2a's key rule holds only with
+    an acting user (C74).
+
+**Not yet tested:** v52's activation gate on a `source_stated` revision (mutation M10 survives). A mapping version of a
+created field needs its extractor (J12), which is G2's; G2's or G1b's tests cover it.
+
+### 8.10 GPEXE's unit words are kinds, not units (the *Rukovodilac*'s amendment, accepted 2026-11-16)
+
+**The finding.** The *Rukovodilac* counted the production inventory read-only, after the owner's first search on
+`34d5e8f3`. The distinct unit words in `details.session` and `details.drill` are `acceleration`, `distance`,
+`duration`, `energy`, `energy_std`, `number`, `power`, `speed` and `time`. These are quantity kinds, not units, so
+D-INV-2's "the unit is the word GPEXE sends" is not taken literally.
+
+The athlete row carries no unit word on any field. No name has a capital letter, so decision (e) has no case today; the
+refusal stays.
+
+**The rule.**
+- A seeded, seed-only table, `training_load.source_unit_words`, maps each word to:
+  - the unit token the raw value is in;
+  - the board's display rule;
+  - the kind and reference of its evidence.
+
+  It is not `unit_conversions`, so a kind word never stands where a unit is expected.
+- **Each row is a hypothesis per word.** The two-athlete tick is what proves each field.
+- **A word without a row is never guessed:** route O answers `409 unit_not_stated`, and only the M2b document acts can
+  open the field.
+- **Adding a tenth word is a migration** (the seed window), with its evidence.
+
+| Word | Unit token | Display rule on the board | Evidence |
+|---|---|---|---|
+| `number` | `count` | `as_sent` | <a id="unit-word-number"></a>repository: the C97 burst / brake evidence, a `{unit: "number"}` details value is a count (`docs/ai/gpexe-c97-unit-evidence.md#burst-events-unit`) |
+| `speed` | `m/s` | `speed_kmh` | <a id="unit-word-speed"></a>repository: probe C of 2026-10-24, the details' `max_values_speed` (unit word `speed`) equals the row's `max_v` in m/s for 9 of 9 pairs (`docs/ai/CURRENT_STATE.md`, the owner-run read-only sitting, C; `docs/ai/gpexe-c97-unit-evidence.md#max-v-provenance`) |
+| `distance` | `m` | `distance_m` | <a id="unit-word-distance"></a>repository, by analogy: the athlete row's `total_distance` is in m (`docs/ai/gpexe-c97-unit-evidence.md#total-distance-unit`). No details field with this word is compared yet |
+| `time` | `s` | `duration_mmss` | <a id="unit-word-time"></a>repository, by analogy: the athlete row's `total_time` is in s (`docs/ai/gpexe-c97-unit-evidence.md#total-time-unit`). **Unresolved whether `time` and `duration` differ in GPEXE**; no fixture shows it |
+| `duration` | `s` | `duration_mmss` | as `time` (`#unit-word-time`) |
+| `power` | `W/kg` | `as_sent` | <a id="unit-word-power"></a>the owner's statement, 2026-11-16, as the *Rukovodilac* relays it |
+| `energy` | `J/kg` | `as_sent` | <a id="unit-word-energy"></a>the owner's statement, 2026-11-16, from the GPEXE application's own screen, as the *Rukovodilac* relays it |
+| `energy_std` | `J/kg` | `as_sent` | as `energy` (`#unit-word-energy`) |
+| `acceleration` | `m/s2` | `as_sent` | <a id="unit-word-acceleration"></a>the owner's statement, 2026-11-16, as the *Rukovodilac* relays it; spelled `m/s2`, as Metrics Core's own variables form spells it |
+
+**The owner's statements** (`power`, `energy`, `energy_std`, `acceleration`) are recorded as his statements, relayed
+by the *Rukovodilac*: not documentation. This is the same class as the burst / brake meaning.
+
+**What it changes in G1:**
+- **The T9i `field_unit` row** gains `source_unit_word`. It is set exactly for `field_unit`, so the stored evidence
+  records both the word and the unit token.
+- **Route O and v74's guard** take everything from the word's row:
+  - the unit token: `source_unit` must equal it;
+  - the display rule: the row's own;
+  - the display unit: that rule's screen unit — `km/h`, `mm:ss` or `m`, or the token itself for `as_sent`.
+- **No conversion requirement on the act.** The act no longer requires an active conversion from the unit; a mapping
+  version still needs its conversion, or the same unit, at T4.
+- **The board's sentence (G1b):**
+  - it always names each athlete's expected number, so a mismatch is visible and the tick is a deliberate "they
+    match";
+  - there is no tick without both values shown;
+  - for `as_sent` with no known screen format it says plainly: "GPEXE may show this rounded or in another unit.
+    Compare the number: <value> <unit>.";
+  - for `duration_mmss` it says that GPEXE may show hours for long values.
+- **The rollback of v74** refuses once any T9i row carries a `source_unit_word`.

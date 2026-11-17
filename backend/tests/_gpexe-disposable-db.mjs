@@ -94,6 +94,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611131300_training_load_v68_track_choice_scale.sql",
   "202611131310_training_load_v69_scale_recording_estimates.sql",
   "202611151200_training_load_v72_source_field_observations.sql",
+  "202611161200_training_load_v74_generic_source_fields.sql",
   "202611171000_training_load_v76_undo_by_importer.sql",
 ];
 
@@ -275,7 +276,12 @@ function assertDisposableName(name, url) {
 // their database without the gate: every migration but v66. v67 (MT-A) is later than v66 by file name and reaches
 // production first, so a database built from this list and then brought up to date gets v67 before v66
 // (production's own order), while one built from the whole list in one run gets v66 first (a fresh deploy).
-export const GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE = GPEXE_TEST_MIGRATIONS.filter((m) => m !== "202611131000_training_load_v66_club_activation_confirmation_gate.sql");
+// The list stops at v69 by FILE NAME (the v66 suite's rule, PR #565): v67-v69 reached production before v66, every
+// later migration (v72 and on) after it. A later migration is written on v66's bodies (v74 replaces one v66's md5 gate
+// checks), so a database holding it without v66 is a state production never had, and v66 refuses it by design.
+const LAST_BEFORE_CONFIRMATION_GATE = "202611131310_training_load_v69_scale_recording_estimates.sql";
+export const GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE = GPEXE_TEST_MIGRATIONS.filter(
+  (m) => m !== "202611131000_training_load_v66_club_activation_confirmation_gate.sql" && m <= LAST_BEFORE_CONFIRMATION_GATE);
 
 export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS }) {
   if (!baseDatabaseUrl) throw new Error("baseDatabaseUrl (DATABASE_URL) is required to reach the local Postgres server.");

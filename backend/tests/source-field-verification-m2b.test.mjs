@@ -522,7 +522,7 @@ test("2. the database guards: a T2b revision INSERT or a state change without it
   assert.deepEqual([(await revisionRow(late)).evidence_status, (await revisionRow(late)).evidence_ref], ["verified", UNIT_REF]);
   // An action whose chain is not built is refused, even by a platform admin.
   const conv = (await one(k, `select id from training_load.unit_conversions limit 1`)).id;
-  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_create',$1,$2,'platform_admin',$3,null,'active')`, [f.fieldId, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
+  refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_retire',$1,$2,'platform_admin',$3,'active','retired')`, [f.fieldId, W.pa.id, crypto.randomUUID()])), "23514", NO_WRITER);
   // A lifecycle row has its chain since v39: without its own change it is refused.
   refusedWith(await tx(W.pa.id, (c) => c.query(`insert into training_load.source_metric_audit (action, source_metric_definition_id, source_metric_version_id, performed_by_user_id, basis, operation_id, from_status, to_status) values ('source_metric_revision_activate',$1,$2,$3,'platform_admin',$4,'draft','active')`, [draft.fieldId, draft.revId, W.pa.id, crypto.randomUUID()])), "23514", LIFECYCLE_FOLLOW);
   // A conversion row has its chain since v47 (phase 7c): without its own conversion change it is refused.

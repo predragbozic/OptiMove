@@ -21,7 +21,7 @@ test("roundDecimal: exact decimal text, half away from zero, always the asked nu
 });
 
 test("the display registry: three columns, each only in its proven unit; what the GPEXE screen shows", () => {
-  assert.equal(DISPLAY_REGISTRY_VERSION, 1);
+  assert.equal(DISPLAY_REGISTRY_VERSION, 2, "2 since G1's generic as_sent rule");
   const time = rule("athlete_session.total_time", "s");
   const dist = rule("athlete_session.total_distance", "m");
   const speed = rule("athlete_session.max_v", "m/s");
@@ -33,11 +33,12 @@ test("the display registry: three columns, each only in its proven unit; what th
   // Another unit of the rule, another proven unit, an unknown column, another family: nothing.
   assert.equal(displayValue(time, "s", "5790"), null);
   assert.equal(displayValue(null, "mm:ss", "5790"), null);
-  assert.equal(rule("athlete_session.total_time", "min"), null);
+  assert.equal(rule("athlete_session.total_time", "min"), null, "a specific rule decides its column's unit; no fallback");
   assert.equal(rule("athlete_session.total_time", null), null);
-  assert.equal(rule("athlete_session.average_v", "m/s"), null);
-  assert.equal(rule("__proto__", "s"), null);
-  assert.equal(displayRuleFor({ sourceSystem: "gpexe", apiFamily: "api", sourceMetricKey: "athlete_session.total_time", sourceUnit: "s" }), null);
+  // G1 (plan 8.7): a column without a specific rule is shown as GPEXE sends it, in its own proven unit (as_sent).
+  assert.equal(rule("athlete_session.average_v", "m/s").rule, "as_sent");
+  assert.equal(rule("__proto__", "s").rule, "as_sent", "a prototype key is never a specific rule");
+  assert.equal(displayRuleFor({ sourceSystem: "gpexe", apiFamily: "api", sourceMetricKey: "athlete_session.total_time", sourceUnit: "s" }).rule, "as_sent", "another family never takes a rest_v1 rule");
 });
 
 test("the test seam serves only a synthetic key, only a rule of the registry and only in that rule's unit", () => {
@@ -45,13 +46,13 @@ test("the test seam serves only a synthetic key, only a rule of the registry and
   try {
     assert.equal(rule("suite.test.time.f1", "s").rule, "duration_mmss");
     assert.equal(rule("suite.test.time.f1", "m"), null, "the rule's own unit still decides");
-    assert.equal(rule("athlete_session.average_v", "s"), null, "a real key never reaches the seam");
+    assert.equal(rule("athlete_session.average_v", "s").rule, "as_sent", "a real key never reaches the seam");
     setDisplayRuleFallbackForTests(() => "no_such_rule");
-    assert.equal(rule("suite.test.time.f1", "s"), null);
+    assert.equal(rule("suite.test.time.f1", "s").rule, "as_sent", "an unknown seam rule is no rule: shown as sent");
   } finally {
     setDisplayRuleFallbackForTests(null);
   }
-  assert.equal(rule("suite.test.time.f1", "s"), null, "off again");
+  assert.equal(rule("suite.test.time.f1", "s").rule, "as_sent", "off again: shown as sent");
 });
 
 test("distinctPair: both values there, non-zero and different, compared as decimals", () => {
@@ -115,4 +116,17 @@ test("the mapper's raw read never carries an athlete's key; the board's keyed re
   // A session the import would not take is refused by its code, as the single read is.
   const broken = { ...bundle, more: {} };
   assert.deepEqual([gpexeSessionValuesKeyed(broken, [(input) => time.extract(input, {})]).code, gpexeLevelValues(broken, (input) => time.extract(input, {})).code], ["more_missing", "more_missing"]);
+});
+
+test("G1 (plan 8.7): as_sent shows the value exactly as GPEXE sends it, in the field's own unit token; the three specific rules and their hashes are unchanged", () => {
+  const burst = rule("details.players.tot_burst_events", "count");
+  assert.deepEqual([burst.rule, burst.units], ["as_sent", ["count"]]);
+  assert.deepEqual([displayValue(burst, "count", "12"), displayValue(burst, "count", "12.0"), displayValue(burst, "count", "3.14159")], ["12", "12", "3.14159"], "whole stays whole, otherwise GPEXE's digits");
+  assert.equal(displayValue(burst, "number", "12"), null, "only the field's own unit");
+  for (const unit of [null, undefined, "", "two words", "a|b", "a=b", "x".repeat(31), "\u200b"]) assert.equal(rule("details.players.tot_burst_events", unit), null, `not a unit token: ${JSON.stringify(unit)}`);
+  // The three specific rules stay byte for byte, and so do the placement hashes built from them.
+  assert.deepEqual(["athlete_session.total_time:s", "athlete_session.total_distance:m", "athlete_session.max_v:m/s"].map((k) => { const [key, unit] = k.split(":"); return rule(key, unit).rule; }), ["duration_mmss", "distance_m", "speed_kmh"]);
+  const parts = { bundleHash: "a".repeat(64), pairIndex: 0, revisionId: "r", displayRule: "distance_m", displayUnit: "m", rawA: "3100", rawB: "2900" };
+  // Pinned from main before G1 (registry version 1): the version bump changes no placement hash of an existing rule.
+  assert.equal(placementHash(parts), "34861db53f565c20382c71f2ef2c15febc03d096e538ea354fb7eda97a8ebc0d");
 });

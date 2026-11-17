@@ -204,7 +204,8 @@ export function chosenRevision(field) {
   return revisions.find((r) => r.state === "active") || revisions.find((r) => r.state === "draft") || null;
 }
 export const hasBound = (revision) => revision?.parameterKind === "zone_bounds" || revision?.parameterKind === "event_threshold";
-export const revisionVerified = (revision) => Boolean(revision && revision.state === "active" && revision.evidenceStatus === "verified");
+// G1: a revision proven by documents (verified) or by the unit word GPEXE states, checked on the board (source_stated).
+export const revisionVerified = (revision) => Boolean(revision && revision.state === "active" && (revision.evidenceStatus === "verified" || revision.evidenceStatus === "source_stated"));
 // Whether a field can be chosen in step 1, and why not (J16 4.2).
 export function fieldStatus(field) {
   if (!field) return { choosable: false, reason: "This field is not available." };

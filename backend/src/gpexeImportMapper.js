@@ -29,6 +29,7 @@
 // the outcome into the whole-candidate blocks and the values left out.
 import { canonicalDecimal, compareDecimal, extractabilityCode, extractorFor, SKIP_CATEGORY } from "./sourceMetricExtractors.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
+import { statusProven } from "./sourceFieldEvidence.js";
 
 export const GPEXE_SOURCE_SYSTEM = "gpexe";
 
@@ -179,7 +180,7 @@ export function mappedMetricSpecs(rows) {
   for (const activation of rows) {
     if (!REQUIREMENTS.has(activation.requirement)) return notUsable("requirement");
     if (activation.versionStatus !== "active") return notUsable("version_not_active");
-    if (activation.fieldState !== "active" || activation.revisionState !== "active" || activation.revisionEvidence !== "verified") return notUsable("revision_not_usable");
+    if (activation.fieldState !== "active" || activation.revisionState !== "active" || !statusProven(activation.revisionEvidence)) return notUsable("revision_not_usable");
     if (activation.definitionState !== "active" || activation.valueType !== "numeric") return notUsable("definition_not_usable");
     if (activation.definitionCurrentVersionId !== activation.metricDefinitionVersionId) return notUsable("definition_version_changed");
     if (!activation.appliesToSession && !activation.appliesToDrill) return notUsable("no_level");

@@ -991,7 +991,7 @@ test("19. a mapping's versions are read in pages (number descending, an opaque c
   assert.deepEqual([detailAgain.status, detailAgain.body.mapping.versions[0].versionNumber], [200, count + 1]);
 });
 
-test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle, the unit-conversion service (phase 7c), the activation service with its shared steps (phase 7d) and the source-instance end (phase 7g), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service, a T5 activation only by the activation service and its shared steps (phase 7d; A1, A2 and the pinned step call those steps), a Metrics Core source connection only by the import's mapping context (phase 9-B, the source instance) and the source-instance end (phase 7g), a T6 value provenance only by the import writer (phase 9-B); nothing in backend/src writes a T2a field, and nothing switches a trigger off", async () => {
+test("20. architecture: only the M2 service writes a mapping; a mapping version only the M2 service (create, submit and, from phase 7b, activate, replace and disable) and the revision lifecycle (its pinned step disables); the T8 audit is written by the M2 service, the M2b verification service, the revision lifecycle, the unit-conversion service (phase 7c), the activation service with its shared steps (phase 7d) and the source-instance end (phase 7g), a T2b revision only by the M2b verification service and the revision lifecycle, a unit conversion only by the unit-conversion service, a T5 activation only by the activation service and its shared steps (phase 7d; A1, A2 and the pinned step call those steps), a Metrics Core source connection only by the import's mapping context (phase 9-B, the source instance) and the source-instance end (phase 7g), a T6 value provenance only by the import writer (phase 9-B); a T2a field only route C (G1a, v74), and nothing switches a trigger off", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const src = new URL("../src/", import.meta.url);
@@ -1012,7 +1012,7 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   // writer of T3, T4, T5 and T8; the platform admin's two removals of stored values write T8.
   assert.deepEqual(writers("source_metric_mappings"), ["sourceMetricBoardSaveService.js", "sourceMetricMappingService.js"]);
   assert.deepEqual(writers("source_metric_mapping_versions"), ["sourceMetricBoardSaveService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js"]);
-  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldVerificationService.js", "sourceInstanceEndService.js", "sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricBoardSaveService.js", "sourceMetricConfirmationAdminService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
+  assert.deepEqual(writers("source_metric_audit"), ["sourceFieldCreateService.js", "sourceFieldVerificationService.js", "sourceInstanceEndService.js", "sourceMetricActivationService.js", "sourceMetricActivationSteps.js", "sourceMetricBoardSaveService.js", "sourceMetricConfirmationAdminService.js", "sourceMetricMappingService.js", "sourceRevisionLifecycleService.js", "unitConversionService.js"]);
   // The stored confirmation (v65): written by the save only; its values are removed by the platform admin's erasure
   // (the expiry removal is the database function's own update).
   assert.deepEqual(writers("source_metric_confirmations"), ["sourceMetricBoardSaveService.js"]);
@@ -1032,8 +1032,9 @@ test("20. architecture: only the M2 service writes a mapping; a mapping version 
   assert.deepEqual(writers("unit_conversions"), ["unitConversionService.js"]);
   // No production module switches a trigger off (the Rukovodilac's note (ii) at the 7c GO).
   assert.deepEqual(files.filter((f) => /disable\s+trigger|session_replication_role/i.test(readFileSync(f, "utf8"))).map((f) => relative(root, f)), [], "nothing in backend/src switches a trigger off (disable trigger, session_replication_role)");
-  assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
-  assert.deepEqual(writers("source_metric_definitions"), [], "source_metric_definitions");
+  // G1a (v74): route C creates a field with its revision 1 and their T8 rows.
+  assert.deepEqual(writers("source_metric_definition_versions"), ["sourceFieldCreateService.js", "sourceFieldVerificationService.js", "sourceRevisionLifecycleService.js"]);
+  assert.deepEqual(writers("source_metric_definitions"), ["sourceFieldCreateService.js"], "source_metric_definitions: route C only");
 });
 
 test("21. the answer of a committed write follows the replay rule: the right, the user and the club are checked again on a new connection before the answer is read; a right lost meanwhile answers the identical 404 and shows nothing - after an uncertain COMMIT and after a confirmed one; a check that cannot finish answers readError without ids", async () => {

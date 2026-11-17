@@ -22,6 +22,7 @@ import { Router } from "express";
 import * as service from "../sourceMetricMappingService.js";
 import * as variables from "../canonicalVariableAdminService.js";
 import * as fields from "../sourceFieldVerificationService.js";
+import * as fieldCreate from "../sourceFieldCreateService.js";
 import * as revisions from "../sourceRevisionLifecycleService.js";
 import * as classification from "../canonicalClassificationService.js";
 import * as conversions from "../unitConversionService.js";
@@ -516,6 +517,17 @@ router.post("/fields/:fieldId/revisions/:revisionId/meaning-verification", handl
   if (!fields.mayVerify(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await fields.verifyMeaning({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 201);
+}));
+
+// G1, route C (docs/ai/gpexe-field-inventory-plan.md, section 8.1): an active platform admin in the platform
+// workspace creates a generic field from a name the inventory observed (201); everyone else the same 404, before the
+// body is looked at.
+router.post("/fields", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!fieldCreate.mayCreateFields(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  writeAnswer(res, await fieldCreate.createField({ ctx, body: req.body }), 201);
 }));
 
 // The source-field revision lifecycle (J5): L1 creates a draft revision (201);

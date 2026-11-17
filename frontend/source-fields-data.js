@@ -117,6 +117,8 @@ export const EVIDENCE_LABEL = {
   documented: "Documented",
   observed: "Observed",
   verified: "Verified",
+  // G1 (D-INV-2): never "Verified" - the unit is GPEXE's own word, checked by an administrator on the board.
+  source_stated: "Unit stated by GPEXE",
 };
 export const OPERATORS = Object.freeze([">=", ">", "<=", "<"]);
 export const OPERATOR_LABEL = { ">=": "At least (>=)", ">": "More than (>)", "<=": "At most (<=)", "<": "Less than (<)" };

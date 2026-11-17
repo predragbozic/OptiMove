@@ -255,11 +255,11 @@ async function confirm(actor, t, cand, items) {
     for (const it of items) {
       n += 1;
       await k.query(`insert into ${T9I} (confirmation_id, session_ordinal, item_no, item_kind, checked, source_metric_version_id, mapping_version_id, parameter_fingerprint, source_unit, target_unit,
-                       scale, scale_divisor, "offset", compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, stored_a, raw_b, stored_b)
-                     values ($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'session',$13,$14,$15,$16,$17,$18)`,
+                       scale, scale_divisor, "offset", compared_level, gpexe_display_rule, gpexe_display_unit, raw_a, stored_a, raw_b, stored_b, source_unit_word)
+                     values ($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'session',$13,$14,$15,$16,$17,$18,$19)`,
       [confId, n, it.kind ?? "club_mapping", it.checked, it.row.source_metric_version_id, it.v.versionId, it.row.parameter_fingerprint, it.row.source_unit, it.row.target_unit,
-        it.row.scale, it.row.scale_divisor, it.row.offset, it.checked ? "duration_mmss" : null, it.checked ? "mm:ss" : null,
-        it.checked ? "1200" : null, it.checked ? "20" : null, it.checked ? "1800" : null, it.checked ? "30" : null]);
+        it.row.scale, it.row.scale_divisor, it.row.offset, it.checked ? (it.rule ?? "duration_mmss") : null, it.checked ? (it.displayUnit ?? "mm:ss") : null,
+        it.checked ? "1200" : null, it.checked ? "20" : null, it.checked ? "1800" : null, it.checked ? "30" : null, it.word ?? null]);
     }
     await k.query(`insert into ${T8} (action, team_id, confirmation_id, performed_by_user_id, basis, operation_id, request_key, request_hash) values ('mapping_confirmation',$1,$2,$3,$4,$5,$6,$7)`,
       [t.teamId, confId, actor.id, actor.basis, operationId, key(), hash()]);
@@ -393,7 +393,7 @@ test("1. the audience: the club's admin and a platform admin in the club's works
 // ---------------------------------------------------------------------------
 test("2. the board: the columns with their unit state, their reason and two athletes' raw values; the club's variables then OptiMove's; OptiMove's active mappings pre-placed; the pair named live and stable", async () => {
   const { board } = ok(await boardOf(W.caA, W.tA));
-  assert.equal(board.displayRegistryVersion, 1);
+  assert.equal(board.displayRegistryVersion, 2, "2 since G1's as_sent rule");
   assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId });
   assert.equal(board.session.candidateId, W.cA.id);
   assert.equal(new Date(board.session.startedAt).toISOString(), "2026-09-14T18:08:12.000Z");
@@ -409,7 +409,8 @@ test("2. the board: the columns with their unit state, their reason and two athl
   assert.deepEqual([unverified.placeable, unverified.reason, unverified.unitProven, unverified.unit], [false, "field_not_confirmed", false, null], "an unproven unit is never shown as what GPEXE sends");
   assert.deepEqual([columnOf(board, W.fZone).placeable, columnOf(board, W.fZone).reason], [false, "field_has_parameters"]);
   assert.deepEqual([columnOf(board, W.fNoReader).placeable, columnOf(board, W.fNoReader).reason, columnOf(board, W.fNoReader).rawA], [false, "source_metric_unsupported", null]);
-  assert.deepEqual([columnOf(board, W.fBurst).placeable, columnOf(board, W.fBurst).reason], [false, "display_rule_missing"]);
+  // G1 (plan 8.7): a proven plain field with no specific screen format is shown as GPEXE sends it, in its own unit.
+  assert.deepEqual([columnOf(board, W.fBurst).placeable, columnOf(board, W.fBurst).reason, columnOf(board, W.fBurst).displayRule, columnOf(board, W.fBurst).displayUnits], [true, null, "as_sent", ["number"]]);
   // The seeded GPEXE fields of v34 are there too, observed only.
   assert.ok(board.columns.some((c) => c.key === "athlete_session.total_time" && c.reason === "field_not_confirmed"));
   // The variables: the club's first, then OptiMove's; never another club's.
@@ -526,7 +527,7 @@ test("4. a placement: the proposal from the one active conversion, the two athle
   assert.equal((await code(W.fUnverified, W.vMin)).code, "field_not_confirmed");
   assert.equal((await code(W.fZone, W.vMin)).code, "field_has_parameters");
   assert.equal((await code(W.fNoReader, W.vMin)).code, "source_metric_unsupported");
-  assert.equal((await code(W.fBurst, W.vMin)).code, "display_rule_missing");
+  assert.equal((await code(W.fBurst, W.vMin)).code, "conversion_unavailable", "as_sent opens the column; the unit still needs a conversion to the variable's");
   const out = await code(W.fTime, W.vSmall);
   assert.deepEqual([out.code, out.limits], ["value_outside_limits", { min: null, max: "10", unit: "min" }], "20 minutes is above the variable's 10");
   assert.equal(JSON.stringify(out).includes("1200"), false, "a refusal carries no value");
@@ -1004,4 +1005,55 @@ test("8. no answer or log line of this suite carries an athlete id, a GPEXE athl
   const removal = code(await fsp.readFile(path.resolve(__dirname, "../src/sourceMetricConfirmationRemoval.js"), "utf8"));
   assert.equal((removal.match(/remove_expired_confirmation_values/g) ?? []).length, 1, "the one write: the removal batch");
   for (const forbidden of ["insert into", "update ", "delete from", "birth_date", "fetch("]) assert.equal(removal.includes(forbidden), false, `the removal module has no "${forbidden}"`);
+});
+
+// G1a (docs/ai/gpexe-field-inventory-plan.md, section 8.7; v74): the owner's first visible gain. Production holds
+// tot_burst_events and tot_brake_events verified by documents in `count` (2026-11-16); until G1 the board refused them
+// (display_rule_missing). Their real keys, their real extractors, the same proof: placeable through as_sent.
+test("13. G1a: the real tot_burst_events and tot_brake_events, verified in count as production holds them, are placeable through as_sent, showing GPEXE's own numbers", async () => {
+  const real = [];
+  for (const realKey of ["details.players.tot_burst_events", "details.players.tot_brake_events"]) {
+    const fieldId = (await one(`select id from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and source_metric_key = $1`, [realKey])).id;
+    const seeded = await one(`select id, revision_number, state, evidence_status from training_load.source_metric_definition_versions where source_metric_definition_id = $1 and state = 'active'`, [fieldId]);
+    // Retire the seeded, observed revision 1, as the lifecycle would, then revision 2 verified in count (the owner's acts).
+    await k.query("begin");
+    await k.query(CTX, [W.pa.id]);
+    await k.query(`update training_load.source_metric_definition_versions set state = 'retired', retired_by_user_id = $2, retired_at = clock_timestamp(), retired_reason = 'Replaced by the proven revision.' where id = $1`, [seeded.id, W.pa.id]);
+    await k.query(`insert into ${T8} (action, source_metric_definition_id, source_metric_version_id, from_status, to_status, reason, performed_by_user_id, basis, operation_id) values ('source_metric_revision_retire',$1,$2,'active','retired','Replaced by the proven revision.',$3,'platform_admin',$4)`, [fieldId, seeded.id, W.pa.id, crypto.randomUUID()]);
+    await k.query("commit");
+    const revId = await writeRevision(k, { fieldId, by: W.pa.id, revisionNumber: seeded.revision_number + 1, valueShape: "unit_value_object", evidenceRef: COMPAT, unit: "count",
+      unitRef: "docs/ai/gpexe-c97-unit-evidence.md#burst-events-unit", meaning: true, meaningRef: "docs/ai/gpexe-c97-meaning-evidence.md#burst-events-meaning", state: "active" });
+    real.push({ key: realKey, fieldId, revId });
+  }
+  const { board } = ok(await boardOf(W.caA, W.tA));
+  for (const f of real) {
+    const col = board.columns.find((c) => c.key === f.key);
+    assert.ok(col, `${f.key} is a column`);
+    assert.deepEqual([col.placeable, col.reason, col.unitProven, col.unit, col.displayRule, col.displayUnits], [true, null, true, "count", "as_sent", ["count"]], f.key);
+    assert.ok(col.rawA !== null && col.rawB !== null && col.rawA !== col.rawB, `${f.key}: the pair's two different values`);
+  }
+  // GPEXE's own numbers, as sent: whole counts.
+  const burst = board.columns.find((c) => c.key === "details.players.tot_burst_events");
+  assert.match(String(burst.rawA), /^\d+$/);
+  assert.match(String(burst.rawB), /^\d+$/);
+});
+
+test("14. G1a: only a field_unit row names a GPEXE unit word; a mapping row that carries one is refused and nothing is written", async () => {
+  const clubE = await club("Club E");
+  const caE = await clubAdmin(clubE, "Club E Admin");
+  const t = await gpexeTeam(clubE);
+  const cand = await candidate(t);
+  const f = await field("time");
+  const v = await activeVersion(caE, f, await variable(caE, { unit: "min" }));
+  const before = (await one(`select count(*)::int n from ${T9} where team_id = $1`, [t.teamId])).n;
+  await assert.rejects(confirm(caE, t, cand, [{ v, checked: true, word: "time" }]),
+    (e) => e.code === "23514" && /^source_metric_confirmation_items: only a field_unit row names a unit word$/.test(e.message));
+  assert.equal((await one(`select count(*)::int n from ${T9} where team_id = $1`, [t.teamId])).n, before);
+  // The same row without the word is written.
+  assert.ok(await confirm(caE, t, cand, [{ v, checked: true }]));
+  // as_sent on a mapping row only in the row's own source unit (the security review's 2a, the database review's LOW-3).
+  const vOther = await activeVersion(caE, await field("time"), await variable(caE, { unit: "min" }));
+  await assert.rejects(confirm(caE, t, cand, [{ v: vOther, checked: true, rule: "as_sent", displayUnit: "m" }]),
+    (e) => e.code === "23514" && /^source_metric_confirmation_items: a compared row names a display rule and a unit of that rule$/.test(e.message));
+  assert.ok(await confirm(caE, t, cand, [{ v: vOther, checked: true, rule: "as_sent", displayUnit: "s" }]), "as sent in the row's own unit");
 });
