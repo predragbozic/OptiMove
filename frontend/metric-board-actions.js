@@ -36,6 +36,30 @@ export function resetBoard() {
 let pendingTeamId = null;
 export function requestBoardOpen({ teamId }) { pendingTeamId = teamId ? String(teamId) : null; }
 
+// S: the switch between the club board and the platform board of the same team ("Switch to OptiMove's variables" /
+// "Switch to the club's variables"). The link is a workspace switch; the team and the target workspace are remembered
+// here and taken by the Training Load reset of that switch, so the board opens again on the same team - and only when
+// the workspace that became active is the one the link named (a failed or another switch takes nothing).
+let afterSwitch = null;
+export function rememberBoardAfterSwitch({ teamId, type, scopeId }) {
+  afterSwitch = teamId ? { teamId: String(teamId), type: String(type || ""), scopeId: scopeId ? String(scopeId) : "" } : null;
+}
+// The workspace switch's hooks: every switch replaces what an earlier one remembered (a link of the board's
+// own remembers its team; any other switch remembers nothing), and a switch that failed forgets it.
+export function boardBeforeSwitch(action) {
+  const d = action?.dataset || {};
+  rememberBoardAfterSwitch({ teamId: d.mbSwitchTeamId, type: d.workspaceType, scopeId: d.workspaceScopeId });
+}
+export function boardSwitchFailed() {
+  afterSwitch = null;
+}
+export function takeBoardAfterSwitch(activeWorkspace) {
+  const wanted = afterSwitch;
+  afterSwitch = null;
+  if (!wanted || !activeWorkspace) return null;
+  return activeWorkspace.type === wanted.type && String(activeWorkspace.scopeId || "") === wanted.scopeId ? wanted.teamId : null;
+}
+
 // ---------------------------------------------------------------------------
 // Leaving
 // ---------------------------------------------------------------------------
@@ -82,7 +106,7 @@ export async function loadBoardSection(render) {
     s.teams = { ...s.teams, loading: true, error: null };
     render();
     try {
-      const items = await fetchBoardTeams(ctx.clubId);
+      const items = await fetchBoardTeams(ctx.clubId, { platform: ctx.platform === true });
       if (!live(s, generation)) return;
       s.teams = { items, loaded: true, loading: false, error: null };
       // One team: no question to ask.

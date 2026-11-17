@@ -397,7 +397,7 @@ English is the app's language. The sketch's Serbian is quoted where the owner sa
 - **The board's audience** is, in a club workspace, club X's active admin, or a platform admin who also administers club X (a club workspace exists only for a club admin, section 1.5). The team must be an active team of club X. Its binding's connection must be owned by club X (`source_metric_binding_club`, `v48:84-89`).
 - **Everyone else gets the identical `404`,** with `no-store`. Callers outside the two admin bases get it before anything is read. A team, binding or candidate outside the club gets the same 404 after its id is read, before any refusal that depends on that resource. Only a malformed request (`400`, `415`), `try_again` (the pool or the per-user lock) and `request_key_reused` (the caller's own key) can come first. That includes:
   - a coach, an athlete, or a team workspace;
-  - the platform workspace, except routes 4–10. There an active platform admin reads any club's confirmations (routes 4–5), erases values (route 6, the confirmer included) and removes expired values (route 7). With 18-P, a platform admin also observes (routes 8–9) and reads stored field observations (route 10, `GET /fields/:fieldId/observations`, platform workspace only);
+  - the platform workspace, except routes 4–10 and **the platform board (section 16, S)**: an active platform admin there uses routes 1–3 and `GET /board/teams` for any club's team, onto OptiMove's variables, writing no confirmation. There an active platform admin reads any club's confirmations (routes 4–5), erases values (route 6, the confirmer included) and removes expired values (route 7). With 18-P, a platform admin also observes (routes 8–9) and reads stored field observations (route 10, `GET /fields/:fieldId/observations`, platform workspace only);
   - another club, or X's admin working in Y's workspace;
   - a revoked role, an archived club or team, or an ended binding (routes 1–3). An ended binding never hides a saved confirmation: route 3's replay and read-back, and routes 4–5, use the predicate of section 6.2 (section 4.3 step 4);
   - an unknown id.
@@ -1753,7 +1753,9 @@ Backend and one migration. Stacked on 18-2. Its merge waits for 18-4's GO; the t
     No writer holds a team row exclusively and then waits for a users row, so no cycle forms.
 - **A replacement is not a switch-off** (the *Rukovodilac*, 2026-11-12, option B). The end keeps `admin_ended`; the
   board reads "switched off by an administrator" only when the mapping's latest activation on the binding ended
-  `admin_ended` and its `activation_end` row's operation holds no `mapping_confirmation` row. A replaced mapping
+  `admin_ended` and its `activation_end` row's operation holds no `mapping_confirmation` row, and (S, section 16) no
+  `activation_start` row of an OptiMove (system) mapping: a platform-board save writes no confirmation. The 7i move to a
+  club's copy also ends and starts in one operation, but it starts the club's copy, so it stays a switch-off. A replaced mapping
   that is still eligible is offered as a replacement of what replaced it. No end reason was added.
 - **Routes 6 and 7** (`backend/src/sourceMetricConfirmationAdminService.js`): API only in J18, for an active platform
   admin in the platform workspace; the runbook says how they are called. Route 6 takes a fixed reason code and
@@ -1912,3 +1914,36 @@ whole team; the screen's sentence sent the admin to a search that could not help
   default to correct; a named session the import would not take answers `candidate_not_importable` there too.
 - **Tests:** `source-metric-board-18-2.test.mjs` test 7e (through the real route, with the reads counted) and
   `metric-board.actions.test.mjs` test 28.
+
+## 16. S: the platform board, onto OptiMove's variables (as built, 2026-11-17)
+
+The owner (2026-11-17): "both the one and the other should be possible": a club maps onto its own variables, a platform
+admin onto OptiMove's. The *Rukovodilac*'s decision (a1), no migration.
+
+- **Who and where.** An active platform admin in the **platform workspace**, for any active team of an active club with an
+  active GPEXE binding of its club's connection. A club admin keeps the club board (section 4.1, unchanged). A platform
+  admin who is also club X's admin uses X's club board in X's workspace. There is no mixed screen.
+- **`GET /board/teams`** (platform workspace only; everyone else the identical 404, `no-store`): `{ teams: [{ clubId,
+  clubName, teamId, teamName }], truncated }`, at most 500. The screen asks one question, "Club · Team".
+- **Routes 1–3 on the platform board.** The owner is `system` (`board.owner`). The targets are OptiMove's variables only;
+  the team's club's hides apply. Placement runs the new-row rules with owner key `system`: C33, reuse of an active
+  system version of the same contract, conversion, limits, the pair and the placement hash. The board's `team` carries
+  `clubId` on both boards.
+- **The save** (route 3) needs `checked` on every new row, as on the club board, but stores **no confirmation** (v65's
+  T9 is club-only). It writes the system T3/T4, activates the version and starts it on the binding as `platform_admin`.
+  The request record is its last `activation_start` T8 row, keyed. A replay gives the same answer; another body under the
+  key is `request_key_reused`; a replay after the team or club was archived is the identical 404. The lock order is the
+  club save's, with every row's hide lock. A platform save may end a club's activation through `replaces` (audited), and
+  that end is a replacement, not a switch-off ("A replacement is not a switch-off", above).
+- **The screen.**
+  - The platform wording; the right column holds OptiMove's variables and *New variable*, which opens Variables' create
+    form with one click back to the same team's board (read again).
+  - The review says: "Saving switches OptiMove's mapping on for this team. OptiMove records who switched it on and when.
+    Your tick and the two athletes' values are not kept."
+  - There is no History tab.
+  - One link goes to the other board of the same team: "Switch to OptiMove's variables" / "Switch to <Club>'s variables".
+    The second appears only where that club's workspace is the admin's. The link switches the workspace and lands on that
+    team's board; a failed switch, or a switch from any other link, remembers no team.
+- **Tests.** `backend/tests/source-metric-board-system-s.test.mjs` S1–S13. The 18-2 and 18-3 audience assertions follow
+  this rule. `frontend/tests/metric-board.actions.test.mjs` S1–S8. e2e `metric-board.test.mjs` 18-4d.
+- **Not in S:** storing the platform's comparison (a2, a later migration), and an in-board form for a new variable.

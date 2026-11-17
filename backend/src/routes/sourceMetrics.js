@@ -121,6 +121,13 @@ router.get("/board", handle(async (req, res) => {
   if (!ctx) return;
   res.json(await board.readBoard({ ctx, queryString: rawQuery(req) }));
 }));
+// S: the platform board's teams, in one step (club and team). An active platform admin in the platform workspace only.
+router.get("/board/teams", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  res.set("Cache-Control", "no-store");
+  res.json(await board.listBoardTeams({ ctx }));
+}));
 // Route 2: { placement } - one column on one variable: the proposal, the two
 // athletes' three values and a placement hash per display unit, or a code.
 router.get("/board/placement", handle(async (req, res) => {

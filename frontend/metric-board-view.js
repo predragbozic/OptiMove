@@ -8,6 +8,7 @@ import {
   preplacedRows, sessionWords, slotOf, variableOf,
 } from "./metric-board-data.js";
 import { sourceFieldDragAvailable } from "./metric-board-drag.js";
+import { state } from "./state.js";
 
 export const isPhone = () => Boolean(globalThis.matchMedia?.("(max-width: 760px)").matches);
 const name = (value) => escapeHtml(cleanName(value));
@@ -42,19 +43,56 @@ function header(s) {
       <div>
         <p class="om-eyebrow">Data configuration</p>
         <h2 class="om-page-header__title" id="metric-board-title" tabindex="-1">Map by drag and drop</h2>
-        <p class="muted mb-lead">${sourceFieldDragAvailable() && !isPhone() ? "Drag a GPEXE column onto your variable" : "Tap a GPEXE column, then your variable"}, compare two athletes with the GPEXE screen, and save.</p>
+        <p class="muted mb-lead">${sourceFieldDragAvailable() && !isPhone() ? `Drag a GPEXE column onto ${onPlatform() ? "an OptiMove variable" : "your variable"}` : `Tap a GPEXE column, then ${onPlatform() ? "an OptiMove variable" : "your variable"}`}, compare two athletes with the GPEXE screen, and save.</p>
       </div>
       ${team ? `<div class="om-page-header__actions"><span class="om-badge om-badge--accent">${name(team.name)}${gpexeTeam(team.sourceTeamId)}</span>
-        ${s.teams.items.length > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-change-team" ${s.write ? "disabled" : ""}>Change team</button>` : ""}</div>` : ""}
+        ${s.teams.items.length > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-change-team" ${s.write ? "disabled" : ""}>Change team</button>` : ""}
+        ${switchLink(s)}</div>` : ""}
     </header>`;
 }
 
+// S: the platform board (OptiMove's variables, any club's team).
+const onPlatform = () => boardContext()?.platform === true;
+
+// S: one click to the other board of the same team - the club's variables (the club workspace) or OptiMove's (the
+// platform workspace). Offered only when that workspace is one of this user's: a platform admin has a club's workspace
+// only as that club's admin too. The switch asks first when there is something unsaved (the app's leave guard).
+function switchLink(s) {
+  const clubId = s.board?.team?.clubId;
+  if (!s.teamId || !clubId) return "";
+  const available = Array.isArray(state.currentUser?.availableWorkspaces) ? state.currentUser.availableWorkspaces : [];
+  const target = onPlatform()
+    ? available.find((w) => w?.type === "club" && String(w.scopeId) === String(clubId))
+    : available.find((w) => w?.type === "platform");
+  if (!target) return "";
+  const club = cleanName(target.label || "") || "the club";
+  const label = onPlatform() ? `Switch to ${club}'s variables` : "Switch to OptiMove's variables";
+  const title = onPlatform() ? `Opens the ${club} workspace on this team.` : "Opens the platform workspace on this team.";
+  return `<button type="button" class="om-btn om-btn--ghost" data-action="workspace-select" data-workspace-type="${escapeAttr(target.type)}" data-workspace-scope-id="${escapeAttr(target.scopeId || "")}" data-mb-switch-team-id="${escapeAttr(String(s.teamId))}" title="${escapeAttr(title)}" ${s.write ? "disabled" : ""}>${escapeHtml(label)}</button>`;
+}
+
+// S-2: what a save replaces, in words - whose mapping (the club's own or OptiMove's), its column and its variable. Never an
+// empty name: when one cannot be read, it says "the club's own mapping of this column".
+export function replacesPhrase(board, c) {
+  const col = cleanName(columnOf(board, c.fieldId)?.label);
+  const variable = cleanName(c.variableLabel ?? variableOf(board, c.variableId)?.label);
+  const club = cleanName(board?.team?.clubName || "");
+  const whose = c.owner === "club" ? (club ? `${club}'s own mapping` : "the club's own mapping") : "OptiMove's mapping";
+  if (col && variable) return `${whose}: ${col} → ${variable}`;
+  // Never an empty name: a readable column is still named; "this column" only when no column name can be read.
+  if (col) return `${whose} of ${col}`;
+  return c.owner === "club" ? "the club's own mapping of this column" : "OptiMove's mapping of this column";
+}
+// S-2: the club's own mapping that a save of OptiMove's mapping replaced on this team, with the day.
+const replacedOn = (pre) => (pre?.replacedBy ? `Replaced by OptiMove's mapping on ${escapeHtml(dateOnly(pre.replacedBy.at))} · ` : "");
+const replacesList = (board, collisions) => collisions.map((c) => escapeHtml(replacesPhrase(board, c))).join("; ");
+
 function whichTeam(s) {
-  if (s.teams.loading || !s.teams.loaded) return `<p class="muted" role="status">Loading the club's teams...</p>`;
+  if (s.teams.loading || !s.teams.loaded) return `<p class="muted" role="status">${onPlatform() ? "Loading the teams..." : "Loading the club's teams..."}</p>`;
   if (s.teams.error?.code === "notFound") return `<div class="om-empty" role="status"><p class="om-empty__title">${BOARD_ERROR.notFound}</p></div>`;
   if (s.teams.error) return `<div class="om-empty" role="status"><p class="om-empty__title">The teams could not be read.</p><div class="om-empty__actions"><button type="button" class="om-btn" data-action="metric-board-reload">Try again</button></div></div>`;
   if (s.teams.items.length === 0) {
-    return `<div class="om-empty" role="status"><p class="om-empty__title">No team of your club is linked to GPEXE yet.</p><p class="om-empty__text">Link one in Settings &gt; Source connections.</p></div>`;
+    return `<div class="om-empty" role="status"><p class="om-empty__title">${onPlatform() ? "No team is linked to GPEXE yet." : "No team of your club is linked to GPEXE yet."}</p><p class="om-empty__text">Link one in Settings &gt; Source connections.</p></div>`;
   }
   return `
     <section class="om-card" aria-labelledby="mb-which-team">
@@ -86,7 +124,10 @@ function columnHtml(s, c, drag) {
   }
   if (use) {
     const badge = use === "on" ? `<span class="om-badge om-badge--success">On</span>` : use === "new" ? `<span class="om-badge om-badge--accent">Placed</span>` : `<span class="om-badge om-badge--info">Placed</span>`;
-    const why = use === "on" ? "Already on for the team. Switch it off under Variables to place it again." : "Placed. Remove it under Variables to place it elsewhere.";
+    // S: on the platform board a column the club fills with its own variable is on, but that variable is not here.
+    const onAsClubs = use === "on" && onPlatform() && (board.on || []).some((o) => o.fieldId === c.fieldId && o.badge === "club_mapping");
+    const why = onAsClubs ? "On for the team as the club's own variable. To change it, switch to the club's variables."
+      : use === "on" ? "Already on for the team. Switch it off under Variables to place it again." : "Placed. Remove it under Variables to place it elsewhere.";
     const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small>${why}</small></span>`;
     return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;
   }
@@ -120,12 +161,15 @@ function slotHtml(s, v, drag) {
   if (slot.kind === "preplaced") {
     const badge = slot.pre.badge === "club_mapping" ? "Your club's mapping" : "OptiMove mapping";
     const replaces = slot.pre.replaces?.length ? " · replaces what is on" : "";
-    return `<li class="mb-slot is-pre">${head(`From ${col} · no check needed${replaces}`)}${unit}<span class="om-badge om-badge--info">${badge}</span>
+    return `<li class="mb-slot is-pre">${head(`${replacedOn(slot.pre)}From ${col} · no check needed${replaces}`)}${unit}<span class="om-badge om-badge--info">${badge}</span>
       <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-pre-remove" data-version-id="${escapeAttr(slot.pre.mappingVersionId)}" ${off}>Remove</button></li>`;
   }
   if (slot.kind === "removed" || slot.kind === "replaceable") {
     const badge = slot.pre.badge === "club_mapping" ? "Your club's mapping" : "OptiMove mapping";
-    const sub = slot.kind === "removed" ? `From ${col} · removed from this save` : `From ${col} · would replace what is on for ${name(teamName(s))}`;
+    // S-2: the club's own mapping that OptiMove's replaced says when; Add puts it back, instead of OptiMove's mapping.
+    const sub = slot.kind === "removed" ? `From ${col} · removed from this save`
+      : slot.pre.replacedBy ? `${replacedOn(slot.pre)}From ${col} · Add puts it back for ${name(teamName(s))} instead of OptiMove's mapping`
+        : `From ${col} · would replace what is on for ${name(teamName(s))}`;
     return `<li class="mb-slot is-idle">${head(sub)}${unit}<span class="om-badge">${badge}</span>
       <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-pre-add" data-version-id="${escapeAttr(slot.pre.mappingVersionId)}" ${off}>Add</button></li>`;
   }
@@ -164,9 +208,14 @@ function boardCards(s) {
       </section>
       <section class="om-card mb-card" aria-labelledby="mb-variables-title">
         <div class="om-card__header"><h3 class="om-card__title" id="mb-variables-title">Variables</h3></div>
+        ${onPlatform() ? `
+        <p class="muted mb-note">OptiMove's variables. What you save here becomes OptiMove's mapping. It is switched on for this team only; other teams will see it offered without a check and can switch it on.</p>
+        <p><button type="button" class="om-btn om-btn--ghost" data-action="training-load-section" data-section="variables" data-dc-view="variables" data-mb-new-variable data-mb-return-team-id="${escapeAttr(String(s.teamId || ""))}" data-mb-return-team-name="${escapeAttr(teamOf(s)?.name || "")}" ${busy(s) ? "disabled" : ""}>New variable</button></p>
+        <p class="muted mb-note">No variable fits? Create it, then go back to this board in one click.</p>
+        ${system.length ? `<ul class="mb-list">${list(system)}</ul>` : `<p class="muted">OptiMove has no variable yet.</p>`}` : `
         <p class="muted mb-note">OptiMove's variables are here at once. Your club can add its own.</p>
         ${club.length ? `<p class="om-eyebrow">Your club's variables</p><ul class="mb-list">${list(club)}</ul>` : `<p class="muted">Your club has no variable of its own yet. Create one in Variables.</p>`}
-        ${system.length ? `<p class="om-eyebrow">OptiMove's variables</p><ul class="mb-list">${list(system)}</ul>` : ""}
+        ${system.length ? `<p class="om-eyebrow">OptiMove's variables</p><ul class="mb-list">${list(system)}</ul>` : ""}`}
       </section>
     </div>`;
 }
@@ -212,7 +261,7 @@ function panelBody(s) {
   const session = dateTime(s.board.session.startedAt);
   return `${title}
     <p>Proposed conversion: <span class="mb-conv">${escapeHtml(conversionWords(p.conversion, p.sourceUnit, p.targetUnit))}</span></p>
-    ${p.collisions?.length ? `<p class="mb-replaces">Saving this replaces what is on for ${name(teamName(s))} now: ${p.collisions.map((c) => `${name(columnOf(s.board, c.fieldId)?.label)} → ${name(variableOf(s.board, c.variableId)?.label)}`).join(", ")}.</p>` : ""}
+    ${p.collisions?.length ? `<p class="mb-replaces">Saving this replaces what is on for ${name(teamName(s))} now: ${replacesList(s.board, p.collisions)}.</p>` : ""}
     ${athletesHtml(s, p, column)}
     <div class="mb-help"><strong>What to watch for</strong><ul>
       <li>Open the same session in GPEXE (${escapeHtml(session)}) and find these two athletes.</li>
@@ -289,7 +338,7 @@ function reviewBody(s) {
       <span class="om-badge ${p.checked ? "om-badge--success" : "om-badge--warning"}">${p.checked ? "Compared" : "Not compared yet"}</span>
       <small>${escapeHtml(conversionWords(pl.conversion, pl.sourceUnit, pl.targetUnit))} · ${p.requirement === "optional" ? "Optional" : "Required"}</small>
       <ul class="mb-review-values">${line(a, pl.values.a, pl.display[unit(p)].a)}${line(b, pl.values.b, pl.display[unit(p)].b)}</ul>
-      ${pl.collisions?.length ? `<small>Replaces what is on now: ${pl.collisions.map((x) => `${name(columnOf(s.board, x.fieldId)?.label)} → ${name(variableOf(s.board, x.variableId)?.label)}`).join(", ")}.</small>` : ""}
+      ${pl.collisions?.length ? `<small class="mb-replaces">Replaces ${replacesList(s.board, pl.collisions)}.</small>` : ""}
       ${p.checked ? "" : `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-compare" data-field-id="${escapeAttr(p.fieldId)}">Compare</button>`}</li>`;
   }).join("");
   const group = (label, rows) => (rows.length ? `<p class="om-eyebrow">${label}</p><ul class="mb-review-list">${rows.map((p) => `<li class="mb-review-row"><strong>${name(columnOf(s.board, p.fieldId)?.label)} → ${name(variableOf(s.board, p.variableId)?.label)}</strong>
@@ -303,6 +352,7 @@ function reviewBody(s) {
     ${group("OptiMove mappings (no check needed)", pre.filter((p) => p.badge !== "club_mapping"))}
     ${group("Your club's mappings (no check needed)", pre.filter((p) => p.badge === "club_mapping"))}
     <p class="muted" id="mb-review-note">${unticked.length ? `Tick every new column to save: ${unticked.map((p) => name(columnOf(s.board, p.fieldId)?.label)).join(", ")}.`
+    : onPlatform() ? "Saving switches OptiMove's mapping on for this team. OptiMove records who switched it on and when. Your tick and the two athletes' values are not kept."
     : "Saved with it: who confirmed, when, and the two athletes' values of the columns you checked. That is the evidence. The values are kept for 90 days, then removed."}</p>
     ${s.write?.kind === "save" ? writeHtml(s) : ""}
     <div class="om-card__actions">${send}<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-review-close" ${s.write ? "disabled" : ""}>Back</button></div>`;
@@ -406,7 +456,7 @@ export function renderBoardHtml() {
   const sheetOpen = isPhone() && (s.switchOff || s.review || s.panel || s.picked);
   return `<section class="mb-screen ${sheetOpen ? "has-sheet" : ""}" data-mb-board>
     ${header(s)}
-    ${!s.teamId ? whichTeam(s) : `${tabs(s)}${s.tab === "history" ? historyTab(s) : mapTab(s)}`}
+    ${!s.teamId ? whichTeam(s) : onPlatform() ? mapTab(s) : `${tabs(s)}${s.tab === "history" ? historyTab(s) : mapTab(s)}`}
     <p class="visually-hidden" aria-live="polite" id="mb-live">${escapeHtml(s.live || "")}</p>
   </section>`;
 }

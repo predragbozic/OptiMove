@@ -189,6 +189,8 @@ test("the start screen reads the domains and categories, the list, the source fi
     ["Categories", "2 categories", ["Aerobic capacity", "Sprint <b>"]],
     ["Source fields", "No source fields yet", []],
     ["Mappings", "No mappings yet", []],
+    // S: the platform workspace's own board (J18 section 16).
+    ["Map by drag and drop", "Drag a GPEXE column onto an OptiMove variable, for any linked team, and compare two athletes.", []],
   ]);
   assert.ok(content.innerHTML.includes("Sprint &lt;b&gt;"), "a name on a card is escaped");
   assert.ok(!$(".metric-variables-segmented") && !$('[data-view="classification"]'), "no switch any more: the start screen replaces it");
