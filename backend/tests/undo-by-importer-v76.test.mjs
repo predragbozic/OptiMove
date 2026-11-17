@@ -732,6 +732,42 @@ test("13c. the mode lowered to pilot while the right waits on the switch row: th
   }
 });
 
+test("13d. a team moved to another club while the right waits on the team row: the old club's admin is refused under the lock; the team's own coach is not affected", async () => {
+  // A team with no binding (a bound team cannot be moved: v27), its switch in mode team; the move is a raw write held open.
+  const orgA = await createGpexePilotOrg(admin, { athleteNames: ["M1"] });
+  const orgB = await createGpexePilotOrg(admin, { athleteNames: ["M2"] });
+  await admin.query(`delete from public.athlete_memberships where team_id = $1`, [orgA.teamId]); // a membership pins the team's club
+  const padmin = await platformAdmin();
+  await enableTeamImportSwitch(admin, orgA.teamId, padmin.id, { mode: "team" });
+  const oldAdmin = await clubAdminOf(orgA.clubId);
+  const coach = await coachOf(orgA.teamId, "coach of the moved team");
+  for (const [user, expected] of [[oldAdmin, "refused"], [coach, "team_coach"]]) {
+    const mover = await newClient();
+    const caller = await newClient();
+    try {
+      await mover.query("begin");
+      await mover.query(`update public.teams set club_id = $2 where id = $1`, [orgA.teamId, orgB.clubId]);
+      await caller.query("begin");
+      const pending = caller.query(`select training_load.lock_gpexe_session_undo_right($1, $2) b`, [user.id, orgA.teamId])
+        .then((r) => r.rows[0].b, (e) => (e.code === "42501" ? "refused" : Promise.reject(e)));
+      let waiting = false;
+      for (let i = 0; i < 100 && !waiting; i += 1) {
+        await sleep(30);
+        waiting = (await admin.query(`select count(*)::int n from pg_locks where not granted and pid = $1`, [caller.processID])).rows[0].n > 0;
+      }
+      assert.ok(waiting, "the right waits on the team row (its unlocked read saw the old club)");
+      await mover.query("commit");
+      assert.equal(await pending, expected);
+    } finally {
+      await caller.query("rollback").catch(() => {});
+      await mover.query("rollback").catch(() => {});
+      await caller.end();
+      await mover.end();
+      await admin.query(`update public.teams set club_id = $2 where id = $1`, [orgA.teamId, orgA.clubId]);
+    }
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The migration, its preflight, post-check and rollback
 // ---------------------------------------------------------------------------

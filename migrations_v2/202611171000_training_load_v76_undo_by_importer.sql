@@ -53,6 +53,7 @@ create function training_load.lock_gpexe_session_undo_right(p_user_id uuid, p_te
 declare
   v_basis text;
   v_club uuid;
+  v_role_club uuid; -- the club the club_admin role was checked for (compared again under the team's lock)
   v_peek text;
   v_mode text;
 begin
@@ -85,6 +86,7 @@ begin
   select s.mode into v_peek from training_load.gpexe_team_import_switch s where s.owner_team_id = p_team_id;
   if v_basis is null and v_peek = 'team' then
     select t.club_id into v_club from public.teams t where t.id = p_team_id;
+    v_role_club := v_club;
     perform 1
       from public.user_club_roles cr
       join public.users u on u.id = cr.user_id and u.is_active = true
@@ -117,6 +119,11 @@ begin
   -- basis, and an archive waits for an undo in flight (the archive writers are single statements: no cycle).
   select t.club_id into v_club from public.teams t where t.id = p_team_id and coalesce(t.is_active, true) for share;
   if not found then
+    raise exception 'user % may not undo an imported session', p_user_id using errcode = '42501';
+  end if;
+  -- A club admin's role was checked for the club read before this lock: a team moved to another club in between is no
+  -- right. The other bases name the team itself (the grant, the team role), not its club.
+  if v_basis = 'club_admin' and v_club is distinct from v_role_club then
     raise exception 'user % may not undo an imported session', p_user_id using errcode = '42501';
   end if;
   if v_club is not null then
