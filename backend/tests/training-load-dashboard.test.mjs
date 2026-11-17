@@ -5584,6 +5584,9 @@ test("Simple production HTTP mount authenticates, hides foreign dashboards and r
     assert.equal((await api(target, { method, ...(method !== "GET" ? { body: {} } : {}) })).status, 401);
   }
   await setActiveWorkspace(adminId, "platform");
+  const clubDetail = await api("/api/training-load/dashboards/" + clubDashboard.id, { cookie: adminCookie });
+  assert.equal(clubDetail.body.simpleWorkspaceRequired, true);
+  assert.equal(Object.hasOwn(clubDetail.body, "simplePreview"), false);
   const presentation = { mode: "replace", value: { schemaVersion: 1, tableFormatting: { evaluationVersion: 1, rules: [] } } };
   const sidecar = await makeWidgetHttp(adminCookie, clubDashboard, { presentation });
   const widgetPath = "/api/training-load/dashboards/" + clubDashboard.id + "/widgets";

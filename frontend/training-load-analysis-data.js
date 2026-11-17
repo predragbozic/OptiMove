@@ -1,3 +1,4 @@
+import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { api } from "./api.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
@@ -185,6 +186,7 @@ function applyDashboardDetail(detail) {
   }
   analysis.dashboard = detail.dashboard;
   analysis.simplePreview = detail.simplePreview === true;
+  analysis.simpleWorkspaceRequired = detail.simpleWorkspaceRequired === true;
   analysis.widgets = detail.widgets || [];
   analysis.selectedDashboardId = detail.dashboard?.id || "";
   analysis.layoutDraft = null;
@@ -273,6 +275,9 @@ export async function loadDashboardDetail(dashboardId, onPainted, { force = fals
       // name, which lives in the catalog. It is fetched once per workspace
       // (memoized in loadAnalysisMetricDefinitions) and only when needed.
       const needsCatalog = (state.trainingLoad.analysis.widgets || []).some((w) => (w.series || []).some((s) => s.metric_definition_id));
+      if (analysis.widgets.some(widget => widget.widget_type === "table" && widget.series?.length === 1)) {
+        void loadTrainingLoadOrgPickerData().then(() => { if (generation === detailGeneration) onPainted?.(); }, () => {});
+      }
       if (needsCatalog) {
         void loadAnalysisMetricDefinitions().then(() => onPainted?.(), () => {});
       }

@@ -1,3 +1,5 @@
+import { renderDashboardMetricTable } from "./training-load-dashboard-table.js";
+import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { escapeHtml, escapeAttr } from "./utils.js";
 
 const action = (name) => `data-action="training-load-simple-${name}"`;
@@ -18,8 +20,8 @@ const statusLabels = { ok: "Ready", valid: "Ready", invalid: "Needs attention", 
 const lookup = (labels, value) => Object.hasOwn(labels, value) ? labels[value] : text(value);
 const friendlyStatus = (value) => statusLabels[value] ?? "Needs attention";
 
-function issueText(issue, technical) {
-  if (!issue || typeof issue !== "object") return technical ? text(issue) : "Review your settings and preview again.";
+function issueText(issue) {
+  if (!issue || typeof issue !== "object") return "Review your settings and preview again.";
   const known = {
     conflict: "Some measurements disagree. Try a different selection.", unitConflict: "Returned observations have conflicting units.",
     requiresChoice: "Choose the required setting before previewing again.", notFound: "The selected metric or filter is no longer available.",
@@ -31,8 +33,8 @@ function issueText(issue, technical) {
     sourceConnectionRequired: "Choose a data source in Advanced settings.", previewQueryFailed: "Preview data could not be loaded. Try previewing again.",
     incompatiblePresentation: "The widget settings do not match this display. Open advanced settings.",
   };
-  const choice = issue.code === "requiresChoice" ? issue.path?.includes("analyticalAggregation") ? "Choose how to combine measurements." : issue.path?.includes("dataScopeLevel") ? "Choose which measurements to use." : null : null;
-  return choice ?? (Object.hasOwn(known, issue.code) ? known[issue.code] : technical ? issue.message ?? text(issue) : "Review your settings and preview again.");
+  const choice = ["requiresChoice", "required"].includes(issue.code) ? issue.path?.includes("analyticalAggregation") ? "Choose how to combine measurements." : issue.path?.includes("dataScopeLevel") ? "Choose which measurements to use." : null : null;
+  return choice ?? (Object.hasOwn(known, issue.code) ? known[issue.code] : "Review your settings and preview again.");
 }
 
 function athleteName(id, athletes) {
@@ -140,11 +142,16 @@ function previewHtml(model, technical) {
   if (!preview) return message(model.previewLoading ? "Loading preview…" : "Preview shows the numbers; the chart appears on the dashboard after saving.");
   const result = preview.widgetResult;
   const tables = [];
+  const sharedTable = preview.normalizedWidget?.widget_type === "table" && ["day", "athlete"].includes(preview.normalizedWidget.group_by) && result?.series?.length === 1;
+  if (sharedTable) {
+    const display = buildDashboardWidgetDisplayModel(preview.normalizedWidget, result, { period: preview.resolvedPeriod });
+    tables.push(renderDashboardMetricTable(display, model.athletes, preview.normalizedWidget.series?.[0]?.display_label || model.selectedMetric?.label || model.selectedMetric?.name || "Metric"));
+  }
   function visit(value, path) {
     if (Array.isArray(value)) tables.push(resultTable(value, path, model.athletes ?? [], technical));
     else if (value && typeof value === "object") Object.entries(value).forEach(([key, child]) => visit(child, `${path} / ${(technical ? lookup(fieldLabels, key) : fieldLabels[key] ?? "Results")}`));
   }
-  for (const [index, series] of (result?.series ?? []).entries()) {
+  for (const [index, series] of (sharedTable ? [] : result?.series ?? []).entries()) {
     const label = model.selectedMetric?.label ?? model.selectedMetric?.name ?? series.label ?? series.displayLabel ?? (technical ? `Series ${index + 1}` : "Metric");
     tables.push(message(`${label}: ${friendlyStatus(series.status ?? "status not specified")}`));
     visit(series.data, label);
@@ -154,8 +161,8 @@ function previewHtml(model, technical) {
     <p class="tl-simple-preview-status" data-ready="${preview.status === "valid"}"><span aria-hidden="true">${preview.status === "valid" ? "✓" : "!"}</span> ${escapeHtml(friendlyStatus(preview.status ?? "not specified"))}${technical ? ` · ${(preview.issues ?? []).length} issues` : ""}</p>
     ${technical && result?.status ? message(`Result status: ${friendlyStatus(result.status)}`) : ""}
     ${preview.resolvedPeriod ? message(`Showing: ${[preview.resolvedPeriod.dateFrom, preview.resolvedPeriod.dateTo].map(date => date?.split("-").reverse().join(".")).join(" – ")}`) : ""}
-    ${(technical ? preview.issues ?? [] : (preview.issues ?? []).slice(0, 1)).map((issue) => message(issueText(issue, technical), "alert")).join("")}
-    ${(technical ? preview.warnings ?? [] : []).map((warning) => message(issueText(warning, technical))).join("")}
+    ${(technical ? preview.issues ?? [] : (preview.issues ?? []).slice(0, 1)).map((issue) => message(issueText(issue), "alert")).join("")}
+    ${(technical ? preview.warnings ?? [] : []).map((warning) => message(issueText(warning))).join("")}
     ${message("Preview shows the numbers; the chart appears on the dashboard after saving.")}
     ${tables.join("")}
     ${!result ? message("No preview results returned.") : ""}
@@ -193,6 +200,6 @@ export function renderSimpleEditorHtml(model = {}, technical = false) {
     <div class="tl-simple-content"><fieldset class="tl-simple-editable"${disabled(locked)}><legend class="tl-simple-sr-only">Step ${step} settings</legend>${step === 1 ? metricCards(model, locked) : step === 2 ? athletesAndPeriod(model, locked) : displayChoices(model, locked)}</fieldset>
     ${step === 3 ? `<section class="tl-simple-preview" aria-label="Result preview" aria-busy="${Boolean(model.previewLoading)}">${button("preview", "Preview", locked || model.previewLoading || !supported.preview || advanced)}${!supported.preview ? message("Live preview is temporarily unavailable.") : ""}${previewHtml(model, technical)}</section>` : ""}</div>
     <footer>${button("advanced", "Advanced settings", locked)}
-    <div class="tl-simple-navigation">${step > 1 ? button("back", "Back", locked) : ""}${step < 3 ? button("next", "Next", locked || (step === 1 && !model.draft?.metricRef) || advanced, 'data-primary="true"') : button("save", "Save", locked || !model.canSave || !supported.atomicSave || advanced || model.previewLoading, 'data-primary="true"')}${step === 3 && !locked && (model.previewLoading || !model.canSave || !supported.atomicSave) ? message(!supported.preview || !supported.atomicSave ? "Saving is not available right now." : model.previewLoading ? "Wait for the preview to finish" : "Fix the problem above to save") : ""}</div></footer>
+    <div class="tl-simple-navigation">${step > 1 ? button("back", "Back", locked) : ""}${step < 3 ? button("next", "Next", locked || (step === 1 && !model.draft?.metricRef) || advanced, 'data-primary="true"') : button("save", "Save", locked || !model.canSave || !supported.atomicSave || advanced || model.previewLoading, 'data-primary="true"')}${step === 3 && !locked && (model.previewLoading || !model.canSave || !supported.atomicSave) ? message(supported.preview && !supported.atomicSave ? "Preview is on. Ask an administrator to enable saving." : !supported.preview ? "Preview is unavailable. Try again later." : model.previewLoading ? "Wait for the preview to finish." : model.preview?.status === "invalid" || model.preview?.status === "requiresChoice" ? "Fix the setting above and preview again." : "Run Preview before saving.") : ""}</div></footer>
   </section></div>`;
 }
