@@ -611,6 +611,90 @@ test("13. an approval and an undo of the same team serialize on the team's impor
   assert.equal((await logOf(s.eventId)).length, 1);
 });
 
+test("13b. the database's own right, without the route in front: each basis and each refusal of lock_gpexe_session_undo_right, the undo function itself refuses a revoked grant", async () => {
+  const team = await setupTeam();
+  const right = async (userId) => {
+    const c = await newClient();
+    try {
+      await c.query("begin");
+      return (await c.query(`select training_load.lock_gpexe_session_undo_right($1, $2) b`, [userId, team.teamId])).rows[0].b;
+    } catch (e) {
+      if (e.code === "42501" && /may not undo an imported session/.test(e.message)) return "refused";
+      throw e;
+    } finally {
+      await c.query("rollback").catch(() => {});
+      await c.end();
+    }
+  };
+  const granted = await coachOf(team.teamId, "granted");
+  const grantId = await grantTo(team, granted);
+  const otherTeam = await setupTeam();
+  const foreignCoach = await coachOf(otherTeam.teamId, "foreign");
+  // Pilot mode (setupTeam's switch): only the platform admin and the granted coach.
+  assert.deepEqual(
+    [await right(team.padmin.id), await right(granted.id), await right(team.coach.id), await right(team.cadmin.id), await right(foreignCoach.id), await right(otherTeam.cadmin.id)],
+    ["platform_admin", "team_grant", "refused", "refused", "refused", "refused"]);
+  // Mode team: the club's admin and the team's coach too; never another team's coach or another club's admin.
+  await setMode(team, "team");
+  assert.deepEqual(
+    [await right(team.coach.id), await right(team.cadmin.id), await right(foreignCoach.id), await right(otherTeam.cadmin.id)],
+    ["team_coach", "club_admin", "refused", "refused"]);
+  // The switch off keeps every basis.
+  await setMode(team, "team", false);
+  assert.deepEqual([await right(team.coach.id), await right(team.cadmin.id), await right(granted.id)], ["team_coach", "club_admin", "team_grant"]);
+  // Pilot again, the grant revoked: refused; a disabled account and a revoked platform role: refused.
+  await setMode(team, "pilot");
+  await revokeGrant(team, grantId);
+  assert.equal(await right(granted.id), "refused", "a revoked grant");
+  const padmin2 = await platformAdmin();
+  await admin.query(`update public.user_global_roles set is_active = false where user_id = $1`, [padmin2.id]);
+  assert.equal(await right(padmin2.id), "refused", "a revoked platform role");
+  const padmin3 = await platformAdmin();
+  await admin.query(`update public.users set is_active = false where id = $1`, [padmin3.id]);
+  assert.equal(await right(padmin3.id), "refused", "a disabled account");
+  // The undo function itself, called directly with the revoked coach: 42501 and nothing removed.
+  const s = await importSession(team, 7619);
+  const rowsBefore = await allRowCounts();
+  await assert.rejects(
+    admin.query(`select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'direct', $4, null)`, [granted.id, team.teamId, s.candidateId, s.eventId]),
+    (e) => e.code === "42501");
+  assert.deepEqual(await allRowCounts(), rowsBefore);
+});
+
+test("13c. the mode lowered to pilot while the right waits on the switch row: the right re-reads it under its lock and refuses the club's admin and the team's coach", async () => {
+  const team = await setupTeam();
+  await setMode(team, "team");
+  for (const user of [team.cadmin, team.coach]) {
+    const holder = await newClient();
+    const caller = await newClient();
+    try {
+      // The holder lowers the mode the way the sanctioned switch write does, and keeps its transaction open.
+      await holder.query("begin");
+      await holder.query("select set_config('optimove.team_import_tx', txid_current()::text, true)");
+      await holder.query(`update training_load.gpexe_team_import_switch set mode = 'pilot', changed_by_user_id = $2, change_reason = 'lowered', changed_at = now() where owner_team_id = $1`, [team.teamId, team.padmin.id]);
+      await holder.query(
+        `insert into training_load.gpexe_team_import_switch_history (owner_team_id, enabled, mode, changed_by_user_id, basis, change_reason) values ($1, true, 'pilot', $2, 'platform_admin', 'lowered')`,
+        [team.teamId, team.padmin.id]);
+      await caller.query("begin");
+      const pending = caller.query(`select training_load.lock_gpexe_session_undo_right($1, $2) b`, [user.id, team.teamId]).then((r) => r.rows[0].b, (e) => (e.code === "42501" ? "refused" : Promise.reject(e)));
+      let waiting = false;
+      for (let i = 0; i < 100 && !waiting; i += 1) {
+        await sleep(30);
+        waiting = (await admin.query(`select count(*)::int n from pg_locks where not granted and pid = $1`, [caller.processID])).rows[0].n > 0;
+      }
+      assert.ok(waiting, "the right waits on the switch row (its peek saw mode team)");
+      await holder.query("commit");
+      assert.equal(await pending, "refused", "re-read under the lock: pilot");
+    } finally {
+      await caller.query("rollback").catch(() => {});
+      await holder.query("rollback").catch(() => {});
+      await caller.end();
+      await holder.end();
+    }
+    await setMode(team, "team");
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The migration, its preflight, post-check and rollback
 // ---------------------------------------------------------------------------
