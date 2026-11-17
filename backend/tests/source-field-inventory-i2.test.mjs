@@ -422,7 +422,33 @@ test("15. G1b: a platform admin in the platform workspace reads which names rout
       upper: flag["athlete_session:G1b_Upper"],
     }, { ab: true, drill: true, session: true, covered: false, zones: false, events: false, text: false, plainNumberInDetails: false, mixed: false, upper: false });
     assert.ok(r.body.fields.every((f) => typeof f.creatable === "boolean"), "every row says it, for the platform admin");
-    for (const cookie of [W.ca.cookie, W.caB.cookie]) {
+    // A key route C would refuse as field_exists: a retired T2a row of the same key (plan 8.1, any state).
+    {
+      const c = new pg.Client({ connectionString: db.url });
+      await c.connect();
+      try {
+        await c.query("set session_replication_role = replica");
+        await c.query(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id, state, retired_by_user_id, retired_at, retired_reason)
+                       values ('gpexe','rest_v1','athlete_session.g1b_retired_key','Retired', $1, 'retired', $1, now(), 'G1b test')`, [W.pa.id]);
+      } finally {
+        await c.end();
+      }
+    }
+    await observe(W.connB, [["athlete_session", "g1b_retired_key", { kind: "number" }]]);
+    const retired = await api("/field-inventory?endpoint=athlete_session&state=all", { cookie: W.pa.cookie });
+    let page = retired.body;
+    let found = page.fields.find((f) => f.name === "g1b_retired_key");
+    while (!found && page.nextCursor) {
+      page = (await api(`/field-inventory?endpoint=athlete_session&state=all&cursor=${page.nextCursor}`, { cookie: W.pa.cookie })).body;
+      found = page.fields.find((f) => f.name === "g1b_retired_key");
+    }
+    assert.deepEqual([found?.covered, found?.creatable], [false, false], "a retired key is not covered, and route C would refuse it");
+    // A platform admin in a club's workspace is a club scope: no flag either.
+    const paClub = await user("platform-admin-in-club-g1b");
+    await q(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [paClub]);
+    await q(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [paClub, W.clubA]);
+    await workspace(paClub, "club", W.clubA);
+    for (const cookie of [W.ca.cookie, W.caB.cookie, await cookieFor(paClub)]) {
       const club = await api("/field-inventory?state=all", { cookie });
       assert.equal(club.status, 200, club.text);
       assert.ok(club.body.fields.length > 0 && club.body.fields.every((f) => !("creatable" in f)), "a club scope never gets the flag");
@@ -433,7 +459,7 @@ test("15. G1b: a platform admin in the platform workspace reads which names rout
     await c.connect();
     try {
       await c.query("set session_replication_role = replica");
-      await c.query(`delete from training_load.source_field_observations where field_name in ('g1b_text_kind', 'g1b_plain_number', 'g1b_mixed', 'G1b_Upper')`);
+      await c.query(`delete from training_load.source_field_observations where field_name in ('g1b_text_kind', 'g1b_plain_number', 'g1b_mixed', 'G1b_Upper', 'g1b_retired_key')`);
     } finally {
       await c.end();
     }

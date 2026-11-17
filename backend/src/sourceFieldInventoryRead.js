@@ -108,12 +108,18 @@ const INVENTORY_SQL = `
                   or (g.endpoint = 'more.complementary_data'
                       and left(d.source_metric_key, length('more.complementary_data.' || g.field_name || '.')) = 'more.complementary_data.' || g.field_name || '.'))
            ) end as covered,
+           -- G1b: route C refuses a key that exists in any state (field_exists), a retired one included.
+           g.endpoint in ('athlete_session', 'details.session', 'details.drill') and exists (
+             select 1 from training_load.source_metric_definitions d
+              where d.source_system = 'gpexe' and d.api_family = 'rest_v1'
+                and d.source_metric_key = case when g.endpoint = 'athlete_session' then 'athlete_session.' else 'details.players.' end || g.field_name
+           ) as key_taken,
            g.unit_word is not null and exists (
              select 1 from training_load.unit_conversions u where u.state = 'active' and g.unit_word in (u.from_unit, u.to_unit)
            ) as unit_known
       from grouped g
   )
-  select endpoint, field_name, kind, unit_word, unit_known, answers::text as answers, last_seen_on, connections, covered, kinds_kept
+  select endpoint, field_name, kind, unit_word, unit_known, answers::text as answers, last_seen_on, connections, covered, kinds_kept, key_taken
     from marked
    where ($3::text = 'all' or endpoint = '${THRESHOLDS}' or covered = ($3::text = 'covered'))
      and ($4::text is null or (endpoint collate "C", field_name collate "C") > ($4::text collate "C", $5::text collate "C"))
@@ -123,7 +129,7 @@ const INVENTORY_SQL = `
 // Route C would create this name: not covered yet, a generic endpoint, a name route C derives a key from, and every
 // observation a value kind a check keeps. Route C decides again on the request.
 function creatable(row) {
-  if (row.covered !== false || row.kinds_kept !== true) return false;
+  if (row.covered !== false || row.kinds_kept !== true || row.key_taken !== false) return false;
   try {
     deriveField({ endpoint: row.endpoint, name: row.field_name, supportsSession: row.endpoint !== "details.drill", supportsDrill: true });
     return true;

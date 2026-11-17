@@ -170,6 +170,10 @@ export const evidenceRefOk = (value) => typeof value === "string" && value.lengt
 // ---------------------------------------------------------------------------
 // What happens next, said once on the form and once after the save (the Rukovodilac's wording).
 export const CREATE_NEXT_STEP = "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.";
+// A per-athlete value carries no unit word, so the board never offers its unit: a document confirms it (proposed wording,
+// the UX review of G1b-1; the Rukovodilac approves it).
+export const CREATE_NEXT_STEP_ROW = "This field has no values yet. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document.";
+export const createNextStep = (endpoint) => (endpoint === "athlete_session" ? CREATE_NEXT_STEP_ROW : CREATE_NEXT_STEP);
 export const FIELD_LABEL_MAX = 80;
 // The levels a name's endpoint allows, and the one a per-drill name must keep.
 export function createLevels(endpoint) {
@@ -179,8 +183,13 @@ export function createLevels(endpoint) {
 }
 // Offered only where the server said route C would take the name (never guessed here).
 export const createOffered = (ctx, item) => Boolean(ctx?.mayVerify && item && item.creatable === true && item.covered === false);
-export function openCreateFieldForm(item) {
+// `siblings`: the loaded inventory. A details name GPEXE sends both for the whole session and per drill becomes one key
+// (details.players.<name>, plan 8.1), so the form opens with both levels (the code review of G1b-1, MEDIUM).
+const DETAILS = ["details.session", "details.drill"];
+export function openCreateFieldForm(item, siblings = []) {
   const levels = createLevels(item.endpoint);
+  const both = DETAILS.includes(item.endpoint) && siblings.some((other) => other !== item && other.name === item.name && DETAILS.includes(other.endpoint) && other.endpoint !== item.endpoint);
+  if (both) { levels.supportsSession = true; levels.supportsDrill = true; }
   return {
     act: "create",
     requestKey: newRequestKey(),
@@ -195,6 +204,7 @@ export function openCreateFieldForm(item) {
     kind: item.kind || "",
     unitWord: item.unitWord || "",
     drillLocked: levels.drillLocked,
+    bothLevels: both,
     fieldId: null,
     fieldName: item.name,
     draft: { label: "", supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
@@ -325,7 +335,9 @@ const ZONE_CODE_TEXT = {
 // Route C's refusals (G1b), in the words of creating a field.
 const CREATE_CODE_TEXT = {
   notFound: "It is not available in this workspace now. Whether the field was created is not known: open Source fields in the platform workspace to see.",
-  invalid_body: "Not created: the server refused a value. Check the name and the levels, and save again.",
+  invalid_body: "Not created: the server refused a value. Check the name and the levels, and choose Create field again.",
+  // A create that lost a race: the field exists, the answer names none (plan 8.9: the losing writer gets no current).
+  field_exists: "This field already exists, so nothing was created. The source fields are read again below.",
   name_not_observed: "Not created: GPEXE has not sent this name as a measured value. Find new sessions first.",
   name_not_supported: "Not created: this GPEXE name cannot become a field.",
   shape_not_generic: "Not created: only a number per athlete, or a whole-session or drill value with its unit, can become a field here.",
@@ -350,7 +362,7 @@ export const CLOSES_FORM = new Set([
 // it cannot take back: Bind, Reconnect, Unbind).
 export function confirmQuestion(form, body) {
   if (form.act === "create") {
-    return `Create the source field "${body.label}" from GPEXE's name ${body.name} (${ENDPOINT_LABEL[body.endpoint] || body.endpoint})? A field is kept: it cannot be removed here once it is created.`;
+    return `Create the source field "${body.label}" from GPEXE's name ${body.name} (${ENDPOINT_LABEL[body.endpoint] || body.endpoint})? Once created, the field cannot be removed here.`;
   }
   const what = `${form.fieldName} (revision ${form.revisionNumber})`;
   const value = form.act === "unit"

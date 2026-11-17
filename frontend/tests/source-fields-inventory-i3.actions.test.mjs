@@ -85,7 +85,7 @@ test("1. a platform admin: the second list in plain words - where the name comes
   assert.deepEqual(inventoryGets(), [INV], "one read, the default filter (not supported)");
   assert.match(text(), /Available in GPEXE, not supported yet/);
   // G1b: the platform admin can act on a name now (Create field); the club's sentence keeps "nothing to do" (test 2).
-  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not use them yet, so they are not imported\. Create field makes a number GPEXE sends into a source field\./);
+  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not use them yet, so they are not imported\. Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet\./);
   const facts = rows().map((r) => r.querySelector(".metric-variables-item-facts").textContent.replace(/\s+/g, " ").trim());
   assert.deepEqual(facts, [
     "Whole session · number with unit in W/kg · seen 12 times, last 10.11.2026 · in 2 GPEXE accounts",

@@ -6,7 +6,7 @@
 // server replays a saved act and never saves twice.
 import { state } from "./state.js";
 import {
-  CLOSES_FORM, CREATE_NEXT_STEP, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, createOffered, createSourceField,
+  CLOSES_FORM, createNextStep, FIELD_OF_CODE, buildSourceFieldRequest, checkNoteText, checkSettles, confirmQuestion, createOffered, createSourceField,
   emptyInventory, emptySourceFieldsState, errorInfo, fetchField, openCreateFieldForm,
   fetchFields, fetchInventory, inventoryMatches, meaningActOffered, newRequestKey, openSourceFieldForm, outcomeUnknown, sourceFieldCodeText, sourceFieldsContext,
   sourceFieldsState, unitActOffered, verifyMeaning, verifyUnit,
@@ -307,7 +307,7 @@ export async function handleSourceFieldsAction(action, { render }) {
     const item = s.inventory.items.find((i) => i.endpoint === action.dataset.sfInvEndpoint && i.name === action.dataset.sfInvName) || null;
     if (!createOffered(ctx, item)) return true;
     s.notice = "";
-    s.form = openCreateFieldForm(item);
+    s.form = openCreateFieldForm(item, s.inventory.items);
     render();
     toTitle();
     focus(".source-fields-form [data-sf-field]:not([disabled])");
@@ -419,7 +419,7 @@ async function send(render) {
   s.form = null;
   if (form.act === "create") {
     // Created (or a Check result found it created): the new field opens; the list and the names are read again later.
-    setNotice(s, `The field was created. ${CREATE_NEXT_STEP}`, "");
+    setNotice(s, `The field was created. ${createNextStep(form.endpoint)}`, "");
     readAgainAfterCreate(s);
     const id = typeof data?.field?.id === "string" ? data.field.id : null;
     if (id) await loadSourceField(id, render); else await loadSourceFieldsSection(render);

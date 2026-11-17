@@ -9,7 +9,7 @@ import {
   ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
   ENDPOINT_LABEL, INVENTORY_ENDPOINTS, KIND_LABEL,
   currentRevision, hasBound, inventoryMatches, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
-  unitActOffered, createOffered, CREATE_NEXT_STEP, FIELD_LABEL_MAX,
+  unitActOffered, createOffered, createNextStep, FIELD_LABEL_MAX,
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -197,7 +197,7 @@ function renderInventoryHtml(s, ctx) {
     <section class="metric-classification-section source-fields-inventory" aria-labelledby="sf-inventory-title">
       <h3 id="sf-inventory-title">Available in GPEXE, not supported yet</h3>
       <p class="muted">${ctx.mayVerify
-        ? "GPEXE also sends these values in the clubs' sessions. OptiMove does not use them yet, so they are not imported. Create field makes a number GPEXE sends into a source field."
+        ? "GPEXE also sends these values in the clubs' sessions. OptiMove does not use them yet, so they are not imported. Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet."
         : "GPEXE also sends these values in your sessions. OptiMove does not use them yet, so they are not imported. There is nothing to do here: this list shows what could be added later."}</p>
       <div class="source-fields-inventory-tools">
         <label class="source-fields-inventory-search"><span class="visually-hidden">Search the GPEXE names</span>
@@ -307,12 +307,12 @@ function renderDetailHtml(s, ctx) {
     ${ctx.mayVerify ? "" : `<p class="muted">Read only here: a platform administrator confirms units and meanings in the platform workspace.</p>`}
     <h3>Revisions</h3>
     ${(field.revisions || []).length ? `<ol class="metric-variables-versions">${field.revisions.map((r) => renderRevisionHtml(r, field, ctx, stale)).join("")}</ol>` : `<p class="muted">No revisions.</p>`}
-    <h3>Confirmations</h3>
+    <h3>Checks and confirmations</h3>
     ${d.verifications.length ? `<ul class="metric-variables-versions source-fields-history">${d.verifications.map((v) => `
       <li class="metric-variables-version">
         <span>Revision ${escapeHtml(String(revisionNumber.get(v.revisionId) ?? "?"))} · ${actWords(v, field)} · ${escapeHtml(fmtDate(v.at))}</span>
         ${v.evidenceRef ? `<span class="muted">Evidence ${code(v.evidenceRef)}</span>` : ""}
-      </li>`).join("")}</ul>` : `<p class="muted">Nothing confirmed yet.</p>`}
+      </li>`).join("")}</ul>` : `<p class="muted">Nothing checked or confirmed yet.</p>`}
     <details class="data-sources-tech"><summary>Technical details</summary><dl>
       <div><dt>Key</dt><dd>${escapeHtml(field.key || "")}</dd></div>
       <div><dt>Data family</dt><dd>${familyLabel(field)}</dd></div>
@@ -384,8 +384,8 @@ function renderCreateFormHtml(s) {
   return `
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="create" novalidate autocomplete="off">
       <h2 id="source-fields-title">Create a field from ${code(form.name)}</h2>
-      <p class="muted source-fields-summary">GPEXE · ${escapeHtml(ENDPOINT_LABEL[form.endpoint] || form.endpoint)} · ${escapeHtml(KIND_LABEL[form.kind] || form.kind || "")}${form.unitWord ? ` in ${escapeHtml(form.unitWord)}` : ""}</p>
-      <p class="metric-variables-field-note">${escapeHtml(CREATE_NEXT_STEP)}</p>
+      <p class="muted source-fields-summary">GPEXE · ${escapeHtml(ENDPOINT_LABEL[form.endpoint] || form.endpoint)} · ${escapeHtml(KIND_LABEL[form.kind] || form.kind || "")}${form.unitWord ? ` (GPEXE says: ${escapeHtml(form.unitWord)})` : ""}</p>
+      <p class="metric-variables-field-note">${escapeHtml(createNextStep(form.endpoint))}</p>
       <label class="search-field"><span>Name in OptiMove</span>
         <input type="text" data-sf-field="label" value="${escapeAttr(form.draft.label ?? "")}" maxlength="${FIELD_LABEL_MAX}" autocomplete="off" ${locked ? "disabled" : ""}${described(form, "label", "hint")}${invalid(form, "label")}>
         <span class="muted" id="sf-hint-label">How the field is named on OptiMove's screens, for example High-speed distance. At most ${FIELD_LABEL_MAX} characters.</span>
@@ -397,7 +397,9 @@ function renderCreateFormHtml(s) {
           ${box("supportsSession", "The whole session")}
           ${box("supportsDrill", "Each drill", { lockedOn: form.drillLocked })}
         </div>
-        ${form.drillLocked ? `<span class="muted">GPEXE sends this name per drill, so the field is always recorded for each drill.</span>` : ""}
+        ${form.drillLocked ? `<span class="muted">GPEXE sends this name per drill, so the field is always recorded for each drill.</span>`
+          : form.bothLevels ? `<span class="muted">GPEXE sends this name for the whole session and per drill; one field records both.</span>`
+          : form.endpoint === "details.session" ? `<span class="muted">Tick Each drill only if GPEXE also sends this value for each drill.</span>` : ""}
         ${levelsError}
       </fieldset>
       <p class="muted">Do not enter athlete names, ids, dates of birth or measured values.</p>

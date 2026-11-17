@@ -117,7 +117,7 @@ test("1. Create field is offered only on a name the server marked creatable, in 
   await loadSourceFieldsSection(render);
   const offered = [...content.querySelectorAll('[data-action="source-fields-create-open"]')].map((b) => `${b.dataset.sfInvEndpoint}:${b.dataset.sfInvName}`);
   assert.deepEqual(offered, ["details.session:metabolic_power", "details.drill:drill_jumps", "athlete_session:hsr_distance"]);
-  assert.match(text(), /Create field makes a number GPEXE sends into a source field\./);
+  assert.match(text(), /Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet\./);
   // A forged click on a name the server did not mark opens nothing.
   await handleSourceFieldsAction({ dataset: { action: "source-fields-create-open", sfInvEndpoint: "athlete_session", sfInvName: "text_thing" } }, { render });
   assert.equal(sourceFieldsState().form, null);
@@ -135,7 +135,8 @@ test("1. Create field is offered only on a name the server marked creatable, in 
 test("2. the form names the GPEXE name, where it comes from and what happens next; its levels follow the endpoint - a per-drill name is always recorded for each drill; Cancel goes back to the button", async () => {
   await openCreate();
   assert.match(text(), /Create a field from metabolic_power/);
-  assert.match(text(), /GPEXE · Whole session · number with unit in power/);
+  assert.match(text(), /GPEXE · Whole session · number with unit \(GPEXE says: power\)/);
+  assert.match(text(), /Tick Each drill only if GPEXE also sends this value for each drill\./);
   assert.ok(text().includes(CREATE_NEXT_STEP), "the next step, said once");
   assert.equal(CREATE_NEXT_STEP, "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.");
   assert.deepEqual([$('[data-sf-field="supportsSession"]').checked, $('[data-sf-field="supportsDrill"]').checked], [true, false]);
@@ -183,7 +184,7 @@ test("4. created: the last question names the label, the GPEXE name and where it
   confirmAnswer = false;
   await submit();
   assert.equal(posts().length, 0, "a declined last question sends nothing");
-  assert.equal(confirmQuestions.at(-1), "Create the source field \"Metabolic power\" from GPEXE's name metabolic_power (Whole session)? A field is kept: it cannot be removed here once it is created.");
+  assert.equal(confirmQuestions.at(-1), "Create the source field \"Metabolic power\" from GPEXE's name metabolic_power (Whole session)? Once created, the field cannot be removed here.");
   confirmAnswer = true;
   await submit();
   assert.equal(posts().length, 1);
@@ -310,4 +311,26 @@ test("9. a per-drill name keeps its drill level at every layer: a change event o
   assert.equal(posts().at(-1).body.supportsDrill, true);
   const form = { ...sourceFieldsState().form, draft: { label: "Drill jumps", supportsSession: false, supportsDrill: false } };
   assert.equal(buildSourceFieldRequest(form).body.supportsDrill, true, "the request keeps the drill whatever the draft says");
+});
+
+test("10. the review fixes: a details name GPEXE sends both for the session and per drill opens with both levels and says so; a per-athlete name says a document confirms its unit; field_exists without the existing field reads again and says it exists", async () => {
+  invItems = [item(), item({ endpoint: "details.drill", name: "metabolic_power" }), item({ endpoint: "athlete_session", name: "hsr_distance", kind: "number", unitWord: null })];
+  await openCreate();
+  assert.deepEqual([$('[data-sf-field="supportsSession"]').checked, $('[data-sf-field="supportsDrill"]').checked], [true, true]);
+  assert.match(text(), /GPEXE sends this name for the whole session and per drill; one field records both\./);
+  sourceFieldsState().form = null;
+  render();
+  await click(createButton("athlete_session", "hsr_distance"));
+  assert.match(text(), /This field has no values yet\. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document\./);
+  assert.doesNotMatch(text(), /confirmed on the board/);
+  sourceFieldsState().form = null;
+  render();
+  post = () => ({ status: 409, body: { error: "field_exists", message: "x" } });
+  await click(createButton("details.session", "metabolic_power"));
+  type("label", "Metabolic power");
+  calls.length = 0;
+  await submit();
+  assert.equal(sourceFieldsState().form, null);
+  assert.match(text(), /This field already exists, so nothing was created\. The source fields are read again below\./);
+  assert.ok(calls.some((c) => c.method === "GET" && c.url === FB), "the list is read again");
 });

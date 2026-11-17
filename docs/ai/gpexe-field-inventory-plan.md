@@ -737,6 +737,15 @@ created field needs its extractor (J12), which is G2's; G2's or G1b's tests cove
   document.
 - **Route C's audience test** (`source-field-create-g1` test 4) now covers a coach and an athlete, and a text/plain body
   and an array body, each the identical 404 before the body is read.
+- **After the reviews of G1b-1** (code, ux, mobile: READY WITH NON-BLOCKING NOTES):
+  - a details name GPEXE sends both for the whole session and per drill is one key (`details.players.<name>`), so its
+    form opens with both levels and says so (code MEDIUM); a whole-session name says to tick Each drill only if GPEXE also
+    sends it per drill;
+  - `creatable` is false when the derived key exists in any state (route C answers `field_exists` for a retired key too);
+    a `field_exists` without the existing field (the losing writer of a race) says the field exists and reads the list
+    again;
+  - a per-athlete name's next step says that a document confirms its unit, since GPEXE sends no unit with it (ux MEDIUM;
+    the wording is proposed to the *Rukovodilac*); the detail's history heading is "Checks and confirmations".
 - **Two connections.** Two GPEXE accounts may send the same name with different unit words. The expected unit of a
   created field comes from the latest observation only, as a hypothesis. Route O's refusal of a word that differs from
   the revision's expected unit (`unit_not_stated`, carry-over 5) is G1b-2's.
