@@ -373,6 +373,8 @@ const MESSAGES = {
   source_metric_target_taken: "Another mapping of this owner already has an active version for this source field and parameters.",
   activation_open: "The mapping version has an open activation; it is not changed before the activation ends.",
   source_metric_unsupported: "OptiMove cannot read this source field yet.",
+  // G1b-1 interim (until G1b-2): a created details field whose unit is not a count.
+  unit_not_importable: "This field's unit cannot be imported yet.",
   parameters_unsupported: "The source parameters do not fit this source field.",
   ...ACTIVATION_MESSAGES,
 };
@@ -388,6 +390,7 @@ function assertExtractable(facts) {
   const code = extractabilityCode({
     sourceSystem: facts.source_system, apiFamily: facts.api_family, sourceMetricKey: facts.source_metric_key,
     valueShape: facts.value_shape, parameterKind: facts.parameter_kind, sourceParameters: facts.source_parameters,
+    sourceUnit: facts.source_unit,
   });
   if (code) throw refusal(409, code, MESSAGES[code]);
 }
@@ -1092,7 +1095,7 @@ export async function createVersion({ ctx, mappingId, body }) {
           where d.id = $1 and r.id = $2`,
         [mapping.source_metric_definition_id, sourceRevisionId],
       )).rows[0];
-      assertExtractable({ ...field, parameter_kind: revision.parameter_kind, source_parameters: revision.parameter_kind === "none" ? {} : source });
+      assertExtractable({ ...field, parameter_kind: revision.parameter_kind, source_parameters: revision.parameter_kind === "none" ? {} : source, source_unit: revision.source_unit });
       const canonicalSql = `select d.state, d.current_version_id, ${CANONICAL_VERSION_COLUMNS},
                                    (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
                               from training_load.metric_definitions d
@@ -1505,7 +1508,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       // Phase 7f: the field and the parameters again, after the right and the
       // states (R3): a draft created before 7f is caught here.
       assertExtractable((await client.query(
-        `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind,
+        `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind, v.source_unit,
                 ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters
            from training_load.source_metric_mapping_versions v
            join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -1735,7 +1738,7 @@ export async function copiedMappingRefusal(client, versions, { fields, revisions
     const revision = revisions.get(v.source_metric_version_id);
     if (!revision || !["draft", "active"].includes(revision.state) || revision.source_unit === null) return named("revision_not_usable");
     const facts = (await client.query(
-      `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind,
+      `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind, v.source_unit,
               ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters
          from training_load.source_metric_mapping_versions v
          join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -1746,6 +1749,7 @@ export async function copiedMappingRefusal(client, versions, { fields, revisions
     const extractable = extractabilityCode({
       sourceSystem: facts.source_system, apiFamily: facts.api_family, sourceMetricKey: facts.source_metric_key,
       valueShape: facts.value_shape, parameterKind: facts.parameter_kind, sourceParameters: facts.source_parameters,
+      sourceUnit: facts.source_unit,
     });
     if (extractable) return named(extractable);
     const conversion = await conversionsHold(client, v);

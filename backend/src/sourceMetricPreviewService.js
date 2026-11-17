@@ -86,6 +86,7 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
     const registryCode = extractabilityCode({
       sourceSystem: version.source_system, apiFamily: version.api_family, sourceMetricKey: version.source_metric_key,
       valueShape: version.value_shape, parameterKind: version.parameter_kind, sourceParameters: version.source_parameters,
+      sourceUnit: version.source_unit,
     });
     // G2 (the board's guard, everywhere a value of the field is read): a field created through route C whose revision is
     // not proven never lets an athlete's value leave the server.

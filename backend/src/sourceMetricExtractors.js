@@ -365,9 +365,23 @@ export function extractorFor({ sourceSystem, apiFamily, sourceMetricKey } = {}) 
 // reads - a later revision may change them) or "parameters_unsupported" (the
 // entry refuses the parameters). A test entry that declares no shape (null)
 // accepts every revision.
-export function extractabilityCode({ sourceSystem, apiFamily, sourceMetricKey, valueShape, parameterKind, sourceParameters }) {
+// G1b-1's interim rule (the Rukovodilac, 2026-11-17): the generic details entry reads only the unit word `number`, so
+// a created details field (not a seeded key) is importable only with the proven unit `count` until G1b-2 teaches the
+// extractor the other words. A version of one with another unit would block every session of its team
+// (source_shape_mismatch), so it is never created, activated or previewed. `sourceUnit` undefined: not asked.
+export const UNIT_NOT_IMPORTABLE = "unit_not_importable";
+export function unitImportableCode({ sourceSystem, apiFamily, sourceMetricKey, sourceUnit }) {
+  if (sourceUnit === undefined || typeof sourceMetricKey !== "string") return null;
+  if (`${sourceSystem}/${apiFamily}/` !== GPEXE_REST_V1 || Object.hasOwn(EXTRACTORS, `${sourceSystem}/${apiFamily}/${sourceMetricKey}`)) return null;
+  if (!sourceMetricKey.startsWith("details.players.")) return null;
+  return sourceUnit === "count" ? null : UNIT_NOT_IMPORTABLE;
+}
+
+export function extractabilityCode({ sourceSystem, apiFamily, sourceMetricKey, valueShape, parameterKind, sourceParameters, sourceUnit }) {
   const extractor = extractorFor({ sourceSystem, apiFamily, sourceMetricKey });
   if (!extractor) return "source_metric_unsupported";
+  const unitCode = unitImportableCode({ sourceSystem, apiFamily, sourceMetricKey, sourceUnit });
+  if (unitCode) return unitCode;
   if (extractor.valueShape !== null && (extractor.valueShape !== valueShape || extractor.parameterKind !== parameterKind)) {
     return "source_metric_unsupported";
   }

@@ -746,6 +746,18 @@ created field needs its extractor (J12), which is G2's; G2's or G1b's tests cove
     again;
   - a per-athlete name's next step says that a document confirms its unit, since GPEXE sends no unit with it (ux MEDIUM;
     the wording approved by the *Rukovodilac*, 2026-11-17); the detail's history heading is "Checks and confirmations".
+- **After G2's merge (the *Rukovodilac*'s orders of 2026-11-17):**
+  - **The interim refusal.** Until G1b-2, a created details field (a generic `details.players.` key) whose proven unit
+    is not `count` gets no mapping version: `extractabilityCode` answers `unit_not_importable` ("This field's unit cannot
+    be imported yet."), so T4, A1, the copy (7i), the 7e preview and the importer's plan all refuse it, and the board
+    shows such a column as unsupported. The generic details entry reads only the word `number`; any other word would
+    block every session of the team (`source_shape_mismatch`). G1b-2 removes the refusal in the PR that teaches the
+    extractor the unit words. Proof: `source-metric-extractors-7f` test 15, resolver test 52.
+  - **The retire remedy (i).** The pinned set keeps only a field with an active revision, so retiring the active
+    revision (L5) stops every check from keeping it; a pending snapshot keeps its values until the retention run
+    projects them away. Proof: resolver test 51. The runbook (`docs/runbooks/gpexe-in-app-import.md`, "Created source
+    fields in a check") says how.
+  - Route C's value-kind rule and the inventory's `creatable` share `KEPT_VALUE_KINDS`.
 - **Two connections.** Two GPEXE accounts may send the same name with different unit words. The expected unit of a
   created field comes from the latest observation only, as a hypothesis. Route O's refusal of a word that differs from
   the revision's expected unit (`unit_not_stated`, carry-over 5) is G1b-2's.

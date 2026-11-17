@@ -7,7 +7,7 @@
 // key, a name outside T2a's key rule or a taken key is refused before anything is written.
 import { adminWriteKit, SourceMetricMappingError } from "./sourceMetricMappingService.js";
 import { mayVerify } from "./sourceFieldVerificationService.js";
-import { deriveField, FieldCreateRefusal, GENERIC_ENDPOINTS, LABEL_MAX_LENGTH, parseCreateFieldBody } from "./sourceFieldCreate.js";
+import { deriveField, FieldCreateRefusal, GENERIC_ENDPOINTS, KEPT_VALUE_KINDS, LABEL_MAX_LENGTH, parseCreateFieldBody } from "./sourceFieldCreate.js";
 import { PINNED_FIELDS_MAX } from "./sourcePinnedFields.js";
 
 const { runWrite, rightsStillHold, refusal, NOT_FOUND, MESSAGES, hashOf, REVISION_COLUMNS, revisionOut } = adminWriteKit;
@@ -108,7 +108,7 @@ export async function createField({ ctx, body }) {
       // G2: every check keeps a created field for every team (the pinned set), and a pinned value of another shape fails
       // the check closed. So a name is created only when every connection saw it as the shape a check keeps: a number
       // for an athlete row, a value with its unit for the details (or no value at all).
-      const kept = GENERIC_ENDPOINTS[endpoint].valueShape === "number" ? ["number", "null"] : ["unit_value_object", "null"];
+      const kept = [...KEPT_VALUE_KINDS[GENERIC_ENDPOINTS[endpoint].valueShape]];
       const otherKind = (await client.query(
         `select 1 from training_load.source_field_observations
           where api_family = 'rest_v1' and endpoint = $1 and field_name = $2 and not (value_kind = any($3::text[])) limit 1`,
