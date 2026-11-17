@@ -781,3 +781,14 @@ test("19 (v76). a coach who may import (undoImport, not a platform admin) has th
   assert.match(s, /Nothing was removed\.<\/strong> Some results of this session were entered by hand, so its imported data cannot be deleted here\. Ask a platform administrator to delete it\./);
   assert.doesNotMatch(s, /Technical details|manual_occasion|HTTP status/);
 });
+
+test("20 (v76, the manager's merge condition): before the v76 deploy the old server sends no undoImport - nobody is offered the delete, a platform admin included", async () => {
+  // The old server's status: a platform admin with identityAdmin, and no undoImport.
+  setup({ statusOver: { admin: true, identityAdmin: true, undoImport: false } });
+  await openImports();
+  await openCandidate("cand-imp");
+  assert.equal(undoSection(), "", "no delete without undoImport");
+  assert.doesNotMatch(html(), /training-load-gpexe-undo-open/);
+  await act("training-load-gpexe-undo-open");
+  assert.equal(previewCalls().length, 0, "the action sends nothing either");
+});
