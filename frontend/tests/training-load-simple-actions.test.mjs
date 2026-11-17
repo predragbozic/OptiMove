@@ -48,7 +48,7 @@ beforeEach(() => {
   state.activeTab = 'training-load';
   state.trainingLoad = emptyTrainingLoadState();
   state.trainingLoad.section = 'analysis';
-  Object.assign(analysis(), { dashboard: { id: dashboardId, revision: 3, name: 'Load board', status: 'active', owner_scope: 'user' }, activeDashboardId: dashboardId, selectedDashboardId: dashboardId, widgets: [widget()], period: structuredClone(period) });
+  Object.assign(analysis(), { simplePreview: true, dashboard: { id: dashboardId, revision: 3, name: 'Load board', status: 'active', owner_scope: 'user' }, activeDashboardId: dashboardId, selectedDashboardId: dashboardId, widgets: [widget()], period: structuredClone(period) });
   calls = []; unexpected = []; confirmations = []; unavailable = false; loseSaveResponse = false; confirmAnswer = true; renderCount = 0; receiptPeriod = null;
   window.confirm = message => { confirmations.push(message); return confirmAnswer; };
   globalThis.fetch = async (url, options = {}) => {
@@ -68,7 +68,7 @@ beforeEach(() => {
     else if (call.url === `${base}/simple/widgets` && call.method === 'POST' && loseSaveResponse) throw new TypeError('Committed response lost');
     else if (call.url === `${base}/simple/widgets` && call.method === 'POST' && receiptPeriod) body = { requestId: call.body.requestId, widgetId, widgetRevision: 8, resolvedPeriod: structuredClone(receiptPeriod) };
     else if (call.url === `${base}/simple/requests/status` && call.method === 'POST' && receiptPeriod) body = { status: 'recorded', receipt: { requestId: call.body.requestId, widgetId, widgetRevision: 8, resolvedPeriod: structuredClone(receiptPeriod) } };
-    else if (call.url === base && call.method === 'GET' && receiptPeriod) body = { dashboard: structuredClone(analysis().dashboard), widgets: [widget({ revision: 8 })] };
+    else if (call.url === base && call.method === 'GET' && receiptPeriod) body = { simplePreview: true, dashboard: structuredClone(analysis().dashboard), widgets: [widget({ revision: 8 })] };
     else if (call.url === `${base}/query` && call.method === 'POST' && receiptPeriod) body = { dashboardRevision: 3, widgets: [] };
     else if (call.url.startsWith('/api/training-load/metrics/')) body = { rows: [], nextCursor: null };
     else { unexpected.push(call); throw new Error(`Unexpected ${call.method} ${call.url}`); }
@@ -399,4 +399,21 @@ test('closing a stale widget reloads its revision before reopening', async () =>
   await simple('close');
   await act('training-load-analysis-edit-widget', { widgetId });
   assert.equal(simpleEditor.model.widgetRevision, 8);
+});
+
+test('the existing widget panel opens without calling Simple when capability is missing', async () => {
+  delete analysis().simplePreview;
+  await act('training-load-analysis-add-widget');
+  assert.equal(simpleEditor.model, null);
+  assert.ok(analysis().metricPanel);
+  assert.equal(calls.some(call => call.url.includes('/simple/')), false);
+});
+
+test('an Estimates only widget opens the Advanced-required screen without changing the series', async () => {
+  const series = analysis().widgets[0].series[0];
+  series.source_policy = 'estimate';
+  await act('training-load-analysis-edit-widget', { widgetId });
+  assert.equal(simpleEditor.model.advancedRequired, true);
+  assert.equal(simpleEditor.model.draft, null);
+  assert.equal(series.source_policy, 'estimate');
 });

@@ -39,7 +39,7 @@ async function screenshot(page, width, phase) {
 
 for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
   test(`(${width}px) Simple creates, edits and recovers a lost save response`, async () => {
-    const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
+    const { context, page, pageErrors } = await openAs(browser, world, "platform_admin", width);
     const title = `Simple test ${width}`;
     try {
       const creation = await context.request.post(`${world.baseUrl}/api/training-load/dashboards`, { data: { name: title } });

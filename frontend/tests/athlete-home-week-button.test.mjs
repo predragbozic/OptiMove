@@ -102,3 +102,24 @@ test("7 (UX review): an athlete's day with only a note shows the note, never 'No
   } finally { globalThis.document.body.classList.contains = () => false; }
   assert.match(renderDayEntryHtml({ date: TODAY, slots: {}, dayNote: "" }, () => ({})), /No entries/, "a coach keeps No entries");
 });
+
+test("8 (code review of #583): a failed Home read stays said when the week's count or My training repaints Home", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("function renderAthleteHomeFromCache()"), src.indexOf("\n}\n", src.indexOf("function renderAthleteHomeFromCache()")));
+  assert.match(body, /error: data \? "" : state\.lastAthleteHomeError/);
+  const home = src.slice(src.indexOf("function renderAthleteHome({ data, error })"), src.indexOf("\n}\n", src.indexOf("function renderAthleteHome({ data, error })")));
+  assert.match(home, /state\.lastAthleteHomeError = data \? "" : error \|\| "";/);
+  // And the view says it: an error with no data is the error, never "Loading your home...".
+  const html = renderAthleteHomeHtml({ data: null, error: "Your home could not be loaded." });
+  assert.match(html, /Your home could not be loaded\./);
+  assert.doesNotMatch(html, /Loading your home/);
+});
+
+test("8b (code review): a new Home load forgets the last failure before it starts", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const start = src.indexOf("async function loadAthleteHome(");
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+  assert.match(body, /state\.lastAthleteHomeError = "";[\s\S]*Promise\.all/);
+});

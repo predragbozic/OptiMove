@@ -1320,7 +1320,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-add-widget") {
     if (!state.trainingLoad.analysis.dashboard) return true;
     if (analysisWidgetActionsBlocked()) return true;
-    if (await openSimpleEditor(null, renderTrainingLoad)) return true;
+    if (state.trainingLoad.analysis.simplePreview && await openSimpleEditor(null, renderTrainingLoad)) return true;
     openAnalysisMetricPanel(null);
     // The catalog load flips metricPicker.loading synchronously, so this
     // first render already shows "Loading metrics..." under the built-ins;
@@ -1479,7 +1479,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const widget = state.trainingLoad.analysis.widgets.find((w) => w.id === action.dataset.widgetId);
     if (!widget || analysisWidgetActionsBlocked()) { closeAnalysisPopovers(); renderTrainingLoad(); return true; }
     closeAnalysisPopovers();
-    if (await openSimpleEditor(widget, renderTrainingLoad)) return true;
+    if (state.trainingLoad.analysis.simplePreview && await openSimpleEditor(widget, renderTrainingLoad)) return true;
     // The panel labels a catalog-backed series from the loaded definitions,
     // so make sure they're in before staging the widget.
     await loadAnalysisMetricDefinitions();
