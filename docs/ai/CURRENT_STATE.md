@@ -2384,6 +2384,28 @@ Technical details.
       the same number, and the details covered all 39 valid rows. The details' unit word is `speed`, so the tool
       printed `insufficient`, but the number is the very `max_v`. This is what lets a check drop the per-row read.
     - `/more/` stays for every row (B).
+- **Before `ESTIMATES_ENABLED` is ever switched on: one migration is owed (recorded 2026-11-17, PR #584 and its
+  test-only follow-up).** The owner's rule (2026-11-16): an athlete sees only data that was really measured; every
+  athlete read answers as if no estimate had ever been written. Saving an estimate for an athlete who was not in the
+  recording creates her activity participant row, so her reads hide a participation an estimate made
+  (`backend/src/trainingActivityAccess.js`, `athleteOwnParticipationSql`). Today that is decided by a timestamp: the
+  participant row is not older than its first estimate, which holds only because `metricEstimateService.js` writes
+  the participant and the estimate in ONE transaction (pinned by test 17y of
+  `backend/tests/metric-estimates-6b-b.test.mjs`).
+  - **The weak direction (the Independent's LOW-1):** if a participant row is ever written in an earlier transaction
+    than its estimate, the athlete is shown the session (empty) and "has recorded sessions" turns true - a leak that
+    an estimate exists.
+  - **The robust fix, not written:** a provenance mark on `training.activity_participants` (which write created the
+    row), set by the estimate's materialization and read by `athleteOwnParticipationSql` instead of the timestamps.
+    It is a migration (runbook, preflight, post-check, rehearsed rollback) and is to be made before the switch.
+  - **Also recorded (LOW-2), no change:** a session link added later to an estimate-made participant makes the
+    session hers, without any value of the estimate.
+  - **Observed while writing the test:** an estimate cannot be saved on a session whose recording was merged into
+    another one - the database refuses the participant link and the coach gets "Nothing was saved" (HTTP 500). It
+    writes nothing, so nothing can leak; whether a coach should be able to estimate there is a separate question.
+  - **Candidate small migration, not written (the Independent's INFO-3 on #578):** a partial index on
+    `training.activity_participant_metric_participant_links (activity_participant_id) where link_status =
+    'confirmed'`; the athlete list, calendar and "has recorded sessions" reads filter by it.
 - **The Metrics Core plan (2026-10-26).** The owner adopted a plan for the rest of the Metrics Core work:
   `docs/ai/metrics-core-plan.md` (phases 0–10, R1 and R2), with the phase 10 decisions in
   `docs/ai/phase10-estimates-decisions.md`. Its roles, reviewers and rules of work are in that file only;
