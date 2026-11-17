@@ -5,6 +5,7 @@
 // the review opened from it steps through the same group (J20 section 8).
 import { inboxBucket, isUncertain, notConfirmedForImport, reviewMadeBeforeLinkChange, rowReasons } from "./gpexe-import-data.js";
 import { undoBusy } from "./gpexe-undo-data.js";
+import { timezoneBusy } from "./gpexe-timezone-data.js";
 
 const UNLINKED = new Set(["no_linked_athlete", "athletes_not_linked"]);
 
@@ -85,7 +86,7 @@ export function nextInGroup(detail, list, gx) {
 // for it. A states group "can't be checked from here" (unknown with a code) offers nothing more and does not hold it.
 export function reviewMustStay(gx, detail = gx?.detail) {
   if (!detail) return false;
-  if (detail.approving || detail.verifying || detail.updating || gx.linkBusy || undoBusy(gx)) return true;
+  if (detail.approving || detail.verifying || detail.updating || gx.linkBusy || undoBusy(gx) || timezoneBusy(gx)) return true;
   const st = detail.states;
   if (st?.saving) return true;
   return Object.values(st?.groups || {}).some((v) => v.status === "sent" || (v.status === "unknown" && !v.code));

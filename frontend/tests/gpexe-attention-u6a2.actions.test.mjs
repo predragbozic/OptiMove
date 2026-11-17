@@ -63,7 +63,8 @@ function status({ enabled = true, canApprove = true, admin = false } = {}) {
     settings: { gpexeTeamId: "980" },
     importSwitch: { enabled, message: enabled ? "Approved imports can write results and activities in this environment." : "Import writing is switched off in this environment: checks and previews are saved, but no result or activity can be written." },
     lastCheck: null,
-    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: admin, identityAdmin: admin },
+    // PR #587: the server marks a platform admin (and the team's club admin in the club's workspace) with sessionTimezoneAdmin.
+    viewer: { canApprove, approvalBasis: canApprove ? "team_grant" : null, isPlatformAdmin: admin, identityAdmin: admin, ...(admin ? { sessionTimezoneAdmin: true } : {}) },
     approvalAvailable: true,
   };
 }
@@ -306,10 +307,10 @@ test("6. (D8) mixed time zones: a data problem in plain words for everyone; the 
     await openImports();
     const list = html();
     assert.match(groupHtml("data", list), /Problem in the GPEXE data/);
-    // P1 (O5): the platform admin reads where to set it; a coach asks the club administrator.
+    // PR #587: whoever may set the zone sets it in the review; a coach asks the club's admin.
     assert.match(list, admin
-      ? /It is not imported until the team has a time zone\. Ask a platform administrator to set it in Settings &gt; Data sources, then find new sessions again with dates that include \d\d\.\d\d\.\d{4}\./
-      : /It is not imported until the team has a time zone\. Ask your club administrator, then find new sessions again with dates that include \d\d\.\d\d\.\d{4}\./);
+      ? /It is not imported until the team has a time zone\. Set the team(?:'|&#0?39;)s time zone, then find new sessions again with dates that include \d\d\.\d\d\.\d{4}\./
+      : /It is not imported until the team has a time zone\. Ask your club(?:'|&#0?39;)s admin to set the team(?:'|&#0?39;)s time zone \(they can do it in this session(?:'|&#0?39;)s review\), then find new sessions again with dates that include \d\d\.\d\d\.\d{4}\./);
     assert.ok(!/mixed_timezones|Zone\/A/.test(list.replace(/<details class="gpexe-tech">[\s\S]*?<\/details>/g, "")), "no code in the open");
     await act("training-load-gpexe-open", { candidateId: "cand-2", group: "data" });
     const review = html();

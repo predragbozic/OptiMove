@@ -67,6 +67,7 @@ import { bringBack, clearLaterNotice, isLater, laterOpen, putLater, setLaterOpen
 const LATER_REPEAT_MS = 400;
 let laterTappedAt = 0;
 export function resetLaterTapForTests() { laterTappedAt = 0; }
+import { changeTimezone, checkTimezone, closeTimezone, leaveTimezoneReview, openTimezone, saveTimezone, timezoneBusy, timezoneHeld } from "./gpexe-timezone-data.js";
 import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
@@ -169,7 +170,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // (the select is disabled; this guards a stale change), and only after
     // a question while sessions are chosen but not imported.
     if (String(action.value) === gx.teamId) return true;
-    if (gx.batch.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown || undoBusy(gx)) {
+    if (gx.batch.sending || gx.guide?.write?.sending || gx.guide?.write?.unknown || undoBusy(gx) || timezoneHeld(gx)) {
       renderTrainingLoad();
       return true;
     }
@@ -362,6 +363,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (!next || next.id === detail.id) return true;
     const refresh = closeGpexeCandidate();
     if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
+    leaveTimezoneReview(gx);
     await openGpexeCandidate(next.id, renderTrainingLoad, { group: detail.group, groupIds: detail.groupIds });
     if (refresh) void reloadGpexeCandidates(renderTrainingLoad);
     return true;
@@ -372,8 +374,11 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (gx.detail?.approving || gx.detail?.verifying) return true;
     // U5b: an undo in flight must be seen; a result not confirmed stays for Check the result when the session is reopened.
     if (gx.undo?.step === "sending") return true;
+    // PR #587: a time zone save in flight is seen to its end; a result not confirmed stays for Check.
+    if (timezoneBusy(gx)) return true;
     const refresh = closeGpexeCandidate();
     if (gx.undo && gx.undo.step !== "unknown") gx.undo = null;
+    leaveTimezoneReview(gx);
     renderTrainingLoad();
     // The session was imported but the list still shows it as pending:
     // read the list again so it moves under Imported.
@@ -446,6 +451,27 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (!approval) return true;
     if (type === "training-load-gpexe-states-again") retryStates(gx.detail);
     await saveImportStates(gx.detail, approval, renderTrainingLoad);
+    return true;
+  }
+  // PR #587: the team's session time zone, from the review of a mixed-time-zones session (the server decides again).
+  if (type === "training-load-gpexe-tz-open") {
+    await openTimezone(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-change") {
+    if (changeTimezone()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-cancel") {
+    if (closeTimezone()) renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-save") {
+    await saveTimezone(renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-tz-check") {
+    await checkTimezone(renderTrainingLoad);
     return true;
   }
   // U5b: undoing an imported session (platform admin; the server decides again).
