@@ -790,18 +790,26 @@ everything G2 needs in the database.
     key that breaks this rule is **left out** of the set and counted in one log line that names no key: one bad row never
     fails every team's check (security review of G2, MEDIUM). Route C never creates such a name;
   - at most 64 names per endpoint (`PINNED_FIELDS_MAX`). Route C refuses the 65th active field of a kind
-    (`too_many_fields`), two creates of one kind serialized by a transaction advisory lock. A set over the bound
+    (`too_many_fields`), two creates of one kind serialized by a two-key transaction advisory lock (namespace
+    719402689, the second key the kind's prefix). Route C is the only writer that makes a T2a row (no route makes a
+    retired field active again), so the bound holds unless a row is written by hand. A set over the bound
     (written past route C) stops a check with `pinned_fields_too_many` before any GPEXE read; the code is
     administrator-only (a coach reads the sentence to contact an administrator). `pinned_field_invalid` stays for a
     malformed set handed to the adapter;
   - a pinned row value is a finite number or null; anything else (a text included) fails the answer closed as
-    `field_shape_unknown` (code review of G2, LOW: data minimisation).
+    `field_shape_unknown` (code review of G2, LOW: data minimisation);
+  - so route C creates a field only when every connection observed the name in the shape a check keeps: a number (row)
+    or a value with its unit (details), or no value (`null`). Any other observed kind is `409 value_not_number`, nothing
+    written (code review of G2's fixes, MEDIUM: a created text field would otherwise fail every team's check). A value of
+    another shape GPEXE sends later still fails the check closed; retiring the field is the remedy.
 - **Where it is read:**
   - **A check** reads it once, before its first request, and freezes it in its adapter. A field created while the check
     runs is not kept by that check; the next check keeps it.
   - **Retention** reads it with the first id page of every run. Until it is known, nothing is projected. A set refused
-    as a whole (over the bound) does not stop the run: that run keeps only the consumed fields (the next check reads the
-    rest again) and logs the code (database review of G2, MEDIUM); a failed read is `projection_failed` as before.
+    as a whole (over the bound, only by a hand-written row) does not stop the run and projects **nothing** in it: every
+    stored value stays as the check that read it kept it, the purge runs, the cursor stays, and the code is logged
+    (database review of G2, MEDIUM, and the reviews of its fixes: no stored pinned value is discarded). A failed read is
+    `projection_failed` as before.
   - **The supersede step** of a check's finalization reads it inside the finalization's transaction; a set refused there
     fails the check with `check_finalize_failed` before its COMMIT, nothing of it written.
 - **Both proven and unproven created fields are pinned.** Their values accumulate for the comparison that proves them
@@ -883,9 +891,10 @@ everything G2 needs in the database.
   - 47: a proven, mapped created field is imported, and an unproven one is never activated and never imported;
   - 48: the inbox after the one-time "changed";
   - 49: a retired field is not pinned; the supersede step refusing the set fails the check with `check_finalize_failed`
-    and changes nothing; retention with the set refused keeps the consumed fields only;
+    and changes nothing; retention with the set refused projects nothing (the snapshot untouched);
   - 50: the 7e preview of a created, unproven field is `409 unit_not_proven` with no value.
 - `source-field-create-g1` test 14: route C refuses `constructor` / `prototype` and the 65th active field of a kind, and
-  a second create held behind the first at 63 is refused (the bound's lock).
+  a second create held behind the first at 63 is refused (the bound's lock); test 15: a name observed as text, a
+  boolean, a plain object, or as text through another connection, is `409 value_not_number`.
 - `source-metric-board-18-2` test 15 (the board guard), `source-metric-extractors-7f` test 14 (the generic extractors),
   `gpexe-duplicate-tracks-mt0` (a created row field on two tracks), and the adapter suite's B7.7c and B7.8.

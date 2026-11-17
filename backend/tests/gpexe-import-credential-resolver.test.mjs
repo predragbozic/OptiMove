@@ -2731,7 +2731,7 @@ test("48. G2, the one-time \"changed\" (the Rukovodilac's (a)): an imported sess
   }
 });
 
-test("49. G2 review fixes: a retired field is not pinned; a retention run whose pinned set is refused keeps only the consumed fields and goes on (no error); the supersede step refusing the set fails the check with check_finalize_failed and changes nothing of the old candidate", async () => {
+test("49. G2 review fixes: a retired field is not pinned; a retention run whose pinned set is refused projects nothing and goes on (no error, the snapshot untouched); the supersede step refusing the set fails the check with check_finalize_failed and changes nothing of the old candidate", async () => {
   const o = await org();
   const seeded = (await q(`select count(*)::int n from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active' and starts_with(source_metric_key, 'details.players.')`))[0].n;
   const keep = "details.players.g2_r_keep";
@@ -2784,13 +2784,12 @@ test("49. G2 review fixes: a retired field is not pinned; a retention run whose 
     const after = await g2Stored(o.teamId);
     assert.deepEqual(after.map((r) => [r.id, r.status]), [[a.id, a.status]], "no new candidate, the old one unchanged");
     assert.deepEqual(after[0].raw_bundle, a.raw_bundle, "the old snapshot byte for byte");
-    // Retention with the set refused: no error, only the consumed fields kept.
+    // Retention with the set refused: no error, and nothing projected - every stored value stays as the check kept it.
     const result = await importer.projectUnimportedSnapshots();
     assert.equal(result?.error ?? null, null, JSON.stringify(result));
-    const [projected] = await g2Stored(o.teamId);
-    for (const values of Object.values(projected.raw_bundle.details.full.players)) {
-      assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), JSON.stringify(Object.keys(values)));
-    }
+    const [untouched] = await g2Stored(o.teamId);
+    assert.deepEqual(untouched.raw_bundle, a.raw_bundle, "the snapshot is not rewritten while the set is refused");
+    for (const values of Object.values(untouched.raw_bundle.details.full.players)) assert.deepEqual(values.g2_r_keep, { unit: "number", value: 4 });
   } finally {
     src.state.bundle.teamSession.updated_on = originalUpdatedOn;
     await g2Remove([keep, retired, ...many, extra]);

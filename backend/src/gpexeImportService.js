@@ -27,7 +27,7 @@ import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCa
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { candidateReasons } from "./gpexeImportReasons.js";
 import { createFieldCollector } from "./sourceFieldInventory.js";
-import { EMPTY_PINNED_FIELDS, PinnedFieldsError, PINNED_FIELDS_SQL, pinnedFieldsFromKeys, readPinnedFields } from "./sourcePinnedFields.js";
+import { PinnedFieldsError, PINNED_FIELDS_SQL, pinnedFieldsFromKeys, readPinnedFields } from "./sourcePinnedFields.js";
 import { candidateState } from "./gpexeImportState.js";
 import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./gpexeImportAudience.js";
 import {
@@ -610,10 +610,13 @@ export async function projectUnimportedSnapshots() {
           pinnedFields = pinnedFieldsFromKeys((await run(PINNED_FIELDS_SQL, [])).rows.map((r) => r.source_metric_key));
         } catch (error) {
           if (!(error instanceof PinnedFieldsError)) throw error;
-          // The set cannot be read as one: this run keeps only the consumed fields (the next check reads the rest
-          // again), says so with the stable code, and goes on.
-          console.warn(`[gpexe] retention: the pinned set was refused (${error.code}); this run keeps only the consumed fields`);
-          pinnedFields = EMPTY_PINNED_FIELDS;
+          // The set cannot be read as one (a raw write past route C): this run projects nothing - every stored value
+          // stays as the check that read it kept it - says so with the stable code, and leaves the purge to run.
+          console.warn(`[gpexe] retention: the pinned set was refused (${error.code}); no snapshot is projected in this run`);
+          await run("commit");
+          client.removeListener("error", onError);
+          client.release();
+          return null;
         }
       }
       const rows = (await run(
@@ -732,6 +735,8 @@ export async function projectUnimportedSnapshots() {
       fail(error);
       break;
     }
+    // G2: the pinned set was refused - nothing is projected in this run, the cursor stays.
+    if (ids === null) break;
     if (!ids.length) {
       // The end of the list: the next run starts from the beginning.
       projectionCursor = null;

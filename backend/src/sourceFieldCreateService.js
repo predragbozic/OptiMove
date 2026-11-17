@@ -13,11 +13,14 @@ import { PINNED_FIELDS_MAX } from "./sourcePinnedFields.js";
 const { runWrite, rightsStillHold, refusal, NOT_FOUND, MESSAGES, hashOf, REVISION_COLUMNS, revisionOut } = adminWriteKit;
 
 const CONTRACT = "source-field-create/v1";
+// The advisory lock namespace of route C's bound (the 7194026xx series of two-key namespaces; the second key is the field kind's prefix).
+const FIELD_CREATE_LOCK_CLASS = 719402689;
 export const mayCreateFields = mayVerify;
 
 const TEXT = {
   name_not_observed: "GPEXE has not sent this name through any connection yet; find new sessions first.",
   field_exists: "A source field with this key already exists.",
+  value_not_number: "GPEXE sends this name as something other than a number (or a value with its unit), so it cannot become a field a check keeps.",
   too_many_fields: `A check keeps at most ${PINNED_FIELDS_MAX} source fields of this kind; this one cannot be added.`,
   invalid_label: `label is one line of 1-${LABEL_MAX_LENGTH} visible characters without surrounding spaces.`,
 };
@@ -102,6 +105,16 @@ export async function createField({ ctx, body }) {
       )).rows[0];
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       if (!seen) throw refusal(409, "name_not_observed", TEXT.name_not_observed);
+      // G2: every check keeps a created field for every team (the pinned set), and a pinned value of another shape fails
+      // the check closed. So a name is created only when every connection saw it as the shape a check keeps: a number
+      // for an athlete row, a value with its unit for the details (or no value at all).
+      const kept = GENERIC_ENDPOINTS[endpoint].valueShape === "number" ? ["number", "null"] : ["unit_value_object", "null"];
+      const otherKind = (await client.query(
+        `select 1 from training_load.source_field_observations
+          where api_family = 'rest_v1' and endpoint = $1 and field_name = $2 and not (value_kind = any($3::text[])) limit 1`,
+        [endpoint, name, kept],
+      )).rows[0];
+      if (otherKind) throw refusal(409, "value_not_number", TEXT.value_not_number);
       const taken = (await client.query(
         `select id from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and source_metric_key = $1`,
         [derived.sourceMetricKey],
@@ -110,13 +123,14 @@ export async function createField({ ctx, body }) {
       // G2: every active field of this kind is kept by every check (the pinned set, sourcePinnedFields.js), at most
       // PINNED_FIELDS_MAX; two creates of one kind are serialized here so neither passes the bound with the other.
       const prefix = GENERIC_ENDPOINTS[endpoint].prefix;
-      await client.query(`select pg_advisory_xact_lock(hashtext('training_load.source_field_create:' || $1))`, [prefix]);
-      const kept = (await client.query(
+      // The two-key form: its own class (FIELD_CREATE_LOCK_CLASS), never the per-user lock's one-key space.
+      await client.query(`select pg_advisory_xact_lock($1::int, hashtext($2))`, [FIELD_CREATE_LOCK_CLASS, prefix]);
+      const keptCount = (await client.query(
         `select count(*)::int as n from training_load.source_metric_definitions
           where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active' and starts_with(source_metric_key, $1)`,
         [prefix],
       )).rows[0].n;
-      if (kept >= PINNED_FIELDS_MAX) throw refusal(409, "too_many_fields", TEXT.too_many_fields);
+      if (keptCount >= PINNED_FIELDS_MAX) throw refusal(409, "too_many_fields", TEXT.too_many_fields);
       if ((await client.query(`select training_load.source_metric_text_ok($1, $2) as ok`, [label, LABEL_MAX_LENGTH])).rows[0].ok !== true) {
         throw refusal(400, "invalid_body", TEXT.invalid_label);
       }

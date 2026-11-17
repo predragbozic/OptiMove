@@ -116,7 +116,7 @@ async function world() {
   await observe(W.conn, [
     ["details.session", "metabolic_power", { kind: "unit_value_object", unit: "power" }],
     ["details.session", "odd_word", { kind: "unit_value_object", unit: "furlongs" }],
-    ["details.session", "no_unit_word", { kind: "number" }],
+    ["details.session", "no_unit_word", { kind: "unit_value_object" }],
     ["details.drill", "drill_only", { kind: "unit_value_object", unit: "number" }],
     ["athlete_session", "average_v"],
     ["athlete_session", "Zeta_count"],
@@ -679,4 +679,30 @@ test("14. G2 review fixes on route C: a lower-case name no check could keep (con
     createService.setFieldCreateHoldForTests(null);
   }
   assert.equal((await one(`select count(*)::int n from training_load.source_metric_definitions where source_system = 'gpexe' and api_family = 'rest_v1' and state = 'active' and starts_with(source_metric_key, 'athlete_session.')`)).n, 64);
+});
+
+test("15. G2 code review MEDIUM: route C creates a field only when every connection saw the name in the shape a check keeps (a number for an athlete row, a value with its unit for the details, or no value) - another shape is 409 value_not_number with nothing written, since a pinned value of another shape would fail every team's check", async () => {
+  const before = (await one(`select count(*)::int n from training_load.source_metric_definitions`)).n;
+  const text = `g2_txt_${uid()}`;
+  const flag = `g2_bool_${uid()}`;
+  const obj = `g2_obj_${uid()}`;
+  const mixed = `g2_mixed_${uid()}`;
+  await observe(W.conn, [["athlete_session", text, { kind: "text" }], ["athlete_session", flag, { kind: "boolean" }], ["details.session", obj, { kind: "object" }]]);
+  await observe(W.conn, [["athlete_session", mixed, { kind: "number" }]]);
+  // The same name seen as text through another connection of the club.
+  const other = (await one(`insert into training_load.source_credential_connections (source_system, owner_scope, owner_club_id, host_key, account_label, credential_kind, created_by_user_id, state)
+     values ('gpexe','club',$1,'server3',$2,'exchanged_token',$3,'not_connected') returning id`, [W.club, `Label ${uid()}`, W.pa.id])).id;
+  await observe(other, [["athlete_session", mixed, { kind: "text" }]]);
+  for (const [endpoint, name] of [["athlete_session", text], ["athlete_session", flag], ["details.session", obj], ["athlete_session", mixed]]) {
+    const r = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ endpoint, name, label: `Shape ${name}` }) });
+    assert.deepEqual([r.status, r.body.error], [409, "value_not_number"], `${endpoint}.${name}: ${r.text}`);
+  }
+  assert.equal((await one(`select count(*)::int n from training_load.source_metric_definitions`)).n, before, "nothing written");
+  // A name seen with no value at all through one connection and with its unit through another is created (a details
+  // field: test 14 left the athlete rows at their bound).
+  const nul = `g2_null_${uid()}`;
+  await observe(W.conn, [["details.session", nul, { kind: "null" }]]);
+  await observe(other, [["details.session", nul, { kind: "unit_value_object", unit: "power" }]]);
+  const created = await api("/fields", { cookie: W.pa.cookie, method: "POST", body: body({ endpoint: "details.session", name: nul, label: "Shape null" }) });
+  assert.equal(created.status, 201, created.text);
 });
