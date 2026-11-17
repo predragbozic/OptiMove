@@ -9,7 +9,7 @@ select (select count(*) from public.schema_migrations where migration_name = 'mi
 select e.f as fn, md5(p.prosrc) as actual_md5, md5(p.prosrc) = e.m as ok
   from (values ('undo_imported_session', '67559dabda476298a10f100d13dc74e1'),
                ('validate_import_deletion_log_v60', 'f00bd8533daef19560b07704c87fd4e2'),
-               ('lock_gpexe_session_undo_right', 'a5266229ae1718f1c501af0aff45394b')) e(f, m)
+               ('lock_gpexe_session_undo_right', '12a6b27602426484fcd19ecd1e09f3cd')) e(f, m)
   join pg_namespace n on n.nspname = 'training_load' join pg_proc p on p.pronamespace = n.oid and p.proname = e.f
  order by 1;
 

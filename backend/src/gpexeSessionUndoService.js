@@ -70,7 +70,8 @@ function parseDetail(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-function mapDatabaseError(error) {
+// Exported for the tests: the mapping a refusal of the database function takes to the HTTP answer.
+export function mapDatabaseError(error) {
   if (error instanceof GpexeImportServiceError) return error;
   const message = String(error?.message || "");
   if (error?.code === "55000" && message.startsWith("session_undo:")) {

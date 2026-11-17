@@ -14,7 +14,10 @@ Migration: `migrations_v2/202611171000_training_load_v76_undo_by_importer.sql`. 
   and `team_coach` of the team, both only while the team's switch is in mode `team`. **The switch being off does not take the
   right away**: a wrong import must stay deletable.
 * `training_load.lock_gpexe_session_undo_right(user, team)` derives it under `FOR SHARE` locks in the revocations' order (users,
-  then the role rows, then the switch row last) and returns the basis, or `42501` (the route answers the identical 404).
+  then the role rows, then the switch row, then the team and its club, as the approval's `lockApprovalTeam`) and returns the
+  basis, or `42501` (the route answers the identical 404). An archived team or club is no right for any basis, a platform
+  admin's included; an archive waits for an undo in flight, and a mode change waits for it too (the switch row is held
+  `FOR SHARE` until the undo commits).
 * `undo_imported_session` takes its right from it and writes the basis to `import_deletion_log.authorized_via`, whose CHECK now
   takes the four bases. The log's insert guard (`validate_import_deletion_log_v60`) derives the basis again: a row naming a basis
   its user does not hold is refused (`42501`), so a coach cannot record an undo as a platform admin's.

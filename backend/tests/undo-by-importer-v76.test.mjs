@@ -341,7 +341,8 @@ test("1. pilot mode: a platform admin undoes (basis platform_admin); a coach and
   assert.equal((await statusOf(team, team.padmin.cookie)).body.viewer.undoImport, true);
   for (const [who, cookie] of [["coach", team.coach.cookie], ["club admin", team.cadmin.cookie]]) {
     const st = await statusOf(team, cookie);
-    if (st.status === 200) assert.equal("undoImport" in st.body.viewer, false, `${who}: no flag`);
+    assert.equal(st.status, 200, `${who}: reads the team's status`);
+    assert.equal("undoImport" in st.body.viewer, false, `${who}: no flag`);
     const rowsBefore = await allRowCounts();
     await allHidden(team, s, cookie, who);
     assert.deepEqual(await allRowCounts(), rowsBefore, `${who}: nothing removed`);
@@ -417,6 +418,9 @@ test("5. everyone else gets the identical 404, nothing removed: another club's a
   const athleteUserId = await makeUser("athlete");
   await admin.query(`update public.athletes set user_id = $1 where id = $2`, [athleteUserId, team.athleteIds[0]]);
   const athlete = { id: athleteUserId, cookie: `optimove_session=${await createSession(athleteUserId)}` };
+  const holder = await coachOf(team.teamId, "grant holder");
+  await grantTo(team, holder);
+  const cadmin = await clubAdminInTeamWorkspace(team);
   const rowsBefore = await allRowCounts();
   for (const [who, u] of [["another club's admin", otherAdmin], ["admin of both, other workspace", both], ["no role", nobody], ["athlete", athlete]]) {
     await allHidden(team, s, u.cookie, who);
@@ -426,6 +430,15 @@ test("5. everyone else gets the identical 404, nothing removed: another club's a
     for (const [who, cookie] of [["coach", team.coach.cookie], ["platform admin", team.padmin.cookie]]) await allHidden(team, s, cookie, `archived team, ${who}`);
   } finally {
     await admin.query(`update public.teams set is_active = true where id = $1`, [team.teamId]);
+  }
+  // An archived club: every basis, a grant holder included, gets the identical 404.
+  await admin.query(`update public.clubs set is_active = false where id = $1`, [team.clubId]);
+  try {
+    for (const [who, cookie] of [["coach", team.coach.cookie], ["grant holder", holder.cookie], ["club admin", cadmin.cookie], ["platform admin", team.padmin.cookie]]) {
+      await allHidden(team, s, cookie, `archived club, ${who}`);
+    }
+  } finally {
+    await admin.query(`update public.clubs set is_active = true where id = $1`, [team.clubId]);
   }
   assert.deepEqual(await allRowCounts(), rowsBefore, "nothing removed");
 });
@@ -559,22 +572,34 @@ test("11. the plain sentences: a calendar link names the next step; a hand-enter
   const r = await undo(team, s, { cookie: team.coach.cookie });
   assert.deepEqual([r.status, r.body.error], [409, "calendar_link_exists"], r.text);
   assert.equal(r.body.message, "This session is attached to a calendar event. Remove it from the calendar event first, then delete it again.");
-  const svc = fs.readFileSync(new URL("../src/gpexeSessionUndoService.js", import.meta.url), "utf8");
-  assert.ok(svc.includes("Some results of this session were entered by hand, so its imported data cannot be deleted here. Ask a platform administrator to delete it."));
-  for (const m of [r.body.message]) assert.doesNotMatch(m, /[a-z]+_[a-z_]+/, "no code in the sentence");
+  // Each of the three refusals through the service's real mapping of the database's refusal: one sentence, no code.
+  const expected = {
+    calendar_link_exists: "This session is attached to a calendar event. Remove it from the calendar event first, then delete it again.",
+    manual_occasion: "Some results of this session were entered by hand, so its imported data cannot be deleted here. Ask a platform administrator to delete it.",
+    entangled_activity: "This session was merged with another session, so its imported data cannot be deleted here. Ask a platform administrator to delete it.",
+  };
+  for (const [code, sentence] of Object.entries(expected)) {
+    const mapped = undoService.mapDatabaseError({ code: "55000", message: `session_undo: ${code}` });
+    assert.deepEqual([mapped.status, mapped.code, mapped.message], [409, code, sentence], code);
+    assert.doesNotMatch(mapped.message, /[a-z]+_[a-z_]+/, `${code}: no code in the sentence`);
+  }
 });
 
 // ---------------------------------------------------------------------------
 // Locks and races
 // ---------------------------------------------------------------------------
 test("12. recorded SQL order of the right: users, then the role rows (platform admin, grant, club admin, team coach), the switch row last; the undo derives the right before the team lock", async () => {
-  const body = (await admin.query(`select prosrc from pg_proc where proname = 'lock_gpexe_session_undo_right'`)).rows[0].prosrc;
+  const stripComments = (src) => src.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const body = stripComments((await admin.query(`select prosrc from pg_proc where proname = 'lock_gpexe_session_undo_right'`)).rows[0].prosrc);
   const at = (needle) => { const i = body.indexOf(needle); assert.ok(i >= 0, needle); return i; };
-  const order = [at("from public.users"), at("from public.user_global_roles"), at("from training_load.gpexe_import_approvers"), at("from public.user_club_roles"), at("from public.user_team_roles"), body.lastIndexOf("gpexe_team_import_switch")];
-  assert.deepEqual([...order].sort((a, b) => a - b), order, "users first, the switch row last");
-  assert.ok(!/gpexe_team_import_switch[\s\S]*enabled/.test(body.slice(body.lastIndexOf("from training_load.gpexe_team_import_switch"))) || !/\benabled\b/.test(body), "the switch's on/off is not read");
-  const undoBody = (await admin.query(`select prosrc from pg_proc where proname = 'undo_imported_session'`)).rows[0].prosrc;
-  assert.ok(undoBody.indexOf("lock_gpexe_session_undo_right") < undoBody.indexOf("gpexe-import-team:"), "the right before the team lock");
+  const order = [at("from public.users"), at("from public.user_global_roles"), at("from training_load.gpexe_import_approvers"), at("from public.user_club_roles"), at("from public.user_team_roles"),
+    body.lastIndexOf("from training_load.gpexe_team_import_switch"), at("from public.teams t where t.id = p_team_id and coalesce(t.is_active, true) for share"), at("from public.clubs c")];
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "users first, then the role rows, the switch row, the team and its club last");
+  assert.doesNotMatch(body, /\benabled\b/, "the switch's on/off is not read");
+  const undoBody = stripComments((await admin.query(`select prosrc from pg_proc where proname = 'undo_imported_session'`)).rows[0].prosrc);
+  const call = undoBody.search(/:=\s*training_load\.lock_gpexe_session_undo_right\(/);
+  assert.ok(call >= 0, "the undo calls the right");
+  assert.ok(call < undoBody.indexOf("gpexe-import-team:"), "the right before the team lock");
   assert.doesNotMatch(undoBody, /is not an active platform admin|'platform_admin'::text|authorized_via[^;]*'platform_admin'/, "no hard-coded basis left");
 });
 
@@ -652,6 +677,18 @@ test("13b. the database's own right, without the route in front: each basis and 
   const padmin3 = await platformAdmin();
   await admin.query(`update public.users set is_active = false where id = $1`, [padmin3.id]);
   assert.equal(await right(padmin3.id), "refused", "a disabled account");
+  // An archived team, then an archived club: no right for any basis, the platform admin included (the approval's
+  // lockApprovalTeam), whatever the route resolved before.
+  await setMode(team, "team");
+  for (const [table, id] of [["teams", team.teamId], ["clubs", team.clubId]]) {
+    await admin.query(`update public.${table} set is_active = false where id = $1`, [id]);
+    try {
+      assert.deepEqual([await right(team.padmin.id), await right(team.coach.id), await right(team.cadmin.id)], ["refused", "refused", "refused"], `archived ${table}`);
+    } finally {
+      await admin.query(`update public.${table} set is_active = true where id = $1`, [id]);
+    }
+  }
+  await setMode(team, "pilot");
   // The undo function itself, called directly with the revoked coach: 42501 and nothing removed.
   const s = await importSession(team, 7619);
   const rowsBefore = await allRowCounts();

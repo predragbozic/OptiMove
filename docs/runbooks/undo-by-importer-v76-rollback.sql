@@ -35,7 +35,7 @@ declare
   expected constant text[][] := array[
     ['undo_imported_session', '67559dabda476298a10f100d13dc74e1'],
     ['validate_import_deletion_log_v60', 'f00bd8533daef19560b07704c87fd4e2'],
-    ['lock_gpexe_session_undo_right', 'a5266229ae1718f1c501af0aff45394b']];
+    ['lock_gpexe_session_undo_right', '12a6b27602426484fcd19ecd1e09f3cd']];
   i int;
 begin
   if not exists (select 1 from public.schema_migrations where migration_name = v76) then

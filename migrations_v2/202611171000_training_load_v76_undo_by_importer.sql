@@ -12,7 +12,8 @@
 --     switch is in mode 'team'. Option (a): the switch being OFF does not take the right away (a wrong import must stay
 --     deletable); in pilot mode (or with no switch row) club_admin and team_coach are no right.
 --   * The new function training_load.lock_gpexe_session_undo_right(user, team) derives it under FOR SHARE locks in the
---     revocations' order: users, then the role rows, then the switch row last. 42501 'user % may not undo an imported
+--     revocations' order: users, then the role rows, then the switch row, then the team and its club (an archived
+--     team or club is no right). 42501 'user % may not undo an imported
 --     session' when there is none (the route answers the identical 404).
 --   * undo_imported_session takes its right from it and writes the basis to the deletion log.
 --   * import_deletion_log.authorized_via takes the four bases; validate_import_deletion_log_v60 derives the basis again and
@@ -111,6 +112,18 @@ begin
   select s.mode into v_mode from training_load.gpexe_team_import_switch s where s.owner_team_id = p_team_id for share;
   if v_basis in ('club_admin', 'team_coach') and v_mode is distinct from 'team' then
     raise exception 'user % may not undo an imported session', p_user_id using errcode = '42501';
+  end if;
+  -- The team, then its club, FOR SHARE (the approval's lockApprovalTeam): an archived team or club is no right, for every
+  -- basis, and an archive waits for an undo in flight (the archive writers are single statements: no cycle).
+  select t.club_id into v_club from public.teams t where t.id = p_team_id and coalesce(t.is_active, true) for share;
+  if not found then
+    raise exception 'user % may not undo an imported session', p_user_id using errcode = '42501';
+  end if;
+  if v_club is not null then
+    perform 1 from public.clubs c where c.id = v_club and coalesce(c.is_active, true) for share;
+    if not found then
+      raise exception 'user % may not undo an imported session', p_user_id using errcode = '42501';
+    end if;
   end if;
   return v_basis;
 end;
