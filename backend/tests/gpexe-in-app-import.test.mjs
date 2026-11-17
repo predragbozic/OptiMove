@@ -678,7 +678,7 @@ test("approver grants: only a platform admin grants and revokes, only to an acti
   const grant = await api(`/teams/${team.teamId}/approvers`, { method: "POST", cookie: team.padmin.cookie, body: { userId: team.coach.id, reason: "approves GPEXE imports for this team" } });
   assert.equal(grant.status, 201);
   assert.equal((await api(`/teams/${team.teamId}/approvers`, { method: "POST", cookie: team.padmin.cookie, body: { userId: team.coach.id, reason: "again" } })).status, 409);
-  assert.deepEqual(await status(team.coach), { canApprove: true, approvalBasis: "team_grant", hasApprovalRight: true, isPlatformAdmin: false, identityNames: true });
+  assert.deepEqual(await status(team.coach), { canApprove: true, approvalBasis: "team_grant", hasApprovalRight: true, isPlatformAdmin: false, identityNames: true, undoImport: true });
 
   // Losing the coach role ends the right without touching the grant.
   const { canApproveGpexeImport } = await import("../src/gpexeImportAccess.js");
