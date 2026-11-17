@@ -24,7 +24,7 @@ function serve(handler) {
 const value = (id, key, n, extra = {}) => ({ factKind: "metric_value", detail: { metricDefinitionId: id, valueNumeric: n, valueBoolean: null, valueText: null, unitAtCapture: null, level: "session", componentId: null, drillOrdinal: null, drillKey: null, valueKey: key, ...extra } });
 const drill = (id, key, n, drillKey, drillOrdinal, componentId = null) => value(id, key, n, { level: "drill", drillKey, drillOrdinal, componentId });
 
-test("1. the entry: hidden until the server says yes; a failed read hides nothing and shows nothing; once yes it stays", async () => {
+test("1. the entry follows the server: hidden until it says yes, hidden again on a later no (owner); a failed read changes nothing", async () => {
   state.myTraining = emptyMyTrainingState();
   assert.equal(view.renderMyTrainingHomeEntryHtml(), "", "not read yet");
   serve(() => ({ status: 200, body: { hasRecordedSessions: false } }));
@@ -35,10 +35,11 @@ test("1. the entry: hidden until the server says yes; a failed read hides nothin
   serve(() => ({ status: 200, body: { hasRecordedSessions: true } }));
   assert.equal(await data.loadMyTrainingAvailability(), true);
   assert.match(view.renderMyTrainingHomeEntryHtml(), /data-target-tab="my-training"[\s\S]*My training/);
-  serve(() => ({ status: 200, body: { hasRecordedSessions: false } }));
-  assert.equal(await data.loadMyTrainingAvailability(), true, "once yes, it stays");
   serve(() => ({ status: 500, body: {} }));
-  assert.equal(await data.loadMyTrainingAvailability(), true);
+  assert.equal(await data.loadMyTrainingAvailability(), true, "a failed read keeps the yes");
+  serve(() => ({ status: 200, body: { hasRecordedSessions: false } }));
+  assert.equal(await data.loadMyTrainingAvailability(), false, "her last recorded session was deleted: the entry goes");
+  assert.equal(view.renderMyTrainingHomeEntryHtml(), "");
   data.resetMyTraining();
   assert.equal(state.myTraining.available, null, "a workspace switch forgets it");
 });
@@ -206,6 +207,106 @@ test("14: a text value goes under its label; the list has its heading, and an em
   serve(() => ({ status: 200, body: { rows: [], nextCursor: null } }));
   await data.loadMyTrainingList({}, () => {});
   const html = view.renderMyTrainingHtml();
-  assert.match(html, /<h3 class="my-training-title">My training<\/h3>/);
+  assert.match(html, /<h3 class="my-training-title" tabindex="-1">My training<\/h3>/);
   assert.match(html, /Sessions appear here after a device or your coach records them\./);
+});
+
+test("15 (owner, 2026-11-17): on the My training tab, a no from the server shows the empty sentence - never an older list, and she stays", async () => {
+  state.activeTab = "my-training";
+  state.myTraining = emptyMyTrainingState();
+  state.myTraining.available = true;
+  serve((url) => (url.endsWith("/self")
+    ? { status: 200, body: { hasRecordedSessions: false } }
+    : { status: 200, body: { rows: [{ activityId: "a1", name: "Team training", localDate: "2026-11-04", recordedBy: "device" }], nextCursor: null } }));
+  let navs = 0;
+  await actions.enterMyTraining({ render: () => {}, renderNav: () => { navs += 1; } });
+  assert.ok(calls.some((u) => u.endsWith("/api/training-activity/self")), "entering reads the server's answer again");
+  assert.equal(state.myTraining.available, false);
+  assert.ok(navs >= 1, "the menu is redrawn");
+  const html = view.renderMyTrainingHtml();
+  assert.match(html, /No recorded sessions in the last 12 months\./);
+  assert.doesNotMatch(html, /Team training|my-training-open/);
+  assert.equal(state.activeTab, "my-training");
+});
+
+test("16 (code review): a no forgets her stored sessions; a later yes reads them again, so Home never names a deleted session", async () => {
+  state.myTraining = emptyMyTrainingState();
+  state.myTraining.available = true;
+  state.myTraining.list = { rows: [{ activityId: "gone", name: "Deleted session", localDate: "2026-11-01", recordedBy: "device" }], nextCursor: null, loaded: true, loading: false, error: "" };
+  serve(() => ({ status: 200, body: { hasRecordedSessions: false } }));
+  await data.loadMyTrainingAvailability();
+  assert.deepEqual(state.myTraining.list.rows, []);
+  assert.equal(state.myTraining.list.loaded, false);
+  serve((url) => (url.includes("/self")
+    ? { status: 200, body: { hasRecordedSessions: true } }
+    : { status: 200, body: { rows: [{ activityId: "new", name: "New session", localDate: "2026-11-16", recordedBy: "device" }], nextCursor: null } }));
+  await actions.refreshMyTrainingEntry({ render: () => {} });
+  assert.ok(calls.some((u) => u.startsWith("/api/training-activity?")), "the list is read again");
+  assert.match(view.renderMyTrainingHomeEntryHtml(), /Last: New session/);
+  assert.doesNotMatch(view.renderMyTrainingHomeEntryHtml(), /Deleted session/);
+});
+
+test("17 (code review): when the menu item hides while it has the focus, the focus moves to the page's heading", async () => {
+  state.myTraining = emptyMyTrainingState();
+  state.myTraining.available = true;
+  const item = { hidden: false, closest: (sel) => (sel === '[data-athlete-tab="my-training"]' ? item : null) };
+  let focused = "";
+  const title = { focus: () => { focused = "title"; } };
+  const saved = globalThis.document;
+  globalThis.document = { ...saved, activeElement: item, querySelector: (sel) => (sel === ".my-training-title" ? title : null) };
+  try {
+    serve((url) => (url.includes("/self") ? { status: 200, body: { hasRecordedSessions: false } } : { status: 200, body: { rows: [], nextCursor: null } }));
+    await actions.enterMyTraining({ render: () => {}, renderNav: () => { item.hidden = state.myTraining.available !== true; } });
+    assert.equal(focused, "title");
+  } finally {
+    globalThis.document = saved;
+  }
+});
+
+test("16b (code review): a no that lands before the list read drops that read; nothing is left loading, and a later yes reads the list", async () => {
+  state.myTraining = emptyMyTrainingState();
+  state.myTraining.available = true;
+  let release;
+  const held = new Promise((r) => { release = r; });
+  serve(async (url) => (url.includes("/self")
+    ? { status: 200, body: { hasRecordedSessions: false } }
+    : (await held, { status: 200, body: { rows: [{ activityId: "gone", name: "Deleted session", localDate: "2026-11-01" }], nextCursor: null } })));
+  const entering = actions.enterMyTraining({ render() {}, renderNav() {} });
+  await new Promise((r) => setTimeout(r, 0));
+  release();
+  await entering;
+  assert.equal(state.myTraining.list.loading, false);
+  assert.deepEqual(state.myTraining.list.rows, [], "the dropped read is not kept");
+  serve((url) => (url.includes("/self")
+    ? { status: 200, body: { hasRecordedSessions: true } }
+    : { status: 200, body: { rows: [{ activityId: "new", name: "New session", localDate: "2026-11-16" }], nextCursor: null } }));
+  await actions.refreshMyTrainingEntry({ render() {} });
+  assert.ok(calls.some((u) => u.startsWith("/api/training-activity?")));
+  assert.match(view.renderMyTrainingHomeEntryHtml(), /Last: New session/);
+});
+
+test("17b (code review): the focus lands on the heading drawn by the last render, when the list read answers after the no", async () => {
+  state.myTraining = emptyMyTrainingState();
+  state.myTraining.available = true;
+  const item = { hidden: false, closest: (sel) => (sel === '[data-athlete-tab="my-training"]' ? item : null) };
+  const saved = globalThis.document;
+  const doc = { ...saved, activeElement: item };
+  let currentTitle = null;
+  doc.querySelector = (sel) => (sel === ".my-training-title" ? currentTitle : null);
+  const render = () => { const t = { focus() { doc.activeElement = t; } }; currentTitle = t; };
+  globalThis.document = doc;
+  let release;
+  const held = new Promise((r) => { release = r; });
+  try {
+    serve(async (url) => (url.includes("/self")
+      ? { status: 200, body: { hasRecordedSessions: false } }
+      : (await held, { status: 200, body: { rows: [], nextCursor: null } })));
+    const entering = actions.enterMyTraining({ render, renderNav() { item.hidden = state.myTraining.available !== true; } });
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    await entering;
+    assert.ok(currentTitle && doc.activeElement === currentTitle, "the focus is on the heading on screen now");
+  } finally {
+    globalThis.document = saved;
+  }
 });

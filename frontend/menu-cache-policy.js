@@ -134,7 +134,7 @@ export const MENU_CACHE_POLICIES = {
     policy: "always-refresh",
     namespace: null,
     rationale:
-      "The athlete's own recorded sessions and values (owner, 2026-11-16; my-training-data.js). Read again on every entry: a session recorded or imported a moment ago must show at once, and the reads are hers alone (GET /api/training-activity as the athlete, the server's own scope). The entry itself is the server's GET /api/training-activity/self answer, read with Home.",
+      "The athlete's own recorded sessions and values (owner, 2026-11-16; my-training-data.js). Read again on every entry: a session recorded or imported a moment ago must show at once, and the reads are hers alone (GET /api/training-activity as the athlete, the server's own scope). The entry itself is the server's GET /api/training-activity/self answer, read with Home and again on entering the tab; an answer of no hides it again (owner, 2026-11-17).",
   },
   "athlete-settings": {
     label: "Account (athlete shell)",

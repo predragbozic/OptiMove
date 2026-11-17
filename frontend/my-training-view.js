@@ -22,10 +22,13 @@ export function renderMyTrainingHtml() {
 }
 
 function renderListHtml(list) {
-  if (!list.loaded && list.error) return errorHtml(list.error, "my-training-retry");
-  if (!list.loaded) return `<div class="empty">Loading your sessions...</div>`;
-  const heading = `<h3 class="my-training-title">My training</h3>`;
-  if (!list.rows.length) return `${heading}<div class="panel my-training-empty"><p>No recorded sessions in the last 12 months.</p><p class="muted">Sessions appear here after a device or your coach records them.</p></div>`;
+  const heading = `<h3 class="my-training-title" tabindex="-1">My training</h3>`;
+  // The server says she has no recorded session (one was deleted while she is here): the empty sentence, never an
+  // older list, and she is not sent away.
+  const none = state.myTraining.available === false;
+  if (!none && !list.loaded && list.error) return errorHtml(list.error, "my-training-retry");
+  if (!none && !list.loaded) return `<div class="empty">Loading your sessions...</div>`;
+  if (none || !list.rows.length) return `${heading}<div class="panel my-training-empty"><p>No recorded sessions in the last 12 months.</p><p class="muted">Sessions appear here after a device or your coach records them.</p></div>`;
   return `
     ${heading}
     <p class="my-training-intro muted">Your last 12 months, newest first.</p>

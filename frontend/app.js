@@ -2551,7 +2551,7 @@ async function loadMyTraining() {
   els.context.textContent = "Your sessions";
   els.title.textContent = "My training";
   els.toolbar.innerHTML = "";
-  return enterMyTraining({ render: renderMyTraining });
+  return enterMyTraining({ render: renderMyTraining, renderNav: renderLibraryNav });
 }
 
 function renderMyTraining() {
