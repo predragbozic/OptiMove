@@ -1466,6 +1466,10 @@ test("18. the import switch off - unset and explicitly 'false' - never touches a
   }
 });
 
+// The planted number 24680.1357 as a JSON number token, never a digit run inside a random id (an id has no dot, and
+// the lookarounds refuse a longer number around it): an exact check, where a "24680" substring could match a UUID.
+const PLANTED_NUMBER = /(?<![0-9.])24680\.1357(?![0-9])/;
+
 test("19. the whole-session details are projected to the consumed fields (the F3c3 pilot's diagnostic): an unconsumed 5-16-key object metric no longer refuses the check - it completes, and that metric is absent from the candidate, its preview and the retained snapshot; a malformed tot_burst_events or tot_brake_events, a dangerous metric key and an invalid players container still fail closed with nothing recorded; the switch off still refuses single and batch approval; the environment token is never sent", async () => {
   const MARKER_METRIC = "markerUnconsumedObjZq";
   const MARKER_TEXT = "Marker free text value";
@@ -1502,7 +1506,8 @@ test("19. the whole-session details are projected to the consumed fields (the F3
     for (const field of ["tot_burst_events", "tot_brake_events"]) assert.deepEqual(Object.keys(values[field]).sort(), ["unit", "value"]);
   }
   const everything = JSON.stringify({ candidates, row });
-  for (const leak of [MARKER_METRIC, MARKER_TEXT, String(MARKER_NUMBER), "24680"]) assert.ok(!everything.includes(leak), `${leak} is absent from the candidate, its preview, the snapshot and the check row`);
+  for (const leak of [MARKER_METRIC, MARKER_TEXT]) assert.ok(!everything.includes(leak), `${leak} is absent from the candidate, its preview, the snapshot and the check row`);
+      assert.ok(!PLANTED_NUMBER.test(everything), `${MARKER_NUMBER} is absent from the candidate, its preview, the snapshot and the check row`);
   assert.ok(candidates[0].preview && candidates[0].preview_hash, "the preview was computed");
   assert.equal(candidates[0].status, "pending", "with the binding's activations the candidate is not blocked");
   // The switch is off: a successful check / preview is allowed, approving is not.
@@ -1663,7 +1668,8 @@ test("22. a superseded candidate keeps no unconsumed metric: a pending candidate
       }
       for (const values of Object.values(row.raw_bundle.details.full.players)) assert.ok(Object.keys(values).every((k) => ["tot_burst_events", "tot_brake_events"].includes(k)), `${row.status} whole session`);
       const stored = JSON.stringify({ raw: row.raw_bundle, preview: row.preview });
-      for (const leak of [MARKER, MARKER_TEXT, "24680"]) assert.ok(!stored.includes(leak), `${leak} is not stored on the ${row.status} candidate`);
+      for (const leak of [MARKER, MARKER_TEXT]) assert.ok(!stored.includes(leak), `${leak} is not stored on the ${row.status} candidate`);
+      assert.ok(!PLANTED_NUMBER.test(stored), `24680.1357 is not stored on the ${row.status} candidate`);
     }
     // Not exposed by any read: the list with replaced versions, the detail of each candidate, through the routes as the club admin.
     const list = await api(`/gpexe/teams/${o.teamId}/candidates?includeSuperseded=true`, { cookie: o.cadmin.cookie });
@@ -1672,7 +1678,8 @@ test("22. a superseded candidate keeps no unconsumed metric: a pending candidate
     for (const row of rows) details.push(await api(`/gpexe/teams/${o.teamId}/candidates/${row.id}`, { cookie: o.cadmin.cookie }));
     assert.ok(details.every((d) => d.status === 200), JSON.stringify(details.map((d) => d.status)));
     const exposed = JSON.stringify([list.body, details.map((d) => d.body), await importer.listCandidates(o.teamId, { includeSuperseded: true })]);
-    for (const leak of [MARKER, MARKER_TEXT, "24680"]) assert.ok(!exposed.includes(leak), `${leak} is exposed by a read`);
+    for (const leak of [MARKER, MARKER_TEXT]) assert.ok(!exposed.includes(leak), `${leak} is exposed by a read`);
+    assert.ok(!PLANTED_NUMBER.test(exposed), "24680.1357 is exposed by a read");
     // The superseded candidate cannot be approved; the current one is refused while the switch is off.
     const approveOld = await api(`/gpexe/teams/${o.teamId}/candidates/${oldRow.id}/approve`, { method: "POST", cookie: o.padmin.cookie, body: { previewHash: oldRow.preview_hash, acceptChanges: true } });
     assert.ok(approveOld.status >= 400 && approveOld.status < 500, JSON.stringify(approveOld.body));

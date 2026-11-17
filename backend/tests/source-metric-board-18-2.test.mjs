@@ -399,7 +399,8 @@ test("1. the audience: the club's admin and a platform admin in the club's works
 test("2. the board: the columns with their unit state, their reason and two athletes' raw values; the club's variables then OptiMove's; OptiMove's active mappings pre-placed; the pair named live and stable", async () => {
   const { board } = ok(await boardOf(W.caA, W.tA));
   assert.equal(board.displayRegistryVersion, 2, "2 since G1's as_sent rule");
-  assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId, clubId: W.tA.clubId });
+  const clubName = (await one(`select name from public.clubs where id = $1`, [W.tA.clubId])).name;
+  assert.deepEqual(board.team, { id: W.tA.teamId, name: "First Team A", sourceTeamId: W.tA.sourceTeamId, clubId: W.tA.clubId, clubName });
   assert.equal(board.session.candidateId, W.cA.id);
   assert.equal(new Date(board.session.startedAt).toISOString(), "2026-09-14T18:08:12.000Z");
   // The pair: the first two of the three named athletes, in the server's own order.
@@ -580,7 +581,7 @@ test("5. a placement against what exists: the club's own active version is reuse
   // The same contract is already on: nothing to place. Another column onto the same variable lists the collision.
   assert.deepEqual(ok(await placement(W.caA, W.tA, W.cA.id, f, target)).placement, { placeable: false, code: "activation_exists", fieldId: f.fieldId, targetId: target.id });
   const f2 = await field("time");
-  assert.deepEqual(ok(await placement(W.caA, W.tA, W.cA.id, f2, target)).placement.collisions, [{ activationId: activation.id, fieldId: f.fieldId, variableId: target.id }]);
+  assert.deepEqual(ok(await placement(W.caA, W.tA, W.cA.id, f2, target)).placement.collisions, [{ activationId: activation.id, fieldId: f.fieldId, variableId: target.id, owner: "club", variableLabel: target.label }]);
   // The club's active version with other levels is not this contract.
   const f3 = await field("time");
   const target3 = await variable(W.caA, { unit: "min" });

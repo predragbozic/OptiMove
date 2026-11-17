@@ -704,7 +704,7 @@ test("S6. on the platform board a column the club fills with its own variable sa
 test("S7. the platform board stores no check: its review says so, never that the athletes' values are kept, and it has no History tab", async () => {
   asUser("platform", null);
   const b = platformBoard();
-  b.variables.push({ ...FX.board.board.variables.find((v) => v.id === TARGET), ownerScope: "system", placeable: true });
+  if (!b.variables.some((v) => v.id === TARGET)) b.variables.push({ ...FX.board.board.variables.find((v) => v.id === TARGET), ownerScope: "system", placeable: true });
   platformWorld(b);
   state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
   await actions.loadBoardSection(render);
@@ -742,4 +742,45 @@ test("S8. the workspace switch's hooks: a switch that failed forgets the remembe
   assert.equal(actions.takeBoardAfterSwitch({ type: "platform", scopeId: null }), null);
   actions.boardBeforeSwitch(link({ mbSwitchTeamId: TEAM }));
   assert.equal(actions.takeBoardAfterSwitch({ type: "platform", scopeId: null }), TEAM);
+});
+
+test("S9. S-2: a platform save that replaces the club's own mapping says so by name - the club, the column and the club's variable, which is not on the platform board - and never with an empty name", async () => {
+  const { replacesPhrase } = await import("../metric-board-view.js");
+  asUser("platform", null);
+  const b = platformBoard();
+  if (!b.variables.some((v) => v.id === TARGET)) b.variables.push({ ...FX.board.board.variables.find((v) => v.id === TARGET), ownerScope: "system", placeable: true });
+  b.team = { ...b.team, clubId: "c-1", clubName: "North Club" };
+  platformWorld(b);
+  const collision = { activationId: "a-9", fieldId: FIELD, variableId: "club-var-not-on-this-board", owner: "club", variableLabel: "Club distance" };
+  overrides.push((c) => (c.url.startsWith(`${B}/board/placement?`) ? { status: 200, body: { placement: { ...FX.placement.placement, collisions: [collision] } } } : null));
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  await place();
+  const column = data.cleanName(FX.board.board.columns.find((c) => c.fieldId === FIELD).label);
+  const panelText = text();
+  assert.ok(panelText.includes(`replaces what is on for`) && panelText.includes(`North Club's own mapping: ${column} → Club distance`), panelText.slice(0, 600));
+  assert.doesNotMatch(panelText, /→ [.;,]|→ $/, "never an empty name");
+  // The review names it too.
+  await click(`[data-action="metric-board-compare"][data-field-id="${FIELD}"]`);
+  tick("[data-mb-tick]", true);
+  await click('[data-action="metric-board-keep"]');
+  await click('[data-action="metric-board-review"]');
+  assert.match(text(), new RegExp(`Replaces North Club's own mapping: ${column} → Club distance\\.`));
+  // A name that cannot be read: the club's own mapping of this column, never an empty arrow.
+  assert.equal(replacesPhrase(b, { ...collision, variableLabel: null }), "the club's own mapping of this column");
+  assert.equal(replacesPhrase({ ...b, team: { ...b.team, clubName: null } }, collision), `the club's own mapping: ${column} → Club distance`);
+  assert.equal(replacesPhrase(b, { activationId: "x", fieldId: "no-such-column", variableId: TARGET, owner: "system" }), "OptiMove's mapping of this column");
+});
+
+test("S10. S-2: on the club board, the club's own mapping that OptiMove's replaced reads when, and can still be put back", async () => {
+  const b = structuredClone(FX.board.board);
+  const own = { ...(b.preplaced[0] ?? {}), mappingVersionId: "e1e1e1e1-0000-4000-8000-000000000001", fieldId: FIELD, variableId: TARGET, badge: "club_mapping", placementHash: "h",
+    replaces: [{ activationId: "a-sys", fieldId: FIELD, variableId: TARGET, owner: "system", variableLabel: "OptiMove distance" }], replacedBy: { owner: "system", at: "2026-11-17T15:30:00Z" } };
+  b.preplaced = [];
+  b.on = [];
+  b.replaceable = [own];
+  overrides.push((c) => (c.url.startsWith(`${B}/board?`) ? { status: 200, body: { board: b } } : null));
+  await open();
+  assert.match(text(), /Replaced by OptiMove's mapping on 17\.11\.2026 · From /);
+  assert.ok(content.querySelector(`[data-action="metric-board-pre-add"][data-version-id="${own.mappingVersionId}"]`), "Add puts it back");
 });

@@ -71,6 +71,17 @@ function switchLink(s) {
   return `<button type="button" class="om-btn om-btn--ghost" data-action="workspace-select" data-workspace-type="${escapeAttr(target.type)}" data-workspace-scope-id="${escapeAttr(target.scopeId || "")}" data-mb-switch-team-id="${escapeAttr(String(s.teamId))}" title="${escapeAttr(title)}" ${s.write ? "disabled" : ""}>${escapeHtml(label)}</button>`;
 }
 
+// S-2: what a save replaces, in words - whose mapping (the club's own or OptiMove's), its column and its variable. Never an
+// empty name: when one cannot be read, it says "the club's own mapping of this column".
+export function replacesPhrase(board, c) {
+  const col = cleanName(columnOf(board, c.fieldId)?.label);
+  const variable = cleanName(c.variableLabel ?? variableOf(board, c.variableId)?.label);
+  const club = cleanName(board?.team?.clubName || "");
+  const whose = c.owner === "club" ? (club ? `${club}'s own mapping` : "the club's own mapping") : "OptiMove's mapping";
+  return col && variable ? `${whose}: ${col} → ${variable}` : c.owner === "club" ? "the club's own mapping of this column" : "OptiMove's mapping of this column";
+}
+const replacesList = (board, collisions) => collisions.map((c) => escapeHtml(replacesPhrase(board, c))).join("; ");
+
 function whichTeam(s) {
   if (s.teams.loading || !s.teams.loaded) return `<p class="muted" role="status">${onPlatform() ? "Loading the teams..." : "Loading the club's teams..."}</p>`;
   if (s.teams.error?.code === "notFound") return `<div class="om-empty" role="status"><p class="om-empty__title">${BOARD_ERROR.notFound}</p></div>`;
@@ -150,7 +161,9 @@ function slotHtml(s, v, drag) {
   }
   if (slot.kind === "removed" || slot.kind === "replaceable") {
     const badge = slot.pre.badge === "club_mapping" ? "Your club's mapping" : "OptiMove mapping";
-    const sub = slot.kind === "removed" ? `From ${col} · removed from this save` : `From ${col} · would replace what is on for ${name(teamName(s))}`;
+    // S-2: the club's own mapping that OptiMove's replaced says when; Add puts it back, as before.
+    const replacedBy = slot.kind === "replaceable" && slot.pre.replacedBy ? `Replaced by OptiMove's mapping on ${escapeHtml(dateOnly(slot.pre.replacedBy.at))} · ` : "";
+    const sub = slot.kind === "removed" ? `From ${col} · removed from this save` : `${replacedBy}From ${col} · would replace what is on for ${name(teamName(s))}`;
     return `<li class="mb-slot is-idle">${head(sub)}${unit}<span class="om-badge">${badge}</span>
       <button type="button" class="om-btn om-btn--ghost mb-slot-act" data-action="metric-board-pre-add" data-version-id="${escapeAttr(slot.pre.mappingVersionId)}" ${off}>Add</button></li>`;
   }
@@ -242,7 +255,7 @@ function panelBody(s) {
   const session = dateTime(s.board.session.startedAt);
   return `${title}
     <p>Proposed conversion: <span class="mb-conv">${escapeHtml(conversionWords(p.conversion, p.sourceUnit, p.targetUnit))}</span></p>
-    ${p.collisions?.length ? `<p class="mb-replaces">Saving this replaces what is on for ${name(teamName(s))} now: ${p.collisions.map((c) => `${name(columnOf(s.board, c.fieldId)?.label)} → ${name(variableOf(s.board, c.variableId)?.label)}`).join(", ")}.</p>` : ""}
+    ${p.collisions?.length ? `<p class="mb-replaces">Saving this replaces what is on for ${name(teamName(s))} now: ${replacesList(s.board, p.collisions)}.</p>` : ""}
     ${athletesHtml(s, p, column)}
     <div class="mb-help"><strong>What to watch for</strong><ul>
       <li>Open the same session in GPEXE (${escapeHtml(session)}) and find these two athletes.</li>
@@ -319,7 +332,7 @@ function reviewBody(s) {
       <span class="om-badge ${p.checked ? "om-badge--success" : "om-badge--warning"}">${p.checked ? "Compared" : "Not compared yet"}</span>
       <small>${escapeHtml(conversionWords(pl.conversion, pl.sourceUnit, pl.targetUnit))} · ${p.requirement === "optional" ? "Optional" : "Required"}</small>
       <ul class="mb-review-values">${line(a, pl.values.a, pl.display[unit(p)].a)}${line(b, pl.values.b, pl.display[unit(p)].b)}</ul>
-      ${pl.collisions?.length ? `<small>Replaces what is on now: ${pl.collisions.map((x) => `${name(columnOf(s.board, x.fieldId)?.label)} → ${name(variableOf(s.board, x.variableId)?.label)}`).join(", ")}.</small>` : ""}
+      ${pl.collisions?.length ? `<small class="mb-replaces">Replaces ${replacesList(s.board, pl.collisions)}.</small>` : ""}
       ${p.checked ? "" : `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-compare" data-field-id="${escapeAttr(p.fieldId)}">Compare</button>`}</li>`;
   }).join("");
   const group = (label, rows) => (rows.length ? `<p class="om-eyebrow">${label}</p><ul class="mb-review-list">${rows.map((p) => `<li class="mb-review-row"><strong>${name(columnOf(s.board, p.fieldId)?.label)} → ${name(variableOf(s.board, p.variableId)?.label)}</strong>

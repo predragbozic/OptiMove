@@ -648,11 +648,26 @@ test("S12. a platform save that replaces what the club had on (its own mapping o
   const p = await placementOf(W.pa, t, cand, f, sysVar);
   assert.equal(p.placeable, true, JSON.stringify(p));
   assert.deepEqual(p.collisions.map((c) => c.activationId), [open.id], "the club's activation is in the way");
+  // S-2: the collision says whose mapping it is and names its variable, so the platform review can say what it replaces.
+  assert.deepEqual([p.collisions[0].owner, p.collisions[0].variableLabel], ["club", clubVar.label]);
   ok(await save(W.pa, t, cand, [await systemRow(t, cand, f, sysVar)]));
   assert.ok((await one(`select ended_at from ${T5} where id = $1`, [open.id])).ended_at, "the club's activation ended");
   const club = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
   assert.ok(!club.switchedOff.some((x) => x.mappingVersionId === clubV.versionId), "not shown as switched off");
+  // S-2: the club reads that OptiMove's mapping replaced its own, and when; it can still put its own back.
+  const replaced = [...club.replaceable, ...club.preplaced].find((x) => x.mappingVersionId === clubV.versionId);
+  assert.ok(replaced, "the club's own mapping is offered again");
+  assert.equal(replaced.replacedBy?.owner, "system");
+  assert.ok(replaced.replacedBy.at && !Number.isNaN(Date.parse(replaced.replacedBy.at)), JSON.stringify(replaced.replacedBy));
+  assert.equal(club.team.clubName.startsWith("Club A"), true, "the board names the team's club");
   assert.ok(club.on.some((o) => o.variableId === sysVar.id && o.badge === "optimove_mapping"));
+  // S-2: the other way round, on a column the club has no mapping of, the club board's collision with OptiMove's
+  // mapping that is on says it is OptiMove's, with its variable's name.
+  const fTime = await field("time");
+  const sysTime = await variable(W.pa, { unit: "min", label: `OptiMove time ${uid()}` });
+  ok(await start(W.paA, await activeVersion(W.pa, fTime, sysTime), t), 201);
+  const back = await placementOf(W.caA, t, cand, fTime, await variable(W.caA, { unit: "min", label: `Club time ${uid()}` }));
+  assert.deepEqual(back.collisions.map((c) => [c.owner, c.variableLabel]), [["system", sysTime.label]], JSON.stringify(back));
 });
 
 test("S13. a move to the club's copy (7i) stays a switch-off on the club board: only a platform-board start of an OptiMove mapping makes an end a replacement", async () => {
@@ -673,4 +688,5 @@ test("S13. a move to the club's copy (7i) stays a switch-off on the club board: 
   const board = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
   assert.ok(board.switchedOff.some((x) => x.mappingVersionId === sysV.versionId), "the system mapping the move ended reads as switched off");
   assert.ok(!board.replaceable.some((r) => r.mappingVersionId === sysV.versionId), "never offered as a board replacement");
+  assert.ok(![...board.replaceable, ...board.preplaced].some((r) => r.replacedBy), "S-2: nothing reads as replaced by OptiMove's mapping");
 });
