@@ -25,6 +25,8 @@ import {
   sourceConnectionsAdminContext,
   writeInFlight,
 } from "./source-connections-data.js";
+import { TIMEZONE_REASON_MAX, teamZone, zoneFormOpen } from "./source-connections-timezone.js";
+import { timezoneOptions } from "./data-sources-data.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -263,7 +265,9 @@ function renderConnectionCardHtml(d, ctx, connection, clubName) {
   const bound = connection.boundTeams || [];
   const attempt = d.lastAttempt?.[id] || null;
   const pending = d.unconfirmed && String(d.unconfirmed.connectionId) === id ? d.unconfirmed : null;
-  const busy = writeInFlight();
+  const writing = writeInFlight();
+  // An open zone form disables the screen's other writes; it hides nothing on the cards (code review).
+  const busy = writing || zoneFormOpen();
   const formOpen = (d.credentialOpen && String(d.credentialOpen.connectionId) === id) || (d.bindReview && String(d.bindReview.connectionId) === id) || (d.pairReview && String(d.pairReview.connectionId) === id) || (d.unbindOpen && String(d.unbindOpen.connectionId) === id);
   return `
     <section class="data-sources-card source-connection" data-connection-id="${escapeAttr(id)}">
@@ -289,7 +293,7 @@ function renderConnectionCardHtml(d, ctx, connection, clubName) {
       ${!formOpen && d.testError && String(d.testError.connectionId) === id ? errorHtml(d.testError, d.testError.context || "") : ""}
       ${!formOpen && d.unbindError && String(d.unbindError.connectionId) === id ? errorHtml(d.unbindError) : ""}
       ${attempt && !formOpen ? renderAttemptHtml(d, ctx, connection, attempt, busy) : ""}
-      ${renderBoundTeamsHtml(d, connection, busy, formOpen)}
+      ${renderBoundTeamsHtml(d, connection, busy, formOpen, writing)}
       ${d.ended && d.noticeFor === id ? renderEndedHtml(d.ended) : ""}
     </section>
   `;
@@ -527,7 +531,7 @@ function renderBindReviewHtml(d, connection, clubName) {
   `;
 }
 
-function renderBoundTeamsHtml(d, connection, busy, formOpen) {
+function renderBoundTeamsHtml(d, connection, busy, formOpen, writing = busy) {
   const bound = connection.boundTeams || [];
   if (!bound.length) return "";
   return `
@@ -539,6 +543,7 @@ function renderBoundTeamsHtml(d, connection, busy, formOpen) {
             <div>
               <strong>${escapeHtml(b.teamName || "Team")}${b.teamActive === false ? " (archived)" : ""}</strong>
               <span class="muted">${escapeHtml(SOURCE_NAME)} team ${escapeHtml(String(b.sourceTeamId))} · since ${escapeHtml(fmtDateTime(b.boundAt))}</span>
+              ${renderTeamZoneHtml(b, busy || formOpen, writing)}
             </div>
             <button class="plain-button ghost" type="button" data-action="source-connections-unbind-open" data-connection-id="${escapeAttr(String(connection.id))}" data-binding-id="${escapeAttr(String(b.bindingId))}" data-team-id="${escapeAttr(String(b.teamId))}" data-team-name="${escapeAttr(b.teamName || "Team")}" data-source-team-id="${escapeAttr(String(b.sourceTeamId))}" ${busy || formOpen ? "disabled" : ""}>Unbind</button>
           </li>
@@ -579,4 +584,79 @@ function renderEndedHtml(ended) {
       </ul>
     </details>
   `;
+}
+
+// The team's session time zone (manager, 2026-11-17, after PR #587): shown only when the server lets this viewer read it.
+function zoneErrorSentence(error, z) {
+  if (!error) return "";
+  if (error.code === "not_saved_after_check") {
+    return z.target ? `It was not saved: the team's time zone is ${z.current ? `still ${z.current}` : "still not set"}. Save it again.` : `It was not cleared: the team's time zone is still ${z.current}. Clear it again.`;
+  }
+  if (error.code === "reason_required") return "Write why, for the record. Nothing was saved.";
+  if (error.code === "invalid_timezone") return "Choose a time zone from the list. Nothing was saved.";
+  if (error.code === "gpexe_change_busy") return "A search or an import is running for this team. Try again when it has finished. Nothing was saved.";
+  if (error.code === "database_busy") return "OptiMove is busy right now. Try again in a moment. Nothing was saved.";
+  if (error.status === 403) return error.message || "Your account can no longer set this team's time zone. Nothing was saved.";
+  if (error.status === 404) return "This team is no longer available in this workspace. Nothing was saved.";
+  return "That did not work. Nothing was saved.";
+}
+
+function renderTeamZoneHtml(b, locked = false, writing = false) {
+  const teamId = String(b.teamId);
+  const z = teamZone(teamId);
+  if (!z || z.step === "hidden" || b.teamActive === false) return "";
+  const id = escapeAttr(teamId);
+  if (z.step === "loading") return `<p class="source-connections-zone muted">Session time zone: reading...</p>`;
+  if (z.step === "readFailed") {
+    return `<div class="source-connections-zone"><p class="data-sources-warn" role="alert">The session time zone could not be read.</p><button class="plain-button" type="button" data-action="source-connections-zone-retry" data-team-id="${id}">Try again</button></div>`;
+  }
+  if (z.step === "lost") {
+    return `<div class="source-connections-zone"><p class="data-sources-warn" role="alert">Your account can no longer read this team's time zone, so OptiMove can't tell whether the change was made. Ask a platform administrator.</p></div>`;
+  }
+  if (z.step === "unknown" || z.step === "checking") {
+    const busy = z.step === "checking";
+    return `<div class="source-connections-zone"><p class="data-sources-warn" role="alert">We can't tell whether the time zone was ${z.target ? "saved" : "cleared"}. Check before trying again.</p><button class="plain-button data-sources-primary" type="button" data-action="source-connections-zone-check" data-team-id="${id}" ${busy ? "disabled" : ""}>${busy ? "Checking..." : `Check whether it was ${z.target ? "saved" : "cleared"}`}</button></div>`;
+  }
+  const line = `<p class="source-connections-zone-line"><span>Session time zone:</span> <strong>${z.current ? escapeHtml(z.current) : "Not set"}</strong></p>`;
+  const notice = z.notice ? `<p class="data-sources-notice" role="status">${escapeHtml(z.notice)}</p>` : "";
+  if (z.step === "shown") {
+    return `
+      <div class="source-connections-zone">
+        ${line}
+        ${notice}
+        <p class="muted">Used only for a session whose GPS units report different time zones: its date and time are read in this zone.${z.current ? "" : " Until it is set, such sessions are not imported."}</p>
+        <div class="data-sources-form-actions">
+          <button class="plain-button" type="button" data-action="source-connections-zone-change" data-team-id="${id}" ${locked ? "disabled" : ""}>${z.current ? "Change" : "Set the time zone"}</button>
+          ${z.current ? `<button class="plain-button ghost" type="button" data-action="source-connections-zone-clear" data-team-id="${id}" ${locked ? "disabled" : ""}>Clear</button>` : ""}
+        </div>
+      </div>`;
+  }
+  // The form (open or saving).
+  const saving = z.step === "saving";
+  const problem = z.problem || zoneErrorSentence(z.error, z);
+  const clear = z.mode === "clear";
+  let zoneField = "";
+  if (!clear) {
+    const listed = timezoneOptions();
+    const options = [`<option value=""${z.timezone ? "" : " selected"}>Choose a time zone</option>`]
+      .concat([...new Set([z.current, z.timezone].filter((x) => x && !listed.includes(x)).concat(listed))].map((x) => `<option value="${escapeAttr(x)}"${x === z.timezone ? " selected" : ""}>${escapeHtml(x)}</option>`));
+    zoneField = `<label class="search-field"><span>Time zone</span><select name="timezone" class="data-sources-select" ${saving ? "disabled" : ""}>${options.join("")}</select></label>`;
+  }
+  return `
+    <div class="source-connections-zone">
+      ${line}
+      <form class="data-sources-form" data-source-connections-form="zone" data-team-id="${id}">
+        <p class="data-sources-form-title">${clear ? "Clear the session time zone" : z.current ? "Change the session time zone" : "Set the session time zone"}</p>
+        ${clear ? `<p class="data-sources-warn">After this, sessions whose GPS units report different time zones are not imported until a time zone is set again. Sessions already imported keep their date and time.</p>` : `<p class="muted">Used only for sessions whose GPS units report different time zones. Sessions already imported keep their date and time.</p>`}
+        ${zoneField}
+        <label class="search-field"><span>Reason (kept in the record)</span>
+          <textarea name="reason" rows="2" maxlength="${TIMEZONE_REASON_MAX}" placeholder="For example: the team trains in Sarajevo" ${saving ? "disabled" : ""}>${escapeHtml(z.reason || "")}</textarea>
+        </label>
+        ${problem ? `<p class="data-sources-error" role="alert">${escapeHtml(problem)}</p>` : ""}
+        <div class="data-sources-form-actions">
+          <button class="plain-button data-sources-primary${clear ? " source-connections-danger" : ""}" type="submit" ${saving || writing ? "disabled" : ""}>${saving ? (clear ? "Clearing..." : "Saving...") : clear ? "Clear the time zone" : "Save the time zone"}</button>
+          <button class="plain-button ghost" type="button" data-action="source-connections-zone-cancel" data-team-id="${id}" ${saving ? "disabled" : ""}>Cancel</button>
+        </div>
+      </form>
+    </div>`;
 }

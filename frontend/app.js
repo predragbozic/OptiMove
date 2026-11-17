@@ -36,7 +36,7 @@ import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storag
 import { ensureDriveImportStatus, handleDriveImportAction, handleDriveImportBeforeUnload, handleDriveImportChange, handleDriveImportPointer, handleDriveImportToggle } from "./drive-import-actions.js";
 import { resetDriveImportForWorkspaceChange } from "./drive-import-data.js";
 import { enterStorageAdminSection, loadStorageAdmin, storageAdminContext, storageAdminNeedsLoad } from "./media-storage-admin-data.js";
-import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, submitSourceConnectionsForm } from "./source-connections-actions.js";
+import { handleSourceConnectionsAction, handleSourceConnectionsBeforeUnload, handleSourceConnectionsInput, submitSourceConnectionsForm } from "./source-connections-actions.js";
 import { handleVariablesAction, handleVariablesInput, submitVariablesForm } from "./metric-variables-actions.js";
 import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./icon-picker.js";
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
@@ -1403,6 +1403,7 @@ function handleContentInput(event) {
   // Data configuration -> Variables: the form's values and the list filter.
   if (handleUndoReasonInput(event.target)) return;
   if (handleTimezoneInput(event.target)) return;
+  if (handleSourceConnectionsInput(event.target)) return;
   if (handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface })) return;
   // Data configuration -> Source fields: the confirmation form's values.
   if (handleSourceFieldsInput(event.target)) return;

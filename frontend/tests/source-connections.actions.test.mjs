@@ -949,7 +949,8 @@ test("14. a lost Connect, Reconnect, Test or create is never confirmed by a read
   await act("source-connections-acknowledge");
   assert.equal(state.sourceConnections.unconfirmed?.action, "unbind", "an Unbind is never acknowledged away; it is checked");
   await act("source-connections-read-state");
-  assert.equal(calls().filter((c) => c.startsWith("GET")).length, 1, "no plain read for an Unbind either");
+  // The connection's reads only (each bound team's session time zone is read on its own path).
+  assert.equal(calls().filter((c) => c.startsWith(`GET ${BASE}`)).length, 1, "no plain read for an Unbind either");
 });
 
 test("15. doc-lint: the credential form carries the agreed sentence and autocomplete=\"current-password\", and neither the screen nor the documents claim that the pair is 'not saved anywhere' or 'never shown again'", async () => {

@@ -1122,6 +1122,8 @@ export const createInitialState = () => ({
     bindReview: null, bindBusy: false, bindError: null,
     unbindOpen: null, unbindBusy: false, unbindError: null,
     checkBusy: false, unconfirmed: null, staleAfterWrite: "",
+    // Each bound team's session time zone, by team id (source-connections-timezone.js).
+    zones: {},
   },
   organizationEditor: { open: false, type: "", row: null },
   // Settings -> Storage (R2 media, PR 5), platform admin only: the defaults
