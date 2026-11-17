@@ -4,6 +4,7 @@
 // linked to its GPEXE athlete 101. 1280, 390 and 360 px; screenshots go to E2E_SHOT_DIR when it is set.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
 import { launch } from "../lib/browser.mjs";
@@ -123,5 +124,20 @@ test("an imported session: Home and the menu lead to her sessions; a session sho
         assert.deepEqual(a.pageErrors, []);
       } finally { await a.context.close(); }
     }
+
+    // Her only recorded session is deleted (an administrator undoes the import): the server now says no, and the entry
+    // goes from Home and the menu (owner, 2026-11-17).
+    const preview = (await setup.call("platform_admin", "GET", `${G}/teams/${setup.teamId}/candidates/${c.id}/undo-preview`)).body.undoPreview;
+    const undone = await setup.call("platform_admin", "POST", `${G}/teams/${setup.teamId}/candidates/${c.id}/undo-import`,
+      { requestKey: crypto.randomUUID(), reason: "e2e: the athlete's entry follows the server", expected: { eventId: preview.eventId } });
+    assert.equal(undone.status, 200, JSON.stringify(undone.body).slice(0, 300));
+    const after = await openAthlete(world, 390);
+    try {
+      assert.deepEqual(await (await after.selfAnswer).json(), { hasRecordedSessions: false });
+      await after.page.waitForTimeout(200);
+      assert.equal(await after.page.locator(".my-training-home").count(), 0, "no Home entry after the delete");
+      assert.equal(await after.page.locator('.sidebar [data-athlete-tab="my-training"]').first().isHidden(), true, "no menu item after the delete");
+      assert.deepEqual(after.pageErrors, []);
+    } finally { await after.context.close(); }
   } finally { await world.stop(); }
 });

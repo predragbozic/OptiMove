@@ -3,10 +3,23 @@ import { state } from "./state.js";
 import { closeMyTrainingSession, loadMyTrainingAvailability, loadMyTrainingList, loadMyTrainingSession } from "./my-training-data.js";
 
 // The tab itself: the list is read on every entry (a new session may have been recorded meanwhile).
-export async function enterMyTraining({ render }) {
+// The server's answer is read again too: the entry follows it here as well (`renderNav` redraws the menu).
+export async function enterMyTraining({ render, renderNav }) {
   closeMyTrainingSession();
   render();
-  await loadMyTrainingList({}, render);
+  // The menu item may hide while it holds the keyboard focus: the focus then goes to the page's heading, after the last
+  // render of both reads (each render replaces the heading) (code review).
+  let moveFocus = false;
+  await Promise.all([
+    loadMyTrainingList({}, render),
+    loadMyTrainingAvailability().then(() => {
+      const focused = globalThis.document?.activeElement?.closest?.('[data-athlete-tab="my-training"]');
+      renderNav?.();
+      render();
+      moveFocus = Boolean(focused?.hidden);
+    }),
+  ]);
+  if (moveFocus) globalThis.document?.querySelector?.(".my-training-title")?.focus?.();
 }
 
 // Home and the menu: the server's answer, then (only when she has sessions) her last one for Home's line.
