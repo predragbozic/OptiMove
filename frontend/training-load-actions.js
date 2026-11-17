@@ -7,6 +7,7 @@ import {
 import { estimateTargetsOf, reviewHasWorkInFlight } from "./gpexe-estimate-link.js";
 import { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft, rosterUnloadShouldWarn } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
+import { lookUpSessionImportUndo, openSessionImportUndo } from "./training-load-import-undo.js";
 import { dropVariablesForm, loadVariablesSection, resetVariables, variablesMayBeLeft, variablesUnloadShouldWarn } from "./metric-variables-actions.js";
 import { emptyVariablesState } from "./metric-variables-data.js";
 import { loadSourceFieldsSection, resetSourceFields, sourceFieldsMayBeLeft, sourceFieldsUnloadShouldWarn } from "./source-fields-actions.js";
@@ -267,8 +268,8 @@ function importsBatchMayBeLeft(nextTab) {
   // U5b: an undo running or not confirmed - the same protection as an import.
   const undoStep = state.trainingLoad.gpexe?.undo?.step;
   if ((undoStep === "sending" || undoStep === "unknown") && nextTab !== "training-load" && !askNow(undoStep === "sending"
-    ? "An import is being undone. If you leave now, the result is not shown. Leave anyway?"
-    : "The result of undoing an import is not confirmed. If you leave now, Check the result is lost. Leave anyway?")) return false;
+    ? "Imported data is being deleted. If you leave now, the result is not shown. Leave anyway?"
+    : "The result of deleting imported data is not confirmed. If you leave now, Check the result is lost. Leave anyway?")) return false;
   if (!batch) return true;
   const ask = askNow;
   // A workspace switch or a notification (nextTab null) resets Training
@@ -1790,7 +1791,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-calendar-today") {
-    if (!rosterMayBeLeft()) return true;
+    if (!rosterMayBeLeft() || sessionUndoSending()) return true;
     const cal = state.trainingLoad.calendar;
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const today = localDateIsoInTimeZone(timezone);
@@ -1824,7 +1825,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-calendar-select-day") {
-    if (!rosterMayBeLeft()) return true;
+    if (!rosterMayBeLeft() || sessionUndoSending()) return true;
     const cal = state.trainingLoad.calendar;
     const date = action.dataset.date;
     cal.selectedDate = date;
@@ -1858,6 +1859,8 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // Phase 5a3b: closing a session with a roster write in flight or a
     // result not confirmed asks first (section 7's leave protection).
     if (activityId !== cal.selectedActivityId && !rosterMayBeLeft()) return true;
+    // v76: a delete opened from this session that is being sent is seen to its end (its answer shows only here).
+    if (activityId !== cal.selectedActivityId && sessionUndoSending()) return true;
     // The same session again keeps its roster state (a write in flight, a
     // result not confirmed); the roster read below then acts as a refresh.
     if (activityId !== cal.selectedActivityId) resetActivityRoster(activityId);
@@ -1886,10 +1889,26 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       loadRosterForOpenActivity(activityId, renderTrainingLoad),
     ]);
     renderTrainingLoad();
+    await offerImportUndo(activityId, renderTrainingLoad);
+    return true;
+  }
+  // v76: "Delete imported data" on the open imported session (training-load-import-undo.js).
+  if (type === "training-load-session-undo-open") {
+    await openSessionImportUndo(renderTrainingLoad, {
+      // The session is gone: every cached view of the calendar is dropped (the week, the month, the activity, the overview),
+      // then the day and the month are read again. The open detail keeps the result until Back to the day.
+      afterDeleted: () => {
+        invalidateAllTrainingLoadCalendarGenerations();
+        return Promise.all([
+          loadTrainingLoadCalendarWeek(renderTrainingLoad),
+          state.trainingLoad.calendar.monthMode ? loadTrainingLoadCalendarMonth(renderTrainingLoad) : null,
+        ]);
+      },
+    });
     return true;
   }
   if (type === "training-load-calendar-clear-activity") {
-    if (!rosterMayBeLeft()) return true;
+    if (!rosterMayBeLeft() || sessionUndoSending()) return true;
     const cal = state.trainingLoad.calendar;
     cal.selectedActivityId = null;
     cal.selectedComponentId = null;
@@ -2046,7 +2065,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // selection is cleared exactly like a workspace switch already does
     // (resetTrainingLoadForWorkspaceChange's own reasoning).
     const cal = state.trainingLoad.calendar;
-    if (cal.weekStart && !rosterMayBeLeft()) return true;
+    if (cal.weekStart && (!rosterMayBeLeft() || sessionUndoSending())) return true;
     if (cal.weekStart) {
       cal.data = null;
       cal.monthData = null;
@@ -2452,7 +2471,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // yet this session, even though the shared week already has a real
     // value from Athletes' own side (Phase B only syncs on an actual
     // nav-button click, not on initial bootstrap).
-    if (action.dataset.activityId !== cal.selectedActivityId && !rosterMayBeLeft()) return true;
+    if (action.dataset.activityId !== cal.selectedActivityId && (!rosterMayBeLeft() || sessionUndoSending())) return true;
     // Same rule as select-activity: the same session keeps its roster state.
     if (action.dataset.activityId !== cal.selectedActivityId) resetActivityRoster(action.dataset.activityId);
     cal.weekStart = weekMondayIso(action.dataset.date);
@@ -2469,6 +2488,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       loadRosterForOpenActivity(action.dataset.activityId, renderTrainingLoad),
     ]);
     renderTrainingLoad();
+    await offerImportUndo(action.dataset.activityId, renderTrainingLoad);
     return true;
   }
 
@@ -2893,4 +2913,24 @@ export function resetTrainingLoadForWorkspaceChange() {
   // puts the toggle control back into its disabled "not yet known" state
   // until the new workspace's own fresh GET lands.
   state.trainingLoad.plannedRpeSetting = { enabled: false, enabledAt: null, loaded: false, loading: false, saving: false, error: "" };
+}
+
+// v76: once the open session's roster is read (it names the session's team), ask whether it is an import this viewer may
+// delete. Helper reads only: nothing is offered on any failure.
+async function offerImportUndo(activityId, render) {
+  const cal = state.trainingLoad.calendar;
+  if (cal.selectedActivityId !== activityId) return;
+  const roster = cal.roster;
+  const teamId = roster?.activityId === activityId ? roster.data?.activity?.ownerTeamId : null;
+  if (!teamId) return;
+  const item = cal.data?.days?.flatMap((d) => d.items || []).find((i) => i.kind === "activity" && i.activityId === activityId) || null;
+  const label = item?.name || roster.data?.activity?.name || "this session";
+  const day = item?.occurredLocalDate || roster.data?.activity?.occurredLocalDate || "";
+  await lookUpSessionImportUndo(activityId, render, { teamId, origin: item?.origin || null, label, day });
+}
+
+// A delete opened from the open session, with its request on the way.
+function sessionUndoSending() {
+  const u = state.trainingLoad.gpexe?.undo;
+  return Boolean(u && u.origin === "session" && u.step === "sending");
 }

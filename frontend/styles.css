@@ -17019,6 +17019,48 @@ p.muted.gpexe-source-fields {
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
+/* v76: "Delete imported data" at the end of an imported session's detail (Training Load > Activities). */
+.tl-import-undo {
+  margin-top: 16px;
+}
+.tl-import-undo > .gpexe-undo {
+  margin-top: 0;
+}
+.tl-import-undo > .plain-button {
+  margin-top: 8px;
+  min-height: 44px;
+}
+/* The app has no base .primary-button: in Activities the delete's buttons get one (mobile review). */
+.tl-import-undo .primary-button {
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tl-import-undo .primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tl-import-undo .primary-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* v76: deleting an imported session's data - the confirming button reads as the destructive step it is. */
+/* Red in Activities and in the Imports review alike: stronger than the Imports screen's own primary rule. */
+body:not(.athlete-mode):not(.login-mode) .gpexe-undo .gpexe-button.gpexe-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+/* A lone button of the section (open, Close, Check the result) keeps its own width. */
+.gpexe-undo > .gpexe-button,
+.gpexe-undo .gpexe-unknown > .gpexe-button {
+  justify-self: start;
+}
 /* U5b: undoing an imported session (admin only). */
 .gpexe-undo {
   display: grid;
@@ -17040,6 +17082,7 @@ p.muted.gpexe-source-fields {
   font-weight: 600;
 }
 .gpexe-undo-reason textarea {
+  font-family: inherit;
   width: 100%;
   min-height: 72px;
   box-sizing: border-box;

@@ -478,7 +478,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-undo-open") {
     const candidate = gx.detail?.candidate;
     if (!undoOffered(candidate, gx)) return true;
-    await openUndo(candidate.id, renderTrainingLoad);
+    await openUndo(candidate.id, renderTrainingLoad, { label: candidate.label || "", day: candidate.sessionStartedAt || "" });
     return true;
   }
   if (type === "training-load-gpexe-undo-cancel") {
@@ -503,13 +503,12 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
       return true;
     }
     u.laterProblem = "";
-    const label = gx.detail?.candidate?.label || "this session";
+    const label = u.label || gx.detail?.candidate?.label || "this session";
     const later = laterRosterWork(u);
     const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
-    const total = Number(u.preview?.removedTotal) || 0;
     const changes = laterChangeCount(later);
     const laterText = later ? ` This also removes ${changes === 1 ? "1 later attendance change" : `${changes} later attendance changes`} made in the Roster tab.` : "";
-    const question = `Remove ${total ? `${total} records` : "the imported data"} of ${label} from OptiMove${versions > 1 ? ` (all ${versions} imports of this session)` : ""}?${laterText} This can't be undone here; to get the data back, import the session again.`;
+    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText} Deleted data can't be restored; to get it back, import the session again from Imports.`;
     u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
     await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);
