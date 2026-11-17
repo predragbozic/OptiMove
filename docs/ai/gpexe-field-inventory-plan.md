@@ -745,7 +745,7 @@ created field needs its extractor (J12), which is G2's; G2's or G1b's tests cove
     a `field_exists` without the existing field (the losing writer of a race) says the field exists and reads the list
     again;
   - a per-athlete name's next step says that a document confirms its unit, since GPEXE sends no unit with it (ux MEDIUM;
-    the wording is proposed to the *Rukovodilac*); the detail's history heading is "Checks and confirmations".
+    the wording approved by the *Rukovodilac*, 2026-11-17); the detail's history heading is "Checks and confirmations".
 - **Two connections.** Two GPEXE accounts may send the same name with different unit words. The expected unit of a
   created field comes from the latest observation only, as a hypothesis. Route O's refusal of a word that differs from
   the revision's expected unit (`unit_not_stated`, carry-over 5) is G1b-2's.

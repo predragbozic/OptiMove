@@ -170,8 +170,8 @@ export const evidenceRefOk = (value) => typeof value === "string" && value.lengt
 // ---------------------------------------------------------------------------
 // What happens next, said once on the form and once after the save (the Rukovodilac's wording).
 export const CREATE_NEXT_STEP = "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.";
-// A per-athlete value carries no unit word, so the board never offers its unit: a document confirms it (proposed wording,
-// the UX review of G1b-1; the Rukovodilac approves it).
+// A per-athlete value carries no unit word, so the board never offers its unit: a document confirms it (the wording of
+// the UX review of G1b-1, approved by the Rukovodilac on 2026-11-17).
 export const CREATE_NEXT_STEP_ROW = "This field has no values yet. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document.";
 export const createNextStep = (endpoint) => (endpoint === "athlete_session" ? CREATE_NEXT_STEP_ROW : CREATE_NEXT_STEP);
 export const FIELD_LABEL_MAX = 80;
