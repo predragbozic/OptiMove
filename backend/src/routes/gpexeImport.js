@@ -240,6 +240,15 @@ router.get("/teams/:teamId/settings/history", handle(async (req, res) => {
 // active admin of the team's own club acting in that club's workspace. Everyone else who sees the team (its coach, a club
 // admin in the team's workspace) gets the 403 of the settings, with nothing of the zone; a foreign or archived team, or a
 // team of another club, the identical 404 of teamAccess. The write checks the right again under the team's lock.
+// The 403 of the two time zone routes: it names who may, never the zone, its history or a name.
+export const SESSION_TIMEZONE_FORBIDDEN = Object.freeze({
+  error: "forbidden",
+  message: "Only a platform administrator, or the admin of this team's club working in the club's workspace, can see or set this team's time zone.",
+});
+function sessionTimezoneForbidden(res) {
+  return res.status(403).json(SESSION_TIMEZONE_FORBIDDEN);
+}
+
 function sessionTimezoneBasis(req, access) {
   if (access.platformAdmin) return "platform_admin";
   return identity.identityAdminBasis(req, access) === "club_admin" ? "club_admin" : null;
@@ -248,7 +257,7 @@ function sessionTimezoneBasis(req, access) {
 router.get("/teams/:teamId/session-timezone", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
-  if (!sessionTimezoneBasis(req, access)) return forbidden(res);
+  if (!sessionTimezoneBasis(req, access)) return sessionTimezoneForbidden(res);
   res.json({ sessionTimezone: await teamTimezone.readTeamSessionTimezone(access.teamId) });
 }));
 
@@ -256,7 +265,7 @@ router.put("/teams/:teamId/session-timezone", handle(async (req, res) => {
   const access = await teamAccess(req, res);
   if (!access) return;
   const basis = sessionTimezoneBasis(req, access);
-  if (!basis) return forbidden(res);
+  if (!basis) return sessionTimezoneForbidden(res);
   const body = req.body && typeof req.body === "object" ? req.body : {};
   try {
     const timezone = body.timezone === null ? null : body.timezone;

@@ -37,6 +37,9 @@ A GPEXE session whose GPS units report more than one time zone (for example one 
   - Whoever sees the team without the right (its coach, a club admin in the team's workspace) gets the settings' 403,
     with no zone, history or name. Another club's team, a missing or archived team, or an archived club: the identical 404.
   - The history keeps who set each value (the name), when and why; the basis is not stored (no migration).
+  - **Known limit:** the right is enforced by the application, not by the database (v62 has no actor guard, unlike v35). A
+    raw database writer, or a future route that writes the table, is not stopped by it; the history still names who wrote.
+    A database actor guard would be a later migration.
   - What a change does: nothing imported is rewritten. The next check, or a review's recompute, rebuilds the preview of a
     pending mixed-zone session with the new zone, so it reads as changed and needs the review again.
 - **Concurrency:** the write takes the team's import lock (`lock_timeout` 3 s, then `409 gpexe_change_busy`), and the

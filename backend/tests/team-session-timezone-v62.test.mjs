@@ -567,18 +567,19 @@ test("17. the owner's decision of 2026-11-16: the active admin of the team's own
   assert.deepEqual(read.body.sessionTimezone.history.map((h) => h.setByName), ["platform admin", "platform admin", "club admin", "club admin"]);
   const count = await historyCount(team.teamId);
 
-  // The coach sees the team: the settings' 403, with nothing of the zone, its history or a name.
+  // The coach sees the team: a 403 that names who may, and nothing of the zone, its history or a name (the body whole).
+  const FORBIDDEN = { error: "forbidden", message: "Only a platform administrator, or the admin of this team's club working in the club's workspace, can see or set this team's time zone." };
   for (const res of [await api(tzPath(team), { cookie: team.coach.cookie }), await setZone(team, "Europe/Paris", { cookie: team.coach.cookie })]) {
     assert.equal(res.status, 403);
-    assert.deepEqual(Object.keys(res.body).sort(), ["error", "message"]);
-    assert.doesNotMatch(res.text, /Europe|history|admin\b.*admin|setBy|reason/i);
+    assert.deepEqual(res.body, FORBIDDEN);
   }
   // The club's admin who also coaches the team, acting in the team's workspace (not the club's): the 403 too. A club admin
   // without a coach role has no team workspace, and their preference falls back to the club's.
   await admin.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [team.cadmin.id, team.teamId]);
   await setWorkspace(team.cadmin.id, "team", team.teamId);
-  assert.equal((await api(tzPath(team), { cookie: team.cadmin.cookie })).status, 403);
-  assert.equal((await setZone(team, "Europe/Paris", { cookie: team.cadmin.cookie })).status, 403);
+  for (const res of [await api(tzPath(team), { cookie: team.cadmin.cookie }), await setZone(team, "Europe/Paris", { cookie: team.cadmin.cookie })]) {
+    assert.deepEqual([res.status, res.body], [403, FORBIDDEN]);
+  }
   assert.equal(Object.hasOwn((await api(`/teams/${team.teamId}/status`, { cookie: team.cadmin.cookie })).body.viewer, "sessionTimezoneAdmin"), false);
   await admin.query(`update public.user_team_roles set is_active = false where user_id = $1 and team_id = $2`, [team.cadmin.id, team.teamId]);
   await setWorkspace(team.cadmin.id, "club", team.clubId);
