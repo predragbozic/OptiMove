@@ -1173,6 +1173,7 @@ export const createInitialState = () => ({
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   tests: emptyTestsState(),
   trainingLoad: emptyTrainingLoadState(),
+  myTraining: emptyMyTrainingState(),
   checkIn: emptyCheckInState(),
   // feature/mobile-messages-fullscreen: menuOpen is the mobile thread
   // header's 3-dot overflow menu (Hide/Block live there on mobile instead
@@ -1195,5 +1196,17 @@ export const createInitialState = () => ({
   athleteExitConfirmOpen: false,
   realtimeOffline: false,
 });
+
+// The athlete's "My training" (owner, 2026-11-16): her own recorded sessions and values, read-only. `available` is the
+// server's answer to whether she has any recorded session (GET /api/training-activity/self); null until it is read, and
+// the entry (Home and the menu) shows only on true.
+export function emptyMyTrainingState() {
+  return {
+    available: null,
+    list: { rows: [], nextCursor: null, loaded: false, loading: false, error: "" },
+    openId: "",
+    detail: { activityId: "", data: null, loading: false, error: "" },
+  };
+}
 
 export const state = createInitialState();
