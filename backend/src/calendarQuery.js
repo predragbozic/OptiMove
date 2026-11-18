@@ -39,7 +39,7 @@ import crypto from "node:crypto";
 import { query } from "./db.js";
 import {
   calendarActivityFilterSql, calendarActivityScopeSql, calendarAthleteFilterSql, calendarAthleteScopeSql,
-  calendarScheduleCandidateSql, calendarScheduleStructuralSql, loadWorkspaceTeams, membershipOnDaySql,
+  calendarScheduleCandidateSql, calendarScheduleStructuralSql, loadWorkspaceTeams, membershipOnDaySql, membershipPeriodOnDaySql,
 } from "./calendarAccess.js";
 import { eventOwnerOfRow, eventPlaceOf, eventShowsFieldSql, eventShowsPlaceSql, eventShowsTypeSql, eventWriteBasis } from "./calendarEventAccess.js";
 // The one published-weekly-plan rule, shared with GET /weekly and GET
@@ -53,11 +53,24 @@ export const CALENDAR_STATUSES = Object.freeze(["planned", "done", "awaiting_ent
 const athleteNameSql = (alias) => `coalesce(${alias}.display_name, ${alias}.full_name, concat_ws(' ', ${alias}.first_name, ${alias}.last_name), ${alias}.athlete_id)`;
 // The athlete's team memberships among the workspace's teams
 // ($<teamsParam>::uuid[]) ON THE DAY `dayExpr`, by the calendar's one
-// membership rule (calendarAccess.js membershipOnDaySql), as an array; '{}'
-// outside a club / team workspace.
-const athleteTeamIdsSql = (alias, teamsParam, dayExpr) =>
-  `(select coalesce(array_agg(distinct wt.id), '{}') from unnest($${teamsParam}::uuid[]) as wt(id)
-     where ${membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = wt.id)`, dayExpr)})`;
+// membership rule (calendarAccess.js membershipOnDaySql), as an array sorted
+// by id; '{}' when the list is empty. A club / team / platform workspace
+// sends its teams (since K2b-1d2 the platform's list holds every active team
+// of an active club, so it gets team ids too); in the athlete's workspace the
+// event path sends the teams its events name (teamScope, readCalendar), and
+// the other kinds send none.
+// K2b-1d2 (the owner, 2026-11-18, plan 23.6): it goes from the athlete's own
+// team periods to the teams of the list, instead of from every team of the
+// list to the athlete (rows x teams), with the same day condition
+// (membershipPeriodOnDaySql, the one membershipOnDaySql uses) and the same
+// result; the index athlete_membership_periods_athlete_idx (v25) serves it.
+// central-calendar-k2b-1d2-team-ids.test.mjs proves it equal to the earlier
+// form for every viewer's list and every day.
+export const athleteTeamIdsSql = (alias, teamsParam, dayExpr) =>
+  `(select coalesce(array_agg(distinct mpt.team_id order by mpt.team_id), '{}')
+      from public.athlete_membership_periods mpt
+     where mpt.athlete_id = ${alias}.id and mpt.membership_type = 'team' and mpt.team_id = any($${teamsParam}::uuid[])
+       and ${membershipPeriodOnDaySql("mpt", `${alias}.id`, dayExpr)})`;
 // A terminal assignment status: the entry can no longer be made (plan 2.5,
 // status `missed`).
 const MISSED_ASSIGNMENT_STATUSES = new Set(["missed"]);
@@ -463,6 +476,9 @@ async function readEventRows(ctx, { from, to }) {
             -- A club's type is shown only on its own club's events (a team moved to
             -- another club keeps its events and their type id; K2b-1a, security M1).
             case when ${eventShowsTypeSql("e", "t", "et")} then et.label end as event_type_label,
+            -- K2b-1d2: the type's icon and colour, for every viewer, under the same rule (D41).
+            case when ${eventShowsTypeSql("e", "t", "et")} then et.icon_key end as event_type_icon_key,
+            case when ${eventShowsTypeSql("e", "t", "et")} then et.color_key end as event_type_color_key,
             -- K2b-1b: the library place, only of the event's club now (D41).
             pl.id as place_id, pl.name as place_name, pl.address as place_address, pl.note as place_note,
             t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
@@ -1164,6 +1180,8 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       place: eventPlaceOf(row), location: row.place_id ? row.place_name : row.location,
       details: canManage ? (detailCounts.get(String(row.id)) ?? { selected: 0, filled: 0, required: 0, filledRequired: 0 }) : undefined,
       eventId: String(row.id), eventKind: row.event_kind, eventTypeId: row.event_type_id ? String(row.event_type_id) : null, eventTypeLabel: row.event_type_label,
+      // K2b-1d2: null when the type is not shown (D41), and for a type without an icon or a colour.
+      eventTypeIconKey: row.event_type_icon_key ?? null, eventTypeColorKey: row.event_type_color_key ?? null,
       span: { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) },
       expects: [...(row.expects || [])], cancelled: row.status === "cancelled",
       revision: row.revision, canManage, notes: canManage ? row.notes : undefined,
@@ -1264,11 +1282,14 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
 function publicCard(card, includeAthletes) {
   // The athlete's own view of an event (D21): name, kind, date, time, place,
   // status (planned / cancelled) and teams — never a count, a teammate, a
-  // note or a link beyond the event's id.
+  // note or a link beyond the event's id. K2b-1d2: the type's icon and colour
+  // (a type's look, never a person's data), under D41 as the label.
   if (card.kind === "event" && card.athleteView) {
     return {
       key: card.key, kind: "event", date: card.date, title: card.title,
-      eventKind: card.eventKind, eventTypeLabel: card.eventTypeLabel, span: card.span,
+      eventKind: card.eventKind, eventTypeLabel: card.eventTypeLabel,
+      eventTypeIconKey: card.eventTypeIconKey ?? null, eventTypeColorKey: card.eventTypeColorKey ?? null,
+      span: card.span,
       startTime: card.startTime, endTime: card.endTime, location: card.location, place: card.place,
       status: card.cancelled ? "cancelled" : "planned", cancelled: card.cancelled,
       teamIds: [...card.teamIds].sort(),
@@ -1294,6 +1315,9 @@ function publicCard(card, includeAthletes) {
     out.eventId = card.eventId;
     out.eventKind = card.eventKind;
     out.eventTypeLabel = card.eventTypeLabel;
+    // K2b-1d2: every viewer's card (a reader's too), under D41 as the label.
+    out.eventTypeIconKey = card.eventTypeIconKey ?? null;
+    out.eventTypeColorKey = card.eventTypeColorKey ?? null;
     out.endTime = card.endTime;
     out.location = card.location;
     out.place = card.place;
