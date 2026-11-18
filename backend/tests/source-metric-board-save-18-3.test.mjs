@@ -1177,4 +1177,15 @@ test("CM (the review of 2026-11-18): a field without a condition never fills a v
   await nothingWritten(async () => {
     rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: activeSys, placementHash: "0".repeat(64), requirement: "optional", replaces: [] }]), "condition_mismatch", 0);
   });
+  // The code review of 2026-11-18 (MEDIUM): every way in, not one. The board never offers it, the placement of the
+  // column on that OptiMove variable refuses it, and a save naming the column and the variable refuses it too.
+  const b = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  assert.equal([...b.preplaced, ...b.replaceable].some((x) => x.mappingVersionId === activeSys), false, "not offered");
+  const shown = b.variables.find((x) => x.id === sysCond.id);
+  if (shown) assert.deepEqual([shown.placeable, shown.filledByFieldIds], [false, []]);
+  assert.deepEqual(await placementOf(W.caA, t, cand, fSys, sysCond), { placeable: false, code: "condition_mismatch", fieldId: fSys.fieldId, targetId: sysCond.id });
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ kind: "new", fieldId: fSys.fieldId, targetId: sysCond.id, expectedTargetVersionId: (await one(`select current_version_id from training_load.metric_definitions where id = $1`, [sysCond.id])).current_version_id, displayUnit: "m",
+      placementHash: "0".repeat(64), checked: true, requirement: "optional", replaces: [] }]), "condition_mismatch", 0);
+  });
 });

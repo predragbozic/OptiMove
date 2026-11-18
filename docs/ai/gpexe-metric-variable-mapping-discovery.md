@@ -1421,11 +1421,14 @@ parameters `{}` for such a revision, v34's parameter check returns early for kin
 admin's basis. Now three server paths refuse it with `409 condition_mismatch` and write nothing: T4 create
 (`createVersion`, after `notReadyCodeOf`), A1 (`activateVersion`, after `canonical_version_changed`; the variable's lock
 statement is unchanged, and the current version's condition is read without a lock, since the version is immutable
-and the variable row is held `FOR SHARE`), and the board save's preplaced row (`preplacedOf`, as defence in depth). Production
+and the variable row is held `FOR SHARE`), and the board, as defence in depth, at every way in: the save's preplaced row (`preplacedOf`), the placement of a
+column on an OptiMove variable on a club board (`placementOf`'s system branch, which a save's new row also takes), and the
+read, which neither offers such a version nor counts it as feeding the variable (`readBoard`). Production
 held 0 such versions and 0 open activations of them (the *Rukovodilac*'s read-only check), so the refusal is outright.
 The later zone-match pull request (its own ★★ migration after v77) replaces it with "refused unless the matched range is
 written in the same transaction". Test: `source-metric-board-save-18-3.test.mjs` CM (both bases; mutations of the three
-guards killed).
+guards killed) and `metric-mappings.actions.test.mjs` 23 (the draft's and the activation's sentences, and a lost
+activation's Check result settles on the code).
 
 ---
 

@@ -437,7 +437,8 @@ const SETTLES_ON_CHECK = {
   submit: ["version_not_draft", "revision_not_usable"],
   activate: ["version_not_submitted", "active_version_changed", "revision_not_verified", "canonical_version_changed", "source_metric_target_taken",
     "target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported",
-    "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"],
+    "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding",
+    "condition_mismatch"],
   disable: ["version_status_changed"],
   switchOn: ["version_not_active", "field_retired", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"],
   switchOff: ["activation_not_open"],
@@ -499,7 +500,7 @@ const ACT_TEXT = {
     // J18 (v66): a club's admin switches a version of a field without parameters on only from the board, with its check.
     confirmation_required: "Switch this version on from Map by drag and drop.",
     source_metric_target_taken: "This field already fills another variable. Only one of them can be active at a time.",
-    ...Object.fromEntries(["target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported", "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous"]
+    ...Object.fromEntries(["target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported", "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous", "condition_mismatch"]
       .map((code) => [code, `This version cannot be activated now: ${DRAFT_TEXT[code].replace(/^(There|The|This)\b/, (w) => w.toLowerCase())}`])),
   },
   disable: { version_status_changed: "This version changed meanwhile." },
