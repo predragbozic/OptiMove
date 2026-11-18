@@ -7,7 +7,8 @@
 --     {"kind": "sum", "inputs": [<2-10 distinct lower-case definition ids>]} (CHECK, metric_calculation_shape_ok).
 --   * A version guard (BEFORE INSERT on metric_definition_versions):
 --       - a variable is calculated from its version 1 or never: a later version keeps the kind of the version before it;
---       - a calculated version is numeric, with no bounds and no condition (a sum outside a bound would refuse an import);
+--       - a calculated version is numeric with no bounds (a sum outside a bound would refuse an import); a condition is
+--         allowed as stated data (the Rukovodilac, 2026-11-18): it is not checked against the inputs in step 1;
 --       - every input is another active variable of the same owner (a system variable takes system inputs; a club variable
 --         its own club's or system ones), numeric, not calculated itself (no nesting, so no cycle), with the calculated
 --         version's unit exactly (no conversion in step 1), and every level the calculated variable has (session /
@@ -105,9 +106,8 @@ begin
     return new;
   end if;
 
-  if new.value_type is distinct from 'numeric' or new.min_value is not null or new.max_value is not null
-     or new.condition_description is not null then
-    raise exception 'metric_definition_versions: a calculated version is numeric, with no bounds and no condition' using errcode = '23514';
+  if new.value_type is distinct from 'numeric' or new.min_value is not null or new.max_value is not null then
+    raise exception 'metric_definition_versions: a calculated version is numeric, with no bounds' using errcode = '23514';
   end if;
   if v_owner_scope not in ('system', 'club') then
     raise exception 'metric_definition_versions: only a system or a club variable is calculated' using errcode = '23514';

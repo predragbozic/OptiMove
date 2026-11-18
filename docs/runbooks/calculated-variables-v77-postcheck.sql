@@ -15,7 +15,7 @@ select exists (select 1 from information_schema.columns where table_schema = 'tr
 select e.f as fn, md5(p.prosrc) as actual_md5, md5(p.prosrc) = e.m as ok
   from (values ('metric_calculation_shape_ok', '2d2a17ae713005d116fc1ab96b783b9d'),
                ('metric_calculation_inputs', '9ab77d5eb11f05a09408f478311dd58b'),
-               ('metric_calculation_version_guard', '85caa715f400d4149d4c999ed7a39271'),
+               ('metric_calculation_version_guard', 'a4d8225e2c3b70e618c58c18eb712dcc'),
                ('metric_calculation_level_guard', '4476523461e60244d0a2aadbcaf25914'),
                ('metric_calculation_mapping_guard', '942b8196a4e8356585044cc308840ca7'),
                ('metric_calculation_value_guard', '22e88230de37aba4646d49cc49986f6f')) e(f, m)

@@ -298,7 +298,7 @@ test("3. the same request key replays the answer (no second row); the same key w
   refused(await post("/variables", W.pa, { ...body, calculation: sum(W.z4, W.z3) }), 409, "request_key_reused");
 });
 
-test("4. the body: 1 or 11 inputs, a repeated input, a non-id, another kind or key, bounds or a condition with a calculation are 400 invalid_body, nothing written", async () => {
+test("4. the body: 1 or 11 inputs, a repeated input, a non-id, another kind or key, or bounds with a calculation are 400 invalid_body, nothing written; a condition in any of the three shapes is stored as stated", async () => {
   const before = await counts();
   const ids = Array.from({ length: 11 }, () => crypto.randomUUID());
   for (const calculation of [
@@ -313,8 +313,20 @@ test("4. the body: 1 or 11 inputs, a repeated input, a non-id, another kind or k
   ]) refused(await calculated(W.pa, [], { calculation }), 400, "invalid_body");
   refused(await calculated(W.pa, [W.z3, W.z4], { minValue: "0" }), 400, "invalid_body");
   refused(await calculated(W.pa, [W.z3, W.z4], { maxValue: "100000" }), 400, "invalid_body");
-  refused(await calculated(W.pa, [W.z3, W.z4], { condition: { kind: "zone", operator: ">=", value: "5", unit: "m/s" } }), 400, "invalid_body");
   assert.deepEqual(await counts(), before);
+  // A condition is stated data on a calculated variable (the Rukovodilac, 2026-11-18): the three shapes are stored as sent.
+  for (const condition of [
+    { kind: "zone", operator: ">=", value: "19.8", unit: "km/h" },
+    { kind: "zone", operator: "between", lower: "19.8", upper: "25.2", unit: "km/h" },
+    { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" },
+  ]) {
+    const res = await calculated(W.pa, [W.z3, W.z4], { condition });
+    assert.equal(res.status, 201, res.text);
+    assert.deepEqual(res.body.variable.currentVersion.condition, condition);
+    assert.equal(res.body.variable.currentVersion.calculation.inputs.length, 2);
+  }
+  refused(await calculated(W.pa, [W.z3, W.z4], { condition: { kind: "zone", operator: "between", lower: "25.2", upper: "19.8", unit: "km/h" } }), 400, "invalid_body");
+  refused(await calculated(W.pa, [W.z3, W.z4], { condition: { kind: "zone", operator: ">=", value: "19.8", unit: "km h" } }), 400, "invalid_unit");
 });
 
 test("5. every input is checked under its lock: unknown, another club's (read exactly like unknown), archived, calculated, another unit, a missing level; a system variable never takes a club input; nothing written", async () => {
@@ -407,7 +419,10 @@ test("9. the database guards of a version and of the levels: a variable never ch
   dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', $2)`, [W.z5.id, calc])),
     /calculated from its first version or never/);
   dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation, max_value) values ($1, 9, 'm', 'numeric', $2, 100)`, [hmld.id, calc])),
-    /no bounds and no condition/);
+    /numeric, with no bounds/);
+  // A condition alone is allowed on a raw calculated version (stated data).
+  const withCondition = await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation, condition_description) values ($1, 9, 'm', 'numeric', $2, '{"operator": ">=", "value": 19.8, "unit": "km/h"}')`, [hmld.id, calc]));
+  assert.equal(withCondition.ok, true, withCondition.error?.message);
   dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', $2)`,
     [hmld.id, JSON.stringify({ kind: "sum", inputs: [W.z4.id, hmld.id] })])), /not its own input/);
   const km = await variable(W.pa, { label: `Km input ${uid()}`, unit: "km" });

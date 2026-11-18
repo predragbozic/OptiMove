@@ -238,8 +238,9 @@ function semanticsInput(body) {
 }
 // v77 (J21): a calculation - the sum of 2-10 other variables, named by id, in
 // the order the admin chose (it is how the formula reads). Null for none. A
-// calculated version has no bounds and no condition (a sum outside a bound
-// would refuse an import).
+// calculated version has no bounds (a sum outside a bound would refuse an
+// import); a condition is allowed as stated data, not checked against the
+// inputs in step 1 (the Rukovodilac, 2026-11-18).
 export const CALCULATION_INPUTS = Object.freeze({ min: 2, max: 10 });
 function calculationInput(raw, semantics) {
   if (raw === undefined || raw === null) return null;
@@ -253,8 +254,8 @@ function calculationInput(raw, semantics) {
     return id.toLowerCase();
   });
   if (new Set(inputs).size !== inputs.length) throw invalidBody(shape);
-  if (semantics.minValue !== null || semantics.maxValue !== null || semantics.condition !== null) {
-    throw invalidBody("A calculated variable has no minValue, maxValue or condition.");
+  if (semantics.minValue !== null || semantics.maxValue !== null) {
+    throw invalidBody("A calculated variable has no minValue or maxValue.");
   }
   return { kind: "sum", inputs };
 }

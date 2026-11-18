@@ -3,7 +3,7 @@
 // attributes and under Technical details.
 import {
   AGGREGATIONS, CHANGE_MODES, CONDITION_KINDS, LEVELS, LIMITS, OPERATORS, UNIT_SUGGESTIONS,
-  aggregationLabel, conditionSummary, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
+  aggregationLabel, conditionNoteFor, conditionSummary, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { isSystemMode } from "./system-variables-data.js";
@@ -109,7 +109,7 @@ function renderListItemHtml(item, ctx) {
     current.unit ? escapeHtml(current.unit) : "",
     (item.levels || []).map(levelLabel).map(escapeHtml).join(" and "),
     current.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}` : "",
-    current.condition ? escapeHtml(conditionSummary(current.condition)) : "",
+    current.condition ? escapeHtml(conditionSummary(current.condition)) + (conditionNoteFor(current) ? " (stated, not checked)" : "") : "",
     current.versionNumber ? `version ${escapeHtml(String(current.versionNumber))}` : "",
   ].filter(Boolean).join(" · ");
   return `
@@ -166,7 +166,7 @@ function renderDetailHtml(s, ctx) {
       <div><dt>Recorded for</dt><dd>${(item.levels || []).map(levelLabel).map(escapeHtml).join(" and ")}</dd></div>
       <div><dt>Per day</dt><dd>${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}</dd></div>
       <div><dt>Allowed values</dt><dd>${escapeHtml(rangeSummary(current))}</dd></div>
-      <div><dt>Condition</dt><dd>${escapeHtml(conditionSummary(current.condition))}</dd></div>
+      <div><dt>Condition</dt><dd>${escapeHtml(conditionSummary(current.condition))}${conditionNoteFor(current) ? `<br><span class="muted">${escapeHtml(conditionNoteFor(current))}</span>` : ""}</dd></div>
       <div><dt>Mapping</dt><dd>${escapeHtml(readinessText(item.mappingTarget))}</dd></div>
     </dl>
     ${renderVariableClassificationHtml(item, ctx, s.classification)}
@@ -239,6 +239,7 @@ function renderVersionHtml(version) {
         escapeHtml(rangeSummary(version)),
         escapeHtml(conditionSummary(version.condition)),
       ].filter(Boolean).join(" · ")}</p>
+      ${conditionNoteFor(version) ? `<p class="muted">${escapeHtml(conditionNoteFor(version))}</p>` : ""}
       ${version.reason ? `<p>Reason: ${escapeHtml(version.reason)}</p>` : ""}
     </li>
   `;

@@ -4400,7 +4400,8 @@ history, a switch per team.
 
 **The database (v77; runbook `docs/runbooks/calculated-variables-v77.md`).**
 - *Version guard* (BEFORE INSERT on `metric_definition_versions`): a variable is calculated from its version 1 or never; a
-  calculated version is numeric with no bounds and no condition; it is a system or club variable; every input is another
+  calculated version is numeric with no bounds (a condition is allowed as stated data, not checked against the inputs
+  in step 1 - the *Rukovodilac*, 2026-11-18); it is a system or club variable; every input is another
   active variable of the same owner (a system variable takes system inputs; a club variable its own club's or system ones),
   numeric, not calculated, with the calculated version's unit exactly and every level it has (session / component, never
   day); a new version of an input keeps its unit and type while a calculated variable's current version uses it. The inputs
@@ -4419,7 +4420,8 @@ history, a switch per team.
 
 **The API** (`backend/src/canonicalVariableAdminService.js`, the M3-0 routes, no new route):
 - `POST /variables` and `POST /variables/:id/versions` take an optional `calculation` (`{kind: "sum", inputs: [ids]}`); with
-  one, `minValue`, `maxValue` and `condition` are `400 invalid_body`. It joins the request hash only when sent, so every
+  one, `minValue` and `maxValue` are `400 invalid_body`; a `condition` (the three shapes) is stored as stated, and the
+  Variables screen says beside it that it is the maker's statement, not checked against the inputs yet. It joins the request hash only when sent, so every
   earlier request replays unchanged. The inputs are read and locked `FOR SHARE` before the rights (a new version's order:
   definitions, then the role, user and club rows) and checked: `409 calculation_input_unavailable` (missing, archived, or not
   readable by this owner - another club's reads exactly like a missing one), `calculation_input_calculated`,

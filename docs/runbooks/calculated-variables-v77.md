@@ -11,8 +11,8 @@ and J21.
   other variables, written once beside its inputs in the import's own transaction. The first one is HMLD = power zone
   distance 3 + 4 + 5.
 * v77 adds `metric_definition_versions.calculation` (null, or `{"kind": "sum", "inputs": [definition ids]}`) and four guards:
-  * on a version: a variable is calculated from its first version or never; a calculated version is numeric with no bounds or
-    condition; its inputs are active, not calculated, numeric variables of the same owner (or system ones) with its unit and
+  * on a version: a variable is calculated from its first version or never; a calculated version is numeric with no bounds
+    (a condition is stated data, not checked against the inputs in step 1); its inputs are active, not calculated, numeric variables of the same owner (or system ones) with its unit and
     every level it has; an input keeps its unit while a calculation uses it;
   * on the levels: a calculated variable gets only a level all its inputs have and keeps at least one, and an input keeps
     a level in use;
@@ -25,7 +25,8 @@ and J21.
 ## The API (for the screens)
 
 * `POST /api/training-load/sources/metrics/variables` and `POST …/variables/:id/versions` take an optional
-  `calculation: { kind: "sum", inputs: [ids] }`. With one, `minValue`, `maxValue` and `condition` are not allowed.
+  `calculation: { kind: "sum", inputs: [ids] }`. With one, `minValue` and `maxValue` are not allowed; a `condition` is stored
+  as the maker states it.
 * Refusals: `409 calculation_input_unavailable` (missing, archived, or not a variable of this workspace or an OptiMove one),
   `calculation_input_calculated`, `calculation_unit_mismatch`, `calculation_level_mismatch`, `calculation_kind_fixed`, and
   `variable_used_by_calculation` (a new version of an input that changes its unit).
