@@ -795,3 +795,10 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   query, after both locks: R2 (questions back to `FOR UPDATE`) now fails tests 15 and 21, as R1 does.
 - **NIT.** The comment at the top of `calendarEventService.js` and plan section 2 (around line 170) now say the event
   row is locked `FOR NO KEY UPDATE`.
+- **After the independent ★★ GO on `c51a298b` (tests only):** LOW-1 is closed by test 31 (*Later*'s key reused with
+  another body → `409 request_key_reused`, nothing written; mutation L1 fails it). INFO-2 is closed by test 32: each
+  pre-v81 body (Tests phase 4, md5 `2d961f5a…`; Training Load **v4**, the only file that defines it, md5 `8410bf72…`) and
+  each v81 body is created under another name from its file and proven by md5; on ordinary schedules (club, team and
+  athlete targets, a joiner and a leaver; Training Load with the switch on and off, the WELLNESS schedule with the switch
+  off, since with it on a live event WELLNESS question of the day covers it by design) both make identical rows. Mutation
+  I2 (the test's v81 copy changed) fails it.

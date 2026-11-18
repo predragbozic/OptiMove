@@ -6,9 +6,13 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { addDays, calendarRoleMatrix, newKey, startCalendarApp, uid } from "./support/calendar-fixture.mjs";
 
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 const TODAY = new Date().toISOString().slice(0, 10);
 const ALL_DAY = { kind: "custom", date: TODAY, from: "00:00", to: "23:59" };
@@ -1303,5 +1307,159 @@ test("30. a Day off that is cancelled or moved takes the day keys of its old spa
     const keyedDays = calls.slice(0, firstWrite).filter((c) => /wellness_day_key/.test(c.text)).map((c) => String(c.params[1]));
     for (const day of [d1, d2]) assert.ok(keyedDays.includes(day), `${op}: the old day ${day} is keyed before the first write (${keyedDays})`);
     if (op === "move") assert.ok(keyedDays.includes(d3), "move: the new day is keyed too");
+  }
+});
+
+test("31. LOW-1: Later's request key reused with another body answers 409 request_key_reused and writes nothing", async () => {
+  const t = await freshTeam("lkr", 1);
+  const ev = await teamEvent(t, { title: "Later key", questions: [{ kind: "rpe", window: ALL_DAY }, { kind: "wellness", window: ALL_DAY }] });
+  const qs = await liveQuestions(ev.id);
+  const rpe = qs.find((x) => x.kind === "rpe");
+  const wel = qs.find((x) => x.kind === "wellness");
+  await api("/api/calendar/questions/mine", { cookie: t.athletes[0].cookie });
+  const key = newKey();
+  const first = await api(`/api/calendar/questions/${rpe.id}/later`, { method: "POST", cookie: t.athletes[0].cookie, body: { requestKey: key } });
+  assert.equal(first.status, 200, first.text);
+  const rows = async () => (await q(`select question_id::text, athlete_id::text, request_key::text from calendar.question_postponements where performed_by_user_id = $1 order by 1`, [t.athletes[0].userId]));
+  const before = await rows();
+  assert.equal(before.length, 1);
+  const reused = await api(`/api/calendar/questions/${wel.id}/later`, { method: "POST", cookie: t.athletes[0].cookie, body: { requestKey: key } });
+  assert.equal(reused.status, 409, reused.text);
+  assert.equal(reused.body.error, "request_key_reused");
+  assert.deepEqual(await rows(), before, "nothing written: the postponement rows (each its own request record) are unchanged");
+  assert.equal((await q(`select count(*)::int as n from calendar.question_postponements where question_id = $1`, [wel.id]))[0].n, 0);
+});
+
+// INFO-2: v81's two replaced bodies against the bodies they replace, on
+// ordinary schedules (no calendar link, skip_days_off false; club, team and
+// athlete targets; a membership that starts inside the window and one that
+// ends inside it). Each pre-v81 body is created under another name, verbatim
+// from the file that defines it before v81, and proven by its md5; each v81
+// body likewise from the migration file. Both run on the same world (a
+// savepoint between them); the rows must be identical apart from generated ids.
+const V81_COPY_EDIT = (sql) => sql;
+function bodyFrom(file, header, copyName) {
+  const text = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+  const start = text.indexOf(header);
+  assert.ok(start >= 0, `${header} in ${file}`);
+  const end = text.indexOf("end $$;", start) + "end $$;".length;
+  const sql = text.slice(start, end);
+  const open = sql.indexOf("$$") + 2;
+  const prosrc = sql.slice(open, sql.indexOf("$$", open));
+  const fn = header.replace(/^create (or replace )?function /, "").replace(/\(.*$/, "");
+  return { prosrc, sql: sql.replace(header, `create or replace function ${copyName}(p_occurrence_id uuid)`), fn };
+}
+const md5 = (s) => crypto.createHash("md5").update(s).digest("hex");
+
+test("32. INFO-2: on ordinary schedules v81's two materializations make exactly the rows the pre-v81 bodies make", async () => {
+  const OLD_T = "tests.materialize_pre_v81_copy";
+  const NEW_T = "tests.materialize_v81_copy";
+  const OLD_L = "training_load.materialize_external_pre_v81_copy";
+  const NEW_L = "training_load.materialize_external_v81_copy";
+  const oldT = bodyFrom("migrations_v2/202608300900_tests_v42_phase4_assignment_timezone_window.sql", "create or replace function tests.materialize_test_assignments_for_occurrence(p_occurrence_id uuid)", OLD_T);
+  const newT = bodyFrom("migrations_v2/202611191000_calendar_v81_athlete_questions.sql", "create or replace function tests.materialize_test_assignments_for_occurrence(p_occurrence_id uuid)", NEW_T);
+  const oldL = bodyFrom("migrations_v2/202609011000_training_load_v4_external_scheduling.sql", "create function training_load.materialize_external_assignments_for_occurrence(p_occurrence_id uuid)", OLD_L);
+  const newL = bodyFrom("migrations_v2/202611191000_calendar_v81_athlete_questions.sql", "create or replace function training_load.materialize_external_assignments_for_occurrence(p_occurrence_id uuid)", NEW_L);
+  // The text read is the real body: the md5 of its prosrc is the recorded one.
+  assert.equal(md5(oldT.prosrc), "2d961f5acd6c6309baa51de868773ba4", "the Tests phase-4 body");
+  assert.equal(md5(oldL.prosrc), "8410bf7298d6b3d5e4aea6dfb94e1a18", "the Training Load v4 body");
+  assert.equal(md5(newT.prosrc), "ef7e1093ca427ba0bf2f2bab120ba14f", "v81's Tests body");
+  assert.equal(md5(newL.prosrc), "a700c67786e79af8c03aae0b2d4a5fc3", "v81's Training Load body");
+  assert.equal((await q(`select md5(prosrc) as m from pg_proc where oid = 'tests.materialize_test_assignments_for_occurrence(uuid)'::regprocedure`))[0].m, md5(newT.prosrc), "the live Tests body is v81's");
+  assert.equal((await q(`select md5(prosrc) as m from pg_proc where oid = 'training_load.materialize_external_assignments_for_occurrence(uuid)'::regprocedure`))[0].m, md5(newL.prosrc), "the live Training Load body is v81's");
+
+  // An ordinary world: a club, team and athlete target on each module's schedule.
+  const t = await freshTeam("info2", 2);
+  const clubOnly = await fx.makeAthlete("q info2 club only", { clubId: m.clubs.c1 });
+  const solo = await fx.makeAthlete("q info2 athlete target", { clubId: m.clubs.c1 });
+  const joiner = await fx.makeAthlete("q info2 joiner");
+  await fx.addMembership({ athleteId: joiner.athleteId, clubId: m.clubs.c1, teamId: t.team, startsAt: `${TODAY}T00:00:00Z` });
+  const leaver = await fx.makeAthlete("q info2 leaver");
+  await fx.addMembership({ athleteId: leaver.athleteId, clubId: m.clubs.c1, teamId: t.team, startsAt: `${addDays(TODAY, -1)}T00:00:00Z` });
+  await q(`update public.athlete_memberships set status = 'archived', archived_at = now() where athlete_id = $1`, [leaver.athleteId]);
+  const targets = [{ kind: "club", id: m.clubs.c1 }, { kind: "team", id: t.team }, { kind: "athlete", id: solo.athleteId }];
+  const clubCoach = role("clubAdmin");
+  // The Tests module schedules WELLNESS only in this phase, and a WELLNESS
+  // schedule is ordinary only while its club's switch is off: with it on, a
+  // live event WELLNESS question of the day covers it by design (O3). The
+  // Training Load side is compared with the switch on and off.
+  const testsSchedules = {};
+  for (const [name, version] of [["wellness", WELLNESS]]) {
+    const res = await api("/api/tests/schedules", {
+      method: "POST", cookie: clubCoach.cookie,
+      body: { testVersionId: version, scheduleKind: "daily", timezone: "UTC", startDate: TODAY, endDate: addDays(TODAY, 3), opensTime: "06:00", closesTime: "21:00", targets },
+    });
+    assert.equal(res.status, 201, res.text);
+    testsSchedules[name] = res.body.schedule.id;
+  }
+  const tlRes = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: clubCoach.cookie,
+    body: { eventName: "Info2 RPE", scheduleKind: "one_time", startDate: TODAY, timezone: "UTC", opensTime: "06:00", closesTime: "21:00", targets },
+  });
+  assert.equal(tlRes.status, 201, tlRes.text);
+  const tlSchedule = tlRes.body.schedules[0].id;
+  const ordinary = await q(`select bool_or(s.skip_days_off) as skip,
+                                   (select count(*)::int from calendar.event_questions where test_schedule_id = any($1::uuid[]) or external_schedule_id = $2) as linked
+                              from tests.test_schedules s where s.id = any($1::uuid[])`, [Object.values(testsSchedules), tlSchedule]);
+  assert.deepEqual(ordinary[0], { skip: false, linked: 0 }, "ordinary schedules");
+
+  const client = new pg.Client({ connectionString: env.db.url });
+  await client.connect();
+  try {
+    for (const b of [oldT, newT, oldL, newL]) await client.query(b === newT || b === newL ? V81_COPY_EDIT(b.sql) : b.sql);
+    assert.equal((await client.query(`select md5(prosrc) as m from pg_proc where oid = '${OLD_T}(uuid)'::regprocedure`)).rows[0].m, "2d961f5acd6c6309baa51de868773ba4");
+    assert.equal((await client.query(`select md5(prosrc) as m from pg_proc where oid = '${OLD_L}(uuid)'::regprocedure`)).rows[0].m, "8410bf7298d6b3d5e4aea6dfb94e1a18");
+    const strip = (rows) => rows.map(({ id, created_at, updated_at, ...rest }) => rest);
+    const run = async ({ table, snapshot, occurrence, fnOld, fnNew }) => {
+      const read = async () => ({
+        assignments: strip((await client.query(`select * from ${table} where occurrence_id = $1 order by athlete_id`, [occurrence])).rows),
+        snapshot: strip((await client.query(`select * from ${snapshot} where occurrence_id = $1 order by athlete_id`, [occurrence])).rows),
+      });
+      await client.query("savepoint world");
+      const nOld = (await client.query(`select ${fnOld}($1) as n`, [occurrence])).rows[0].n;
+      const a = await read();
+      await client.query("rollback to savepoint world");
+      const nNew = (await client.query(`select ${fnNew}($1) as n`, [occurrence])).rows[0].n;
+      const b = await read();
+      await client.query("rollback to savepoint world");
+      return { nOld, nNew, a, b };
+    };
+    const compare = async (switchLabel, testsSched, { withTests = true } = {}) => {
+      await client.query("begin");
+      // The world as the module leaves it before its first materialization of the day.
+      for (const [table, snapshot, occTable, sched] of [
+        ["tests.test_assignments", "tests.test_occurrence_target_snapshot", "tests.test_schedule_occurrences", testsSched],
+        ["training_load.external_assignments", "training_load.external_occurrence_target_snapshot", "training_load.external_schedule_occurrences", tlSchedule],
+      ]) {
+        await client.query(`delete from ${table} where occurrence_id in (select id from ${occTable} where schedule_id = $1)`, [sched]);
+        await client.query(`delete from ${snapshot} where occurrence_id in (select id from ${occTable} where schedule_id = $1)`, [sched]);
+        await client.query(`update ${occTable} set assignments_materialized_at = null where schedule_id = $1`, [sched]);
+      }
+      const occT = (await client.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [testsSched, TODAY])).rows[0].id;
+      const occL = (await client.query(`select training_load.generate_external_schedule_occurrence($1, $2) as id`, [tlSchedule, TODAY])).rows[0].id;
+      for (const [label, spec] of [
+        ...(withTests ? [[`Tests (${switchLabel})`, { table: "tests.test_assignments", snapshot: "tests.test_occurrence_target_snapshot", occurrence: occT, fnOld: OLD_T, fnNew: NEW_T }]] : []),
+        [`Training Load (${switchLabel})`, { table: "training_load.external_assignments", snapshot: "training_load.external_occurrence_target_snapshot", occurrence: occL, fnOld: OLD_L, fnNew: NEW_L }],
+      ]) {
+        const r = await run(spec);
+        assert.ok(r.nOld >= 4, `${label}: the old body made the day's assignments (${r.nOld})`);
+        const athletes = r.a.assignments.map((x) => String(x.athlete_id));
+        for (const who of [t.athletes[0], clubOnly, solo, joiner]) assert.ok(athletes.includes(String(who.athleteId)), `${label}: ${who.name} asked by the old body`);
+        assert.equal(r.nNew, r.nOld, `${label}: the same count`);
+        assert.deepEqual(r.b, r.a, `${label}: the same rows, column by column`);
+      }
+      await client.query("rollback");
+    };
+    await compare("the switch on", testsSchedules.wellness, { withTests: false });
+    await switchOn(m.clubs.c1, false);
+    try {
+      await compare("the switch off", testsSchedules.wellness);
+    } finally {
+      await switchOn(m.clubs.c1, true);
+    }
+  } finally {
+    await client.query("rollback").catch(() => {});
+    for (const fn of [OLD_T, NEW_T, OLD_L, NEW_L]) await client.query(`drop function if exists ${fn}(uuid)`).catch(() => {});
+    await client.end();
   }
 });
