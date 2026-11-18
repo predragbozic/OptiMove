@@ -75,6 +75,14 @@ const ONE_SIDED = new Set([">=", ">", "<=", "<"]);
 const PIN_GUARD = "metric_definitions: an active mapping version pins the current version; disable it first";
 // v77's version guard, exactly: a new version of an input of a calculated variable that changes its unit or type.
 const CALCULATION_INPUT_GUARD = "metric_definition_versions: a calculated variable uses this variable; its unit and type stay as they are";
+// v78's backstops (the API refuses each first, naming the variable; these answer a writer the API did not see in time).
+const CALCULATION_GUARD_CODES = new Map([
+  ["metric_definition_versions: a calculated variable adds up this variable; its day rule stays Sum", "calculation_input_day_rule_in_use"],
+  ["metric_definition_versions: every input is added up by Sum", "calculation_input_not_additive"],
+  ["metric_definition_versions: a calculated version's day rule is Sum", "calculated_day_rule_fixed"],
+  ["metric_definitions: an active calculated variable adds up this variable; it stays active", "calculation_input_archive_in_use"],
+  ["metric_definitions: a calculated variable is active only while every input is active", "calculation_input_not_active"],
+]);
 const KEY_CONSTRAINT = "metric_definitions_owner_scope_owner_user_id_owner_club_id__key";
 const RETRY_CONSTRAINTS = new Set(["metric_variable_requests_one_per_key", "metric_definition_versions_metric_definition_id_version_num_key"]);
 
@@ -112,7 +120,20 @@ const TEXT = {
   calculation_level_mismatch: "Every input must have every level of the calculated variable.",
   calculation_kind_fixed: "A variable is calculated from its first version or never.",
   variable_used_by_calculation: "A calculated variable adds up this variable; its unit stays as it is.",
+  // PR 2 (the owner's rule of 2026-11-18): a sum adds only what can be added.
+  calculated_day_rule_fixed: "A calculated variable adds its inputs up, so a day's values are added up too (Sum).",
+  calculation_input_day_rule_in_use: "A calculated variable adds up this variable, so a day's values stay added up (Sum).",
+  calculation_input_not_additive: "An input is not an amount; only amounts (combined by Sum) can be added up.",
+  calculation_input_archive_in_use: "A calculated variable adds up this variable; it cannot be archived while it is used.",
+  calculation_input_not_active: "An input of this calculated variable is archived; restore it first.",
 };
+// The sentence of an input whose day rule is not Sum: it names the variable and why it cannot be added up.
+const NOT_AN_AMOUNT = { avg: "is an average", max: "is a highest value", last: "is a latest value", none: "keeps each value separately" };
+const notAdditiveText = (label, method) => (method === "none"
+  ? `${label} keeps each value separately, not as an amount; it cannot be added up.`
+  : `${label} ${NOT_AN_AMOUNT[method] ?? "is not an amount"}, not an amount; it cannot be added up.`);
+const dayRuleInUseText = (label) => `${label} adds up this variable, so a day's values stay added up (Sum).`;
+const archiveInUseText = (label) => `${label} adds up this variable; it cannot be archived while ${label} uses it.`;
 // A rename's precondition: the server's SHA-256 of the stored label, short
 // label, description and state (hex).
 const LABELS_TOKEN = /^[0-9a-f]{64}$/;
@@ -229,7 +250,11 @@ function aggregationInput(raw) {
 // a create and a new version.
 function semanticsInput(body) {
   const unit = unitInput(body.unit, () => refusal(400, "invalid_unit", TEXT.invalid_unit));
-  const dailyAggregationMethod = aggregationInput(body.dailyAggregationMethod);
+  // A calculated variable's day rule is Sum (PR 2): it may be left out, and anything else is refused.
+  // Only a plain object counts as a calculation here; any other shape is the calculation's own 400 below.
+  const calculated = body.calculation !== null && typeof body.calculation === "object" && !Array.isArray(body.calculation);
+  const dailyAggregationMethod = calculated && body.dailyAggregationMethod === undefined ? "sum" : aggregationInput(body.dailyAggregationMethod);
+  if (calculated && dailyAggregationMethod !== "sum") throw refusal(409, "calculated_day_rule_fixed", TEXT.calculated_day_rule_fixed);
   const minValue = decimalField(body.minValue, "minValue");
   const maxValue = decimalField(body.maxValue, "maxValue");
   if (minValue !== null && maxValue !== null && decCmp(dec(minValue), dec(maxValue)) > 0) throw invalidBody("minValue is not above maxValue.");
@@ -264,14 +289,17 @@ const calculationParam = (calculation) => (calculation === null ? null : JSON.st
 // guard's order), each checked: readable by this owner (its own or a system
 // variable), active, not calculated, numeric, with the unit and every level.
 // An input this owner cannot read reads exactly like a missing one.
-// Whether a calculated variable's current version adds up this variable.
-async function usedByCalculation(client, definitionId) {
-  return (await client.query(
-    `select 1 from training_load.metric_definitions cd
+// The name of a calculated variable whose current version adds up this variable (null for none); `activeOnly` leaves an
+// archived calculated variable out (an archive asks only whether an active one still uses it).
+async function usedByCalculation(client, definitionId, { activeOnly = false } = {}) {
+  const row = (await client.query(
+    `select cd.label from training_load.metric_definitions cd
        join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
-      where (to_jsonb(cv.*) -> 'calculation' -> 'inputs') ? $1::text limit 1`,
+      where (to_jsonb(cv.*) -> 'calculation' -> 'inputs') ? $1::text ${activeOnly ? "and cd.state = 'active'" : ""}
+      order by cd.label, cd.id limit 1`,
     [definitionId],
-  )).rowCount > 0;
+  )).rows[0];
+  return row ? row.label : null;
 }
 async function checkCalculationInputs(client, ctx, calculation, { unit, levels }) {
   const params = [calculation.inputs];
@@ -280,7 +308,7 @@ async function checkCalculationInputs(client, ctx, calculation, { unit, levels }
   // the new version (one statement that locks and joins would drop it and answer the wrong code).
   await client.query(`select d.id from training_load.metric_definitions d where d.id = any ($1::uuid[]) and ${readable} order by d.id for share of d`, params);
   const rows = (await client.query(
-    `select d.id::text as id, d.state, v.value_type, v.unit, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
+    `select d.id::text as id, d.label, d.state, v.value_type, v.unit, v.daily_aggregation_method, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
             (select array_agg(c.scope_level::text) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
        from training_load.metric_definitions d
        join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
@@ -292,6 +320,13 @@ async function checkCalculationInputs(client, ctx, calculation, { unit, levels }
     throw refusal(409, "calculation_input_unavailable", TEXT.calculation_input_unavailable);
   }
   if (rows.some((r) => r.calculated)) throw refusal(409, "calculation_input_calculated", TEXT.calculation_input_calculated);
+  // A sum adds only amounts (the owner, 2026-11-18): an input's day rule is Sum. The first other one in the formula's order is named.
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const notAdditive = calculation.inputs.map((id) => byId.get(id)).find((r) => r.daily_aggregation_method !== "sum");
+  if (notAdditive) {
+    throw refusal(409, "calculation_input_not_additive", notAdditiveText(notAdditive.label, notAdditive.daily_aggregation_method),
+      { current: { variableId: notAdditive.id, dailyAggregationMethod: notAdditive.daily_aggregation_method } });
+  }
   if (rows.some((r) => r.value_type !== "numeric" || r.unit !== unit)) throw refusal(409, "calculation_unit_mismatch", TEXT.calculation_unit_mismatch);
   if (rows.some((r) => levels.some((level) => !(r.scopes ?? []).includes(LEVELS[level])))) {
     throw refusal(409, "calculation_level_mismatch", TEXT.calculation_level_mismatch);
@@ -741,6 +776,10 @@ export function classifyVariableError(error) {
   if (code === "23514" && !error.constraint && error.message === PIN_GUARD) return refusal(409, "variable_pinned", TEXT.variable_pinned);
   // v77's guard, the backstop of the checks made under the same locks.
   if (code === "23514" && !error.constraint && error.message === CALCULATION_INPUT_GUARD) return refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+  if (code === "23514" && !error.constraint && CALCULATION_GUARD_CODES.has(error.message)) {
+    const mapped = CALCULATION_GUARD_CODES.get(error.message);
+    return refusal(409, mapped, TEXT[mapped]);
+  }
   return null;
 }
 
@@ -807,7 +846,7 @@ export async function createVariable({ ctx, body }) {
   adminOnly(ctx);
   plainObject(body,
     ["requestKey", "label", "shortLabel", "description", "key", "iconKey", "unit", "levels", "dailyAggregationMethod", "minValue", "maxValue", "condition", "calculation"],
-    ["requestKey", "label", "unit", "levels", "dailyAggregationMethod"]);
+    ["requestKey", "label", "unit", "levels"]);
   const requestKey = uuidField(body.requestKey);
   if (!boundedText(body.label, TEXT_LIMITS.label)) throw invalidBody("label is one line of 1-80 visible characters without surrounding spaces.");
   const label = body.label;
@@ -891,7 +930,7 @@ export async function createVariableVersion({ ctx, variableId, body }) {
   if (typeof variableId !== "string" || !UUID.test(variableId)) throw NOT_FOUND();
   plainObject(body,
     ["requestKey", "expectedCurrentVersionId", "unit", "dailyAggregationMethod", "minValue", "maxValue", "condition", "reason", "calculation"],
-    ["requestKey", "expectedCurrentVersionId", "unit", "dailyAggregationMethod"]);
+    ["requestKey", "expectedCurrentVersionId", "unit"]);
   const requestKey = uuidField(body.requestKey);
   const expectedCurrentVersionId = uuidField(body.expectedCurrentVersionId);
   const semantics = { ...semanticsInput(body) };
@@ -945,8 +984,10 @@ export async function createVariableVersion({ ctx, variableId, body }) {
         )).rows.map((r) => r.level);
         const levels = ["session", "drill"].filter((level) => scopes.includes(LEVELS[level]));
         await checkCalculationInputs(client, ctx, semantics.calculation, { unit: semantics.unit, levels });
-      } else if (semantics.unit !== stored.unit && (await usedByCalculation(client, id))) {
-        throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+      } else if (semantics.unit !== stored.unit || semantics.dailyAggregationMethod !== "sum") {
+        const user = await usedByCalculation(client, id);
+        if (user !== null && semantics.unit !== stored.unit) throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+        if (user !== null) throw refusal(409, "calculation_input_day_rule_in_use", dayRuleInUseText(user));
       }
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       const units = [semantics.unit, ...(semantics.condition ? [semantics.condition.unit] : [])];
@@ -1062,7 +1103,7 @@ async function runChange({ ctx, variableId, operation, requestKey, requestHash, 
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1`, [id])).rows[0];
       if (!row) throw NOT_FOUND();
-      check(row);
+      await check(row, client);
       for (const [value, max, field = "reason", nullable = false] of [...texts(row), [reason, TEXT_LIMITS.reason]]) {
         if (value === null) continue;
         if (!boundedText(value, max)) throw invalidBody(textRuleMessage(field, max, nullable));
@@ -1166,9 +1207,12 @@ export async function archiveVariable({ ctx, variableId, body }) {
   const requestHash = hashOf({ contract: CONTRACT, operation: "variable_archive", variableId: id, body: { reason } });
   return runChange({
     ctx, variableId: id, operation: "variable_archive", requestKey, requestHash, reason,
-    check: (row) => {
+    check: async (row, client) => {
       if (row.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
       if (row.pinned) throw refusal(409, "variable_pinned", TEXT.archive_pinned);
+      // An input of an active calculated variable stays (PR 2; the Rukovodilac's default of 2026-11-18).
+      const user = await usedByCalculation(client, id, { activeOnly: true });
+      if (user !== null) throw refusal(409, "calculation_input_archive_in_use", archiveInUseText(user));
     },
     texts: () => [],
     update: () => ({ sql: "state = 'archived'", values: [] }),
@@ -1185,10 +1229,28 @@ export async function restoreVariable({ ctx, variableId, body }) {
   const requestHash = hashOf({ contract: CONTRACT, operation: "variable_restore", variableId: id, body: { reason } });
   return runChange({
     ctx, variableId: id, operation: "variable_restore", requestKey, requestHash, reason,
-    check: (row) => {
+    check: async (row, client) => {
       if (row.state === "active") throw refusal(409, "variable_active", TEXT.variable_active);
       if (ctx.basis === "team_coach" && !coachArchived(row)) throw refusal(409, "restore_by_admin", TEXT.restore_by_admin);
       if (row.pinned) throw refusal(409, "variable_pinned", TEXT.archive_pinned);
+      // A calculated variable is active only while every input is (v78); the first archived input is named. Its inputs are
+      // locked FOR SHARE in id order first, so an archive of one of them and this restore wait for each other.
+      await client.query(
+        `select i.id from training_load.metric_definitions i
+          where i.id in (select x.id::uuid from training_load.metric_definitions d
+                           join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+                           cross join lateral jsonb_array_elements_text(to_jsonb(v.*) -> 'calculation' -> 'inputs') as x(id)
+                          where d.id = $1)
+          order by i.id for share of i`, [id],
+      );
+      const archived = (await client.query(
+        `select i.label from training_load.metric_definitions d
+           join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+           join lateral jsonb_array_elements_text(to_jsonb(v.*) -> 'calculation' -> 'inputs') with ordinality as x(id, ord) on true
+           join training_load.metric_definitions i on i.id = x.id::uuid
+          where d.id = $1 and i.state <> 'active' order by x.ord limit 1`, [id],
+      )).rows[0];
+      if (archived) throw refusal(409, "calculation_input_not_active", `${archived.label} is archived; restore it first, then this calculated variable.`);
     },
     texts: () => [],
     update: () => ({ sql: "state = 'active'", values: [] }),
