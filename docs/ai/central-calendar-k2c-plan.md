@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2 is planned; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract (2.3) is next; K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -412,6 +412,401 @@ the team's "Morning session" of one athlete each; an "Evening session" of the se
 A button in the Builder's session editor creates the calendar event of that session (its type, day, time and targets
 from the session) and links the session in one request (the create route with `sessions`, K2a plan 2.1 (b')). A plan
 first, after K2c-1 is in use.
+
+### 2.1 The UI contract (K2c-2, written 2026-11-18 against `main` `4a2b07ec`; waits for the manager's GO)
+
+Phase 1 only: no code until the GO. Written against the code as it is on `4a2b07ec` (K2c-1 merged as PR #613).
+
+#### 2.1.1 What exists, and the two gaps found
+
+**The Builder (`frontend/builder-*.js`, `backend/src/routes/builder.js`).**
+
+- A weekly plan is one athlete's plan for one week (`plans.plans`, `plan_type = 'weekly'`, `week_start`). Its days
+  are the Builder's blocks (`draft.blocks[]`, each with `date`), and a day's sessions are `block.sessions[]`, each
+  with `id`, `amPm` (`AM` / `PM` / ""), `bta` (`B` / `T` / `A` / ""), `time` ("HH:MM" or ""), `name`,
+  `rpeEnabled`, `trackingEnabled` (`buildDraft`, `builder.js:1785-1845`). The draft names no `logical_session_id`
+  and no `session_order`.
+- A batch (one plan per athlete, `builder_batch_id`) is `draft.batch.plans[]` (`id`, `athleteId`, `athleteName`).
+- **The Builder never edits a live plan directly.** A new plan is `status: 'draft'` until *Save*
+  (`builder-submit-plan`); opening a saved plan makes an **edit draft** (`POST /api/builder/plans/:id/edit`,
+  `builder-actions.js:225`): a copy (`isEditDraft: true`, `editSourcePlanId` = the live plan) with its own session
+  ids, applied to the live plan only by *Apply changes*. The edit-draft copy keeps the live session's
+  `logical_session_id` (`builder.js:2329-2362`).
+- Only a live, active, non-draft weekly plan is on the calendar (`WEEKLY_PLAN_SESSION_FILTER_SQL`,
+  `trainingLoadAccess.js:239-244`). So **only a saved session can be linked**; an attach of anything else is
+  `400 session_not_available`.
+
+**What the calendar calls a planned group.** A planned card (`kind: "planned"`, `calendarQuery.js:930-975`; D16b)
+is one card per plan owner + day + slot (AM / PM, B / T / A) + trimmed, case-insensitive session name. It carries
+`date`, `title` (the most common spelling), `startTime` (only when every session shares it), `slot { amPm, bta,
+order }`, `athleteIds`, `athletes[] { athleteId, planId, sessionId, logicalSessionId, rpe }`, `links { planIds,
+logicalSessionIds }` and `expects` / `rpe`. A session linked to an event is folded under the event card (its
+`links.planIds` / `logicalSessionIds`) and is not a planned card any more.
+
+**Gap 1 — the create route ignores `sessions`.** K2a plan 4.2 names `sessions?` on `POST /api/calendar/events`
+(option (b′), "links in the same transaction"), but it was never built: `validateCreateBody`
+(`calendarEventService.js:211-241`) reads no `sessions` field and does not refuse unknown keys, so a body with
+`sessions` today creates the event and **silently links nothing**. "Make an event" in one request needs a small
+backend change (2.1.10, Q1).
+
+**Gap 2 — the Builder cannot name a calendar session.** The draft has neither the logical id nor the slot order, and
+an edit draft's session ids are not the live ones. The contract closes this **without a backend change** by reading
+the calendar's own day (2.1.3); Q2 records the alternative.
+
+#### 2.1.2 The entry point
+
+- **Where:** on a weekly plan's session row in the Builder, in `.builder-session-actions`
+  (`builder-structure.js:388-395`), after the Training Load controls (`renderSessionTrainingLoadControls`): one
+  button **Make an event** (`plain-button cc-builder-event-button`, a calendar glyph plus the words; the words stay
+  at every width, so it is never an icon alone).
+- **Who sees it** (the client's view; the server decides on every request):
+  - the active workspace is `club`, `team` or `private_coach` (the writer bases `club_admin` / `platform_admin` in
+    a club, `team_coach`, `private_coach` of v49 `calendar.lock_event_writer`). The platform workspace never gets it
+    (the create answers `403 workspace_required`); the athlete workspace and an athlete never do;
+  - the plan is weekly (`draft.plan.planType === "weekly"`), not a template, not a program;
+  - the session's day has a date (`block.date`).
+- **Disabled, with one line under it** (`.cc-builder-event-note`, `role="status"`):
+  - a never-saved plan (`status === "draft"` and not `isEditDraft`): "Save the plan first, then make the event.";
+  - while any Builder save is pending (`queuedBuilderApi` busy): off, no line;
+  - while another "Make an event" of this Builder is in flight or not confirmed (2.1.6): off.
+- **Pressing it** opens a small inline panel under the session row (2.1.4) and first reads the session's day
+  (2.1.3). Nothing is written by the press.
+
+#### 2.1.3 Finding the session on the calendar (one existing read, no backend change)
+
+On the press, the panel reads `GET /api/calendar?from=D&to=D` (`centralCalendarUrl(D, D, today)`, the calendar's
+own read of the active workspace; D = `block.date`) and looks for this session:
+
+- **The live plan id** `L` = `draft.plan.editSourcePlanId` for an edit draft, else `draft.plan.id` (a saved plan
+  opened without an edit draft).
+- **The planned card** `P` of day D with `P.kind === "planned"`, some `P.athletes[i].planId === L`,
+  `P.slot.amPm === (session.amPm || null)`, `P.slot.bta === (session.bta || null)`, and
+  `lower(trim(P.title)) === lower(trim(session.name))` (the D16b key; an empty name matches an empty title). Pure
+  rule `builderCalendarMatch(draft, block, session, answer)` in the new module (2.1.11).
+- **Outcomes of the match:**
+  - **exactly one `P`** → the form (2.1.4) over that group: `P.links.logicalSessionIds`, `P.athleteIds`,
+    `P.title`, `P.startTime`, `P.rpe`;
+  - **an event card** `E` of day D with `E.links.planIds` holding `L` and the same slot and name
+    (`E.links.logicalSessionIds` ∩ the folded athletes' sessions) → already linked (2.1.8): "This training is in the
+    calendar as “<E.title>”." with **Open in calendar**;
+  - **none** → one sentence by cause, no form:
+    - an edit draft: "Apply your changes first, then make the event." (the live session differs in name or slot, or
+      does not exist yet);
+    - a saved plan: "This training is not on the calendar of this workspace." (another workspace's plan, or outside
+      the read scope);
+  - **more than one `P`** (two cards fit: should not happen under D16b): the same "not on the calendar" sentence;
+    never a guess.
+- **The read failed:** "The calendar could not be read." with **Try again** (the read again; nothing written).
+- **A stale read:** a generation counter (the `training-load-*-data.js` pattern) so a slower answer of an earlier
+  press never replaces a newer one.
+
+The match uses the **live** session. An edit draft whose session is unchanged links the live session, which is what
+the calendar shows; its unsaved exercise edits do not matter to the link (the link is by slot key, K2a 2.2).
+
+#### 2.1.4 The form (small, pre-filled)
+
+Shown in the inline panel (`<section class="cc-builder-event" aria-labelledby=…>`, heading "Make an event"):
+
+| Field | Pre-filled from | Coach can change |
+|---|---|---|
+| **Title** | `P.title`, else the session name, else "Training" | yes (text, 1–120, `input` 16 px) |
+| **Type** | the workspace's types (`readCentralCalendarCatalog`, `GET /api/calendar/events/types`, already cached per workspace) of `kind === "training"`: the first by the catalog's order | only when the workspace has more than one training-kind type (a `select`); otherwise a quiet line "Type: Training" |
+| **Day** | `block.date` | **no** (fixed; the attach needs the session on the event's day). Shown as "Wed 18.11.2026" |
+| **Start time** | `P.startTime` (the time every athlete's session shares), else empty | yes (`input type="time"`) |
+| **End time** | empty | yes (optional; must be after the start, the server's `checkDaysAndTimes`) |
+| **Time zone** | `Intl.DateTimeFormat().resolvedOptions().timeZone` (as the calendar's form) | no, not shown |
+| **Who** | `P.athleteIds` as athlete targets (`{ kind: "athlete", id }` each) | **no**. Shown as "12 athletes" with the names folded (the card's `athletes`, names the read already gave) |
+| **Ask for RPE** | ticked when the group asks (`P.rpe` not null, i.e. any session asks) | yes (a checkbox). The line under it says what else changes (2.1.5) |
+
+Not in the form (the calendar's own *Edit* covers them later): end day, place, details, notes, expects other than
+RPE (`device_data` / `test_result` keep the type's defaults). The coach can *Open in calendar* after the create and
+edit there.
+
+- **No training-kind type** in the workspace: no form; "This workspace has no Training event type. A club admin can
+  add one in Settings → Calendar." (no button for a coach; a club admin gets **Open Settings → Calendar**).
+- Buttons: **Make the event** (`plain-button cc-primary`, the panel's one primary) and **Cancel** (closes the panel,
+  writes nothing). Escape closes it too when nothing is in flight.
+
+#### 2.1.5 The one request
+
+`POST /api/calendar/events` through `createCentralCalendarEvent` (the existing 90 s bounded `eventWrite`):
+
+```
+{ requestKey,                       // newCentralCalendarRequestKey(), made when sent
+  eventTypeId, title, day: D, startTime?, endTime?, timezone,
+  expects,                          // the type's defaultExpects with "rpe" added or removed by the checkbox
+  targets: [{ kind: "athlete", id }, …],     // P.athleteIds
+  sessions: { logicalSessionIds: P.links.logicalSessionIds, alignSessions } }   // needs Q1
+```
+
+- **`alignSessions`** (K2a 3.2, D20 option A; K2c-1 sends `false` and keeps Align a visible button):
+  - the checkbox **equals** the group's current state → `alignSessions: false` (nothing to change);
+  - the coach **changed** it → `alignSessions: true`, and the form said so before sending: "This training will ask
+    for RPE too." / "This training will stop asking for RPE." That line is the visible confirmation; nothing changes
+    silently. Only plans the workspace manages change (the server's `notAllowed`); the workspace switch is never
+    flipped (`switchOff`).
+- **RPE off with results:** `409 has_existing_results { resultCount }` (the event is not made, nothing saved) → in the
+  panel: "N RPE answers were already given in this training. Stop asking for RPE anyway? The answers are kept." with
+  **Stop asking** (a **new** key, `sessions.confirmDisableWithResults: true`) and **Keep asking** (unticks nothing:
+  re-ticks the checkbox and sends nothing). The K2c-1 inline step, not `confirm()`.
+- One `requestKey` per press of **Make the event**; a refusal leaves nothing saved and its key is not reused.
+
+#### 2.1.6 The outcomes
+
+- **Success** (`201`, or `200` with `verifiedAfterCommitError`): the panel shows "Event made: “<title>”, Wed
+  18.11.2026." with **Open in calendar** (`role="status"`, focus on it), plus, from the answer's `alignment`:
+  - `notAllowed > 0`: "Some of these trainings belong to another coach's plan and were left as they are.";
+  - `switchOff > 0`: "RPE requests are switched off in Training Load, so athletes will not be asked until they are
+    switched on.";
+  - the calendar cache is dropped (`invalidateCentralCalendarCache`), so the calendar reads fresh when opened.
+- **Lost answer** (`centralCalendarOutcomeUnknown`: no answer, the 90 s bound, `503 outcome_unknown`, an unwritten
+  5xx): "The result is not confirmed." with **Check result**, which sends the **same** path, body and key (the
+  server replays a saved command or answers its refusal; never a second create with a new key). While it waits the
+  form is read-only and **Make the event** is gone. A check that answers a code the server gives only after reading
+  its request record settles it as "Nothing was saved" with the code's sentence; `try_again` and any other answer
+  keep it not confirmed.
+- **Refusals** (one sentence, one next step; never a code or an id; `role="alert"` in the panel):
+
+| Code | Sentence | Next step |
+|---|---|---|
+| `session_already_attached` | "This training is already in another event. Open the calendar to see it." | **Open in calendar** (the day) |
+| `session_not_available` | "This training can't be added to an event from this workspace. Nothing was saved." | — (a plan of another workspace, unpublished, or deleted meanwhile) |
+| `session_outside_event` | "This training is not on the event's day any more. Nothing was saved." | **Read the day again** |
+| `athlete_not_targeted` | "Some athletes of this training can't be part of an event of this workspace. Nothing was saved." | — |
+| `target_not_available` | "Some athletes of this training are not in this workspace on that day. Nothing was saved." | — |
+| `type_not_available` (the type archived or gone meanwhile), `invalid_type` | "This event type is no longer available. Choose another one." | the catalog read again, the form kept |
+| `has_existing_results` | the inline question of 2.1.5 | **Stop asking** / **Keep asking** |
+| `workspace_required` (403) | "Open your club's or team's workspace to make events." | — |
+| `try_again` | "The calendar is busy. Nothing was saved; try again in a moment." | the button stays |
+| `request_key_reused` | "This could not be sent. Nothing was saved; try again." | a new key next press |
+| 401 / 403 / 404 | "Please sign in again. Nothing was saved." / "Events cannot be made in this workspace. Nothing was saved." / "This training is not available any more." | — |
+| `invalid_*`, other | "Nothing was saved. Try again." | — |
+
+  Every refusal re-reads the day (2.1.3) so the panel shows the current truth (for `session_already_attached`, the
+  already-linked line of 2.1.8). The exact codes of the create-with-sessions branch are fixed by Q1's backend PR; the
+  sentences are written in `builder-calendar-event.js` with the K2c-1 sentences reused where the code is the same.
+
+#### 2.1.7 Leaving the Builder
+
+- **In flight** (the request sent, no answer yet): leaving the Builder (another tab, the rail, Back, opening another
+  plan, a batch pill, closing the plan, a workspace switch) asks once: "An event is still being made. Leave anyway?
+  You can check it later in the calendar." On a yes the write is handed to the calendar's uncertain-writes memory
+  (`central-calendar-actions.js:259-299`, mode `create`, its `sentBody` and `requestKey`): the calendar line then
+  offers **Check result** with the same body and key (the calendar already replays mode `create`). The request's own
+  answer, if it lands after the leave, settles that entry (success or a settled refusal removes it).
+- **Not confirmed:** the same hand-over without a question on a non-final leave (the line in the calendar is the
+  way back); on a final leave (sign-out, a reload, a switch into or out of the athlete workspace) the existing
+  `centralCalendarMayBeLeft({ final })` question counts it, because it is in the calendar's memory.
+- **`beforeunload`:** a new `handleBuilderCalendarEventBeforeUnload` (registered beside the calendar's in `app.js`)
+  returns the browser's dialog while a create is in flight; an unconfirmed one is already counted by
+  `handleCentralCalendarBeforeUnload`.
+- One new exported function in `central-calendar-actions.js`, `rememberCentralCalendarCreate({ sentBody,
+  requestKey })`, wraps the existing `rememberUncertainWrite` for a create not made through the calendar's form; no
+  other change to the calendar's memory.
+
+#### 2.1.8 The way back (is this session already in the calendar?)
+
+- **No new read is invented.** The Builder learns it from the day read of 2.1.3, which runs on the press: an event
+  card holding the session → "This training is in the calendar as “<title>”." with **Open in calendar**, and no form.
+- **After a success in this Builder,** the session row shows a quiet badge "In calendar" (memory only: the Builder's
+  slice, keyed by live plan id + date + slot + name; dropped when the Builder closes or the workspace changes). It
+  is not shown on a later open of the plan.
+- A **persistent** badge on every session row of a week would need one read of the plan's week
+  (`GET /api/calendar?from=weekStart&to=+6`) per Builder open, or a field on the Builder's draft — Q3.
+- **Open in calendar:** opens the calendar tab on day D with the event's panel (`event:<id>:<D>`) through a new
+  small exported function `openCentralCalendarAt({ date, key })` (sets `anchor`, `selectedDate`, `panel`, then the
+  existing tab open, `openCentralCalendarFromRail`'s path in `app.js`). It leaves the Builder; the edit draft stays
+  in the drafts list as it does on any other leave.
+
+#### 2.1.9 Mobile (360 / 375 / 390 px)
+
+- The button in `.builder-session-actions` keeps `min-height: 44px` at every width (checked against the cascade: the
+  ≤ 760 px blocks set `.builder-session-actions .text-action { min-height: 32px }`, `styles.css:8938`, and the
+  icon-action rules at `:24754`; the new class gets its own rule under `body:not(.athlete-mode)` so none of them
+  shrinks it).
+- The panel is a full-width block under the session row; fields stack one per line; **Make the event** and **Cancel**
+  are full width at ≤ 390 px, side by side above.
+- Every `input` / `select` 16 px (the title, the type, both times); the checkbox has a 44 px label row.
+- Names wrap (`overflow-wrap: anywhere`); no horizontal scroll in the Builder at 360 px.
+- Selectors: `.cc-builder-event*` (the calendar's prefix), added in the calendar's part of `styles.css`.
+
+#### 2.1.10 Backend: what is needed (Q1)
+
+The smallest change that makes "one request" true, in `calendarEventService.js` only:
+
+- `validateCreateBody` accepts an optional `sessions { logicalSessionIds (1–200 uuids), alignSessions (boolean),
+  confirmDisableWithResults? }` with the attach's own validators (`uuidListField`, `booleanField`), added to the
+  canonical body **only when sent**, so the request hash of a body without it is unchanged (the K2b-1b rule).
+- `createEvent`, after the event and its targets are inserted and before the result: the attach's existing steps on
+  the new event — `readLinkableSessions` unlocked, `allLinkable` / the owner's tree, the plans `FOR SHARE` ascending,
+  read again, `inEventDays`, `targeted`, not linked elsewhere, the link rows, `alignLinkedSessions` when asked. A
+  refusal rolls the whole create back (nothing saved). The lock order is the attach's after the writer lock (no event
+  row lock is needed: the row is new in this transaction). One change row (kind `create`, `details.sessions`,
+  `details.aligned`) and one request row, as today; the answer adds `attached` and `alignment`.
+- Tests on disposable databases: create with sessions (one request row, links, the fold on the next read), every
+  refusal leaves no event, the replay, `request_key_reused` with and without sessions, the alignment and its results
+  gate, the owner's tree, a concurrent attach of the same slot.
+- It touches a transaction, its lock order and idempotency: **external-review trigger 4**, so ★★ (`code-reviewer`,
+  `security-reviewer`, the independent review). No migration (v49's operation `create` and its change kinds hold it).
+
+**Fallback if Q1 is no:** the frontend sends two commands: the create (its key), then `POST /:id/sessions` (a second
+key). Between them the event exists without the link; a refused or lost second step shows "The event was made, but
+the training is not linked yet." with **Link it** (the K2c-1 attach) and **Open in calendar**. More states, more
+copy, and a half-done result visible to the coach; not recommended.
+
+#### 2.1.11 Files the code will touch
+
+Frontend (no backend in this list; Q1's backend is its own pull request first):
+
+- **new** `frontend/builder-calendar-event.js` — pure: `builderCalendarMatch`, the form's pre-fill, the request body,
+  every sentence (exported for the tests);
+- **new** `frontend/builder-calendar-event-actions.js` — the press, the day read with its generation, the send, Check
+  result, the leave and `beforeunload` handlers; the view part as `renderBuilderCalendarEventHtml` in the same
+  module's view twin **new** `frontend/builder-calendar-event-view.js` (the module pattern);
+- `frontend/builder-structure.js` — the button in the session row and the panel's slot under it;
+- `frontend/builder-actions.js` — dispatch of `builder-calendar-event` (`data-act`: `open`, `send`, `check`, `close`,
+  `retry-read`, `stop-asking`, `keep-asking`, `open-calendar`);
+- `frontend/central-calendar-actions.js` — `rememberCentralCalendarCreate`, `openCentralCalendarAt` (two small
+  exports; nothing else changes);
+- `frontend/app.js` — the leave chain (`builderCalendarEventMayBeLeft` beside `centralCalendarMayBeLeft`), the
+  `beforeunload` registration, `openCentralCalendarAt` wiring;
+- `frontend/state.js` — **shared**: one new key on the Builder slice, `emptyBuilderState().calendarEvent: null`
+  (`{ sessionId, phase: "reading" | "form" | "sending" | "unconfirmed" | "done" | "refused", read, form, requestKey,
+  sentBody, message }`) and `calendarEventsMade: []` (the in-memory "In calendar" badges). No other slice changes;
+- `frontend/styles.css` — **shared**: `.cc-builder-event*` rules only;
+- **new** `frontend/tests/builder-calendar-event.actions.test.mjs`.
+
+#### 2.1.12 Tests
+
+**Suite** `frontend/tests/builder-calendar-event.actions.test.mjs` (JSDOM, the real Builder view / actions and the
+new modules, a fake `fetch` that keeps the routes' contracts: `GET /api/calendar` answers planned and event cards of
+the K2a-1b shape and, after a create with sessions, the session folded under the new event; `POST
+/api/calendar/events` validates the body, replays the same key and body, answers `request_key_reused` for the same key
+with another body, and changes nothing on a refusal; `GET /events/types` the catalog):
+
+1. visibility: a weekly saved plan / an edit draft in a club, team and private-coach workspace → the button; a
+   template, a program, the platform and athlete workspaces → none; a never-saved plan → disabled with its line;
+2. the match: one card → the form with the group's title, time, athletes and RPE; another plan's card, another slot,
+   another name → no form and the right sentence; an edit draft with a renamed session → "Apply your changes first";
+   an event card holding the session → the linked line with Open in calendar; two fitting cards → no guess;
+3. the read: failure → Try again; a slower earlier answer never replaces a newer one;
+4. the request: one POST with the exact body (targets = the group's athletes, `logicalSessionIds` = the group's,
+   `alignSessions: false` when the checkbox is unchanged, `true` and the line when changed, `expects` follows the
+   checkbox, the time zone);
+5. success: the notice, Open in calendar opens `event:<id>:<D>`, the "In calendar" badge, the calendar cache dropped;
+   `notAllowed` / `switchOff` sentences;
+6. `has_existing_results` → the step; Keep asking sends nothing; Stop asking sends a new key with
+   `confirmDisableWithResults: true`;
+7. every refusal code → its sentence, nothing else changed, the day read again, a new key on the next press;
+8. a lost answer → *Result not confirmed* · *Check result* sends the same path, body and key; a settling code ends it;
+   `try_again` keeps it; the form read-only meanwhile;
+9. one control at a time: a double click sends one POST; a second session's button off while one is in flight;
+10. leaving: in flight → the question, on yes the entry is in the calendar's memory with the same key and body and the
+    calendar's Check result resends it; unconfirmed → handed over without a question; `beforeunload` while in flight;
+11. no id or code in the panel's text (a scan for UUIDs and the codes).
+
+**Mutations** (each must fail a test): match on any athlete's plan id instead of the live plan id; drop the name in the
+match; send the session's own id instead of the group's `logicalSessionIds`; target only the session's athlete; send
+`alignSessions: true` when the checkbox is unchanged; a new key on Check result; reuse the key after a refusal; settle a
+check on `try_again`; drop the generation check; offer the button in the platform workspace; not hand the write over on
+leave.
+
+**Then:** the targeted calendar suites (`central-calendar-links`, `-events`, `-event-details`, `central-calendar`)
+because two exports are added to `central-calendar-actions.js`; the Builder suites that render the session row
+(`builder-*`); the whole `--preset frontend-fast` on the head and on a clean `origin/main` worktree, compared file by
+file (known failures on main, not this work: `builder-mobile-section-workflow` 16c (manifest),
+`exercise-editor-thumbnail`, `exercise-media-thumbnail`, `training-load.actions`); the build; `git diff --check`.
+
+**Browser check:** Chromium through `npm run e2e:demo` (a disposable database, invented data: a club with a team, a
+saved weekly plan of four athletes from one Builder batch with a "Morning session"), at 360, 375, 390 and 1280 px:
+open the plan (an edit draft), Make an event, the event appears on the calendar with the training folded under it,
+pressing the button again shows the linked line, a refused case (a session already in an event), no horizontal
+scroll, no target under 44 px, no input under 16 px, no JS error. Q1's backend must be merged first for this check
+(or run on its branch).
+
+**Reviews** (after the code, on a frozen head): `code-reviewer`, `ux-design-reviewer` (a new coach flow),
+`mobile-qa`, then the independent review and the manager's gate. Q1's backend pull request has its own ★★ reviews.
+
+#### 2.1.13 Open questions for the manager (each with a recommendation)
+
+1. **The backend change for `sessions` on create (2.1.10).** Recommend **yes**, as its own small ★★ pull request
+   before the frontend: `calendarEventService.js` and its suite only, no migration, no route added. Without it the
+   "one request" of the brief is impossible; the fallback (two commands) shows a half-done event to the coach.
+2. **Naming the session: the calendar read vs a Builder field.** Recommend **the calendar day read** (2.1.3): no
+   backend, and it gives exactly the group K2c-1 links (D16b) and the "already linked" fact. The alternative is
+   `logicalSessionId` on `buildDraft`'s sessions (a read-only field in `builder.js`), which still needs the calendar
+   read for the group and the link state, so it adds nothing for K2c-2.
+3. **A persistent "In calendar" badge on the Builder's session rows.** Recommend **not in K2c-2** (memory only after
+   a success, and the press shows the truth). Later: one week read per Builder open, or a field on the draft.
+4. **Targets: athletes or the team?** The form targets the group's athletes one by one (every one must be a target,
+   `athlete_not_targeted`). In a team workspace, when the group is the whole team on that day, a team target would
+   follow later roster changes. Recommend **athletes only in K2c-2** (simple, exact, the private coach's only form);
+   a "the whole team" option later if coaches ask.
+5. **RPE in the form.** Recommend the **one checkbox** of 2.1.4–2.1.5 (pre-set from the training, `alignSessions`
+   only when the coach changes it, the change stated before sending). The alternative (the type's defaults,
+   `alignSessions: false`, Align later in the calendar) leaves a fresh event that disagrees with its training.
+6. **Which type when the workspace has several training-kind types?** Recommend the first by the catalog's order, a
+   `select` only when there are several; no type of kind `training` → the sentence of 2.1.4.
+7. **An edit draft with unsaved changes to the session's name or slot.** Recommend the sentence "Apply your changes
+   first, then make the event." (no guess, no link to a session the coach is still changing).
+8. **K2c-1's open LOW F5 (the plan owner on `sessionLinks`)** is not needed here and stays a follow-up.
+
+### 2.2 The manager's GO (2026-11-18)
+
+GO on 2.1 at `adb22ce4`, with these decisions. Where they differ from 2.1, they win.
+
+1. **`sessions` on create: yes, as its own ★★ backend pull request, K2c-2-B, before the frontend.**
+   - K2a plan 2.1 (b′) planned it; `validateCreateBody` never built it.
+   - K2c-2-B is stacked on PR #614 (`claude/central-calendar-k2b2a-1`, K2b-2a-1, migration v81, not merged), which
+     changes `createEvent` for `questions`; the two must agree on RPE's one channel. The branch
+     `claude/central-calendar-k2c-2-backend` is made from #614's frozen head, and this docs branch is merged into it
+     (`git merge --no-edit`, no rebase).
+   - **Before any code**, its technical contract is written as section 2.3 and gets its own GO. It fixes:
+     - the canonical body: `sessions: { logicalSessionIds, alignSessions, confirmDisableWithResults? }`, in the
+       canonical body only when sent (today's hashes unchanged), validated by the attach route's own validators;
+     - the lock order under `.claude/rules/migrations.md`: every lock before the first write, proven by a
+       recorded-SQL-order test. So the attach's plan and session locks come **before** the event INSERT. The exact
+       order: users-first rights → the writer lock → the type `FOR SHARE` → the attach's locks → #614's questions'
+       locks (Training Load, Tests, the day key) → the first write, and how it merges with #614's create order;
+     - atomicity: a refusal of any attach step rolls back the whole create, nothing written;
+     - the codes: the attach's, unchanged;
+     - idempotency: the same key replays the saved answer; the same key with other `sessions` is
+       `request_key_reused`;
+     - the interplay with #614's questions: `sessions` that carry RPE and no `questions` sent → the type's RPE default
+       is skipped, named in `questionsSkipped`, and the create succeeds; `sessions` plus explicit `questions` with RPE
+       → `rpe_from_sessions`, the whole create rolled back;
+     - the tests: every basis and the identical 404; replay and a lost COMMIT; atomicity through a refusal on each
+       attach step; the hash of a body without `sessions` unchanged; the interplay; races of the attach's locks
+       against a concurrent attach or detach; the recorded SQL order; mutations on each guard;
+     - the reviewers: `code-reviewer` and `db-reviewer`, then the independent review and the OptiMove manager's gate.
+   - **Follow-up, not in K2c-2-B:** the create route does not refuse unknown keys.
+2. **Naming the session through the calendar day read (2.1.3): yes, no backend change.** More than one matching card
+   (the same plan, slot and name) → one sentence, nothing made, never a guess. The server's attach checks stay the
+   guard.
+3. **No persistent "In calendar" badge** (2.1.8): a follow-up.
+4. **Targets: the group's athletes one by one** for K2c-2. **Follow-up:** target the team when the plan's assignment
+   is a team.
+5. **RPE: no checkbox.** This replaces the RPE row of 2.1.4, the `alignSessions` and `has_existing_results` parts of
+   2.1.5, the `has_existing_results` row of 2.1.6, and test 6 of 2.1.12 (and the "`alignSessions: true` when the
+   checkbox is unchanged" mutation):
+   - the event's `expects` follows the training: `rpe` when the group asks for it (`P.rpe` not null), not otherwise;
+     the type's other defaults stay as they are;
+   - `alignSessions: false` always;
+   - a coach changes RPE in the Builder session, where it lives. One question per screen, and `has_existing_results`
+     never comes up from this button.
+6. **The type:** the first `training`-kind type in catalog order, a select only when there are several; none → one
+   sentence pointing to Settings → Calendar. As 2.1.4.
+7. **An edit draft with unapplied changes to the session's name or slot:** "Apply your changes first, then make the
+   event." As 2.1.3.
+8. **K2c-1's LOW F5** stays a follow-up.
+
+**The order of the stream's pull requests:** #614 → K2b-2a-2a (the Tests option) → **K2c-2-B** (backend) → K2b-2a-2b
+(the coach screens; it also touches `central-calendar-actions.js`) → **K2c-2-F** (the Builder frontend, on
+`claude/central-calendar-k2c-2`, merged with K2c-2-B's head). The frontend's two exports in
+`central-calendar-actions.js` stay small, so the merge with K2b-2a-2b is trivial.
+
+**Next:** section 2.3 on `claude/central-calendar-k2c-2-backend` once #614's frozen head is known; no code before its
+GO.
 
 ## 3. K3 — "New training" from an event (named only)
 
