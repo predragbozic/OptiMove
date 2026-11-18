@@ -367,7 +367,7 @@ test("6. a club admin's calculated variable takes its own club's and system vari
   assert.equal(JSON.stringify(reduced.body).includes(own.id), false);
 });
 
-test("7. a new version: a calculated variable changes its inputs (kept as a calculation); kind changes, an unchanged sum and an input's unit change are refused; any other change of an input is fine", async () => {
+test("7. a new version: a calculated variable changes its inputs (kept as a calculation); kind changes, an unchanged sum, an input's unit change and an input's day rule away from Sum are refused; any other change of an input is fine", async () => {
   const v = W.hmld;
   const newInputs = await post(`/variables/${v.id}/versions`, W.pa, {
     requestKey: key(), expectedCurrentVersionId: v.currentVersion.id, unit: "m", dailyAggregationMethod: "sum", calculation: sum(W.z4, W.z5),
@@ -381,8 +381,16 @@ test("7. a new version: a calculated variable changes its inputs (kept as a calc
   refused(await post(`/variables/${W.z3.id}/versions`, W.pa, { requestKey: key(), expectedCurrentVersionId: W.z3.currentVersion.id, unit: "m", dailyAggregationMethod: "sum", calculation: sum(W.z4, W.z5) }), 409, "calculation_kind_fixed");
   // z4 is an input of HMLD's current version: its unit stays.
   refused(await post(`/variables/${W.z4.id}/versions`, W.pa, { requestKey: key(), expectedCurrentVersionId: W.z4.currentVersion.id, unit: "km", dailyAggregationMethod: "sum" }), 409, "variable_used_by_calculation");
+  // ... and its day rule stays Sum (PR 2: a sum adds only amounts); a change that keeps both is fine.
   const agg = await post(`/variables/${W.z4.id}/versions`, W.pa, { requestKey: key(), expectedCurrentVersionId: W.z4.currentVersion.id, unit: "m", dailyAggregationMethod: "max" });
-  assert.equal(agg.status, 201, agg.text);
+  refused(agg, 409, "calculation_input_day_rule_in_use");
+  // The sentence names a calculated variable whose current version adds z4 up (the first by name).
+  const users = (await rows(k, `select d.label from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id = d.current_version_id
+     where v.calculation -> 'inputs' ? $1 order by d.label, d.id`, [W.z4.id])).map((x) => x.label);
+  assert.ok(users.includes(W.hmld.label));
+  assert.equal(agg.body.message, `${users[0]} adds up this variable, so a day's values stay added up (Sum).`);
+  const kept = await post(`/variables/${W.z4.id}/versions`, W.pa, { requestKey: key(), expectedCurrentVersionId: W.z4.currentVersion.id, unit: "m", dailyAggregationMethod: "sum", maxValue: "100000" });
+  assert.equal(kept.status, 201, kept.text);
   W.hmldVersion = current;
   // An input that leaves a calculation's current version may change its unit again.
   const q1 = await variable(W.pa, { label: `Q1 ${uid()}` });
@@ -411,7 +419,7 @@ test("8. no mapping targets a calculated variable: the API refuses a version wit
   assert.match(raw.error.message, /a calculated variable is never the target of a mapping/);
 });
 
-test("9. the database guards of a version and of the levels: a variable never changes kind, a calculated version has no bounds or condition, levels follow the inputs both ways", async () => {
+test("9. the database guards of a version and of the levels: a variable never changes kind, a calculated version has no bounds (a condition is stated data, allowed), levels follow the inputs both ways", async () => {
   const { hmld } = W;
   const calc = JSON.stringify({ kind: "sum", inputs: [W.z4.id, W.z5.id] });
   dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) values ($1, 9, 'm', 'numeric')`, [hmld.id])),
@@ -639,4 +647,54 @@ test("15. the whole-row reads name the version row itself (the code re-review): 
   assert.equal(row.calculated, true);
   const plain = await one(k, `select ${CANONICAL_VERSION_COLUMNS} from (select 1 as v) x, training_load.metric_definition_versions v where v.id = $1`, [W.z5.currentVersion.id]);
   assert.equal(plain.calculated, false);
+});
+
+test("16. a sum adds only amounts (the owner, 2026-11-18): an input whose day rule is not Sum is refused with a sentence naming it, for a platform admin and a club admin; the calculated variable's own day rule is Sum; an input of an active calculated variable is not archived; nothing written", async () => {
+  const sentences = {
+    avg: (l) => `${l} is an average, not an amount; it cannot be added up.`,
+    max: (l) => `${l} is a highest value, not an amount; it cannot be added up.`,
+    last: (l) => `${l} is a latest value, not an amount; it cannot be added up.`,
+    none: (l) => `${l} keeps each value separately, not as an amount; it cannot be added up.`,
+  };
+  for (const [who, base] of [[W.pa, W.z3], [W.caA, await variable(W.caA, { label: `A amount ${uid()}` })]]) {
+    for (const method of ["avg", "max", "last", "none"]) {
+      const other = await variable(who, { label: `Top speed ${method} ${uid()}`, dailyAggregationMethod: method });
+      const before = await counts();
+      const res = await calculated(who, [base, other]);
+      refused(res, 409, "calculation_input_not_additive");
+      assert.equal(res.body.message, sentences[method](other.label));
+      assert.deepEqual(await counts(), before, "nothing written");
+    }
+  }
+  // The calculated variable's own day rule: Sum, which the body may leave out; anything else is refused.
+  for (const method of ["avg", "max", "last", "none"]) {
+    const before = await counts();
+    refused(await calculated(W.pa, [W.z3, W.z4], { dailyAggregationMethod: method }), 409, "calculated_day_rule_fixed");
+    assert.deepEqual(await counts(), before);
+  }
+  const omitted = await post("/variables", W.pa, { requestKey: key(), label: `HMLD omitted ${uid()}`, unit: "m", levels: ["session"], calculation: sum(W.z3, W.z4) });
+  assert.equal(omitted.status, 201, omitted.text);
+  assert.equal(omitted.body.variable.currentVersion.dailyAggregationMethod, "sum");
+  // An ordinary variable still states its day rule.
+  refused(await post("/variables", W.pa, { requestKey: key(), label: `Plain ${uid()}`, unit: "m", levels: ["session"] }), 400, "invalid_body");
+  // An input of an active calculated variable stays: archiving it is refused, naming the calculated variable, for each basis.
+  const sysIn = await variable(W.pa, { label: `S amount ${uid()}` });
+  const sysCalc = (await calculated(W.pa, [sysIn, W.z3])).body.variable;
+  const ownIn = await variable(W.caA, { label: `A amount ${uid()}` });
+  const clubCalc = (await calculated(W.caA, [ownIn, W.z3])).body.variable;
+  for (const [who, input, calc] of [[W.pa, sysIn, sysCalc], [W.caA, ownIn, clubCalc], [W.coachA, ownIn, clubCalc]]) {
+    const before = await counts();
+    const res = await post(`/variables/${input.id}/archive`, who, { requestKey: key(), reason: "Not used any more" });
+    refused(res, 409, "calculation_input_archive_in_use");
+    assert.equal(res.body.message, `${calc.label} adds up this variable; it cannot be archived while ${calc.label} uses it.`);
+    assert.deepEqual(await counts(), before);
+  }
+  // Once the calculated variable itself is archived, its inputs may be archived too.
+  const q1 = await variable(W.pa, { label: `Q amount 1 ${uid()}` });
+  const q2 = await variable(W.pa, { label: `Q amount 2 ${uid()}` });
+  const c = (await calculated(W.pa, [q1, q2])).body.variable;
+  refused(await post(`/variables/${q1.id}/archive`, W.pa, { requestKey: key(), reason: "Not used any more" }), 409, "calculation_input_archive_in_use");
+  assert.equal((await post(`/variables/${c.id}/archive`, W.pa, { requestKey: key(), reason: "Not used any more" })).status, 200);
+  const freed = await post(`/variables/${q1.id}/archive`, W.pa, { requestKey: key(), reason: "Not used any more" });
+  assert.equal(freed.status, 200, freed.text);
 });
