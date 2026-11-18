@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built, its review round fixed (section 1.2.1)**; K2c-2 is planned; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2 is planned; K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -367,6 +367,45 @@ same counts as a clean `origin/main` (`8288b38f`). The build passes and `git dif
 
 The console showed a 403 of `/api/tests/athlete/timezone` on load (not this change) and the deliberate 400 of the
 refused link.
+
+#### 1.2.2 The last round on `fbb8e170` (2026-11-18)
+
+The narrow re-reviews: `code-reviewer` and `mobile-qa` READY WITH NON-BLOCKING NOTES, `ux-design-reviewer` READY; every
+earlier finding closed. Two new MEDIUMs and four LOWs, fixed as follows. The manager checks this delta; no further
+review round.
+
+| Finding | Fix | Test (mutation killed) |
+|---|---|---|
+| N1 a "not targeted" refusal remembered forever | `linkRefused` keeps `{ code, revision }` (the revision the command was sent with). For `athlete_not_targeted` / `activity_not_targeted` the pair counts as refused only while the event's revision is that one. Their row reads "Some athletes are not in this event." | 11, 11c (N1, N1b) |
+| N2 a partial Align contradicts itself | `alignBlocked` whenever `notAllowed > 0`, keyed to the re-read revision. With `changed > 0` too, the notice reads "The linked trainings you manage now ask for RPE." (or "…no longer ask for RPE."). The blocked row and the `changed: 0` notice read "Some linked trainings can't be changed from here. Their plan's coach can change them in the Builder." | 5c, 5c' (N2, N2b) |
+| LOW the link question on a mere form close | the question runs only when the slice is left (`calendarMayBeLeft({ leavingSlice })`; the form's close passes false). *New event* and the uncertain line's checks are off while a link is in flight, in the markup and in the handlers | 8c (L, L2, L3, L4) |
+| LOW `alignStep` survives a re-read | the step keeps the event's revision and `expects`, and is dropped when they no longer match the card | 5d (S) |
+| LOW focus in the Align step | the step opens with focus on its primary button; *Not now* returns it to the Align button; after `has_existing_results` focus goes to *Stop asking* | browser |
+| LOW the done text out of view on a phone | after a settled command, focus goes to the section's status line (`tabindex="-1"`), else to the "Trainings and activities" heading (`tabindex="-1"`) | browser |
+
+The optional "Open “X”" button was not done (as the manager said).
+
+**Tests:**
+- The five calendar suites pass: links 28/28, event-details 33/33, events 52/52, platform-teams 5/5, central-calendar
+  41/41.
+- `--preset frontend-fast` on the head gave 258 files (pass 252, known-fail 3, fail 3) and 3593 passed, 21 failed of
+  3614. A clean `origin/main` (`8288b38f`) gave 257 files (pass 251, known-fail 3, fail 3) and 3566 passed, 21 failed
+  of 3587. The failing files are the same with the same counts.
+- The build passes and `git diff --check` is clean.
+- Mutations: the 9 new ones, plus the three earlier ones whose text moved (ML, MX, M9), are all killed.
+
+**Browser check** (Chromium, `npm run e2e:demo`, invented data: an event whose targets are two athletes; the club's and
+the team's "Morning session" of one athlete each; an "Evening session" of the second athlete), at 360 and 1280 px:
+- Both Morning trainings share one Linked row, the F5 known limit, as recorded.
+- After the link, focus is on the panel's status line, which is in view, also at 360 px with 12 lines of notes.
+- The Align step's focus goes to *Ask for RPE*, and *Not now* returns it to the Align button.
+- Align over the club's and the team's plan was partial: "The linked trainings you manage now ask for RPE.", the blocked
+  row's sentence, and no Align button after it.
+- With the second athlete removed from the targets while still linked, the Evening training was offered, refused once
+  ("Some athletes are not in this event.", no Link). With the athlete added back (the revision moved), it was offered
+  again.
+- No horizontal scroll, no target under 44 px, no JS error. The console showed the existing 403 of
+  `/api/tests/athlete/timezone` and the deliberate 409.
 
 ## 2. K2c-2 — "Make an event" from the Builder (planned)
 

@@ -312,6 +312,13 @@ const FINAL_WORDS = Object.freeze({
 });
 
 export function centralCalendarMayBeLeft({ final = false } = {}) {
+  return calendarMayBeLeft({ final, leavingSlice: true });
+}
+
+// `leavingSlice`: the calendar itself is left (a workspace switch, the page,
+// the app's update); false when only the event form closes (review LOW: the
+// link question belongs to leaving the slice, not to closing a form).
+function calendarMayBeLeft({ final = false, leavingSlice = true } = {}) {
   const cal = state.centralCalendar;
   const form = cal?.form;
   const words = final ? FINAL_WORDS[final === true ? "sign-out" : final] || FINAL_WORDS["sign-out"] : null;
@@ -320,7 +327,7 @@ export function centralCalendarMayBeLeft({ final = false } = {}) {
   const waiting = () => Boolean(words) && (anyUncertainWrite() || Boolean(cal?.linkWrite));
   // A link command in flight (K2c-1, review M1): asked about, and on a yes
   // kept to check under the event before the slice is replaced.
-  if (cal?.linkWrite && !cal.linkWrite.check && !words) {
+  if (leavingSlice && cal?.linkWrite && !cal.linkWrite.check && !words) {
     if (!ask("A link is still being saved. Leave anyway? You can check it later under the event.")) return false;
     rememberLinkWrite(cal.linkWrite);
   }
@@ -380,7 +387,7 @@ function closeEventForm(render, { asked = false, rereadRender = render } = {}) {
   const cal = state.centralCalendar;
   const form = cal.form;
   if (!form) return true;
-  if (!asked && !centralCalendarMayBeLeft()) return false;
+  if (!asked && !calendarMayBeLeft({ leavingSlice: false })) return false;
   cal.form = null;
   render?.();
   focusPanelStart(cal);
@@ -1107,6 +1114,25 @@ function linkSpecOf(cal, dataset) {
   };
 }
 
+// The Align row's second step, tied to the event as it is now (review LOW).
+function alignStepOf(item, stage, resultCount = null) {
+  return { eventKey: item.key, stage, resultCount, revision: item.revision, expects: (item.expects || []).join(",") };
+}
+
+function focusLinkControl(selector) {
+  globalThis.document?.querySelector?.(`.cc-panel-links ${selector}`)?.focus?.({ preventScroll: false });
+}
+
+// After a settled command the confirmation is brought into view (review LOW:
+// on a phone the sheet's Close is far above it): the section's status line,
+// else its heading.
+function focusLinkStatus() {
+  const doc = globalThis.document;
+  const target = doc?.querySelector?.(".cc-panel-links .cc-link-message") || doc?.querySelector?.("#ccLinksTitle");
+  target?.focus?.({ preventScroll: true });
+  target?.scrollIntoView?.({ block: "nearest" });
+}
+
 // The route a pressed act sends to ("align-confirm" / "align-results" are the
 // Align row's second step, review M6).
 function wireOf(act) {
@@ -1136,9 +1162,10 @@ async function startLinkWrite(cal, dataset, render) {
   if (dataset.act === "align") {
     const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
     if (!centralCalendarEventLinkable(item)) return;
-    cal.alignStep = { eventKey: item.key, stage: "confirm", resultCount: null };
+    cal.alignStep = alignStepOf(item, "confirm");
     cal.linkMessage = null;
     render?.();
+    focusLinkControl('[data-act="align-confirm"]');
     return;
   }
   const spec = linkSpecOf(cal, dataset);
@@ -1245,25 +1272,28 @@ async function linkSettled(cal, spec, data, render) {
     cal.alignStep = null;
     const alignment = data?.alignment || {};
     // Nothing could change from here: not offered again until the event moves.
-    cal.alignBlocked = (Number(alignment.changed) || 0) === 0 && (Number(alignment.notAllowed) || 0) > 0 && event
-      ? { eventId: spec.eventId, revision: event.revision } : null;
+    // Some trainings could not change here (review N2): not offered again
+    // until the event's revision moves, whatever else changed.
+    cal.alignBlocked = (Number(alignment.notAllowed) || 0) > 0 && event ? { eventId: spec.eventId, revision: event.revision } : null;
   }
   showLinkText(cal, readFailed(cal) ? `${done}${READ_FAILED_TAIL}` : done);
   render?.();
-  if (stayed) focusPanelStart(cal);
+  if (stayed) focusLinkStatus();
 }
 
 async function linkRefused(cal, spec, info, render) {
   if (info.code === "has_existing_results" && spec.wire === "align") {
     // The server's own gate asks in the Align row: [Stop asking] sends a new
     // key with confirmDisableWithResults, [Not now] nothing (review M6).
-    cal.alignStep = { eventKey: spec.eventKey, stage: "results", resultCount: info.resultCount };
+    const item = findItemOnDay(cal, spec.eventKey, spec.date);
+    cal.alignStep = item ? alignStepOf(item, "results", info.resultCount) : null;
     cal.linkMessage = null;
     render?.();
+    focusLinkControl('[data-act="align-results"]');
     return;
   }
   cal.alignStep = null;
-  if (centralCalendarLinkRefusalRemembered(info) && spec.pairKey) cal.linkRefused.set(spec.pairKey, info.code);
+  if (centralCalendarLinkRefusalRemembered(info) && spec.pairKey) cal.linkRefused.set(spec.pairKey, { code: info.code, revision: spec.body.expectedRevision });
   const text = centralCalendarLinkRefusalText(info);
   if (centralCalendarLinkRefusalRereads(info)) {
     const stayed = cal.panel.open && cal.panel.key === spec.panelKey;
@@ -1497,6 +1527,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   if (type === "central-calendar-align-cancel") {
     if (!cal.linkWrite) cal.alignStep = null;
     render?.();
+    focusLinkControl('[data-act="align"]');
     return true;
   }
   if (type === "central-calendar-link-check") {
@@ -1505,6 +1536,8 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === "central-calendar-new-event") {
+    // One control at a time: not while a link is being saved (review LOW).
+    if (cal.linkWrite) return true;
     await openCreateForm(render);
     return true;
   }
@@ -1547,6 +1580,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   // The screen's line of writes left unconfirmed: one opens its pending check.
   if (type === "central-calendar-event-pending") {
     const entry = centralCalendarUncertainWrites().find((other) => other.requestKey === action.dataset.requestKey);
+    if (cal.linkWrite) return true;
     if (entry?.mode === "link") await checkLinkWrite(cal, entry, render, { openPanel: true });
     else if (entry && !cal.form) openPendingCheck(cal, entry, render);
     return true;

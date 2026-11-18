@@ -572,7 +572,7 @@ function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
   // K2a-2: New event only where this workspace may create one (a club, a
   // team, a private coach); the server decides again on the write.
   const newEvent = canCreate
-    ? `<button type="button" class="plain-button cc-primary cc-new-event" data-action="central-calendar-new-event"${cal.form ? " disabled" : ""}>${renderIconSvg("calendar-event", { size: 18 })}<span>New event</span></button>`
+    ? `<button type="button" class="plain-button cc-primary cc-new-event" data-action="central-calendar-new-event"${cal.form || cal.linkWrite ? " disabled" : ""}>${renderIconSvg("calendar-event", { size: 18 })}<span>New event</span></button>`
     : "";
   const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}" aria-label="${label}" title="${label}">${renderSwitchIcon(value)}</button>`;
   const modeSwitch = layout === "wide" && cal.view === "week"
@@ -924,7 +924,7 @@ function linkRowHtml(title, meta, button, refusedReason = "") {
 
 function linkFeedbackHtml(cal, panelKey, pending) {
   const message = cal.linkMessage && cal.linkMessage.panelKey === panelKey ? cal.linkMessage : null;
-  const messageHtml = message ? `<p class="cc-panel-note cc-link-message" role="${message.alert ? "alert" : "status"}">${escapeHtml(message.text)}</p>` : "";
+  const messageHtml = message ? `<p class="cc-panel-note cc-link-message" role="${message.alert ? "alert" : "status"}" tabindex="-1">${escapeHtml(message.text)}</p>` : "";
   if (!pending) return messageHtml;
   const checking = cal.linkWrite?.check === true;
   return `<div class="cc-link-unconfirmed" role="status"><p class="cc-panel-note">The result is not confirmed.</p>${messageHtml}
@@ -944,8 +944,11 @@ function renderAlignHtml(item, cal, off) {
   const align = centralCalendarAlignLine(item);
   if (!align) return "";
   const blocked = cal.alignBlocked && cal.alignBlocked.eventId === item.eventId && cal.alignBlocked.revision === item.revision;
-  if (blocked) return `<div class="cc-link-align"><p class="cc-panel-note">${escapeHtml(align.text)} ${escapeHtml(CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED)}</p></div>`;
-  const step = cal.alignStep && cal.alignStep.eventKey === item.key ? cal.alignStep : null;
+  if (blocked) return `<div class="cc-link-align"><p class="cc-panel-note">${escapeHtml(CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED)}</p></div>`;
+  // A step belongs to the event as it was when it opened (review LOW): a
+  // re-read that moved the revision or what the event collects drops it.
+  const step = cal.alignStep && cal.alignStep.eventKey === item.key && cal.alignStep.revision === item.revision
+    && cal.alignStep.expects === (item.expects || []).join(",") ? cal.alignStep : null;
   const busy = busyOn(cal, "align", "act", "align") || busyOn(cal, "align-confirm", "act", "align-confirm") || busyOn(cal, "align-results", "act", "align-results");
   if (step) {
     const question = step.stage === "results" ? centralCalendarResultsQuestion(step.resultCount) : align.step;
@@ -1028,7 +1031,7 @@ function renderEventLinksHtml(item, cal, pending) {
     parts.push(`<p class="cc-panel-note">${escapeHtml(CENTRAL_CALENDAR_LINK_EMPTY)}</p>`);
   }
   return `<section class="cc-panel-links" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}>
-      <h4 class="cc-panel-subtitle" id="ccLinksTitle">Trainings and activities</h4>
+      <h4 class="cc-panel-subtitle" id="ccLinksTitle" tabindex="-1">Trainings and activities</h4>
       ${linkFeedbackHtml(cal, item.key, pending)}
       ${parts.join("")}
     </section>`;
@@ -1125,7 +1128,7 @@ function renderUncertainWritesHtml(cal, writes) {
   };
   return `<div class="cc-refresh-note cc-uncertain-line" role="status">
       <span>${writes.length === 1 ? "1 save of an event is not confirmed." : `${writes.length} saves of events are not confirmed.`}</span>
-      ${writes.map((entry) => `<button type="button" class="plain-button cc-inline-button" data-action="central-calendar-event-pending" data-request-key="${escapeAttr(entry.requestKey)}">${escapeHtml(label(entry))}</button>`).join("")}
+      ${writes.map((entry) => `<button type="button" class="plain-button cc-inline-button" data-action="central-calendar-event-pending" data-request-key="${escapeAttr(entry.requestKey)}"${cal.linkWrite ? " disabled" : ""}>${escapeHtml(label(entry))}</button>`).join("")}
     </div>`;
 }
 

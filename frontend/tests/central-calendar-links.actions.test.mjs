@@ -451,7 +451,7 @@ test("5a. Align: one line without a number; the first press shows the step and s
   assert.equal(off.confirm, "Stop asking");
   assert.equal(links.centralCalendarAlignLine({ expects: ["rpe"], alignment: { pending: 0 } }), null);
   assert.equal(links.centralCalendarLinkDoneText("align", { data: { alignment: { direction: "rpe_off", changed: 1, notAllowed: 2, switchOff: 1 } } }),
-    "The linked trainings no longer ask for RPE. Some linked trainings can't be changed from here. RPE requests are switched off in Training Load, so athletes will not be asked until they are switched on.");
+    "The linked trainings you manage no longer ask for RPE. RPE requests are switched off in Training Load, so athletes will not be asked until they are switched on.");
 });
 
 test("5b. has_existing_results: the question in the Align row; Not now sends nothing more; Stop asking sends a new key with confirmDisableWithResults", async () => {
@@ -505,9 +505,9 @@ test("5c. Align that changes nothing here (changed 0, notAllowed > 0): the sente
   await press(linkButton('[data-act="align"]'));
   await press(linkButton('[data-act="align-confirm"]'));
   await tick();
-  assert.equal(said(), "Some linked trainings can't be changed from here.");
+  assert.equal(said(), "Some linked trainings can't be changed from here. Their plan's coach can change them in the Builder.");
   assert.equal(linkButton('[data-act="align"]'), null, "not offered again");
-  assert.match(section().textContent, /Some linked trainings can't be changed from here\./);
+  assert.match(section().querySelector(".cc-link-align").textContent, /Some linked trainings can't be changed from here\. Their plan's coach can change them in the Builder\./);
   fake.live[0].revision += 1;
   await act({ action: "central-calendar-retry" });
   await tick();
@@ -699,10 +699,10 @@ test("11. the refusals the read cannot predict (and the two 'not targeted' ones,
   const cases = [
     ["session_not_available", "planned", 400, "Can't be linked here."],
     ["session_already_attached", "planned", 409, "Already linked to another event."],
-    ["athlete_not_targeted", "planned", 409, "Can't be linked here."],
+    ["athlete_not_targeted", "planned", 409, "Some athletes are not in this event."],
     ["activity_not_available", "activity", 400, "Can't be linked here."],
     ["activity_already_attached", "activity", 409, "Already linked to another event."],
-    ["activity_not_targeted", "activity", 409, "Can't be linked here."],
+    ["activity_not_targeted", "activity", 409, "Some athletes are not in this event."],
   ];
   for (const [code, kind, status, reason] of cases) {
     clearAllViewCache();
@@ -877,4 +877,97 @@ test("7e. a planned card's own unconfirmed link locks its whole panel: Link to a
   await tick();
   assert.ok(linkButton(`[data-event-key="event:${E2}:${D}"]`).disabled, "the other event's Link is off");
   assert.ok(section().querySelector('[data-action="central-calendar-link-check"]'), "Check result in this panel");
+});
+
+
+// --- The last round (1.2.2): N1, N2, LOWs ---------------------------------------------------------------
+
+test("11c. a 'not targeted' refusal holds only for the event's revision: once the event moves (the athletes added), Link is offered again", async () => {
+  let refuseNow = true;
+  const refuse = (call) => (call.url.endsWith("/sessions") && refuseNow ? { status: 409, body: { error: "athlete_not_targeted", message: "x" } } : null);
+  const fake = server({ refuse });
+  const calls = installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  await tick();
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  assert.equal(linkButton('[data-planned-key="planned:p1"]'), null);
+  assert.equal(section().querySelector(".cc-link-refused").textContent, "Some athletes are not in this event.");
+  // The coach adds the athletes to the event: its revision moves.
+  fake.live[0].revision += 1;
+  refuseNow = false;
+  await act({ action: "central-calendar-retry" });
+  await tick();
+  assert.ok(linkButton('[data-planned-key="planned:p1"]'), "offered again");
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  assert.equal(writesOf(calls).length, 2);
+  assert.equal(writesOf(calls)[1].body.expectedRevision, 2);
+  // An "already attached" refusal stays whatever the revision.
+  assert.equal(links.centralCalendarLinkSuggestions({ days: [{ date: D, items: [{ ...defaultItems()[0], revision: 9 }, P1()] }] }, { ...defaultItems()[0], revision: 9 },
+    new Map([[links.centralCalendarRefusedPairKey(E1, P1()), { code: "session_already_attached", revision: 1 }]])).trainings[0].refused, "Already linked to another event.");
+});
+
+test("5c'. a partial Align (changed 1, notAllowed 1): 'the linked trainings you manage', and the row says the rest without offering Align again", async () => {
+  const items = defaultItems();
+  items[0] = { ...items[0], alignment: { pending: 2 } };
+  const fake = server({ items });
+  installFetchMock((call) => {
+    if (call.url.endsWith("/align")) {
+      Object.assign(fake.live[0], { revision: fake.live[0].revision + 1, alignment: { pending: 1 } });
+      return { status: 200, body: { alignment: { direction: "rpe_on", changed: 1, unchanged: 0, notAllowed: 1, switchOff: 0 } } };
+    }
+    return fake(call);
+  });
+  await loadCentralCalendar({ render });
+  await tick();
+  await openEvent();
+  await press(linkButton('[data-act="align"]'));
+  await press(linkButton('[data-act="align-confirm"]'));
+  await tick();
+  assert.equal(said(), "The linked trainings you manage now ask for RPE.");
+  assert.equal(linkButton('[data-act="align"]'), null, "not offered again");
+  assert.equal(section().querySelector(".cc-link-align").textContent.trim(), "Some linked trainings can't be changed from here. Their plan's coach can change them in the Builder.");
+});
+
+test("5d. an Align step does not survive a re-read that moved the event: the step is gone and the first-step label follows the new expects", async () => {
+  const items = defaultItems();
+  items[0] = { ...items[0], expects: [], alignment: { pending: 1 } };
+  const refuse = (call) => (call.url.endsWith("/align") ? { status: 409, body: { error: "has_existing_results", message: "x", resultCount: 2 } } : null);
+  const fake = server({ items, refuse });
+  installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  await tick();
+  await openEvent();
+  await press(linkButton('[data-act="align"]'));
+  await press(linkButton('[data-act="align-confirm"]'));
+  await tick();
+  assert.ok(linkButton('[data-act="align-results"]'), "the results step");
+  Object.assign(fake.live[0], { revision: fake.live[0].revision + 1, expects: ["rpe"] });
+  await act({ action: "central-calendar-retry" });
+  await tick();
+  assert.equal(linkButton('[data-act="align-results"]'), null, "the step is gone");
+  assert.equal(linkButton('[data-act="align"]').textContent, "Ask for RPE in the linked trainings");
+});
+
+test("8c. while a link is being saved: New event and the line's checks are off; closing a form never asks the link question", async () => {
+  await start({ lose: 1 });
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  const cal = state.centralCalendar;
+  cal.linkWrite = { act: "link-session", plannedKey: "planned:p1" };
+  render();
+  assert.ok(dom().querySelector('[data-action="central-calendar-new-event"]').disabled, "New event off");
+  assert.ok(dom().querySelector('.cc-uncertain-line [data-action="central-calendar-event-pending"]').disabled, "the line's check off");
+  await act({ action: "central-calendar-new-event" });
+  assert.equal(cal.form, null, "the handler refuses too");
+  // A form open while a link is in flight (forced): closing it asks nothing about the link.
+  cal.form = { mode: "create", draft: {}, dirty: false };
+  questions.length = 0;
+  await act({ action: "central-calendar-event-form-close" });
+  assert.equal(cal.form, null);
+  assert.equal(questions.length, 0, "no link question on a form close");
+  cal.linkWrite = null;
 });

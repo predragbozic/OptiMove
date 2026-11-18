@@ -45,12 +45,24 @@ export function centralCalendarRefusedPairKey(eventId, item) {
   return "";
 }
 
-// The reason a refused pair keeps on its row (`refused` maps a pair key to the
-// code the server answered).
+// The reason a refused pair keeps on its row (`refused` maps a pair key to
+// { code, revision }: the server's code and the event's revision it was sent
+// with).
+const NOT_TARGETED = new Set(["athlete_not_targeted", "activity_not_targeted"]);
 export function centralCalendarRefusedReason(code) {
-  return code === "session_already_attached" || code === "activity_already_attached" ? "Already linked to another event." : "Can't be linked here.";
+  if (code === "session_already_attached" || code === "activity_already_attached") return "Already linked to another event.";
+  if (NOT_TARGETED.has(code)) return "Some athletes are not in this event.";
+  return "Can't be linked here.";
 }
-const refusalOf = (refused, key) => (refused?.get?.(key) ? centralCalendarRefusedReason(refused.get(key)) : "");
+// A "not targeted" refusal holds only while the event is as it was (review
+// N1): a coach who adds the athletes to the event changes its revision, and
+// the pair is offered again.
+function refusalOf(refused, key, event) {
+  const entry = refused?.get?.(key);
+  if (!entry) return "";
+  if (NOT_TARGETED.has(entry.code) && Number(entry.revision) !== Number(event?.revision)) return "";
+  return centralCalendarRefusedReason(entry.code);
+}
 
 // The suggestions of an event card's panel (section 1.1.2): the planned cards
 // of its day whose athletes are all the event's, the activity cards of its
@@ -62,10 +74,10 @@ export function centralCalendarLinkSuggestions(data, event, refused = new Map())
   if (!centralCalendarEventLinkable(event)) return out;
   for (const item of dayItems(data, event.date)) {
     if (item.kind === "planned" && (item.links?.logicalSessionIds || []).length) {
-      if (covers(event, item)) out.trainings.push({ item, refused: refusalOf(refused, centralCalendarRefusedPairKey(event.eventId, item)) });
+      if (covers(event, item)) out.trainings.push({ item, refused: refusalOf(refused, centralCalendarRefusedPairKey(event.eventId, item), event) });
       else if (sharesAny(event, item)) out.partial += 1;
     } else if (item.kind === "activity" && (item.links?.activityIds || []).length && sharesAny(event, item)) {
-      out.activities.push({ item, refused: refusalOf(refused, centralCalendarRefusedPairKey(event.eventId, item)) });
+      out.activities.push({ item, refused: refusalOf(refused, centralCalendarRefusedPairKey(event.eventId, item), event) });
     }
   }
   return out;
@@ -80,7 +92,7 @@ export function centralCalendarEventsForPlanned(data, planned, refused = new Map
   if (planned?.kind !== "planned" || !(planned.links?.logicalSessionIds || []).length) return out;
   for (const item of dayItems(data, planned.date)) {
     if (!centralCalendarEventLinkable(item)) continue;
-    if (covers(item, planned)) out.events.push({ item, refused: refusalOf(refused, centralCalendarRefusedPairKey(item.eventId, planned)) });
+    if (covers(item, planned)) out.events.push({ item, refused: refusalOf(refused, centralCalendarRefusedPairKey(item.eventId, planned), item) });
     else if (sharesAny(item, planned)) out.partial.push(item);
   }
   return out;
@@ -165,7 +177,7 @@ export function centralCalendarAlignLine(event) {
     step: "Athletes of the linked trainings will no longer be asked for RPE.", confirm: "Stop asking",
   };
 }
-export const CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED = "Some linked trainings can't be changed from here.";
+export const CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED = "Some linked trainings can't be changed from here. Their plan's coach can change them in the Builder.";
 
 export function centralCalendarPartialLine(n) {
   if (n < 1) return "";
@@ -208,8 +220,10 @@ export function centralCalendarLinkDoneText(act, { name = "", data = null, event
     const changed = Number(alignment.changed) || 0;
     const notAllowed = Number(alignment.notAllowed) || 0;
     if (changed === 0 && notAllowed > 0) return CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED;
-    const parts = [alignment.direction === "rpe_off" ? "The linked trainings no longer ask for RPE." : "The linked trainings now ask for RPE."];
-    if (notAllowed > 0) parts.push(CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED);
+    // A partial Align (review N2): only the trainings this workspace manages
+    // changed; the row says the rest and is not offered again.
+    const whose = notAllowed > 0 ? "The linked trainings you manage" : "The linked trainings";
+    const parts = [alignment.direction === "rpe_off" ? `${whose} no longer ask for RPE.` : `${whose} now ask for RPE.`];
     if ((Number(alignment.switchOff) || 0) > 0) parts.push("RPE requests are switched off in Training Load, so athletes will not be asked until they are switched on.");
     return parts.join(" ");
   }
