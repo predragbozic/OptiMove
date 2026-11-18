@@ -415,8 +415,7 @@ All under `requireAuth`; the active workspace decides (`calendarEventAccess.js`)
 | Tests `PATCH` / `DELETE` / pause; TL external-schedule `PATCH` / pause / resume / cancel / schedule-again | as today | — | **⚑ new:** 409 `schedule_managed_by_calendar` for a schedule a live question names (it changes only through its event) |
 
 - **The window** (plan 3.3), in the event's `timezone`, on the event's last day `L = coalesce(end_day, day)`:
-  `after_event` = `L`, from `end_time` (18:00 without one; `start_time` + 0 when only a start… no: 18:00 unless
-  `end_time`) to 23:59; `next_morning` = `L + 1`, 07:00–12:00; `custom` = a date in `[day, L + 1]`, `from < to` on
+  `after_event` = `L`, from `end_time` (18:00 when the event has no `end_time`, O2) to 23:59; `next_morning` = `L + 1`, 07:00–12:00; `custom` = a date in `[day, L + 1]`, `from < to` on
   that date (else `window_one_day`, "Answers can be collected within one day for now."). An `after_event` whose end is
   23:59 or later is `invalid_window`.
 - **The schedules a question writes** (through the extracted helpers, 9.1.7): `one_time`, `start_date = end_date =
