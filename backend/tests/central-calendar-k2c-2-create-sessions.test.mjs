@@ -764,7 +764,7 @@ test("7. the recorded SQL of a create with sessions: writer lock, type, the swit
 // ---------------------------------------------------------------------------
 // 8. The db-reviewer's round (MEDIUM-1, MEDIUM-2)
 // ---------------------------------------------------------------------------
-test("8. a create with sessions and the Training Load quick toggle of the same session at once, in both orders: both settle, no 40P01", async () => {
+test("8. a create with sessions and the Training Load quick toggle of the same session: the toggle while the create holds its plan locks, and both at once; both settle, no 40P01", async () => {
   for (const first of ["create", "toggle"]) {
     const w = await teamWorld(`toggle ${first}`, { n: 1 });
     const holder = gate();

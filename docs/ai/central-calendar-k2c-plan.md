@@ -1111,7 +1111,7 @@ Built on 2.3 with the GO of 2.4; backend only, no migration, no new route. One f
   `eventTargetsAthleteSql` now returns `targetsAthleteSql` over the stored targets with the same text; the create's
   source is `unnest($2::text[], …) as tg(target_kind, target_athlete_id, target_team_id, target_club_id) where true`.
 
-**Deviations from 2.3, both found by the tests:**
+**Deviations from 2.3:**
 - **A detach racing a create (2.3.9, group 10):** the contract said the create "waits and then links". Under READ
   COMMITTED the create's read sees the link still live until the detach commits, so it answers
   `session_already_attached` at once; once the detach has committed, the create links. Test 6b pins that behaviour.
@@ -1120,13 +1120,13 @@ Built on 2.3 with the GO of 2.4; backend only, no migration, no new route. One f
   channel is the session link" (2.4 Q2) governs the event's own RPE question; it adds no refusal of a referenced
   schedule.
 
-**Tests:** `backend/tests/central-calendar-k2c-2-create-sessions.test.mjs`, 17 tests in the groups of 2.3.9 as
+**Tests:** `backend/tests/central-calendar-k2c-2-create-sessions.test.mjs`, 21 tests after the review round below, in the groups of 2.3.9 as
 amended by 2.4 (bases and the identical answers, the body, a refusal at each attach step with nothing written, a
 fault after the first write, replay and `request_key_reused`, the hash pin against `e98a7378`, a lost COMMIT, the
 interplay with the questions, the attach's targeted SQL pinned and the attach equal to the create in seven
 target scenarios, the races against an attach in both orders, a detach, a Builder lock and a foreign plan held, a Day
-off, and the recorded SQL order for a training and a Day off). 17 mutations, all killed (the first form of M12 was
-equivalent on v81 and was replaced by one that drops the link counts).
+off, and the recorded SQL order for a training and a Day off). 18 mutations, all killed (the first form of M12 was
+equivalent on v81 and was replaced by one that drops the link counts; M18 came with the review round).
 
 **The review round on `7050b1cb`** (`code-reviewer`, `db-reviewer`, narrow `security-reviewer`; all READY WITH
 NON-BLOCKING NOTES on the code, no BLOCKER or HIGH):
