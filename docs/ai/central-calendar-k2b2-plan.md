@@ -484,12 +484,14 @@ All under `requireAuth`; the active workspace decides (`calendarEventAccess.js`)
 #### 9.1.6 The notifications
 
 - `public.app_notifications`, written **in the command's transaction** (as `notifyPlanAssignments`), one per athlete
-  the schedule's own target resolution reaches who has a `user_id`:
+  of the recipients below:
   - `calendar_question_asked` on ask (and on create / update that asks): title "Your coach has a question", body e.g.
     "How did Training go? Answer after 18:00 today." (the window in the event's time zone), `entity_type 'calendar_event'`,
     `entity_id` the event, metadata `{eventId, questionId, kind}`, dedupe `calendar:v1:question_asked:<questionId>:<athleteId>`;
   - `calendar_question_moved` on a move: dedupe `calendar:v1:question_moved:<newQuestionId>:<athleteId>`.
   - Nothing on remove or cancel (the open item disappears from her list).
+- **The recipients (the manager's A2):** the event's audience on the question's `window_date` (the calendar's audience
+  rule, membership on that day), each athlete with a `user_id`.
 - The realtime `notifications_changed` event is sent **after the COMMIT** only: `runCalendarCommand` gains an optional
   `afterCommit(out)` hook, called once the COMMIT answered (and on the verified-after-commit-error path), never on a
   replay.
@@ -587,3 +589,36 @@ One new suite `backend/tests/central-calendar-k2b2-questions.test.mjs` (calendar
 - **O3:** the reverse of "never twice" (a daily WELLNESS schedule created over a day that already has an event's
   WELLNESS): 2a-1 does not guard it; the proposal is a later step (Tests form warning) — or should the Tests create
   route refuse it now?
+
+#### 9.1.13 The manager's GO (2026-11-18)
+
+Recorded verbatim (the calendar manager's message to the executor, GO on 9.1 at `96458cb5`):
+
+> **GO for K2b-2a-1** on 9.1 at `96458cb5`, with the decisions below.
+>
+> Deviations:
+> - ⚑1 one `calendar.event_questions` table for both kinds, RPE still setting `events.external_schedule_id`: **accepted**.
+> - ⚑2 `default_questions` null = derived from `default_expects`, no seed rewrite: **accepted**.
+> - ⚑3 v81 needs the Tests schema, real FKs, only in the calendar fixture list: **accepted**. Confirm in the report that every suite that applies v81 has the Tests schema.
+> - ⚑4 the skip as a `cancelled` assignment plus a skip row: **accepted, with a renamed table** (see O3): `calendar.question_assignment_skips`, `reason in ('day_off', 'day_off_cancelled', 'covered_by_event')`. In the report, prove that a `cancelled` insert passes every Tests CHECK and trigger, and that the Tests overview, the notification worker and `resolve_current_target_dates` treat it as you describe (tests, not reading).
+> - ⚑5 `409 questions_off` inside existing commands while the switch is off: **accepted** (O1). Its message is one plain sentence: "Questions for athletes are not turned on for this club."
+> - ⚑6 `schedule_managed_by_calendar` on the Tests and TL edit, pause, resume, cancel, delete and schedule-again routes: **accepted**. The manual *Remind* routes (Tests `POST /schedules/:id/remind`, TL `POST /external-schedules/:id/remind`) stay **allowed**, since they change nothing of the schedule; pin that with a test. The message: "This question belongs to a calendar event. Change it on the event."
+> - ⚑7 the Day off effect only within the same club (a team's club included): **accepted**.
+>
+> Open questions:
+> - **O2:** without an end time, `after_event` opens at the **later of 18:00 and the event's start time**, and closes at 23:59. If that start is 23:59 or later → `invalid_window`.
+> - **O3:** guard it **now, at materialization**. A daily WELLNESS assignment is made `cancelled`, with a `covered_by_event` skip row, when:
+>   - the schedule is of a club whose switch is on;
+>   - the athlete has, on that date, a live event WELLNESS question whose event reaches her (by the same audience rule as the Day off).
+>
+>   This holds whatever `skip_days_off` says, so one day never asks WELLNESS twice in either order. The ask (and a move) of an event WELLNESS question takes the same exclusive `calendar.day_off:<club>:<day>` key for its `window_date`, so it serializes with materialization. Rename the key if you like, but keep one key per club and day. Test it in both orders and concurrently, with no `40P01`. Removing an event's WELLNESS before its day brings the daily day back by itself, because it is not materialized yet; test that too.
+>
+> Two additions:
+> - **A1:** `GET /api/calendar/questions/mine` must make sure the day's occurrence and her assignment exist for each question whose window is open. Use the same on-demand generation athlete Today already does: Tests `ensureCurrentOccurrence`, and the TL occurrence generation. Otherwise `form.assignmentId` / `externalAssignmentId` can be missing exactly when she opens the app. Test that a fresh day returns usable form ids.
+> - **A2:** the notification's recipients are the event's audience on the question's `window_date` (membership on that day), each with a `user_id`. Say so in 9.1.6.
+>
+> Everything else in 9.1 stands. When phase 2 is green, send the report as the brief says. Include the migration's sha256 and the md5 before and after of every replaced body, because the OptiMove manager reads them read-only on production before the owner's merge order.
+
+Consequences for 9.1 (the executor): the skip table of 9.1.2 item 5 is `calendar.question_assignment_skips` with the
+three reasons above; the per-club, per-day key is renamed `calendar.wellness_day:<club>:<day>` (one key per club and day,
+taken by the Day off command, the WELLNESS ask / move and the materialization).
