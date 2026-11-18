@@ -1090,3 +1090,38 @@ test("13. a value-carrying statement that runs past its own bound is cancelled: 
   assert.ok(took >= VALUE_STATEMENT_TIMEOUT_MS - 200 && took < VALUE_STATEMENT_TIMEOUT_MS + 1400, `cancelled at the value bound, not at the transaction's (${took} ms)`);
   assert.equal(ok(await save(W.caA, t, cand, rows)).confirmation.rows.length, 1);
 });
+
+test("Z4 (the review of PR #602): a zone mapping that is not on for the team is never placed again from the board - the placement read and a save's pre-placed row both answer field_has_parameters, and nothing is written", async () => {
+  const { t, cand } = await freshTeam();
+  const fZone = await field("zone");
+  const target = await variable(W.pa, { unit: "m", label: `OptiMove zone ${uid()}` });
+  // An active OptiMove version of the zone column (on for no team: as after a switch-off), planted from an active
+  // version's own rows with the zone's revision and bounds (the routes need a canonical condition this suite has no use for).
+  // A copy of a row with some columns replaced; generated columns are left to the table.
+  const copyRow = async (table, id, set) => {
+    const [schema, name] = table.split(".");
+    const cols = (await k.query(`select column_name from information_schema.columns where table_schema = $1 and table_name = $2 and is_generated = 'NEVER' order by ordinal_position`, [schema, name])).rows.map((c) => c.column_name);
+    const list = cols.map((c) => `"${c}"`).join(", ");
+    return (await one(`insert into ${table} (${list}) select ${list} from jsonb_populate_record(null::${table}, (select to_jsonb(x) || $2::jsonb from ${table} x where x.id = $1)) returning id`,
+      [id, JSON.stringify({ id: crypto.randomUUID(), ...set })])).id;
+  };
+  const versionId = await planted(async () => {
+    const mappingId = await copyRow(T3, W.sysTime.mappingId, { source_metric_definition_id: fZone.fieldId, metric_definition_id: target.id });
+    const targetVersion = (await one(`select current_version_id from training_load.metric_definitions where id = $1`, [target.id])).current_version_id;
+    return copyRow(T4, W.sysTime.versionId, { mapping_id: mappingId, source_metric_definition_id: fZone.fieldId, source_metric_version_id: fZone.revId,
+      metric_definition_id: target.id, metric_definition_version_id: targetVersion, parameter_kind: "zone_bounds",
+      source_parameters: { operator: "between", lower: 20, upper: 25, unit: "W/kg" }, canonical_parameters: { operator: "between", lower: 20, upper: 25, unit: "W/kg" },
+      parameter_fingerprint: `v1:${"a".repeat(64)}` });
+  });
+  assert.equal((await one(`select status, parameter_kind from ${T4} where id = $1`, [versionId])).status, "active");
+  const board = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  assert.equal([...board.preplaced, ...board.replaceable].some((x) => x.mappingVersionId === versionId), false, "never offered as a pre-placed row");
+  const own = await variable(W.caA, { unit: "m" });
+  await nothingWritten(async () => {
+    // Add by hand: an OptiMove variable is never placed by the club (only its own mapping, which the board does not
+    // offer for a zone column); the club's own variable is refused for the zone column itself.
+    assert.deepEqual(await placementOf(W.caA, t, cand, fZone, target), { placeable: false, code: "target_scope_mismatch", fieldId: fZone.fieldId, targetId: target.id });
+    assert.equal((await placementOf(W.caA, t, cand, fZone, own)).code, "field_has_parameters");
+    rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: versionId, placementHash: "0".repeat(64), requirement: "optional", replaces: [] }]), "field_has_parameters", 0);
+  });
+});

@@ -31,7 +31,8 @@ const busy = (s) => Boolean(s.write) || s.loading;
 const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest and marks the value as missing. Untick to leave it out quietly.";
 // Keys, codes and the GPEXE team's number are for a platform admin only (the owner, 2026-11-13).
 const forSupport = () => boardContext()?.isPlatformAdmin === true;
-// A numbered zone column's expected range from the session's team limits (sent to a platform admin only, P1); never a fact.
+// A numbered zone column's range from the session's team limits (every board caller gets them: a club only its own team's).
+// Shown as a fact, on the owner-stated evidence of GPEXE's settings screen (docs/ai/gpexe-field-inventory-plan.md 8.13).
 const zoneRangeLine = (board, key) => {
   const text = zoneRangeText(key, board?.zoneThresholds);
   return text ? `<small class="mb-zone-range">Zone ${escapeHtml(text)}</small>` : "";
@@ -134,8 +135,9 @@ function columnHtml(s, c, drag) {
     // S: on the platform board a column the club fills with its own variable is on, but that variable is not here.
     const onAsClubs = use === "on" && onPlatform() && (board.on || []).some((o) => o.fieldId === c.fieldId && o.badge === "club_mapping");
     const why = onAsClubs ? "On for the team as the club's own variable. To change it, switch to the club's variables."
-      // A zone or threshold column cannot be placed by hand; once switched off, its variable's Add puts it back.
-      : use === "on" ? (c.reason === "field_has_parameters" ? "Already on for the team. If you switch it off, Add under Variables puts it back."
+      // A zone or threshold column cannot be placed by hand, and the board never puts it back (both Add paths refuse
+      // field_has_parameters: placementOf and preplacedOf). The screen promises nothing else (no Mappings on this board).
+      : use === "on" ? (c.reason === "field_has_parameters" ? "Already on for the team. If you switch it off, it can't be placed on this board again."
         : "Already on for the team. Switch it off under Variables to place it again.") : "Placed. Remove it under Variables to place it elsewhere.";
     const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}<small>${why}</small></span>`;
     return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;

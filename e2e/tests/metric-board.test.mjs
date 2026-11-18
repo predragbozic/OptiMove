@@ -113,7 +113,7 @@ test("18-4b. (390 px) the same flow by tapping: one bottom sheet at a time, no d
       if (parkedAtStart === 0) {
         assert.equal(await group.count(), 0, "nothing to park");
         assert.ok(zoneOn, "the board world has a zone or threshold column");
-        assert.match(await page.locator(".mb-cols").innerText(), /If you switch it off, Add under Variables puts it back\./);
+        assert.match(await page.locator(".mb-cols").innerText(), /If you switch it off, it can't be placed on this board again\./);
       } else {
         const summary = group.locator("summary");
         assert.equal((await summary.innerText()).trim(), `Zone sets and threshold events: not available yet (${parkedAtStart})`);

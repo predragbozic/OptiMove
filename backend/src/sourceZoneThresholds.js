@@ -1,9 +1,10 @@
 // The team zone limits of a stored GPEXE session (the Rukovodilac's order of 2026-11-18: show a numbered zone's range
 // so no one has to open GPEXE to know what "zone 4" is). The limits are the team threshold set the check read for that
 // session, valid on its day (GET team/:id/thresholds/?valid_on=<session day>; the mapper checks the validity window), as
-// the candidate's raw bundle keeps it. Read only; never a value of its own. Which range a numbered zone covers is
-// EXPECTED, not proven (docs/ai/gpexe-details-coverage-plan.md: the details' zones are not reproduced by /more/'s), so
-// every screen prints it as expected.
+// the candidate's raw bundle keeps it. Read only; never a value of its own. Which range a numbered zone covers is shown
+// as a fact on owner-stated evidence (GPEXE's own team settings screen, docs/ai/gpexe-field-inventory-plan.md 8.13: zones
+// from 1, zone 1 from 0, each to the next limit); it is not a machine proof, and Compare with GPEXE stays the check before
+// a zone field is used. No screen says "expected".
 const numberList = (v) => (Array.isArray(v) && v.length > 0 && v.length <= 12 && v.every((x) => typeof x === "number" && Number.isFinite(x)) ? v : null);
 
 // { power: [..] | null, speed: [..] | null } from a raw bundle; null when the bundle holds no set at all.

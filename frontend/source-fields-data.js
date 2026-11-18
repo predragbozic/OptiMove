@@ -275,7 +275,7 @@ export const evidenceRefOk = (value) => typeof value === "string" && value.lengt
 export const CREATE_NEXT_STEP = "Nothing is imported yet. After the next Find new sessions brings this value, open it here and use Compare with GPEXE once. Then you can put it on a variable.";
 // A per-athlete value carries no unit word, so the board never offers its unit: a document confirms it (the wording of
 // the UX review of G1b-1, approved by the Rukovodilac on 2026-11-17).
-export const CREATE_NEXT_STEP_ROW = "Nothing is imported yet. GPEXE sends no unit with this value, so it cannot be checked against GPEXE here. Ask your developer to confirm its unit before you put it on a variable.";
+export const CREATE_NEXT_STEP_ROW = "Nothing is imported yet. GPEXE sends no unit with this value, so it cannot be compared with GPEXE here. Open it here and use Confirm the unit, naming the GPEXE document that gives its unit, before you put it on a variable.";
 export const createNextStep = (endpoint) => (endpoint === "athlete_session" ? CREATE_NEXT_STEP_ROW : CREATE_NEXT_STEP);
 export const FIELD_LABEL_MAX = 80;
 // The levels a name's endpoint allows, and the one a per-drill name must keep.

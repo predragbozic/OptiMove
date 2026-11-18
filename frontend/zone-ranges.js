@@ -33,7 +33,9 @@ export function zoneRange(zone, thresholds) {
   const unit = UNIT[zone.family];
   const n = zone.number;
   if (n < 1 || n > t.length + 1) return null;
-  if (n === 1) return `0–${fmt(t[0])} ${unit}`;
+  // A zone of no width (two equal limits, or a first limit of 0) has no range to show.
+  if (n === 1) return t[0] > 0 ? `0–${fmt(t[0])} ${unit}` : null;
+  if (n <= t.length && !(t[n - 1] > t[n - 2])) return null;
   if (n === t.length + 1) return `${fmt(t[t.length - 1])} ${unit} and above`;
   return `${fmt(t[n - 2])}–${fmt(t[n - 1])} ${unit}`;
 }

@@ -828,7 +828,8 @@ test("Z2 (the Rukovodilac, 2026-11-18): zone and threshold columns leave the lis
   assert.ok(!main.textContent.includes("Example zone set"), "not in the main column list");
   // A zone column that is on stays in the list and never promises it can be placed again (the UX review).
   const onZone = [...main.querySelectorAll(".mb-col-item")].find((li) => li.textContent.includes("Power zone distance") && !li.textContent.includes("open top"));
-  assert.match(onZone.textContent, /Already on for the team\. If you switch it off, Add under Variables puts it back\./);
+  assert.match(onZone.textContent, /Already on for the team\. If you switch it off, it can't be placed on this board again\./);
+  assert.equal(/puts it back/.test(onZone.textContent), false, "no promise the board cannot keep");
   assert.doesNotMatch(text(), /Mappings/);
   const zoneOn = club.board.on.find((o) => o.fieldId === club.board.columns.find((c) => c.label === "Power zone distance").fieldId);
   await click(`[data-action="metric-board-switch-off-open"][data-activation-id="${zoneOn.activationId}"]`);

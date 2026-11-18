@@ -156,17 +156,18 @@ function creatable(row) {
 }
 
 // A zone name GPEXE sends in a session's details (`athletesessionpowerzone_distance_4`): the family, what is measured and
-// GPEXE's own number. Only the name's facts: which range the number stands for is not proven (the details carry four
-// power zones where /more/ carries five, and no numbering reproduces them - docs/ai/gpexe-details-coverage-plan.md), so
-// no range is ever derived from it.
+// GPEXE's own number, the name's facts only. The range a number stands for is not derived here: the screens take it from
+// the team limits (frontend/zone-ranges.js), as a fact on the owner-stated evidence of GPEXE's settings screen
+// (docs/ai/gpexe-field-inventory-plan.md 8.13), not a machine proof.
 const ZONE_NAME = /^athletesession([a-z]+)zone_(distance|time|events)_([0-9]{1,2})$/;
 export function zoneOf(name) {
   const m = ZONE_NAME.exec(typeof name === "string" ? name : "");
   return m ? { family: m[1], measure: m[2], number: Number(m[3]) } : null;
 }
 
-// The team thresholds a platform admin sees with the zone names (2026-11-18): the power and speed limits of the newest
-// stored session of each active binding of the visible connections (the threshold set GPEXE sent with it; a team
+// The team thresholds the list shows with the zone names, to a platform admin only (P1; the club board carries its own
+// team's) (2026-11-18): the power and speed limits of the newest stored session of each active binding of the visible
+// connections (the threshold set GPEXE sent with it; a team
 // setting, never an athlete's value). One set when every such team has the same; otherwise only that they differ.
 // One row per binding is chosen first (the newest stored session, by its id), and only that row's bundle is opened (the
 // code review's MEDIUM: never every stored bundle).

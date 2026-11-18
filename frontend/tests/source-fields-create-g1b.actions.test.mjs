@@ -325,7 +325,8 @@ test("10. the review fixes: a details name GPEXE sends both for the session and 
   sourceFieldsState().form = null;
   render();
   await click(createButton("athlete_session", "hsr_distance"));
-  assert.match(text(), /Nothing is imported yet\. GPEXE sends no unit with this value, so it cannot be checked against GPEXE here\. Ask your developer to confirm its unit before you put it on a variable\./);
+  assert.match(text(), /Nothing is imported yet\. GPEXE sends no unit with this value, so it cannot be compared with GPEXE here\. Open it here and use Confirm the unit, naming the GPEXE document that gives its unit, before you put it on a variable\./);
+  assert.equal(/developer/i.test(text()), false);
   assert.doesNotMatch(text(), /confirmed on the board/);
   sourceFieldsState().form = null;
   render();
