@@ -382,6 +382,8 @@ const MESSAGES = {
   // The way out the server takes (the Rukovodilac's point): route O refuses a revision a document already proved
   // (unit_already_verified), so the word is proved on a new revision - L5, L1 and L3, then routes 8 and O (route test 19).
   unit_word_ambiguous: "A document cannot tell which GPEXE word this unit is. Retire this revision, add a new unproven revision of the field and activate it, then compare it with GPEXE (Source fields > Compare with GPEXE).",
+  // A club's admin may take none of those steps (L1, L3, L5 and route O are the platform's): it is told who can.
+  unit_word_ambiguous_club: "A document cannot tell which GPEXE word this unit is. Ask a platform administrator to compare this field with GPEXE.",
   ...ACTIVATION_MESSAGES,
 };
 
@@ -412,9 +414,13 @@ export async function unitWordCode(client, facts, sourceUnit, revisionId) {
   )).rows[0]?.word ?? null;
   return unitWordCodeOf({ unitWords, sourceUnit, provenWord });
 }
-async function assertUnitWord(client, facts, sourceUnit, revisionId) {
+// The sentence follows the caller (the code review's HIGH): every step it names is one this owner's admin may take.
+export function unitWordMessage(code, ownerScope) {
+  return code === "unit_word_ambiguous" && ownerScope === "club" ? MESSAGES.unit_word_ambiguous_club : MESSAGES[code];
+}
+async function assertUnitWord(client, ctx, facts, sourceUnit, revisionId) {
   const code = await unitWordCode(client, facts, sourceUnit, revisionId);
-  if (code) throw refusal(409, code, MESSAGES[code]);
+  if (code) throw refusal(409, code, unitWordMessage(code, ctx.owner?.scope));
 }
 export function classifyDatabaseError(error) {
   if (error instanceof SourceMetricMappingError) return error;
@@ -1118,7 +1124,7 @@ export async function createVersion({ ctx, mappingId, body }) {
         [mapping.source_metric_definition_id, sourceRevisionId],
       )).rows[0];
       assertExtractable({ ...field, parameter_kind: revision.parameter_kind, source_parameters: revision.parameter_kind === "none" ? {} : source });
-      await assertUnitWord(client, field, revision.source_unit, sourceRevisionId);
+      await assertUnitWord(client, ctx, field, revision.source_unit, sourceRevisionId);
       const canonicalSql = `select d.state, d.current_version_id, ${CANONICAL_VERSION_COLUMNS},
                                    (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
                               from training_load.metric_definitions d
@@ -1540,7 +1546,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
         [vId],
       )).rows[0];
       assertExtractable(extractFacts);
-      await assertUnitWord(client, extractFacts, extractFacts.source_unit, extractFacts.source_metric_version_id);
+      await assertUnitWord(client, ctx, extractFacts, extractFacts.source_unit, extractFacts.source_metric_version_id);
       if (replacing) await databaseTextAgrees(client, reason);
       if (listed.length > 0) await databaseTextAgrees(client, activationReason);
       if (writeHold) await writeHold(client, replacing ? "mapping_version_replace" : "mapping_version_activate");

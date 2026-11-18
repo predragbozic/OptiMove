@@ -133,6 +133,18 @@ function evaluate(world, pairIndex, rows) {
       if (!v || !columns.some((c) => c.field.id === v.field_id) || !world.variables.some((x) => x.id === v.variable_id)) throw NOT_FOUND();
     }
   }
+  // G1b-3 (the Independent's LOW-2): the save's own check of every row's column, before the board's placement - a created
+  // details column is saved only with a GPEXE word OptiMove can read (the exact word of a route O proof, or the one word
+  // of a unit no other word shares). The column's reason says the same; each of the two guards holds alone.
+  rows.forEach((row, rowIndex) => {
+    const fieldId = row.kind === "new" ? row.fieldId : world.versions.find((x) => x.id === row.mappingVersionId)?.field_id;
+    const f = columns.find((c) => c.field.id === fieldId)?.field;
+    // A proven column only: an unproven one keeps its own refusal (field_not_confirmed).
+    if (f && f.source_unit !== null && isGenericDetailsKey({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })) {
+      const code = unitWordCodeOf({ unitWords: world.unitWords ?? new Map(), sourceUnit: f.source_unit, provenWord: f.proven_word ?? null });
+      if (code) throw rowRefusal(code, rowIndex);
+    }
+  });
   const outcomes = rows.map((row) => (row.kind === "new"
     ? placementOf(world, pairIndex, { fieldId: row.fieldId, targetId: row.targetId }, shared).placement
     : preplacedOf(world, shared, row.mappingVersionId)));
@@ -162,15 +174,6 @@ function evaluate(world, pairIndex, rows) {
         kind: "preplaced", row, fieldId: out.v.field_id, variableId: out.v.variable_id, revisionId: out.v.revision_id, targetVersionId: out.v.target_version_id,
         versionId: out.v.id, mappingId: out.v.mapping_id, levels: out.row.levels, collisions: out.row.collisions, system: out.v.owner_key === "system",
       };
-    }
-    // G1b-3 (the Independent's LOW-2): a created details column is saved only with a GPEXE word OptiMove can read - the
-    // exact word of a route O proof, or the one word of a unit no other word shares (the import's rule, explicit here
-    // and not only through the column's reason).
-    const column = shared.columns.find((c) => c.field.id === item.fieldId);
-    const f = column?.field;
-    if (f && isGenericDetailsKey({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })) {
-      const code = unitWordCodeOf({ unitWords: world.unitWords, sourceUnit: f.source_unit, provenWord: f.proven_word ?? null });
-      if (code) throw rowRefusal(code, rowIndex);
     }
     if (fields.has(item.fieldId) || variables.has(item.variableId)) throw invalid("A column and a variable appear in one row only.");
     fields.add(item.fieldId);

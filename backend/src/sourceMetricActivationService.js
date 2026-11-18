@@ -24,7 +24,7 @@
 // the state checks after the right, the writes with the keyed audit row last
 // and the bounded COMMIT (v48's deferred links). Answers carry no acting user
 // and no reason (C63, G).
-import { adminWriteKit, classifyDatabaseError } from "./sourceMetricMappingService.js";
+import { adminWriteKit, classifyDatabaseError, unitWordCode, unitWordMessage } from "./sourceMetricMappingService.js";
 import { mayManageActivations, activationInScope, bindingClubHolds } from "./sourceMetricAccess.js";
 import {
   ACTIVATION_MESSAGES, ACTIVATION_SELECT, activationVisible, assertListedBindingsInScope, bindingList, checkListedStarts,
@@ -96,7 +96,8 @@ export async function startActivations({ ctx, body }) {
       // named mapping, its owner, each binding's club and team.
       const v = (await client.query(
         `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
-                v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family
+                v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family,
+                d.source_metric_key, v.source_unit
            from training_load.source_metric_mapping_versions v
            join training_load.source_metric_mappings m on m.id = v.mapping_id
            join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -128,6 +129,10 @@ export async function startActivations({ ctx, body }) {
       // Step 6: the states, answered only now.
       if (version.status !== "active") throw refusal(409, "version_not_active", ACTIVATION_MESSAGES.version_not_active, { current: { status: version.status } });
       if (!field || field.state !== "active") throw refusal(409, "field_retired", ACTIVATION_MESSAGES.field_retired);
+      // G1b-3 (the code review's MEDIUM): a version active from before the exact-word rule (a created field proven by a
+      // document in a unit two GPEXE words share) is not switched on for another team - its import would read nothing.
+      const unitWord = await unitWordCode(client, v, v.source_unit, v.source_metric_version_id);
+      if (unitWord) throw refusal(409, unitWord, unitWordMessage(unitWord, ctx.owner?.scope));
       await checkListedStarts(client, v, bindings, locked);
       await databaseTextAgrees(client, reason);
       if (writeHold) await writeHold(client, "activation_start");

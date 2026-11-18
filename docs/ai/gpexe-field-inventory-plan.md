@@ -925,7 +925,20 @@ The *Rukovodilac*'s order after the Independent's GO on G1b-2: one small pull re
 - **The tests recorded in 8.11:** `unit_word_missing` on activation and on a club's copy (route test 16), the
   Unbind-first race against route O (route test 17: the tick waits on the binding lock, then `binding_not_active`,
   nothing written), and the duration and speed fields end to end (resolver test 54).
-- **Mutations:** 12 of the new guards, all killed.
+- **After the code review (NOT READY, one HIGH, two MEDIUM):**
+  - *The sentence follows the caller* (HIGH): a club's admin may take none of L1, L3, L5 or route O, so its
+    `unit_word_ambiguous` says "Ask a platform administrator to compare this field with GPEXE"; the platform's names the
+    steps (server `unitWordMessage`, by the owner scope; the screen by the workspace; route test 20, frontend test).
+  - *S1 checks the word too* (MEDIUM): an active version from before this rule is not switched on for another team
+    (route test 21). The deploy transition: a read-only count of such versions before the deploy (runbook, expect 0).
+  - *The save's own check* (MEDIUM): it runs over every row before the board's placement. The column's reason says the
+    same from the same inputs, so each guard holds alone; removing either one is equivalent at the outcome, removing both
+    is killed. The first mutation record called the save check killed; that was wrong (the mutation script counted a
+    failed cleanup audit as a failed test) and the script now counts only a failed test.
+  - LOWs: test 17 waits until the tick is seen waiting on a lock; the copy's `unit_word_ambiguous` is in test 16.
+- **Mutations** (counted by failed tests only): 15 of the new guards, 13 killed. Two are equivalent at the outcome:
+  removing the save's own check (the column's reason refuses the same row from the same inputs), and dropping the
+  board's "no value" for a column without a readable word (the extractor reads nothing for it either).
 
 ## 9. G2: the pinned set, the generic extractors and the club-board guard (as built, 2026-11-17)
 

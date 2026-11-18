@@ -650,6 +650,16 @@ test("16. G1b-3, the unit word at activation and at a club's copy (the code revi
       fields: new Map([[f.fieldId, "active"]]), revisions: new Map([[f.revisionId, { state: "active", source_unit: "bpm" }]]),
     });
     assert.deepEqual(named, { sourceMetricId: f.fieldId, code: "unit_word_missing" });
+    // The same version with the field's unit set to a shared one (J/kg) and no proven word: ambiguous.
+    await k.query("begin");
+    await k.query("set local session_replication_role = replica");
+    await k.query(`update training_load.source_metric_definition_versions set source_unit = 'J/kg' where id = $1`, [f.revisionId]);
+    await k.query(`update training_load.source_metric_mapping_versions set source_unit = 'J/kg', target_unit = 'J/kg' where id = $1`, [version.id]);
+    await k.query("commit");
+    const ambiguous = await mappingService.copiedMappingRefusal(client, [{ id: version.id, source_metric_definition_id: f.fieldId, source_metric_version_id: f.revisionId }], {
+      fields: new Map([[f.fieldId, "active"]]), revisions: new Map([[f.revisionId, { state: "active", source_unit: "J/kg" }]]),
+    });
+    assert.deepEqual(ambiguous, { sourceMetricId: f.fieldId, code: "unit_word_ambiguous" });
   } finally {
     client.release();
   }
@@ -675,8 +685,14 @@ test("17. route O against an Unbind that comes first (the code review's LOW): th
     connections.setSourceUnbindHoldForTests(null);
   }
   const tickCall = tick(W.pa, f, tickBody(o));
-  await new Promise((r) => setTimeout(r, 500));
+  // The tick is seen waiting on a lock (the binding the Unbind holds) before the Unbind is let go (the code review's LOW).
+  let waited = false;
+  for (let i = 0; i < 100 && !waited; i += 1) {
+    waited = (await one(`select count(*)::int n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike '%source_team_bindings%'`)).n > 0;
+    if (!waited) await new Promise((r) => setTimeout(r, 50));
+  }
   release();
+  assert.ok(waited, "the tick waited on the binding lock");
   const [unbound, ticked] = await Promise.all([unbind, tickCall]);
   assert.equal(unbound.status, 200, unbound.text);
   refused(ticked, 409, "binding_not_active");
@@ -732,4 +748,44 @@ test("19. G1b-3, the way out of unit_word_ambiguous is one the server takes (the
   assert.deepEqual([o.confirmable, o.word, o.unit], [true, "energy", "J/kg"]);
   ok(await tick(W.pa, g, tickBody(o)), 201);
   ok(await versionOf(r2), 201);
+});
+
+test("20. G1b-3 (the code review's HIGH): a club's admin is never told to take the platform's steps - its createVersion of a club mapping of a document-proven J/kg field is 409 unit_word_ambiguous asking a platform administrator, nothing written; the platform admin's answer names the steps", async () => {
+  const f = await created("g1b2_club_audience", { expected: "J/kg" });
+  for (const act of ["unit-verification", "meaning-verification"]) {
+    const res = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/${act}`, W.pa, act === "unit-verification" ? { requestKey: key(), sourceUnit: "J/kg", evidenceRef: UNIT_REF } : { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+    assert.ok([200, 201].includes(res.status), res.text);
+  }
+  for (const [who, steps] of [[W.caA, false], [W.pa, true]]) {
+    const variable = ok(await post("/variables", who, { requestKey: key(), label: `Audience ${uid()}`, unit: "J/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+    const mapping = ok(await post("/mappings", who, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+    const body = refused(await post(`/mappings/${mapping.id}/versions`, who, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false }), 409, "unit_word_ambiguous");
+    if (steps) assert.match(body.message, /Retire this revision/);
+    else {
+      assert.equal(body.message, "A document cannot tell which GPEXE word this unit is. Ask a platform administrator to compare this field with GPEXE.");
+    }
+    assert.equal((await one(`select count(*)::int n from training_load.source_metric_mapping_versions where mapping_id = $1`, [mapping.id])).n, 0, "nothing written");
+  }
+});
+
+test("21. G1b-3, S1 (the code review's MEDIUM): an active version from before the exact-word rule (its created field proven by a document in J/kg, set under the replica role) is not switched on for a team - 409 unit_word_ambiguous, no activation", async () => {
+  const t = await gpexeTeam(W.clubA);
+  const variable = ok(await post("/variables", W.pa, { requestKey: key(), label: `S1 word ${uid()}`, unit: "W/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+  const f = await created("g1b3_s1_wkg", { expected: "W/kg" });
+  for (const act of ["unit-verification", "meaning-verification"]) {
+    const res = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/${act}`, W.pa, act === "unit-verification" ? { requestKey: key(), sourceUnit: "W/kg", evidenceRef: UNIT_REF } : { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+    assert.ok([200, 201].includes(res.status), res.text);
+  }
+  const mapping = ok(await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+  const version = ok(await post(`/mappings/${mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false }), 201).version;
+  ok(await post(`/mappings/${mapping.id}/versions/${version.id}/submit`, W.pa, { requestKey: key() }));
+  ok(await post(`/mappings/${mapping.id}/versions/${version.id}/activate`, W.pa, { requestKey: key(), expectedActiveVersionId: null }));
+  await k.query("begin");
+  await k.query("set local session_replication_role = replica");
+  await k.query(`update training_load.source_metric_definition_versions set source_unit = 'J/kg' where id = $1`, [f.revisionId]);
+  await k.query(`update training_load.source_metric_mapping_versions set source_unit = 'J/kg', target_unit = 'J/kg' where id = $1`, [version.id]);
+  await k.query("commit");
+  const res = await post("/activations", W.pa, { requestKey: key(), mappingId: mapping.id, versionId: version.id, bindings: [{ bindingId: t.bindingId, requirement: "optional" }], reason: "G1b-3 S1 word check." });
+  refused(res, 409, "unit_word_ambiguous");
+  assert.equal((await one(`select count(*)::int n from training_load.source_metric_mapping_activations where mapping_version_id = $1`, [version.id])).n, 0, "no activation");
 });

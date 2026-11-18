@@ -1574,6 +1574,19 @@ pinned set, plan section 9.1). Only a field with an active revision is kept.
     the board does not compare a revision a document already proved. Retire the revision (L5), add a new unproven
     revision of the field (L1) and activate it (L3) - these three are API routes of the platform admin, with no screen
     yet - then compare it with GPEXE in Source fields. The comparison records the word, and the version is created.
+    A club's admin reads "Ask a platform administrator to compare this field with GPEXE" instead.
+  - *Before deploying G1b-3 (read-only, the deployed database).* A version that G1b-2 let a created field proven by a
+    document in J/kg or s have reads nothing after the deploy, so every session of a team it is switched on for would be
+    blocked as `source_shape_mismatch` (GPEXE did not change; the rule did). Count them first; expect 0:
+    ```sql
+    select count(*) from training_load.source_metric_mapping_versions v
+      join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
+      join training_load.source_metric_definition_versions r on r.id = v.source_metric_version_id
+     where d.created_by_user_id is not null and d.source_metric_key like 'details.%'
+       and r.unit_observation_id is null and r.source_unit in ('J/kg', 's') and v.status in ('needs_review', 'active');
+    ```
+    If it is not 0, disable those versions (or prove their word on a new revision) before the deploy. After it, such a
+    version is refused at activation, at a switch-on (S1), at a club's copy and on the board.
 - **Confirming a created field's unit on the board (G1b-2).** A platform admin, in the platform workspace, opens the field
   in Source fields and chooses *Compare with GPEXE*: a team, then two named athletes of its newest saved session with the
   number GPEXE should show. If both match the GPEXE screen, the tick saves the unit GPEXE states and GPEXE's own label as
