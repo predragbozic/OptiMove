@@ -234,14 +234,23 @@ export function displayNumber(value) {
 // that exists today instead of "ask support" (manager, 2026-11-15; wording only).
 export function columnReasonText(code, { platformAdmin = false } = {}) {
   if (code === "field_not_confirmed" && platformAdmin) return "This column's unit is not confirmed yet. Switch to the platform workspace, then confirm it in Data configuration > Source fields.";
-  // A zone or an event threshold: Mappings cannot finish it today (its revision needs a document for the unit and the
-  // limits, and none exists), so the sentence names the one step that works - a numbered zone name is a plain field.
-  if (code === "field_has_parameters" && platformAdmin) return "Zones and thresholds cannot be placed yet: their unit and limits need a document first. For one zone, create its numbered GPEXE field in Data configuration > Source fields and compare it with GPEXE.";
+  if (code === "field_has_parameters") return parkedSentence({ platformAdmin });
   return COLUMN_REASON[code] || "This column cannot be placed.";
+}
+// A zone or an event threshold (a field with parameters): Mappings cannot finish it today - its revision needs a
+// document for the unit and the limits, and none exists. One wording for the board's group and its reason: what is
+// missing, then the one step that works for who is looking (a numbered zone name is a plain field, created in Source
+// fields in the platform workspace only).
+export function parkedSentence({ platformAdmin = false, onPlatform = boardContext()?.platform === true } = {}) {
+  const head = "OptiMove cannot yet choose which zone or threshold to use for these.";
+  const events = "Events above a threshold cannot be added yet.";
+  if (!platformAdmin) return `${head} To use one zone, ask OptiMove support to add it as a column of its own. ${events}`;
+  const where = onPlatform ? "create" : "switch to the platform workspace, then create";
+  return `${head} To use one zone, ${where} its numbered GPEXE field in Data configuration > Source fields and confirm it there. ${events}`;
 }
 export const COLUMN_REASON = {
   field_not_confirmed: "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it.",
-  field_has_parameters: "OptiMove cannot place zones and thresholds yet. Ask OptiMove support.",
+  field_has_parameters: "OptiMove cannot yet choose which zone or threshold to use for these. To use one zone, ask OptiMove support to add it as a column of its own. Events above a threshold cannot be added yet.",
   source_metric_unsupported: "OptiMove cannot read this column yet.",
   display_rule_missing: "OptiMove cannot show how GPEXE displays this column yet, so it cannot be compared here.",
   // G1b-3: a created column without a GPEXE unit word OptiMove can read.

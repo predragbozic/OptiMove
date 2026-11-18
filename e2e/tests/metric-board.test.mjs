@@ -27,7 +27,8 @@ async function prepareBoard(world) {
   const on = board.on.find((o) => o.fieldId === column.fieldId);
   assert.ok(on, "OptiMove's mapping of TotDist is on at the start");
   // The Rukovodilac, 2026-11-18: a zone or threshold column that is not on is listed only in "Not available yet".
-  const parked = board.columns.filter((c) => !c.placeable && c.reason === "field_has_parameters" && !board.on.some((o) => o.fieldId === c.fieldId)).length;
+  const used = new Set([...board.on, ...(board.preplaced || [])].map((o) => o.fieldId));
+  const parked = board.columns.filter((c) => !c.placeable && c.reason === "field_has_parameters" && !used.has(c.fieldId)).length;
   return { setup, fieldId: column.fieldId, variableId: made.body.variable.id, activationId: on.activationId, parked };
 }
 
@@ -105,16 +106,23 @@ test("18-4b. (390 px) the same flow by tapping: one bottom sheet at a time, no d
       await openBoard(page);
       // Zone and threshold columns that are not on: one closed group at the end, a 44 px summary, no Mappings pointer.
       const group = page.locator("details.mb-parked");
-      assert.equal(await group.count(), parked > 0 ? 1 : 0, `${parked} column(s) not available yet`);
-      if (parked > 0) {
+      assert.ok(parked > 0, "the board world has a zone or threshold column that is not on");
+      assert.equal(await group.count(), 1, `${parked} column(s) not available yet`);
+      {
         const summary = group.locator("summary");
-        assert.equal((await summary.innerText()).trim(), `Not available yet (${parked})`);
+        assert.equal((await summary.innerText()).trim(), `Zones and thresholds: not available yet (${parked})`);
         assert.ok((await summary.boundingBox()).height >= 44, "the summary is a 44 px target");
         assert.equal(await group.evaluate((d) => d.open), false, "closed by default");
         await summary.tap();
         assert.match((await group.innerText()).replace(/\s+/g, " "), /These need a zone or threshold choice that OptiMove does not offer yet\. For a single zone, ask OptiMove support to add its numbered GPEXE field\./);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0, "no horizontal overflow with the group open");
-        await summary.tap();
+        // The open state survives repaints through the real toggle event (the switch-off sheet opens and closes).
+        await page.tap(`[data-action="metric-board-switch-off-open"][data-activation-id="${activationId}"]`);
+        await page.waitForSelector(".mb-sheet");
+        await page.tap('.mb-sheet [data-action="metric-board-switch-off-cancel"]');
+        await page.waitForSelector(".mb-sheet", { state: "detached" });
+        assert.equal(await page.locator("details.mb-parked").evaluate((d) => d.open), true, "still open after the repaint");
+        await page.locator("details.mb-parked summary").tap();
       }
       assert.doesNotMatch(await page.locator("[data-mb-board]").innerText(), /Map zones and thresholds in Mappings/);
       assert.equal(await page.locator("[data-mb-drag-field]").count(), 0, "nothing drags on a phone");

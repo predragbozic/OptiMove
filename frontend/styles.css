@@ -27113,8 +27113,9 @@ button.mb-col:focus-visible, .mb-slot-open:focus-visible { outline: none; box-sh
 .mb-reason { color: var(--om-warning) !important; }
 .mb-col-vals { color: var(--muted); font-size: var(--om-text-xs); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .mb-tech { font-size: var(--om-text-xs); color: var(--muted); }
+.mb-tech code { overflow-wrap: anywhere; }
 .mb-parked { margin-top: var(--om-space-3); border-top: 1px solid var(--om-border-subtle); padding-top: var(--om-space-2); }
-.mb-parked > summary { cursor: pointer; box-sizing: border-box; min-height: var(--om-tap-target); padding-block: 12px; color: var(--muted); font-weight: 600; }
+.mb-parked > summary { display: list-item; cursor: pointer; box-sizing: border-box; min-height: var(--om-tap-target); padding-block: 12px; color: var(--text); font-weight: 600; }
 .mb-parked > .mb-note { margin: 0 0 var(--om-space-2); }
 .mb-tech summary { cursor: pointer; width: fit-content; padding: 2px 0; }
 .mb-slot {

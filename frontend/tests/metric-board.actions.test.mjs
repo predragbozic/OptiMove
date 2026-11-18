@@ -799,15 +799,21 @@ test("S11. S-2: once OptiMove's mapping that replaced it is off again, the club'
   assert.match(text(), /Replaced by OptiMove's mapping on 16\.11\.2026 · From .* · no check needed/);
 });
 
-test("Z (the Rukovodilac, 2026-11-18): a zone or threshold column never points to Mappings, which cannot finish it today; the platform admin gets the numbered-field step, everyone else support", () => {
-  const platform = data.columnReasonText("field_has_parameters", { platformAdmin: true });
-  const club = data.columnReasonText("field_has_parameters");
-  assert.equal(platform, "Zones and thresholds cannot be placed yet: their unit and limits need a document first. For one zone, create its numbered GPEXE field in Data configuration > Source fields and compare it with GPEXE.");
-  assert.equal(club, "OptiMove cannot place zones and thresholds yet. Ask OptiMove support.");
-  for (const text of [platform, club]) assert.doesNotMatch(text, /Mappings/);
+const HEAD = "OptiMove cannot yet choose which zone or threshold to use for these.";
+const EVENTS = "Events above a threshold cannot be added yet.";
+const CLUB_STEP = `${HEAD} To use one zone, ask OptiMove support to add it as a column of its own. ${EVENTS}`;
+const PLATFORM_STEP = `${HEAD} To use one zone, create its numbered GPEXE field in Data configuration > Source fields and confirm it there. ${EVENTS}`;
+const SWITCH_STEP = `${HEAD} To use one zone, switch to the platform workspace, then create its numbered GPEXE field in Data configuration > Source fields and confirm it there. ${EVENTS}`;
+
+test("Z (the Rukovodilac, 2026-11-18): a zone or threshold column never points to Mappings, which cannot finish it today; one wording, with the step for who is looking and where", () => {
+  assert.equal(data.columnReasonText("field_has_parameters"), CLUB_STEP);
+  assert.equal(data.parkedSentence({ platformAdmin: true, onPlatform: true }), PLATFORM_STEP);
+  assert.equal(data.parkedSentence({ platformAdmin: true, onPlatform: false }), SWITCH_STEP, "a platform admin in a club workspace is told to switch first (the UX review)");
+  assert.equal(data.columnReasonText("field_has_parameters", { platformAdmin: true }), SWITCH_STEP, "the club workspace of beforeEach");
+  for (const text of [CLUB_STEP, PLATFORM_STEP, SWITCH_STEP]) assert.doesNotMatch(text, /Mappings/);
 });
 
-test("Z2 (the Rukovodilac, 2026-11-18): zone and threshold columns leave the list for one closed 'Not available yet (N)' group with one sentence and a real next step - never Mappings; it keeps its open state across a repaint", async () => {
+test("Z2 (the Rukovodilac, 2026-11-18): zone and threshold columns leave the list for one closed group with one sentence and a real next step - never Mappings; it keeps its open state across a repaint; a zone column that is on says it cannot be placed again", async () => {
   const zone = { fieldId: "f-zone", revisionId: "r-zone", key: "more.complementary_data.power.distance", label: "Example zone set", unit: "m", unitProven: false, expectedUnit: "m", placeable: false, reason: "field_has_parameters", displayRule: null, displayUnits: [], rawA: null, rawB: null };
   const club = structuredClone(FX.board);
   club.board.columns.push(zone, { ...zone, fieldId: "f-acc", key: "more.events.acceleration", label: "Example threshold events" });
@@ -815,13 +821,19 @@ test("Z2 (the Rukovodilac, 2026-11-18): zone and threshold columns leave the lis
   await open();
   const group = content.querySelector("details.mb-parked");
   assert.ok(group && !group.open, "one closed group");
-  assert.equal(group.querySelector("summary").textContent.trim(), "Not available yet (2)");
-  assert.match(group.textContent, /These need a zone or threshold choice that OptiMove does not offer yet\. For a single zone, ask OptiMove support to add its numbered GPEXE field\./);
+  assert.equal(group.querySelector("summary").textContent.trim(), "Zones and thresholds: not available yet (2)");
+  assert.equal(group.querySelector(".mb-note").textContent, CLUB_STEP);
   assert.ok(group.textContent.includes("Example zone set") && group.textContent.includes("Example threshold events"));
   const main = [...content.querySelectorAll(".mb-list")].find((ul) => !ul.closest(".mb-parked"));
   assert.ok(!main.textContent.includes("Example zone set"), "not in the main column list");
-  assert.ok(main.textContent.includes("Power zone distance"), "a zone column that is already on stays in the list, with what is on");
+  // A zone column that is on stays in the list and never promises it can be placed again (the UX review).
+  const onZone = [...main.querySelectorAll(".mb-col-item")].find((li) => li.textContent.includes("Power zone distance") && !li.textContent.includes("open top"));
+  assert.match(onZone.textContent, /Already on for the team\. If you switch it off, it cannot be placed again here yet\./);
   assert.doesNotMatch(text(), /Mappings/);
+  const zoneOn = club.board.on.find((o) => o.fieldId === club.board.columns.find((c) => c.label === "Power zone distance").fieldId);
+  await click(`[data-action="metric-board-switch-off-open"][data-activation-id="${zoneOn.activationId}"]`);
+  assert.match(content.querySelector("#mb-switch-off-title").parentElement.textContent, /It cannot be placed again here yet\./);
+  await click('[data-action="metric-board-switch-off-cancel"]');
   actions.metricBoardParkedToggled(true);
   render();
   assert.equal(content.querySelector("details.mb-parked").open, true, "a repaint keeps it open");
@@ -833,5 +845,14 @@ test("Z2 (the Rukovodilac, 2026-11-18): zone and threshold columns leave the lis
   platformWorld(b);
   state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
   await actions.loadBoardSection(render);
-  assert.match(content.querySelector("details.mb-parked").textContent, /For a single zone, create its numbered GPEXE field in Data configuration > Source fields\./);
+  assert.equal(content.querySelector("details.mb-parked .mb-note").textContent, PLATFORM_STEP);
+});
+
+test("Z2c (the code review): a platform admin who is also the club's admin, on the club board, is told to switch to the platform workspace first", async () => {
+  state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "Example Club" }, availableWorkspaces: [{ type: "club", scopeId: CLUB }, { type: "platform" }] };
+  const club = structuredClone(FX.board);
+  club.board.columns.push({ fieldId: "f-zone", revisionId: "r-zone", key: "more.complementary_data.power.distance", label: "Example zone set", unit: "m", unitProven: false, expectedUnit: "m", placeable: false, reason: "field_has_parameters", displayRule: null, displayUnits: [], rawA: null, rawB: null });
+  overrides.push((c) => (c.url.startsWith(`${B}/board?`) ? { status: 200, body: club } : null));
+  await open();
+  assert.equal(content.querySelector("details.mb-parked .mb-note").textContent, SWITCH_STEP);
 });

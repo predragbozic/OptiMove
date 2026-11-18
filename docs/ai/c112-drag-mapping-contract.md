@@ -242,18 +242,17 @@ section 4.4's lock order (the hide lock), each marked in place.
   - Each row shows the raw values of athlete A and athlete B, in the source unit.
 - **Columns that cannot be placed** stay in the list, grey, with one reason:
   - "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it." The revision is not verified (section 10, (b)).
-  - "OptiMove cannot place zones and thresholds yet. Ask OptiMove support." The field has parameters. (As built,
-    2026-11-18: the first wording, "Map zones and thresholds in Mappings.", named a path that cannot finish today -
-    J16 refuses to submit a version whose revision is not verified, and no document proves these fields' unit and
-    limits. A platform admin is told: "Zones and thresholds cannot be placed yet: their unit and limits need a
-    document first. For one zone, create its numbered GPEXE field in Data configuration > Source fields and compare it
-    with GPEXE." A numbered zone name is a field without parameters, so route C creates it and route O compares it.
-    The Rukovodilac's decision of the same day: on both boards such a column, unless it is already on or placed, leaves
-    the list for one closed group at its end, "Not available yet (N)", with one sentence: "These need a zone or
-    threshold choice that OptiMove does not offer yet." and the next step - for a platform admin "For a single zone,
-    create its numbered GPEXE field in Data configuration > Source fields.", for a club's admin "For a single zone, ask
-    OptiMove support to add its numbered GPEXE field." Display only; the server decides as before. The group keeps
-    its open state across a repaint.)
+  - Zones and thresholds (the field has parameters). As built, 2026-11-18: the first wording, "Map zones and thresholds
+    in Mappings.", named a path that cannot finish today - J16 refuses to submit a version whose revision is not
+    verified, and no document proves these fields' unit and limits. On both boards such a column, unless it is on or
+    placed, leaves the list for one closed group at its end, "Zones and thresholds: not available yet (N)", with one
+    wording (`parkedSentence`): "OptiMove cannot yet choose which zone or threshold to use for these." Then the step for
+    who is looking: a club's admin "To use one zone, ask OptiMove support to add it as a column of its own."; a platform
+    admin "To use one zone, create its numbered GPEXE field in Data configuration > Source fields and confirm it
+    there." (in a club workspace: "switch to the platform workspace, then create …"); then "Events above a threshold
+    cannot be added yet." A numbered zone name is a field without parameters, so route C creates it. A zone column
+    that is on says that once off it cannot be placed again here yet, and so does its switch-off question. Display
+    only; the server decides as before. The group keeps its open state across a repaint.
   - "OptiMove cannot read this column yet." There is no extractor.
   - "These two athletes have no value here." The admin can choose *Other athletes*.
 - **Right: the variables.** First the club's own active variables, then OptiMove's system variables, each with its unit.
@@ -1153,7 +1152,7 @@ Each new guard has a mutation that the suite kills:
 
 **What is self-service at once.** Every field whose revision is active and verified. Today that is `total_time`, `total_distance` and `max_v`, as the owner reports.
 
-**What a club sees for any other field.** The column with its reason: "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it." or "OptiMove cannot place zones and thresholds yet. Ask OptiMove support.".
+**What a club sees for any other field.** The column with its reason: "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it." or, for zones and thresholds, the closed group above.
 
 **The honest tension.** The owner's „Nema potrebe za ovim smaranjima” is fully met for every confirmed field. For a new field, a club waits for one platform act. That act needs no document under a2, and the club itself drives it under b3.
 
