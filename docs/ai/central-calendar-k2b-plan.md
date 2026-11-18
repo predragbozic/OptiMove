@@ -1800,5 +1800,42 @@ and the head the same):
 
   Each has anchors in test 2, and test 1 compares both against the old form. Its static verdict once the suites pass:
   READY.
-- **Still to run (the manager):** on the head that carries these tests, the team-ids suite, BM13–BM20 (BM16 and BM17
-  killed; BM19 and BM20 equivalent), the neighbouring calendar suites, and the measurement before and after.
+**The database results.** The calendar manager (the *Rukovodilac*) ran these in separate temporary trees, on disposable
+databases through the T1 runner. The executor's session cannot read `DATABASE_URL`.
+- **On `81559b28`, seven suites: 134/134**, and the cleanup audit is clean:
+
+  | Suite | Result |
+  |---|---|
+  | `central-calendar-k1a` | 28/0 |
+  | `central-calendar-k2a-1b` | 23/0 |
+  | `central-calendar-k2a-events` | 31/0 |
+  | `central-calendar-k2b-1d2-team-ids` | 3/0 |
+  | `central-calendar-k2b-1d2` | 9/0 |
+  | `central-calendar-k2b-event-details` | 11/0 |
+  | `central-calendar-k2b-settings` | 29/0 |
+
+- **The mutations on `81559b28`:**
+  - BM12–BM18 were killed, BM16 and BM17 included.
+  - BM19 and BM20 survived, as expected: they are equivalent.
+  - Together with BM1–BM11 (11/11 on `b7d81acd`), **18 of 20 are killed and 2 are equivalent.**
+- **The measurement on `4c9e5286`** (the code is the same on `81559b28`). The world is 3 clubs × 10 teams and 300
+  athletes, from 1 to 30 November, with `--runs 7`; the values are medians:
+
+  | Workspace | Before (`94aab138`) | After |
+  |---|---|---|
+  | Platform | 649 ms | 764 ms (1.18×) |
+  | Club | 222 ms | 206 ms, faster |
+
+  Before the rewrite the platform measured 790–881 ms after (23.7). With the rewrite, the club's read is faster than on
+  the base.
+- **`code-reviewer`, with these results: READY WITH NON-BLOCKING NOTES** on `81559b28`, in place of BLOCKED.
+  - Its MEDIUM is closed: the new athletes decide BM16 and BM17.
+  - The other new cases are valid against v25.
+  - The results support R1–R6.
+  - **One new LOW**, recorded and not applied, because this round is documents only and a test change would need a new
+    database run:
+    - The anchor `idsOn(w.restored, TODAY)` compares the day of the database's `now()`, which is when the restore opens
+      its second period, with `TODAY`, taken on the JavaScript side when the module loads.
+    - A run that crosses midnight UTC in between fails that anchor falsely.
+    - Test 1 still passes, and nothing reaches production. A false pass cannot happen.
+    - The fix: anchor on the period's actual first day, or take `TODAY` from the test connection's `current_date`.
