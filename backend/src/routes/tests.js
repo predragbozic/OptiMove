@@ -1282,8 +1282,12 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       return res.status(resolvedRules.status).json({ error: resolvedRules.error });
     }
 
-    // K2b-2a-1: "Skip days off" toggled on its own, or with any other change.
-    if (body.skipDaysOff !== undefined) {
+    // K2b-2a-1: "Skip days off" toggled on its own, or with a status or
+    // notification change. A full edit decides it below, from the RESULTING
+    // kind, in the same UPDATE as schedule_kind (the 2a-2a code review: the
+    // CHECK test_schedules_skip_days_off_daily never sees an intermediate row).
+    const fullEditRequested = FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined);
+    if (body.skipDaysOff !== undefined && !fullEditRequested) {
       const refusal = body.skipDaysOff === false ? null : await skipDaysOffRefusal(client, {
         skipDaysOff: body.skipDaysOff, scheduleKind: schedule.schedule_kind,
         owner: { ownerScope: schedule.owner_scope, ownerClubId: schedule.owner_club_id, ownerTeamId: schedule.owner_team_id },
@@ -1385,6 +1389,31 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     }
     const scheduleKind = (body.scheduleKind !== undefined ? text(body.scheduleKind) === "daily" : schedule.schedule_kind === "recurring") ? "recurring" : "one_time";
 
+    // K2b-2a-1: the full edit's "Skip days off", decided from the RESULTING
+    // kind (a recurring schedule is always daily here): true only when the
+    // result is daily and the club's switch is on (400, nothing written);
+    // false when sent false; kept when not sent and the result is daily, else
+    // reset to false (the option cannot apply to a schedule that is not daily).
+    // skip_days_off (v81) is named only where the column exists (the
+    // insert's rule, testsScheduleWriter.js); the locked row is `select *`.
+    const hasSkipColumn = Object.prototype.hasOwnProperty.call(schedule, "skip_days_off");
+    let skipDaysOff;
+    if (body.skipDaysOff === undefined) {
+      skipDaysOff = scheduleKind === "recurring" ? Boolean(schedule.skip_days_off) : false;
+    } else if (body.skipDaysOff === false) {
+      skipDaysOff = false;
+    } else {
+      const refusal = await skipDaysOffRefusal(client, {
+        skipDaysOff: body.skipDaysOff, scheduleKind,
+        owner: { ownerScope: schedule.owner_scope, ownerClubId: schedule.owner_club_id, ownerTeamId: schedule.owner_team_id },
+      });
+      if (refusal || body.skipDaysOff !== true) {
+        await client.query("rollback");
+        return res.status(400).json(refusal || { error: "skip_days_off_unavailable", message: "Skipping days off is not available for this schedule." });
+      }
+      skipDaysOff = true;
+    }
+
     // A daily (recurring) schedule already generates its own occurrences one
     // day at a time, ongoing - converting it to a single one_time schedule
     // has no safe answer for "which occurrence becomes THE one_time
@@ -1445,7 +1474,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       `update tests.test_schedules set
          schedule_kind = $2, timezone = $3, start_date = $4, end_date = $5,
          recurrence_rule = $6, recurrence_rule_version = 1,
-         opens_time = $7, due_time = $8, closes_time = $9, status = $10, updated_at = now()
+         opens_time = $7, due_time = $8, closes_time = $9, status = $10${hasSkipColumn ? ", skip_days_off = $11" : ""}, updated_at = now()
        where id = $1`,
       [
         schedule.id,
@@ -1458,6 +1487,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
         dueTime,
         closesTime,
         status,
+        ...(hasSkipColumn ? [skipDaysOff] : []),
       ],
     );
 
