@@ -263,6 +263,7 @@ const READINESS = {
   canonical_not_numeric: "Not numeric, so no mapping can use it.",
   canonical_unit_missing: "It has no unit, so no mapping can use it.",
   canonical_unit_not_a_token: "Its unit is not a unit token, so no mapping can use it.",
+  canonical_calculated: "Calculated by OptiMove from other variables, so no mapping can use it.",
 };
 // The bound values the field must hold for this variable, in the field's
 // bound unit (J16 4.4), or null when one has no exact value there.
@@ -476,6 +477,7 @@ const DRAFT_TEXT = {
   canonical_not_numeric: "This variable cannot be the target of a mapping now.",
   canonical_unit_missing: "This variable cannot be the target of a mapping now.",
   canonical_unit_not_a_token: "This variable cannot be the target of a mapping now.",
+  canonical_calculated: "This variable is calculated by OptiMove from other variables, so no mapping can use it.",
   target_not_active: "This variable cannot be the target of a mapping now.",
   revision_not_usable: "The field changed; choose it again.",
   invalid_parameters: "The bound does not match the variable's bound.",
@@ -523,7 +525,7 @@ export const READ_AGAIN = new Set([
   "target_scope_mismatch", "target_not_active", "source_metric_retired", "revision_not_usable", "version_not_draft",
   "version_not_submitted", "active_version_changed", "canonical_version_changed", "version_status_changed",
   "version_not_active", "field_retired", "activation_not_open",
-  "canonical_not_numeric", "canonical_unit_missing", "canonical_unit_not_a_token",
+  "canonical_not_numeric", "canonical_unit_missing", "canonical_unit_not_a_token", "canonical_calculated",
 ]);
 const MAPPING_ACTS = new Set(["create", "draft", "submit", "activate", "disable"]);
 export function refusalText(act, info) {

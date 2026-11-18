@@ -1,3 +1,4 @@
+import { renderAthleteHomeEventsHtml } from "./athlete-home-events-view.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
 import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadHomeCardHtml, renderTrainingLoadWeekButtonHtml } from "./training-load-view.js";
@@ -65,6 +66,7 @@ export function renderAthleteHomeHtml({ data, error }) {
       ${renderTrainingLoadHomeCardHtml(state.trainingLoad.athleteToday)}
       ${renderTodayCard(today)}
       ${renderWeekStrip(week)}
+      ${renderAthleteHomeEventsHtml(state.athleteHomeEvents)}
       ${renderMyTrainingHomeEntryHtml()}
       ${renderQuickActions()}
     </section>
@@ -113,7 +115,7 @@ function renderTodayCard(today) {
     return `
       <section class="panel athlete-home-today">
         <p class="eyebrow">Today's training</p>
-        <div class="empty-state">No training is assigned for today.</div>
+        <div class="empty-state">No training plan is assigned for today.</div>
       </section>
     `;
   }

@@ -50,7 +50,8 @@ const COACH_PINNED = /^metric_variable_requests: a team coach does not rename a 
 const REQUEST_LINK = /^metric_variable_changes: a change is written with its own request row$/;
 const CHANGES_APPEND = /^metric_variable_changes: change records are append-only$/;
 const KIND_SHAPE = "metric_variable_changes_kind_shape";
-const REDUCED = ["actions", "description", "editable", "icon", "id", "key", "label", "labelsToken", "ownerScope", "shortLabel", "state", "truncated"];
+// v77 (J21) adds `calculated` (whether OptiMove calculates it; never its inputs).
+const REDUCED = ["actions", "calculated", "description", "editable", "icon", "id", "key", "label", "labelsToken", "ownerScope", "shortLabel", "state", "truncated"];
 const ICON_FUNCTIONS = ["metric_definitions_record_change", "metric_variable_requests_change_guard"];
 const ICON_TRIGGERS = ["metric_definitions_v38_record_change", "metric_variable_requests_change_guard"];
 const ICON_CHECKS = ["metric_variable_changes_kind_check", "metric_variable_changes_kind_shape", "metric_variable_requests_change_iff",

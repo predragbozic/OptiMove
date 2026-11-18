@@ -59,7 +59,9 @@ were added on 2026-11-03 at `ad0e0d63` (merge of PR #344); nothing else was re-d
 its deploy, the lock-order rule (PR #346) and the *Rukovodilac*'s acceptance of the 7i-B plan were added on 2026-11-03
 at `355ae868` (merge of PR #346); nothing else was re-derived then. Phase 7i-B1 (PR #352, migration v53), its rename
 before the merge, its deploy and the *Rukovodilac*'s v53 post-check were added on 2026-11-04 at `26b6c8bc` (merge of PR
-#352); nothing else was re-derived then.
+#352); nothing else was re-derived then. The central calendar's K2b-1d and K2b-1e entries, and the fix of the
+`central-calendar-k2b-settings` 1a / 1b note, were brought up to date on 2026-11-18 at `94aab138` (merge of PR #601), by
+the K2b-1e pull request; nothing else was re-derived then.
 
 ## Active phase
 
@@ -252,7 +254,9 @@ request, mandatory; the *Rukovodilac*'s order of 2026-11-02, event `783e3591`, f
     conflicts only with an exclusive write of that row. No caller updates that row in the same transaction (grep).
   - **Failures that predate v54 and stay:** `gpexe-client` and `gpexe-rest-v1-adapter-reads` (unit suites on Node 22) and
     `central-calendar-k2b-settings` tests 1a / 1b (the v51 post-check expects v51 to be the last migration) fail
-    identically on a clean `main`.
+    identically on a clean `main`. *Since fixed for 1a / 1b:* `53be7089` (2026-11-12) builds that suite's database only
+    up to v51 and removed the two from the known failures; the calendar's manager accepted it as the fix on 2026-11-18
+    (K2b plan 22.7, Q6).
 
   **GPS import: the flow proposal is an accepted direction, not a contract** (the owner, 2026-11-04: „GPS import:
   predlog toka izgleda dobar", relayed by the *Rukovodilac* with the sketch `https://claude.ai/artifact/V1DNskt8hNpNGPKGzXcpT7`).
@@ -355,11 +359,20 @@ deploys and post-checks without a record in this file are as the stream manager 
 - **K2b-1d**, the event form, the panel and the cards (plan section 21; frontend only, no migration): the event's place
   (a club's place or a one-off text, the team's default place first) and its details in the form; the place for every
   viewer and the details with *Enter details* for a manager in the panel; a manager's card with its type's icon and
-  colour, *Awaiting details* and "Details x/y"; Settings → Calendar's *Required* switch. The pull request that adds this
-  line, open.
-- Next by the plan: K2b-1d2 (a small backend step: the type's icon and colour on every card, the platform workspace's
-  teams with their clubs; plan 21.9), then K2b-1e (the athlete's *Upcoming events*) and K2b-2 (athlete questions through
-  the Tests module, D40).
+  colour, *Awaiting details* and "Details x/y"; Settings → Calendar's *Required* switch. PR #349: merge `63019ab`
+  (2026-11-03 12:13 UTC); deployed 2026-11-03, per the stream manager. With it K2b-1 is complete.
+- **K2b-1e**, the athlete's *Upcoming events* on Athlete Home (D28; plan section 22, the manager's decisions in 22.7;
+  frontend only, no migration, no backend change): her own `GET /api/calendar` for today and the 13 days after it
+  (`kinds=event`), one row per event with its title, type word, day(s), time ("Time not set" without one, except a *Day
+  off*, which then has no time part) and place
+  with *Open in maps*; a cancelled event marked, without its place; the first 5 rows, then *Show N more*. The pull
+  request that adds this line, open. Recorded for later:
+  - the team on the row for an athlete in two teams (22.7, Q3);
+  - whether the error's `role="alert"` is read out more than once when Home is drawn again, not checked with a screen
+    reader (22.9, F4).
+- Next by the plan: K2b-1d2 (a small backend step: the type's icon and colour on every card, the athlete's included,
+  and the platform workspace's teams with their clubs; plan 21.9), then K2b-2 (athlete questions through the Tests
+  module, D40).
 
 The Training Load / GPEXE record follows as last reviewed on 2026-10-15.
 

@@ -326,6 +326,8 @@ const TRIGGER_REFUSALS = new Map([
   ["source_metric_mapping_versions: the canonical version is not numeric", [409, "canonical_not_numeric"]],
   ["source_metric_mapping_versions: canonical_unit_missing", [409, "canonical_unit_missing"]],
   ["source_metric_mapping_versions: canonical_unit_not_a_token", [409, "canonical_unit_not_a_token"]],
+  // v77 (J21): the backstop of notReadyCodeOf's canonical_calculated.
+  ["source_metric_mapping_versions: a calculated variable is never the target of a mapping", [409, "canonical_calculated"]],
   ["source_metric_mapping_versions: the conversion must equal the active unit conversion of its unit pair", [409, "conversion_unavailable"]],
   ["source_metric_mapping_versions: the bound conversion must equal the active unit conversion of its unit pair", [409, "bound_conversion_unavailable"]],
   ["source_metric_mapping_versions: the canonical condition description has no supported shape", [409, "condition_description_unsupported"]],
@@ -362,6 +364,7 @@ const MESSAGES = {
   // The review of 2026-11-18: a field without a condition never fills a variable that counts only values under one (no
   // check could tell that the field's values are the ones the condition names). Zone match is the later way in.
   condition_mismatch: "This variable counts only values under a condition, and this field has none, so it cannot fill it.",
+  canonical_calculated: "The canonical definition is calculated by OptiMove from other variables; no mapping feeds it.",
   canonical_unit_missing: "The canonical definition's current version has no unit.",
   canonical_unit_not_a_token: "The canonical definition's unit is not a unit token.",
   conversion_unavailable: "No active unit conversion exists for this unit pair.",
@@ -578,7 +581,8 @@ export async function listFields({ ctx, query }) {
 
 // The parts of a canonical version the API reads, never the raw
 // condition_description: numbers as their exact numeric text.
-const CANONICAL_VERSION_COLUMNS = `v.id as version_id, v.version_number, v.value_type, v.unit,
+// v77 (J21): whether the version is calculated, read through to_jsonb so a schema before v77 (no column) reads false.
+const CANONICAL_VERSION_COLUMNS = `v.id as version_id, v.version_number, v.value_type, v.unit, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
   (v.unit is not null and char_length(v.unit) between 1 and 30) as unit_present,
   coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
   jsonb_typeof(v.condition_description) as cd_type,
@@ -614,6 +618,8 @@ function canonicalParametersOf(row) {
   return null;
 }
 function notReadyCodeOf(row) {
+  // v77 (J21): a calculated variable's values are its calculation; no source feeds it.
+  if (row.calculated === true) return "canonical_calculated";
   if (row.value_type !== "numeric") return "canonical_not_numeric";
   if (!row.unit_present) return "canonical_unit_missing";
   if (!row.unit_is_token) return "canonical_unit_not_a_token";

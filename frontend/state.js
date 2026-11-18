@@ -1179,6 +1179,7 @@ export const createInitialState = () => ({
   tests: emptyTestsState(),
   trainingLoad: emptyTrainingLoadState(),
   myTraining: emptyMyTrainingState(),
+  athleteHomeEvents: emptyAthleteHomeEventsState(),
   checkIn: emptyCheckInState(),
   // feature/mobile-messages-fullscreen: menuOpen is the mobile thread
   // header's 3-dot overflow menu (Hide/Block live there on mobile instead
@@ -1212,6 +1213,14 @@ export function emptyMyTrainingState() {
     openId: "",
     detail: { activityId: "", data: null, loading: false, error: "" },
   };
+}
+
+// The athlete's *Upcoming events* on Home (K2b-1e, docs/ai/central-calendar-k2b-plan.md section 22): her own events of
+// the next 14 days from GET /api/calendar. `status` is "idle" (not read yet), "loading", "ready", "error" or "hidden"
+// (a 403: the section is not shown); `rows` are the explicit pick of athlete-home-events-data.js, one per event;
+// `today` is the date the rows were read for; `canRetry` is false after a lost sign-in; `expanded` is Show N more.
+export function emptyAthleteHomeEventsState() {
+  return { status: "idle", rows: [], today: "", contextKey: "", error: "", canRetry: true, expanded: false };
 }
 
 export const state = createInitialState();
