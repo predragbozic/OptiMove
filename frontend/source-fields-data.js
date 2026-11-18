@@ -129,7 +129,7 @@ export function zoneLimitsNote(family, zoneThresholds, day = "") {
   if (!set) return "";
   if (set.differ) return `${pair[0]} zone limits differ between teams, so no zone's range is shown.`;
   return Array.isArray(set.values)
-    ? `${pair[0]} zone limits of the team: ${set.values.join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. The range beside each zone is expected, not confirmed. To confirm it, use “Compare with GPEXE” on that zone.`
+    ? `${pair[0]} zone limits of the team: ${set.values.join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. The range beside each zone is expected, not confirmed. To confirm it, use the value, then Compare with GPEXE.`
     : "";
 }
 // Values first by quantity, zones together in zone order; the rest is "not values".
@@ -241,10 +241,10 @@ export const evidenceRefOk = (value) => typeof value === "string" && value.lengt
 // G1b: creating a field from a name GPEXE sent (route C, docs/ai/gpexe-field-inventory-plan.md section 8.1)
 // ---------------------------------------------------------------------------
 // What happens next, said once on the form and once after the save (the Rukovodilac's wording).
-export const CREATE_NEXT_STEP = "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.";
+export const CREATE_NEXT_STEP = "Nothing is imported yet. After the next Find new sessions brings this value, open it here and use Compare with GPEXE once. Then you can put it on a variable.";
 // A per-athlete value carries no unit word, so the board never offers its unit: a document confirms it (the wording of
 // the UX review of G1b-1, approved by the Rukovodilac on 2026-11-17).
-export const CREATE_NEXT_STEP_ROW = "This field has no values yet. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document.";
+export const CREATE_NEXT_STEP_ROW = "Nothing is imported yet. GPEXE sends no unit with this value, so it cannot be checked against GPEXE here. Ask your developer to confirm its unit before you put it on a variable.";
 export const createNextStep = (endpoint) => (endpoint === "athlete_session" ? CREATE_NEXT_STEP_ROW : CREATE_NEXT_STEP);
 export const FIELD_LABEL_MAX = 80;
 // The levels a name's endpoint allows, and the one a per-drill name must keep.
@@ -545,10 +545,11 @@ export const REREADS_OBSERVATION = new Set(["board_changed", "pair_not_comparabl
 export function confirmQuestion(form, body) {
   if (form.act === "observe") {
     const o = form.observation;
-    return `Save the unit of ${form.fieldName} as ${o.unit} (GPEXE's word "${o.word}") and its meaning as GPEXE's own name "${o.gpexeName}", from this comparison of two athletes? It is saved once and never changed; a correction is a new revision.`;
+    // The owner's rule: the decision in plain words; GPEXE's word and name stay under Technical details.
+    return `Save ${o.unit} as the unit of ${form.fieldName}? Both athletes' numbers match GPEXE. You can't change it here later.`;
   }
   if (form.act === "create") {
-    return `Create the source field "${body.label}" from GPEXE's name ${body.name} (${ENDPOINT_LABEL[body.endpoint] || body.endpoint})? Once created, the field cannot be removed here.`;
+    return `Use ${body.label}${form.unit ? ` (${form.unit})` : ""} in OptiMove? Once added, it cannot be removed here.`;
   }
   const what = `${form.fieldName} (revision ${form.revisionNumber})`;
   const value = form.act === "unit"
@@ -566,5 +567,6 @@ export const FIELD_OF_CODE = { invalid_unit: "sourceUnit", invalid_evidence_ref:
 export function inventoryState(item, ctx) {
   if (item?.covered) return "In use";
   if (createOffered(ctx, item)) return "Not used yet";
-  return "Not available yet";
+  // A club cannot add a value (the list says there is nothing to do); the platform cannot add this one yet.
+  return ctx?.mayVerify ? "Can't be added yet" : "Not imported yet";
 }

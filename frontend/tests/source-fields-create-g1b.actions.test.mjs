@@ -118,7 +118,7 @@ test("1. Create field is offered only on a name the server marked creatable, in 
   await loadSourceFieldsSection(render);
   const offered = [...content.querySelectorAll('[data-action="source-fields-create-open"]')].map((b) => `${b.dataset.sfInvEndpoint}:${b.dataset.sfInvName}`);
   assert.deepEqual(offered.sort(), ["athlete_session:hsr_distance", "details.drill:drill_jumps", "details.session:metabolic_power"]);
-  assert.match(text(), /Use this value adds one to OptiMove, so you can then put it on a variable\./);
+  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not import them yet\. Use this value adds it to OptiMove; once new sessions bring it and you have checked it against GPEXE, you can put it on a variable\./);
   // A forged click on a name the server did not mark opens nothing.
   await handleSourceFieldsAction({ dataset: { action: "source-fields-create-open", sfInvEndpoint: "athlete_session", sfInvName: "text_thing" } }, { render });
   assert.equal(sourceFieldsState().form, null);
@@ -141,7 +141,7 @@ test("2. the form names the GPEXE name, where it comes from and what happens nex
   assert.equal($(".source-fields-tech").open, false, "technical details closed by default");
   assert.match(text(), /Tick Each drill only if GPEXE also sends this value for each drill\./);
   assert.ok(text().includes(CREATE_NEXT_STEP), "the next step, said once");
-  assert.equal(CREATE_NEXT_STEP, "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.");
+  assert.equal(CREATE_NEXT_STEP, "Nothing is imported yet. After the next Find new sessions brings this value, open it here and use Compare with GPEXE once. Then you can put it on a variable.");
   assert.deepEqual([$('[data-sf-field="supportsSession"]').checked, $('[data-sf-field="supportsDrill"]').checked], [true, false]);
   assert.equal($('[data-sf-field="label"]').value, "Metabolic power", "the name in OptiMove starts as the list's plain name");
   await click('[data-action="source-fields-cancel"]');
@@ -150,7 +150,7 @@ test("2. the form names the GPEXE name, where it comes from and what happens nex
   await click(createButton("details.drill", "drill_jumps"));
   const drill = $('[data-sf-field="supportsDrill"]');
   assert.deepEqual([drill.checked, drill.disabled, $('[data-sf-field="supportsSession"]').checked], [true, true, false]);
-  assert.match(text(), /GPEXE sends this name per drill, so the field is always recorded for each drill\./);
+  assert.match(text(), /GPEXE sends this value for each drill, so OptiMove imports it for each drill\./);
   sourceFieldsState().form = null;
   render();
   await click(createButton("athlete_session", "hsr_distance"));
@@ -188,7 +188,7 @@ test("4. created: the last question names the label, the GPEXE name and where it
   confirmAnswer = false;
   await submit();
   assert.equal(posts().length, 0, "a declined last question sends nothing");
-  assert.equal(confirmQuestions.at(-1), "Create the source field \"Metabolic power\" from GPEXE's name metabolic_power (Whole session)? Once created, the field cannot be removed here.");
+  assert.equal(confirmQuestions.at(-1), "Use Metabolic power in OptiMove? Once added, it cannot be removed here.");
   confirmAnswer = true;
   await submit();
   assert.equal(posts().length, 1);
@@ -200,7 +200,7 @@ test("4. created: the last question names the label, the GPEXE name and where it
   assert.equal(sourceFieldsState().form, null);
   assert.equal(sourceFieldsState().detail.id, NEW, "the new field opens");
   assert.ok(calls.some((c) => c.method === "GET" && c.url === `${FB}/${NEW}`));
-  assert.match(text(), new RegExp(`The field was created\\. ${CREATE_NEXT_STEP.replaceAll(".", "\\.")}`));
+  assert.match(text(), new RegExp(`Metabolic power is now in OptiMove\\. ${CREATE_NEXT_STEP.replaceAll(".", "\\.")}`));
   // Back: the list and the names are read again, and the created name has no button any more.
   calls.length = 0;
   await click('[data-action="source-fields-back"]');
@@ -255,7 +255,7 @@ test("6. a lost answer: Result not confirmed, the leave guard asks, Check result
   const second = posts()[1];
   assert.deepEqual(second.body, first.body, "the very same request");
   assert.equal(sourceFieldsState().detail.id, NEW);
-  assert.match(text(), /The field was created\./);
+  assert.match(text(), /is now in OptiMove\./);
 });
 
 test("7. a Check result answered by a refusal from the body settles it (nothing was created); Close without checking reads the list and the names again", async () => {
@@ -321,11 +321,11 @@ test("10. the review fixes: a details name GPEXE sends both for the session and 
   invItems = [item(), item({ endpoint: "details.drill", name: "metabolic_power" }), item({ endpoint: "athlete_session", name: "hsr_distance", kind: "number", unitWord: null })];
   await openCreate();
   assert.deepEqual([$('[data-sf-field="supportsSession"]').checked, $('[data-sf-field="supportsDrill"]').checked], [true, true]);
-  assert.match(text(), /GPEXE sends this name for the whole session and per drill; one field records both\./);
+  assert.match(text(), /GPEXE sends this value for the whole session and for each drill; OptiMove imports both\./);
   sourceFieldsState().form = null;
   render();
   await click(createButton("athlete_session", "hsr_distance"));
-  assert.match(text(), /This field has no values yet\. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document\./);
+  assert.match(text(), /Nothing is imported yet\. GPEXE sends no unit with this value, so it cannot be checked against GPEXE here\. Ask your developer to confirm its unit before you put it on a variable\./);
   assert.doesNotMatch(text(), /confirmed on the board/);
   sourceFieldsState().form = null;
   render();
@@ -344,7 +344,7 @@ test("Z (the Rukovodilac, 2026-11-18): Create field on a numbered zone says the 
   invLimits = { power: { values: [20, 25, 60, 75] }, speed: null, asOf: "2026-11-07T10:00:00Z" };
   try {
     await openCreate("details.session", "athletesessionpowerzone_distance_4");
-    assert.match(text(), /Expected range of this zone: 60–75 W\/kg \(the team's zone limits in the newest saved session, 07\.11\.2026\)\. After you create the field, confirm it with “Compare with GPEXE”\./);
+    assert.match(text(), /Expected range of this zone: 60–75 W\/kg \(the team's zone limits in the newest saved session, 07\.11\.2026\)\. After you add it, confirm it with Compare with GPEXE\./);
     sourceFieldsState().form = null;
     render();
     await openCreate();

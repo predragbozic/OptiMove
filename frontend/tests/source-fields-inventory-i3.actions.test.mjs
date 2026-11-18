@@ -93,7 +93,7 @@ test("1. a platform admin: the second list in plain words - where the name comes
   assert.deepEqual(inventoryGets(), [INV], "one read, the default filter (not supported)");
   assert.match(text(), /More values GPEXE sends/);
   // G1b: the platform admin can act on a name now (Create field); the club's sentence keeps "nothing to do" (test 2).
-  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not import them yet\. Use this value adds one to OptiMove, so you can then put it on a variable\./);
+  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not import them yet\. Use this value adds it to OptiMove; once new sessions bring it and you have checked it against GPEXE, you can put it on a variable\./);
   // 2026-11-18: the readable name and the unit first (never GPEXE's word), GPEXE's name small, the counts last.
   const lines = rows().map((r) => [r.querySelector(".metric-variables-item-name"), r.querySelector(".source-fields-inventory-raw"), r.querySelector(".metric-variables-item-facts")].map((e) => e.textContent.replace(/\s+/g, " ").trim()));
   assert.deepEqual(lines, [
@@ -114,7 +114,7 @@ test("2. a club admin: the club's own sentence, no connection count and no team 
   assert.doesNotMatch(text(), /GPEXE account/);
   assert.equal($(".source-fields-inventory-thresholds"), null, "the thresholds fold is the platform's");
   // The plain view: the name, the unit and one state; never a count or a source.
-  assert.equal(rows()[0].textContent.replace(/\s+/g, " ").trim(), "Metabolic power (W/kg) Not available yet");
+  assert.equal(rows()[0].textContent.replace(/\s+/g, " ").trim(), "Metabolic power (W/kg) Not imported yet");
 });
 
 test("3. the endpoint chips and Show supported too become the read's query; the chosen chip is pressed; supported names carry a badge", async () => {
@@ -318,7 +318,7 @@ test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zo
   // shows its expected range, always marked expected (the Rukovodilac's order of 2026-11-18). Differing limits: no range.
   const notes = [...content.querySelectorAll(".source-fields-inventory-note")].map((e) => e.textContent.trim());
   assert.deepEqual(notes, [
-    "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). The range beside each zone is expected, not confirmed. To confirm it, use “Compare with GPEXE” on that zone.",
+    "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). The range beside each zone is expected, not confirmed. To confirm it, use the value, then Compare with GPEXE.",
     "Speed zone limits differ between teams, so no zone's range is shown.",
   ]);
   assert.deepEqual(names(power), ["Metabolic power (W/kg)"]);
@@ -361,4 +361,16 @@ test("R3 (#601's LOW-1): a platform admin working in a club's workspace is told 
   const message = refusalText("draft", { status: 409, code: "unit_word_ambiguous" });
   assert.match(message, /Switch to the platform workspace, then retire this revision/);
   assert.doesNotMatch(message, /Ask a platform administrator/);
+});
+
+test("T (the code review's MEDIUM): leaving the technical view clears a source filter chosen there and reads the whole list again - never a filter with no visible control", async () => {
+  pages.default = ok([item()]);
+  pages[`${INV}?endpoint=athlete_session`] = ok([item({ endpoint: "athlete_session", name: "only_rows", kind: "number" })]);
+  await loadTech();
+  await click('[data-endpoint="athlete_session"]');
+  assert.deepEqual(shownNames(), ["only_rows"]);
+  await click('[data-action="source-fields-inv-technical"]');
+  assert.equal(inventoryGets().at(-1), INV);
+  assert.equal(sourceFieldsState().inventory.technical, false);
+  assert.deepEqual(shownNames(), ["metabolic_power"]);
 });

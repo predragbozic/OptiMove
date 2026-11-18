@@ -180,11 +180,11 @@ for (const [label, width, nth] of [["1280 px", WIDTHS.desktop, 0], ["390 px", WI
       assert.ok(form.sizes.every((h) => h >= 44), `choices and buttons are 44 px (${form.sizes})`);
       // The next step by where the value comes from: a per-athlete value has no unit word, so a document confirms it.
       assert.match(form.text, endpoint === "athlete_session"
-        ? /This field has no values yet\. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document\./
-        : /This field has no values yet\. Its unit is confirmed on the board once new sessions carry it\./);
+        ? /Nothing is imported yet\. GPEXE sends no unit with this value, so it cannot be checked against GPEXE here\./
+        : /Nothing is imported yet\. After the next Find new sessions brings this value, open it here and use Compare with GPEXE once\./);
       await page.fill('[data-sf-field="label"]', `E2E field ${width}`);
       await page.click('[data-source-fields-form="create"] button[type="submit"]');
-      await page.waitForFunction(() => /The field was created\./.test(document.querySelector(".source-fields")?.innerText || ""), null, { timeout: 20_000 });
+      await page.waitForFunction(() => /is now in OptiMove\./.test(document.querySelector(".source-fields")?.innerText || ""), null, { timeout: 20_000 });
       assert.equal(posts.length, 1, "one request");
       assert.equal(posts[0].name, name);
       const detail = await page.locator(".source-fields").innerText();

@@ -217,7 +217,7 @@ test("5. the tick: refused until the box is ticked; the last question names the 
   confirmAnswer = false;
   await submit();
   assert.equal(posts().length, 0, "the last question was declined");
-  assert.match(confirmQuestions.at(-1), /Save the unit of Metabolic energy as J\/kg \(GPEXE's word "energy"\) and its meaning as GPEXE's own name "metabolic_energy"/);
+  assert.equal(confirmQuestions.at(-1), "Save J/kg as the unit of Metabolic energy? Both athletes' numbers match GPEXE. You can't change it here later.");
   confirmAnswer = true;
   post = () => {
     theField = field({ revisions: [revision({ evidenceStatus: "source_stated", sourceUnit: "J/kg", unitVerifiedAt: "2026-11-17T00:00:00Z", meaningVerifiedAt: "2026-11-17T00:00:00Z" })] });

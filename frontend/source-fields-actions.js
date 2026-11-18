@@ -222,7 +222,7 @@ export function sourceFieldsMayBeLeft() {
 // The list and the names read again after a field was (or may have been) created.
 function readAgainAfterCreate(s) {
   s.list = { ...emptySourceFieldsState().list };
-  s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+  s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical: s.inventory.technical };
 }
 export function sourceFieldsUnloadShouldWarn() {
   if (state.activeTab !== "training-load" || state.trainingLoad.section !== "source-fields") return false;
@@ -261,8 +261,15 @@ export async function handleSourceFieldsAction(action, { render }) {
     return true;
   }
   if (type === "source-fields-inv-technical") {
-    // The plain view or the technical one: nothing is read again.
-    s.inventory.technical = !s.inventory.technical;
+    // The plain view or the technical one. Leaving the technical view also clears a source filter chosen there, since
+    // its chips are hidden in the plain view (the code review's MEDIUM: never a filter with no visible control).
+    const technical = !s.inventory.technical;
+    if (!technical && s.inventory.endpoint) {
+      s.inventory = { ...emptyInventory(), endpoint: "", showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical };
+      await loadInventory(render);
+      return true;
+    }
+    s.inventory.technical = technical;
     render();
     return true;
   }
@@ -556,7 +563,7 @@ async function send(render) {
   s.form = null;
   if (form.act === "create") {
     // Created (or a Check result found it created): the new field opens; the list and the names are read again later.
-    setNotice(s, `The field was created. ${createNextStep(form.endpoint)}`, "");
+    setNotice(s, `${form.draft?.label || "The value"} is now in OptiMove. ${createNextStep(form.endpoint)}`, "");
     readAgainAfterCreate(s);
     const id = typeof data?.field?.id === "string" ? data.field.id : null;
     if (id) await loadSourceField(id, render); else await loadSourceFieldsSection(render);

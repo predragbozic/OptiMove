@@ -167,7 +167,7 @@ function inventoryUnitText(item) {
 function inventoryRowHtml(item, index, ctx, search, zoneThresholds = null, technical = false) {
   // G1b: the button only where the server said route C would take the name. Named after its result (the owner's rule).
   const create = createOffered(ctx, item)
-    ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Use ${escapeAttr(readableName(item))} in OptiMove">Use this value</button>`
+    ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Use this value: ${escapeAttr(readableName(item))}">Use this value</button>`
     : "";
   const range = ctx.mayVerify && item.zone ? expectedRangeText(item.name, zoneThresholds) : null;
   // The plain view: the name, its unit, a zone's expected range and one state. GPEXE's own name and the counts only in
@@ -243,7 +243,7 @@ function renderInventoryHtml(s, ctx) {
     <section class="metric-classification-section source-fields-inventory" aria-labelledby="sf-inventory-title">
       <h3 id="sf-inventory-title">More values GPEXE sends</h3>
       <p class="muted">${ctx.mayVerify
-        ? "GPEXE also sends these values in the clubs' sessions. OptiMove does not import them yet. Use this value adds one to OptiMove, so you can then put it on a variable."
+        ? "GPEXE also sends these values in the clubs' sessions. OptiMove does not import them yet. Use this value adds it to OptiMove; once new sessions bring it and you have checked it against GPEXE, you can put it on a variable."
         : "GPEXE also sends these values in your sessions. OptiMove does not import them yet. There is nothing to do here: this list shows what could be added later."}</p>
       <div class="source-fields-inventory-tools">
         <label class="source-fields-inventory-search"><span class="visually-hidden">Search the values</span>
@@ -255,7 +255,7 @@ function renderInventoryHtml(s, ctx) {
         <label class="source-fields-choice"><input type="checkbox" data-action="source-fields-inv-supported" ${inv.showSupported ? "checked" : ""}><span>Also show the ones OptiMove already uses</span></label>
         <label class="source-fields-choice"><input type="checkbox" data-action="source-fields-inv-technical" ${inv.technical ? "checked" : ""}><span>Show technical details</span></label>
       </div>
-      ${inv.loading ? `<p class="muted" role="status">Loading names...</p>` : ""}
+      ${inv.loading ? `<p class="muted" role="status">Loading values...</p>` : ""}
       ${inv.error ? `<div class="error" role="alert"><p>${escapeHtml(inv.error)}</p><button class="plain-button" type="button" data-action="source-fields-inv-reload">Try again</button></div>` : ""}
       ${inv.loaded && !shown.length && !inv.error ? `<p class="empty">${inv.items.length ? "No values here yet. Show technical details lists the other things GPEXE sends." : "Nothing yet. Values appear after the next Find new sessions in Imports."}</p>` : ""}
       ${shown.length ? `<p class="empty" id="sf-inv-no-match"${matching ? " hidden" : ""}>${inv.nextCursor ? "Nothing matches among the values loaded so far. Load more to search the rest." : "Nothing matches the search."}</p>` : ""}
@@ -464,13 +464,13 @@ function renderCreateFormHtml(s) {
         ${fieldError(form, "label")}
       </label>
       <fieldset class="metric-variables-fieldset">
-        <legend>Recorded for</legend>
+        <legend>Import it for</legend>
         <div${form.errors.levels ? ` aria-describedby="sf-err-levels"` : ""}>
           ${box("supportsSession", "The whole session")}
           ${box("supportsDrill", "Each drill", { lockedOn: form.drillLocked })}
         </div>
-        ${form.drillLocked ? `<span class="muted">GPEXE sends this name per drill, so the field is always recorded for each drill.</span>`
-          : form.bothLevels ? `<span class="muted">GPEXE sends this name for the whole session and per drill; one field records both.</span>`
+        ${form.drillLocked ? `<span class="muted">GPEXE sends this value for each drill, so OptiMove imports it for each drill.</span>`
+          : form.bothLevels ? `<span class="muted">GPEXE sends this value for the whole session and for each drill; OptiMove imports both.</span>`
           : form.endpoint === "details.session" ? `<span class="muted">Tick Each drill only if GPEXE also sends this value for each drill.</span>` : ""}
         ${levelsError}
       </fieldset>
@@ -489,7 +489,7 @@ function createRangeHtml(form) {
   const limits = sourceFieldsState().inventory?.zoneThresholds;
   const range = expectedRange(numberedZoneOf(form.name), limits);
   const day = fmtDate(limits?.asOf);
-  return range ? `<p class="muted">Expected range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you create the field, confirm it with “Compare with GPEXE”.</p>` : "";
+  return range ? `<p class="muted">Expected range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you add it, confirm it with Compare with GPEXE.</p>` : "";
 }
 // The compared session's own team limits: the range to look for in GPEXE (the Rukovodilac's order of 2026-11-18).
 function observeRangeHtml(o) {
@@ -548,13 +548,13 @@ function renderObserveFormHtml(s) {
   return `
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="observe" novalidate autocomplete="off">
       <h2 id="source-fields-title">Compare ${escapeHtml(form.fieldName)} with GPEXE</h2>
-      <p class="metric-variables-field-note">If both athletes' numbers match the GPEXE screen, OptiMove saves the unit GPEXE states and GPEXE's own label as the meaning. It is saved once and never changed: a correction is a new revision.</p>
+      <p class="metric-variables-field-note">If both athletes' numbers match the GPEXE screen, OptiMove saves this value's unit. You can't change it here later.</p>
       ${teamPicker}
       ${comparison}
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? unconfirmedHtml(form) : `
       <div class="data-sources-form-actions">
-        ${o?.confirmable ? `<button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Saving..." : "Save unit and meaning"}</button>` : ""}
+        ${o?.confirmable ? `<button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Saving..." : "Save: the numbers match"}</button>` : ""}
         <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
       </div>`}
       <details class="data-sources-tech"><summary>Technical details</summary><dl>
