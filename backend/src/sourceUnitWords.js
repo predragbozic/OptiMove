@@ -28,3 +28,43 @@ export async function unitWordsFor(executor, fields) {
   if (!generic) return new Map();
   return readUnitWords(executor, { sourceSystem: generic.sourceSystem, apiFamily: generic.apiFamily });
 }
+
+// G1b-3 (the Rukovodilac's decision on the Independent's LOW-1): a revision proven through route O carries the exact
+// word GPEXE sent (T9i.source_unit_word of its unit observation, final in v74); the importer takes that word only. Two
+// seeded pairs share a token (energy / energy_std -> J/kg, time / duration -> s), so a change of word inside a pair may
+// be a change of quantity. `rev` is the SQL alias of a T2b row (training_load.source_metric_definition_versions).
+export const provenWordSql = (rev) => `(select i.source_unit_word from training_load.source_metric_confirmation_items i
+   where i.confirmation_id = ${rev}.unit_observation_id and i.item_kind = 'field_unit' and i.source_unit_word is not null)`;
+
+// The proven word of each of these revisions (id -> word; a revision without one is absent). Read only for a generic
+// details field, like the words: a database before v74 (no comparison tables) is never asked.
+export async function provenWordsOf(executor, revisionIds) {
+  if (revisionIds.length === 0) return new Map();
+  const rows = (await executor.query(
+    `select r.id::text as id, ${provenWordSql("r")} as word from training_load.source_metric_definition_versions r where r.id = any($1::uuid[])`,
+    [revisionIds],
+  )).rows;
+  return new Map(rows.filter((r) => r.word !== null).map((r) => [r.id, r.word]));
+}
+
+// The importer's form: the proven word of each generic details row of a plan (sourceMetricVersionId -> word); a plan
+// without one asks nothing.
+export async function provenWordsFor(executor, rows) {
+  const generic = rows.filter((r) => isGenericDetailsKey(r));
+  return provenWordsOf(executor, generic.map((r) => String(r.sourceMetricVersionId)));
+}
+
+// The words whose token is this unit.
+export function wordsOfUnit(unitWords, sourceUnit) {
+  return [...unitWords].filter(([, token]) => token === sourceUnit).map(([word]) => word).sort();
+}
+
+// Why a created details field cannot be read in this unit, or null. With a proven word: that word, and its token is the
+// unit. Without one (a document proof): the unit has exactly one seeded word - a shared token is refused, since a
+// document cannot tell which GPEXE word the unit is.
+export function unitWordCodeOf({ unitWords, sourceUnit, provenWord = null }) {
+  if (typeof provenWord === "string") return unitWords.get(provenWord) === sourceUnit ? null : "unit_word_missing";
+  const words = wordsOfUnit(unitWords, sourceUnit);
+  if (words.length === 0) return "unit_word_missing";
+  return words.length === 1 ? null : "unit_word_ambiguous";
+}

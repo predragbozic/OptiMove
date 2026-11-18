@@ -899,6 +899,51 @@ and `e2e/tests/source-fields-observe.test.mjs`.
   on the binding lock, then `binding_not_active`) is a follow-up test.
 - **Not run:** PostgreSQL 17; 360 and 375 px; a physical device.
 
+### 8.12 As built (G1b-3; the executor, 2026-11-18)
+
+The *Rukovodilac*'s order after the Independent's GO on G1b-2: one small pull request, **no migration**.
+
+- **The exact proven word (the Independent's LOW-1, the *Rukovodilac*'s decision).** A revision proven through route O
+  names the word GPEXE sent: `T9i.source_unit_word` of its unit observation (`unit_observation_id`), final in v74 and
+  never removed with the values. The importer's mapping context, the 7e preview and the board read it with the revision
+  (`sourceUnitWords.provenWordSql`), and the extractor takes that word only: another word of the same token (energy /
+  energy_std, time / duration) is `unexpected_unit`, the shape block with the sentence that names the field (resolver
+  test 54: energy, time, duration and speed proven, imported as kJ/kg, min, min and km/h; each change of word inside a
+  pair blocks the next session and nothing more is imported).
+- **A document proof** (no stored word) keeps the token rule only where the unit has exactly one seeded word. A shared
+  token reads nothing in the extractor, and T4 create, A1, a club's copy and the board save refuse it with `409
+  unit_word_ambiguous` (the *Rukovodilac* accepted this on 2026-11-18); a unit with no word stays `unit_word_missing`
+  (`sourceUnitWords.unitWordCodeOf`, shared by all of them; route tests 13 and 16, 7f test 15).
+- **The way out is one the server takes** (the *Rukovodilac*'s point): route O refuses a revision a document already
+  proved (`unit_already_verified`), and v74 holds a revision's unit proof as a document or an observation, never both
+  (`num_nonnulls(unit_evidence_ref, unit_observation_id) <= 1`), so no word-only observation is added. The refusal says the
+  real steps: retire the revision (L5), add a new unproven revision (L1), activate it (L3), then compare it with GPEXE.
+  Route test 19 runs exactly those steps and then creates the version. L1, L3 and L5 have no screen yet.
+- **The board (the Independent's LOW-2):** a created column without a readable word has the reason
+  `unit_word_missing` or `unit_word_ambiguous`, carries no value and is not placeable; the save checks the word itself
+  as well (route test 18: a save naming such a column is `409 unit_word_ambiguous`, nothing written).
+- **The tests recorded in 8.11:** `unit_word_missing` on activation and on a club's copy (route test 16), the
+  Unbind-first race against route O (route test 17: the tick waits on the binding lock, then `binding_not_active`,
+  nothing written), and the duration and speed fields end to end (resolver test 54).
+- **After the code review (NOT READY, one HIGH, two MEDIUM):**
+  - *The sentence follows the caller* (HIGH): a club's admin may take none of L1, L3, L5 or route O, so its
+    `unit_word_ambiguous` says "Ask a platform administrator to compare this field with GPEXE"; the platform's names the
+    steps (server `unitWordMessage`, by the owner scope; the screen by the workspace; route test 20, frontend test).
+  - *S1 checks the word too* (MEDIUM): an active version from before this rule is not switched on for another team
+    (route test 21). The deploy transition: a read-only count of such versions before the deploy (runbook, expect 0).
+  - *The save's own check* (MEDIUM): it runs over every row before the board's placement. The column's reason says the
+    same from the same inputs, so each guard holds alone; removing either one is equivalent at the outcome, removing both
+    is killed. The first mutation record called the save check killed; that was wrong (the mutation script counted a
+    failed cleanup audit as a failed test) and the script now counts only a failed test.
+  - LOWs: test 17 waits until the tick is seen waiting on a lock; the copy's `unit_word_ambiguous` is in test 16.
+- **The proven word is read only for a created details field** (the full disposable run): read inside the importer's
+  activations query it broke every plan on a database without v74's comparison tables. It is now read, like the words,
+  only when a generic details field is planned (`sourceUnitWords.provenWordsFor` / `provenWordsOf`), in the importer, the
+  7e preview and the board; the mapping context still never imports the registry (9b architecture test 3).
+- **Mutations** (counted by failed tests only): 17 of the new guards, 15 killed. Two are equivalent at the outcome:
+  removing the save's own check (the column's reason refuses the same row from the same inputs), and dropping the
+  board's "no value" for a column without a readable word (the extractor reads nothing for it either).
+
 ## 9. G2: the pinned set, the generic extractors and the club-board guard (as built, 2026-11-17)
 
 The plan of section 5 ("G2") and the *Rukovodilac*'s GO of 2026-11-17. One pull request, **no migration**: v74 holds

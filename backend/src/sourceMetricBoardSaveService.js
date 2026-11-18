@@ -20,6 +20,8 @@ import { bindingClubHolds } from "./sourceMetricAccess.js";
 import { lockHides, lockListedBindings } from "./sourceMetricActivationSteps.js";
 import { boardKit, isSystemBoard, mayUseBoard } from "./sourceMetricBoardService.js";
 import { DISPLAY_REGISTRY_VERSION } from "./sourceMetricBoard.js";
+import { isGenericDetailsKey } from "./sourceMetricExtractors.js";
+import { unitWordCodeOf } from "./sourceUnitWords.js";
 
 const { runWrite, rightsStillHold, refusal, NOT_FOUND, plainObject, uuidField, hashOf } = adminWriteKit;
 const { loadWorld, columnsOf, choosePair, placementOf, preplacedOf } = boardKit;
@@ -51,6 +53,9 @@ const MESSAGES = {
   variable_taken_on_binding: "This variable is already filled for the team.",
   variable_hidden: "The club hides this OptiMove variable.",
   row_refused: "A row of the board cannot be saved as it is. Nothing was saved.",
+  // G1b-3 (the Independent's LOW-2): the save's own check of a created column's GPEXE word, besides the column's reason.
+  unit_word_missing: "OptiMove does not know GPEXE's unit word for this column, so it cannot import its values. Nothing was saved.",
+  unit_word_ambiguous: "OptiMove does not know which GPEXE word this column's unit is. Nothing was saved. OptiMove support proves the word on a new revision of the field (Compare with GPEXE).",
 };
 const invalid = (message = MESSAGES.invalid_body) => refusal(400, "invalid_body", message);
 const rowRefusal = (code, rowIndex, extra = {}) => refusal(409, code, MESSAGES[code] ?? MESSAGES.row_refused, { current: { rowIndex, ...extra } });
@@ -128,6 +133,18 @@ function evaluate(world, pairIndex, rows) {
       if (!v || !columns.some((c) => c.field.id === v.field_id) || !world.variables.some((x) => x.id === v.variable_id)) throw NOT_FOUND();
     }
   }
+  // G1b-3 (the Independent's LOW-2): the save's own check of every row's column, before the board's placement - a created
+  // details column is saved only with a GPEXE word OptiMove can read (the exact word of a route O proof, or the one word
+  // of a unit no other word shares). The column's reason says the same; each of the two guards holds alone.
+  rows.forEach((row, rowIndex) => {
+    const fieldId = row.kind === "new" ? row.fieldId : world.versions.find((x) => x.id === row.mappingVersionId)?.field_id;
+    const f = columns.find((c) => c.field.id === fieldId)?.field;
+    // A proven column only: an unproven one keeps its own refusal (field_not_confirmed).
+    if (f && f.source_unit !== null && isGenericDetailsKey({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })) {
+      const code = unitWordCodeOf({ unitWords: world.unitWords ?? new Map(), sourceUnit: f.source_unit, provenWord: f.proven_word ?? null });
+      if (code) throw rowRefusal(code, rowIndex);
+    }
+  });
   const outcomes = rows.map((row) => (row.kind === "new"
     ? placementOf(world, pairIndex, { fieldId: row.fieldId, targetId: row.targetId }, shared).placement
     : preplacedOf(world, shared, row.mappingVersionId)));

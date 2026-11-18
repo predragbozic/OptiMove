@@ -401,16 +401,31 @@ test("14. G2, the generic extractors: athlete_session.<name> reads one row numbe
   assert.equal(G2("details.players.tot_burst_events"), G("details.players.tot_burst_events"));
 });
 
-test("15. G1b-2, rule (b): a created details field reads exactly the words whose seeded unit token is its version's proven source unit - any other word, an unknown word, a missing context or a non-string word is unexpected_unit (a shape refusal, never a skip); the value stays in the source unit; no unit refusal is left in extractabilityCode", async () => {
+test("15. G1b-2/G1b-3, rule (b): a created details field reads exactly its proven word (a route O proof), or without one the single word of its unit - never one word of a shared token (energy/energy_std, time/duration); any other word, an unknown word, a missing context or a non-string word is unexpected_unit (a shape refusal, never a skip); the value stays in the source unit; no unit refusal is left in extractabilityCode", async () => {
   const { extractabilityCode, isGenericDetailsKey } = await import("../src/sourceMetricExtractors.js");
   const words = new Map([["number", "count"], ["energy", "J/kg"], ["energy_std", "J/kg"], ["time", "s"], ["duration", "s"], ["speed", "m/s"]]);
   const det = G2("details.players.g1b_energy");
   const at = (unit, value = 412.5) => ({ playerDetails: { g1b_energy: { unit, value } } });
-  // The words of the version's unit, and only those.
-  assert.deepEqual(det.extract(at("energy"), {}, { sourceUnit: "J/kg", unitWords: words }), { value: 412.5 });
-  assert.deepEqual(det.extract(at("energy_std"), {}, { sourceUnit: "J/kg", unitWords: words }), { value: 412.5 }, "two words of one token");
-  assert.deepEqual(det.extract(at("time"), {}, { sourceUnit: "s", unitWords: words }), { value: 412.5 });
-  assert.deepEqual(det.extract(at("duration"), {}, { sourceUnit: "s", unitWords: words }), { value: 412.5 });
+  // G1b-3: a route O proof names its exact word; only that word is read - never the other word of a shared token.
+  assert.deepEqual(det.extract(at("energy"), {}, { sourceUnit: "J/kg", unitWords: words, provenWord: "energy" }), { value: 412.5 });
+  assert.deepEqual(det.extract(at("energy_std"), {}, { sourceUnit: "J/kg", unitWords: words, provenWord: "energy" }), { skip: "unexpected_unit" }, "the other word of the pair");
+  assert.deepEqual(det.extract(at("energy_std"), {}, { sourceUnit: "J/kg", unitWords: words, provenWord: "energy_std" }), { value: 412.5 });
+  assert.deepEqual(det.extract(at("time"), {}, { sourceUnit: "s", unitWords: words, provenWord: "time" }), { value: 412.5 });
+  assert.deepEqual(det.extract(at("duration"), {}, { sourceUnit: "s", unitWords: words, provenWord: "time" }), { skip: "unexpected_unit" }, "the other word of the pair");
+  assert.deepEqual(det.extract(at("duration"), {}, { sourceUnit: "s", unitWords: words, provenWord: "duration" }), { value: 412.5 });
+  // A proven word of another token never reads (the proof's unit is the version's).
+  assert.deepEqual(det.extract(at("speed"), {}, { sourceUnit: "J/kg", unitWords: words, provenWord: "speed" }), { skip: "unexpected_unit" });
+  // Without a proven word (a document proof): a shared token reads nothing; a unit with one word reads it.
+  for (const [word, unit] of [["energy", "J/kg"], ["energy_std", "J/kg"], ["time", "s"], ["duration", "s"]]) {
+    assert.deepEqual(det.extract(at(word), {}, { sourceUnit: unit, unitWords: words }), { skip: "unexpected_unit" }, `${word}: a shared token without a proven word`);
+  }
+  assert.deepEqual(det.extract(at("speed", 7.5), {}, { sourceUnit: "m/s", unitWords: words }), { value: 7.5 }, "a one-word unit keeps the token rule");
+  // The refusal codes of the mapping, the board and its save (sourceUnitWords.unitWordCodeOf).
+  const { unitWordCodeOf } = await import("../src/sourceUnitWords.js");
+  for (const [args, code] of [
+    [{ sourceUnit: "J/kg" }, "unit_word_ambiguous"], [{ sourceUnit: "s" }, "unit_word_ambiguous"], [{ sourceUnit: "m/s" }, null], [{ sourceUnit: "bpm" }, "unit_word_missing"],
+    [{ sourceUnit: "J/kg", provenWord: "energy" }, null], [{ sourceUnit: "J/kg", provenWord: "speed" }, "unit_word_missing"], [{ sourceUnit: "J/kg", provenWord: "watts" }, "unit_word_missing"],
+  ]) assert.equal(unitWordCodeOf({ unitWords: words, ...args }), code, JSON.stringify(args));
   assert.deepEqual(det.extract(at("number", 7), {}, { sourceUnit: "count", unitWords: words }), { value: 7 }, "number keeps working for count");
   for (const [word, unit, why] of [["number", "J/kg", "a word of another token"], ["energy", "count", "a word of another token"], ["power", "J/kg", "a word not seeded"],
     ["J/kg", "J/kg", "a unit token is not a word"], ["", "J/kg", "an empty word"], [7, "J/kg", "a non-string word"], [null, "J/kg", "no word"]]) {

@@ -23,8 +23,8 @@ import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMappe
 import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
-import { canonicalDecimal, compareDecimal, extractorFor } from "./sourceMetricExtractors.js";
-import { unitWordsFor } from "./sourceUnitWords.js";
+import { canonicalDecimal, compareDecimal, extractorFor, isGenericDetailsKey } from "./sourceMetricExtractors.js";
+import { provenWordsOf, unitWordCodeOf, unitWordsFor } from "./sourceUnitWords.js";
 import { removeExpiredBatch as removeExpiredValuesBatch, setRemovalFaultForTests } from "./sourceMetricConfirmationRemoval.js";
 import { DISPLAY_REGISTRY_VERSION, displayRuleFor, displayValue, distinctPair, placementHash, rankPairs } from "./sourceMetricBoard.js";
 
@@ -145,6 +145,10 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   // G1b-2 (rule (b)): GPEXE's unit words, once for this board, only when a generic details field is among the fields: a
   // column reads exactly the words of its revision's proven unit, as its import does.
   const unitWords = await unitWordsFor(client, fields.map((f) => ({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })));
+  // G1b-3: the exact word of each generic details field's proof, read only when such a field is on the board.
+  const generic = fields.filter((f) => isGenericDetailsKey({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key }));
+  const proven = generic.length > 0 ? await provenWordsOf(client, generic.map((f) => f.revision_id)) : new Map();
+  for (const f of fields) f.proven_word = proven.get(String(f.revision_id)) ?? null;
 
   // The stored session. Never an undone import (v57) or a superseded one; its
   // last check succeeded through this binding (as the importer requires).
@@ -192,7 +196,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
       base.slice(0, 3),
     )).rows;
     if (listed.length === 0) throw refusal(409, "no_stored_session", BOARD_MESSAGES.no_stored_session);
-    const columns = columnsOf({ fields });
+    const columns = columnsOf({ fields, unitWords });
     // "Refused by the import's own gates": blocked, with a code that is not one of the mapping-level blocks (those say
     // "no mapping yet" or "this mapping does not fit", which the board is there to change). Such a session is not read
     // while another can be taken; its stored code is its reason. Every other session is tried, newest first.
@@ -376,11 +380,18 @@ function columnsOf(world) {
     else if (f.parameter_kind !== "none") reason = "field_has_parameters";
     else if (!proven) reason = "field_not_confirmed";
     else if (!rule) reason = "display_rule_missing";
+    // G1b-3: a created details field is read only with its proven word (route O), or by a document only where the unit
+    // has exactly one GPEXE word; otherwise the column carries no value and never becomes a row.
+    else if (isGenericDetailsKey({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })) {
+      reason = unitWordCodeOf({ unitWords: world.unitWords ?? new Map(), sourceUnit: f.source_unit, provenWord: f.proven_word ?? null });
+    }
     // A column can be read (its values shown, a system mapping of it switched on) without being placeable as a new row.
     // G2 (the Rukovodilac's rule, security MEDIUM 2 of G1a): a field created by route C whose unit is not proven yet is
     // never readable on this board - no athlete's value of it leaves the server; the platform's comparison (G1b) is
     // where it is proven. A seeded field keeps today's rule.
-    const readable = Boolean(extractor) && reason !== "source_metric_unsupported" && f.parameter_kind === "none" && !(f.created === true && !proven);
+    // G1b-3: a column without a GPEXE word OptiMove can read carries no value either.
+    const readable = Boolean(extractor) && reason !== "source_metric_unsupported" && f.parameter_kind === "none" && !(f.created === true && !proven)
+      && reason !== "unit_word_missing" && reason !== "unit_word_ambiguous";
     return { field: f, extractor, rule, reason, readable };
   });
 }
@@ -403,7 +414,7 @@ function keyedPlan(bundle, columns, teamTimezone, unitWords) {
     const extractor = extractorFor({ sourceSystem: col.field.source_system, apiFamily: col.field.api_family, sourceMetricKey: col.field.source_metric_key });
     if (!extractor) continue;
     ids.push(col.field.id);
-    const context = { sourceUnit: col.field.source_unit, unitWords };
+    const context = { sourceUnit: col.field.source_unit, unitWords, provenWord: col.field.proven_word ?? null };
     extracts.push((input) => extractor.extract(input, {}, context));
   }
   const rowCount = Array.isArray(bundle?.athleteSessions) ? bundle.athleteSessions.length : 0;

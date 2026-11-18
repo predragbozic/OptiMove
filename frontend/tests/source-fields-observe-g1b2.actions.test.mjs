@@ -279,3 +279,19 @@ test("8. another team drops the comparison on the screen (and its tick) until it
   assert.equal($(".source-fields-observe"), null, "no comparison of the other team on the screen");
   assert.equal($('[data-sf-field="attested"]'), null);
 });
+
+test("G1b-3 (the code review's HIGH): a unit_word_ambiguous refusal names only steps this workspace may take - the platform's revision steps and Compare with GPEXE in the platform workspace, a platform administrator in a club's", async () => {
+  const { refusalText } = await import("../metric-mappings-data.js");
+  const info = { status: 409, code: "unit_word_ambiguous" };
+  asPlatform();
+  for (const act of ["draft", "activate", "switchOn"]) {
+    const text = refusalText(act, info);
+    assert.match(text, /(^|: )A document cannot tell which GPEXE word this unit is\. Retire this revision, add a new unproven revision of the field and activate it, then compare it with GPEXE/, `${act}: ${text}`);
+  }
+  asClub();
+  for (const act of ["draft", "activate", "switchOn"]) {
+    const text = refusalText(act, info);
+    assert.match(text, /(^|: )A document cannot tell which GPEXE word this unit is\. Ask a platform administrator to compare this field with GPEXE\.$/, `${act}: ${text}`);
+    assert.doesNotMatch(text, /Retire|revision|Source fields/, `${act}: no step the club's admin may not take`);
+  }
+});

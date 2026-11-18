@@ -553,17 +553,18 @@ test("12. what the comparison stands on is read again under the locks: a stored 
   }
 });
 
-test("13. rule (b) at the mapping (the code review's MEDIUM): a created details field proven by a document in a unit no GPEXE unit word carries (bpm) gets no mapping version - 409 unit_word_missing, nothing written; the same field proven in J/kg does", async () => {
-  const variable = ok(await post("/variables", W.pa, { requestKey: key(), label: `Word rule ${uid()}`, unit: "J/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
-  for (const [unit, expect] of [["bpm", 409], ["J/kg", 201]]) {
-    const f = await created(`g1b2_word_${unit === "bpm" ? "bpm" : "jkg"}`, { expected: unit });
+test("13. rule (b) at the mapping (the code review's MEDIUM, G1b-3): a created details field proven by a document gets a mapping version only where its unit has exactly one GPEXE word - bpm (no word) is 409 unit_word_missing, J/kg (energy, energy_std) is 409 unit_word_ambiguous, nothing written; W/kg (power) is 201", async () => {
+  for (const [unit, expect, code] of [["bpm", 409, "unit_word_missing"], ["J/kg", 409, "unit_word_ambiguous"], ["W/kg", 201]]) {
+    const f = await created(`g1b2_word_${{ bpm: "bpm", "J/kg": "jkg", "W/kg": "wkg" }[unit]}`, { expected: unit });
     const proven = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/unit-verification`, W.pa, { requestKey: key(), sourceUnit: unit, evidenceRef: UNIT_REF });
     assert.ok([200, 201].includes(proven.status), proven.text);
+    // The variable in the field's own unit where a token is a variable unit (no conversion needed), else J/kg.
+    const variable = ok(await post("/variables", W.pa, { requestKey: key(), label: `Word rule ${uid()}`, unit: unit === "bpm" ? "J/kg" : unit, levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
     const mapping = ok(await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
     const res = await post(`/mappings/${mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false, conversionNote: unit === "bpm" ? "not the same unit" : undefined });
     const versions = (await one(`select count(*)::int n from training_load.source_metric_mapping_versions where mapping_id = $1`, [mapping.id])).n;
     if (expect === 409) {
-      refused(res, 409, "unit_word_missing");
+      refused(res, 409, code);
       assert.equal(versions, 0, "nothing written");
     } else {
       ok(res, 201);
@@ -622,4 +623,169 @@ test("15. route 8 without a session (the code review's LOWs): a pair without can
   await k.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{details,full,players}', '5'::jsonb) where id = $1`, [broken.id]);
   const answer = ok(await observationOf(W.pa, f, { teamId: t.teamId })).observation;
   assert.equal(answer.session.candidateId, good.id);
+});
+
+test("16. G1b-3, the unit word at activation and at a club's copy (the code review's LOW): a draft version whose field's proven unit has no GPEXE word (bpm, set under the replica role) is refused at A1 with 409 unit_word_missing and stays as it was; copiedMappingRefusal names the field with unit_word_missing", async () => {
+  const variable = ok(await post("/variables", W.pa, { requestKey: key(), label: `Word guard ${uid()}`, unit: "W/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+  const f = await created("g1b3_guard_wkg", { expected: "W/kg" });
+  const proven = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/unit-verification`, W.pa, { requestKey: key(), sourceUnit: "W/kg", evidenceRef: UNIT_REF });
+  assert.ok([200, 201].includes(proven.status), proven.text);
+  const meant = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/meaning-verification`, W.pa, { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+  assert.ok([200, 201].includes(meant.status), meant.text);
+  const mapping = ok(await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+  const version = ok(await post(`/mappings/${mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false }), 201).version;
+  ok(await post(`/mappings/${mapping.id}/versions/${version.id}/submit`, W.pa, { requestKey: key() }));
+  // A version written before the rule (or by hand): its field's proven unit has no GPEXE word.
+  await k.query("begin");
+  await k.query("set local session_replication_role = replica");
+  await k.query(`update training_load.source_metric_definition_versions set source_unit = 'bpm' where id = $1`, [f.revisionId]);
+  await k.query(`update training_load.source_metric_mapping_versions set source_unit = 'bpm', target_unit = 'bpm' where id = $1`, [version.id]);
+  await k.query("commit");
+  const before = await one(`select status from training_load.source_metric_mapping_versions where id = $1`, [version.id]);
+  refused(await post(`/mappings/${mapping.id}/versions/${version.id}/activate`, W.pa, { requestKey: key(), expectedActiveVersionId: null }), 409, "unit_word_missing");
+  assert.deepEqual(await one(`select status from training_load.source_metric_mapping_versions where id = $1`, [version.id]), before, "the version stays as it was");
+  const client = await appPool.connect();
+  try {
+    const named = await mappingService.copiedMappingRefusal(client, [{ id: version.id, source_metric_definition_id: f.fieldId, source_metric_version_id: f.revisionId }], {
+      fields: new Map([[f.fieldId, "active"]]), revisions: new Map([[f.revisionId, { state: "active", source_unit: "bpm" }]]),
+    });
+    assert.deepEqual(named, { sourceMetricId: f.fieldId, code: "unit_word_missing" });
+    // The same version with the field's unit set to a shared one (J/kg) and no proven word: ambiguous.
+    await k.query("begin");
+    await k.query("set local session_replication_role = replica");
+    await k.query(`update training_load.source_metric_definition_versions set source_unit = 'J/kg' where id = $1`, [f.revisionId]);
+    await k.query(`update training_load.source_metric_mapping_versions set source_unit = 'J/kg', target_unit = 'J/kg' where id = $1`, [version.id]);
+    await k.query("commit");
+    const ambiguous = await mappingService.copiedMappingRefusal(client, [{ id: version.id, source_metric_definition_id: f.fieldId, source_metric_version_id: f.revisionId }], {
+      fields: new Map([[f.fieldId, "active"]]), revisions: new Map([[f.revisionId, { state: "active", source_unit: "J/kg" }]]),
+    });
+    assert.deepEqual(ambiguous, { sourceMetricId: f.fieldId, code: "unit_word_ambiguous" });
+  } finally {
+    client.release();
+  }
+});
+
+test("17. route O against an Unbind that comes first (the code review's LOW): the Unbind holds the binding; the tick waits on the binding lock and, once the Unbind commits, is refused with binding_not_active; nothing is written", async () => {
+  const connections = await import("../src/sourceConnectionService.js");
+  const t = await gpexeTeam(W.clubA);
+  for (const n of [1, 2, 3]) await link(t, n);
+  const f = await created("g1b3_unbind_first", { expected: "J/kg" });
+  const cand = await candidate(t, energyOf(f.name));
+  const o = ok(await observationOf(W.pa, f, { candidateId: cand.id })).observation;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let reached;
+  const reachedP = new Promise((resolve) => { reached = resolve; });
+  connections.setSourceUnbindHoldForTests(async () => { reached(); await held; });
+  let unbind;
+  try {
+    unbind = api(`/../gpexe/connections/${t.connectionId}/bindings/${t.bindingId}/unbind`, { method: "POST", cookie: W.pa.cookie, body: { requestKey: key(), reason: "G1b-3 race.", expected: { teamId: t.teamId, sourceTeamId: t.sourceTeamId } } });
+    await reachedP;
+  } finally {
+    connections.setSourceUnbindHoldForTests(null);
+  }
+  const tickCall = tick(W.pa, f, tickBody(o));
+  // The tick is seen waiting on a lock (the binding the Unbind holds) before the Unbind is let go (the code review's LOW).
+  let waited = false;
+  for (let i = 0; i < 100 && !waited; i += 1) {
+    waited = (await one(`select count(*)::int n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike '%source_team_bindings%'`)).n > 0;
+    if (!waited) await new Promise((r) => setTimeout(r, 50));
+  }
+  release();
+  assert.ok(waited, "the tick waited on the binding lock");
+  const [unbound, ticked] = await Promise.all([unbind, tickCall]);
+  assert.equal(unbound.status, 200, unbound.text);
+  refused(ticked, 409, "binding_not_active");
+  assert.equal((await one(`select count(*)::int n from training_load.source_metric_confirmations where source_metric_version_id = $1`, [f.revisionId])).n, 0, "nothing written");
+});
+
+test("18. G1b-3, the board (the Independent's LOW-2): a created details field proven by a document in J/kg is listed on the club's board with the reason unit_word_ambiguous, carries no value and is not placeable; a save that names it anyway is refused 409 unit_word_ambiguous and writes nothing", async () => {
+  const f = await created("g1b2_board_doc", { expected: "J/kg" });
+  for (const act of ["unit-verification", "meaning-verification"]) {
+    const res = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/${act}`, W.pa, act === "unit-verification" ? { requestKey: key(), sourceUnit: "J/kg", evidenceRef: UNIT_REF } : { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+    assert.ok([200, 201].includes(res.status), res.text);
+  }
+  const names = (await rows(`select substring(source_metric_key from 'details\\.players\\.(.*)') as n from training_load.source_metric_definitions where source_metric_key like 'details.players.g1b2%'`)).map((r) => r.n);
+  const cand = await candidate(W.tA, (id) => Object.assign({}, ...names.map((n) => energyOf(n)(id))));
+  const res = await get(`/board?${qs({ teamId: W.tA.teamId, candidateId: cand.id })}`, W.caA);
+  const b = ok(res).board;
+  const col = b.columns.find((c) => c.fieldId === f.fieldId);
+  assert.deepEqual([col?.reason, col?.placeable, col?.rawA ?? null, col?.rawB ?? null], ["unit_word_ambiguous", false, null, null], JSON.stringify(col));
+  const variable = ok(await post("/variables", W.caA, { requestKey: key(), label: `Board word ${uid()}`, unit: "J/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+  const versions = async () => (await one(`select count(*)::int n from training_load.source_metric_mapping_versions where source_metric_definition_id = $1`, [f.fieldId])).n;
+  const saved = await post("/confirmations", W.caA, {
+    requestKey: key(), teamId: W.tA.teamId, candidateId: cand.id, pair: b.pair.index, rows: [{
+      kind: "new", fieldId: f.fieldId, targetId: variable.id, expectedTargetVersionId: variable.currentVersionId ?? variable.versionId ?? crypto.randomUUID(),
+      displayUnit: "J/kg", placementHash: "0".repeat(64), requirement: "required", replaces: [], checked: true,
+    }],
+  });
+  refused(saved, 409, "unit_word_ambiguous");
+  assert.equal(await versions(), 0, "nothing written");
+});
+
+test("19. G1b-3, the way out of unit_word_ambiguous is one the server takes (the Rukovodilac's point): a created field proven by a document in J/kg gets no mapping version, and route 8 refuses to compare it (unit_already_verified); the refusal's own steps - retire the revision (L5), add a new unproven revision (L1) and activate it (L3), then compare it with GPEXE (routes 8 and O) - prove the exact word, and the version is then created", async () => {
+  const f = await created("g1b2_wayout", { expected: "J/kg" });
+  for (const act of ["unit-verification", "meaning-verification"]) {
+    const res = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/${act}`, W.pa, act === "unit-verification" ? { requestKey: key(), sourceUnit: "J/kg", evidenceRef: UNIT_REF } : { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+    assert.ok([200, 201].includes(res.status), res.text);
+  }
+  const variable = ok(await post("/variables", W.pa, { requestKey: key(), label: `Way out ${uid()}`, unit: "J/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+  const mapping = ok(await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+  const versionOf = (revisionId) => post(`/mappings/${mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: revisionId, appliesToSession: true, appliesToDrill: false });
+  const refusedVersion = refused(await versionOf(f.revisionId), 409, "unit_word_ambiguous");
+  assert.match(refusedVersion.message, /Retire this revision, add a new unproven revision of the field and activate it, then compare it with GPEXE/);
+  const cand = await candidate(W.tA, energyOf(f.name));
+  // Comparing the document-proven revision itself is refused - the sentence never sends the admin there.
+  refused(await observationOf(W.pa, f, { candidateId: cand.id }), 409, "unit_already_verified");
+  // The sentence's steps.
+  ok(await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/retire`, W.pa, { requestKey: key(), reason: "The word is proved on a new revision.", expectedState: "active" }));
+  const next = ok(await post(`/fields/${f.fieldId}/revisions`, W.pa, { requestKey: key(), valueShape: "unit_value_object", parameterKind: "none", supportsSession: true, supportsDrill: false, expectedSourceUnit: "J/kg" }), 201);
+  const r2 = next.revision?.id ?? next.revisionId;
+  assert.ok(r2, JSON.stringify(next));
+  ok(await post(`/fields/${f.fieldId}/revisions/${r2}/activate`, W.pa, { requestKey: key() }));
+  const g = { ...f, revisionId: r2 };
+  const o = ok(await observationOf(W.pa, g, { candidateId: cand.id })).observation;
+  assert.deepEqual([o.confirmable, o.word, o.unit], [true, "energy", "J/kg"]);
+  ok(await tick(W.pa, g, tickBody(o)), 201);
+  ok(await versionOf(r2), 201);
+});
+
+test("20. G1b-3 (the code review's HIGH): a club's admin is never told to take the platform's steps - its createVersion of a club mapping of a document-proven J/kg field is 409 unit_word_ambiguous asking a platform administrator, nothing written; the platform admin's answer names the steps", async () => {
+  const f = await created("g1b2_club_audience", { expected: "J/kg" });
+  for (const act of ["unit-verification", "meaning-verification"]) {
+    const res = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/${act}`, W.pa, act === "unit-verification" ? { requestKey: key(), sourceUnit: "J/kg", evidenceRef: UNIT_REF } : { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+    assert.ok([200, 201].includes(res.status), res.text);
+  }
+  for (const [who, steps] of [[W.caA, false], [W.pa, true]]) {
+    const variable = ok(await post("/variables", who, { requestKey: key(), label: `Audience ${uid()}`, unit: "J/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+    const mapping = ok(await post("/mappings", who, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+    const body = refused(await post(`/mappings/${mapping.id}/versions`, who, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false }), 409, "unit_word_ambiguous");
+    if (steps) assert.match(body.message, /Retire this revision/);
+    else {
+      assert.equal(body.message, "A document cannot tell which GPEXE word this unit is. Ask a platform administrator to compare this field with GPEXE.");
+    }
+    assert.equal((await one(`select count(*)::int n from training_load.source_metric_mapping_versions where mapping_id = $1`, [mapping.id])).n, 0, "nothing written");
+  }
+});
+
+test("21. G1b-3, S1 (the code review's MEDIUM): an active version from before the exact-word rule (its created field proven by a document in J/kg, set under the replica role) is not switched on for a team - 409 unit_word_ambiguous, no activation", async () => {
+  const t = await gpexeTeam(W.clubA);
+  const variable = ok(await post("/variables", W.pa, { requestKey: key(), label: `S1 word ${uid()}`, unit: "W/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+  const f = await created("g1b3_s1_wkg", { expected: "W/kg" });
+  for (const act of ["unit-verification", "meaning-verification"]) {
+    const res = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/${act}`, W.pa, act === "unit-verification" ? { requestKey: key(), sourceUnit: "W/kg", evidenceRef: UNIT_REF } : { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+    assert.ok([200, 201].includes(res.status), res.text);
+  }
+  const mapping = ok(await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+  const version = ok(await post(`/mappings/${mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false }), 201).version;
+  ok(await post(`/mappings/${mapping.id}/versions/${version.id}/submit`, W.pa, { requestKey: key() }));
+  ok(await post(`/mappings/${mapping.id}/versions/${version.id}/activate`, W.pa, { requestKey: key(), expectedActiveVersionId: null }));
+  await k.query("begin");
+  await k.query("set local session_replication_role = replica");
+  await k.query(`update training_load.source_metric_definition_versions set source_unit = 'J/kg' where id = $1`, [f.revisionId]);
+  await k.query(`update training_load.source_metric_mapping_versions set source_unit = 'J/kg', target_unit = 'J/kg' where id = $1`, [version.id]);
+  await k.query("commit");
+  const res = await post("/activations", W.pa, { requestKey: key(), mappingId: mapping.id, versionId: version.id, bindings: [{ bindingId: t.bindingId, requirement: "optional" }], reason: "G1b-3 S1 word check." });
+  refused(res, 409, "unit_word_ambiguous");
+  assert.equal((await one(`select count(*)::int n from training_load.source_metric_mapping_activations where mapping_version_id = $1`, [version.id])).n, 0, "no activation");
 });
