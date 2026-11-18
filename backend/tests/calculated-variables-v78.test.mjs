@@ -131,13 +131,27 @@ test("1. v78 on a database through v77 (with a calculated variable over two summ
   allOk(await runbook(r, PREFLIGHT_PATH));
   await applyV78(rdb.url);
   allOk(await runbook(r, POSTCHECK_PATH));
-  // A later migration recorded: the rollback refuses and changes nothing.
-  await r.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ('migrations_v2/209912312359_later.sql', $1, 0, 'test')`, ["0".repeat(64)]);
+  // Another track's later migration (the calendar's v81, by name) does not block the rollback (the Rukovodilac's coordination
+  // rule): it looks only at its own objects.
+  const LATER = "migrations_v2/202611191000_calendar_v81_athlete_questions.sql";
+  await r.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ($1, $2, 0, 'test')`, [LATER, "0".repeat(64)]);
+  allOk(await runbook(r, POSTCHECK_PATH));
+  await r.query(await fsp.readFile(ROLLBACK_PATH, "utf8"));
+  const afterOther = await catalog(r);
+  assert.deepEqual({ ...afterOther, migrations: afterOther.migrations.filter((m) => m !== LATER) }, before, "rolled back to v77 exactly, the other track's record kept");
+  allOk(await runbook(r, PREFLIGHT_PATH));
+  await applyV78(rdb.url);
+  await r.query(`delete from public.schema_migrations where migration_name = $1`, [LATER]);
+  // A body replaced after v78 (as a later Metrics Core migration would): the rollback refuses and changes nothing.
+  const v78Sql = await fsp.readFile(path.resolve(ROOT, "migrations_v2", V78), "utf8");
+  await r.query("create or replace function training_load.metric_calculation_state_guard() returns trigger as $x$ begin return new; end; $x$ language plpgsql");
   const atRefusal = await catalog(r);
-  await assert.rejects(r.query(await fsp.readFile(ROLLBACK_PATH, "utf8")), /v78 rollback refused: a later migration is recorded/);
+  await assert.rejects(r.query(await fsp.readFile(ROLLBACK_PATH, "utf8")), /v78 rollback refused: a body in force is not the one v78 wrote/);
   await r.query("rollback").catch(() => {});
   assert.deepEqual(await catalog(r), atRefusal, "the refused rollback changed nothing");
-  await r.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/209912312359_later.sql'`);
+  const stateBody = /create function training_load\.metric_calculation_state_guard\(\) returns trigger as \$\$([\s\S]*?)\$\$ language plpgsql;/.exec(v78Sql)[1];
+  await r.query(`create or replace function training_load.metric_calculation_state_guard() returns trigger as $x$${stateBody}$x$ language plpgsql`);
+  allOk(await runbook(r, POSTCHECK_PATH));
   // Back to v77 and a stored violation (an input whose day rule is Highest, written while v77 allowed it): the preflight shows
   // it, and v78 refuses with nothing applied.
   await r.query(await fsp.readFile(ROLLBACK_PATH, "utf8"));
@@ -155,6 +169,14 @@ test("1. v78 on a database through v77 (with a calculated variable over two summ
   await r.query("rollback");
 });
 
+const API_CODE = { calculated: "calculated_day_rule_fixed", input: "calculation_input_not_additive", sticky: "calculation_input_day_rule_in_use",
+  archive: "calculation_input_archive_in_use", restore: "calculation_input_not_active" };
+// Each database refusal also maps to the API's code (the code review's MEDIUM: the map is by exact text).
+async function mapsTo(res, code) {
+  const { classifyVariableError } = await import("../src/canonicalVariableAdminService.js");
+  assert.equal(classifyVariableError(res.error)?.code, code, res.error?.message);
+}
+
 test("2. the raw-write guards (any writer, not only the API): a calculated version summed by day only, over inputs summed by day only; an input keeps Sum while used; an input of an active calculated variable is not archived; a calculated variable is restored only while its inputs are active", async () => {
   const a = await variable(k);
   const b = await variable(k);
@@ -162,16 +184,22 @@ test("2. the raw-write guards (any writer, not only the API): a calculated versi
   const calc = await variable(k, { calculation: sum(a, b) });
   // The calculated version's own day rule.
   for (const day of ["avg", "max", "last", "none"]) {
-    dbRefused(await attempt(k, (c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, calculation)
-      values ($1, 2, 'm', 'numeric', $2, $3)`, [calc, day, JSON.stringify(sum(a, b))])), /calculated version's day rule is Sum/);
+    const res = await attempt(k, (c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, calculation)
+      values ($1, 2, 'm', 'numeric', $2, $3)`, [calc, day, JSON.stringify(sum(a, b))]));
+    dbRefused(res, /calculated version's day rule is Sum/);
+    await mapsTo(res, API_CODE.calculated);
   }
   // An input not summed by day.
-  dbRefused(await attempt(k, (c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation)
-    values ($1, 2, 'm', 'numeric', $2)`, [calc, JSON.stringify(sum(a, highest))])), /every input is added up by Sum/);
+  const notAdditive = await attempt(k, (c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation)
+    values ($1, 2, 'm', 'numeric', $2)`, [calc, JSON.stringify(sum(a, highest))]));
+  dbRefused(notAdditive, /every input is added up by Sum/);
+  await mapsTo(notAdditive, API_CODE.input);
   // An input keeps Sum while used (a unit kept the same, so it is the day rule that refuses).
   for (const day of ["avg", "max", "last", "none"]) {
-    dbRefused(await attempt(k, (c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method)
-      values ($1, 2, 'm', 'numeric', $2)`, [a, day])), /adds up this variable; its day rule stays Sum/);
+    const res = await attempt(k, (c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method)
+      values ($1, 2, 'm', 'numeric', $2)`, [a, day]));
+    dbRefused(res, /adds up this variable; its day rule stays Sum/);
+    await mapsTo(res, API_CODE.sticky);
   }
   const keepsSum = await attempt(k, (c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method, max_value)
     values ($1, 2, 'm', 'numeric', 'sum', 100)`, [a]));
@@ -182,8 +210,9 @@ test("2. the raw-write guards (any writer, not only the API): a calculated versi
     values ($1, 2, 'm', 'numeric', 'max')`, [free]));
   assert.equal(freeChange.ok, true, freeChange.error?.message);
   // An input of an active calculated variable is not archived.
-  dbRefused(await attempt(k, (c) => c.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [a])),
-    /active calculated variable adds up this variable; it stays active/);
+  const archived = await attempt(k, (c) => c.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [a]));
+  dbRefused(archived, /active calculated variable adds up this variable; it stays active/);
+  await mapsTo(archived, API_CODE.archive);
   // A calculated variable over an archived input is not restored (archived inputs written with the guard off, as a writer
   // before v78 could have left them).
   const x = await variable(k);
@@ -193,8 +222,9 @@ test("2. the raw-write guards (any writer, not only the API): a calculated versi
   await k.query("set local session_replication_role = replica");
   await k.query(`update training_load.metric_definitions set state = 'archived' where id = any($1::uuid[])`, [[c2, x]]);
   await k.query("commit");
-  dbRefused(await attempt(k, (c) => c.query(`update training_load.metric_definitions set state = 'active' where id = $1`, [c2])),
-    /calculated variable is active only while every input is active/);
+  const restored = await attempt(k, (c) => c.query(`update training_load.metric_definitions set state = 'active' where id = $1`, [c2]));
+  dbRefused(restored, /calculated variable is active only while every input is active/);
+  await mapsTo(restored, API_CODE.restore);
 });
 
 // Two concurrent transactions on their own connections.
@@ -255,6 +285,53 @@ test("3. the races (trigger 4): an archive of an input and a calculation being c
     await b.end();
   }
   // No active calculated variable over an input that is not active, anywhere in this database.
+  assert.equal((await one(k, `select count(*)::int n from training_load.metric_definitions cd
+      join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
+      join training_load.metric_definitions i on i.id = any (training_load.metric_calculation_inputs(cv.calculation))
+     where cd.state = 'active' and cv.calculation is not null and i.state <> 'active'`)).n, 0);
+});
+
+test("4. the restore of a calculated variable and the archive of one of its inputs wait for each other in both orders (the reviews of 2026-11-18): the second is refused, and no active calculated variable is left over an archived input", async () => {
+  // v38's change record needs an acting user, which a raw write has not; it is switched off for this test only (an AFTER
+  // trigger that plays no part in v78's guard).
+  await k.query("alter table training_load.metric_definitions disable trigger metric_definitions_v38_record_change");
+  const a = await client();
+  const b = await client();
+  try {
+    const fresh = async () => {
+      const p = await variable(k);
+      const q = await variable(k);
+      const c = await variable(k, { calculation: sum(p, q) });
+      await k.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [c]);
+      return { p, c };
+    };
+    // (i) The restore first: it holds the inputs FOR SHARE; the archive waits, then sees an active calculated variable.
+    const first = await fresh();
+    await a.query("begin");
+    await a.query(`update training_load.metric_definitions set state = 'active' where id = $1`, [first.c]);
+    await b.query("begin");
+    const archive = b.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [first.p]).then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+    assert.equal(await waitsForLock(), true, "the archive waits for the restore");
+    await a.query("commit");
+    dbRefused(await archive, /active calculated variable adds up this variable; it stays active/);
+    await b.query("rollback");
+    // (ii) The archive first: it holds the input's row; the restore waits on it, then sees an archived input.
+    const second = await fresh();
+    await b.query("begin");
+    await b.query(`update training_load.metric_definitions set state = 'archived' where id = $1`, [second.p]);
+    await a.query("begin");
+    const restore = a.query(`update training_load.metric_definitions set state = 'active' where id = $1`, [second.c]).then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+    assert.equal(await waitsForLock(), true, "the restore waits for the archive");
+    await b.query("commit");
+    dbRefused(await restore, /calculated variable is active only while every input is active/);
+    await a.query("rollback");
+  } finally {
+    await a.query("rollback").catch(() => {});
+    await b.query("rollback").catch(() => {});
+    await a.end();
+    await b.end();
+    await k.query("alter table training_load.metric_definitions enable trigger metric_definitions_v38_record_change");
+  }
   assert.equal((await one(k, `select count(*)::int n from training_load.metric_definitions cd
       join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
       join training_load.metric_definitions i on i.id = any (training_load.metric_calculation_inputs(cv.calculation))

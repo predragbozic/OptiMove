@@ -797,3 +797,64 @@ test("19. a calculated variable is restored only while every input is active (v7
   const back = await restore(c.id);
   assert.equal(back.status, 200, back.text);
 });
+
+test("20. through the routes, a restore of a calculated variable and an archive of one of its inputs wait for each other in both orders (the reviews of 2026-11-18): the second answers its 409 naming the other, and no active calculated variable is left over an archived input", async () => {
+  const variables = await import("../src/canonicalVariableAdminService.js");
+  const archive = (who, id) => post(`/variables/${id}/archive`, who, { requestKey: key(), reason: "Not used any more" });
+  const restore = (who, id) => post(`/variables/${id}/restore`, who, { requestKey: key() });
+  const fresh = async () => {
+    const p = await variable(W.pa, { label: `Race restore in ${uid()}` });
+    const q = await variable(W.pa, { label: `Race restore in ${uid()}` });
+    const c = (await calculated(W.pa, [p, q])).body.variable;
+    assert.equal((await archive(W.pa, c.id)).status, 200);
+    return { p, c };
+  };
+  const holdAt = (point) => {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    let reached;
+    const atHold = new Promise((resolve) => { reached = resolve; });
+    variables.setVariableWriteHoldForTests(async (_client, at) => { if (at === point) { reached(); await held; } });
+    return { atHold, release };
+  };
+  try {
+    // (i) The restore holds (its inputs locked FOR SHARE); the archive of an input waits, then is refused.
+    const first = await fresh();
+    let h = holdAt("variable_restore");
+    const restoring = restore(W.pa, first.c.id);
+    await h.atHold;
+    variables.setVariableWriteHoldForTests(null);
+    const archiving = archive(W.pa2, first.p.id);
+    assert.equal(await waitsForLock(), true, "the archive waits for the restore");
+    h.release();
+    assert.equal((await restoring).status, 200);
+    const refusedArchive = await archiving;
+    refused(refusedArchive, 409, "calculation_input_archive_in_use");
+    assert.equal(refusedArchive.body.message, `${first.c.label} adds up this variable; it cannot be archived while ${first.c.label} uses it.`);
+    // (ii) The archive holds (the input's row FOR UPDATE); the restore waits on the input, then is refused naming it.
+    const second = await fresh();
+    h = holdAt("variable_archive");
+    const archiving2 = archive(W.pa, second.p.id);
+    await h.atHold;
+    variables.setVariableWriteHoldForTests(null);
+    const restoring2 = restore(W.pa2, second.c.id);
+    assert.equal(await waitsForLock(), true, "the restore waits for the archive");
+    h.release();
+    assert.equal((await archiving2).status, 200);
+    const refusedRestore = await restoring2;
+    refused(refusedRestore, 409, "calculation_input_not_active");
+    assert.equal(refusedRestore.body.message, `${second.p.label} is archived; restore it first, then this calculated variable.`);
+  } finally {
+    variables.setVariableWriteHoldForTests(null);
+  }
+  assert.equal((await one(k, `select count(*)::int n from training_load.metric_definitions cd
+      join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
+      join training_load.metric_definitions i on i.id = any (training_load.metric_calculation_inputs(cv.calculation))
+     where cd.state = 'active' and cv.calculation is not null and i.state <> 'active'`)).n, 0);
+});
+
+test("21. a malformed calculation is the body's 400, whatever the day rule sent with it (the code review's LOW)", async () => {
+  for (const calculation of ["x", 1, [], true]) {
+    refused(await post("/variables", W.pa, { requestKey: key(), label: `Bad ${uid()}`, unit: "m", levels: ["session"], dailyAggregationMethod: "avg", calculation }), 400, "invalid_body");
+  }
+});

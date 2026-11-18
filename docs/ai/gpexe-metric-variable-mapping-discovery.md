@@ -4471,7 +4471,14 @@ archive and the restore; the API maps their messages to the same codes. Migratio
 v80 zone match (the *Rukovodilac*, 2026-11-18). Overlap of two inputs (e.g. zone 3 and "above 25 W/kg") is not checked:
 PR 3's screen says so before Save, and zone match refuses overlapping conditioned inputs once ranges are stored.
 
-**Next:** PR 2b, the import writer and the preview (C142-C146, C148), then PR 3, the screen (C141, C150).
+**Next:** PR 2b, the import writer and the preview (C142-C146, C148), then PR 3, the screen (C141, C150). Recorded for 2b
+(the *Rukovodilac*, 2026-11-18): a calculated value is written with role `derived_rollup` (v3's CHECK
+`metric_values_computed_by_ref_requires_derived` binds a formula reference to that role), so the dashboard query admits a
+calculated definition's own `derived_rollup` values under every role policy, with a test that no existing series changes;
+the re-import reads only non-derived rows (`importResult`, `isPureSupplement`); a corrected, supplemented or needs-review
+occasion and a manual correction of an input leave no stale calculated value current; a manual correction must carry the
+occasion's complete set of metrics (`validateCompleteValueSet`), so 2b leaves calculated variables out of that set and
+recomputes them (the code review of 2a, LOW).
 
 ## K. Open, but not blocking M1
 

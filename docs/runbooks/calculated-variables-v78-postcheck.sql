@@ -2,17 +2,16 @@
 -- after its deploy (the Rukovodilac, Supabase SQL Editor, each block in a read-only transaction). Changes nothing. Every block
 -- returns ok = true, or the stated counts.
 
--- 1. v78 is recorded once, as the last migrations_v2 migration (compare checksum with the file's sha256).
+-- 1. v78 is recorded once (compare checksum with the file's sha256). Later migrations of other tracks may be recorded.
 select count(*) = 1 as v78_once,
-       max(checksum) as checksum,
-       not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611181100_training_load_v78_calculated_variables_additive.sql') as v78_last
+       max(checksum) as checksum
   from public.schema_migrations where migration_name = 'migrations_v2/202611181100_training_load_v78_calculated_variables_additive.sql';
 
 -- 2. The two bodies are v78's and the state guard's trigger is enabled.
 select (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training_load' and p.proname = 'metric_calculation_version_guard') = 'eae4cc9d519a498ca7f4acf0bedbdcbd' as version_guard_v78,
        (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-         where n.nspname = 'training_load' and p.proname = 'metric_calculation_state_guard') = '1954b245cfd2c147540c3daf3bb95a92' as state_guard_v78,
+         where n.nspname = 'training_load' and p.proname = 'metric_calculation_state_guard') = '51fc201fb536a64e5803f413b9fbffdf' as state_guard_v78,
        exists (select 1 from pg_trigger t join pg_class c on c.oid = t.tgrelid
                 where t.tgname = 'metric_definitions_calculation_state_guard' and c.relname = 'metric_definitions' and t.tgenabled = 'O') as trigger_enabled;
 

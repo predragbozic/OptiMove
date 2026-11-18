@@ -8,8 +8,12 @@
 -- It restores v77's body of training_load.metric_calculation_version_guard exactly (and its comment), drops v78's state guard
 -- (its trigger and function) and removes the v78 record. It changes no row of any table. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v78 is not recorded, or any later migrations_v2 migration is;
---   * a body in force is not the one v78 wrote.
+--   * v78 is not recorded;
+--   * a body in force is not the one v78 wrote, or its trigger is missing (a later migration that replaced either - a
+--     Metrics Core one such as v79 - must be rolled back first).
+-- It does not look at later migrations by name: one that touches other objects (the calendar's v81, the dashboard's v75)
+-- does not block it. (v77's own rollback, as merged, refuses on any later migration; once v78 or another migration is
+-- recorded, this rollback is the path back from v78.)
 -- After it the four day-rule and archive rules are the API's alone again (backend/src/canonicalVariableAdminService.js).
 -- One transaction. Run it at a quiet moment as
 --   psql -v ON_ERROR_STOP=1 -f calculated-variables-v78-rollback.sql
@@ -30,13 +34,13 @@ begin
   if not exists (select 1 from public.schema_migrations where migration_name = v78) then
     raise exception 'v78 rollback refused: v78 is not recorded';
   end if;
-  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v78) then
-    raise exception 'v78 rollback refused: a later migration is recorded';
+  if not exists (select 1 from pg_trigger where tgname = 'metric_definitions_calculation_state_guard') then
+    raise exception 'v78 rollback refused: the state guard''s trigger is missing';
   end if;
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'metric_calculation_version_guard') is distinct from 'eae4cc9d519a498ca7f4acf0bedbdcbd'
      or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-          where n.nspname = 'training_load' and p.proname = 'metric_calculation_state_guard') is distinct from '1954b245cfd2c147540c3daf3bb95a92' then
+          where n.nspname = 'training_load' and p.proname = 'metric_calculation_state_guard') is distinct from '51fc201fb536a64e5803f413b9fbffdf' then
     raise exception 'v78 rollback refused: a body in force is not the one v78 wrote';
   end if;
 end $$;

@@ -2,10 +2,12 @@
 -- before the deploy that applies it (the Rukovodilac, Supabase SQL Editor, each block in a read-only transaction). Changes
 -- nothing. Every block returns ok = true, or the stated counts.
 
--- 1. v77 is recorded and v78 is not; no migrations_v2 migration sorts after v78.
+-- 1. v77 (the one migration v78 depends on) is recorded and v78 is not. Other migrations (the dashboard's v75, the calendar's
+--    v81) may be recorded or not; the list is for the reader only.
 select exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611181000_training_load_v77_calculated_variables.sql') as v77_recorded,
        not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611181100_training_load_v78_calculated_variables_additive.sql') as v78_absent,
-       not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611181100_training_load_v78_calculated_variables_additive.sql') as nothing_later;
+       (select string_agg(migration_name, ', ' order by migration_name) from public.schema_migrations
+         where migration_name > 'migrations_v2/202611181000_training_load_v77_calculated_variables.sql') as recorded_after_v77;
 
 -- 2. The version guard in force is v77's, and v78's state guard does not exist yet.
 select (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace

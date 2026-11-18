@@ -251,7 +251,8 @@ function aggregationInput(raw) {
 function semanticsInput(body) {
   const unit = unitInput(body.unit, () => refusal(400, "invalid_unit", TEXT.invalid_unit));
   // A calculated variable's day rule is Sum (PR 2): it may be left out, and anything else is refused.
-  const calculated = body.calculation !== undefined && body.calculation !== null;
+  // Only a plain object counts as a calculation here; any other shape is the calculation's own 400 below.
+  const calculated = body.calculation !== null && typeof body.calculation === "object" && !Array.isArray(body.calculation);
   const dailyAggregationMethod = calculated && body.dailyAggregationMethod === undefined ? "sum" : aggregationInput(body.dailyAggregationMethod);
   if (calculated && dailyAggregationMethod !== "sum") throw refusal(409, "calculated_day_rule_fixed", TEXT.calculated_day_rule_fixed);
   const minValue = decimalField(body.minValue, "minValue");
@@ -1232,7 +1233,16 @@ export async function restoreVariable({ ctx, variableId, body }) {
       if (row.state === "active") throw refusal(409, "variable_active", TEXT.variable_active);
       if (ctx.basis === "team_coach" && !coachArchived(row)) throw refusal(409, "restore_by_admin", TEXT.restore_by_admin);
       if (row.pinned) throw refusal(409, "variable_pinned", TEXT.archive_pinned);
-      // A calculated variable is active only while every input is (v78); the first archived input is named.
+      // A calculated variable is active only while every input is (v78); the first archived input is named. Its inputs are
+      // locked FOR SHARE in id order first, so an archive of one of them and this restore wait for each other.
+      await client.query(
+        `select i.id from training_load.metric_definitions i
+          where i.id in (select x.id::uuid from training_load.metric_definitions d
+                           join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+                           cross join lateral jsonb_array_elements_text(to_jsonb(v.*) -> 'calculation' -> 'inputs') as x(id)
+                          where d.id = $1)
+          order by i.id for share of i`, [id],
+      );
       const archived = (await client.query(
         `select i.label from training_load.metric_definitions d
            join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id

@@ -9,9 +9,10 @@
 --   * a new BEFORE UPDATE OF state guard on training_load.metric_definitions (training_load.metric_calculation_state_guard):
 --       - an input of an ACTIVE calculated variable's current version is not archived;
 --       - a calculated variable is restored only while every input of its current version is active.
---     It reads the other rows without a lock: an archive (the row's FOR NO KEY UPDATE) and a calculation being created over the
---     same variable (the version guard's FOR SHARE of its inputs) wait for each other, and a PL/pgSQL statement reads what the
---     other committed (READ COMMITTED, a fresh snapshot per statement).
+--     An archive (the row's FOR NO KEY UPDATE) waits for a calculation being created over the same variable (the version
+--     guard's FOR SHARE of its inputs) and for a restore of a calculated variable over it (this guard's FOR SHARE of the
+--     inputs, in id order), and the reverse; the second is refused, since a PL/pgSQL statement reads what the other committed
+--     (READ COMMITTED, a fresh snapshot per statement).
 --   No table, column, index or row. The API refuses the same four cases first, with sentences naming the variable
 --   (backend/src/canonicalVariableAdminService.js); these are the backstop for any other writer.
 --
@@ -181,6 +182,12 @@ begin
   end if;
   -- ... and a calculated variable becomes active again only while every input is active.
   if old.state is distinct from 'active' and new.state = 'active' then
+    -- The inputs FOR SHARE in id order first (the version guard's order): an archive of one of them and this restore wait
+    -- for each other, and the second is refused (the reviews of 2026-11-18: without the lock both could pass).
+    perform 1 from training_load.metric_definitions i
+     where i.id = any (training_load.metric_calculation_inputs((select cv.calculation from training_load.metric_definition_versions cv
+                                                                 where cv.id = new.current_version_id)))
+     order by i.id for share;
     if exists (select 1 from training_load.metric_definition_versions cv
                  join training_load.metric_definitions i on i.id = any (training_load.metric_calculation_inputs(cv.calculation))
                 where cv.id = new.current_version_id and cv.calculation is not null and i.state is distinct from 'active') then
@@ -202,7 +209,7 @@ begin
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'metric_calculation_version_guard') is distinct from 'eae4cc9d519a498ca7f4acf0bedbdcbd'
      or (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-          where n.nspname = 'training_load' and p.proname = 'metric_calculation_state_guard') is distinct from '1954b245cfd2c147540c3daf3bb95a92' then
+          where n.nspname = 'training_load' and p.proname = 'metric_calculation_state_guard') is distinct from '51fc201fb536a64e5803f413b9fbffdf' then
     raise exception 'v78 failed: a body is not the one v78 writes' using errcode = '23514';
   end if;
 end;
