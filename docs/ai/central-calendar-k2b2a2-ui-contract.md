@@ -94,8 +94,8 @@ A section **"Questions for athletes"** at the top of the tab (before *Event type
 - Off: "○ Off — questions to athletes are not turned on for this club. A platform administrator can turn them on."
 - State shown with a glyph and the word, never with colour alone.
 
-**A platform admin** (the client knows it from `/me`'s global roles, as other admin-only controls do): the same line,
-then one form:
+**A platform admin** (the client knows it from `state.organization.data.isPlatformAdmin`, the fact Settings → Storage
+and App health already use; the server decides again on the write): the same line, then one form:
 - **Reason** (`textarea`, required, ≤ 500 characters, 16 px): label "Why are you turning it on?" / "…off?";
 - one button: **Turn on for this club** or **Turn off for this club** (the opposite of the state);
 - empty reason → the button stays enabled; on press, the field's error "Write a reason." and nothing is sent;
@@ -294,12 +294,12 @@ Refusals (section `role="alert"`, under the row that sent):
 ### 4.4 The card
 
 - An RPE question sets the event's `external_schedule_id`, so the card's existing **"RPE x/y"** (D14, one count per
-  card, `central-calendar-view.js` `cardCountLabel`) already counts it. **Nothing changes on the card for RPE.**
+  card, `central-calendar-view.js` `centralCalendarCountLabel`) already counts it. **Nothing changes on the card for RPE.**
 - WELLNESS has no card count (the calendar read does not fold questions). Proposed: keep D14's one count; WELLNESS is
   only in the panel (Q6).
-- The card's existing "RPE is expected, but nothing attached to this event asks the athletes for it yet." gains, when
-  the switch is on and the coach manages the event, the next step: "Ask RPE in the event's panel." (no new read: the
-  card already knows `expects` and `rpe`).
+- The panel's existing gap note "RPE is expected, but nothing attached to this event asks the athletes for it yet."
+  (`GAP_NOTES.rpe`) gains, when B1 says the switch is on and the coach manages the event, the next step: "Use *Ask
+  RPE* below." (no new read: the card already knows `expects` and `rpe`).
 
 ---
 
