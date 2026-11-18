@@ -149,7 +149,10 @@ test("8. R7: the details' literal unit 'number' passes; another literal is a sha
   for (const players of [b.details.full.players]) for (const p of Object.values(players)) p.tot_burst_events.unit = "count";
   const plan = buildGpexeImportPlan(b, { metricSpecs: specsOf(allRows()) });
   assert.ok(plan.leftOut.some((r) => r.category === "shape" && r.code === "unexpected_unit"));
-  assert.deepEqual(classifyMappedPlan(plan, { importableIds: ["101", "102"], activationCount: 11 }), { block: "source_shape_mismatch" });
+  // G1b-2: the block names the first shape record's activation, so the preview's sentence can name the field.
+  const shape = plan.leftOut.find((r) => r.category === "shape");
+  assert.ok(shape.activationId);
+  assert.deepEqual(classifyMappedPlan(plan, { importableIds: ["101", "102"], activationCount: 11 }), { block: "source_shape_mismatch", activationId: shape.activationId });
 });
 
 test("9. R8: the range is inclusive; one step of 1e-9 outside is left out canonical_value_out_of_range and the value appears in no record", () => {

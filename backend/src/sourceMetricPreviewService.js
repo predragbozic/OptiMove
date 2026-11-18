@@ -25,6 +25,7 @@ import { GPEXE_SOURCE_SYSTEM, gpexeLevelValues } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { PREVIEW_MINIMUM_ATHLETES, previewLevel } from "./sourceMetricPreview.js";
 import { revisionProven } from "./sourceFieldEvidence.js";
+import { unitWordsFor } from "./sourceUnitWords.js";
 
 const { boundedRead, refusal, NOT_FOUND, MESSAGES, UUID, PARAMS_AS_TEXT } = adminWriteKit;
 
@@ -64,7 +65,7 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
   // One REPEATABLE READ READ ONLY transaction: the version, the candidate's
   // scope, its snapshot state and its bundle are one snapshot. The candidate
   // row is read without a lock.
-  const { v, bundle, teamTimezone } = await boundedRead(async (client) => {
+  const { v, bundle, teamTimezone, unitWords } = await boundedRead(async (client) => {
     // The mapping readable in this workspace, the version of that mapping.
     const version = (await client.query(
       `select v.id, v.source_unit, v.target_unit,
@@ -86,7 +87,6 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
     const registryCode = extractabilityCode({
       sourceSystem: version.source_system, apiFamily: version.api_family, sourceMetricKey: version.source_metric_key,
       valueShape: version.value_shape, parameterKind: version.parameter_kind, sourceParameters: version.source_parameters,
-      sourceUnit: version.source_unit,
     });
     // G2 (the board's guard, everywhere a value of the field is read): a field created through route C whose revision is
     // not proven never lets an athlete's value leave the server.
@@ -135,13 +135,15 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
     if (registryCode) throw refusal(409, registryCode, MESSAGES[registryCode]);
     if (unproven) throw refusal(409, "unit_not_proven", PREVIEW_MESSAGES.unit_not_proven);
     // v62: the candidate team's session time zone, read in the same transaction, so a mixed session passes the import's gates.
-    return { v: version, bundle: candidate.raw_bundle, teamTimezone: await teamSessionTimezone(client, candidate.owner_team_id) };
+    // G1b-2 (rule (b)): GPEXE's unit words, read only for a generic details field, so its preview reads what its import reads.
+    const unitWords = await unitWordsFor(client, [{ sourceSystem: version.source_system, apiFamily: version.api_family, sourceMetricKey: version.source_metric_key }]);
+    return { v: version, bundle: candidate.raw_bundle, teamTimezone: await teamSessionTimezone(client, candidate.owner_team_id), unitWords };
   });
   // After the transaction: the values.
   // Fail closed: every check above lets the bundle through or refuses.
   if (bundle === null || typeof bundle !== "object") throw new Error("preview bundle missing");
   const entry = extractorFor({ sourceSystem: v.source_system, apiFamily: v.api_family, sourceMetricKey: v.source_metric_key });
-  const out = gpexeLevelValues(bundle, (input) => entry.extract(input, v.source_parameters), { teamTimezone });
+  const out = gpexeLevelValues(bundle, (input) => entry.extract(input, v.source_parameters, { sourceUnit: v.source_unit, unitWords }), { teamTimezone });
   if (out.code) throw refusal(409, "candidate_not_importable", PREVIEW_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
   const factors = { scale: v.scale, divisor: v.scale_divisor, offset: v.offset };
   return {

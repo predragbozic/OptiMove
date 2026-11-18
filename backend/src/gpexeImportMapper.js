@@ -176,7 +176,9 @@ const REQUIREMENTS = new Set(["required", "optional"]);
 // written as it stands, "source_unit_mismatch" when the version's source unit
 // is not its revision's proven unit (defence in depth beside the T6 guard).
 // Never a bound, threshold or factor from code: every one is the version's.
-export function mappedMetricSpecs(rows) {
+// unitWords (G1b-2, rule (b)): GPEXE's seeded unit words, word -> unit token, read once per plan
+// (sourceUnitWords.js); a generic details field reads only a word whose token is its version's proven source unit.
+export function mappedMetricSpecs(rows, { unitWords = new Map() } = {}) {
   if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
   const notUsable = (blockReason) => ({ block: "mapping_not_usable", blockReason });
   const seen = new Set();
@@ -192,7 +194,6 @@ export function mappedMetricSpecs(rows) {
     if (extractabilityCode({
       sourceSystem: activation.sourceSystem, apiFamily: activation.apiFamily, sourceMetricKey: activation.sourceMetricKey,
       valueShape: activation.revisionValueShape, parameterKind: activation.revisionParameterKind, sourceParameters: activation.sourceParameters,
-      sourceUnit: activation.revisionSourceUnit,
     }) !== null) return notUsable("not_extractable");
     for (const [level, covered] of [["full", activation.appliesToSession], ["drill", activation.appliesToDrill]]) {
       if (!covered) continue;
@@ -230,7 +231,7 @@ export function mappedMetricSpecs(rows) {
         min: activation.minValue === null || activation.minValue === undefined ? null : canonicalDecimal(activation.minValue),
         max: activation.maxValue === null || activation.maxValue === undefined ? null : canonicalDecimal(activation.maxValue),
       }),
-      extract: (input) => extractor.extract(input, sourceParameters),
+      extract: (input) => extractor.extract(input, sourceParameters, { sourceUnit: activation.revisionSourceUnit, unitWords }),
     });
   });
   return { block: null, specs };
@@ -622,7 +623,10 @@ export function classifyMappedPlan(plan, { importableIds, activationCount }) {
   const admitted = importable.size > 0 ? importable : new Set(plan.participants.map((p) => p.gpexeAthleteId));
   const records = plan.leftOut.filter((record) => admitted.has(record.gpexeAthleteId));
   if (records.some((record) => record.category === "threshold_contract")) return { block: "source_threshold_contract_mismatch" };
-  if (records.some((record) => record.category === "shape")) return { block: "source_shape_mismatch" };
+  // G1b-2 (the Independent's LOW-1): the first mapped value refused for its shape names its activation, so the preview
+  // can name the field for an administrator (a coach reads the plain sentence).
+  const shape = records.find((record) => record.category === "shape");
+  if (shape) return { block: "source_shape_mismatch", activationId: shape.activationId ?? null };
   const values = plan.participants
     .filter((p) => admitted.has(p.gpexeAthleteId))
     .reduce((n, p) => n + p.results.reduce((m, result) => m + result.values.length, 0), 0);

@@ -23,7 +23,8 @@ import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMappe
 import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
-import { canonicalDecimal, compareDecimal, extractorFor, unitImportableCode } from "./sourceMetricExtractors.js";
+import { canonicalDecimal, compareDecimal, extractorFor } from "./sourceMetricExtractors.js";
+import { unitWordsFor } from "./sourceUnitWords.js";
 import { removeExpiredBatch as removeExpiredValuesBatch, setRemovalFaultForTests } from "./sourceMetricConfirmationRemoval.js";
 import { DISPLAY_REGISTRY_VERSION, displayRuleFor, displayValue, distinctPair, placementHash, rankPairs } from "./sourceMetricBoard.js";
 
@@ -141,6 +142,9 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
       order by d.source_metric_key collate "C"`,
     [GPEXE_SOURCE_SYSTEM, team.api_family],
   )).rows;
+  // G1b-2 (rule (b)): GPEXE's unit words, once for this board, only when a generic details field is among the fields: a
+  // column reads exactly the words of its revision's proven unit, as its import does.
+  const unitWords = await unitWordsFor(client, fields.map((f) => ({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })));
 
   // The stored session. Never an undone import (v57) or a superseded one; its
   // last check succeeded through this binding (as the importer requires).
@@ -202,7 +206,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     const attempt = async (row) => {
       tried += 1;
       const read = (await client.query(candidateSql(`c.id = $5::uuid`, ""), [...base, row.id])).rows[0];
-      const verdict = !read ? { why: "gone", plan: null } : defaultSessionVerdict(read, team, columns, teamTimezone);
+      const verdict = !read ? { why: "gone", plan: null } : defaultSessionVerdict(read, team, columns, teamTimezone, unitWords);
       if (verdict.why !== null) { reasons[row.index] = verdict.why; return false; }
       candidate = read;
       defaultPlan = verdict.plan;
@@ -354,7 +358,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   for (const row of identities) if (typeof row.display_name === "string" && row.display_name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.display_name);
   for (const row of linked) if (typeof row.name === "string" && row.name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.name);
 
-  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, fields, variables, versions, open, switchedOff, replacedBySystem, conversions, names };
+  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, unitWords, fields, variables, versions, open, switchedOff, replacedBySystem, conversions, names };
 }
 
 // ---------------------------------------------------------------------------
@@ -369,8 +373,6 @@ function columnsOf(world) {
     const rule = proven ? displayRuleFor({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key, sourceUnit: f.source_unit }) : null;
     let reason = null;
     if (!extractor || (extractor.valueShape !== null && (extractor.valueShape !== f.value_shape || extractor.parameterKind !== f.parameter_kind))) reason = "source_metric_unsupported";
-    // G1b-1's interim rule: a created details field whose proven unit is not a count cannot be imported yet.
-    else if (proven && unitImportableCode({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key, sourceUnit: f.source_unit })) reason = "source_metric_unsupported";
     else if (f.parameter_kind !== "none") reason = "field_has_parameters";
     else if (!proven) reason = "field_not_confirmed";
     else if (!rule) reason = "display_rule_missing";
@@ -392,7 +394,7 @@ export const BOARD_MAX_CELLS = 60_000;
 // import's own gates. The only caller of the keyed read; the extracts are filled here, from the registry alone.
 // Returns { ids, out } - out is the mapper's answer (out.code when the import would not take the session) - or
 // { tooLarge: true } when the work is over the board's cap, before any value is read.
-function keyedPlan(bundle, columns, teamTimezone) {
+function keyedPlan(bundle, columns, teamTimezone, unitWords) {
   const ids = [];
   const extracts = [];
   for (const col of columns) {
@@ -401,7 +403,8 @@ function keyedPlan(bundle, columns, teamTimezone) {
     const extractor = extractorFor({ sourceSystem: col.field.source_system, apiFamily: col.field.api_family, sourceMetricKey: col.field.source_metric_key });
     if (!extractor) continue;
     ids.push(col.field.id);
-    extracts.push((input) => extractor.extract(input, {}));
+    const context = { sourceUnit: col.field.source_unit, unitWords };
+    extracts.push((input) => extractor.extract(input, {}, context));
   }
   const rowCount = Array.isArray(bundle?.athleteSessions) ? bundle.athleteSessions.length : 0;
   if (extracts.length * rowCount > BOARD_MAX_CELLS) return { tooLarge: true };
@@ -414,7 +417,7 @@ export const DEFAULT_SESSION_UNREADABLE = "session_unreadable";
 // session's plan. The same checks, in the same order, a named session is refused by (its size, its check and
 // binding, its start, the board's size cap), and then the board's own plan - the import's gates - so a session taken
 // here is one sessionValues() reads.
-function defaultSessionVerdict(row, team, columns, teamTimezone) {
+function defaultSessionVerdict(row, team, columns, teamTimezone, unitWords) {
   const no = (why) => ({ why, plan: null });
   if (row.purged || row.expired) return no("snapshot_expired");
   if (row.too_large === true) return no("candidate_too_large");
@@ -423,7 +426,7 @@ function defaultSessionVerdict(row, team, columns, teamTimezone) {
   if (row.raw_bundle === null || typeof row.raw_bundle !== "object") return no("candidate_source_mismatch");
   let plan;
   try {
-    plan = keyedPlan(row.raw_bundle, columns, teamTimezone);
+    plan = keyedPlan(row.raw_bundle, columns, teamTimezone, unitWords);
   } catch (error) {
     // A stored bundle the plan cannot even walk (a shape the mapper does not expect) is one more session to pass by,
     // never a failed board for the team. Said once, by the kind of error only - no message, no value, no id.
@@ -436,7 +439,7 @@ function defaultSessionVerdict(row, team, columns, teamTimezone) {
 
 function sessionValues(world, columns) {
   // The default's own plan when it chose this session (the same columns, bundle and time zone); else built here.
-  const plan = world.defaultPlan ?? keyedPlan(world.candidate.raw_bundle, columns, world.teamTimezone);
+  const plan = world.defaultPlan ?? keyedPlan(world.candidate.raw_bundle, columns, world.teamTimezone, world.unitWords);
   if (plan.tooLarge) throw refusal(409, "board_too_large", BOARD_MESSAGES.board_too_large);
   const { ids, out } = plan;
   if (out.code) throw refusal(409, "candidate_not_importable", BOARD_MESSAGES.candidate_not_importable, { current: { reason: out.code } });

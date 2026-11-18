@@ -752,7 +752,7 @@ created field needs its extractor (J12), which is G2's; G2's or G1b's tests cove
     be imported yet."), so T4, A1, the copy (7i), the 7e preview and the importer's plan all refuse it, and the board
     shows such a column as unsupported. The generic details entry reads only the word `number`; any other word would
     block every session of the team (`source_shape_mismatch`). G1b-2 removes the refusal in the PR that teaches the
-    extractor the unit words. Proof: `source-metric-extractors-7f` test 15, resolver test 52.
+    extractor the unit words. Proof: `source-metric-extractors-7f` test 15, resolver test 52. **Removed by G1b-2** (section 8.11).
   - **The retire remedy (i).** The pinned set keeps only a field with an active revision, so retiring the active
     revision (L5) stops every check from keeping it; a pending snapshot keeps its values until the retention run
     projects them away. Proof: resolver test 51. The runbook (`docs/runbooks/gpexe-in-app-import.md`, "Created source
@@ -816,6 +816,88 @@ by the *Rukovodilac*: not documentation. This is the same class as the burst / b
     Compare the number: <value> <unit>.";
   - for `duration_mmss` it says that GPEXE may show hours for long values.
 - **The rollback of v74** refuses once any T9i row carries a `source_unit_word`.
+
+### 8.11 As built (G1b-2; the executor, 2026-11-17)
+
+No migration: v74 holds the whole chain. Routes 8, O and 10 are `backend/src/sourceFieldObservationService.js`; GPEXE's
+words are read by `backend/src/sourceUnitWords.js`. The screen is *Compare with GPEXE* on Source fields (the field's
+detail). Tests: `backend/tests/source-field-observed-g1b2.test.mjs` (routes 8, O, 10), resolver tests 52 and 53 (the
+word rule through the import, and the energy field end to end through the real routes),
+`source-metric-extractors-7f` test 15, `source-metric-board-18-2` test 16, `frontend/tests/source-fields-observe-g1b2.actions.test.mjs`
+and `e2e/tests/source-fields-observe.test.mjs`.
+
+- **Route 8** (`GET /fields/:fieldId/observation`) takes `teamId` or `candidateId`, and `pair` (the pair's rank, as the
+  board's) or `pairs=i,j` (two positions); with a team only, the team's newest saved session (of the last five, within a
+  4 s budget, one always tried) that has a pair to compare. A position is the athlete's place in the import plan's list of the session (the import's own gates),
+  never an id. The pairs are the board's rule (C117): two athletes OptiMove can name, two different non-zero values. The
+  answer carries the word, its unit token and display rule, each athlete's raw value and the number GPEXE should show, and
+  the comparison's hash (`g1.observation.v1`, over the bundle, the pair, the two names, the revision, the word, the rule
+  and both raw values; never stored). It says `confirmable: false` with a reason (`words_disagree`, `word_unknown`,
+  `expected_unit_differs`) where the tick would be refused, so the screen never offers it. A per-athlete field answers
+  `409 unit_not_stated` (`no_unit_word`, the 8.2 sentence) before any session is read; a field with parameters
+  `field_has_parameters`; a proven one `unit_already_verified`.
+- **Route O** builds the comparison once, on plain reads, and compares its hash (else `board_changed`). After every lock it
+  reads again only what the comparison stands on, without the bundle (the DB review's MEDIUM-1): the candidate's content
+  hash, last check, binding and state, and the two athletes' names (else `board_changed`). Its locks: the per-user lock and the request record (runWrite), the revision FOR UPDATE (as an M2b
+  act takes it, so the two serialize and the second answers `unit_already_verified`), the session's binding and team FOR
+  SHARE, the rights users first, the team's club FOR SHARE; then T9, T9s, T9i (under the value statement bound), the T2b
+  update and the two T8 rows, the keyed `source_metric_unit_observed` first. The recorded statement order is test 7.
+  T9s's `pair_index` is the pair's rank. The answer is the revision and the comparison's id; a replay is the same.
+  Refusals of the database (v65's candidate texts) read as `board_changed`; a lost right is the identical 404.
+- **Other refusals:** a revision that carries other evidence (`documented`, `observed`) is `field_has_evidence`, never
+  "already confirmed"; both athletes without a word is `no_unit_word`; a word is echoed in a refusal only when it is a
+  seeded one.
+- **The answer names GPEXE's value** (`gpexeName`, the key's last part), so the admin finds it on the GPEXE screen; the
+  last question names it as the meaning.
+- **A wrong word in an import names the field** (the Independent's LOW-1): the first value refused for its shape names
+  its activation, and the preview's administrator sentence says which GPEXE field and which variable, so that one mapping
+  can be switched off for the team; a coach reads the plain sentence.
+- **Carry-over 5:** a word whose unit token is not the revision's expected unit is `unit_not_stated`
+  (`expected_unit_differs`): two GPEXE accounts may send one name with different words.
+- **Route 10** lists a field's comparisons (at most 50, newest first, `truncated` when there are more) with the team, the club, who, when, the word, the
+  unit, and the two raw values only while they are kept (not removed, not past their date - also when the removal before
+  the read fails). A club's admin gets the identical 404 and reads only the status words of 8.9b.
+- **Rule (b):** the generic details extractor reads a value only when its word is one of the seeded words whose unit
+  token is the mapping version's proven source unit (`energy` and `energy_std` both J/kg; `time` and `duration` both s);
+  any other word, an unknown word, or a read without that context is `unexpected_unit` - a shape refusal that blocks the
+  session, never a skip. The word -> token map is read once per plan from `source_unit_words`, and only when a generic
+  details field is read (the importer's mapping context, the 7e preview, the club board), so a database before v74 is
+  never asked. **Rule (c):** the value stays in the source unit; the version's conversion gives the canonical unit, and T6
+  keeps the raw value (resolver tests 52 and 53: J/kg imported as kJ/kg).
+- **The interim refusal of G1b-1 is removed:** `unitImportableCode`, `unit_not_importable` and their texts are gone; the
+  club board reads a created details field through the word rule.
+- **The architecture guards** (`gpexe-import-mapped-architecture-9b` test 3): the mapper's one spec now passes the unit
+  context; the board's extracts pass their column's context; and the comparison service is the one other reader of the
+  keyed values, with exactly one extract, the registry's own `genericObservationExtract` of the field.
+- **Carry-over 3:** a `source_stated` revision is activated through M2 (v52's gate; route test 6) and through the platform
+  board's save (resolver test 53, the Rukovodilac's addition: the energy field's last leg places the proven column onto an
+  OptiMove kJ/kg variable for the team).
+- **The club board after a tick** (the Rukovodilac's addition; route test 11): before route O a created field's column
+  carries no value on the club's board; after it, the column is a normal proven column, its values read and placeable.
+- **Carry-over 6, recorded (the *Rukovodilac*'s choice (ii)):** limiting `as_sent` to `parameter_kind 'none'` in the
+  database twin belongs in the T9i insert guard's mapping branch, md5-gated; it is done by the next migration that touches
+  that guard. The application already offers `as_sent` only for a field without parameters.
+- **Recorded, not changed:** routes 8 and 10 run the removal of expired values before the read (a write in a GET, as the
+  board does); the club check under the locks uses the team read before them (teams do not change club, D43).
+- **Rule (b) at the mapping** (the code review's MEDIUM): T4 create, A1 and a club's copy refuse a created details field
+  whose proven unit no seeded word carries (`409 unit_word_missing`, nothing written; route test 13), since every value
+  of it would be a shape refusal and block the session. Route 8's `word_unknown`, and its `no_unit_word` for a details
+  value, now say the field cannot be imported until OptiMove knows GPEXE's word for it. The club board's column reason
+  is unchanged (a follow-up: the column carries no value, so it is never placeable).
+- **Under the locks** route O reads again the candidate's metadata (not the bundle: no second parse while the locks are
+  held) and the two athletes' names; a change is `board_changed` with nothing written (route test 12). v65's T9s trigger
+  refuses a session whose bundle hash moved as a backstop.
+- **Route O's COMMIT outcomes** go through the shared `runWrite`: a rollback with a lost answer is `503
+  outcome_unknown` and the same key then writes once; a COMMIT with a lost answer is verified through the request record;
+  a failed read after the COMMIT answers the write with `readError` (route test 14).
+- **Route 8 without a session:** a pair without `candidateId` is `400 invalid_query`; a stored session the plan cannot
+  walk is passed by, its error name logged only (route test 15).
+- **Mutations:** 22 of the new guards; 21 killed. One is equivalent at the outcome: removing route O's under-lock
+  bundle-hash comparison (v65's T9s trigger refuses the same write, still `board_changed` with nothing written). Removing
+  the under-lock `evidenceRefusal` is killed by route test 8 (document first).
+- **Recorded:** route test 9 covers the tick-first order against Unbind only; the Unbind-first order (the tick waits
+  on the binding lock, then `binding_not_active`) is a follow-up test.
+- **Not run:** PostgreSQL 17; 360 and 375 px; a physical device.
 
 ## 9. G2: the pinned set, the generic extractors and the club-board guard (as built, 2026-11-17)
 

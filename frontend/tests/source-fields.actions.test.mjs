@@ -103,6 +103,8 @@ function serve(post = () => ({ status: 404, body: { error: "notFound" } })) {
     if (call.method === "GET" && call.url === FB) return { status: 200, body: { fields } };
     const one = call.method === "GET" && fields.find((f) => call.url === `${FB}/${f.id}`);
     if (one) return { status: 200, body: { field: one, verifications: verifications[one.id] || [] } };
+    // G1b-2: the field's comparisons on the board (route 10), read with the field in the platform workspace.
+    if (call.method === "GET" && fields.some((f) => call.url === `${FB}/${f.id}/observations`)) return { status: 200, body: { observations: [] } };
     if (call.method === "POST") return post(call);
     return { status: 404, body: { error: "notFound" } };
   };
@@ -223,7 +225,7 @@ test("one field: its revisions with facts, expected units marked not proven, con
   ];
   verifications[F1] = [{ revisionId: R1, act: "unit", at: "2026-10-20T08:00:00.000Z", evidenceRef: "docs/ai/evidence.md#total-time" }];
   await openField(F1);
-  assert.equal(gets().at(-1), `${FB}/${F1}`);
+  assert.deepEqual(gets().slice(-2), [`${FB}/${F1}`, `${FB}/${F1}/observations`], "the field, then its comparisons (platform workspace)");
   assert.equal($("#source-fields-title").textContent, "Total time");
   const revisions = [...content.querySelectorAll(".source-fields-revision")];
   assert.equal(revisions.length, 2);

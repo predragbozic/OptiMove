@@ -1098,7 +1098,7 @@ test("15. G2: a field created by route C whose unit is not proven shows no athle
   }
 });
 
-test("16. G1b-1's interim rule on the board: a created details field proven in a unit other than count is shown as a column OptiMove cannot read yet - not placeable, no values; the same field proven as a count is not refused for that", async () => {
+test("16. G1b-2, rule (b) on the board: a created details field proven in J/kg is a column the club board reads (no interim refusal), each athlete's value read only where GPEXE's word is a word of J/kg - an athlete whose word is power has no value; a count field keeps reading number", async () => {
   const mk = async (key, unit) => {
     const fieldId = (await one(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,$2,$3) returning id`, [key, `G1b ${key}`, W.pa.id])).id;
     await writeRevision(k, { fieldId, by: W.pa.id, valueShape: "unit_value_object", parameterKind: "none", evidenceRef: COMPAT, unit, unitRef: UNIT_REF, meaning: true, meaningRef: MEANING_REF, state: "active" });
@@ -1108,15 +1108,23 @@ test("16. G1b-1's interim rule on the board: a created details field proven in a
   await mk("details.players.g1b_board_count", "count");
   const before = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [W.cA.id])).raw_bundle;
   const planted = structuredClone(before);
-  for (const values of Object.values(planted.details.full.players)) Object.assign(values, { g1b_board_energy: { unit: "energy", value: 735.5 }, g1b_board_count: { unit: "number", value: 4 } });
+  const ids = Object.keys(planted.details.full.players).sort();
+  ids.forEach((id, i) => Object.assign(planted.details.full.players[id], {
+    g1b_board_energy: { unit: i === 0 ? "power" : "energy", value: 735.5 + i },
+    g1b_board_count: { unit: "number", value: 4 + i },
+  }));
   await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [W.cA.id, planted]);
   try {
     const res = await boardOf(W.caA, W.tA);
     const { board } = ok(res);
     const energy = board.columns.find((c) => c.key === "details.players.g1b_board_energy");
     assert.ok(energy, "the column is listed");
-    assert.deepEqual([energy.placeable, energy.reason, energy.rawA, energy.rawB], [false, "source_metric_unsupported", null, null]);
-    assert.ok(!JSON.stringify(res.body).includes("735.5"), "none of its values in the answer");
+    assert.notEqual(energy.reason, "source_metric_unsupported", JSON.stringify(energy));
+    assert.equal(energy.displayRule, "as_sent");
+    // The pair's values: each is an energy athlete's (never the power athlete's 735.5).
+    assert.ok(energy.rawA !== null || energy.rawB !== null, `the energy athletes' values are read (${JSON.stringify(energy)})`);
+    for (const raw of [energy.rawA, energy.rawB].filter((v) => v !== null)) assert.ok(Number(raw) > 735.5, raw);
+    assert.ok(!JSON.stringify(res.body).includes("735.5"), "the athlete whose word is power has no value");
     const count = board.columns.find((c) => c.key === "details.players.g1b_board_count");
     assert.notEqual(count.reason, "source_metric_unsupported", JSON.stringify(count));
   } finally {

@@ -548,8 +548,8 @@ function bindEvents() {
   // Data configuration -> Variables: a select or a level box also reports its
   // choice through "change", for a browser that fires no "input" for it.
   els.content.addEventListener("change", (event) => handleVariablesInput(event.target, { render: renderActiveTrainingLoadSurface }));
-  // Data configuration -> Source fields: the operator select reports through "change" too.
-  els.content.addEventListener("change", (event) => handleSourceFieldsInput(event.target));
+  // Data configuration -> Source fields: the operator select (and the comparison's team) report through "change" too.
+  els.content.addEventListener("change", (event) => handleSourceFieldsInput(event.target, { render: renderActiveTrainingLoadSurface }));
   // Central calendar (K2a-2): the event form's select, dates and boxes too.
   els.content.addEventListener("change", (event) => handleCentralCalendarInput(event.target, { render: renderCentralCalendar }));
   // Settings -> Calendar (K2b-1c): a choice in its form (a select, a colour, a box).

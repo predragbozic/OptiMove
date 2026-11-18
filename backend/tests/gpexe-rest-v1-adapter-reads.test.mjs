@@ -1365,7 +1365,7 @@ test("B7.7c G2, the generic details extractor on drills: with a created details.
     }
   }
   assert.ok(wrapped > 0, "the bundle carries drill details");
-  const out = mappedMetricSpecs([activationRowFor("gpexe_burst_events", { sourceMetricKey: "details.players.g2_jumps", sourceLabel: "g2_jumps", definitionKey: "g2_jumps", sourceParameterFingerprint: "fp-g2" }, 0)]);
+  const out = mappedMetricSpecs([activationRowFor("gpexe_burst_events", { sourceMetricKey: "details.players.g2_jumps", sourceLabel: "g2_jumps", definitionKey: "g2_jumps", sourceParameterFingerprint: "fp-g2" }, 0)], { unitWords: new Map([["number", "count"]]) });
   assert.equal(out.block, null);
   const plan = buildGpexeImportPlan(bundle, { metricSpecs: out.specs });
   assert.ok(plan.participants.some((p) => p.results.some((r) => r.level !== "full" && r.values.some((v) => v.sourceMetricKey === "details.players.g2_jumps" && Number(v.value ?? v.sourceValue) === 5))), JSON.stringify(plan.participants.map((p) => p.results.map((r) => r.values))).slice(0, 400));

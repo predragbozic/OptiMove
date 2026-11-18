@@ -2871,30 +2871,191 @@ test("51. G1b-1, the retire remedy: a field whose active revision is retired (L5
   }
 });
 
-test("52. G1b-1's interim rule through the services: a created details field proven in J/kg gets no mapping version (409 unit_not_importable, nothing written), so no team's sessions can be blocked; the same field proven as a count does", async () => {
+test("52. G1b-2, rules (b) and (c) through the import: a created details field proven in J/kg gets a mapping version (no interim refusal) and, switched on, imports the raw value of every athlete whose answer carries a word of J/kg (energy) - converted to the variable's unit, T6 keeping the raw value; one athlete's answer with another word (power) blocks the session as source_shape_mismatch and nothing is imported; a count field keeps working with number", async () => {
   const { writeRevision } = await import("./support/source-revisions.mjs");
+  const { t6Rows } = await import("./support/mapped-world.mjs");
   const variablesSvc = await import("../src/canonicalVariableAdminService.js");
   const mappingsSvc = await import("../src/sourceMetricMappingService.js");
+  const activationsSvc = await import("../src/sourceMetricActivationService.js");
+  const conversionsSvc = await import("../src/unitConversionService.js");
   const keys = ["details.players.g1b_energy", "details.players.g1b_count"];
   const o = await org();
   const ctx = { userId: String(o.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } };
   const rk = () => crypto.randomUUID();
   const ref = "docs/ai/test-evidence.md#unit-of-the-field";
+  // A conversion J/kg -> kJ/kg (rule (c): the version's conversion gives the canonical unit), unless one exists.
+  const conv = await q(`select 1 from training_load.unit_conversions where from_unit = 'J/kg' and to_unit = 'kJ/kg' and state = 'active'`);
+  if (conv.length === 0) await conversionsSvc.createConversion({ ctx, body: { requestKey: rk(), fromUnit: "J/kg", toUnit: "kJ/kg", scale: "0.001", scaleDivisor: "1", offset: "0", evidenceRef: "docs/ai/test-evidence.md#joules-to-kilojoules" } });
   try {
-    const versionFor = async (key, unit) => {
+    await enableTeamImportSwitch(admin, o.teamId);
+    useSource();
+    const { binding } = await bound(o);
+    await activateBinding(admin, binding.bindingId);
+    const switchOn = async (key, unit, variableUnit) => {
       const fieldId = await g2Field(key, o.padmin.id, { revision: false });
       const rev = await writeRevision(admin, { fieldId, by: o.padmin.id, valueShape: "unit_value_object", unit, unitRef: ref, meaning: true, meaningRef: "docs/ai/test-evidence.md#meaning-of-the-field", evidenceRef: ref });
-      const variable = (await variablesSvc.createVariable({ ctx, body: { requestKey: rk(), label: `G1b ${unit} ${crypto.randomBytes(3).toString("hex")}`, unit, levels: ["session", "drill"], dailyAggregationMethod: "sum" } })).variable;
+      const variable = (await variablesSvc.createVariable({ ctx, body: { requestKey: rk(), label: `G1b ${unit} ${crypto.randomBytes(3).toString("hex")}`, unit: variableUnit, levels: ["session", "drill"], dailyAggregationMethod: "sum" } })).variable;
       const mapping = (await mappingsSvc.createMapping({ ctx, body: { requestKey: rk(), sourceMetricId: fieldId, metricDefinitionId: variable.id } })).mapping;
-      return mappingsSvc.createVersion({ ctx, mappingId: mapping.id, body: { requestKey: rk(), sourceRevisionId: rev.revisionId ?? rev, appliesToSession: true, appliesToDrill: true } }).then((a) => ({ version: a.version }), (e) => ({ e, mappingId: mapping.id }));
+      const version = (await mappingsSvc.createVersion({ ctx, mappingId: mapping.id, body: { requestKey: rk(), sourceRevisionId: rev.revisionId ?? rev, appliesToSession: true, appliesToDrill: false, ...(unit === variableUnit ? {} : { conversionNote: "Converted by the active unit conversion." }) } })).version;
+      await mappingsSvc.submitVersion({ ctx, mappingId: mapping.id, versionId: version.id, body: { requestKey: rk() } });
+      await mappingsSvc.activateVersion({ ctx, mappingId: mapping.id, versionId: version.id, body: { requestKey: rk(), expectedActiveVersionId: null } });
+      await activationsSvc.startActivations({ ctx, body: { requestKey: rk(), mappingId: mapping.id, versionId: version.id, bindings: [{ bindingId: binding.bindingId, requirement: "optional" }], reason: "G1b-2 test activation." } });
+      return variable;
     };
-    const energy = await versionFor(keys[0], "J/kg");
-    assert.deepEqual([energy.e?.status, energy.e?.code], [409, "unit_not_importable"], JSON.stringify(energy.e ?? energy));
-    assert.equal(energy.e.message, "This field's unit cannot be imported yet.");
-    assert.equal((await q(`select count(*)::int n from training_load.source_metric_mapping_versions where mapping_id = $1`, [energy.mappingId]))[0].n, 0, "nothing written");
-    const count = await versionFor(keys[1], "count");
-    assert.ok(count.version?.id, JSON.stringify(count.e ?? count));
+    const energy = await switchOn(keys[0], "J/kg", "kJ/kg");
+    const count = await switchOn(keys[1], "count", "count");
+    for (const [i, gpexeAthleteId] of ["101", "102", "103"].entries()) {
+      const linked = await api(`/gpexe/teams/${o.teamId}/athlete-links`, { method: "POST", cookie: o.coach.cookie, body: { gpexeAthleteId, athleteId: o.athleteIds[i] } });
+      assert.equal(linked.status, 201, JSON.stringify(linked.body));
+    }
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const original = structuredClone(src.state.bundle);
+    const values = { 101: "1500", 102: "2250.5", 103: "1800" };
+    // One athlete's word is power (a W/kg word): the whole session is blocked, nothing is imported.
+    g2Plant(src.state.bundle, { details: (id) => ({ g1b_energy: { unit: id === "102" ? "power" : "energy", value: Number(values[id] ?? 1) }, g1b_count: { unit: "number", value: 4 } }) });
+    const blocked = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(blocked.status, "succeeded", JSON.stringify(blocked.error));
+    const [b] = await q(`select status, preview from training_load.gpexe_import_candidates where owner_team_id = $1 and status <> 'superseded'`, [o.teamId]);
+    assert.deepEqual([b.status, b.preview?.blocked?.code], ["blocked", "source_shape_mismatch"], JSON.stringify(b.preview?.blocked));
+    // The Independent's LOW-1: the administrator's sentence names the field and its variable, so that one mapping can be
+    // switched off for the team.
+    assert.match(b.preview.blocked.message, new RegExp(`^GPEXE sent "G2 details\\.players\\.g1b_energy" \\(it fills ${energy.label}\\) in another shape or unit than its field has\\.`), b.preview.blocked.message);
+    // Every athlete's word is energy (energy_std would do too): imported, in kJ/kg, T6 keeping the raw J/kg value.
+    src.state.bundle = structuredClone(original);
+    src.state.bundle.teamSession.updated_on = "2026-09-14T23:10:00";
+    g2Plant(src.state.bundle, { details: (id) => ({ g1b_energy: { unit: id === "101" ? "energy_std" : "energy", value: Number(values[id] ?? 1) }, g1b_count: { unit: "number", value: 4 } }) });
+    src.state.gates.list = null;
+    const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+    assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+    const [cand] = await q(`select id, status, preview, preview_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and status <> 'superseded'`, [o.teamId]);
+    assert.notEqual(cand.status, "blocked", JSON.stringify(cand.preview?.blocked));
+    process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+    try {
+      await importer.approveCandidate(o.teamId, cand.id, { userId: o.padmin.id, previewHash: cand.preview_hash, acceptChanges: false });
+    } finally {
+      delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    }
+    const [{ metric_event_id: eventId }] = await q(`select metric_event_id from training_load.gpexe_import_approvals where candidate_id = $1`, [cand.id]);
+    const rows = await t6Rows(admin, eventId);
+    const mine = rows.filter((r) => String(r.metric_definition_id) === String(energy.id));
+    // Every athlete the import keeps (the fixture's third athlete is not imported) has its value, energy_std included.
+    const counted = rows.filter((r) => String(r.metric_definition_id) === String(count.id));
+    assert.ok(counted.length >= 2 && mine.length === counted.length, `${mine.length} energy values for ${counted.length} imported athletes`);
+    const expected = new Map([["1500", "1.5"], ["2250.5", "2.2505"], ["1800", "1.8"]]);
+    for (const r of mine) {
+      const raw = String(Number(r.source_value_text));
+      assert.ok(expected.has(raw), `T6 keeps the raw value in the source unit (J/kg): ${raw}`);
+      assert.equal(String(Number(r.value_text)), expected.get(raw), "the value is converted to the variable's unit (kJ/kg)");
+    }
+    assert.ok(mine.some((r) => Number(r.source_value_text) === 1500), "the energy_std athlete's value");
+    assert.ok(mine.every((r) => r.unit_at_capture === "kJ/kg"), JSON.stringify(mine.map((r) => r.unit_at_capture)));
+    assert.ok(rows.some((r) => String(r.metric_definition_id) === String(count.id) && Number(r.source_value_text) === 4), "the count field keeps working with number");
   } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
     await g2Remove(keys);
+  }
+});
+
+test("53. G1b-2, the energy field end to end through the real routes: a check observes GPEXE's name with its word energy; route C creates the field (expected J/kg); the next check keeps it; route 8 shows two named athletes' raw values and route O ticks them - the revision is source_stated in J/kg; the platform board places the proven column onto an OptiMove kJ/kg variable for the team (the system mapping, its version and the activation); the next check's import writes each value converted to kJ/kg, T6 keeping the raw J/kg value", async () => {
+  const variablesSvc = await import("../src/canonicalVariableAdminService.js");
+  const conversionsSvc = await import("../src/unitConversionService.js");
+  const { t6Rows } = await import("./support/mapped-world.mjs");
+  const name = "g1b2_metabolic_energy";
+  const key = `details.players.${name}`;
+  const o = await org();
+  const ctx = { userId: String(o.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } };
+  const rk = () => crypto.randomUUID();
+  const M = "/sources/metrics";
+  try {
+    if ((await q(`select 1 from training_load.unit_conversions where from_unit = 'J/kg' and to_unit = 'kJ/kg' and state = 'active'`)).length === 0) {
+      await conversionsSvc.createConversion({ ctx, body: { requestKey: rk(), fromUnit: "J/kg", toUnit: "kJ/kg", scale: "0.001", scaleDivisor: "1", offset: "0", evidenceRef: "docs/ai/test-evidence.md#joules-to-kilojoules" } });
+    }
+    await enableTeamImportSwitch(admin, o.teamId);
+    useSource();
+    const { binding } = await bound(o);
+    await activateBinding(admin, binding.bindingId);
+    for (const [i, gpexeAthleteId] of ["101", "102", "103"].entries()) {
+      const linked = await api(`/gpexe/teams/${o.teamId}/athlete-links`, { method: "POST", cookie: o.coach.cookie, body: { gpexeAthleteId, athleteId: o.athleteIds[i] } });
+      assert.equal(linked.status, 201, JSON.stringify(linked.body));
+    }
+    process.env.GPEXE_API_TOKEN = ENV_TOKEN;
+    legacyTrap();
+    src.serve(o.sourceTeamId);
+    const values = { 101: 1500, 102: 2250.5, 103: 1800 };
+    g2Plant(src.state.bundle, { details: (id) => ({ [name]: { unit: "energy", value: values[id] ?? 1 } }) });
+    const check = async () => {
+      const view = await importer.startCheck(o.teamId, { userId: o.cadmin.id, window: { from: DAY, to: DAY }, wait: true, adminViewer: true });
+      assert.equal(view.status, "succeeded", JSON.stringify(view.error));
+    };
+    // 1. A check observes the name and its word.
+    await check();
+    // 2. Route C: the field, expecting J/kg.
+    const created = await api(`${M}/fields`, { method: "POST", cookie: o.padmin.cookie, body: { requestKey: rk(), endpoint: "details.session", name, label: "Metabolic energy", supportsSession: true, supportsDrill: false } });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.deepEqual([created.body.field.key, created.body.revision.expectedSourceUnit, created.body.revision.evidenceStatus], [key, "J/kg", "unproven"]);
+    const fieldId = created.body.field.id;
+    const revisionId = created.body.revision.id;
+    // 3. The next check keeps it in the stored session.
+    await check();
+    // 4. Route 8, then route O.
+    const read = await api(`${M}/fields/${fieldId}/observation?teamId=${o.teamId}`, { cookie: o.padmin.cookie });
+    assert.equal(read.status, 200, JSON.stringify(read.body));
+    const ob = read.body.observation;
+    assert.deepEqual([ob.confirmable, ob.word, ob.unit, ob.displayRule], [true, "energy", "J/kg", "as_sent"]);
+    const ticked = await api(`${M}/fields/${fieldId}/revisions/${revisionId}/observed-confirmation`, {
+      method: "POST", cookie: o.padmin.cookie,
+      body: { requestKey: rk(), session: { candidateId: ob.session.candidateId, pairs: ob.pair.positions, placementHash: ob.placementHash }, attested: true },
+    });
+    assert.equal(ticked.status, 201, JSON.stringify(ticked.body));
+    assert.deepEqual([ticked.body.revision.evidenceStatus, ticked.body.revision.sourceUnit], ["source_stated", "J/kg"]);
+    // 5. The platform board (the Rukovodilac's addition): the proven column placed onto an OptiMove kJ/kg variable for the
+    // team - the save writes the system mapping, its version (v52's gate takes source_stated) and the team's activation.
+    const variable = (await variablesSvc.createVariable({ ctx, body: { requestKey: rk(), label: `Metabolic energy ${uid()}`, unit: "kJ/kg", levels: ["session", "drill"], dailyAggregationMethod: "sum" } })).variable;
+    const boardRes = await api(`${M}/board?teamId=${o.teamId}`, { cookie: o.padmin.cookie });
+    assert.equal(boardRes.status, 200, JSON.stringify(boardRes.body));
+    const board = boardRes.body.board;
+    assert.equal(board.owner, "system");
+    const column = board.columns.find((c) => c.fieldId === fieldId);
+    assert.deepEqual([column?.unitProven, column?.unit, column?.displayRule, column?.reason], [true, "J/kg", "as_sent", null], JSON.stringify(column));
+    const placed = await api(`${M}/board/placement?teamId=${o.teamId}&candidateId=${board.session.candidateId}&pair=${board.pair.index}&fieldId=${fieldId}&targetId=${variable.id}`, { cookie: o.padmin.cookie });
+    assert.equal(placed.status, 200, JSON.stringify(placed.body));
+    const p = placed.body.placement;
+    assert.deepEqual([p.placeable, p.kind, p.sourceUnit, p.targetUnit, p.conversion.kind], [true, "new", "J/kg", "kJ/kg", "converted"], JSON.stringify(p));
+    const saved = await api(`${M}/confirmations`, {
+      method: "POST", cookie: o.padmin.cookie,
+      body: { requestKey: rk(), teamId: o.teamId, candidateId: board.session.candidateId, pair: board.pair.index, rows: [{
+        kind: "new", fieldId, targetId: variable.id, expectedTargetVersionId: p.expectedTargetVersionId, displayUnit: "J/kg",
+        placementHash: p.placementHashes["J/kg"], requirement: "required", replaces: [], checked: true,
+      }] },
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const [mapped] = await q(`select m.owner_scope, v.status, v.source_unit, v.target_unit from training_load.source_metric_mapping_activations a
+                               join training_load.source_metric_mappings m on m.id = a.mapping_id join training_load.source_metric_mapping_versions v on v.id = a.mapping_version_id
+                              where a.source_team_binding_id = $1 and a.metric_definition_id = $2 and a.ended_at is null`, [binding.bindingId, variable.id]);
+    assert.deepEqual(mapped, { owner_scope: "system", status: "active", source_unit: "J/kg", target_unit: "kJ/kg" });
+    // 6. The next check previews the mapped values; the approval imports them.
+    await check();
+    const [cand] = await q(`select id, status, preview, preview_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and status <> 'superseded' order by first_seen_at desc limit 1`, [o.teamId]);
+    assert.notEqual(cand.status, "blocked", JSON.stringify(cand.preview?.blocked));
+    process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+    try {
+      await importer.approveCandidate(o.teamId, cand.id, { userId: o.padmin.id, previewHash: cand.preview_hash, acceptChanges: false });
+    } finally {
+      delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    }
+    const [{ metric_event_id: eventId }] = await q(`select metric_event_id from training_load.gpexe_import_approvals where candidate_id = $1`, [cand.id]);
+    const mine = (await t6Rows(admin, eventId)).filter((r) => String(r.metric_definition_id) === String(variable.id));
+    assert.ok(mine.length >= 2, JSON.stringify(mine.length));
+    for (const r of mine) {
+      const raw = Number(r.source_value_text);
+      assert.ok(Object.values(values).includes(raw), `the raw J/kg value: ${raw}`);
+      assert.equal(Number(r.value_text), raw / 1000, "converted to kJ/kg");
+      assert.equal(r.unit_at_capture, "kJ/kg");
+    }
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+    await g2Remove([key]);
   }
 });

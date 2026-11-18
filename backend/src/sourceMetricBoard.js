@@ -93,6 +93,15 @@ export function displayRuleFor({ sourceSystem, apiFamily, sourceMetricKey, sourc
   return entry;
 }
 
+// G1b-2 (plan section 8.10): the display entry of a unit word's rule, for the platform's comparison of a generic field -
+// the word's own rule in the word's own unit token (a specific rule's unit must be the token it reads, as v74's T9i
+// guard requires), or as_sent for any unit token. Null for anything else.
+export function displayEntryForRule(rule, sourceUnit) {
+  if (rule === AS_SENT_RULE) return asSentRule(sourceUnit);
+  const entry = Object.values(RULES).find((r) => r.rule === rule) ?? null;
+  return entry && entry.sourceUnit === sourceUnit ? entry : null;
+}
+
 // What the GPEXE screen should show for a raw value, in `unit` of the rule;
 // null when the unit is not the rule's or the value cannot be shown.
 export function displayValue(entry, unit, raw) {
