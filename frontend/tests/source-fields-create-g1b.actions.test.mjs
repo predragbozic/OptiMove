@@ -344,6 +344,7 @@ test("Z (the Rukovodilac, 2026-11-18): Create field on a numbered zone says the 
   invLimits = { power: { values: [20, 25, 60, 75] }, speed: null, asOf: "2026-11-07T10:00:00Z" };
   try {
     await openCreate("details.session", "athletesessionpowerzone_distance_4");
+    assert.equal($('[data-sf-field="label"]').value, "Power zone 4 · distance", "the name kept in OptiMove carries no team's range");
     assert.match(text(), /Range of this zone: 60–75 W\/kg \(the team's zone limits in the newest saved session, 07\.11\.2026\)\. After you add it, check it once with Compare with GPEXE\./);
     sourceFieldsState().form = null;
     render();

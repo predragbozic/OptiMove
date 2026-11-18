@@ -303,7 +303,8 @@ export function openCreateFieldForm(item, siblings = [], thresholds = null) {
     bothLevels: both,
     fieldId: null,
     fieldName: item.name,
-    draft: { label: readableName(item, thresholds).slice(0, FIELD_LABEL_MAX), supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
+    // The name kept in OptiMove carries no range: one team's limits can change or differ between clubs (the UX review).
+    draft: { label: readableName(item).slice(0, FIELD_LABEL_MAX), supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
   };
 }
 
