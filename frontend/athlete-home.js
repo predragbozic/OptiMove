@@ -115,7 +115,7 @@ function renderTodayCard(today) {
     return `
       <section class="panel athlete-home-today">
         <p class="eyebrow">Today's training</p>
-        <div class="empty-state">No training is assigned for today.</div>
+        <div class="empty-state">No training plan is assigned for today.</div>
       </section>
     `;
   }

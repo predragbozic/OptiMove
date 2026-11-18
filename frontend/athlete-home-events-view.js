@@ -19,19 +19,21 @@ export function athleteHomeEventDayWord(iso, today) {
 }
 
 // The time: "18:00–19:30", "18:00" without an end, "Time not set" without a start (the manager's Q2: an event without a
-// time is not necessarily a whole day; the coach may not have entered it).
+// time is not necessarily a whole day; the coach may not have entered it). A day off has no time by nature, so without
+// one it shows no time part at all (the manager's decision on PR #603; its kind is `day_off`).
 export function athleteHomeEventTime(row) {
-  if (!row.startTime) return "Time not set";
+  if (!row.startTime) return row.eventKind === "day_off" ? "" : "Time not set";
   return `${String(row.startTime).slice(0, 5)}${row.endTime ? `–${String(row.endTime).slice(0, 5)}` : ""}`;
 }
 
-// The day(s) and the time: "Today · 18:00", "Fri 21 Nov – Sun 23 Nov · 09:00–17:00". A multi-day event that began
-// before today shows its real first day.
+// The day(s) and the time: "Today · 18:00", "Fri 21 Nov – Sun 23 Nov · 09:00–17:00" (a date range always with the en
+// dash and a space on each side, the manager's decision on PR #603). A multi-day event that began before today shows
+// its real first day.
 export function athleteHomeEventWhen(row, today) {
   const days = row.to && row.to !== row.from
     ? `${athleteHomeEventDayWord(row.from, today)} – ${athleteHomeEventDayWord(row.to, today)}`
     : athleteHomeEventDayWord(row.from, today);
-  return `${days} · ${athleteHomeEventTime(row)}`;
+  return [days, athleteHomeEventTime(row)].filter(Boolean).join(" · ");
 }
 
 function typeWord(row) {

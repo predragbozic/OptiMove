@@ -158,6 +158,24 @@ test("E4. the words: Today, Tomorrow, a weekday and a date; a time, a start only
   assert.ok($$(".athlete-home-event svg.athlete-home-event-icon").length === 3);
 });
 
+test("E4b. a Day off (kind day_off) without a time shows no time part; with a time it shows it; every other kind keeps Time not set; a date range is \" – \" (en dash, a space each side)", async () => {
+  calendarServer(() => ({ status: 200, body: answer([
+    card({ id: "off", date: TODAY, title: "Day off", eventKind: "day_off", eventTypeLabel: "Day off" }),
+    card({ id: "offtimed", date: "2026-11-19", title: "Day off", eventKind: "day_off", eventTypeLabel: "Day off", startTime: "12:00:00" }),
+    card({ id: "rest2", date: "2026-11-20", title: "Rest weekend", eventKind: "day_off", eventTypeLabel: "Day off", span: { from: "2026-11-20", to: "2026-11-21" } }),
+    card({ id: "rest2", date: "2026-11-21", title: "Rest weekend", eventKind: "day_off", eventTypeLabel: "Day off", span: { from: "2026-11-20", to: "2026-11-21" } }),
+    card({ id: "meet", date: "2026-11-22", title: "Video analysis", eventKind: "meeting", eventTypeLabel: "Meeting" }),
+  ]) }));
+  await load();
+  const texts = rowTexts();
+  assert.match(texts[0], /^Day off Today$/, "no time part, not even Time not set");
+  assert.match(texts[1], /^Day off Tomorrow · 12:00$/);
+  assert.match(texts[2], /^Rest weekend Fri 20 Nov – Sat 21 Nov · Day off$/);
+  assert.match(texts[3], /^Video analysis Sun 22 Nov · Time not set · Meeting$/);
+  assert.ok(texts[2].includes(" – "), "the range: the en dash with a space on each side");
+  assert.equal(/\d - |\d-[A-Z]/.test(dom.window.document.body.textContent), false, "no hyphen in a range");
+});
+
 test("E5. the place: a library place's name, address with Open in maps and note; no link without an address; a one-off text without a link; no place, no line; markup is text", async () => {
   const xss = "<img src=x onerror=alert(1)>";
   calendarServer(() => ({ status: 200, body: answer([
