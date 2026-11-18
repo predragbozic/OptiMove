@@ -162,10 +162,11 @@ function applyInventorySearch(search) {
   const doc = globalThis.document;
   if (!doc?.querySelectorAll) return;
   const items = sourceFieldsState().inventory.items;
+  const limits = sourceFieldsContext()?.mayVerify ? sourceFieldsState().inventory.zoneThresholds : null;
   let shown = 0;
   doc.querySelectorAll("[data-sf-inv-row]").forEach((row) => {
     const item = items[Number(row.dataset.sfInvRow)];
-    const match = Boolean(item) && inventoryMatches(item, search);
+    const match = Boolean(item) && inventoryMatches(item, search, limits);
     row.hidden = !match;
     if (match) shown += 1;
   });

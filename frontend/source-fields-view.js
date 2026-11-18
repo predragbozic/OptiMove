@@ -175,7 +175,7 @@ function inventoryRowHtml(item, index, ctx, search, zoneThresholds = null, techn
         <code class="source-fields-code source-fields-inventory-raw">${escapeHtml(item.name)}</code>
         <span class="metric-variables-item-facts muted source-fields-inventory-facts">${inventoryFacts(item, ctx)}</span>` : "";
   return `
-    <li data-sf-inv-row="${index}"${inventoryMatches(item, search) ? "" : " hidden"}>
+    <li data-sf-inv-row="${index}"${inventoryMatches(item, search, ctx.mayVerify ? zoneThresholds : null) ? "" : " hidden"}>
       <div class="source-fields-inventory-item">
         ${item.isValue === true
           ? `<span class="metric-variables-item-name">${escapeHtml(readableName(item, ctx.mayVerify ? zoneThresholds : null))} <span class="source-fields-inventory-unit">${escapeHtml(inventoryUnitText(item))}</span></span>
@@ -210,7 +210,8 @@ function inventoryListHtml(inv, ctx) {
   const index = new Map(inv.items.map((item, i) => [item, i]));
   const row = (item) => inventoryRowHtml(item, index.get(item), ctx, inv.search, inv.zoneThresholds, inv.technical);
   const { groups, other } = inventoryGroups(inv.items, { merge: !inv.technical });
-  const matches = (items) => items.some((item) => inventoryMatches(item, inv.search));
+  const limits = ctx.mayVerify ? inv.zoneThresholds : null;
+  const matches = (items) => items.some((item) => inventoryMatches(item, inv.search, limits));
   // The team limits of the zone families in a group, once (platform only).
   // Each family's limits once in the whole list, in the first group that has one of its zones (the UX review).
   const said = new Set();
@@ -237,7 +238,7 @@ function renderInventoryHtml(s, ctx) {
   const chips = [["", "All"], ...INVENTORY_ENDPOINTS.map((e) => [e, ENDPOINT_LABEL[e]])];
   // The plain view lists the values only; the technical view adds the names that are not values.
   const shown = inv.technical ? inv.items : inventoryGroups(inv.items, { merge: true }).groups.flatMap((g) => g.items);
-  const matching = shown.filter((item) => inventoryMatches(item, inv.search)).length;
+  const matching = shown.filter((item) => inventoryMatches(item, inv.search, ctx.mayVerify ? inv.zoneThresholds : null)).length;
   return `
     <section class="metric-classification-section source-fields-inventory" aria-labelledby="sf-inventory-title">
       <h3 id="sf-inventory-title">More values GPEXE sends</h3>

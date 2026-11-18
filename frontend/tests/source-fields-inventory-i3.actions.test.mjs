@@ -400,3 +400,29 @@ test("K (the owner's second screenshot): speed zones read in km/h as GPEXE shows
   assert.deepEqual(names, ["Speed zone 2 · 19.8–25.2 km/h · distance (m)", "Speed zone 3 · 25.2 km/h and above · distance (m)"]);
   assert.match(text(), /Speed zone limits of the team: 19\.8 · 25\.2 km\/h, from the newest saved session/);
 });
+
+test("S (the code review's MEDIUM): the search finds what the row shows - 'zone 4 distance' and the range '60–75'", async () => {
+  pages.default = { status: 200, body: { nextCursor: null, zoneThresholds: { power: { values: [20, 25, 60, 75] }, speed: null, asOf: null }, fields: [
+    item({ name: "athletesessionpowerzone_distance_4", unitWord: "distance", unit: "m", zone: { family: "power", measure: "distance", number: 4 } }),
+    item({ name: "metabolic_power" }),
+  ] } };
+  await loadSourceFieldsSection(render);
+  for (const q of ["zone 4 distance", "60–75", "power zone 4 · 60"]) {
+    handleSourceFieldsInput(Object.assign($("[data-sf-inv-search]"), { value: q }));
+    assert.deepEqual(shownNames(), ["athletesessionpowerzone_distance_4"], q);
+    assert.equal($("#sf-inv-no-match").hidden, true, q);
+  }
+});
+
+test("M2 (the code review's LOW): only the whole session's and a drill's rows merge, keeping the one that can be added; a per-athlete row of the same name stays its own", async () => {
+  pages.default = ok([
+    item({ endpoint: "details.session", name: "x", creatable: false }),
+    item({ endpoint: "details.drill", name: "x", creatable: true }),
+    item({ endpoint: "athlete_session", name: "y", kind: "number", creatable: true }),
+    item({ endpoint: "details.session", name: "y", covered: true }),
+  ]);
+  await loadSourceFieldsSection(render);
+  assert.ok($('[data-action="source-fields-create-open"][data-sf-inv-endpoint="details.drill"][data-sf-inv-name="x"]'), "the drill row that can be added is kept");
+  assert.ok($('[data-action="source-fields-create-open"][data-sf-inv-endpoint="athlete_session"][data-sf-inv-name="y"]'), "the per-athlete row stays");
+  assert.equal(rows().filter((r) => !r.hidden).length, 3);
+});

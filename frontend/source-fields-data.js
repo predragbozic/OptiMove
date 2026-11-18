@@ -93,10 +93,16 @@ export const KIND_LABEL = {
   object: "group of values",
   list: "list",
 };
-// The search narrows the loaded names in place, by name or readable name, ignoring case.
-export const inventoryMatches = (item, search) => {
-  const q = String(search || "").trim().toLowerCase();
-  return !q || String(item.name || "").toLowerCase().includes(q) || readableName(item).toLowerCase().includes(q);
+// The search narrows the loaded names in place, by GPEXE's name or the text the row shows (with the same team limits),
+// ignoring case, "·" and repeated spaces (the code review: search what is on screen).
+const searchText = (t) => String(t || "").toLowerCase().replace(/·/g, " ").replace(/\s+/g, " ").trim();
+// Every word of the query must appear, in any order ("zone 4 distance" finds "Power zone 4 · 60–75 W/kg · distance").
+export const inventoryMatches = (item, search, thresholds = null) => {
+  const words = searchText(search).split(" ").filter(Boolean);
+  if (!words.length) return true;
+  const name = searchText(item.name);
+  const shown = searchText(readableName(item, thresholds));
+  return words.every((w) => name.includes(w) || shown.includes(w));
 };
 
 // The owner's first use of the list (2026-11-18): a readable name first, the unit (never GPEXE's word), the zone's own
@@ -143,15 +149,19 @@ export function zoneLimitsNote(family, zoneThresholds, day = "") {
 // some per athlete too); with the sources hidden, two rows of one plain name could not be told apart. The row kept is
 // one in use if any is, then the whole session's, then a drill's, then a per-athlete one; Use this value on it opens
 // the form with both levels when GPEXE sends both (openCreateFieldForm's siblings).
-const MERGE_ORDER = ["details.session", "details.drill", "athlete_session", "more.events", "more.complementary_data"];
+// Only the whole session's and a drill's rows merge: they share one source key (details.players.<name>); a per-athlete
+// or /more/ row of the same name is another field and stays its own row (the code review's LOW). The row kept is the one
+// in use, else the one that can be added, else the whole session's.
+const MERGED = ["details.session", "details.drill"];
 function mergeByName(values) {
-  const rank = (i) => (i.covered ? 0 : 1) * 10 + (MERGE_ORDER.indexOf(i.endpoint) + 1 || 9);
+  const rank = (i) => (i.covered ? 0 : 10) + (i.creatable === true ? 0 : 5) + MERGED.indexOf(i.endpoint);
   const best = new Map();
   for (const item of values) {
+    if (!MERGED.includes(item.endpoint)) continue;
     const kept = best.get(item.name);
     if (!kept || rank(item) < rank(kept)) best.set(item.name, item);
   }
-  return values.filter((item) => best.get(item.name) === item);
+  return values.filter((item) => !MERGED.includes(item.endpoint) || best.get(item.name) === item);
 }
 export function inventoryGroups(items, { merge = false } = {}) {
   const all = items.filter((i) => i.isValue === true);
