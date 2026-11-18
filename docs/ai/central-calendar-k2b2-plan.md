@@ -1,124 +1,259 @@
 # Central calendar — K2b-2 plan: *Ask athletes* on an event (D40)
 
-Status: **proposed (2026-11-18).** Q1 is decided (section 6); Q2–Q6 are open. No code, no migration. Written by the
-calendar stream's manager against the checked-out code at `946914f4` (`main`, PR #603 merged). No persistent database
-was read.
+Status: **proposed (2026-11-18), revised with the owner's answers of the same day** (relayed by the OptiMove manager,
+to whom the owner handed the coordination). Q1–Q4 and Q6 are decided (section 7). **Q5 is the manager's recommendation,
+waiting for the owner's confirmation.** The owner confirms the revised plan before any code. No code, no migration in
+this document. Written by the calendar stream's manager against `main` `946914f4`. No persistent database was read.
 
-D40 (the owner, 2026-11-02; `docs/ai/central-calendar-k2b-plan.md` section 10 and D40): questions to athletes go **only
-through the Tests module**. K2b-2 is *Ask athletes* on an event: a questionnaire from the Tests library is scheduled in
-one click for the event's athletes, with a window after the event; the answers live in Tests and show on the event's
-card; and the Tests parameters are **mapped into Metrics Core** so the answers reach the Training Load dashboards (no
-new registry; `.claude/rules/metrics-core-mapping.md`, ADR-007).
+D40 (the owner, 2026-11-02; `docs/ai/central-calendar-k2b-plan.md` section 10 and D40): questions to athletes go only
+through existing question channels, never through a new registry. K2b-2 is *Ask athletes* on an event.
 
 ## 1. What the code allows today (read-only discovery, 2026-11-18)
 
-**The Tests module** (migrations `202608220900_tests_v42_*` to `202608300900_tests_v42_phase4_*`, `backend/src/routes/tests.js`):
-- **Only WELLNESS can be scheduled.** `POST /api/tests/schedules` and `/schedules/bulk` refuse every other test version
-  (`tests.js:22`, `:745-746`), the athlete's form reads WELLNESS's parameters whatever the assignment
-  (`tests.js:175-186`), and no route creates or edits a test (`GET /library` marks only WELLNESS `schedulable`). WELLNESS
-  is a system test: five 0–10 items, an injury yes / no and a `wellness_total` average.
-- **The window is one local day.** A schedule stores wall-clock `opens_time` ≤ `due_time` ≤ `closes_time` on a local date;
-  a one-time schedule has `end_date = start_date`. A window across midnight or over several days cannot be expressed.
-  Each athlete's window is computed in their own device time zone, falling back to the schedule's.
-- **No request key.** `POST /schedules` is one plain transaction; a lost answer and a retry can make two schedules.
-- **Targets** are athlete / team / club, the same three shapes as an event's targets. A team's or club's members are
-  frozen once per occurrence, when it first materializes on the day.
-- **Notifications** are written only when the request carries `notificationRules`; without them the worker sends nothing
-  for that schedule. `backend/README-tests-notification-worker.md` says the worker is **not scheduled anywhere** (no
-  Render cron). Whether production runs it was not checked.
-- **Results:** the calendar already builds a test card with `results {expected, completed, missed}` and folds it into an
-  event whose `test_schedule_id` names its schedule (`calendarQuery.js:1035-1055`, `:1218-1227`). `missed` counts the
-  assignment status `missed`, which nothing writes for tests; the Tests module derives "missed" from `closes_at`.
+**RPE outside a plan: the Training Load external schedules** (`migrations_v2/202609011000_training_load_v4_external_scheduling.sql`
+and v6–v8; `backend/src/routes/trainingLoad.js`):
+- `training_load.external_schedules` is "an RPE session scheduled outside any Weekly plan": a label, its targets
+  (athlete / team / club), occurrences per date, one assignment per athlete with that athlete's own window
+  (`opens_at` / `due_at` / `closes_at` in their device time zone).
+- `POST /api/training-load/external-schedules` creates one in one transaction. It has **no request key**, so a retried
+  POST makes a second schedule, and it sends **no notification**.
+- The athlete answers through `POST /api/training-load/external-assignments/:id/rpe`. The value goes into
+  **`training_load.session_feedback`** with `source = 'scheduled_external'`, the one RPE / sRPE table of ADR-004, and
+  the activity is materialized in the same transaction.
+- **The calendar already links it:** `calendar.events.external_schedule_id` (v49, a real foreign key, one planned event
+  per schedule, **no kind restriction**), checked by `checkScheduleRefs`. The calendar read folds the schedule's
+  `rpe {asked, submitted, missed}` into the event's card, and the card shows "RPE x/y" (`central-calendar-view.js:325`).
+  No screen sets the link today; only the API accepts it.
+- **`expects: ['rpe']`** (the default of the *Training* and *Match* types) asks nobody by itself. With no channel, the
+  panel says "RPE is expected, but nothing attached to this event asks the athletes for it yet." When planned sessions
+  are linked and aligned, their `rpe_enabled` follows it, and planned RPE is answered through `POST /sessions/:id/rpe`
+  into the same `session_feedback`.
 
-**The calendar** (v49, `migrations_v2/202610311000_calendar_v49_events.sql`):
-- `calendar.events.test_schedule_id` exists (no foreign key; a trigger checks it), but **only an event of kind `test`**
-  may carry one (`:327-331`), and at most one planned event per schedule (`:271-272`). So a questionnaire after a match
-  or a training cannot be linked today without a migration.
+**The Tests module** (`202608220900_tests_v42_*` to `202608300900_tests_v42_phase4_*`, `backend/src/routes/tests.js`):
+- **Only WELLNESS can be scheduled.** `POST /api/tests/schedules` refuses any other version, and the athlete's form reads
+  WELLNESS's parameters. The library holds WELLNESS (an athlete self-report: fatigue, sleep, soreness, stress, mood 0–10,
+  injury yes / no, a total) and FMS (coach-measured movement tests and a battery), with no column telling a
+  self-report from a coach measurement.
+- **The window is one local day** (`opens_time` ≤ `due_time` ≤ `closes_time` on a date; a one-time schedule has
+  `end_date = start_date`).
+- **No request key** on `POST /schedules`. Team and club members are frozen once per occurrence, at its first
+  materialization on the day.
+- An event may carry `test_schedule_id` (v49) **only if it is of kind `test`**: the test the event *is*.
 
-**Metrics Core** (v27, v34, v53, v63, v74; `backend/src/sourceMetric*`):
-- The mapping chain is source field → mapping version → **activation per team binding** → value provenance. An
-  activation needs a `source_team_bindings` row, which needs a credential connection to an approved external host; the
-  provenance guard needs an open activation and an active binding (v34 `:1300`, `:1483-1610`; v53 `:632-718`). v74's
-  "generic source fields" are generic GPEXE fields only.
-- So **Tests cannot reach the dashboards through the existing mapping chain** without new Metrics Core schema and changes
-  in `sourceMetric*` files, which are off-limits for the calendar stream while the mapping track is active, and which
-  belong to the Metrics Core manager's line.
-- The dashboards read values by variable whatever wrote them (`trainingLoadDashboardQuery.js`), so once Tests values
-  exist as Metrics Core values with their provenance, no dashboard change is needed beyond an entry method.
+**Notifications:**
+- `public.app_notifications` is the app's in-app notification (recipient, type, title, body, entity, metadata,
+  `dedupe_key` with a partial unique index). `type` is free text, so a new type needs no migration.
+- A plan's publish writes its notifications **inside the plan's transaction** (`notifyPlanAssignments`,
+  `routes/builder.js:179-212`) and sends the realtime event after the COMMIT. The frontend shows an unknown type as a
+  plain row and refreshes on `notifications_changed`.
+- **Neither worker is scheduled:** neither the Tests notification worker nor the Training Load one runs on a cron
+  (`backend/README-tests-notification-worker.md`, `README-training-load-notification-worker.md`). So nothing invites or
+  reminds athletes today unless a coach presses *Remind*.
 
-## 2. The proposed split
+**Metrics Core:** the mapping chain (activation per team binding → value provenance) needs an external binding, so Tests
+answers cannot reach the dashboards through it. That stays with the mapping line (Q1).
 
-- **K2b-2a — *Ask athletes* (the calendar stream):** schedule a questionnaire for an event's athletes in one click, link
-  it to the event, show the answers' count on the event's card. Calendar and Tests code, one calendar migration.
-- **K2b-2b — Tests answers into Metrics Core (the Metrics Core line, not the calendar's):** a design for an internal
-  source (Tests) in the mapping chain, or an estimates-style provenance of its own; it needs the Metrics Core manager's
-  contract and the owner's decision, and it touches `sourceMetric*`. The calendar stream does not build it; K2b-2a
-  works without it, and the answers stay in Tests until it exists.
+## 2. The shape: one feature over the two existing channels
 
-## 3. K2b-2a, as proposed
+*Ask athletes* adds no question store of its own. An event's question is always one of these two:
+- **RPE**, through a Training Load external schedule linked by the existing `calendar.events.external_schedule_id`. The
+  answer lands in `session_feedback` as today (ADR-004), and the card's existing "RPE x/y" counts it.
+- **A Tests questionnaire** (today WELLNESS), through a Tests schedule linked by a new calendar link table (section 4),
+  because v49 keeps `test_schedule_id` for the test a `test` event *is*. The answers stay in Tests.
 
-- **Who:** whoever may manage the event (`eventWriteBasis`), in the event owner's workspace. The schedule's owner is the
-  event's owner (the existing `scheduleBelongsToOwner` rule), its targets are the event's targets.
-- **Where:** in the event's panel, for a planned event that has targets (not *Day off*): **Ask athletes**. One form:
-  the questionnaire (today WELLNESS only, named as the Tests library names it) and *When* (Q3). One confirmation line
-  names how many athletes will be asked. One button.
-- **The write:** one calendar command with a `requestKey`, through the calendar's one runner (`calendarCommandRunner.js`:
-  the writer lock, then the event row `FOR UPDATE`, the right decided again on the locked row, the request and change
-  rows, the bounded COMMIT). In that transaction: the Tests schedule row, its targets and its notification rules
-  (invitation and one reminder), through a helper extracted from `routes/tests.js` (`insertScheduleRow`, the targets, the
-  rules) so both modules write the same rows; then the event's link. A lost answer is *Result not confirmed* · *Check
-  result* with the same key, never a second schedule.
-- **The link (★ migration, v81 or later):** a new table `calendar.event_questionnaires` (event, test schedule, who, when),
-  one live questionnaire per event, trigger-checked like v49's reference (the shared fixture has no Tests schema), with
-  its audit row; v49's `test_schedule_id` of a `test` event keeps its meaning (the test the event *is*). The numbers
-  agreed with the Metrics Core line (2026-11-18, its correction of the same day): v75 is reserved (dashboards D2a); v77
-  (PR #608, computed variables part 1), v78 (computed variables part 2), v79 (ratio and difference) and v80 (zone with a
-  condition) are the mapping line's; the calendar takes v81 or later, checked against `origin/main` and the 12-digit
-  prefix rule when the file is written, and only on the owner's order naming the file.
-- **Afterwards:**
-  - the event's card and panel: "Questions: 3 of 18 answered" for a manager (a count, never a name on the card; the panel
-    lists who answered for a manager, as the test card does); the athlete sees nothing new on the calendar card (D21),
-    and answers in Tests as today;
-  - `missed` on the folded card is derived from the window's close, as the Tests module does (a fix in `calendarQuery.js`);
-  - the event cancelled → its questionnaire's schedule cancelled in the same transaction; the event's day changed →
-    the schedule moves with it while nobody has answered, otherwise the change is refused with one sentence (Q5);
-  - *Remove questions* while nobody has answered.
-- **Tests:** disposable databases through the T1 runner (rights for every basis and the identical 404, the request-key
-  replay and a lost COMMIT, the schedule's rows equal to a `POST /schedules` with the same input, cancel and move,
-  late joiners, the count), mutations on the guards, the frontend suite through the real handlers, the frontend PR gate,
-  a browser check at 360 / 375 / 390 / 1280 px on the real server with a disposable database.
-- **Reviews:** `code-reviewer`, `db-reviewer`, `security-reviewer` (a write across two modules' tables), `ux-design-reviewer`,
-  `mobile-qa`; the fresh independent review; the owner's external review (triggers 1 and 4: a migration, a transaction
-  with idempotency).
-- **Slices:** K2b-2a-1 the migration and the backend command (★); K2b-2a-2 the screen.
+The calendar writes those rows in its own command, through helpers extracted from `routes/trainingLoad.js` and
+`routes/tests.js`. Both modules' create routes and the calendar therefore write the same rows, and a test pins that.
 
-## 4. What K2b-2a leaves out
+### 2.1 RPE without two places for one answer (the owner's point 2)
 
-- Questionnaires other than WELLNESS (they need the Tests module's authoring and execution, a Tests track).
-- A window across midnight or over several days (a Tests schema change).
-- Push notifications while the Tests worker is not scheduled (Q6).
-- Any Metrics Core or dashboard change (K2b-2b).
+An event's RPE comes from **exactly one** channel:
+- **Linked planned sessions:** when the event has planned sessions linked (K2a-1b), its RPE is theirs, as today: the
+  athletes answer the session (`rpe_enabled`), and *Ask athletes* does not offer RPE ("RPE comes from the linked
+  sessions").
+- **Its own external schedule:** otherwise *Ask athletes* creates one RPE external schedule for the event's athletes and
+  day, linked through `external_schedule_id`.
+- **Linking a planned session to an event that already asks for RPE:**
+  - while nobody has answered, the event's RPE schedule is cancelled in the same transaction and the sessions take over;
+  - once someone has answered, the link is refused with one sentence ("Athletes have already answered this event's RPE.
+    Remove the session link or keep the event's own RPE.").
+- An athlete is therefore never asked twice for one event's RPE, and every RPE answer is one `session_feedback` row.
 
-## 5. Risks
+## 3. What the coach and the athlete see
 
-- The Tests module writes rows the calendar now creates: a later Tests change to `insertScheduleRow` must keep the
-  extracted helper as the one writer (a test pins both call sites to the same rows).
-- A team's members are frozen at the day's first materialization (the Tests rule): an athlete added later that day is
-  not asked. The calendar's membership-on-the-day rule agrees for the day itself.
+### 3.1 Turned on per club, off by default (the OptiMove manager's standing note)
 
-## 6. Decisions for the owner
+- The answers describe the athletes' state, minors included, and the legal basis is still open with the owner. So *Ask
+  athletes* exists only where it is turned on: a switch **per club, off by default**. While it is off, nothing of it
+  shows and the commands answer the identical 404.
+- **Who turns it on** is the owner's decision (Q7). The recommendation is a platform admin, in Settings → Calendar of
+  that club's workspace, with a reason, recorded; the club's admin sees the state.
 
-- **Q1 — the split: decided.** The calendar builds K2b-2a only (*Ask athletes* and the answers' count on the card), and
-  *answers in the dashboards* (K2b-2b) stays with the mapping line, after its computed variables. Decided by the OptiMove
-  manager (the Metrics Core line) on 2026-11-18, to whom the owner handed the coordination („to iskomuniciraj sve sa
-  rukovodiocem optimove").
-- **Q2 — the questionnaires:** WELLNESS only for now (recommended; it is the only schedulable test), or wait for Tests
-  authoring first.
-- **Q3 — when the athletes answer:** two choices in the form, *After the event* (from the event's end, or 18:00 without
-  an end time, until 23:59 the same day) and *Next morning* (07:00–12:00 the next day) (recommended); or one fixed window.
-- **Q4 — which events:** every planned event with athletes except *Day off* (recommended), or only trainings and matches.
-- **Q5 — changes after asking:** cancelling the event cancels the questions; moving it moves them while nobody has
-  answered, otherwise the move is refused (recommended); or questions never move.
-- **Q6 — notifications:** the Tests worker is not scheduled per the repository; until it is, athletes see the questions
-  in the app (Athlete Home, Tests) but get no notification. Scheduling it (a Render cron job) is the owner's
-  infrastructure decision; K2b-2a works either way.
+### 3.2 Default questions per event type (Q4, the owner's point 2)
+
+- **Settings → Calendar → Event types** gets a *Questions for athletes* choice per type: none, RPE, WELLNESS, or both.
+- The proposed defaults follow `default_expects`: **Training and Match: RPE**; Test, Travel, Meeting and Camp: none;
+  **Day off: never**, and the choice is not offered for it.
+- A new event takes its type's questions, pre-ticked in the form. The coach adds or removes them per event, before or
+  after saving.
+
+### 3.3 When the athletes answer (Q3, the owner's point 1)
+
+- Three choices in the form:
+  - **After the event:** from the event's end time (18:00 without one) until 23:59 the same day;
+  - **Next morning:** 07:00–12:00 the next day;
+  - **Custom:** a date (the event's days or the day after) and a from–to time.
+- **Custom stays inside one day for now,** with the sentence "Answers can be collected within one day for now." A window
+  across midnight needs a Tests and Training Load schema change, which is a later step.
+- A multi-day event asks on its last day (After the event) or the day after (Next morning).
+
+### 3.4 The athlete: a soft prompt, never a locked app (the owner's point 3)
+
+- **At the moment of asking:** an in-app notification for every athlete asked, written in the same transaction as the
+  question. Its type is `calendar_question_asked`, with a dedupe key per event, question and athlete, for example
+  "Your coach asks how the match went. Answer after 20:00 today." It is never a push notification for now (Q6).
+- **When the athlete opens the app** while a question is open (its window is open and it is not answered):
+  - **the prompt:** the questionnaire comes first, over the whole screen, with the primary button **Answer now** and a
+    secondary **Later**;
+  - **Answer now** opens the existing form: the Tests WELLNESS form, or the RPE form of the external assignment;
+  - **Later** is recorded with the time;
+  - **after that:** the prompt does not come back during the same app session. The question stays at the top of Athlete
+    Home until it is answered or its window closes;
+  - **no lock:** the app is never locked, and the schedule is always visible. A strict "Required to continue" is not
+    built.
+- **The coach** sees, in the event's panel:
+  - the counts ("RPE 3/18", "WELLNESS 2/18");
+  - three lists of names: who answered, who chose *Later*, who has not answered yet;
+  - the counts on the card, as "RPE x/y" today. Names appear only in the panel, for whoever may manage the event.
+
+### 3.5 Changes after asking (Q5, the manager's recommendation, waiting for the owner)
+
+- **The event is cancelled:** its questions are cancelled in the same transaction. The schedules are cancelled, nobody
+  is asked any more, and the answers already given stay.
+- **The event's day or time changes:**
+  - while nobody has answered, the questions' window moves with it;
+  - once someone has answered, the change is refused with one sentence ("Athletes have already answered this event's
+    questions.").
+- **Remove a question:** allowed while nobody has answered it. Afterwards it is closed early instead, and the answers
+  stay.
+
+## 4. The data (★ one calendar migration, v81 or later)
+
+The numbers were agreed with the Metrics Core line (2026-11-18, its correction of the same day):
+- v75 is reserved for the dashboards' D2a;
+- v77 (PR #608, computed variables part 1), v78 (computed variables part 2), v79 (ratio and difference) and v80 (zone with
+  a condition) are the mapping line's;
+- the calendar takes **v81 or later**. The number is checked against `origin/main` and the 12-digit prefix rule when the
+  file is written, and the file is written only on the owner's order naming it.
+
+The migration, in the `calendar` schema:
+- **the club switch:** `calendar.club_question_settings` (club, on / off, who, when, reason), with its change log;
+- **the type's defaults:** `calendar.event_types.default_questions` (`text[]`, values `rpe` / `wellness`, checked; the
+  system types seeded from `default_expects`; never for `day_off`). It is exempt from v51's "the meaning is frozen" rule,
+  like the label;
+- **the Tests link:** `calendar.event_questionnaires` (event, Tests schedule, who, when; one live link per event and test
+  version). It is trigger-checked like v49's reference, because the shared test fixture has no Tests schema;
+- **the *Later* record:** `calendar.question_postponements` (event, question, athlete, when). It is append-only, and an
+  athlete writes only her own row;
+- the request and change rows of the calendar's runner, for the new operations.
+
+## 5. The commands and reads
+
+- **Ask / remove / move:**
+  - one calendar command per change, with a `requestKey`, through the calendar's one runner (`calendarCommandRunner.js`:
+    the writer lock, the event row `FOR UPDATE`, the right decided again on the locked row, the request and change
+    rows, the bounded COMMIT);
+  - in that transaction: the external or Tests schedule rows (targets = the event's targets, owner = the event's
+    owner), the link, and the in-app notifications;
+  - a lost answer is *Result not confirmed* · *Check result* with the same key, never a second schedule.
+- **Create and edit of an event:** they carry the questions, which run the same steps inside the event's own command.
+- **The athlete's open questions:**
+  - one read for the prompt and Athlete Home: her open questions of events, each with its kind, the event's title and
+    time, the window and the link to its form;
+  - only her own; nothing about another athlete.
+- **The athlete's *Later*:** one small write with a `requestKey`, refused for a question that is not hers or not open.
+- **The coach's panel:** the counts and the three name lists, for a manager of the event only. For everyone else it is
+  the identical 404, as the panel's athlete list today.
+- **The fix:** `missed` on a folded Tests card is derived from the window's close, as the Tests module does.
+
+## 6. Slices, tests and reviews
+
+**K2b-2a-1 (★, migration and backend):**
+- **Contents:** the migration of section 4; the commands and reads of section 5; the extracted helpers; the
+  notifications; the fixes.
+- **Tests:**
+  - every basis, and the identical 404 while the club's switch is off;
+  - the request-key replay and a lost COMMIT;
+  - the schedules equal to their module's own create route with the same input;
+  - RPE's one channel (section 2.1);
+  - cancel, move, remove;
+  - late joiners;
+  - *Later* only for her own;
+  - the notifications in the same transaction;
+  - the counts.
+- **Gates:** mutations on the guards; the T1 runner on disposable databases.
+
+**K2b-2a-2 (coach screens):**
+- Settings → Calendar: the type's *Questions for athletes*, and the club's switch for whoever Q7 names;
+- the event form and the panel: the questions, the window choices, the counts and the three lists.
+
+**K2b-2a-3 (athlete screens):** the soft prompt on opening the app, the top of Athlete Home, and the notification's
+link.
+
+**Reviews:**
+- `code-reviewer`, `db-reviewer` and `security-reviewer` for 2a-1;
+- `code-reviewer`, `ux-design-reviewer` and `mobile-qa` for 2a-2 and 2a-3;
+- the fresh independent review on each;
+- the owner's external review for 2a-1 (trigger 1, a migration; trigger 4, transactions and idempotency);
+- browser checks at 360 / 375 / 390 / 1280 px on the real server with a disposable database.
+
+**Not in K2b-2a:**
+- questionnaires other than WELLNESS (Tests authoring and execution, a Tests track);
+- a window across midnight;
+- push notifications and scheduling the workers;
+- any Metrics Core or dashboard change (K2b-2b, the mapping line).
+
+## 7. The owner's decisions (2026-11-18) and what is still open
+
+- **Q1, the split: decided.** The calendar builds K2b-2a. *Answers in the dashboards* (K2b-2b) stays with the mapping
+  line, after its computed variables.
+- **Q2, the questionnaires: decided** („Upitnici koji se nalaze u listi testova ili listi OptiMove (RPE) bi trebalo da
+  mogu da se nađu unutar Ask athletes"). Offered now: **RPE** (the existing Training Load channel) and **WELLNESS** (the
+  one questionnaire Tests can schedule). Any other Tests questionnaire appears once Tests can schedule it, with no
+  calendar change.
+- **Q3, the window: decided.** After the event, Next morning, and Custom inside one day for now (3.3).
+- **Q4, which events: decided** („Ask athletes može da stoji kao default u nekim događajima, a da se u nekim omogući").
+  Defaults per type in Settings → Calendar; Training and Match ask for RPE by default; never on Day off (3.2).
+- **Q5, changes after asking: the manager's recommendation (3.5), waiting for the owner's confirmation.**
+- **Q6, notifications: decided.** The in-app notification only, as when a plan is published; no push for now (3.4).
+- **The soft prompt: decided** (3.4). The strict variant is not built.
+- **Q7, still open:** who turns *Ask athletes* on for a club. The recommendation is a platform admin, recorded with a
+  reason, as for the import switch. It stays off everywhere until then.
+
+## 8. Proposed next: *Daily questions* for a team, skipping days off (K2b-2c; the owner's idea, 2026-11-18)
+
+The owner: „takodje moze da se desi da ja zakazem wellness svaki dan anketu osim day off i da bude validna u periodu
+nekom".
+
+- **What exists:** the Tests module already schedules WELLNESS **every day** of a period (`scheduleKind: 'daily'`, from –
+  to), with a window each day, and one-time schedules for listed dates (`POST /schedules/bulk`). What it cannot do is
+  skip a team's days off, which only the calendar knows (*Day off* events, kind `day_off`).
+- **The proposal:**
+  - *Daily questions* for a team: the questionnaire (today WELLNESS), the period from – to and the daily window (inside
+    one day, as in 3.3);
+  - the questionnaire is scheduled for every day of the period **except the days the team has a planned *Day off*
+    event**. It is one Tests schedule per day, linked to the calendar's series, so a single day can be cancelled.
+- **The skip is live** (recommended): a *Day off* added later cancels that day's questionnaire in the same transaction,
+  if nobody has answered it yet. A *Day off* cancelled before its day begins brings the day back.
+  - The alternative is a static skip: only the days off that exist at scheduling time are skipped. It is simpler, but
+    it drifts from the calendar.
+- **Never twice on one day:** on a day covered by the team's daily WELLNESS, an event of that day does not offer WELLNESS
+  ("Today's WELLNESS already covers this day"). Its RPE stays.
+- **The same club switch** (3.1), off by default. The same athlete prompt and Athlete Home card (3.4), and the same coach
+  lists (who answered, chose *Later*, has not answered).
+- **The data:** the series (team, questionnaire, period, window, who, when) and its days' links. That goes in the same
+  calendar migration as section 4 if K2b-2c is built together with K2b-2a, or in the next free calendar number.
+- **Open for the owner:**
+  - **Q8:** the live skip (recommended), or the static one;
+  - **Q9:** the order. Is *Daily questions* (K2b-2c) built before or after the per-event questions (K2b-2a)? Both share
+    the switch, the prompt and the migration, so building them as one slice series is also possible. The
+    recommendation: K2b-2a-1, the backend of both, in one migration; then the screens.
