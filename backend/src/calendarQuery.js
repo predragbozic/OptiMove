@@ -463,6 +463,9 @@ async function readEventRows(ctx, { from, to }) {
             -- A club's type is shown only on its own club's events (a team moved to
             -- another club keeps its events and their type id; K2b-1a, security M1).
             case when ${eventShowsTypeSql("e", "t", "et")} then et.label end as event_type_label,
+            -- K2b-1d2: the type's icon and colour, for every viewer, under the same rule (D41).
+            case when ${eventShowsTypeSql("e", "t", "et")} then et.icon_key end as event_type_icon_key,
+            case when ${eventShowsTypeSql("e", "t", "et")} then et.color_key end as event_type_color_key,
             -- K2b-1b: the library place, only of the event's club now (D41).
             pl.id as place_id, pl.name as place_name, pl.address as place_address, pl.note as place_note,
             t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
@@ -1164,6 +1167,8 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       place: eventPlaceOf(row), location: row.place_id ? row.place_name : row.location,
       details: canManage ? (detailCounts.get(String(row.id)) ?? { selected: 0, filled: 0, required: 0, filledRequired: 0 }) : undefined,
       eventId: String(row.id), eventKind: row.event_kind, eventTypeId: row.event_type_id ? String(row.event_type_id) : null, eventTypeLabel: row.event_type_label,
+      // K2b-1d2: null when the type is not shown (D41), and for a type without an icon or a colour.
+      eventTypeIconKey: row.event_type_icon_key ?? null, eventTypeColorKey: row.event_type_color_key ?? null,
       span: { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) },
       expects: [...(row.expects || [])], cancelled: row.status === "cancelled",
       revision: row.revision, canManage, notes: canManage ? row.notes : undefined,
@@ -1264,11 +1269,14 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
 function publicCard(card, includeAthletes) {
   // The athlete's own view of an event (D21): name, kind, date, time, place,
   // status (planned / cancelled) and teams — never a count, a teammate, a
-  // note or a link beyond the event's id.
+  // note or a link beyond the event's id. K2b-1d2: the type's icon and colour
+  // (a type's look, never a person's data), under D41 as the label.
   if (card.kind === "event" && card.athleteView) {
     return {
       key: card.key, kind: "event", date: card.date, title: card.title,
-      eventKind: card.eventKind, eventTypeLabel: card.eventTypeLabel, span: card.span,
+      eventKind: card.eventKind, eventTypeLabel: card.eventTypeLabel,
+      eventTypeIconKey: card.eventTypeIconKey ?? null, eventTypeColorKey: card.eventTypeColorKey ?? null,
+      span: card.span,
       startTime: card.startTime, endTime: card.endTime, location: card.location, place: card.place,
       status: card.cancelled ? "cancelled" : "planned", cancelled: card.cancelled,
       teamIds: [...card.teamIds].sort(),
@@ -1294,6 +1302,9 @@ function publicCard(card, includeAthletes) {
     out.eventId = card.eventId;
     out.eventKind = card.eventKind;
     out.eventTypeLabel = card.eventTypeLabel;
+    // K2b-1d2: every viewer's card (a reader's too), under D41 as the label.
+    out.eventTypeIconKey = card.eventTypeIconKey ?? null;
+    out.eventTypeColorKey = card.eventTypeColorKey ?? null;
     out.endTime = card.endTime;
     out.location = card.location;
     out.place = card.place;

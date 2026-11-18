@@ -1473,7 +1473,7 @@ clean `1cfaf64`. The manager ordered one small round with no new internal review
 All 8 mutations of the round were killed (scratchpad `k2b1d-mutations-r3.mjs`). The earlier known limit — a refresh
 from elsewhere did not read an open panel's details again — is closed by the first row.
 
-## 23. K2b-1d2 — the type's icon and colour on every card; the platform's teams with their clubs (the plan; waiting for the manager's GO)
+## 23. K2b-1d2 — the type's icon and colour on every card; the platform's teams with their clubs (the manager's GO in 23.6)
 
 The backend step of 21.9 (Q1 (b) and Q2). Branch `claude/central-calendar-k2b-1d2` from `origin/main` `94aab138`. Section
 22 (K2b-1e) is in PR #603, not on `main` yet, so this file ends at 21 here. Whichever of the two pull requests merges
@@ -1598,3 +1598,38 @@ The two parts reach the screen differently:
   - the build.
 - **Reviews:** `code-reviewer` and `security-reviewer` on the frozen head; then the independent review and the owner's
   external review. No merge, deploy or persistent database; one draft pull request.
+
+### 23.6 The manager's decisions (2026-11-18) — GO for K2b-1d2
+
+GO for K2b-1d2 as section 23 plans it.
+
+- **Q1:** the two frontend guards of 23.3 go into this pull request:
+  - one helper names a team "U19 · Borac" when it carries `clubName`, used for the team's name, the Groups chips, the
+    legend and the form's names;
+  - the edit form never offers teams from the platform's list.
+
+  The platform's screen therefore never shows an ambiguous team name. The cards' type icon and colour go to K2b-1d3,
+  after PR #603 merges.
+- **Q2:** only the active teams of active clubs.
+- **Q3:** each team wears the colour its club chose; two clubs may share one, and the club in the name tells them
+  apart.
+- **Q4, the cost bound:**
+  - measure the platform's month read on a disposable database with a seeded world (3 clubs × 10 teams, 300 athletes, a
+    month of planned sessions and events), before and after the change;
+  - if the read after is **slower than 1.5 × before, or longer than 1 s locally**, the rewrite of `athleteTeamIdsSql`
+    (from the athlete's memberships to the teams, under the same `membershipOnDaySql` rule) becomes part of this step,
+    with tests that prove the same result;
+  - otherwise only the measured numbers are recorded.
+- **T, the database:** the read of `backend/.env` is a permission of this session, so it is the owner's to decide; the
+  manager asks the owner. Until then, everything that needs no database is done:
+  - `npm --prefix backend ci` in this worktree;
+  - the code;
+  - the new backend tests, written but not run;
+  - the frontend tests, and `frontend-fast` on the head and on a clean `main`;
+  - the build.
+
+  The manager says whether this session gets the permission or runs the backend suites and mutations on the branch
+  itself.
+- As section 23: no migration; `sourceMetric*`, `sourceField*`, `gpexe*`, Imports and the mapping screens are not
+  touched; invented names only; `code-reviewer` and `security-reviewer` on the frozen head; one draft pull request, no
+  merge and no deploy.
