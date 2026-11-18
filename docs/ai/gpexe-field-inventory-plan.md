@@ -944,6 +944,35 @@ The *Rukovodilac*'s order after the Independent's GO on G1b-2: one small pull re
   removing the save's own check (the column's reason refuses the same row from the same inputs), and dropping the
   board's "no value" for a column without a readable word (the extractor reads nothing for it either).
 
+### 8.13 As built (the readable Source fields list; the executor, 2026-11-18)
+
+The owner's first real use of "Available in GPEXE" (relayed by the *Rukovodilac*): the rows showed GPEXE's word instead
+of the unit, no zone fact, and names that are not values among the ones that can be mapped. One pull request, inventory
+read and screen, **no migration**.
+
+- **The unit, not the word:** the read joins v74's `source_unit_words` and returns `unit` (the seed's token, so every
+  audience sees it); the row shows "m", "s", "W/kg"… A details word without a seed row reads "unit not stated by GPEXE";
+  a per-athlete number reads "number (GPEXE sends no unit)".
+- **The zone fact, never a range:** `zoneOf(name)` reads only the name (`athletesession<family>zone_<distance|time|events>_<n>`)
+  and the row is titled "Power zone 4 · distance". Which range a number stands for is not proven: the details carry four
+  power zones where `/more/` carries five and no numbering reproduces them (`docs/ai/gpexe-details-coverage-plan.md`), so
+  no range is derived. A platform admin also reads the team thresholds ("team thresholds: 20, 25, 60, 75 W/kg"), from the
+  `teamThresholds` of the newest stored session of each active binding: one set while they all agree, otherwise "team
+  thresholds differ between teams" (`zoneThresholdsOf`; route test 22). A club never gets them (P1). Relative speed and
+  the other families show the zone's name only.
+- **Not values:** `isStructuralName` (`id`, `athlete`, `user`, `team`, …, `*_id`, `are_*_visible`, `is_*_visible`,
+  `validity_*`, `*_timestamp`) joins `isStructuralField`, so route C refuses them and they are never creatable. Each row
+  carries `isValue` (a field, or one route C would create); the screen folds the rest under one closed "Other names GPEXE
+  sends (not values)". The collector still skips only the exact pairs it skipped before.
+- **Readable and grouped:** the readable name and unit first, GPEXE's own name small under it, the counts last; values
+  grouped by quantity (distance, time, power, energy, speed, acceleration, counts, other), zones together in zone order.
+  The search finds a GPEXE name or a readable one. Grouping applies to the loaded page (200 names per page).
+- **#601's LOW-1:** `unit_word_ambiguous` is worded by basis too - a platform admin working in a club's workspace is told
+  to switch to the platform workspace (route test 23, frontend test R3).
+- **Create field for several names at once: a follow-up, not built.** Route C takes one name per request with its own
+  key, label and levels, and each lost answer needs its own *Check result*; a sequential batch is cheap to send but needs a
+  per-name label and level choice and a per-row outcome (saved, refused, not confirmed). It is its own small screen change.
+
 ## 9. G2: the pinned set, the generic extractors and the club-board guard (as built, 2026-11-17)
 
 The plan of section 5 ("G2") and the *Rukovodilac*'s GO of 2026-11-17. One pull request, **no migration**: v74 holds

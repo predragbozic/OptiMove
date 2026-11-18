@@ -8,7 +8,7 @@ import {
   EVIDENCE_EXAMPLE, EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
   ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
   ENDPOINT_LABEL, INVENTORY_ENDPOINTS, KIND_LABEL,
-  currentRevision, hasBound, inventoryMatches, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
+  currentRevision, hasBound, inventoryGroups, inventoryMatches, levelsText, readableName, zoneFactText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
   unitActOffered, createOffered, createNextStep, FIELD_LABEL_MAX,
   DURATION_HOURS_NOTE, observationLines, observationReasonText, observationWordText, observeOffered,
 } from "./source-fields-data.js";
@@ -149,16 +149,23 @@ function renderListHtml(s, ctx) {
 // ---------------------------------------------------------------------------
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const fmtDay = (day) => (/^\d{4}-\d{2}-\d{2}$/.test(day || "") ? `${day.slice(8, 10)}.${day.slice(5, 7)}.${day.slice(0, 4)}` : "");
-function inventoryFacts(item, ctx, { withEndpoint = true } = {}) {
+function inventoryFacts(item, ctx, { withEndpoint = true, withKind = false } = {}) {
   const kind = KIND_LABEL[item.kind] || "";
   return [
     withEndpoint ? ENDPOINT_LABEL[item.endpoint] || "" : "",
-    item.unitWord ? `${kind} in ${item.unitWord}` : kind,
+    // The team zone limits' fold keeps what each name holds (they are never a field).
+    withKind ? (item.unitWord ? `${kind} in ${item.unitWord}` : kind) : "",
     `seen ${plural(Number(item.answersSeen) || 0, "time", "times")}${item.lastSeenOn ? `, last ${fmtDay(item.lastSeenOn)}` : ""}`,
     ctx.mayVerify && Number.isInteger(item.connectionCount) ? `in ${plural(item.connectionCount, "GPEXE account", "GPEXE accounts")}` : "",
   ].filter(Boolean).map(escapeHtml).join(" · ");
 }
-function inventoryRowHtml(item, index, ctx, search) {
+// The unit GPEXE's word stands for, never the word; a value without a known word says so. Not a value: what it holds.
+function inventoryUnitText(item) {
+  if (item.isValue !== true) return KIND_LABEL[item.kind] || "";
+  if (item.unit) return item.unit;
+  return item.endpoint === "athlete_session" ? "number (GPEXE sends no unit)" : "unit not stated by GPEXE";
+}
+function inventoryRowHtml(item, index, ctx, search, zoneThresholds = null) {
   // G1b: Create field only where the server said route C would take the name.
   const create = createOffered(ctx, item)
     ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Create a field from ${escapeAttr(item.name)}">Create field</button>`
@@ -166,8 +173,9 @@ function inventoryRowHtml(item, index, ctx, search) {
   return `
     <li data-sf-inv-row="${index}"${inventoryMatches(item, search) ? "" : " hidden"}>
       <div class="source-fields-inventory-item">
-        <span class="metric-variables-item-name"><code class="source-fields-code">${escapeHtml(item.name)}</code>${item.covered ? ` <span class="item-badge">Already used</span>` : ""}</span>
-        <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx)}</span>
+        <span class="metric-variables-item-name">${escapeHtml(readableName(item))} <span class="source-fields-inventory-unit">${escapeHtml([inventoryUnitText(item), ctx.mayVerify ? zoneFactText(item, zoneThresholds) : ""].filter(Boolean).join(" · "))}</span>${item.covered ? ` <span class="item-badge">Already used</span>` : ""}</span>
+        <code class="source-fields-code source-fields-inventory-raw">${escapeHtml(item.name)}</code>
+        <span class="metric-variables-item-facts muted source-fields-inventory-facts">${inventoryFacts(item, ctx)}</span>
         ${create}
       </div>
     </li>`;
@@ -185,9 +193,26 @@ function renderThresholdsHtml(inv, ctx) {
         : `<ul class="metric-variables-list">${t.items.map((item, i) => `
             <li data-sf-threshold-row="${i}"><div class="source-fields-inventory-item">
               <span class="metric-variables-item-name"><code class="source-fields-code">${escapeHtml(item.name)}</code></span>
-              <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx, { withEndpoint: false })}</span>
+              <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx, { withEndpoint: false, withKind: true })}</span>
             </div></li>`).join("")}</ul>`}
     </details>`;
+}
+// Values grouped by quantity (zones together, in zone order); the names that are not values in one closed fold. Each
+// row keeps its index in the loaded list, so the search narrows it in place.
+function inventoryListHtml(inv, ctx) {
+  const index = new Map(inv.items.map((item, i) => [item, i]));
+  const row = (item) => inventoryRowHtml(item, index.get(item), ctx, inv.search, inv.zoneThresholds);
+  const { groups, other } = inventoryGroups(inv.items);
+  return `
+    ${groups.map((g) => `
+      <h4 class="source-fields-inventory-group" id="sf-inv-group-${escapeAttr(g.key)}">${escapeHtml(g.label)}</h4>
+      <ul class="metric-variables-list" aria-labelledby="sf-inv-group-${escapeAttr(g.key)}">${g.items.map(row).join("")}</ul>`).join("")}
+    ${other.length ? `
+      <details class="source-fields-inventory-other">
+        <summary>Other names GPEXE sends (not values) · ${other.length}</summary>
+        <p class="muted">Identifiers, groups, flags and times GPEXE sends with the values. They never become a field.</p>
+        <ul class="metric-variables-list">${other.map(row).join("")}</ul>
+      </details>` : ""}`;
 }
 function renderInventoryHtml(s, ctx) {
   const inv = s.inventory;
@@ -213,7 +238,7 @@ function renderInventoryHtml(s, ctx) {
       ${inv.error ? `<div class="error" role="alert"><p>${escapeHtml(inv.error)}</p><button class="plain-button" type="button" data-action="source-fields-inv-reload">Try again</button></div>` : ""}
       ${inv.loaded && !inv.items.length && !inv.error ? `<p class="empty">No names yet. They appear after the next Find new sessions in Imports.</p>` : ""}
       ${inv.items.length ? `<p class="empty" id="sf-inv-no-match"${matching ? " hidden" : ""}>${inv.nextCursor ? "No name matches among the names loaded so far. Load more to search the rest." : "No name matches the search."}</p>` : ""}
-      ${inv.items.length ? `<ul class="metric-variables-list" aria-labelledby="sf-inventory-title">${inv.items.map((item, i) => inventoryRowHtml(item, i, ctx, inv.search)).join("")}</ul>` : ""}
+      ${inv.items.length ? inventoryListHtml(inv, ctx) : ""}
       ${inv.nextCursor ? `<button class="plain-button" type="button" data-action="source-fields-inv-more" ${inv.loadingMore ? "disabled" : ""}>${inv.loadingMore ? "Loading..." : "Load more"}</button>` : ""}
       ${renderThresholdsHtml(inv, ctx)}
     </section>`;

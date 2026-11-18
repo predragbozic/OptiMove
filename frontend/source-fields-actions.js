@@ -112,6 +112,8 @@ export async function loadInventory(render, { more = false } = {}) {
     const items = Array.isArray(data?.fields) ? data.fields : [];
     inv.items = more ? [...inv.items, ...items] : items;
     inv.nextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
+    // The team thresholds of the zone names (platform only; the first page carries them, as every page does).
+    if (!more || data?.zoneThresholds) inv.zoneThresholds = data?.zoneThresholds ?? null;
     inv.loaded = true;
     inv.error = null;
   } catch (error) {

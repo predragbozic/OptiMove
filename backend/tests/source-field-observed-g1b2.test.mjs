@@ -789,3 +789,32 @@ test("21. G1b-3, S1 (the code review's MEDIUM): an active version from before th
   refused(res, 409, "unit_word_ambiguous");
   assert.equal((await one(`select count(*)::int n from training_load.source_metric_mapping_activations where mapping_version_id = $1`, [version.id])).n, 0, "no activation");
 });
+
+test("22. the inventory's zone thresholds come from the newest stored session of each active binding: one set while they agree, 'differ' once a team's newest session carries another set; a club never gets them", async () => {
+  const zone = async (who) => (await get(`/field-inventory?endpoint=details.session`, who)).body.zoneThresholds;
+  const t = await gpexeTeam(W.clubA);
+  await candidate(t, () => ({}), { startedAt: "2026-10-01T18:00:00Z" });
+  await candidate(W.tA, () => ({}), { startedAt: "2026-10-01T18:00:00Z" });
+  assert.deepEqual(await zone(W.pa), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] } });
+  // The newer session of one team carries another power set.
+  const newer = await candidate(t, () => ({}), { startedAt: "2026-10-02T18:00:00Z" });
+  const stored = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [newer.id])).raw_bundle;
+  stored.teamThresholds.power_thresholds = [20, 25, 60, 80];
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [newer.id, stored]);
+  assert.deepEqual(await zone(W.pa), { power: { differ: true }, speed: { values: [5.5, 7] } });
+  assert.equal(await zone(W.caA), undefined, "a club never gets the team thresholds (P1)");
+});
+
+test("23. #601's LOW-1: a platform admin working in a club's workspace is told to switch to the platform workspace (never to ask a platform administrator); a club's admin is told to ask one", async () => {
+  const f = await created("g1b2_pa_in_club", { expected: "J/kg" });
+  for (const act of ["unit-verification", "meaning-verification"]) {
+    const res = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/${act}`, W.pa, act === "unit-verification" ? { requestKey: key(), sourceUnit: "J/kg", evidenceRef: UNIT_REF } : { requestKey: key(), evidenceRef: "docs/ai/test-evidence.md#meaning-of-the-field" });
+    assert.ok([200, 201].includes(res.status), res.text);
+  }
+  for (const [who, expected] of [[W.paClub, /^A document cannot tell which GPEXE word this unit is\. Switch to the platform workspace, then retire this revision/], [W.caA, /^A document cannot tell which GPEXE word this unit is\. Ask a platform administrator/]]) {
+    const variable = ok(await post("/variables", who, { requestKey: key(), label: `Who ${uid()}`, unit: "J/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+    const mapping = ok(await post("/mappings", who, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+    const body = refused(await post(`/mappings/${mapping.id}/versions`, who, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false }), 409, "unit_word_ambiguous");
+    assert.match(body.message, expected);
+  }
+});

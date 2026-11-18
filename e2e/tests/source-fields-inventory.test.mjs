@@ -67,8 +67,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.click('[data-action="source-fields-inv-endpoint"][data-endpoint="athlete_session"]');
       await page.waitForFunction(() => document.querySelector('[data-endpoint="athlete_session"]')?.getAttribute("aria-pressed") === "true");
       await page.waitForFunction(() => !document.querySelector(".source-fields-inventory [role=status]"));
-      const facts = await page.locator("[data-sf-inv-row] .metric-variables-item-facts").allInnerTexts();
-      assert.ok(facts.length > 0 && facts.every((f) => f.startsWith("Per athlete")), "only per-athlete names");
+      const facts = await page.locator("[data-sf-inv-row] .metric-variables-item-facts").allTextContents();
+      assert.ok(facts.length > 0 && facts.every((f) => f.trim().startsWith("Per athlete")), "only per-athlete names");
       await page.fill("[data-sf-inv-search]", "zzz-no-such-name");
       await page.waitForSelector("#sf-inv-no-match:not([hidden])");
       assert.equal(writes.length, 0, "the list only reads");

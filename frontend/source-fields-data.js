@@ -30,7 +30,7 @@ export function sourceFieldsContext(user = state.currentUser) {
 
 export function emptyInventory() {
   return {
-    items: [], loaded: false, loading: false, loadingMore: false, error: null, nextCursor: null,
+    items: [], loaded: false, loading: false, loadingMore: false, error: null, nextCursor: null, zoneThresholds: null,
     endpoint: "", showSupported: false, search: "",
     // Team thresholds (P1): the platform workspace only, read when their fold opens.
     thresholds: { items: [], loaded: false, loading: false, error: null, open: false },
@@ -89,8 +89,54 @@ export const KIND_LABEL = {
   object: "group of values",
   list: "list",
 };
-// The search narrows the loaded names in place, by name, ignoring case.
-export const inventoryMatches = (item, search) => !search || String(item.name || "").toLowerCase().includes(String(search).trim().toLowerCase());
+// The search narrows the loaded names in place, by name or readable name, ignoring case.
+export const inventoryMatches = (item, search) => {
+  const q = String(search || "").trim().toLowerCase();
+  return !q || String(item.name || "").toLowerCase().includes(q) || readableName(item).toLowerCase().includes(q);
+};
+
+// The owner's first use of the list (2026-11-18): a readable name first, the unit (never GPEXE's word), the zone's own
+// fact, and the names that are not values folded away; grouped by quantity.
+const ZONE_FAMILY = { power: "Power", speed: "Speed", relativespeed: "Relative speed", jumpheight: "Jump height", heartrate: "Heart rate", metabolicpower: "Metabolic power" };
+const MEASURE = { distance: "distance", time: "time", events: "events" };
+const capitalize = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+export function readableName(item) {
+  const z = item?.zone;
+  if (z && Number.isInteger(z.number)) return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} · ${MEASURE[z.measure] || z.measure}`;
+  const name = String(item?.name || "").replace(/^athlete_?session_?/, "").replace(/_+/g, " ").trim();
+  return capitalize(name) || String(item?.name || "");
+}
+export const QUANTITIES = Object.freeze([
+  ["distance", "Distance", ["m"]], ["time", "Time", ["s"]], ["power", "Power", ["W/kg"]], ["energy", "Energy", ["J/kg"]],
+  ["speed", "Speed", ["m/s"]], ["acceleration", "Acceleration", ["m/s2"]], ["count", "Counts", ["count"]],
+]);
+export function quantityOf(item) {
+  const hit = QUANTITIES.find(([, , units]) => units.includes(item?.unit));
+  return hit ? hit[0] : "other";
+}
+export const QUANTITY_LABEL = { ...Object.fromEntries(QUANTITIES.map(([key, label]) => [key, label])), other: "Other values" };
+const ZONE_THRESHOLD = { power: ["power", "W/kg"], speed: ["speed", "m/s"] };
+// "Power zone 4 · team thresholds: 20, 25, 60, 75 W/kg" - the name's number and the team's limits, never a range (which
+// range a number stands for is not proven). The limits are the platform admin's only (P1).
+export function zoneFactText(item, zoneThresholds) {
+  const z = item?.zone;
+  if (!z) return "";
+  const pair = ZONE_THRESHOLD[z.family];
+  const set = pair && zoneThresholds ? zoneThresholds[pair[0]] : null;
+  if (!set) return "";
+  if (set.differ) return "team thresholds differ between teams";
+  return Array.isArray(set.values) ? `team thresholds: ${set.values.join(", ")} ${pair[1]}` : "";
+}
+// Values first by quantity, zones together in zone order; the rest is "not values".
+export function inventoryGroups(items) {
+  const values = items.filter((i) => i.isValue === true);
+  const other = items.filter((i) => i.isValue !== true);
+  const order = [...QUANTITIES.map(([key]) => key), "other"];
+  const sortKey = (i) => [i.zone ? 0 : 1, i.zone?.family || "", i.zone?.measure || "", i.zone?.number ?? 0, readableName(i).toLowerCase()];
+  const cmp = (a, b) => { const x = sortKey(a); const y = sortKey(b); for (let k = 0; k < x.length; k += 1) { if (x[k] < y[k]) return -1; if (x[k] > y[k]) return 1; } return 0; };
+  const groups = order.map((key) => ({ key, label: QUANTITY_LABEL[key], items: values.filter((i) => quantityOf(i) === key).sort(cmp) })).filter((g) => g.items.length);
+  return { groups, other };
+}
 export const fetchField = (id) => api(`${BASE}/${encodeURIComponent(id)}`);
 function write(path, body) {
   const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(WRITE_BOUND_MS) : undefined;

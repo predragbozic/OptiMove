@@ -35,7 +35,8 @@ test("the key, shape and levels are derived from the endpoint and the observed n
   assert.deepEqual(deriveField(body({ endpoint: "athlete_session", name: "average_v" })), { sourceMetricKey: "athlete_session.average_v", valueShape: "number", parameterKind: "none", supportsSession: true, supportsDrill: true });
   for (const endpoint of ["more.events", "more.complementary_data", "team_thresholds", "anything", "__proto__", "constructor"]) refused(() => deriveField(body({ endpoint })), 409, "shape_not_generic");
   for (const [endpoint, name] of [["athlete_session", "teamsession"], ["athlete_session", "id"], ["athlete_session", "start_timestamp"]]) refused(() => deriveField(body({ endpoint, name })), 409, "name_not_observed");
-  assert.equal(deriveField(body({ name: "id" })).sourceMetricKey, "details.players.id", "a structural list is per endpoint");
+  // 2026-11-18 (the owner's first use): a reference, a group, a flag or a time is refused on every endpoint.
+  for (const name of ["id", "athlete", "athlete_session_id", "are_values_visible", "validity_start"]) refused(() => deriveField(body({ name })), 409, "name_not_observed");
   for (const name of ["Zeta_count", "speedMax", "HR"]) refused(() => deriveField(body({ name })), 409, "name_not_supported");
   refused(() => deriveField(body({ endpoint: "details.drill", supportsDrill: false })), 400, "invalid_body");
 });

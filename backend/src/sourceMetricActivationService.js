@@ -132,7 +132,7 @@ export async function startActivations({ ctx, body }) {
       // G1b-3 (the code review's MEDIUM): a version active from before the exact-word rule (a created field proven by a
       // document in a unit two GPEXE words share) is not switched on for another team - its import would read nothing.
       const unitWord = await unitWordCode(client, v, v.source_unit, v.source_metric_version_id);
-      if (unitWord) throw refusal(409, unitWord, unitWordMessage(unitWord, ctx.owner?.scope));
+      if (unitWord) throw refusal(409, unitWord, unitWordMessage(unitWord, ctx.owner?.scope, ctx.basis));
       await checkListedStarts(client, v, bindings, locked);
       await databaseTextAgrees(client, reason);
       if (writeHold) await writeHold(client, "activation_start");

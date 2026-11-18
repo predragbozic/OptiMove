@@ -119,11 +119,14 @@ const INVENTORY_SQL = `
            ) as unit_known
       from grouped g
   )
-  select endpoint, field_name, kind, unit_word, unit_known, answers::text as answers, last_seen_on, connections, covered, kinds_kept, key_taken
-    from marked
-   where ($3::text = 'all' or endpoint = '${THRESHOLDS}' or covered = ($3::text = 'covered'))
-     and ($4::text is null or (endpoint collate "C", field_name collate "C") > ($4::text collate "C", $5::text collate "C"))
-   order by endpoint collate "C", field_name collate "C"
+  select m.endpoint, m.field_name, m.kind, m.unit_word, m.unit_known, m.answers::text as answers, m.last_seen_on, m.connections, m.covered,
+         m.kinds_kept, m.key_taken, w.source_unit as word_unit
+    from marked m
+    -- The owner's first use (2026-11-18): the unit a word stands for (v74's seed), shown instead of the word.
+    left join training_load.source_unit_words w on w.source_system = 'gpexe' and w.api_family = 'rest_v1' and w.word = m.unit_word
+   where ($3::text = 'all' or m.endpoint = '${THRESHOLDS}' or m.covered = ($3::text = 'covered'))
+     and ($4::text is null or (m.endpoint collate "C", m.field_name collate "C") > ($4::text collate "C", $5::text collate "C"))
+   order by m.endpoint collate "C", m.field_name collate "C"
    limit $6`;
 
 // Route C would create this name: not covered yet, a generic endpoint, a name route C derives a key from, and every
@@ -139,6 +142,38 @@ function creatable(row) {
   }
 }
 
+// A zone name GPEXE sends in a session's details (`athletesessionpowerzone_distance_4`): the family, what is measured and
+// GPEXE's own number. Only the name's facts: which range the number stands for is not proven (the details carry four
+// power zones where /more/ carries five, and no numbering reproduces them - docs/ai/gpexe-details-coverage-plan.md), so
+// no range is ever derived from it.
+const ZONE_NAME = /^athletesession([a-z]+)zone_(distance|time|events)_([0-9]{1,2})$/;
+export function zoneOf(name) {
+  const m = ZONE_NAME.exec(typeof name === "string" ? name : "");
+  return m ? { family: m[1], measure: m[2], number: Number(m[3]) } : null;
+}
+
+// The team thresholds a platform admin sees with the zone names (2026-11-18): the power and speed limits of the newest
+// stored session of each active binding of the visible connections (the threshold set GPEXE sent with it; a team
+// setting, never an athlete's value). One set when every such team has the same; otherwise only that they differ.
+const THRESHOLDS_SQL = `
+  select distinct on (b.id) c.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power,
+         c.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed
+    from training_load.source_team_bindings b
+    join training_load.source_credential_connections k on k.id = b.connection_id and k.source_system = 'gpexe'
+    join training_load.gpexe_import_candidates c on c.owner_team_id = b.team_id
+   where b.state = 'active' and c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
+   order by b.id, c.session_started_at desc, c.id`;
+const numberList = (v) => (Array.isArray(v) && v.length > 0 && v.length <= 12 && v.every((x) => typeof x === "number" && Number.isFinite(x)) ? v : null);
+export function zoneThresholdsOf(rows) {
+  const out = {};
+  for (const kind of ["power", "speed"]) {
+    const sets = rows.map((r) => numberList(r[kind])).filter(Boolean).map((v) => JSON.stringify(v));
+    const distinct = [...new Set(sets)];
+    out[kind] = distinct.length === 0 ? null : distinct.length === 1 && sets.length === rows.length ? { values: JSON.parse(distinct[0]) } : { differ: true };
+  }
+  return out;
+}
+
 export async function listFieldInventory({ ctx, query }) {
   const parsed = parseInventoryQuery(query, ctx);
   const platform = isPlatformScope(ctx);
@@ -151,7 +186,11 @@ export async function listFieldInventory({ ctx, query }) {
   ];
   // G1b: whether route C would take this name (its own derivation, never a guess of the screen), for its audience only.
   const mayCreate = mayCreateFields(ctx);
-  const r = await boundedRead((client) => client.query(INVENTORY_SQL, params));
+  const { r, thresholdRows } = await boundedRead(async (client) => ({
+    r: await client.query(INVENTORY_SQL, params),
+    // Platform only (P1: team thresholds are the platform admin's).
+    thresholdRows: platform && parsed.endpoint !== THRESHOLDS ? (await client.query(THRESHOLDS_SQL)).rows : [],
+  }));
   const rows = r.rows.slice(0, INVENTORY_PAGE_SIZE);
   const fields = rows.map((row) => ({
     endpoint: row.endpoint,
@@ -161,9 +200,18 @@ export async function listFieldInventory({ ctx, query }) {
     answersSeen: Number(row.answers),
     lastSeenOn: row.last_seen_on,
     covered: row.covered,
+    // The unit the word stands for (the seed; never the account's own data), and whether the name is a value that is a
+    // field or could become one (the rest is folded away on the screen).
+    unit: row.word_unit ?? null,
+    isValue: row.endpoint !== THRESHOLDS && (row.covered === true || creatable(row)),
+    zone: zoneOf(row.field_name),
     ...(platform ? { connectionCount: row.connections } : {}),
     ...(mayCreate ? { creatable: creatable(row) } : {}),
   }));
   const last = rows[rows.length - 1];
-  return { fields, nextCursor: r.rows.length > INVENTORY_PAGE_SIZE ? encodeCursor(ctx, parsed, { endpoint: last.endpoint, name: last.field_name }) : null };
+  return {
+    fields,
+    ...(platform && parsed.endpoint !== THRESHOLDS ? { zoneThresholds: zoneThresholdsOf(thresholdRows) } : {}),
+    nextCursor: r.rows.length > INVENTORY_PAGE_SIZE ? encodeCursor(ctx, parsed, { endpoint: last.endpoint, name: last.field_name }) : null,
+  };
 }

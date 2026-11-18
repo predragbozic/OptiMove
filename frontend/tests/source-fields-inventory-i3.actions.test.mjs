@@ -35,14 +35,15 @@ const $ = (selector) => content.querySelector(selector);
 const text = () => content.textContent.replace(/\s+/g, " ");
 const inventoryGets = () => calls.filter((c) => c.method === "GET" && c.url.startsWith(INV)).map((c) => c.url);
 const rows = () => [...content.querySelectorAll("[data-sf-inv-row]")];
-const shownNames = () => rows().filter((r) => !r.hidden).map((r) => r.querySelector(".metric-variables-item-name").textContent.trim());
+// GPEXE's own name, small under the readable one (2026-11-18).
+const shownNames = () => rows().filter((r) => !r.hidden).map((r) => r.querySelector(".source-fields-inventory-raw").textContent.trim());
 async function click(selector) {
   const element = $(selector);
   assert.ok(element, `${selector} is on the screen`);
   await handleSourceFieldsAction(element, { render });
 }
 
-const item = (over = {}) => ({ endpoint: "details.session", name: "metabolic_power", kind: "unit_value_object", unitWord: "W/kg", answersSeen: 12, lastSeenOn: "2026-11-10", covered: false, ...over });
+const item = (over = {}) => ({ endpoint: "details.session", name: "metabolic_power", kind: "unit_value_object", unitWord: "power", unit: "W/kg", isValue: true, zone: null, answersSeen: 12, lastSeenOn: "2026-11-10", covered: false, ...over });
 let pages = {};
 let delay = null;
 function serve() {
@@ -79,18 +80,20 @@ beforeEach(() => {
 test("1. a platform admin: the second list in plain words - where the name comes from, its kind, the unit, the answers, the last day and the connections - never a key, an endpoint code or an id", async () => {
   pages.default = ok([
     item({ connectionCount: 2 }),
-    item({ endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, answersSeen: 1, lastSeenOn: "2026-11-14", connectionCount: 1 }),
+    item({ endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, unit: null, answersSeen: 1, lastSeenOn: "2026-11-14", connectionCount: 1 }),
   ]);
   await loadSourceFieldsSection(render);
   assert.deepEqual(inventoryGets(), [INV], "one read, the default filter (not supported)");
   assert.match(text(), /Available in GPEXE, not supported yet/);
   // G1b: the platform admin can act on a name now (Create field); the club's sentence keeps "nothing to do" (test 2).
   assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not use them yet, so they are not imported\. Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet\./);
-  const facts = rows().map((r) => r.querySelector(".metric-variables-item-facts").textContent.replace(/\s+/g, " ").trim());
-  assert.deepEqual(facts, [
-    "Whole session · number with unit in W/kg · seen 12 times, last 10.11.2026 · in 2 GPEXE accounts",
-    "Per athlete · number · seen 1 time, last 14.11.2026 · in 1 GPEXE account",
+  // 2026-11-18: the readable name and the unit first (never GPEXE's word), GPEXE's name small, the counts last.
+  const lines = rows().map((r) => [r.querySelector(".metric-variables-item-name"), r.querySelector(".source-fields-inventory-raw"), r.querySelector(".metric-variables-item-facts")].map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+  assert.deepEqual(lines, [
+    ["Metabolic power W/kg", "metabolic_power", "Whole session · seen 12 times, last 10.11.2026 · in 2 GPEXE accounts"],
+    ["A b number (GPEXE sends no unit)", "a_b", "Per athlete · seen 1 time, last 14.11.2026 · in 1 GPEXE account"],
   ]);
+  assert.doesNotMatch(text(), /number with unit in|\bpower\b · /, "GPEXE's word is never shown as the unit");
   assert.doesNotMatch(text(), /details\.session|athlete_session|unit_value_object|complementary_data/, "no endpoint or kind code in what is shown (codes live only in data- attributes)");
 });
 
@@ -98,11 +101,12 @@ test("2. a club admin: the club's own sentence, no connection count and no team 
   asClub();
   // A count in the answer is never shown to a club, even if the server sent one.
   pages.default = ok([item({ unitWord: null, connectionCount: 3 })]);
+  // The unit is the seed's (never the account's own data), so a club sees it too.
   await loadSourceFieldsSection(render);
   assert.match(text(), /GPEXE also sends these values in your sessions\./);
   assert.doesNotMatch(text(), /GPEXE account/);
   assert.equal($(".source-fields-inventory-thresholds"), null, "the thresholds fold is the platform's");
-  assert.match(rows()[0].textContent, /Whole session · number with unit · seen 12 times/);
+  assert.match(rows()[0].textContent.replace(/\s+/g, " "), /Metabolic power W\/kg .*Whole session · seen 12 times/);
 });
 
 test("3. the endpoint chips and Show supported too become the read's query; the chosen chip is pressed; supported names carry a badge", async () => {
@@ -118,7 +122,8 @@ test("3. the endpoint chips and Show supported too become the read's query; the 
   await click('[data-action="source-fields-inv-supported"]');
   assert.equal(inventoryGets().at(-1), `${INV}?state=all&endpoint=athlete_session`);
   assert.ok($('[data-action="source-fields-inv-supported"]').checked);
-  assert.match(rows()[0].textContent, /total_distance\s*Already used/);
+  const used = rows().find((r) => r.querySelector(".source-fields-inventory-raw").textContent.trim() === "total_distance");
+  assert.match(used.querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " "), /Total distance .*Already used/);
   const before = inventoryGets().length;
   await click('[data-action="source-fields-inv-endpoint"][data-endpoint="athlete_session"]');
   assert.equal(inventoryGets().length, before, "the chip already chosen reads nothing again");
@@ -269,4 +274,55 @@ test("5b. with more names to load, a search without a match says to load more", 
   input.value = "speed";
   input.dispatchEvent(new window.Event("input", { bubbles: true }));
   assert.match($("#sf-inv-no-match").textContent, /No name matches among the names loaded so far\. Load more to search the rest\./);
+});
+
+test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zones in zone order, each row's readable name with its unit (never GPEXE's word) and the zone's team thresholds; the names that are not values in one closed fold; the search finds both", async () => {
+  pages.default = { status: 200, body: { nextCursor: null, zoneThresholds: { power: { values: [20, 25, 60, 75] }, speed: { differ: true } }, fields: [
+    item({ name: "athletesessionpowerzone_distance_4", unitWord: "distance", unit: "m", zone: { family: "power", measure: "distance", number: 4 }, connectionCount: 1 }),
+    item({ name: "athletesessionpowerzone_distance_2", unitWord: "distance", unit: "m", zone: { family: "power", measure: "distance", number: 2 }, connectionCount: 1 }),
+    item({ name: "athletesessionspeedzone_distance_3", unitWord: "distance", unit: "m", zone: { family: "speed", measure: "distance", number: 3 }, connectionCount: 1 }),
+    item({ name: "metabolic_power", connectionCount: 1 }),
+    item({ name: "mystery", unitWord: "furlongs", unit: null, connectionCount: 1 }),
+    item({ endpoint: "details.drill", name: "athlete", kind: "object", unitWord: null, unit: null, isValue: false, answersSeen: 9, connectionCount: 1 }),
+    item({ endpoint: "details.drill", name: "athlete_session_id", kind: "number", unitWord: null, unit: null, isValue: false, answersSeen: 9, connectionCount: 1 }),
+  ] } };
+  await loadSourceFieldsSection(render);
+  const groups = [...content.querySelectorAll(".source-fields-inventory-group")].map((h) => h.textContent.trim());
+  assert.deepEqual(groups, ["Distance", "Power", "Other values"]);
+  const names = (list) => [...list.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim());
+  const [distance, power, other] = [...content.querySelectorAll(".source-fields-inventory-group + ul")];
+  assert.deepEqual(names(distance), [
+    "Power zone 2 · distance m · team thresholds: 20, 25, 60, 75 W/kg",
+    "Power zone 4 · distance m · team thresholds: 20, 25, 60, 75 W/kg",
+    "Speed zone 3 · distance m · team thresholds differ between teams",
+  ]);
+  assert.deepEqual(names(power), ["Metabolic power W/kg"]);
+  assert.deepEqual(names(other), ["Mystery unit not stated by GPEXE"]);
+  assert.doesNotMatch(text(), /furlongs|in distance/, "GPEXE's word is never shown as the unit");
+  const fold = $(".source-fields-inventory-other");
+  assert.ok(fold && !fold.open, "the names that are not values are folded away, closed");
+  assert.match(fold.querySelector("summary").textContent, /Other names GPEXE sends \(not values\) · 2/);
+  assert.deepEqual([...fold.querySelectorAll(".source-fields-inventory-raw")].map((e) => e.textContent.trim()), ["athlete", "athlete_session_id"]);
+  assert.match(fold.textContent, /group of values/, "a name that is not a value says what it holds");
+  // The search narrows by GPEXE's name or the readable one.
+  handleSourceFieldsInput(Object.assign($("[data-sf-inv-search]"), { value: "zone 4" }));
+  assert.deepEqual(shownNames(), ["athletesessionpowerzone_distance_4"]);
+});
+
+test("R2: a club's admin sees the unit and the zone's own name, never the team thresholds (the platform's, P1)", async () => {
+  asClub();
+  pages.default = { status: 200, body: { nextCursor: null, zoneThresholds: { power: { values: [20, 25, 60, 75] } }, fields: [
+    item({ name: "athletesessionpowerzone_distance_4", unitWord: null, unit: "m", zone: { family: "power", measure: "distance", number: 4 } }),
+  ] } };
+  await loadSourceFieldsSection(render);
+  assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 · distance m");
+  assert.doesNotMatch(text(), /thresholds/);
+});
+
+test("R3 (#601's LOW-1): a platform admin working in a club's workspace is told to switch to the platform workspace, never to ask a platform administrator", async () => {
+  const { refusalText } = await import("../metric-mappings-data.js");
+  state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "FK Borac", role: "platform_admin" }, availableWorkspaces: [{ type: "platform" }, { type: "club", scopeId: CLUB }] };
+  const message = refusalText("draft", { status: 409, code: "unit_word_ambiguous" });
+  assert.match(message, /Switch to the platform workspace, then retire this revision/);
+  assert.doesNotMatch(message, /Ask a platform administrator/);
 });

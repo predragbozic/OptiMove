@@ -155,7 +155,7 @@ test("1. a platform admin in the platform workspace: every connection's names th
     "more.complementary_data:a_b",
   ]);
   const ab = r.body.fields.find((f) => f.endpoint === "athlete_session" && f.name === "a_b");
-  assert.deepEqual(ab, { endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, answersSeen: 7, lastSeenOn: "2026-11-14", covered: false, connectionCount: 2, creatable: true });
+  assert.deepEqual(ab, { endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, answersSeen: 7, lastSeenOn: "2026-11-14", covered: false, unit: null, isValue: true, zone: null, connectionCount: 2, creatable: true });
   assert.equal(r.body.fields.find((f) => f.name === "custom_secret_unit").unitWord, "xyzzy", "a platform admin sees the word as recorded");
   assert.equal(r.body.nextCursor, null);
   const all = await api("/field-inventory?state=all", { cookie: W.pa.cookie });
@@ -464,4 +464,61 @@ test("15. G1b: a platform admin in the platform workspace reads which names rout
       await c.end();
     }
   }
+});
+
+test("R (the owner's first use, 2026-11-18): each row carries the unit its word stands for (v74's seed, to every audience), whether it is a value (a field, or one route C would create), and a zone name's own facts; names that are a reference, a group, a flag or a time are never values and never creatable; the platform gets the zone thresholds, a club never", async () => {
+  const conn = await connection({ clubId: W.clubA, by: W.pa.id });
+  await observe(conn, [
+    ["details.session", "athletesessionpowerzone_distance_4", { kind: "unit_value_object", unit: "distance" }],
+    ["details.session", "r_energy_like", { kind: "unit_value_object", unit: "furlongs" }],
+    ["details.drill", "athlete", { kind: "object" }],
+    ["details.drill", "athlete_session_id", { kind: "number" }],
+    ["details.session", "are_values_visible", { kind: "boolean" }],
+    ["details.session", "validity_start_r", { kind: "text" }],
+    ["athlete_session", "r_hsr", { kind: "number" }],
+  ]);
+  // Each endpoint on its own (an earlier test fills the first page of athlete_session names).
+  const read = async (who) => {
+    const out = { fields: [], zoneThresholds: undefined };
+    for (const endpoint of ["details.session", "details.drill", "athlete_session"]) {
+      let cursor = null;
+      do {
+        const body = (await api(`/field-inventory?state=all&endpoint=${endpoint}${cursor ? `&cursor=${cursor}` : ""}`, { cookie: who.cookie })).body;
+        out.fields.push(...body.fields);
+        if ("zoneThresholds" in body) out.zoneThresholds = body.zoneThresholds;
+        cursor = body.nextCursor;
+      } while (cursor);
+    }
+    return out;
+  };
+  const byName = (body) => Object.fromEntries(body.fields.map((f) => [f.name, f]));
+  const pa = await read(W.pa);
+  const rows = byName(pa);
+  assert.deepEqual([rows.athletesessionpowerzone_distance_4.unit, rows.athletesessionpowerzone_distance_4.isValue, rows.athletesessionpowerzone_distance_4.zone],
+    ["m", true, { family: "power", measure: "distance", number: 4 }]);
+  assert.deepEqual([rows.r_energy_like.unit, rows.r_energy_like.isValue], [null, true], "a word without a seed row has no unit; the name can still become a field");
+  assert.deepEqual([rows.r_hsr.unit, rows.r_hsr.isValue, rows.r_hsr.zone], [null, true, null]);
+  for (const name of ["athlete", "athlete_session_id", "are_values_visible", "validity_start_r"]) {
+    assert.deepEqual([rows[name].isValue, rows[name].creatable], [false, false], name);
+  }
+  assert.ok(pa.zoneThresholds && "power" in pa.zoneThresholds && "speed" in pa.zoneThresholds, "the platform gets the zone thresholds");
+  const club = await read(W.ca);
+  assert.equal(club.zoneThresholds, undefined, "a club never gets the team thresholds (P1)");
+  assert.equal(byName(club).athletesessionpowerzone_distance_4.unit, "m", "the unit is the seed's, so a club sees it");
+  // Route C refuses the names that are not values.
+  const { deriveField, FieldCreateRefusal } = await import("../src/sourceFieldCreate.js");
+  for (const [endpoint, name] of [["details.drill", "athlete_session_id"], ["details.session", "are_values_visible"], ["details.drill", "athlete"]]) {
+    assert.throws(() => deriveField({ endpoint, name, supportsSession: true, supportsDrill: true }), (e) => e instanceof FieldCreateRefusal && e.code === "name_not_observed", name);
+  }
+});
+
+test("R2: the zone thresholds - one set when every bound team's newest stored session carries the same, otherwise only that they differ (zoneThresholdsOf); zoneOf reads only the name's facts", async () => {
+  const { zoneThresholdsOf, zoneOf } = await import("../src/sourceFieldInventoryRead.js");
+  assert.deepEqual(zoneThresholdsOf([]), { power: null, speed: null });
+  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 75], speed: [5.5, 7] }]), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] } });
+  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 80], speed: [5.5, 7] }]), { power: { differ: true }, speed: { values: [5.5, 7] } });
+  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25], speed: null }, { power: [20, 25], speed: [5.5, 7] }]), { power: { values: [20, 25] }, speed: { differ: true } }, "a team without a set is not a match");
+  assert.deepEqual(zoneThresholdsOf([{ power: ["x"], speed: [] }]), { power: null, speed: null }, "only finite number lists");
+  assert.deepEqual(zoneOf("athletesessionrelativespeedzone_distance_3"), { family: "relativespeed", measure: "distance", number: 3 });
+  for (const name of ["ext_work_over_zone0", "athletesessionpowerzone_distance", "powerzone_distance_4", "athletesessionpowerzone_speed_4"]) assert.equal(zoneOf(name), null, name);
 });

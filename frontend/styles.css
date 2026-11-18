@@ -27435,6 +27435,34 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
 .source-fields-inventory-thresholds {
   margin-top: 12px;
 }
+/* The owner's first use (2026-11-18): the readable name and unit first, GPEXE's own name small under it, the counts
+   last; values grouped by quantity; the names that are not values in one closed fold. */
+.source-fields-inventory-unit {
+  font-weight: 400;
+  color: var(--muted);
+}
+.source-fields-inventory-raw {
+  font-size: 0.85em;
+  color: var(--muted);
+  justify-self: start;
+}
+.source-fields-inventory-facts {
+  font-size: 0.85em;
+}
+.source-fields-inventory-group {
+  margin: 16px 0 6px;
+  font-size: 1rem;
+}
+.source-fields-inventory-other {
+  margin-top: 16px;
+}
+.source-fields-inventory-other summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
 .source-fields-inventory-thresholds summary {
   min-height: 44px;
   display: flex;
