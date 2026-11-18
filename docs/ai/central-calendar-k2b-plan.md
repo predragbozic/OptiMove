@@ -1839,3 +1839,23 @@ databases through the T1 runner. The executor's session cannot read `DATABASE_UR
     - A run that crosses midnight UTC in between fails that anchor falsely.
     - Test 1 still passes, and nothing reaches production. A false pass cannot happen.
     - The fix: anchor on the period's actual first day, or take `TODAY` from the test connection's `current_date`.
+      It is applied in the last round, below.
+
+**The independent review of the rewrite, on `81559b28`: READY WITH NON-BLOCKING NOTES** (relayed by the manager).
+- **What it checked:**
+  - The new and the old rule gave the same ids, in the same order, in 132,600 comparisons on a random world, with 7
+    settings of the planner and 0 differences.
+  - BM19 is equivalent by v25's CHECK too.
+  - BM20 is equivalent, and the explicit `order by` now guarantees it.
+- **The last round** (tests and comments only):
+  - **LOW, RM1:** the suite did not catch `<` for `<=` in the "first period in the club" check of
+    `membershipPeriodOnDaySql`. A new athlete has no club period, team A1 from TODAY+3 and team A2 from TODAY+5. The
+    anchors are TODAY [A1, A2], TODAY+3 [A1] and TODAY+5 [A1, A2]. Test 1 compares the athlete against the old form.
+    The mutation is BM21 in the notes folder's script.
+  - **NIT, comment:** `athleteTeamIdsSql`'s comment now says that the athlete's event path (`teamScope`) sends a team
+    list too, and that the other kinds send none.
+  - **NIT, test 2:** the restored athlete's anchors take the restore's day from the database: the UTC day of the new
+    period's `valid_from`, which is the restore's `now()`. They no longer use the file's `TODAY`. This closes the
+    `code-reviewer`'s LOW. It reads the period itself rather than a second `current_date`, which could also fall after
+    midnight.
+- **To run (the manager):** the team-ids suite and RM1 (BM21) on the new head.

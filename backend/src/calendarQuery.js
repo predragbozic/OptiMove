@@ -54,9 +54,11 @@ const athleteNameSql = (alias) => `coalesce(${alias}.display_name, ${alias}.full
 // The athlete's team memberships among the workspace's teams
 // ($<teamsParam>::uuid[]) ON THE DAY `dayExpr`, by the calendar's one
 // membership rule (calendarAccess.js membershipOnDaySql), as an array sorted
-// by id; '{}' outside a club / team / platform workspace (since K2b-1d2 the
-// platform's list holds every active team of an active club, so it gets team
-// ids too).
+// by id; '{}' when the list is empty. A club / team / platform workspace
+// sends its teams (since K2b-1d2 the platform's list holds every active team
+// of an active club, so it gets team ids too); in the athlete's workspace the
+// event path sends the teams its events name (teamScope, readCalendar), and
+// the other kinds send none.
 // K2b-1d2 (the owner, 2026-11-18, plan 23.6): it goes from the athlete's own
 // team periods to the teams of the list, instead of from every team of the
 // list to the athlete (rows x teams), with the same day condition

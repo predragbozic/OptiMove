@@ -128,6 +128,12 @@ before(async () => {
   await membership({ athleteId: w.restored, clubId: w.clubA, startsAt: LONG_AGO });
   const restoredA1 = await membership({ athleteId: w.restored, clubId: w.clubA, teamId: w.A1, startsAt: LONG_AGO, archivedAt: `${addDays(D0, -3)}T12:00:00Z` });
   await q(`update public.athlete_memberships set status = 'active', archived_at = null, updated_at = now() where id = $1`, [restoredA1]);
+  // The restore's day as the DATABASE wrote it (its now(), a UTC day), not this file's TODAY: a run across midnight UTC
+  // would otherwise fail the anchors falsely (code review LOW; the manager's NIT).
+  w.restoredDay = (await q(
+    `select ((valid_from at time zone 'UTC')::date)::text as day from public.athlete_membership_periods where membership_id = $1 and valid_to is null`,
+    [restoredA1],
+  ))[0].day;
   // Archived before it started: a period of zero length on its one day (db review).
   w.zeroLength = await athlete("Ids zero length");
   await membership({ athleteId: w.zeroLength, clubId: w.clubA, startsAt: LONG_AGO });
@@ -142,7 +148,13 @@ before(async () => {
   w.leftLater = await athlete("Ids left later");
   await membership({ athleteId: w.leftLater, clubId: w.clubA, startsAt: `${addDays(TODAY, 2)}T08:00:00Z`, archivedAt: `${addDays(TODAY, 4)}T08:00:00Z` });
   await membership({ athleteId: w.leftLater, clubId: w.clubA, teamId: w.A1, startsAt: `${addDays(TODAY, 2)}T08:00:00Z`, archivedAt: `${addDays(TODAY, 4)}T08:00:00Z` });
-  w.athletes = [w.mover, w.archivedOnly, w.late, w.lateWithClub, w.twoTeams, w.paused, w.teamArchived, w.boundary, w.movedMember, w.otherClub, w.restored, w.zeroLength, w.crossClub, w.leftLater];
+  // Two teams of one club, no club period: A1 from TODAY+3, A2 from TODAY+5. On TODAY+3 the A1 period starting THAT DAY
+  // is already the first period in the club, so A2 takes no fallback; the first period's day counts (`<=`, kills RM1,
+  // the independent review).
+  w.firstPeriodDay = await athlete("Ids first period day");
+  await membership({ athleteId: w.firstPeriodDay, clubId: w.clubA, teamId: w.A1, startsAt: `${addDays(TODAY, 3)}T08:00:00Z` });
+  await membership({ athleteId: w.firstPeriodDay, clubId: w.clubA, teamId: w.A2, startsAt: `${addDays(TODAY, 5)}T08:00:00Z` });
+  w.athletes = [w.mover, w.archivedOnly, w.late, w.lateWithClub, w.twoTeams, w.paused, w.teamArchived, w.boundary, w.movedMember, w.otherClub, w.restored, w.zeroLength, w.crossClub, w.leftLater, w.firstPeriodDay];
 });
 
 after(async () => {
@@ -215,10 +227,11 @@ test("2. anchors: the cases the rule is about give what the rule says (with ever
   // D43: the moved team, from its joining day (an earlier club period: no fallback).
   assert.deepEqual(await idsOn(w.movedMember, addDays(MID, -1)), []);
   assert.deepEqual(await idsOn(w.movedMember, MID), sorted(w.E));
-  // Restored: through the first period's last day, none in the gap, the team again from the restore (today).
+  // Restored: through the first period's last day, none in the gap, the team again from the restore's day (read from the
+  // database).
   assert.deepEqual(await idsOn(w.restored, addDays(D0, -3)), sorted(w.A1));
-  assert.deepEqual(await idsOn(w.restored, addDays(TODAY, -1)), []);
-  assert.deepEqual(await idsOn(w.restored, TODAY), sorted(w.A1));
+  assert.deepEqual(await idsOn(w.restored, addDays(w.restoredDay, -1)), []);
+  assert.deepEqual(await idsOn(w.restored, w.restoredDay), sorted(w.A1));
   // A period of zero length covers its one day.
   assert.deepEqual(await idsOn(w.zeroLength, addDays(TODAY, 1)), []);
   assert.deepEqual(await idsOn(w.zeroLength, addDays(TODAY, 2)), sorted(w.A2));
@@ -229,6 +242,11 @@ test("2. anchors: the cases the rule is about give what the rule says (with ever
   assert.deepEqual(await idsOn(w.leftLater, TODAY), []);
   assert.deepEqual(await idsOn(w.leftLater, addDays(TODAY, 3)), sorted(w.A1));
   assert.deepEqual(await idsOn(w.leftLater, addDays(TODAY, 5)), []);
+  // The day of the first period in the club counts as "on or before" (RM1): both before it by the fallback, only A1 on
+  // A1's joining day, both again once A2 starts.
+  assert.deepEqual(await idsOn(w.firstPeriodDay, TODAY), sorted(w.A1, w.A2));
+  assert.deepEqual(await idsOn(w.firstPeriodDay, addDays(TODAY, 3)), sorted(w.A1));
+  assert.deepEqual(await idsOn(w.firstPeriodDay, addDays(TODAY, 5)), sorted(w.A1, w.A2));
 });
 
 test("3. THE membership rule after the refactor equals its earlier text, for every athlete, team and club, single days and windows; and a window is the union of its days", async () => {
