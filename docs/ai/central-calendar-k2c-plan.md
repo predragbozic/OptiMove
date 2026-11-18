@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract K2c-2-B (2.3) has the manager's GO (2.4) and is being built; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract K2c-2-B (2.3) has the manager's GO (2.4) and is built (2.5); K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -1090,6 +1090,41 @@ and the create rights); then the independent review and the OptiMove manager's g
 central-calendar`; `--filter tests-`; `--filter training-load-external`; `--preset backend-fast`; `git diff --check`.
 The manager opens the pull request after its check. Base: this branch on #614's head `e98a7378`; `main` is merged in
 when #614 merges.
+
+### 2.5 K2c-2-B as built (2026-11-18)
+
+Built on 2.3 with the GO of 2.4; backend only, no migration, no new route. One file of code,
+`backend/src/calendarEventService.js`, and one new suite.
+
+- **The body:** `createSessionsField` reads `sessions` only when sent: an object, `logicalSessionIds` through the
+  attach's `uuidListField` (sorted, deduplicated, 1–200), `alignSessions` absent or `false`, no
+  `confirmDisableWithResults` (either is `400 invalid_align`, "Create the event first, then align its trainings.").
+  `canonical.sessions = { logicalSessionIds }` only when sent.
+- **The create:** after the club's question switch (`lockQuestionState`) and before `planQuestions`: the unlocked
+  read over the resolved targets, `allLinkable`, `lockPlansForShare`, the read again, `judgeSessionsForLink`; a test
+  seam `testHooks.afterSessionLocks`. `planQuestions` takes `sessionsLinked`. The links are written after the event,
+  its targets and its details (`insertSessionLinks`), before #614's after-writes. The answer and the stored result
+  carry `attached`, `alreadyAttached: 0`, `alignment: null` beside #614's question counts; the change row's details
+  add `sessions` and `planIds`.
+- **Shared with the attach, its SQL unchanged:** `judgeSessionsForLink` (the attach's checks in its order, `eventId`
+  null meaning any live link is another event's) and `insertSessionLinks` (the attach's INSERT, moved);
+  `eventTargetsAthleteSql` now returns `targetsAthleteSql` over the stored targets with the same text; the create's
+  source is `unnest($2::text[], …) as tg(target_kind, target_athlete_id, target_team_id, target_club_id) where true`.
+
+**Deviations from 2.3, both found by the tests:**
+- **A detach racing a create (2.3.9, group 10):** the contract said the create "waits and then links". Under READ
+  COMMITTED the create's read sees the link still live until the detach commits, so it answers
+  `session_already_attached` at once; once the detach has committed, the create links. Test 6b pins that behaviour.
+- A `lock_timeout` ending in `try_again` was not staged for a create with sessions (15 s); the runner's mapping of
+  `55P03` / `40P01` is unchanged and covered by the K2a suites.
+
+**Tests:** `backend/tests/central-calendar-k2c-2-create-sessions.test.mjs`, 17 tests in the groups of 2.3.9 as
+amended by 2.4 (bases and the identical answers, the body, a refusal at each attach step with nothing written, a
+fault after the first write, replay and `request_key_reused`, the hash pin against `e98a7378`, a lost COMMIT, the
+interplay with the questions, the attach's targeted SQL pinned and the attach equal to the create in seven
+target scenarios, the races against an attach in both orders, a detach, a Builder lock and a foreign plan held, a Day
+off, and the recorded SQL order for a training and a Day off). 17 mutations, all killed (the first form of M12 was
+equivalent on v81 and was replaced by one that drops the link counts).
 
 ## 3. K3 — "New training" from an event (named only)
 
