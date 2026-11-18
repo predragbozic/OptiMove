@@ -1,8 +1,8 @@
 # Central calendar — K2b-2 plan: *Ask athletes* on an event (D40)
 
-Status: **proposed (2026-11-18), revised with the owner's answers of the same day** (relayed by the OptiMove manager,
-to whom the owner handed the coordination). Q1–Q4 and Q6 are decided (section 7). **Q5 is the manager's recommendation,
-waiting for the owner's confirmation.** The owner confirms the revised plan before any code. No code, no migration in
+Status: **accepted by the owner (2026-11-18)**, with every decision of section 7 and section 8 („ostalo se slažem",
+after the owner's own answers on Q2–Q4, Q6 and Q8). The code starts with K2b-2a-1, and its migration is written only on
+the owner's order naming the file (section 4). No code, no migration in
 this document. Written by the calendar stream's manager against `main` `946914f4`. No persistent database was read.
 
 D40 (the owner, 2026-11-02; `docs/ai/central-calendar-k2b-plan.md` section 10 and D40): questions to athletes go only
@@ -143,13 +143,14 @@ The numbers were agreed with the Metrics Core line (2026-11-18, its correction o
 - v75 is reserved for the dashboards' D2a;
 - v77 (PR #608, computed variables part 1), v78 (computed variables part 2), v79 (ratio and difference) and v80 (zone with
   a condition) are the mapping line's;
-- the calendar takes **v81 or later**. The number is checked against `origin/main` and the 12-digit prefix rule when the
+- the calendar takes **v81 or later**. The proposed file is `migrations_v2/202611191000_calendar_v81_athlete_questions.sql`
+  (the prefix is unique on `main` `2d4e6d7e`). The number is checked against `origin/main` and the 12-digit prefix rule when the
   file is written, and the file is written only on the owner's order naming it.
 
 The migration, in the `calendar` schema:
 - **the club switch:** `calendar.club_question_settings` (club, on / off, who, when, reason), with its change log;
 - **the type's defaults:** `calendar.event_types.default_questions` (`text[]`, values `rpe` / `wellness`, checked; the
-  system types seeded from `default_expects`; never for `day_off`). It is exempt from v51's "the meaning is frozen" rule,
+  system types seeded from `default_expects`; empty for `day_off`, where a coach may still ask per event). It is exempt from v51's "the meaning is frozen" rule,
   like the label;
 - **the Tests link:** `calendar.event_questionnaires` (event, Tests schedule, who, when; one live link per event and test
   version). It is trigger-checked like v49's reference, because the shared test fixture has no Tests schema;
@@ -225,11 +226,11 @@ link.
 - **Q4, which events: decided** („Ask athletes može da stoji kao default u nekim događajima, a da se u nekim omogući").
   Defaults per type in Settings → Calendar; Training and Match ask for RPE by default; Day off has none by default but
   may be asked on (3.2).
-- **Q5, changes after asking: the manager's recommendation (3.5), waiting for the owner's confirmation.**
+- **Q5, changes after asking: decided** as recommended (3.5).
 - **Q6, notifications: decided.** The in-app notification only, as when a plan is published; no push for now (3.4).
 - **The soft prompt: decided** (3.4). The strict variant is not built.
-- **Q7, still open:** who turns *Ask athletes* on for a club. The recommendation is a platform admin, recorded with a
-  reason, as for the import switch. It stays off everywhere until then.
+- **Q7, who turns it on: decided.** A platform admin, per club, recorded with a reason, as for the import switch. It
+  stays off everywhere until then.
 
 ## 8. Daily WELLNESS that skips days off: an option of the Tests schedule (K2b-2c; the owner, 2026-11-18)
 
@@ -259,7 +260,7 @@ tamo neko zakazivanje vec postoji".
   coach's view of who answered, chose *Later* or has not answered (in Tests, and on the calendar's Tests card).
 - **Q8, decided by the owner:** days off are skipped by default and can be included. Live skipping is the manager's
   recommendation, and the owner did not object.
-- **Q9, the order (the manager's recommendation, waiting for the owner):**
+- **Q9, the order: decided as recommended:**
   1. K2b-2a-1, the backend of both the per-event questions and this option, in one calendar migration;
   2. the coach's screens, the Tests form's option first;
   3. the athlete's prompt.
