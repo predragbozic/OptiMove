@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract (2.3) is next; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract K2c-2-B (2.3) waits for the manager's GO; K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -807,6 +807,258 @@ GO on 2.1 at `adb22ce4`, with these decisions. Where they differ from 2.1, they 
 
 **Next:** section 2.3 on `claude/central-calendar-k2c-2-backend` once #614's frozen head is known; no code before its
 GO.
+
+### 2.3 K2c-2-B — the technical contract: `sessions` on create (written 2026-11-18; waits for the manager's GO)
+
+★★: one transaction, its lock order and idempotency (external-review trigger 4). Backend only, **no migration, no new
+route**. Branch `claude/central-calendar-k2c-2-backend`, made from PR #614's frozen head `e98a7378` (K2b-2a-1,
+migration v81, with `main` `4a2b07ec` merged in), with this docs branch merged into it. Written against that head; the
+line numbers below are of `backend/src/calendarEventService.js` there.
+
+#### 2.3.1 What exists on `e98a7378`
+
+- `createEvent` (`:822-882`), through `runEventCommand` (`:695-`) and the calendar's one runner
+  (`calendarCommandRunner.js`): BEGIN, `lock_timeout` 15 s; `prepare` (the owner and basis from the active
+  workspace, the request hash, `calendar.lock_event_writer`, which since v54 locks users first, then the role, then
+  the owner team / club `FOR SHARE`); the requestKey replay after the locks, under a transaction-scoped advisory lock
+  on (table, user, key); `apply`; the request and change rows; a bounded COMMIT (15 s, then the request looked for on
+  a new connection for 5 s: `verifiedAfterCommitError` or `503 outcome_unknown`).
+- In `apply`, before the first write (#614's order, its plan 9.1.4): the type `FOR SHARE` (`resolveType`) → the
+  targets resolved (reads, no lock) → the place `FOR SHARE` → the details `FOR SHARE` → the club's question switch
+  `FOR SHARE` (`lockQuestionState`; no event yet, so no event questions) → `planQuestions` (reads) → the day keys and
+  a Day off's assignments (`lockDaysAndDayOff`: the club's day advisory keys ascending, then the open Tests
+  assignments it cancels `FOR UPDATE`). Then the writes: the RPE question's schedule (`applyRpeBeforeEventWrite`),
+  the event, its targets, its details, the WELLNESS questions, the Day off's cancellations, the view.
+- The attach (`attachSessions`, `:1518-1582`): the event row `FOR NO KEY UPDATE` (prepare) → the question state →
+  the sessions decided on an **unlocked** read (`readLinkableSessions`, `allLinkable`: in the caller's calendar scope
+  on its day, a published weekly session, a plan inside the event owner's tree) → the plans `FOR SHARE` in ascending
+  id (`lockPlansForShare`) → the sessions read again (`FOR UPDATE of ps` in ascending id when aligning) and judged
+  again: the event's days, every athlete a target on that day, no live link of the slot to another event → the
+  link rows → the alignment (`alignLinkedSessions` → `writePublishedSessionFlags`, which locks the edit-draft copies
+  `FOR UPDATE` in ascending id, then writes) → the event's RPE question ended `replaced_by_sessions` when there was
+  one → the revision.
+- The attach's "targeted" is a SQL `exists` over `calendar.event_targets` of the stored event
+  (`eventTargetsAthleteSql`, `:1366-1371`). A create has no stored targets before its INSERT, so it needs the same
+  rule over the targets it resolved (2.3.4).
+- `planQuestions` (`:1800-`) already skips the RPE default and refuses an explicit RPE ask with `rpe_from_sessions`
+  when the event has a live session link (`Q.hasLiveSessionLinks`), which is always false for a create.
+- The v49 link trigger (`event_session_links_before_write`) checks a new link's event is planned, its day inside the
+  event's days and its slot a published session; the unique index `event_session_links_one_live_per_slot` is the
+  backstop of "one live link per slot". v49's request operation and change kind `create` hold a create that also
+  links: no migration.
+
+#### 2.3.2 The request body (the canonical body and its hash)
+
+```
+POST /api/calendar/events
+{ …the create body of K2a / K2b-1b / K2b-2a-1, unchanged…,
+  sessions?: { logicalSessionIds: [uuid, …],     // 1–200, MAX_LINKED_SESSIONS
+               alignSessions?: boolean,           // default false
+               confirmDisableWithResults?: boolean } }   // default false
+```
+
+- Validated by the attach's own validators: `uuidListField(sessions, "logicalSessionIds", "invalid_sessions",
+  { max: MAX_LINKED_SESSIONS })` (lower-cased, deduplicated, **sorted**), `booleanField(sessions, "alignSessions",
+  "invalid_align")`, `booleanField(sessions, "confirmDisableWithResults", "invalid_confirm")`. `sessions` present but
+  not a plain object → `400 invalid_sessions`. Unknown keys inside `sessions` are ignored, as everywhere in this
+  route today (the follow-up of 2.2).
+- `canonical.sessions = { logicalSessionIds, alignSessions, confirmDisableWithResults }` is added **only when
+  `sessions` is sent** (the K2b-1b rule), so the hash of every body without it is byte for byte what it is today
+  (`requestHash(canonical, { eventId: null, owner })`).
+- **Idempotency** (the runner, unchanged): the same key and the same canonical body → the saved answer, read again
+  now; the same key with another `sessions` (other ids, another flag, `sessions` added or dropped) → `409
+  request_key_reused`; a refused request writes no row, so its key stays free. The ids being sorted, two orders of
+  the same ids are the same request.
+
+#### 2.3.3 The lock order of a create with `sessions` — every lock before the first write
+
+```
+prepare (unchanged)
+ 1. calendar.lock_event_writer(user, owner, basis)    users FOR SHARE → the role row → the owner team / club FOR SHARE (v54)
+    the requestKey replay (after the locks, the runner's key lock)
+apply — no write until step 9
+ 2. the type FOR SHARE                                 resolveType
+ 3. the targets resolved                               reads only (membership on the event's first day)
+ 4. the place FOR SHARE, the details FOR SHARE         K2b-1b
+ 5. the club's question switch FOR SHARE               lockQuestionState(eventId null)
+ 6. the sessions (new, the attach's steps):
+    6a. decided on an unlocked read                    readLinkableSessions over the resolved targets (2.3.4); allLinkable
+    6b. the plans FOR SHARE, ascending id              lockPlansForShare
+    6c. read again; FOR UPDATE of ps, ascending id,     then judged: the event's days, every athlete targeted, no live link
+        only when alignSessions                         to another event (2.3.5)
+    6d. alignSessions only: the edit-draft copies       moved out of writePublishedSessionFlags's first statement into its
+        FOR UPDATE, ascending id                        own lock step here (2.3.6)
+ 7. planQuestions                                      reads; the RPE ask skipped / refused because sessions are sent (2.3.7)
+ 8. the day keys and a Day off's assignments           lockDaysAndDayOff (#614's step 6)
+--- the first write ---
+ 9. the alignment's flag writes (alignSessions only)    then #614's writes unchanged: the RPE question's schedule (never,
+                                                         with sessions), the event, its targets, its details
+10. the session links (one multi-row INSERT)            after the targets, so the read back sees them
+11. #614's after-writes: the WELLNESS questions, the Day off's cancellations; the view; the request and change rows
+```
+
+- **How it merges with #614's create order:** #614's steps (writer lock → type → targets → place → details → question
+  switch → questions' reads → day keys → writes) are kept, and the session steps 6a–6d go between the question switch
+  (step 5) and `planQuestions` (step 7). This is **the attach's own order** (on `e98a7378` the attach takes the
+  question state before the plans), so a create and an attach take calendar → plans → Day off in the same order.
+  The order the manager listed (the attach's locks before "the questions' locks") is kept for every lock that can
+  wait on a writer: the Training Load and Tests locks of the questions and the day keys all come after the plans.
+  The one difference is the club's question switch: a `FOR SHARE` on one `calendar.club_question_settings` row,
+  before the plans, as in the attach. Taking it after the plans would give the create and the attach two orders of
+  the same two locks; both are shared, so neither order can deadlock against the other, but one order is simpler to
+  prove (Q1 of 2.3.10).
+- **Why no cycle with the Builder:** a Builder save, delete or batch sync takes its plan `FOR UPDATE` and never a
+  calendar row; the create holds the plans `FOR SHARE` and waits only on rows the Builder never holds after it. A
+  Builder *Apply changes* of an edit draft takes the draft's own plan, not the live one first; the alignment's
+  draft-copy lock (6d) is the attach's existing order (the plan, then the copies) and is taken before the first write.
+  The db-reviewer checks this against `applyEditDraft` (`routes/builder.js`); the race tests of 2.3.9 run it.
+- **Foreign-key checks after the first write:** the link INSERT's foreign keys take `FOR KEY SHARE` on the plan and
+  the event inside the server; the plans are already held `FOR SHARE` (stronger) and the event is this transaction's
+  own row, so they never wait. They are not SQL the service sends, so the recorded-order test does not list them.
+- `55P03` (the 15 s `lock_timeout`) and `40P01` anywhere → `409 try_again`, nothing written (the runner).
+
+#### 2.3.4 "Targeted" before the event exists
+
+- `readLinkableSessions` gets a second source of targets: instead of the stored event
+  (`calendar.event_targets tg where tg.event_id = $2`), the resolved list `unnest($k::text[], $m::uuid[]) as
+  tg(target_kind, target_id)`. The rule is the same SQL: an athlete target is the athlete; a team or club target is a
+  membership on **the session's own day** (`membershipOnDaySql`), as the attach judges it.
+- One builder, `targetsAthleteSql(source, athleteExpr, dayExpr)`, makes both forms, and the attach keeps its stored
+  form. A test runs the attach and a create over the same targets and sessions and asserts the same `targeted`
+  answer for every athlete (team, club and athlete targets; a member who left the day before).
+- The event's days for the checks of 6c are the body's `day` / `endDay` (`inEventDays` over `{ day, end_day }`).
+
+#### 2.3.5 Atomicity and the codes
+
+- Every check of 6a–6c runs **before the first write**. A refusal throws and the runner rolls the transaction back:
+  no event, no target, no detail, no question, no schedule, no link, no request row, no change row.
+- The codes are **the attach's, unchanged** (K2a plan section 11):
+
+| Step | Code |
+|---|---|
+| the body | `400 invalid_sessions`, `invalid_align`, `invalid_confirm` |
+| 6a / 6c | `400 session_not_available` (missing, unpublished, outside the caller's calendar scope on its day, a plan outside the event owner's tree — one answer) |
+| 6c | `409 session_outside_event` (a session not on one of the event's days) |
+| 6c | `409 athlete_not_targeted { count }` |
+| 6c, and the unique index under a race | `409 session_already_attached` |
+| 9, the alignment | `409 has_existing_results { resultCount }` (RPE off over results, without `confirmDisableWithResults`) |
+| 7, #614 | `409 rpe_from_sessions` (an explicit RPE question with sessions, 2.3.7) |
+
+- The order of the checks (so a body with two faults gets one known answer): the body's validation; then the
+  create's own (type, targets, place, details, schedules); then 6a's `session_not_available`; then 6c's in the
+  attach's order (`session_not_available` again, `session_outside_event`, `athlete_not_targeted`,
+  `session_already_attached`); then 7 (`rpe_from_sessions`); then 9's results gate.
+- `rpe_already_answered` cannot happen on a create (no question exists yet).
+
+#### 2.3.6 The alignment on create
+
+- `alignSessions: true` aligns the named sessions to the new event's `expects`, as the attach does (D20 option A):
+  RPE on with tracking, or RPE off; only on plans the workspace manages (`notAllowed`); the switch never touched
+  (`switchOff`); RPE off over results needs `confirmDisableWithResults` (else `has_existing_results`, nothing saved).
+  The Builder sends `false` (decision 5 of 2.2); `true` is for the API's completeness and for a later screen.
+- To keep "every lock before the first write", `writePublishedSessionFlags` (`plannedSessionFlags.js`) is split into
+  its two existing statements: `lockDraftCopiesForFlags(client, sessions)` (the `FOR UPDATE of ps2` select, ascending
+  id) and the write that takes the locked copies' ids. The quick toggles and the attach call both, in the same order
+  as today, so their SQL and order do not change; the create calls the lock in step 6d and the write in step 9. A
+  test pins the quick toggles' and the attach's recorded SQL unchanged.
+- The results gate (`session_feedback` count) is a read and stays where the alignment decides it, before its write.
+
+#### 2.3.7 The interplay with #614's questions (one RPE channel)
+
+- With `sessions` sent, the new event will hold a live session link, so it is **the RPE channel** (#614 plan 9.1.5:
+  "an event with a live planned-session link answers `rpe_from_sessions` to an RPE ask"). `planQuestions` gets
+  `sessionsLinked: true` from the create, and its RPE branch reads `sessionsLinked || Q.hasLiveSessionLinks(...)`:
+  - **no `questions` sent** and the switch on: the type's RPE default is **skipped** and named in the answer's
+    `questionsSkipped: ["rpe"]` (and the change row's `details.questionsSkipped`); WELLNESS defaults are asked as
+    today; the create succeeds;
+  - **`questions` sent with RPE:** `409 rpe_from_sessions`, the whole create rolled back;
+  - `questions` sent without RPE: as today.
+- "Sessions that carry RPE": the rule is the link, not the sessions' flags, as #614 decided for the attach. A link to
+  sessions that do not ask for RPE still makes the sessions the event's RPE channel; the event's `expects` (the
+  Builder sends `rpe` only when the training asks, decision 5) and the calendar's alignment note say the rest. Q2.
+- `externalScheduleId` sent with `sessions`: as the attach allows today (a referenced schedule beside linked
+  sessions; the read adds both). No new refusal.
+
+#### 2.3.8 The answer, the record, the replay
+
+- `201 { event, attached: N, alreadyAttached: 0, alignment | null, …#614's questionsAsked / questionsSkipped /
+  dayOffCancelled when it has them }`. `alreadyAttached` is always 0 on a create (a slot linked to another event is
+  refused; to this event is impossible); kept for the attach's answer shape.
+- The stored result keeps the counts beside the ids (the K2a-1b rule), so a replay and a verified lost COMMIT answer
+  the same counts. Never a name or a note in the request row.
+- One change row, kind `create`; its `details` add `sessions: N`, `planIds` (sorted), and with an alignment `align`,
+  `aligned`, `notAllowed`, `switchOff` (the attach's detail keys). One request row, operation `create`. The event's
+  revision stays the create's (no bump: the links are written in the create).
+- The realtime / notification step of #614 after the COMMIT is unchanged.
+
+#### 2.3.9 Tests (disposable databases, the real routes, `backend/tests/central-calendar-k2c-2-create-sessions.test.mjs`)
+
+1. **Bases and the identical 404 / 403:** a club admin, a platform admin in the club's workspace, a team coach, a
+   private coach each create with sessions; the platform workspace → `403 workspace_required`; an athlete → 403; a
+   session of a plan outside the owner's tree (a sibling team's, a private coach's of a club athlete, another club's)
+   → `session_not_available`, identical to a missing id.
+2. **The fold:** after the create the next `GET /api/calendar` shows the group folded under the new event, no planned
+   card; `GET /events/:id` lists the session links.
+3. **Atomicity, one refusal per step,** each asserting no event, target, detail, question, schedule, link, request or
+   change row: `invalid_sessions` (not an object, empty, 201 ids, not uuids), `invalid_align`, `invalid_confirm`,
+   `session_not_available` (each cause), `session_outside_event`, `athlete_not_targeted` (team, club and athlete
+   targets; a member on another day), `session_already_attached`, `has_existing_results`, `rpe_from_sessions`; and a
+   fault injected after the first write (a seam) rolls everything back.
+4. **Idempotency:** replay → the same answer and counts, one event, one request; the same key with other ids, another
+   flag, `sessions` dropped or added → `request_key_reused`; the ids in another order → the replay; a double submit
+   (two concurrent requests, one key) → one event.
+5. **The hash:** a body without `sessions` hashes exactly as before (a pinned hash of a fixed body, computed on
+   `e98a7378` and asserted after the change); a create without `sessions` behaves byte for byte as before (#614's
+   suite green unchanged).
+6. **A lost COMMIT:** the commit seam times out → `verifiedAfterCommitError` with the counts when the request is
+   found; `503 outcome_unknown` when it is not; never "nothing saved" after a sent COMMIT.
+7. **The interplay:** switch on, a type with RPE and WELLNESS defaults, no `questions` → RPE skipped and named,
+   WELLNESS asked, no RPE schedule; explicit RPE → `rpe_from_sessions`, nothing saved; explicit WELLNESS only → as
+   today; switch off / not installed → as today.
+8. **"Targeted" equals the attach's** (2.3.4) for the same targets and sessions.
+9. **The alignment:** RPE on over unaligned sessions, RPE off with and without results and the confirmation, a plan
+   the workspace does not manage (`notAllowed`), the switch off (`switchOff`), an edit-draft copy updated in the same
+   transaction; the quick toggles' and the attach's recorded SQL unchanged by the split.
+10. **Races:**
+    - a create and an attach of the same slot to another event, both directions (each held at the seam after its
+      locks): one wins, the other `session_already_attached`, never two live links (also through the unique index,
+      the mapped `23505`);
+    - a create while a detach of the same slot from another event commits: the create waits and then links;
+    - a create while a Builder delete or batch sync of the plan holds it `FOR UPDATE`: the create waits, then
+      `session_not_available` (or links, when the sync kept the slot);
+    - a create with `alignSessions` against an *Apply changes* of the plan's edit draft;
+    - a create against a Day off of the same club and day, and against a Tests materialization holding the day key;
+    - none ends in a `40P01`; a `lock_timeout` ends in `try_again`.
+11. **The recorded SQL order** (the rule of `.claude/rules/migrations.md`): the create's SQL recorded through the
+    client seam; asserted: the order of steps 1–8 (writer lock, type, place, details, the switch, the plans
+    ascending, the sessions, the draft copies, the day keys), no locking clause before the writer lock, and **no
+    locking clause (`for share`, `for update`, `for no key update`, `pg_advisory_xact_lock`) between the first write
+    and the COMMIT**; with and without `alignSessions`, with and without questions, with a Day off type.
+12. **Mutations** (each must fail a test): drop `canonical.sessions` from the hash; add it when not sent; take the
+    plans after the event INSERT; skip the unlocked decision (lock first); judge `targeted` on the stored event (none
+    yet); drop the "days" check; drop the "linked elsewhere" check; drop the `23505` mapping; skip the RPE default
+    without `sessions`; not refuse an explicit RPE with `sessions`; leave the draft-copy lock inside the write; write
+    the links before the targets; not store the counts for the replay.
+
+Then `--preset backend-fast` and the calendar suites (`central-calendar-k2a-1b`, `-k2b2-questions`, `-k2b-settings`,
+`-k1a`), the T1 disposable kind for the touched families, `git diff --check`. `test:backend:shared` is not run (no
+local OPTIMOVE database here; the same note as #614's).
+
+**Reviewers:** `code-reviewer` and `db-reviewer` (the locks and the transaction) on the frozen head, then the
+independent review and the OptiMove manager's gate.
+
+#### 2.3.10 Open questions (each with a recommendation)
+
+1. **The question switch before the plans** (2.3.3): recommend **yes**, the attach's own order, so a create and an
+   attach take calendar → plans → Day off alike. Both are `FOR SHARE`, so the other order would not deadlock either;
+   one order is the simpler proof.
+2. **The RPE channel is the link, not the sessions' flags** (2.3.7): recommend **yes**, #614's rule. With the
+   Builder's decision 5 the event expects RPE exactly when its training asks, so the two agree in practice.
+3. **Splitting `writePublishedSessionFlags`'s lock from its write** (2.3.6): recommend **yes**, the smallest change that
+   keeps the rule for an aligning create, with the existing callers' SQL pinned unchanged. The alternative is to
+   refuse `alignSessions: true` on a create (`400 invalid_align`) and keep the shared function as it is: smaller, and
+   the Builder never sends it; but the API then differs from the attach.
+4. **Unknown keys on create** stay a follow-up (2.2); this PR adds none and refuses none.
 
 ## 3. K3 — "New training" from an event (named only)
 
