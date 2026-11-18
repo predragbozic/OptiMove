@@ -277,7 +277,8 @@ export function placementRefusal(p, { column, variable } = {}) {
     case "activation_exists": return "This column is already on for the team.";
     case "variable_taken_on_binding": return `${name} is already filled for the team.`;
     case "level_not_allowed": return "This variable is not kept per session, so this column cannot fill it.";
-    case "condition_mismatch": return "This variable counts only values under a condition. Map it in Mappings.";
+    // Mappings refuses it too (the review of 2026-11-18): no step here would finish it today.
+    case "condition_mismatch": return "This variable counts only values under a condition, and this column has none, so it cannot fill it. Choose a variable without a condition.";
     case "target_not_usable": return "This variable has no numeric unit, so a column cannot fill it.";
     case "pair_not_distinct": return COLUMN_REASON.no_value_for_pair;
     case "value_outside_limits": {
