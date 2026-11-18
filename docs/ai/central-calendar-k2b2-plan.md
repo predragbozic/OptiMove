@@ -92,7 +92,8 @@ An event's RPE comes from **exactly one** channel:
 
 - **Settings → Calendar → Event types** gets a *Questions for athletes* choice per type: none, RPE, WELLNESS, or both.
 - The proposed defaults follow `default_expects`: **Training and Match: RPE**; Test, Travel, Meeting and Camp: none;
-  **Day off: never**, and the choice is not offered for it.
+  **Day off: none by default**. The coach may still add questions to a *Day off* event if he wants (the owner,
+  2026-11-18: „ja mogu i da stavim na day off ako hoću").
 - A new event takes its type's questions, pre-ticked in the form. The coach adds or removes them per event, before or
   after saving.
 
@@ -222,38 +223,43 @@ link.
   calendar change.
 - **Q3, the window: decided.** After the event, Next morning, and Custom inside one day for now (3.3).
 - **Q4, which events: decided** („Ask athletes može da stoji kao default u nekim događajima, a da se u nekim omogući").
-  Defaults per type in Settings → Calendar; Training and Match ask for RPE by default; never on Day off (3.2).
+  Defaults per type in Settings → Calendar; Training and Match ask for RPE by default; Day off has none by default but
+  may be asked on (3.2).
 - **Q5, changes after asking: the manager's recommendation (3.5), waiting for the owner's confirmation.**
 - **Q6, notifications: decided.** The in-app notification only, as when a plan is published; no push for now (3.4).
 - **The soft prompt: decided** (3.4). The strict variant is not built.
 - **Q7, still open:** who turns *Ask athletes* on for a club. The recommendation is a platform admin, recorded with a
   reason, as for the import switch. It stays off everywhere until then.
 
-## 8. Proposed next: *Daily questions* for a team, skipping days off (K2b-2c; the owner's idea, 2026-11-18)
+## 8. Daily WELLNESS that skips days off: an option of the Tests schedule (K2b-2c; the owner, 2026-11-18)
 
 The owner: „takodje moze da se desi da ja zakazem wellness svaki dan anketu osim day off i da bude validna u periodu
-nekom".
+nekom", and then: „moze da preskoci a ja mogu i da stavim na day off ako hocu. Inace wellnes vec postoji u testovima i
+tamo neko zakazivanje vec postoji".
 
-- **What exists:** the Tests module already schedules WELLNESS **every day** of a period (`scheduleKind: 'daily'`, from –
-  to), with a window each day, and one-time schedules for listed dates (`POST /schedules/bulk`). What it cannot do is
-  skip a team's days off, which only the calendar knows (*Day off* events, kind `day_off`).
-- **The proposal:**
-  - *Daily questions* for a team: the questionnaire (today WELLNESS), the period from – to and the daily window (inside
-    one day, as in 3.3);
-  - the questionnaire is scheduled for every day of the period **except the days the team has a planned *Day off*
-    event**. It is one Tests schedule per day, linked to the calendar's series, so a single day can be cancelled.
-- **The skip is live** (recommended): a *Day off* added later cancels that day's questionnaire in the same transaction,
-  if nobody has answered it yet. A *Day off* cancelled before its day begins brings the day back.
-  - The alternative is a static skip: only the days off that exist at scheduling time are skipped. It is simpler, but
-    it drifts from the calendar.
-- **Never twice on one day:** on a day covered by the team's daily WELLNESS, an event of that day does not offer WELLNESS
-  ("Today's WELLNESS already covers this day"). Its RPE stays.
-- **The same club switch** (3.1), off by default. The same athlete prompt and Athlete Home card (3.4), and the same coach
-  lists (who answered, chose *Later*, has not answered).
-- **The data:** the series (team, questionnaire, period, window, who, when) and its days' links. That goes in the same
-  calendar migration as section 4 if K2b-2c is built together with K2b-2a, or in the next free calendar number.
-- **Open for the owner:**
-  - **Q8:** the live skip (recommended), or the static one;
-  - **Q9:** the order. Is *Daily questions* (K2b-2c) built before or after the per-event questions (K2b-2a)? Both share
-    the switch, the prompt and the migration, so building them as one slice series is also possible. The
-    recommendation: K2b-2a-1, the backend of both, in one migration; then the screens.
+- **Where:** WELLNESS is scheduled where it is scheduled today, in Tests → Schedule, with the existing *daily* kind (a
+  period from – to and a window each day). There is no second calendar form for it.
+- **The new option** on that form: **Skip days off**, ticked by default. Unticked, the athletes are asked on days off
+  too.
+- **Live, from the calendar:** an athlete is not asked on a day when a planned *Day off* event of the calendar reaches
+  her. That uses the calendar's own audience rule (the event's targets and membership on the day), decided when that
+  day's assignments are made.
+  - A *Day off* added later, before the day's assignments exist, therefore removes that day's question.
+  - A *Day off* added after the assignments exist cancels the open, unanswered assignments of the athletes it reaches.
+    That happens in the *Day off*'s own command; an answered one stays.
+  - A *Day off* cancelled before the day's assignments exist brings the day back.
+- **The data:**
+  - a `skip_days_off` flag on `tests.test_schedules`;
+  - the Tests function that makes a day's assignments, reading `calendar.events` (`CREATE OR REPLACE` with an md5
+    precondition).
+  - It goes in the same migration as section 4 (v81 or later), if built together.
+- **Never twice on one day:** on a day when an athlete already has a WELLNESS from a daily schedule, an event of that
+  day does not offer WELLNESS ("Today's WELLNESS already covers this day"). Its RPE stays.
+- **The club switch** of 3.1 covers it, off by default, as do the athlete's prompt and Athlete Home card of 3.4, and the
+  coach's view of who answered, chose *Later* or has not answered (in Tests, and on the calendar's Tests card).
+- **Q8, decided by the owner:** days off are skipped by default and can be included. Live skipping is the manager's
+  recommendation, and the owner did not object.
+- **Q9, the order (the manager's recommendation, waiting for the owner):**
+  1. K2b-2a-1, the backend of both the per-event questions and this option, in one calendar migration;
+  2. the coach's screens, the Tests form's option first;
+  3. the athlete's prompt.
