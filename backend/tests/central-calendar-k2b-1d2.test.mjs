@@ -252,3 +252,35 @@ test("2d. the platform's read takes the same number of statements with 2 or 12 t
   for (let i = 0; i < 10; i += 1) await env.fx.makeTeam(club.clubId, `count team ${i}`);
   assert.equal(await count(), small, `the same number of statements (${small})`);
 });
+
+// ---------------------------------------------------------------------------
+// 3. K2b-1d3 (LOW-1 of PR #605's review): the reader's view names no team for the platform workspace
+// ---------------------------------------------------------------------------
+test("3a. the reader's event view of the platform workspace names no team at all (no route reaches it: the test seam)", async () => {
+  const { roles, teams, clubs } = m;
+  const { reducedEventViewForTests } = await import("../src/calendarEventService.js");
+  const { resolveCalendarContext } = await import("../src/calendarAccess.js");
+  const { loadAuthorizationContext } = await import("../src/authz.js");
+  const ctxOf = async (role) => {
+    const user = (await q(`select * from public.users where id = $1`, [role.id]))[0];
+    return resolveCalendarContext({ user, authz: await loadAuthorizationContext(user) });
+  };
+  const type = (await catalog(roles.clubAdmin.cookie)).types.find((t) => t.key === "training");
+  const created = await createEvent(roles.clubAdmin.cookie, {
+    eventTypeId: type.id, title: `Reader view ${uid()}`, targets: [{ kind: "team", id: teams.t1 }, { kind: "club", id: clubs.c1 }],
+  });
+  assert.equal(created.status, 201, created.text);
+  const id = created.body.event.id;
+
+  // The control: the team's coach (a reader of the club's event) is shown the team target of their own scope.
+  const coachView = await reducedEventViewForTests(await ctxOf(roles.teamCoach), id);
+  assert.equal(coachView.canManage, false);
+  assert.deepEqual(coachView.targets.filter((t) => t.kind === "team").map((t) => String(t.id)), [String(teams.t1)], "a reader's own team is named");
+
+  // The platform workspace: loadWorkspaceTeams would name every club's teams there, so the branch gives none.
+  const platformCtx = await ctxOf(roles.platformAdmin);
+  assert.equal(platformCtx.workspace.type, "platform");
+  const view = await reducedEventViewForTests(platformCtx, id);
+  assert.deepEqual(view.targets.filter((t) => t.kind === "team"), [], "no team target for the platform's reader view");
+  assert.equal(JSON.stringify(view).includes(String(teams.t1)), false, "no team id anywhere in the view");
+});

@@ -2347,11 +2347,20 @@ is touched.
   untinted; a cancelled row's icon stays muted. **Backend:** `readEventRows` selects `e.timezone`, and `publicCard`
   puts `timezone` on every event card, the athlete's branch included (`backend/src/calendarQuery.js`).
 - **24.3.** The Places form's note hint is the sentence of 24.3 (`frontend/calendar-settings-view.js`).
+- **LOW-1 of PR #605's independent review (the manager's addition, 2026-11-18).** `reducedViewOf`
+  (`backend/src/calendarEventService.js`) gives the platform workspace an empty team list in code
+  (`ctx.workspace?.type === "platform" ? [] : await loadWorkspaceTeams(ctx)`), no longer only a comment: since K2b-1d2
+  `loadWorkspaceTeams` names every club's teams for the platform. No route reaches that view for the platform (its
+  admin manages every event), so a test-only seam `reducedEventViewForTests(ctx, eventId)` reads the event row and
+  calls the reader's view directly. `central-calendar-k2b-1d2` test 3a: the team's coach (the control) is shown its own
+  team target; the platform's reader view names no team target and no team id. Mutation: the branch removed → 3a
+  fails. After it: the seven calendar suites 135/135; `--preset backend-fast` 591/676, failing only `gpexe-client`
+  (17/2) and `gpexe-rest-v1-adapter-reads` (14/83), as on `main`.
 - **Tests** (this run, Node 22, PostgreSQL 16):
   - `node scripts/test-runner.mjs --project backend --kind disposable --filter central-calendar`: 7 files, 134/134
     (the athlete's allowlist gains `timezone` key by key in `-k2a-events`, `-k2b-event-details`, `-k2b-1d2`; the
     zone asserted on the manager's, the reader's and the athlete's card in `-k2b-1d2` 1a and on the athlete's in
-    `-k2a-events`).
+    `-k2a-events`). (Before LOW-1; 135/135 with test 3a, below.)
   - Frontend: `central-calendar-event-details.actions` D18 / D18b / D18c / D19 rewritten for the card's own look (a
     manager's, a reader's and the athlete's card, the panel, `null` and foreign keys, no catalog read for the cards, one
     when the form opens); `central-calendar-events.actions` 4b no longer expects a catalog read;
