@@ -2253,3 +2253,76 @@ runner.
   `exercise-media-thumbnail`, `training-load.actions`); the new frontend suite 5/0; the build passed.
 - **The merge of `main` `946914f4`** (PR #603 merged): the only conflict was this file, both sections kept (22, then 23);
   no code file conflicted. The results on the merge's head are in the pull request's description.
+
+## 24. K2b-1d3 — the type's icon and colour from the card; *Upcoming events* drops an ended event (the manager's GO in 24.5)
+
+The frontend step that section 23.3 named, plus the two notes of the reviewer of PR #603, as agreed with the OptiMove
+manager (the Metrics Core line, to whom the owner handed the coordination, 2026-11-18). Branch
+`claude/central-calendar-k2b-1d3` from PR #605's frozen head `7a5c383d` (stacked: its pull request shows only this step
+while PR #605 is open, and takes `main` in by a merge once PR #605 has merged). **No migration.**
+
+### 24.1 The cards wear the type's icon and colour from the card itself
+
+- **Today** (K2b-1d): only a manager's event card shows its type's icon and colour, looked up by `eventTypeId` in the
+  catalog (`GET /events/types`), which the calendar reads for that alone when such a card is in the answer
+  (`centralCalendarNeedsCatalog`, `central-calendar-data.js`); a reader's card keeps its kind's icon.
+- **Now** (K2b-1d2 sends `eventTypeIconKey` / `eventTypeColorKey` on every event card, under D41):
+  - `centralCalendarItemIconKey` takes `item.eventTypeIconKey` when it is a library key (`isLibraryKey`), else the
+    kind's icon, else the event icon; `typeColorStyle` takes `item.eventTypeColorKey` (`calendarColorIndex`, a key
+    outside the palette gives no tint). The same for a manager's, a reader's and the athlete's card in the calendar,
+    the panel and every view.
+  - The cards no longer read the catalog: `centralCalendarCardType`, the `cardTypes` map and the catalog read that
+    `centralCalendarNeedsCatalog` starts after a range is applied fall away. **The catalog stays for the form** (the
+    actions' `ensureEventTypes` reads it when the form opens), unchanged.
+  - A moved team's event (D41) carries `null` for both and therefore shows its kind's icon, untinted.
+
+### 24.2 *Upcoming events* on Athlete Home (PR #603's list)
+
+- The row's pick (`ATHLETE_HOME_EVENT_ROW_KEYS`) gains `eventTypeIconKey` and `eventTypeColorKey`; the row's icon is the
+  type's icon (else the kind's), tinted with the type's colour as on the calendar card.
+- **An ended event leaves the list (LOW-1 of PR #603's review; agreed 2026-11-18):**
+  - an event with an end time is left out once its end has passed, counted in **the event's own time zone**: the end is
+    the last day of its span (`span.to`) at `endTime`; at the very minute of its end it is gone (`now >= end`);
+  - an event without an end time stays until the end of its last day (the device's date, as today);
+  - "today" stays the device's date, as on the rest of Athlete Home;
+  - a cancelled event follows the same rule.
+- **The time zone on the card (the one backend change):** the athlete's event card does not carry the event's
+  `timezone` today. `publicCard` (`backend/src/calendarQuery.js`) adds `timezone` (the event's IANA zone, already a
+  column of `calendar.events`) to every event card, the athlete's allowlist included. It names a place's clock, never a
+  person, a value or a count; the allowlist tests are extended key by key. A card without a valid zone falls back to
+  the device's zone.
+- The list is filtered when it is drawn and again at a minute's tick while Home is open, with no new request.
+
+### 24.3 The place's note (LOW-2 of PR #603's review)
+
+The Places form already says "Coaches and athletes can see it on the event." (`calendar-settings-view.js`). The hint
+becomes: "For example the entrance, parking or the changing room. Coaches and athletes can see it on the event, so
+write nothing about a person here."
+
+### 24.4 Tests, checks and reviews
+
+- **Frontend** (through the real view, data and actions, a fake API):
+  - a manager's, a reader's and the athlete's card with a system type's and a club's type's icon and colour; `null` keys
+    (D41) → the kind's icon untinted; a key outside the library or the palette ignored;
+  - no catalog request when the calendar shows a manager's cards, and the catalog read once when the form opens;
+  - *Upcoming events*: the type's icon and tint, else the kind's; the boundaries of 24.2 — the end exactly now, one
+    minute before, an event across midnight (span to the next day), a multi-day event on its last day, an event whose
+    zone differs from the device's (its end passed there but not here, and the reverse), no end time, a cancelled event,
+    an invalid zone; the minute's tick;
+  - mutations on the guards (the library key, the palette, the `>=`, the zone, the fallback).
+- **Backend:** `timezone` on the manager's, the reader's and the athlete's card, and the athlete's allowlist key by key
+  (`central-calendar-k2a-events`, `-k2b-event-details`, `-k2b-1d2`); the seven calendar suites on disposable
+  databases.
+- **Gates:** the whole `--preset frontend-fast` on the head and on a clean `main`, compared; `backend-fast`; the build;
+  `git diff --check`.
+- **Browser check** on the real server and a disposable database (`npm run e2e:demo`, invented data): the calendar's
+  cards for a manager and a reader, the panel, *Upcoming events* at 360 / 375 / 390 / 1280 px, every target at least
+  44 px, no horizontal scroll.
+- **Reviews:** `code-reviewer`, `mobile-qa`, `security-reviewer` (the athlete's allowlist gains a key); the fresh
+  independent review (the viewer scenarios and its own mutations); then the OptiMove manager's gate.
+
+### 24.5 The manager's GO (2026-11-18)
+
+GO for K2b-1d3 as 24.1–24.4 plan it. The rule of 24.2 is the one agreed with the OptiMove manager. No migration; no file
+of the mapping and import track (`sourceMetric*`, `sourceField*`, `gpexe*`, Imports, Source fields, the mapping board)
+is touched.
