@@ -622,3 +622,31 @@ Recorded verbatim (the calendar manager's message to the executor, GO on 9.1 at 
 Consequences for 9.1 (the executor): the skip table of 9.1.2 item 5 is `calendar.question_assignment_skips` with the
 three reasons above; the per-club, per-day key is renamed `calendar.wellness_day:<club>:<day>` (one key per club and day,
 taken by the Day off command, the WELLNESS ask / move and the materialization).
+
+#### 9.1.14 As built (the executor, phase 2): what differs from 9.1 and 9.1.13
+
+- **One more dependency:** Training Load v7 (`202609020900_..._v7_external_schedule_notification_rules.sql`): an RPE
+  question writes the schedule's three worker rules, all off, as the module's own create route does. The preflight
+  checks it, and the calendar fixture (`backend/tests/support/calendar-fixture.mjs`) now applies v7 too.
+- **The RPE schedule's shape is the module's own one-time shape:** `end_date` null (POST /external-schedules writes
+  none for a one-time schedule); the guard accepts null or the window's day.
+- **WELLNESS never twice, as built:** an ask or move is refused when an athlete the event reaches on that day already
+  has a non-cancelled WELLNESS assignment of a schedule of the same club (not of a cancelled schedule), or another live
+  event WELLNESS question of the club on that day reaches one of the same athletes. A daily (or one-time, not
+  question-linked) schedule not yet materialized for the day is not a conflict: its materialization makes the day
+  `cancelled` with `covered_by_event` (O3).
+- **What moves a question:** a change of the event's day, end day, start, end, time zone **or targets** (the schedules
+  copied the targets). Nobody answered: moved; somebody answered: `409 questions_answered`.
+- **Switch turned off after asking:** cancel, remove and the panel keep working for what exists (the panel and the
+  three question commands are the 404 while off); an event move then ends its unanswered questions `removed` instead
+  of asking again.
+- **Defaults on create:** the type's questions are asked with the *After the event* window. A default that cannot be
+  asked (RPE with a schedule set by hand, a window that does not fit, WELLNESS already covering the day) is skipped and
+  named in the answer's `questionsSkipped`; a question sent explicitly is refused instead.
+- **The Tests PATCH** takes `skipDaysOff` on its own or with another change (the same rule as the create).
+- **The fix of plan 5:** `central-calendar-k1a.test.mjs` test 13 asserted the old behaviour (an open assignment past its
+  window was "missing"); it now asserts `missed`, as the accepted plan says.
+- **Table name:** `calendar.question_assignment_skips`, reasons `day_off`, `day_off_cancelled`, `covered_by_event`;
+  the advisory key is `calendar.wellness_day:<club>:<day>` (`calendar.wellness_day_key`).
+- **One more helper function** than 9.1 named: `calendar.event_audience_on_day(event, day)` (the recipients of A2, the
+  WELLNESS check).

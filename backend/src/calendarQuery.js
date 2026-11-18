@@ -366,6 +366,8 @@ async function readTestAssignmentRows(ctx, { from, to, filters, teamIds }) {
   const result = await query(
     `select asg.id as assignment_id, asg.athlete_id, ${athleteNameSql("ath")} as athlete_name, ${athleteTeamIdsSql("ath", 3, "asg.local_scheduled_date")} as team_ids,
             asg.local_scheduled_date as day, asg.status as assignment_status,
+            -- K2b-2a-1 (plan 5): missed once the window closed, as the Tests module derives it.
+            (asg.status not in ('completed', 'excused', 'cancelled', 'in_progress') and now() > asg.closes_at) as window_closed,
             o.id as occurrence_id, o.status as occurrence_status,
             sch.id as schedule_id, sch.status as schedule_status, sch.opens_time,
             coalesce(tv.name, tbv.name) as test_name
@@ -1043,7 +1045,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
       const teamIdsOfAthlete = uniq(row.team_ids || []);
       teamIdsOfAthlete.forEach((id) => card.teamIds.add(id));
       const open = !CLOSED_ASSIGNMENT_STATUSES.has(row.assignment_status);
-      const missed = MISSED_ASSIGNMENT_STATUSES.has(row.assignment_status);
+      const missed = MISSED_ASSIGNMENT_STATUSES.has(row.assignment_status) || row.window_closed === true;
       card.athletes.push({
         athleteId: row.athlete_id, name: row.athlete_name, teamIds: teamIdsOfAthlete,
         assignmentId: row.assignment_id, assignmentStatus: row.assignment_status,
