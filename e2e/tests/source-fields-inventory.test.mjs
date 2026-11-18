@@ -53,11 +53,42 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     page.on("request", (r) => { if (r.method() !== "GET" && /sources\/metrics/.test(r.url())) writes.push(r.url()); });
     try {
       await openSourceFields(page);
+      // The plain view first (the owner's rule): plain names, units and one state; no GPEXE name, count or source.
+      const plain = await layout(page);
+      assert.ok(plain.rows > 0, "the check recorded values that no field covers");
+      assert.match(plain.text, /GPEXE also sends these values in your sessions\./);
+      assert.match(plain.text, /Power zone 4 · distance \(m\)/);
+      assert.doesNotMatch(plain.text, /athletesession|seen \d+ time|Whole session|Per athlete|Other things GPEXE sends/, "nothing technical by default");
+      assert.ok(plain.overflow <= 0, `nothing wider than the screen (overflow ${plain.overflow})`);
+      // One click away: the technical view.
+      await page.click('[data-action="source-fields-inv-technical"]');
       const l = await layout(page);
-      assert.ok(l.rows > 0, "the check recorded names that no field covers");
-      assert.match(l.text, /GPEXE also sends these values in your sessions\./);
       assert.match(l.text, /seen \d+ times?, last \d{2}\.\d{2}\.\d{4}/);
-      assert.doesNotMatch(l.text, /athlete_session|details\.session|more\.events|unit_value_object|GPEXE account/, "plain words; no account count for a club");
+      assert.doesNotMatch(l.text, /details\.session|more\.events|unit_value_object|GPEXE account/, "plain words; no account count for a club");
+      // The readable list (2026-11-18): a zone row by its name and unit, no team limits for a club; the names that are
+      // not values in a closed fold whose summary is a 44 px target; opened, nothing is wider than the screen.
+      const r = await page.evaluate(() => {
+        const name = (raw) => [...document.querySelectorAll("[data-sf-inv-row]")].find((row) => row.querySelector(".source-fields-inventory-raw")?.textContent.trim() === raw);
+        const fold = document.querySelector(".source-fields-inventory-other");
+        const summary = fold?.querySelector("summary");
+        return {
+          zone: name("athletesessionpowerzone_distance_4")?.querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim() || "",
+          longName: Boolean(name("athletesessionrelativespeedzone_distance_3")),
+          foldOpen: fold?.open ?? null,
+          summaryHeight: summary ? Math.round(summary.getBoundingClientRect().height) : 0,
+          inFold: fold ? [...fold.querySelectorAll(".source-fields-inventory-raw")].map((e) => e.textContent.trim()) : [],
+        };
+      });
+      assert.equal(r.zone, "Power zone 4 · distance (m)");
+      assert.ok(r.longName, "the long zone name is listed");
+      assert.doesNotMatch(l.text, /team limits/, "a club never sees the team limits");
+      assert.equal(r.foldOpen, false, "the names that are not values are folded");
+      assert.ok(r.summaryHeight >= 44, `the fold's summary is a 44 px target (${r.summaryHeight})`);
+      assert.ok(r.inFold.includes("athlete_session_id") && r.inFold.includes("are_values_visible"), JSON.stringify(r.inFold));
+      await page.click(".source-fields-inventory-other summary");
+      const opened = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert.ok(opened <= 0, `the open fold stays within the screen (${opened})`);
+      await page.click(".source-fields-inventory-other summary");
       assert.ok(l.checkbox > 0 && l.checkbox <= 24, `the checkbox keeps its own size (${l.checkbox})`);
       assert.ok(l.overflow <= 0, `nothing wider than the screen (overflow ${l.overflow})`);
       assert.ok(l.chips.length >= 6 && l.chips.every((h) => h >= 44), `chips are 44 px (${l.chips})`);
@@ -67,8 +98,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.click('[data-action="source-fields-inv-endpoint"][data-endpoint="athlete_session"]');
       await page.waitForFunction(() => document.querySelector('[data-endpoint="athlete_session"]')?.getAttribute("aria-pressed") === "true");
       await page.waitForFunction(() => !document.querySelector(".source-fields-inventory [role=status]"));
-      const facts = await page.locator("[data-sf-inv-row] .metric-variables-item-facts").allInnerTexts();
-      assert.ok(facts.length > 0 && facts.every((f) => f.startsWith("Per athlete")), "only per-athlete names");
+      const facts = await page.locator("[data-sf-inv-row] .metric-variables-item-facts").allTextContents();
+      assert.ok(facts.length > 0 && facts.every((f) => f.trim().startsWith("Per athlete")), "only per-athlete names");
       await page.fill("[data-sf-inv-search]", "zzz-no-such-name");
       await page.waitForSelector("#sf-inv-no-match:not([hidden])");
       assert.equal(writes.length, 0, "the list only reads");
@@ -84,6 +115,13 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
   try {
     await openSourceFields(pa.page);
     assert.match(await pa.page.locator(".source-fields-inventory").innerText(), /in the clubs' sessions/);
+    // The Rukovodilac's order of 2026-11-18: a numbered zone row shows its expected range from the team's limits.
+    const z4 = await pa.page.evaluate(() => [...document.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")]
+      .map((e) => e.textContent.replace(/\s+/g, " ").trim()).find((t) => t.startsWith("Power zone 4 ·")) || "");
+    assert.equal(z4, "Power zone 4 · 60–75 W/kg · distance (m)");
+    assert.match(await pa.page.locator(".source-fields-inventory").innerText(), /Power zone limits of the team: 20 · 25 · 60 · 75 W\/kg, from the newest saved session \(\d{2}\.\d{2}\.\d{4}\)\./);
+    // The team limits' fold is in the technical view.
+    await pa.page.click('[data-action="source-fields-inv-technical"]');
     await pa.page.click(".source-fields-inventory-thresholds summary");
     await pa.page.click('[data-action="source-fields-inv-thresholds"]');
     await pa.page.waitForFunction(() => document.querySelector("[data-sf-threshold-row]") || /No team zone limits yet/.test(document.querySelector(".source-fields-inventory-thresholds")?.innerText || ""), null, { timeout: 20_000 });
@@ -103,7 +141,7 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
   try {
     await openSourceFields(other.page);
     assert.equal(await other.page.locator("[data-sf-inv-row]").count(), 0);
-    assert.match(await other.page.locator(".source-fields-inventory").innerText(), /No names yet/);
+    assert.match(await other.page.locator(".source-fields-inventory").innerText(), /Nothing yet\. Values appear after the next Find new sessions in Imports\./);
   } finally {
     await other.context.close();
   }
@@ -123,7 +161,7 @@ for (const [label, width, nth] of [["1280 px", WIDTHS.desktop, 0], ["390 px", WI
       const name = await buttons.nth(nth).getAttribute("data-sf-inv-name");
       const endpoint = await buttons.nth(nth).getAttribute("data-sf-inv-endpoint");
       const buttonHeight = await buttons.nth(nth).evaluate((b) => Math.round(b.getBoundingClientRect().height));
-      assert.ok(buttonHeight >= 44, `Create field is 44 px (${buttonHeight})`);
+      assert.ok(buttonHeight >= 44, `Use this value is 44 px (${buttonHeight})`);
       await buttons.nth(nth).click();
       await page.waitForSelector('[data-source-fields-form="create"]');
       const form = await page.evaluate(() => {
@@ -142,11 +180,11 @@ for (const [label, width, nth] of [["1280 px", WIDTHS.desktop, 0], ["390 px", WI
       assert.ok(form.sizes.every((h) => h >= 44), `choices and buttons are 44 px (${form.sizes})`);
       // The next step by where the value comes from: a per-athlete value has no unit word, so a document confirms it.
       assert.match(form.text, endpoint === "athlete_session"
-        ? /This field has no values yet\. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document\./
-        : /This field has no values yet\. Its unit is confirmed on the board once new sessions carry it\./);
+        ? /Nothing is imported yet\. GPEXE sends no unit with this value, so it cannot be checked against GPEXE here\./
+        : /Nothing is imported yet\. After the next Find new sessions brings this value, open it here and use Compare with GPEXE once\./);
       await page.fill('[data-sf-field="label"]', `E2E field ${width}`);
       await page.click('[data-source-fields-form="create"] button[type="submit"]');
-      await page.waitForFunction(() => /The field was created\./.test(document.querySelector(".source-fields")?.innerText || ""), null, { timeout: 20_000 });
+      await page.waitForFunction(() => /is now in OptiMove\./.test(document.querySelector(".source-fields")?.innerText || ""), null, { timeout: 20_000 });
       assert.equal(posts.length, 1, "one request");
       assert.equal(posts[0].name, name);
       const detail = await page.locator(".source-fields").innerText();

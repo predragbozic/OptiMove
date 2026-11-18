@@ -1,11 +1,43 @@
 import { escapeAttr, escapeHtml } from "./utils.js";
 
-export function dashboardChartPlots(model, labelForSeries, rowContext) {
+import { dashboardGroupLabels } from "./training-load-analysis-group-labels.js";
+
+export function dashboardChartPlots(model, labelForSeries, rowContext, groupLabels = dashboardGroupLabels(model)) {
   if (model.status !== "ready" || !["line_chart", "bar_chart"].includes(model.widgetType)) return [];
   const plots = [];
   const precision = model.config.effective.numberFormat.maximumFractionDigits;
   for (const series of model.series) {
     if (series.status !== "ready") continue;
+    const athleteLines = model.widgetType === "line_chart" && ["day", "week"].includes(model.groupBy)
+      && series.chartGroups.length > 1 && series.chartGroups.every(group => group.identity.athleteId)
+      && new Set(series.chartGroups.map(group => group.identity.athleteId)).size === series.chartGroups.length
+      && new Set(series.chartGroups.map(group => group.identity.unit)).size === 1;
+    if (athleteLines) {
+      const keys = [...new Set(series.chartGroups.flatMap(group => group.rows.map(row => row.identity.bucketKey)))].sort();
+      const usedNames = new Set();
+      const names = series.chartGroups.map(group => {
+        const base = rowContext(group.rows[0]) || "Athlete name unavailable";
+        let name = base;
+        let suffix = 2;
+        while (usedNames.has(name)) name = base + " (" + suffix++ + ")";
+        usedNames.add(name);
+        return name;
+      });
+      plots.push({ caption: labelForSeries(series.definition), precision, shortDateAxis: true, option: {
+        animation: false,
+        grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
+        legend: { show: model.config.effective.legend.visible, type: "scroll", top: 4 },
+        tooltip: { trigger: "axis", renderMode: "richText", confine: true },
+        xAxis: { type: "category", data: keys.map(key => groupLabels.get(key) || rowContext(series.chartGroups.flatMap(group => group.rows).find(row => row.identity.bucketKey === key))), axisLabel: { hideOverlap: true } },
+        yAxis: { type: "value", name: series.chartGroups[0].identity.unit || "" },
+        series: series.chartGroups.map((group, index) => {
+          const rows = new Map(group.rows.map(row => [row.identity.bucketKey, row]));
+          return { name: names[index], id: String(index), type: "line", connectNulls: false,
+            data: keys.map(key => rows.get(key)?.chartStatus === "value" ? rows.get(key).value : null) };
+        }),
+      } });
+      continue;
+    }
     for (const group of series.chartGroups) {
       if (!group.rows.some(row => row.chartStatus === "value")) continue;
       const rows = [...group.rows];
@@ -16,13 +48,14 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
       plots.push({
         caption,
         precision,
+        shortDateAxis: true,
         option: {
           animation: false,
           color: ["#002d9c"],
           grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
           legend: { show: model.config.effective.legend.visible, type: "scroll", left: 12, right: 12, top: 4 },
           tooltip: { trigger: "axis", renderMode: "richText", confine: true },
-          xAxis: { type: "category", data: rows.map(row => row.identity.bucketKey ?? ""), axisLabel: { hideOverlap: true } },
+          xAxis: { type: "category", data: rows.map(row => groupLabels.get(row.identity.bucketKey ?? "") || rowContext(row)), axisLabel: { hideOverlap: true } },
           yAxis: { type: "value", name: unit, nameLocation: "middle", nameGap: 42 },
           series: [{
             name,
@@ -44,8 +77,8 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
   return plots;
 }
 
-export function renderDashboardChartPlots(model, labelForSeries, rowContext) {
-  return dashboardChartPlots(model, labelForSeries, rowContext).map(plot => `
+export function renderDashboardChartPlots(model, labelForSeries, rowContext, groupLabels = dashboardGroupLabels(model)) {
+  return dashboardChartPlots(model, labelForSeries, rowContext, groupLabels).map(plot => `
     <figure class="tl-analysis-plot">
       <figcaption>${escapeHtml(plot.caption)}</figcaption>
       <optimove-dashboard-chart data-chart="${escapeAttr(JSON.stringify(plot))}">

@@ -42,7 +42,7 @@ import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./ico
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, sourceFieldsThresholdsToggled, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-actions.js";
-import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput, boardBeforeSwitch, boardSwitchFailed } from "./metric-board-actions.js";
+import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput, boardBeforeSwitch, boardSwitchFailed, metricBoardParkedToggled } from "./metric-board-actions.js";
 import { endSourceFieldDrag, dropSourceFieldDrag, leaveSourceFieldDrag, overSourceFieldDrag, startSourceFieldDrag } from "./metric-board-drag.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
@@ -93,6 +93,8 @@ import { enterMyTraining, handleMyTrainingAction, handleMyTrainingBack, refreshM
 import { resetMyTraining } from "./my-training-data.js";
 import { renderMyTrainingHtml } from "./my-training-view.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
+import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
+import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
@@ -569,6 +571,11 @@ function bindEvents() {
     // I3: Source fields' team thresholds fold keeps its open state across repaints.
     if (panel?.classList?.contains("source-fields-inventory-thresholds")) {
       sourceFieldsThresholdsToggled(panel.open);
+      return;
+    }
+    // The board's "Not available yet" group keeps its open state across repaints.
+    if (panel?.classList?.contains("mb-parked")) {
+      metricBoardParkedToggled(panel.open);
       return;
     }
     const settings = panel?.classList?.contains("imports-settings");
@@ -2545,6 +2552,8 @@ async function loadAthleteHome({ forceRefresh = false } = {}) {
     loadTrainingLoadAthleteHomeWeek(renderAthleteHomeFromCache),
     // "My training" (owner, 2026-11-16): the entry shows only once the server says she has a recorded session.
     refreshMyTrainingEntry({ render: () => { renderLibraryNav(); renderAthleteHomeFromCache(); } }),
+    // Her events of the next 14 days (K2b-1e, D28): her own GET /api/calendar, painted into Home's section.
+    loadAthleteHomeEvents({ render: renderAthleteHomeFromCache, forceRefresh }),
   ]);
 }
 
@@ -3053,6 +3062,12 @@ async function handleContentClick(event) {
     await loadActiveTab();
     return;
   }
+  // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer. Gated by its prefix, so every other click
+  // keeps reaching the handlers below without an await.
+  if (type?.startsWith("athlete-home-events-")) {
+    await handleAthleteHomeEventsAction(action, { render: renderAthleteHomeFromCache });
+    return;
+  }
   if (type === "weekly-create-plan") {
     if (isAthleteMode() || state.currentUser?.role === "athlete") return;
     const athleteId = state.selectedAthleteId;
@@ -3439,6 +3454,8 @@ async function onWorkspaceChanged() {
   resetTrainingLoadForWorkspaceChange();
   // My training is the athlete workspace's own: nothing of another workspace's answer is kept.
   resetMyTraining();
+  // So are Home's Upcoming events (K2b-1e): the list and an answer on its way are dropped.
+  resetAthleteHomeEvents();
   if (state.activeTab === "my-training") state.activeTab = isAthleteMode() ? "athlete-home" : "coach-home";
   renderTabs();
   renderLibraryNav();

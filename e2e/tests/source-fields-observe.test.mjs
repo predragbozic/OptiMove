@@ -92,8 +92,9 @@ for (const [label, width, name] of [["1280 px", WIDTHS.desktop, "e2e_metabolic_e
       assert.ok(shown.sizes.every((h) => h >= 44), `choices and buttons are 44 px (${shown.sizes})`);
       assert.equal(shown.lines.length, 2);
       for (const line of shown.lines) assert.match(line, /^.+: GPEXE may show this rounded or in another unit\. Compare the number: [0-9.]+ J\/kg\.$/);
-      assert.match(shown.text, new RegExp(`find the value ${name} for these two athletes`));
-      assert.match(shown.text, new RegExp(`GPEXE sends the unit word "${name === "e2e_metabolic_energy" ? "energy" : "energy_std"}" with this value; OptiMove reads it as J/kg\\.`));
+      // The owner's rule: the field's plain name and the unit; GPEXE's own name and word only under Technical details.
+      assert.match(shown.text, new RegExp(`find ${fields[name].label} for these two athletes`));
+      assert.match(shown.text, /GPEXE sends this value in J\/kg\./);
       assert.doesNotMatch(shown.text, /\b10[1-3]\b|candidate|athlete id/i, "no GPEXE athlete id or internal word on the screen");
       // No save before the tick.
       await page.click('[data-source-fields-form="observe"] button[type="submit"]');

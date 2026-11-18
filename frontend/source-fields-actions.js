@@ -112,6 +112,8 @@ export async function loadInventory(render, { more = false } = {}) {
     const items = Array.isArray(data?.fields) ? data.fields : [];
     inv.items = more ? [...inv.items, ...items] : items;
     inv.nextCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
+    // The team thresholds of the zone names (platform only; the first page carries them, as every page does).
+    if (!more || data?.zoneThresholds) inv.zoneThresholds = data?.zoneThresholds ?? null;
     inv.loaded = true;
     inv.error = null;
   } catch (error) {
@@ -160,13 +162,18 @@ function applyInventorySearch(search) {
   const doc = globalThis.document;
   if (!doc?.querySelectorAll) return;
   const items = sourceFieldsState().inventory.items;
+  const limits = sourceFieldsContext()?.mayVerify ? sourceFieldsState().inventory.zoneThresholds : null;
   let shown = 0;
   doc.querySelectorAll("[data-sf-inv-row]").forEach((row) => {
     const item = items[Number(row.dataset.sfInvRow)];
-    const match = Boolean(item) && inventoryMatches(item, search);
+    const match = Boolean(item) && inventoryMatches(item, search, limits);
     row.hidden = !match;
     if (match) shown += 1;
   });
+  // A group with no matching row is hidden whole; a match in the fold opens it (the code review's LOW).
+  doc.querySelectorAll("[data-sf-inv-group]").forEach((group) => { group.hidden = !group.querySelector("[data-sf-inv-row]:not([hidden])"); });
+  const fold = doc.querySelector(".source-fields-inventory-other");
+  if (fold && search && fold.querySelector("[data-sf-inv-row]:not([hidden])")) fold.open = true;
   const none = doc.getElementById("sf-inv-no-match");
   if (none) none.hidden = shown > 0 || !items.length;
 }
@@ -216,7 +223,7 @@ export function sourceFieldsMayBeLeft() {
 // The list and the names read again after a field was (or may have been) created.
 function readAgainAfterCreate(s) {
   s.list = { ...emptySourceFieldsState().list };
-  s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+  s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical: s.inventory.technical };
 }
 export function sourceFieldsUnloadShouldWarn() {
   if (state.activeTab !== "training-load" || state.trainingLoad.section !== "source-fields") return false;
@@ -250,12 +257,25 @@ export async function handleSourceFieldsAction(action, { render }) {
   if (type === "source-fields-inv-endpoint") {
     const endpoint = action.dataset.endpoint || "";
     if (s.inventory.endpoint === endpoint) return true;
-    s.inventory = { ...emptyInventory(), endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+    s.inventory = { ...emptyInventory(), endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical: s.inventory.technical };
     await loadInventory(render);
     return true;
   }
+  if (type === "source-fields-inv-technical") {
+    // The plain view or the technical one. Leaving the technical view also clears a source filter chosen there, since
+    // its chips are hidden in the plain view (the code review's MEDIUM: never a filter with no visible control).
+    const technical = !s.inventory.technical;
+    if (!technical && s.inventory.endpoint) {
+      s.inventory = { ...emptyInventory(), endpoint: "", showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical };
+      await loadInventory(render);
+      return true;
+    }
+    s.inventory.technical = technical;
+    render();
+    return true;
+  }
   if (type === "source-fields-inv-supported") {
-    s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: !s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+    s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: !s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical: s.inventory.technical };
     await loadInventory(render);
     return true;
   }
@@ -329,7 +349,8 @@ export async function handleSourceFieldsAction(action, { render }) {
     const item = s.inventory.items.find((i) => i.endpoint === action.dataset.sfInvEndpoint && i.name === action.dataset.sfInvName) || null;
     if (!createOffered(ctx, item)) return true;
     s.notice = "";
-    s.form = openCreateFieldForm(item, s.inventory.items);
+    // The zone's range from the team's limits, only where the list shows them (the platform admin, P1).
+    s.form = openCreateFieldForm(item, s.inventory.items, ctx.mayVerify ? s.inventory.zoneThresholds : null);
     render();
     toTitle();
     focus(".source-fields-form [data-sf-field]:not([disabled])");
@@ -544,7 +565,7 @@ async function send(render) {
   s.form = null;
   if (form.act === "create") {
     // Created (or a Check result found it created): the new field opens; the list and the names are read again later.
-    setNotice(s, `The field was created. ${createNextStep(form.endpoint)}`, "");
+    setNotice(s, `${form.draft?.label || "The value"} is now in OptiMove. ${createNextStep(form.endpoint)}`, "");
     readAgainAfterCreate(s);
     const id = typeof data?.field?.id === "string" ? data.field.id : null;
     if (id) await loadSourceField(id, render); else await loadSourceFieldsSection(render);

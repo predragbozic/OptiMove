@@ -18,6 +18,7 @@
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
 import { revisionProven } from "./sourceFieldEvidence.js";
+import { bundleZoneThresholds } from "./sourceZoneThresholds.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMapper.js";
 import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
@@ -621,7 +622,12 @@ export async function readBoard({ ctx, queryString }) {
   const q = readQuery(queryString, { teamId: "uuid", candidateId: "uuid", pair: "index" }, ["teamId"]);
   await removeExpiredBatch();
   const world = await boundedRead((client) => loadWorld(client, ctx, { teamId: q.teamId, candidateId: q.candidateId ?? null }));
-  return boardOf(world, q.pair ?? 0);
+  const out = boardOf(world, q.pair ?? 0);
+  // The team zone limits of the session in view, so a numbered zone column shows its range. The board is always of one
+  // team the caller may map (its own club's, or any team for the platform board), so a club's admin sees only its own
+  // team's limits (the Rukovodilac's decision of 2026-11-18); P1 still keeps them off a club's list of GPEXE names.
+  out.board.zoneThresholds = bundleZoneThresholds(world.candidate?.raw_bundle);
+  return out;
 }
 
 // ---------------------------------------------------------------------------

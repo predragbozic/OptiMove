@@ -91,9 +91,9 @@ test("table retains raw arrays, separate athletes, sources, units and every serv
   setup("table", [row([0, 2]), row(9, { athleteId: "athlete-1", sourceConnectionId: "source-1" }), row(17, { athleteId: "athlete-2", sourceConnectionId: "source-2", unit: "m" })]);
   const rows = [...rendered().querySelectorAll(".tl-analysis-table tbody tr")];
   assert.equal(rows.length, 3);
-  assert.match(rows[0].textContent, /\[0,2\]/);
-  assert.match(rows[1].textContent, /athlete-1.*source-1/);
-  assert.match(rows[2].textContent, /athlete-2.*source-2/);
+  assert.match(rows[0].textContent, /Unavailable/);
+  assert.match(rows[1].textContent, /Athlete name unavailable/);
+  assert.match(rows[2].textContent, /Athlete name unavailable/);
   assert.equal(rows[2].children[3].textContent, "m");
 });
 
@@ -115,8 +115,8 @@ for (const type of ["line_chart", "bar_chart"]) {
     setup(type, [row(10, { athleteId: "athlete-1", sourceConnectionId: "source-1" }), row(20, { athleteId: "athlete-2", sourceConnectionId: '<img src=x onerror="bad">' })]);
     const body = rendered().querySelector(".tl-analysis-widget");
     assert.equal(body.querySelectorAll(".tl-analysis-table tbody tr").length, 2);
-    assert.match(body.textContent, /sRPE.*athlete-1.*source-1/);
-    assert.match(body.textContent, /athlete-2/);
+    assert.match(body.textContent, /sRPE.*Athlete name unavailable/);
+    assert.doesNotMatch(body.querySelector("table").outerHTML, /athlete-2|source-1/);
     assert.equal(body.querySelector("img"), null);
   });
 }
@@ -135,7 +135,8 @@ test("loading is not an empty result and malformed results do not crash any widg
 
 test("KPI shows actual identity context and tables expose keyboard-accessible readable equivalents", () => {
   setup("kpi", [row(12, { athleteId: "athlete-1", sourceConnectionId: "source-1" })]);
-  assert.match(rendered().querySelector(".tl-analysis-kpi-context").textContent, /Athlete athlete-1.*Source source-1/);
+  state.trainingLoad.orgPickerData = { athletes: [{ id: "athlete-1", name: "Alex" }] };
+  assert.equal(rendered().querySelector(".tl-analysis-kpi-context").textContent, "Alex");
   for (const type of ["table", "line_chart", "bar_chart"]) {
     setup(type, [row(-12), row(0, { bucketKey: "2026-10-02" })]);
     const document = rendered();
@@ -146,18 +147,11 @@ test("KPI shows actual identity context and tables expose keyboard-accessible re
   }
 });
 
-test("all reported source identity fields distinguish chart captions, tables and KPI context", () => {
-  for (const type of ["line_chart", "bar_chart", "table", "kpi"]) {
+test("table and chart captions keep source identifiers out of visible values", () => {
+  for (const type of ["line_chart", "bar_chart", "table"]) {
     setup(type, [row(12, { sourceIdentityId: "identity-one", sourceSystem: "system-one", entryMethod: "api_import" })]);
     const body = rendered().querySelector(".tl-analysis-widget");
-    for (const value of ["identity-one", "system-one", "api_import"]) assert.ok(body.textContent.includes(value));
-    if (type.includes("chart")) {
-      assert.match(body.querySelector("figcaption").textContent, /identity-one.*system-one.*api_import/);
-      setup(type, [row(12, { sourceIdentityId: "identity-one" }), row(12, { sourceIdentityId: "identity-two" })]);
-      const captions = [...rendered().querySelectorAll("figcaption")].map(caption => caption.textContent);
-      assert.equal(captions.length, 2);
-      assert.notEqual(captions[0], captions[1]);
-    }
+    assert.doesNotMatch(body.textContent, /identity-one|system-one|api_import/);
   }
 });
 
@@ -174,7 +168,7 @@ test("V2 number formatting changes presentation only; legacy scalar text and boo
 test("tables display nested and mixed arrays losslessly while KPI and charts refuse scalar conversion", () => {
   for (const value of [[[10, 20], 30], [null, [0, false, "text", []], 30]]) {
     setup("table", [row(value)]);
-    assert.equal(rendered().querySelector(".tl-analysis-table tbody tr").children[2].textContent, JSON.stringify(value));
+    assert.equal(rendered().querySelector(".tl-analysis-table tbody tr").children[2].textContent, "Unavailable");
     for (const type of ["kpi", "line_chart", "bar_chart"]) {
       setup(type, [row(value)]);
       const body = rendered().querySelector(".tl-analysis-widget");
@@ -212,21 +206,9 @@ test("only an active request displays Loading when the result is null", () => {
   assert.doesNotMatch(rendered().querySelector(".tl-analysis-widget").textContent, /Loading/);
 });
 
-test("source labels use reported provenance rather than configured connections and preserve multiple sources", () => {
-  for (const type of ["table", "line_chart", "bar_chart"]) {
-    const analysis = setup(type, [row(30)]);
-    analysis.widgets[0].series[0].source_connection_id = "configured-only";
-    let body = rendered().querySelector(".tl-analysis-widget");
-    assert.doesNotMatch(body.textContent, /configured-only|Source /);
-    const reported = analysis.queryResult.widgets[0].series[0].data.current[0];
-    reported.sourceConnectionId = "actual-one";
-    reported.provenance = [{ sourceConnectionId: "actual-one" }, { sourceConnectionId: "actual-two" }];
-    body = rendered().querySelector(".tl-analysis-widget");
-    assert.match(body.textContent, /Source provenance/);
-    assert.match(body.textContent, /actual-one/);
-    assert.match(body.textContent, /actual-two/);
-    assert.doesNotMatch(body.textContent, /configured-only|Source actual-one/);
-  }
+test("table omits raw provenance while preserving distinct result rows", () => {
+  setup("table", [row(30, { provenance: [{ sourceConnectionId: "actual-one" }] })]);
+  assert.doesNotMatch(rendered().querySelector("table").outerHTML, /actual-one|Source provenance/);
 });
 
 test("saved and preview single-metric tables render the same safe names, date, unit and values", async () => {
@@ -267,4 +249,72 @@ test("shared athlete/date tables show conflicting units without merging readings
   assert.equal(table.querySelectorAll("tbody tr").length, 1);
   assert.match(table.querySelector("tbody").textContent, /Unit conflict/);
   assert.doesNotMatch(table.querySelector("tbody").textContent, /\b12\b|\b24\b/);
+});
+
+for (const grouping of ["week", "month", "cohort"]) test(grouping + " and multiple series never print UUIDs or JSON", () => {
+  const id = "11911111-1111-4111-8111-111111111111";
+  const a = setup("table", [row({ secret: id }, { athleteId: id, bucketKey: id, sourceConnectionId: id })]);
+  a.widgets[0].group_by = grouping;
+  a.widgets[0].series.push({ ...a.widgets[0].series[0], id: "second" });
+  a.queryResult.widgets[0].series.push({ ...a.queryResult.widgets[0].series[0], seriesId: "second" });
+  state.trainingLoad.orgPickerData = { athletes: [{ id, name: "Alex" }] };
+  const table = rendered().querySelector("table");
+  if (grouping === "month") {
+    assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /Invalid or unavailable/);
+    assert.equal(table, null);
+    return;
+  }
+  assert.match(table.textContent, /Alex/);
+  assert.doesNotMatch(table.outerHTML, /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}|secret|\{&quot;/i);
+});
+
+test("workspace explanation does not hide each widget error", () => {
+  const a = setup("table", []);
+  a.simpleWorkspaceRequired = true;
+  a.queryError = "Failed";
+  assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /could not be loaded|Invalid or unavailable/);
+});
+
+for (const type of ["kpi", "table", "line_chart", "bar_chart"]) test(type + " hides identity and provenance", () => {
+  const id = "11911111-1111-4111-8111-111111111111";
+  setup(type, [row(12, { athleteId: id, bucketKey: id.toUpperCase(), sourceConnectionId: id, sourceSystem: "private-system" })]);
+  state.trainingLoad.orgPickerData = { athletes: [{ id, name: "Alex" }] };
+  const body = rendered().querySelector(".tl-analysis-widget");
+  assert.match(body.textContent, /Alex/);
+  if (type !== "kpi") assert.equal(body.querySelector("tbody tr").children[1].textContent, "Alex");
+  assert.doesNotMatch(body.outerHTML, /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}|Source|private-system|sourceConnectionId|sourceSystem/i);
+});
+for (const group of ["session", "component", "cohort"]) test(group + " buckets are distinct and stable", () => {
+  const first = "11911111-1111-4111-8111-111111111111", second = "22922222-2222-4222-8222-222222222222";
+  const a = setup("table", [row(1, { bucketKey: first }), row(2, { bucketKey: second }), row(3, { bucketKey: first, athleteId: "other" })]);
+  a.widgets[0].group_by = group;
+  const cells = [...rendered().querySelectorAll("tbody tr")].map(tr => tr.children[1].textContent);
+  const kind = group === "session" ? "Session" : group === "component" ? "Component" : "Group";
+  assert.equal(cells[0], kind + " 1"); assert.equal(cells[1], kind + " 2"); assert.ok(cells[2].startsWith(kind + " 1"));
+});
+
+for (const groupBy of ["session", "component", "cohort"]) test(groupBy + " labels match across every plot and table despite reversed series order and gaps", () => {
+  const first = "11911111-1111-4111-8111-111111111111", second = "22922222-2222-4222-8222-222222222222";
+  const a = setup("bar_chart", [row(null, { bucketKey: first }), row(2, { bucketKey: second })]);
+  a.widgets[0].group_by = groupBy;
+  a.widgets[0].series.push({ ...a.widgets[0].series[0], id: "series-2" });
+  a.queryResult.widgets[0].series.push({ seriesId: "series-2", status: "ok", data: { current: [row(3, { bucketKey: second }), row(4, { bucketKey: first })] } });
+  const before = structuredClone(a);
+  const body = rendered().querySelector(".tl-analysis-widget");
+  const plots = [...body.querySelectorAll("optimove-dashboard-chart")].map(node => JSON.parse(node.getAttribute("data-chart")));
+  const kind = groupBy === "session" ? "Session" : groupBy === "component" ? "Component" : "Group";
+  assert.deepEqual(plots.map(plot => plot.option.xAxis.data), [[kind + " 1", kind + " 2"], [kind + " 2", kind + " 1"]]);
+  assert.deepEqual([...body.querySelectorAll("tbody tr")].map(tr => tr.children[1].textContent), [kind + " 1", kind + " 2", kind + " 2", kind + " 1"]);
+  assert.deepEqual(a, before);
+  assert.doesNotMatch(body.outerHTML, /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/i);
+});
+test("group numbering includes an earlier row omitted from its chart", () => {
+  const first = "11911111-1111-4111-8111-111111111111", second = "22922222-2222-4222-8222-222222222222";
+  const a = setup("line_chart", [row(null, { athleteId: "missing", bucketKey: first }), row(2, { athleteId: "visible", bucketKey: second })]);
+  a.widgets[0].group_by = "session";
+  const body = rendered().querySelector(".tl-analysis-widget");
+  const plots = [...body.querySelectorAll("optimove-dashboard-chart")].map(node => JSON.parse(node.getAttribute("data-chart")));
+  assert.equal(plots.length, 1);
+  assert.deepEqual(plots[0].option.xAxis.data, ["Session 2"]);
+  assert.ok(body.querySelector("tbody tr:nth-child(2)").children[1].textContent.startsWith("Session 2"));
 });

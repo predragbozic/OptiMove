@@ -30,6 +30,10 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
             else {
               chart = this.chart = library.init(container, null, { renderer: "svg" });
               plot.option.tooltip.valueFormatter = value => typeof value === "number" && !Number.isInteger(value) ? value.toFixed(plot.precision) : String(value);
+              if (plot.shortDateAxis) {
+                // Full category dates stay available in tooltips; shorten only axis labels.
+                plot.option.xAxis.axisLabel.formatter = value => /^\d{2}\.\d{2}\.\d{4}$/.test(value) ? value.slice(0, 6) : value;
+              }
               chart.setOption(plot.option, { notMerge: true });
             }
           } catch {

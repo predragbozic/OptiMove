@@ -129,3 +129,33 @@ test("library and rendering failures leave an explicit fallback and release part
   }
   assert.equal(disposed, 1);
 });
+
+test("athlete lines share one chart and named legend with formatted dates", () => {
+  const display = model([row(1), row(2, "2026-10-02", { athleteId: "other" })]);
+  const result = dashboardChartPlots(display, () => "Distance", r => r.identity.athleteId === "athlete" ? "Alex" : "Bo");
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].option.series.map(series => series.name), ["Alex", "Bo"]);
+  assert.deepEqual(result[0].option.xAxis.data, ["01.10.2026", "02.10.2026"]);
+  assert.equal(result[0].option.legend.show, true);
+  assert.deepEqual(result[0].option.series[0].data, [1, null]);
+});
+
+test("duplicate and pending names stay unique and refresh with roster names", () => {
+  const display = model([row(1), row(2, "2026-10-02", { athleteId: "other" }), row(3, "2026-10-03", { athleteId: "third" })], { config: { schemaVersion: 2, legend: { visible: false } } });
+  for (const resolve of [() => "Athlete name unavailable", () => "Alex", r => r.identity.athleteId === "third" ? "Alex (2)" : "Alex"]) {
+    const [plot] = dashboardChartPlots(display, () => "Distance", resolve);
+    assert.equal(new Set(plot.option.series.map(s => s.name)).size, 3);
+    assert.equal(plot.option.legend.show, false);
+  }
+  const [loaded] = dashboardChartPlots(display, () => "Distance", r => ({ athlete: "Alex", other: "Bo", third: "Cam" })[r.identity.athleteId]);
+  assert.deepEqual(loaded.option.series.map(s => s.name), ["Alex", "Bo", "Cam"]);
+});
+test("axis is DD.MM. while tooltip category retains DD.MM.YYYY", async () => {
+  let option;
+  const fixture = harness(async () => ({ init: () => ({ setOption(value) { option = value; }, resize() {}, dispose() {} }) }));
+  fixture.mount(); await settle();
+  assert.deepEqual(option.xAxis.data, ["01.10.2026"]);
+  assert.equal(option.xAxis.axisLabel.formatter(option.xAxis.data[0]), "01.10.");
+  assert.equal(option.xAxis.axisLabel.formatter("Session 1"), "Session 1");
+  fixture.window.close();
+});

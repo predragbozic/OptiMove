@@ -944,6 +944,66 @@ The *Rukovodilac*'s order after the Independent's GO on G1b-2: one small pull re
   removing the save's own check (the column's reason refuses the same row from the same inputs), and dropping the
   board's "no value" for a column without a readable word (the extractor reads nothing for it either).
 
+### 8.13 As built (the readable Source fields list; the executor, 2026-11-18)
+
+The owner's first real use of "Available in GPEXE" (relayed by the *Rukovodilac*): the rows showed GPEXE's word instead
+of the unit, no zone fact, and names that are not values among the ones that can be mapped. One pull request, inventory
+read and screen, **no migration**.
+
+- **The unit, not the word:** the read joins v74's `source_unit_words` and returns `unit` (the seed's token, so every
+  audience sees it); the row shows it in its own brackets, "(m)", "(s)", "(W/kg)"…, and "(no unit from GPEXE)" otherwise.
+- **The zone fact:** `zoneOf(name)` reads only the name (`athletesession<family>zone_<distance|time|events>_<n>`) and the
+  row is titled "Power zone 4 · distance". At first no range was derived (the details carry four power zones where
+  `/more/` carries five, `docs/ai/gpexe-details-coverage-plan.md`); since the owner-stated evidence of the same day the
+  range is shown as below ("A numbered zone's range"). The team limits come from the `teamThresholds` of the newest
+  stored session of each active binding (one stored bundle per binding, a read of its own that never fails the list).
+- **Not values:** `isStructuralName` (`id`, `athlete`, `user`, `team`, …, `*_id`, `are_*_visible`, `is_*_visible`,
+  `validity_*`, `*_timestamp`) joins `isStructuralField`, so route C refuses them and they are never creatable. Each row
+  carries `isValue`: a number, a number with its unit or a zone list that is not a structural name - by what the name is,
+  never by whether route C would create it (the code review: an uncovered events value stays a value). A
+  complementary-data family (an object of zone lists) and a name a source field already covers are values too
+  (`isValueRow`; the narrow re-review: the mapped `power` and `speed` families must never be folded). The screen folds
+  the rest under one closed "Other names GPEXE sends (not values)", each by GPEXE's own name and what it holds. The
+  collector still skips only the exact pairs it skipped before.
+- **Readable and grouped:** the readable name and unit first, GPEXE's own name small under it, the counts last; values
+  grouped by quantity (distance, time, power, energy, speed, acceleration, counts, other), zones together in zone order.
+  The search finds a GPEXE name or a readable one, hides a group with no match and opens the fold when a match is in it.
+  Grouping applies to the loaded page (200 names per page). The small lines keep the 12 px floor.
+- **#601's LOW-1:** `unit_word_ambiguous` is worded by basis too - a platform admin working in a club's workspace is told
+  to switch to the platform workspace (route test 23, frontend test R3).
+- **A numbered zone's range (the Rukovodilac's orders of 2026-11-18).** Wherever a numbered GPEXE zone
+  (`athletesession{power|speed}zone_{distance|time|events}_N`) is shown - a Source fields row, the Create form, Compare
+  with GPEXE, a board column and the variable it fills - its range from the team's limits is shown: "Power zone 4 ·
+  60–75 W/kg · distance (m)" on a list row, "Zone 60–75 W/kg" on a board column, "From … (60–75 W/kg)" on a variable,
+  "Range of this zone: …" on the Create form and the Compare panel. Compare with GPEXE stays the check before a zone field
+  is used. Speed ranges are shown in km/h, as GPEXE's settings screen shows them (the stored limits are m/s, × 3.6).
+  - **Numbering, owner-stated evidence (2026-11-18), not a machine proof:** the owner's screenshot of GPEXE's own team
+    settings shows power zone markers 0, 20, 25, 60, 75 W/kg labelled Z1–Z5 (Z1 0–20, Z2 20–25, Z3 25–60, Z4 60–75, Z5 75
+    and above), jump height 0, 0.25, 0.50 m as Z1–Z3 and impact intensity 0, 75, 90 m/s² as Z1–Z3: zones from one, zone 1
+    from 0, each zone from its limit to the next, N limits above 0 give N+1 zones. It fits the stored facts:
+    `power_thresholds` [20, 25, 60, 75] and the details names `_2`–`_5` (zone 1 is not sent). Pure functions:
+    `frontend/zone-ranges.js`, `backend/src/sourceZoneThresholds.js`.
+  - **Second owner screenshot (2026-11-18, owner-stated evidence):** speed zones 0, 19.8, 25.2 km/h as Z1–Z3 (the
+    stored 5.5 and 7 m/s); relative speed 0, 60, 80, 90 % as Z1–Z4; acceleration 0, 2.50 m/s² as Z1–Z2; deceleration 0,
+    −2.50 m/s² as Z1–Z2 (Z2 is −2.50 and below, the axis runs the other way); the event thresholds 25.2 km/h (0.0 s),
+    60 % (0.0 s), 2.50 and −2.50 m/s² (0.3 s). The same rule: zones from one, each from its marker.
+  - **Families:** power and speed, the two limit lists the stored bundle holds today. A relative speed or jump height
+    zone shows its number alone until its family's limits are stored (a follow-up may read them; a deceleration
+    range must read "−2.5 m/s² and below").
+  - **Which limits:** the team threshold set the check read for that session, valid on its day (the mapper checks the
+    validity window), as the stored bundle keeps it. The board and Compare with GPEXE use the session they show. The
+    Source fields list has no session in view: it uses the newest saved session of each linked team, names that day
+    ("from the newest saved session (07.11.2026)"), and shows no range when teams' limits differ.
+  - **Who:** the board is sent `zoneThresholds` for its one team: a platform admin's, or the club admin's own team on
+    the club board (the Rukovodilac's decision: a club's own team's limits are that club's data). P1 still keeps the
+    limits off a club's list of GPEXE names and the team-limits fold; route 8 is the platform admin's.
+  - **A machine proof, follow-up (not built):** on a stored session, `/more/`'s zone item k against the details' `_k`
+    for k ≥ 2 (zone 1 omitted in the details) would confirm the numbering from data. The probe of 2026-10-24 compared
+    them without that offset and found no numbering that reproduces them.
+- **Create field for several names at once: a follow-up, not built.** Route C takes one name per request with its own
+  key, label and levels, and each lost answer needs its own *Check result*; a sequential batch is cheap to send but needs a
+  per-name label and level choice and a per-row outcome (saved, refused, not confirmed). It is its own small screen change.
+
 ## 9. G2: the pinned set, the generic extractors and the club-board guard (as built, 2026-11-17)
 
 The plan of section 5 ("G2") and the *Rukovodilac*'s GO of 2026-11-17. One pull request, **no migration**: v74 holds

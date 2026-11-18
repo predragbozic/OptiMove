@@ -417,3 +417,12 @@ test('an Estimates only widget opens the Advanced-required screen without changi
   assert.equal(simpleEditor.model.draft, null);
   assert.equal(series.source_policy, 'estimate');
 });
+
+test('the chart athlete choice opens selection without silently dropping anyone', async () => {
+  await openNew();
+  await simple('metric', { kind: 'builtin', id: 'rpe' });
+  await simple('next'); await simple('next');
+  await simple('choose-athletes');
+  assert.equal(simpleEditor.model.step, 2);
+  assert.deepEqual(simpleEditor.model.draft.athleteSelection, { mode: 'selected', athleteIds: [] });
+});

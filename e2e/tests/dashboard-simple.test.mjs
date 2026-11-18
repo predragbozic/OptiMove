@@ -62,6 +62,7 @@ for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
       await screenshot(page, width, "before-save");
       await action(page, "simple-save").click();
       await page.locator(".tl-simple-editor").waitFor({ state: "hidden" });
+      assert.equal(await page.locator(".tl-layout-bar").count(), 0);
       await page.getByRole("button", { name: "Widget actions: Saved sessions" }).click();
       await action(page, "analysis-edit-widget").click();
       await action(page, "simple-next").click();

@@ -33,6 +33,8 @@ function issueText(issue) {
     sourceConnectionRequired: "Choose a data source in Advanced settings.", previewQueryFailed: "Preview data could not be loaded. Try previewing again.",
     incompatiblePresentation: "The widget settings do not match this display. Open advanced settings.",
   };
+  if (issue.reason === "maxChartAthletes") return "Choose up to 20 athletes for this chart.";
+  if (issue.code === "widgetSizeBounds") return "This display needs a different widget size. Use the current display or add a new widget.";
   const choice = ["requiresChoice", "required"].includes(issue.code) ? issue.path?.includes("analyticalAggregation") ? "Choose how to combine measurements." : issue.path?.includes("dataScopeLevel") ? "Choose which measurements to use." : null : null;
   return choice ?? (Object.hasOwn(known, issue.code) ? known[issue.code] : "Review your settings and preview again.");
 }
@@ -110,9 +112,11 @@ function displayChoices(model, locked) {
   const scopes = metric.scope_capabilities?.length ? metric.scope_capabilities.map((scope) => typeof scope === "string" ? scope : scope.scope_level) : ["day", "session", "component"];
   return `<label class="tl-simple-field">Title<input type="text" ${action("title")} maxlength="200" value="${escapeAttr(model.draft?.title ?? "")}"${disabled(locked)}></label>
     <fieldset${disabled(locked)}><legend>Display</legend>${views.map(([value, label]) => {
+      if (model.widgetId && value !== view.type) return "";
       const supported = types.some((type) => (typeof type === "string" ? type : type.key) === value && type.is_active !== false);
       return `<label class="tl-simple-choice"><input type="radio" name="training-load-simple-view" ${action("view")} value="${value}"${(view.type ?? "table") === value ? " checked" : ""}${disabled(!supported)}>${label}${!supported ? " (unavailable)" : ""}</label>`;
     }).join("")}</fieldset>
+    ${model.widgetId ? message("To use a different display type, add a new widget.") : ""}
     ${selectField("group", "Group results by", [["day", "Day"], ["week", "Week"], ["athlete", "Athlete"], ["session", "Session"], ["component", "Component"], ["cohort", "Whole group"]], view.groupBy ?? "day", locked)}
     ${custom ? selectField("aggregation", "How to combine measurements", (metric.allowed_aggregations ?? []).map((value) => [value, ({ sum: "Total (sum)", avg: "Average", max: "Maximum", last: "Latest value", none: "Each measurement" })[value]]).filter(([, label]) => label), view.analyticalAggregation, locked, "Choose how to combine measurements") : ""}
     ${custom && scopes.length > 1 ? selectField("scope", "Use measurements from", scopes.map((value) => [value, ({ day: "Day", session: "Session", component: "Component" })[value]]).filter(([, label]) => label), view.dataScopeLevel, locked, "Choose which measurements to use") : ""}`;
@@ -164,6 +168,7 @@ function previewHtml(model, technical) {
     ${(technical ? preview.issues ?? [] : (preview.issues ?? []).slice(0, 1)).map((issue) => message(issueText(issue), "alert")).join("")}
     ${(technical ? preview.warnings ?? [] : []).map((warning) => message(issueText(warning))).join("")}
     ${message("Preview shows the numbers; the chart appears on the dashboard after saving.")}
+    ${(preview.issues ?? []).some(issue => issue.reason === "maxChartAthletes") ? button("choose-athletes", "Choose athletes") : ""}
     ${tables.join("")}
     ${!result ? message("No preview results returned.") : ""}
     ${technical ? `<details class="tl-simple-raw"><summary>Complete preview result and problem details</summary><pre>${escapeHtml(JSON.stringify(preview, null, 2))}</pre></details>` : ""}`;

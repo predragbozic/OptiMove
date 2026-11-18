@@ -384,6 +384,8 @@ const MESSAGES = {
   unit_word_ambiguous: "A document cannot tell which GPEXE word this unit is. Retire this revision, add a new unproven revision of the field and activate it, then compare it with GPEXE (Source fields > Compare with GPEXE).",
   // A club's admin may take none of those steps (L1, L3, L5 and route O are the platform's): it is told who can.
   unit_word_ambiguous_club: "A document cannot tell which GPEXE word this unit is. Ask a platform administrator to compare this field with GPEXE.",
+  // #601's LOW-1: a platform admin working in a club's workspace takes the steps from the platform workspace.
+  unit_word_ambiguous_platform_in_club: "A document cannot tell which GPEXE word this unit is. Switch to the platform workspace, then retire this revision, add a new unproven revision of the field and activate it, and compare it with GPEXE (Source fields > Compare with GPEXE).",
   ...ACTIVATION_MESSAGES,
 };
 
@@ -415,12 +417,13 @@ export async function unitWordCode(client, facts, sourceUnit, revisionId) {
   return unitWordCodeOf({ unitWords, sourceUnit, provenWord });
 }
 // The sentence follows the caller (the code review's HIGH): every step it names is one this owner's admin may take.
-export function unitWordMessage(code, ownerScope) {
-  return code === "unit_word_ambiguous" && ownerScope === "club" ? MESSAGES.unit_word_ambiguous_club : MESSAGES[code];
+export function unitWordMessage(code, ownerScope, basis = null) {
+  if (code !== "unit_word_ambiguous" || ownerScope !== "club") return MESSAGES[code];
+  return basis === "platform_admin" ? MESSAGES.unit_word_ambiguous_platform_in_club : MESSAGES.unit_word_ambiguous_club;
 }
 async function assertUnitWord(client, ctx, facts, sourceUnit, revisionId) {
   const code = await unitWordCode(client, facts, sourceUnit, revisionId);
-  if (code) throw refusal(409, code, unitWordMessage(code, ctx.owner?.scope));
+  if (code) throw refusal(409, code, unitWordMessage(code, ctx.owner?.scope, ctx.basis));
 }
 export function classifyDatabaseError(error) {
   if (error instanceof SourceMetricMappingError) return error;

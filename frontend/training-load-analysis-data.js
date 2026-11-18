@@ -275,7 +275,7 @@ export async function loadDashboardDetail(dashboardId, onPainted, { force = fals
       // name, which lives in the catalog. It is fetched once per workspace
       // (memoized in loadAnalysisMetricDefinitions) and only when needed.
       const needsCatalog = (state.trainingLoad.analysis.widgets || []).some((w) => (w.series || []).some((s) => s.metric_definition_id));
-      if (analysis.widgets.some(widget => widget.widget_type === "table" && widget.series?.length === 1)) {
+      if (analysis.widgets.some(widget => widget.series?.length > 0)) {
         void loadTrainingLoadOrgPickerData().then(() => { if (generation === detailGeneration) onPainted?.(); }, () => {});
       }
       if (needsCatalog) {
