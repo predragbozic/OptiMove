@@ -411,3 +411,50 @@ answers and one chooses *Later*, Move and Remove, the Tests form's option; no ho
   sentences module); `code-reviewer`, `ux-design-reviewer`, `mobile-qa`, the independent review.
 
 **Recommend: yes, two PRs in this order**, with B1 added to #614 before its merge.
+
+## 10. The manager's GO (2026-11-18)
+
+GO on the contract at `3c04ca7c`, with these decisions (the calendar manager's message to the executor):
+
+1. **B1 goes into #614** (the K2b-2a-1 executor adds it). The shape the screens code against:
+   - `GET /api/calendar/events/types` gets a top-level `questions: { enabled: boolean }`: `true` only when the
+     workspace owner's club (or the team's club) has the switch on; `false` for a private coach, the platform, or no
+     club; nothing else of the switch is sent.
+   - Each type gets `defaultQuestions: [...]` only while the switch is on: exactly what a create without `questions`
+     would ask. While off, the key is absent.
+2. **Panel read: yes.** Only when `questions.enabled` is true and the card says `canManage`; a 404 hides the section
+   silently.
+3. **Untouched create: yes.** No `questions` sent; the list only when the coach changed the section. The
+   `questionsSkipped` notice stays.
+4. **Ask from the panel: yes.**
+5. **Confirmations follow the Interaction principles** (`.claude/rules/frontend.md`), rendered as an **inline step**
+   (one sentence, two buttons), **never a native `confirm()`** (K2c-1's Align pattern). This replaces 4.3's `confirm()`:
+   - **Remove / Stop a question:** unanswered — "Remove the RPE question? Athletes won't be asked." **Remove
+     question** / **Keep it**; answered — "Stop the RPE question? 3 answers are kept; nobody else can answer." **Stop
+     question** / **Keep it**.
+   - **The event form:** a save that would close an answered question early (the coach unticked it) shows the same
+     inline step before sending.
+   - **The club switch:** one inline step after the reason: "Turn on questions for athletes for this club? Its coaches
+     can then ask athletes after events." / "Turn off questions for athletes for this club? Coaches can't ask new
+     questions; the answers given stay." **Turn on** (or **Turn off**) / **Cancel**. (This replaces 2.1's "a
+     confirmation is not asked".)
+   - **A type's `defaultQuestions`:** no extra step; it rides the type form's Save.
+   - The mutation "drop the confirmation" targets these inline steps.
+6. **No WELLNESS count on the card: yes.**
+7. **The split: yes.** In 2a-2 only the sentence on `409 schedule_managed_by_calendar`: the Tests schedule screen
+   (2a-2a) and the TL external-schedule screen (2a-2b). For TL only its refusal-sentence mapping, its file named in the
+   report first; `frontend/training-load-simple-*` and `frontend/training-load-analysis-*` are not touched.
+   `managedByCalendar` is a later step.
+8. **`expects` and Ask stay independent: yes.**
+9. **State and date only: yes.**
+
+**Slicing: two PRs.**
+- **2a-2a** = branch `claude/central-calendar-k2b2a-2`: this contract plus the Tests *Skip days off* option and its
+  suite. Light regime: `code-reviewer` + `mobile-qa`, at most one narrow re-review; "light regime" in the PR body.
+- **2a-2b** = branch `claude/central-calendar-k2b2a-2b`, stacked on 2a-2a: Settings, the event form and the panel; full
+  reviews.
+
+**Base:** code 2a-2a against B1's shape now; when the manager sends #614's new head (main merged in, plus B1), merge it
+with `git merge --no-edit origin/claude/central-calendar-k2b2a-1` (no rebase). The browser check and the Frontend PR
+gate run after that merge. `styles.css` and `state.js` are shared: calendar- or tests-prefixed selectors only, and any
+shared part of `state.js` touched is named. The executor does not open the PR.

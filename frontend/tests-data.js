@@ -237,3 +237,17 @@ export async function loadOrgPickerData() {
   state.tests.orgPickerData = data;
   return data;
 }
+
+// K2b-2a-2a: is the active workspace's club's *Ask athletes* switch on?
+// (docs/ai/central-calendar-k2b2a2-ui-contract.md section 1 and 10, B1:
+// GET /api/calendar/events/types carries questions.enabled.) Any failure, or
+// an answer without the field, is "off": the option is then not offered and
+// nothing is sent, so the schedule keeps today's behaviour.
+export async function fetchTestsQuestionsEnabled() {
+  try {
+    const data = await api("/api/calendar/events/types");
+    return data?.questions?.enabled === true;
+  } catch {
+    return false;
+  }
+}

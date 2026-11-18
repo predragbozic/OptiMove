@@ -385,6 +385,15 @@ export const emptyScheduleForm = (overrides = {}) => ({
   opensTime: "06:00",
   dueTime: "",
   closesTime: "22:00",
+  // K2b-2a-2a: "Skip days off" of a daily WELLNESS schedule
+  // (docs/ai/central-calendar-k2b2a2-ui-contract.md section 1). Offered only
+  // while questionsEnabled is true (the club's Ask athletes switch, read from
+  // GET /api/calendar/events/types; null = not read yet, false = off or the
+  // read failed). skipDaysOffInitial is an edited schedule's stored value
+  // (null on a create); an edit sends skipDaysOff only when it differs.
+  skipDaysOff: true,
+  skipDaysOffInitial: null,
+  questionsEnabled: null,
   // Calendar picker state, shared by BOTH interaction modes (see the
   // scheduleKind comment above). calendarMonth is a "YYYY-MM" string (the
   // month currently displayed). selectedDates (multi-select mode only)

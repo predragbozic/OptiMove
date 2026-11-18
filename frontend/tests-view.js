@@ -1052,6 +1052,7 @@ export function renderScheduleFormHtml() {
               <span class="tests-timezone-info-full">Times follow each athlete's device timezone.</span>
               <span class="tests-timezone-info-short">Follows each athlete's own timezone.</span>
             </p>
+            ${renderTestsSkipDaysOffHtml(form)}
             ${renderRecipientsTriggerHtml(form)}
             ${renderNotificationsCollapsibleHtml(form)}
             ${renderAdvancedSettingsHtml(form)}
@@ -1581,4 +1582,19 @@ export function handleTestsLibraryInput(target) {
   const empty = root.querySelector("[data-tests-library-empty]");
   if (empty) empty.hidden = Boolean(total);
   return true;
+}
+
+// K2b-2a-2a: "Skip days off" (docs/ai/central-calendar-k2b2a2-ui-contract.md
+// section 1) - only for a daily schedule while the club's Ask athletes switch
+// is on (scheduleForm.questionsEnabled === true); otherwise nothing at all.
+export function renderTestsSkipDaysOffHtml(form) {
+  if (form.scheduleKind !== "daily" || form.questionsEnabled !== true) return "";
+  return `
+    <label class="tests-skip-days-off">
+      <input type="checkbox" data-action="tests-schedule-skip-days-off" ${form.skipDaysOff ? "checked" : ""} ${form.submitting ? "disabled" : ""}>
+      <span class="tests-skip-days-off-text">
+        <span class="tests-skip-days-off-label">Skip days off</span>
+        <span class="muted tests-skip-days-off-hint">Athletes aren't asked on a day when a Day off in the calendar includes them.</span>
+      </span>
+    </label>`;
 }
