@@ -29,6 +29,16 @@ export const CENTRAL_CALENDAR_EVENT_KINDS = Object.freeze(["training", "match", 
 // What an event may expect (D19), in the server's order.
 export const CENTRAL_CALENDAR_EVENT_EXPECTS = Object.freeze(["rpe", "device_data", "test_result"]);
 
+// A team's name as the calendar shows it (K2b-1d2, plan section 23, the
+// manager's Q1): with its club when the team carries one - the platform
+// workspace's teams, where teams of several clubs meet - as "U19 · Borac";
+// otherwise its name, as before. One helper for the team's name on cards and
+// in the panel, the Groups chips, the legend and the form's names.
+export function centralCalendarTeamLabel(team) {
+  const name = team?.name || "Team";
+  return team?.clubName ? `${name} · ${team.clubName}` : name;
+}
+
 let rangeGeneration = 0;
 let dayGeneration = 0;
 

@@ -1851,3 +1851,405 @@ The manager confirmed the reading of the *Day off* decision: a *Day off* **with*
   - a physical phone (the owner reviews on one);
   - the real server and database (no `DATABASE_URL` in this session, 22.7 T);
   - VoiceOver and TalkBack.
+
+## 23. K2b-1d2 — the type's icon and colour on every card; the platform's teams with their clubs (the manager's GO in 23.6)
+
+The backend step of 21.9 (Q1 (b) and Q2). Branch `claude/central-calendar-k2b-1d2` from `origin/main` `94aab138`. Section
+22 (K2b-1e) was in PR #603 when this was written; PR #603 merged first (`946914f4`), and this branch took `main` in by
+a merge whose only conflict was this file (23.9). **No migration:** every column needed
+already exists. A calendar migration would be v77 or later and only on the owner's order naming it.
+
+### 23.1 The type's icon and colour on every event card (Q1 (b))
+
+- **What exists** (checked in the code):
+  - the type's `icon_key` (v49 `:118`) and `color_key` (v51 `:85`) are columns of `calendar.event_types`;
+  - `readEventRows` (`backend/src/calendarQuery.js:451-483`) already reads the type's label and id under D41
+    (`eventShowsTypeSql`, `backend/src/calendarEventAccess.js`: a `system` type always, a club's type only on an event of
+    that club now);
+  - `publicCard` (`:1264-1322`) gives a manager `eventTypeId`, and nobody gets the icon or the colour. Since K2b-1d the
+    frontend therefore takes them from the catalog (`GET /events/types`), and only for a manager's card.
+- **The change:**
+  - `readEventRows` selects `case when <D41> then et.icon_key end as event_type_icon_key` and the same for `color_key`;
+  - `publicCard` adds `eventTypeIconKey` and `eventTypeColorKey` (or `null`) to **every** event card: a manager's, a
+    reader's and the athlete's.
+  - A moved team's event (D41) carries `null` for both, as it does for the label, so nothing of the old club's catalog
+    leaves.
+  - One statement, the same as today; no new read.
+- **The athlete's allowlist** gains the two keys. They name a type's icon and colour, never a person, a value or a
+  count. `central-calendar-k2a-events.test.mjs` (~878-882) and `central-calendar-k2b-event-details.test.mjs:480` are
+  extended key by key.
+- **The views of `GET /events/:id`** (a manager's and a reader's) are not changed: the panel reads the card.
+
+### 23.2 The platform workspace's teams with their club (Q2)
+
+- **What exists:**
+  - `loadWorkspaceTeams` (`backend/src/calendarAccess.js:254-270`) answers `[]` for the platform workspace, so its
+    calendar names no team;
+  - its scope is everyone (`calendarAccess.js:108`, `:150`, `:200`);
+  - the function has two callers: `readCalendar` (`calendarQuery.js:795`: `teams[]`, the teams a card names, and the
+    athletes' team ids) and `reducedViewOf` (`calendarEventService.js:469`). The platform admin manages every event
+    (`eventWriteBasis`: platform workspace → `platform_admin`), so that view is never the platform's; the second caller
+    is unaffected in practice.
+- **The change:** for the platform workspace, every **active team of an active club**, ordered by the club's name, then
+  the team's name, then its id. Each team carries what a club's teams carry (`teamId`, `name`, `athleteCount`,
+  `colorKey`) plus `clubId` and `clubName`, and only the platform's teams get the two club keys. One statement:
+  `public.teams` joined to `public.clubs` and `calendar.team_settings`, with the existing per-team member count.
+- **Who reads it:** only a platform admin in the platform workspace (`resolveActiveWorkspace`). The same admin already
+  reads every club and team in Settings, so nothing new is disclosed. It is still a read across clubs, so it takes the
+  security review and the owner's external review (trigger 2).
+- **How many teams:** the code sets no bound. A club's admin adds teams one by one, and archived teams and clubs are left
+  out. The record names one pilot club in production; I estimate tens of teams at most, but **I did not read
+  production**.
+- **The cost, and the one real risk:**
+  - The teams' statement is O(teams). The bigger cost is downstream: `athleteTeamIdsSql` (`calendarQuery.js:58-60`)
+    unnests the whole team list for **every athlete row** of the window and runs `membershipOnDaySql` for each pair. So
+    the platform's read grows with rows × teams, where a club's grows with rows × the club's teams.
+  - **Plan:** measure before and after on a disposable database with a seeded platform world (for example 3 clubs × 10
+    teams, 300 athletes, a month of planned sessions and events).
+  - If the platform's month read grows past a bound the manager sets, rewrite `athleteTeamIdsSql` to go from the
+    athlete's memberships to the teams (`team_id = any($teams)` under the same `membershipOnDaySql` rule) instead of
+    from every team. That would be a separate, tested change.
+- **The colours:** a team keeps the colour its club chose (K2b-1c's P2 rule). Two clubs may choose the same colour, so in
+  the platform's view two teams can share one; their labels then tell them apart. Q3 of 23.4.
+
+### 23.3 The frontend: what goes with this step and what follows
+
+The two parts reach the screen differently:
+- **23.1 changes nothing on screen.** The frontend does not read the new keys yet.
+- **23.2 changes the platform's screen as soon as it is deployed.** The Groups chips, the team dots and pills on the
+  cards and in the panel, and the legend start to name teams, and two clubs' "U19" would read alike. The edit form also
+  offers the answer's `teams[]` as targets (`central-calendar-event-form.js:411`), so the platform's support edit would
+  list every club's teams (the server refuses another club's team, but the screen would offer it).
+
+**Recommended split:**
+- **K2b-1d2 (this step):** 23.1 and 23.2 in the backend, with two small frontend guards so that the platform's screen is
+  right the day it ships:
+  - **the team label:** one helper names a team "U19 · Borac" when it carries `clubName`. It is used by `teamName`,
+    the Groups chips, the legend and the form's names. A club's or a team's workspace is unchanged;
+  - **the edit form's team targets:** never from the platform's list (as today, when that list is empty). Offering the
+    event's own club's teams there is a later product question.
+
+  Reviewers: `code-reviewer` and `security-reviewer`, then the independent review and the owner's external review
+  (trigger 2). `mobile-qa` only for the longer chip labels, if the manager wants it.
+- **K2b-1d3 (the next small frontend step, after PR #603 merges):**
+  - every event card wears its type's icon and colour from the card (`eventTypeIconKey` / `eventTypeColorKey`), a
+    reader's included. The catalog read that K2b-1d makes for a manager's cards then falls away; the catalog stays for
+    the form;
+  - the athlete's *Upcoming events* list (PR #603) takes the type's icon from `eventTypeIconKey`, else the kind's.
+
+  It cannot go here without touching PR #603's files.
+
+### 23.4 Open questions for the manager
+
+- **Q1 — the split:** the two frontend guards of 23.3 in this pull request (recommended, so the platform's screen never
+  shows ambiguous team names), or a backend-only pull request and the guards in K2b-1d3.
+- **Q2 — the platform's team list:** active teams of active clubs (recommended; an archived club's teams named nowhere,
+  as a club's archived team today), or every team.
+- **Q3 — colours in the platform's view:** each club's chosen colour, sharing one across clubs being possible
+  (recommended), or only the automatic colours in the platform.
+- **Q4 — the cost bound:** what growth of the platform's month read is acceptable before the `athleteTeamIdsSql` rewrite
+  of 23.2 becomes part of this step.
+- **T — the database for the tests:** reading the main checkout's `backend/.env` for `DATABASE_URL` was refused by this
+  session's permission check (22.7 T in PR #603). I will not try it again on a session's instruction, since that is the
+  user's permission to give. Without a disposable database the backend suites of 23.5 cannot run here. So either:
+  - the owner allows that read for this session, or provides `DATABASE_URL` another way; or
+  - the manager runs the database suites on the branch.
+
+### 23.5 Tests and checks
+
+- **Backend** (disposable databases through the real runner, `npm --prefix backend ci` in this worktree first):
+  - `central-calendar-k1a`, `-k2a-events`, `-k2a-1b`, `-k2b-settings`, `-k2b-event-details`, and `--preset backend-fast`;
+  - **new cases:**
+    - the two keys on the cards of a manager, a reader and the athlete, for a system type and a club's type;
+    - `null` on a moved team's event (D41);
+    - the athlete's allowlist key by key;
+    - the platform's `teams[]` with `clubId` and `clubName`, active teams of active clubs only, in its order, with
+      cards naming them;
+    - a club's and a team's workspace answering exactly as before (no club keys);
+    - the identical answers for everyone who is not a platform admin;
+    - the statement count unchanged;
+  - mutations on the D41 predicate, the platform branch, the active filters and the club keys;
+  - the cost measurement of 23.2.
+- **Frontend** (only with Q1 as recommended):
+  - the team label with and without `clubName`, and the form's targets never from the platform's list, through the real
+    view and form;
+  - `frontend-fast` on the head and on a clean `origin/main`, compared;
+  - the build.
+- **Reviews:** `code-reviewer` and `security-reviewer` on the frozen head; then the independent review and the owner's
+  external review. No merge, deploy or persistent database; one draft pull request.
+
+### 23.6 The manager's decisions (2026-11-18) — GO for K2b-1d2
+
+GO for K2b-1d2 as section 23 plans it.
+
+- **Q1:** the two frontend guards of 23.3 go into this pull request:
+  - one helper names a team "U19 · Borac" when it carries `clubName`, used for the team's name, the Groups chips, the
+    legend and the form's names;
+  - the edit form never offers teams from the platform's list.
+
+  The platform's screen therefore never shows an ambiguous team name. The cards' type icon and colour go to K2b-1d3,
+  after PR #603 merges.
+- **Q2:** only the active teams of active clubs.
+- **Q3:** each team wears the colour its club chose; two clubs may share one, and the club in the name tells them
+  apart.
+- **Q4, the cost bound:**
+  - measure the platform's month read on a disposable database with a seeded world (3 clubs × 10 teams, 300 athletes, a
+    month of planned sessions and events), before and after the change;
+  - if the read after is **slower than 1.5 × before, or longer than 1 s locally**, the rewrite of `athleteTeamIdsSql`
+    (from the athlete's memberships to the teams, under the same `membershipOnDaySql` rule) becomes part of this step,
+    with tests that prove the same result;
+  - otherwise only the measured numbers are recorded.
+- **Q4, changed by the owner (2026-11-18):** after the slowdown was explained, the owner said „pa reši ti to na vreme,
+  posle toga će biti problem" (relayed by the manager). So the rewrite of `athleteTeamIdsSql` **is part of this pull
+  request**, although the measured cost (1.17–1.30×, 23.7) was under the bound. As built: 23.8.
+- **T, the database:** the read of `backend/.env` is a permission of this session, so it is the owner's to decide; the
+  manager asks the owner. Until then, everything that needs no database is done:
+  - `npm --prefix backend ci` in this worktree;
+  - the code;
+  - the new backend tests, written but not run;
+  - the frontend tests, and `frontend-fast` on the head and on a clean `main`;
+  - the build.
+
+  The manager says whether this session gets the permission or runs the backend suites and mutations on the branch
+  itself.
+- As section 23: no migration; `sourceMetric*`, `sourceField*`, `gpexe*`, Imports and the mapping screens are not
+  touched; invented names only; `code-reviewer` and `security-reviewer` on the frozen head; one draft pull request, no
+  merge and no deploy.
+
+### 23.7 As built, the internal review round (on `60c7697f`) and what is still open
+
+**As built:**
+- **The cards:** `readEventRows` selects `et.icon_key` and `et.color_key` under `eventShowsTypeSql`, in the same
+  statement. `publicCard` gives `eventTypeIconKey` and `eventTypeColorKey` (or `null`) on the manager's, the reader's
+  and the athlete's card. `eventTypeId` stays the manager's.
+- **The platform:** `loadWorkspaceTeams` has a platform branch with one statement: active teams of active clubs,
+  `order by c.name, c.id, t.name, t.id`, each with `clubId` and `clubName`; the club and team branches are unchanged.
+  `reducedViewOf` states why the platform never reaches it.
+- **The frontend:** `centralCalendarTeamLabel` (`central-calendar-data.js`) is used by `teamName` (cards, dots, pills,
+  panel, day lists), the Groups chips, the legend and the form's labels. The form's `teams` is `[]` in the platform
+  workspace.
+- **The form's names (23.6, Q1) are dead code in practice, and harmless:** the platform's form gets no teams, and a
+  club's or a team's teams carry no `clubName`. So the form's team label always reads as before. It is kept so the label
+  stays the one helper everywhere (the independent review's NIT).
+- **The measurement:** `backend/scripts/calendar-platform-read-cost.mjs` (Q4, disposable database only, `--root` for the
+  before run). It fails when the seeding does not reach the read.
+
+**The reviews:**
+- `security-reviewer`: READY WITH NON-BLOCKING NOTES. No BLOCKER, CRITICAL or HIGH; one MEDIUM (the cost, unmeasured);
+  four LOW.
+- `code-reviewer`, first round (on `60c7697f`): **BLOCKED** by its contract, since no database suite had run. On the
+  code: no BLOCKER or HIGH; two MEDIUM and two LOW in the tests and the script.
+- `code-reviewer`, narrow round (on `b7d81acd`, with the manager's database results below): **READY WITH NON-BLOCKING
+  NOTES**.
+  - All four first-round findings are closed.
+  - The database results prove A1–A5: A1–A3 by tests 1a–1d and BM1–BM4; A4 by 2a, 2b and 2b2 and BM5–BM11; A5 by test
+    2d's statement count.
+  - A6 and A7 rest on the frontend evidence; no frontend file changed.
+  - Its one LOW was this record, out of date in that head ("not run", "10 tests"); it is corrected here.
+- **The independent review** (on `7e35024d`): READY WITH NON-BLOCKING NOTES, with no BLOCKER, HIGH or MEDIUM. Its 11
+  backend and 4 frontend scenarios pass. It repeated 131/131 and `backend-fast` 674/676, with both failures the same on
+  `94aab138`. Its mutations were all killed except B12b (below) and three equivalent ones. Its notes are answered in the
+  last round, which changed tests, one comment and documents, with no change of behaviour:
+
+  | Finding | Severity | Correction | Test | Status |
+  |---|---|---|---|---|
+  | B12b — the platform's member count without `am.status = 'active'` survived | LOW | test 2a archives a T1 member's team membership (Settings' own statement) and compares the platform's `athleteCount` with a direct `status = 'active'` count | 2a (BM12) | Written; it needs the database |
+  | Escaping of a team's club name was pinned only by the review's own test (its mutation "the team name in the panel unescaped") | LOW | P2b: a club named `<i id=pwn>…</i>` makes no element in the chips, a card's pill, the legend, the panel and its athlete rows | P2b (FM7–FM9) | Fixed; P2b passes, FM7–FM9 killed |
+  | The Q4 range: the review measured 1.24× and 1.30× | LOW | the range 1.17–1.30× and the trigger to measure again at about 40 active teams, recorded above | — | Recorded |
+  | The comment on `athleteTeamIdsSql` named only a club and a team workspace | NIT | "'{}' outside a club / team / platform workspace" | — | Fixed |
+  | The form's names of 23.6 are dead code in practice | NIT | recorded above (harmless) | — | Recorded |
+
+| Finding | Reviewer, severity | Correction | Test | Status |
+|---|---|---|---|---|
+| Q4's cost is unmeasured | security — MEDIUM | measured by the manager: 1.17×, 0.79 s, under the bound; no rewrite | the Q4 run, before and after | Measured |
+| Test 2a's order check cannot tell "club first" from "team first" (the fixture's names sort the same both ways) | code — MEDIUM | a club "Aaa…" with a team "Zz…" and a club "Bbb…" with a team "Aa…": Zz comes first | 2a (BM8) | Fixed; 2a passes, BM8 killed |
+| The platform's `colorKey` (Q3) was never set, so it was compared as null with null | code — MEDIUM | T1's colour set to "rust" through `PUT /settings/teams/:id`; the platform reads "rust" | 2a (BM11) | Fixed; 2a passes, BM11 killed |
+| Test 1b never set a colour before "taking it away" | code — LOW | "amber" set, read, then `null`, read again | 1b | Fixed; 1b passes |
+| The script could measure without planned cards | code — LOW | it fails when no planned card, or fewer event cards than events, reach the read | — | Fixed; the Q4 run passed it |
+| No test of a revoked platform role | security — LOW | the next answer is no longer the platform's and names no club | 2b2 | Fixed; 2b2 passes |
+| `reducedViewOf` relies on the platform admin never being a reader | security — LOW/NIT | a comment that says so | — | Fixed |
+| A reader's card on a moved team's event is not checked (only a manager's) | security — LOW | not added: the same SQL case as the manager's card, and a moved team's event has no reader of the old club in the fixture | — | Recorded |
+| The form's platform guard is the frontend's only | security — LOW/NIT | the server already refuses another club's team on a write | — | Accepted |
+
+**The database checks, run by the calendar manager** (the *Rukovodilac*) in this session's worktree on head `b7d81acd`
+(this session's permission check refused the `DATABASE_URL` read, although the owner allowed it; the tree stayed clean
+and the head the same):
+- **The backend suites** (`node scripts/test-runner.mjs --project backend --kind disposable` with six `--file`): 131/131,
+  cleanup audit clean:
+
+  | Suite | Result |
+  |---|---|
+  | `central-calendar-k1a` | 28/0 |
+  | `central-calendar-k2a-1b` | 23/0 |
+  | `central-calendar-k2a-events` | 31/0 |
+  | `central-calendar-k2b-1d2` | 9/0 (the suite has nine tests: 1a–1d, 2a, 2b, 2b2, 2c, 2d) |
+  | `central-calendar-k2b-event-details` | 11/0 |
+  | `central-calendar-k2b-settings` | 29/0 |
+
+  `k2b-settings` at 29/0 also confirms that 1a / 1b are fixed on `main` (22.7, Q6).
+- **The backend mutations:** BM1–BM11 (`K2b-1d2-backend-mutations.mjs`), 11 of 11 killed.
+- **Q4** (`backend/scripts/calendar-platform-read-cost.mjs --runs 7`; 3 clubs × 10 teams, 300 athletes, 3900 sessions,
+  240 events, 630 cards, 1–30 Nov):
+
+  | | Median | Range | Teams in the answer |
+  |---|---|---|---|
+  | after, `b7d81acd` | 790 ms | 769–854 | 30 |
+  | before, `94aab138` (a clean detached tree) | 674 ms | 662–741 | 0 |
+
+  The ratio is 1.17× and the read takes 0.79 s, under the bound (1.5× / 1 s). So the `athleteTeamIdsSql` rewrite is
+  **not** part of this step; the numbers are recorded here.
+- **The measured range, with the independent review's runs:** on the same machine, the independent review measured
+  676 ms before and 839 ms and 881 ms after, so 1.24× and 1.30×. With the executor's and the manager's 1.17×, **the
+  range is 1.17–1.30×**, at most 0.88 s, still under 1.5× / 1 s.
+- **When to measure again:** the cost grows with the number of teams. When the platform passes about **40 active teams**
+  (the world measured had 30), Q4 is run again with the script. If the read is then over the bound, the
+  `athleteTeamIdsSql` rewrite of 23.2 follows.
+
+**Run in this session:**
+- `backend-fast` (on `60c7697f`): 674 of 676. The same two files fail with the same counts on a clean `main`:
+  `gpexe-rest-v1-adapter-reads`, and `legacy-schema-generator`, whose failing test is about CRLF input.
+- `backend-fast` on `b7d81acd`: 673 of 676, the same two plus `gpexe-client` 18/1 once. That is a timing test ("a GPEXE
+  that never answers is stopped at the time limit"); it then passed 19/0 three times alone.
+- The new frontend suite: 4/4. The calendar frontend suites: 158/158.
+- Frontend mutations: 6/6 killed.
+- The Frontend PR gate on `60c7697f`: no new failure, the same 19 files with the same counts as a clean `main`. No
+  frontend file changed after it.
+- The build passed; `git diff --check` is clean.
+
+### 23.8 The rewrite of `athleteTeamIdsSql` (the owner's decision of 2026-11-18, 23.6)
+
+- **What it was:** `athleteTeamIdsSql` (`backend/src/calendarQuery.js`) gave an athlete's teams on a day by unnesting
+  the whole team list of the viewer **for every athlete row** and running `membershipOnDaySql` for each pair (rows ×
+  teams). With the platform's list of every club's teams, that is what grew (23.2, 23.7).
+- **What it is:** from the athlete's own team periods (`public.athlete_membership_periods`, v25) to the teams of the list
+  (`team_id = any($teams)`), under **the same day condition**, now one shared function
+  (`membershipPeriodOnDaySql`, `backend/src/calendarAccess.js`), which `membershipOnDaySql` itself uses. That condition
+  is:
+  - the period covers the day, the joining and the leaving day included, as UTC dates;
+  - or the period is open and the day lies before the athlete's first period in the period's club (the fallback).
+
+  The array is sorted by id, as before. The existing index `athlete_membership_periods_athlete_idx` (v25) serves it.
+  **No migration, no index added.**
+- **Why it is the same result:** the old form keeps a team T of the list when some team period of T satisfies the
+  condition; the new form collects the team of every team period of the list that satisfies it. These are the same set,
+  and `distinct` with the explicit order gives the same array. The rule reads the periods, not the memberships'
+  `status`: an archived membership is a closed period, and a paused one an open period, as before.
+- **The proof**, `backend/tests/central-calendar-k2b-1d2-team-ids.test.mjs`: the old form and the old text of
+  `membershipOnDaySql` are frozen in the test.
+  - **The world:** an athlete who changes team mid-range; a membership archived before the range; the fallback (no
+    earlier period in the club) and its refusal (an earlier club period); two teams; a paused membership; a team archived
+    mid-range (D45); an empty team moved to another club with a raw write and joined afterwards (D43; a team with members
+    cannot move, since the membership holds the `(team, club)` key); joining and leaving at the edges of a UTC day.
+  - **Test 1:** old against new for every athlete, every day of a 14-day range, and every team list a viewer can have:
+    the platform's, each club's, a club's list before its team was archived, each single team, all of them, and none.
+    The arrays must be identical, in order.
+  - **Test 2:** anchors for those cases.
+  - **Test 3:** `membershipOnDaySql` against its old text on single days and on windows of up to 5 days, and every window
+    against the union of its days.
+- **The measurement:** `calendar-platform-read-cost.mjs` gained `--workspace club`, which times club 1's admin in the
+  same world. It is to be run before (`94aab138`) and after, for the platform and for a club.
+- **Mutations** (`K2b-1d2-backend-mutations.mjs`, BM13–BM20; each checked to apply):
+  - the day's upper bound dropped;
+  - the leaving day no longer counted;
+  - the fallback dropped;
+  - the fallback for any period, not only an open one (the rule's "current" membership);
+  - the fallback's club condition dropped;
+  - the team list filter dropped;
+  - the team-type filter dropped, expected equivalent (a club period has no team id);
+  - the explicit order dropped, expected equivalent (`distinct` sorts).
+- **Not run in this session** (no database): the two suites, the mutations and the measurement; the manager runs them.
+  `backend-fast` here: 674/676, the two known files.
+
+**The review round on `4c9e5286`** (static; neither reviewer can run a database suite):
+- **`db-reviewer`: READY WITH NON-BLOCKING NOTES.**
+  - The semantics are the same, and no index or migration is needed.
+  - Its LOW and NIT notes are added to the test world, with no change of code:
+    - a membership archived before the range and then restored: two periods of one team, with a gap;
+    - a period of zero length: archived before it started, so it covers its one day;
+    - team lists with a NULL element, and no list at all;
+    - a "long ago" date counted from today instead of a fixed date.
+- **`code-reviewer`: BLOCKED by its contract**, because the new suite and the mutations have not run. It found no code
+  finding:
+  - the set, the order, NULL, empty and duplicate lists, and the aliases are the same;
+  - the frozen old text equals the removed code.
+
+  Its one **MEDIUM** concerned the test world, which could not kill BM16 or BM17. It is fixed with two athletes:
+  - one whose first period is in another club, then a team of club A from TODAY+3 (BM17);
+  - one who joins club A and a team on TODAY+2 and leaves on TODAY+4, with no earlier period in the club (BM16).
+
+  Each has anchors in test 2, and test 1 compares both against the old form. Its static verdict once the suites pass:
+  READY.
+**The database results.** The calendar manager (the *Rukovodilac*) ran these in separate temporary trees, on disposable
+databases through the T1 runner. The executor's session cannot read `DATABASE_URL`.
+- **On `81559b28`, seven suites: 134/134**, and the cleanup audit is clean:
+
+  | Suite | Result |
+  |---|---|
+  | `central-calendar-k1a` | 28/0 |
+  | `central-calendar-k2a-1b` | 23/0 |
+  | `central-calendar-k2a-events` | 31/0 |
+  | `central-calendar-k2b-1d2-team-ids` | 3/0 |
+  | `central-calendar-k2b-1d2` | 9/0 |
+  | `central-calendar-k2b-event-details` | 11/0 |
+  | `central-calendar-k2b-settings` | 29/0 |
+
+- **The mutations on `81559b28`:**
+  - BM12–BM18 were killed, BM16 and BM17 included.
+  - BM19 and BM20 survived, as expected: they are equivalent.
+  - Together with BM1–BM11 (11/11 on `b7d81acd`), **18 of 20 are killed and 2 are equivalent.**
+- **The measurement on `4c9e5286`** (the code is the same on `81559b28`). The world is 3 clubs × 10 teams and 300
+  athletes, from 1 to 30 November, with `--runs 7`; the values are medians:
+
+  | Workspace | Before (`94aab138`) | After |
+  |---|---|---|
+  | Platform | 649 ms | 764 ms (1.18×) |
+  | Club | 222 ms | 206 ms, faster |
+
+  Before the rewrite the platform measured 790–881 ms after (23.7). With the rewrite, the club's read is faster than on
+  the base.
+- **`code-reviewer`, with these results: READY WITH NON-BLOCKING NOTES** on `81559b28`, in place of BLOCKED.
+  - Its MEDIUM is closed: the new athletes decide BM16 and BM17.
+  - The other new cases are valid against v25.
+  - The results support R1–R6.
+  - **One new LOW**, recorded and not applied, because this round is documents only and a test change would need a new
+    database run:
+    - The anchor `idsOn(w.restored, TODAY)` compares the day of the database's `now()`, which is when the restore opens
+      its second period, with `TODAY`, taken on the JavaScript side when the module loads.
+    - A run that crosses midnight UTC in between fails that anchor falsely.
+    - Test 1 still passes, and nothing reaches production. A false pass cannot happen.
+    - The fix: anchor on the period's actual first day, or take `TODAY` from the test connection's `current_date`.
+      It is applied in the last round, below.
+
+**The independent review of the rewrite, on `81559b28`: READY WITH NON-BLOCKING NOTES** (relayed by the manager).
+- **What it checked:**
+  - The new and the old rule gave the same ids, in the same order, in 132,600 comparisons on a random world, with 7
+    settings of the planner and 0 differences.
+  - BM19 is equivalent by v25's CHECK too.
+  - BM20 is equivalent, and the explicit `order by` now guarantees it.
+- **The last round** (tests and comments only):
+  - **LOW, RM1:** the suite did not catch `<` for `<=` in the "first period in the club" check of
+    `membershipPeriodOnDaySql`. A new athlete has no club period, team A1 from TODAY+3 and team A2 from TODAY+5. The
+    anchors are TODAY [A1, A2], TODAY+3 [A1] and TODAY+5 [A1, A2]. Test 1 compares the athlete against the old form.
+    The mutation is BM21 in the notes folder's script.
+  - **NIT, comment:** `athleteTeamIdsSql`'s comment now says that the athlete's event path (`teamScope`) sends a team
+    list too, and that the other kinds send none.
+  - **NIT, test 2:** the restored athlete's anchors take the restore's day from the database: the UTC day of the new
+    period's `valid_from`, which is the restore's `now()`. They no longer use the file's `TODAY`. This closes the
+    `code-reviewer`'s LOW. It reads the period itself rather than a second `current_date`, which could also fall after
+    midnight.
+- **To run (the manager):** the team-ids suite and RM1 (BM21) on the new head.
+
+### 23.9 The manager's runs on the final head, and `main` merged in (2026-11-18)
+
+The calendar manager (the cloud session), on Linux, Node 22.23.5, PostgreSQL 16, disposable databases through the T1
+runner.
+- **On `e189bf70`** (the head before this merge):
+  - the seven suites of 23.8: 134/134 (`k1a` 28, `k2a-1b` 23, `k2a-events` 31, `k2b-1d2-team-ids` 3, `k2b-1d2` 9,
+    `k2b-event-details` 11, `k2b-settings` 29); the cleanup audit is clean;
+  - **RM1 (BM21)** (`<` for `<=` in the first-period check) is killed: the team-ids suite fails 0/3;
+  - **BM12** (the platform's member count without `status = 'active'`) is killed by `k2b-1d2` test 2a.
+- **The trial merge with `main` `86d16f20`** (before PR #603 merged): `backend-fast` and `frontend-fast` fail exactly the
+  files and counts a clean `main` fails (`gpexe-client`, `gpexe-rest-v1-adapter-reads`; `exercise-editor-thumbnail`,
+  `exercise-media-thumbnail`, `training-load.actions`); the new frontend suite 5/0; the build passed.
+- **The merge of `main` `946914f4`** (PR #603 merged): the only conflict was this file, both sections kept (22, then 23);
+  no code file conflicted. The results on the merge's head are in the pull request's description.
