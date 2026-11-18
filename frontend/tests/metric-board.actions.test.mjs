@@ -798,3 +798,11 @@ test("S11. S-2: once OptiMove's mapping that replaced it is off again, the club'
   await open();
   assert.match(text(), /Replaced by OptiMove's mapping on 16\.11\.2026 · From .* · no check needed/);
 });
+
+test("Z (the Rukovodilac, 2026-11-18): a zone or threshold column never points to Mappings, which cannot finish it today; the platform admin gets the numbered-field step, everyone else support", () => {
+  const platform = data.columnReasonText("field_has_parameters", { platformAdmin: true });
+  const club = data.columnReasonText("field_has_parameters");
+  assert.equal(platform, "Zones and thresholds cannot be placed yet: their unit and limits need a document first. For one zone, create its numbered GPEXE field in Data configuration > Source fields and compare it with GPEXE.");
+  assert.equal(club, "OptiMove cannot place zones and thresholds yet. Ask OptiMove support.");
+  for (const text of [platform, club]) assert.doesNotMatch(text, /Mappings/);
+});

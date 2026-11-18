@@ -242,7 +242,12 @@ section 4.4's lock order (the hide lock), each marked in place.
   - Each row shows the raw values of athlete A and athlete B, in the source unit.
 - **Columns that cannot be placed** stay in the list, grey, with one reason:
   - "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it." The revision is not verified (section 10, (b)).
-  - "Map zones and thresholds in Mappings." The field has parameters, and J16 stays the path for it.
+  - "OptiMove cannot place zones and thresholds yet. Ask OptiMove support." The field has parameters. (As built,
+    2026-11-18: the first wording, "Map zones and thresholds in Mappings.", named a path that cannot finish today -
+    J16 refuses to submit a version whose revision is not verified, and no document proves these fields' unit and
+    limits. A platform admin is told: "Zones and thresholds cannot be placed yet: their unit and limits need a
+    document first. For one zone, create its numbered GPEXE field in Data configuration > Source fields and compare it
+    with GPEXE." A numbered zone name is a field without parameters, so route C creates it and route O compares it.)
   - "OptiMove cannot read this column yet." There is no extractor.
   - "These two athletes have no value here." The admin can choose *Other athletes*.
 - **Right: the variables.** First the club's own active variables, then OptiMove's system variables, each with its unit.
@@ -1142,7 +1147,7 @@ Each new guard has a mutation that the suite kills:
 
 **What is self-service at once.** Every field whose revision is active and verified. Today that is `total_time`, `total_distance` and `max_v`, as the owner reports.
 
-**What a club sees for any other field.** The column with its reason: "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it." or "Map zones and thresholds in Mappings.".
+**What a club sees for any other field.** The column with its reason: "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it." or "OptiMove cannot place zones and thresholds yet. Ask OptiMove support.".
 
 **The honest tension.** The owner's „Nema potrebe za ovim smaranjima” is fully met for every confirmed field. For a new field, a club waits for one platform act. That act needs no document under a2, and the club itself drives it under b3.
 

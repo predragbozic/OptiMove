@@ -234,11 +234,14 @@ export function displayNumber(value) {
 // that exists today instead of "ask support" (manager, 2026-11-15; wording only).
 export function columnReasonText(code, { platformAdmin = false } = {}) {
   if (code === "field_not_confirmed" && platformAdmin) return "This column's unit is not confirmed yet. Switch to the platform workspace, then confirm it in Data configuration > Source fields.";
+  // A zone or an event threshold: Mappings cannot finish it today (its revision needs a document for the unit and the
+  // limits, and none exists), so the sentence names the one step that works - a numbered zone name is a plain field.
+  if (code === "field_has_parameters" && platformAdmin) return "Zones and thresholds cannot be placed yet: their unit and limits need a document first. For one zone, create its numbered GPEXE field in Data configuration > Source fields and compare it with GPEXE.";
   return COLUMN_REASON[code] || "This column cannot be placed.";
 }
 export const COLUMN_REASON = {
   field_not_confirmed: "OptiMove has not confirmed this column yet. Ask OptiMove support to confirm it.",
-  field_has_parameters: "Map zones and thresholds in Mappings.",
+  field_has_parameters: "OptiMove cannot place zones and thresholds yet. Ask OptiMove support.",
   source_metric_unsupported: "OptiMove cannot read this column yet.",
   display_rule_missing: "OptiMove cannot show how GPEXE displays this column yet, so it cannot be compared here.",
   // G1b-3: a created column without a GPEXE unit word OptiMove can read.
