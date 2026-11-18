@@ -110,7 +110,7 @@ test("18-4b. (390 px) the same flow by tapping: one bottom sheet at a time, no d
       assert.equal(await group.count(), 1, `${parked} column(s) not available yet`);
       {
         const summary = group.locator("summary");
-        assert.equal((await summary.innerText()).trim(), `Zones and thresholds: not available yet (${parked})`);
+        assert.equal((await summary.innerText()).trim(), `Zone sets and threshold events: not available yet (${parked})`);
         assert.ok((await summary.boundingBox()).height >= 44, "the summary is a 44 px target");
         assert.equal(await group.evaluate((d) => d.open), false, "closed by default");
         await summary.tap();

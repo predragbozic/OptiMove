@@ -126,7 +126,7 @@ export function zoneLimitsNote(family, zoneThresholds, day = "") {
   if (!set) return "";
   if (set.differ) return `${pair[0]} zone limits differ between teams, so no zone's range is shown.`;
   return Array.isArray(set.values)
-    ? `${pair[0]} zone limits of the team: ${set.values.join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. The range beside each zone is expected, not confirmed: Compare with GPEXE confirms it.`
+    ? `${pair[0]} zone limits of the team: ${set.values.join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. The range beside each zone is expected, not confirmed. To confirm it, use “Compare with GPEXE” on that zone.`
     : "";
 }
 // Values first by quantity, zones together in zone order; the rest is "not values".

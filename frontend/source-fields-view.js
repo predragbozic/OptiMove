@@ -477,13 +477,15 @@ function renderCreateFormHtml(s) {
 
 // A numbered zone's expected range on the Create form, from the list's team limits (platform only; route C is too).
 function createRangeHtml(form) {
-  const range = expectedRange(numberedZoneOf(form.name), sourceFieldsState().inventory?.zoneThresholds);
-  return range ? `<p class="muted">This zone is expected to cover ${escapeHtml(range)} (the team's limits). That is not confirmed until you compare the field with GPEXE.</p>` : "";
+  const limits = sourceFieldsState().inventory?.zoneThresholds;
+  const range = expectedRange(numberedZoneOf(form.name), limits);
+  const day = fmtDate(limits?.asOf);
+  return range ? `<p class="muted">Expected range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you create the field, confirm it with “Compare with GPEXE”.</p>` : "";
 }
 // The compared session's own team limits: the range to look for in GPEXE (the Rukovodilac's order of 2026-11-18).
 function observeRangeHtml(o) {
   const range = expectedRange(numberedZoneOf(o?.gpexeName), o?.zoneThresholds);
-  return range ? `<p class="metric-variables-field-note">It is expected to be the zone ${escapeHtml(range)} (this session's team limits). Check that GPEXE shows it for that range; the range is not confirmed by OptiMove yet.</p>` : "";
+  return range ? `<p class="metric-variables-field-note">Expected range of this zone: ${escapeHtml(range)} (this session's team zone limits). Check that GPEXE shows the same range for it. OptiMove has not confirmed it yet.</p>` : "";
 }
 
 // G1b-2: the comparison of a generic field with the GPEXE screen (plan sections 8.2 and 8.10). The team, then the server's

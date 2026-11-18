@@ -341,10 +341,10 @@ test("Z (the Rukovodilac, 2026-11-18): Create field on a numbered zone says the 
   invLimits = { power: { values: [20, 25, 60, 75] }, speed: null, asOf: "2026-11-07T10:00:00Z" };
   try {
     await openCreate("details.session", "athletesessionpowerzone_distance_4");
-    assert.match(text(), /This zone is expected to cover 60–75 W\/kg \(the team's limits\)\. That is not confirmed until you compare the field with GPEXE\./);
+    assert.match(text(), /Expected range of this zone: 60–75 W\/kg \(the team's zone limits in the newest saved session, 07\.11\.2026\)\. After you create the field, confirm it with “Compare with GPEXE”\./);
     sourceFieldsState().form = null;
     render();
     await openCreate();
-    assert.doesNotMatch(text(), /expected to cover/);
+    assert.doesNotMatch(text(), /Expected range of this zone/);
   } finally { invLimits = undefined; }
 });

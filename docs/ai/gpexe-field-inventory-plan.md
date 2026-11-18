@@ -978,7 +978,11 @@ read and screen, **no migration**.
 - **A numbered zone's expected range (the Rukovodilac's order of 2026-11-18).** Wherever a numbered GPEXE zone
   (`athletesession{power|speed}zone_{distance|time|events}_N`) is shown - a Source fields row, the Create form, Compare
   with GPEXE, a board column and the variable it fills - its range from the team's limits is shown beside it, always
-  as **expected** ("expected 60–75 W/kg, confirm with Compare with GPEXE"), never as a fact.
+  as **expected**, never as a fact: "Expected 60–75 W/kg" on a list row and "Expected 60–75 W/kg (not confirmed)" on a
+  board column, with the step to confirm it said once per screen ("To confirm it, use “Compare with GPEXE” on that
+  zone"); "Expected range of this zone: …" on the Create form and the Compare panel (the UX review: one pattern, and
+  wording that also reads for "below 20 W/kg" and "75 W/kg and above"). Speed ranges are in m/s; whether GPEXE's own
+  screen shows them in km/h is not checked.
   - **Numbering (expected):** from one; with ascending limits t1 < … < tk, zone 1 is below t1, zone n is t(n-1)–t(n),
     zone k+1 is tk and above (GPEXE's power limits 20 · 25 · 60 · 75 W/kg make zone 4 60–75 W/kg). Speed limits in
     m/s. A relative speed zone has no team range and shows none. Pure functions: `frontend/zone-ranges.js`,

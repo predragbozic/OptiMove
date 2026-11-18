@@ -821,7 +821,7 @@ test("Z2 (the Rukovodilac, 2026-11-18): zone and threshold columns leave the lis
   await open();
   const group = content.querySelector("details.mb-parked");
   assert.ok(group && !group.open, "one closed group");
-  assert.equal(group.querySelector("summary").textContent.trim(), "Zones and thresholds: not available yet (2)");
+  assert.equal(group.querySelector("summary").textContent.trim(), "Zone sets and threshold events: not available yet (2)");
   assert.equal(group.querySelector(".mb-note").textContent, CLUB_STEP);
   assert.ok(group.textContent.includes("Example zone set") && group.textContent.includes("Example threshold events"));
   const main = [...content.querySelectorAll(".mb-list")].find((ul) => !ul.closest(".mb-parked"));
@@ -867,7 +867,7 @@ test("Z3 (the Rukovodilac, 2026-11-18): a numbered zone column and the variable 
   state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
   await actions.loadBoardSection(render);
   const row = [...content.querySelectorAll(".mb-col-item")].find((li) => li.textContent.includes("Power zone 4 distance"));
-  assert.match(row.querySelector(".mb-zone-range").textContent, /^Expected 60–75 W\/kg, confirm with Compare with GPEXE$/);
+  assert.match(row.querySelector(".mb-zone-range").textContent, /^Expected 60–75 W\/kg \(not confirmed\)$/);
 
   asUser("club");
   overrides = [];

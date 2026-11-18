@@ -112,7 +112,7 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
     const z4 = await pa.page.evaluate(() => [...document.querySelectorAll("[data-sf-inv-row]")]
       .find((row) => row.querySelector(".source-fields-inventory-raw")?.textContent.trim() === "athletesessionpowerzone_distance_4")
       ?.querySelector(".source-fields-inventory-facts")?.textContent || "");
-    assert.match(z4, /^expected 60–75 W\/kg, confirm with Compare with GPEXE · /, z4);
+    assert.match(z4, /^Expected 60–75 W\/kg · Whole session · /, z4);
     assert.match(await pa.page.locator(".source-fields-inventory").innerText(), /Power zone limits of the team: 20 · 25 · 60 · 75 W\/kg, from the newest saved session \(\d{2}\.\d{2}\.\d{4}\)\./);
     await pa.page.click(".source-fields-inventory-thresholds summary");
     await pa.page.click('[data-action="source-fields-inv-thresholds"]');

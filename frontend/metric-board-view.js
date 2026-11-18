@@ -34,7 +34,7 @@ const forSupport = () => boardContext()?.isPlatformAdmin === true;
 // A numbered zone column's expected range from the session's team limits (sent to a platform admin only, P1); never a fact.
 const zoneRangeLine = (board, key) => {
   const text = expectedRangeText(key, board?.zoneThresholds);
-  return text ? `<small class="mb-zone-range">${escapeHtml(text.charAt(0).toUpperCase() + text.slice(1))}</small>` : "";
+  return text ? `<small class="mb-zone-range">${escapeHtml(text)} (not confirmed)</small>` : "";
 };
 const gpexeTeam = (id) => (forSupport() && id ? ` — linked to GPEXE team ${escapeHtml(id)}` : "");
 
@@ -162,7 +162,7 @@ function parkedHtml(s) {
     return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small></span></div>${tech}</li>`;
   }).join("");
   return `<details class="mb-parked" ${s.parkedOpen ? "open" : ""}>
-    <summary>Zones and thresholds: not available yet (${items.length})</summary>
+    <summary>Zone sets and threshold events: not available yet (${items.length})</summary>
     <p class="muted mb-note">${escapeHtml(sentence)}</p>
     <ul class="mb-list">${rows}</ul>
   </details>`;
@@ -235,6 +235,7 @@ function boardCards(s) {
         <p class="muted mb-note">${escapeHtml(sessionWords(board.session, dateTime))} ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
         <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <span><strong>${name(board.pair.labels[1])}</strong>.</span>
           ${board.pair.count > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-other-athletes" ${busy(s) ? "disabled" : ""}>Other athletes</button>` : ""}</p>
+        ${board.columns.some((c) => expectedRangeText(c.key, board.zoneThresholds)) ? `<p class="muted mb-note">Zone ranges are expected from this session's team zone limits. To confirm one, open Source fields and use “Compare with GPEXE” on that zone.</p>` : ""}
         <ul class="mb-list">${board.columns.filter((c) => !parked(s, c)).map((c) => columnHtml(s, c, drag)).join("")}</ul>
         ${parkedHtml(s)}
       </section>

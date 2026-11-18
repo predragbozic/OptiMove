@@ -245,7 +245,7 @@ section 4.4's lock order (the hide lock), each marked in place.
   - Zones and thresholds (the field has parameters). As built, 2026-11-18: the first wording, "Map zones and thresholds
     in Mappings.", named a path that cannot finish today - J16 refuses to submit a version whose revision is not
     verified, and no document proves these fields' unit and limits. On both boards such a column, unless it is on or
-    placed, leaves the list for one closed group at its end, "Zones and thresholds: not available yet (N)", with one
+    placed, leaves the list for one closed group at its end, "Zone sets and threshold events: not available yet (N)", with one
     wording (`parkedSentence`): "OptiMove cannot yet choose which zone or threshold to use for these." Then the step for
     who is looking: a club's admin "To use one zone, ask OptiMove support to add it as a column of its own."; a platform
     admin "To use one zone, create its numbered GPEXE field in Data configuration > Source fields and confirm it

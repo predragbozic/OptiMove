@@ -34,8 +34,9 @@ export function expectedRange(zone, thresholds) {
   return `${fmt(t[n - 2])}–${fmt(t[n - 1])} ${unit}`;
 }
 
-// The short text beside a zone: "expected 60–75 W/kg, confirm with Compare with GPEXE".
+// The short label beside a zone in a list or on a board: "Expected 60–75 W/kg". The call to confirm it is said once per
+// screen (the UX review: not on every row), with the button name.
 export function expectedRangeText(nameOrKey, thresholds) {
   const range = expectedRange(numberedZoneOf(nameOrKey), thresholds);
-  return range ? `expected ${range}, confirm with Compare with GPEXE` : null;
+  return range ? `Expected ${range}` : null;
 }

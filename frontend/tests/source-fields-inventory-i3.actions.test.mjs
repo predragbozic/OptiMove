@@ -306,14 +306,14 @@ test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zo
   // shows its expected range, always marked expected (the Rukovodilac's order of 2026-11-18). Differing limits: no range.
   const notes = [...content.querySelectorAll(".source-fields-inventory-note")].map((e) => e.textContent.trim());
   assert.deepEqual(notes, [
-    "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). The range beside each zone is expected, not confirmed: Compare with GPEXE confirms it.",
+    "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). The range beside each zone is expected, not confirmed. To confirm it, use “Compare with GPEXE” on that zone.",
     "Speed zone limits differ between teams, so no zone's range is shown.",
   ]);
   const facts = (list) => [...list.querySelectorAll(".source-fields-inventory-facts")].map((e) => e.textContent);
   const [z2, z4, s3] = facts(distance);
-  assert.match(z2, /^expected 20–25 W\/kg, confirm with Compare with GPEXE · /);
-  assert.match(z4, /^expected 60–75 W\/kg, confirm with Compare with GPEXE · /);
-  assert.doesNotMatch(s3, /expected/, "limits that differ between teams give no range");
+  assert.match(z2, /^Expected 20–25 W\/kg · Whole session · /);
+  assert.match(z4, /^Expected 60–75 W\/kg · Whole session · /);
+  assert.doesNotMatch(s3, /Expected/, "limits that differ between teams give no range");
   assert.deepEqual(names(power), ["Metabolic power (W/kg)"]);
   assert.deepEqual(names(other), ["Mystery (no unit from GPEXE)"]);
   assert.doesNotMatch(text(), /furlongs|in distance/, "GPEXE's word is never shown as the unit");
