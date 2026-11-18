@@ -42,7 +42,10 @@ test("no training today: shows the explicit empty state, never an empty card or 
     programs: { rows: [], total: 0 },
   };
   const html = renderAthleteHomeHtml({ data, error: "" });
-  assert.ok(html.includes("No training is assigned for today."));
+  // K2b-1e (the manager, PR #603): it names what it counts - a training plan - so it never contradicts a training event
+  // of the calendar listed below it under Upcoming events.
+  assert.ok(html.includes("No training plan is assigned for today."));
+  assert.ok(!html.includes("No training is assigned for today."));
   assert.ok(!html.includes("Open today's training"), "no open-training button when there is nothing to open");
 });
 

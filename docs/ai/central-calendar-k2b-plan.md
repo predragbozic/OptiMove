@@ -1472,3 +1472,382 @@ clean `1cfaf64`. The manager ordered one small round with no new internal review
 
 All 8 mutations of the round were killed (scratchpad `k2b1d-mutations-r3.mjs`). The earlier known limit — a refresh
 from elsewhere did not read an open panel's details again — is closed by the first row.
+
+## 22. K2b-1e — the athlete's *Upcoming events* on Athlete Home (the manager's GO in 22.7)
+
+D28: the athlete's *Upcoming events* on Athlete Home — 14 days; name, type, day, time; the place with its address and
+note; *Open in maps*. Branch `claude/central-calendar-k2b-1e-3b2784` from `origin/main` `94aab138` (production; the
+migrations end at v76). **Frontend only**: nothing below needs a backend change or a migration.
+
+### 22.1 The data source: the athlete's own `GET /api/calendar` (checked in the code)
+
+- **The read:** `GET /api/calendar?from=<today>&to=<today + 13>&today=<today>&kinds=event`, `today` the device's local
+  date (`localDateIso`; the route takes it within two days of the server's date). Athlete mode is the server's
+  `athlete` workspace (`frontend/app.js:373` sends such a session to `/athlete`), so `resolveCalendarContext`
+  (`backend/src/calendarAccess.js:44-46`) answers her as the athlete; the route ignores filters for her
+  (`backend/src/routes/calendar.js`).
+- **Her scope (D21):** her own targets only — herself, or a team or club she is a member of **on that day**
+  (`calendarScheduleCandidateSql`, athlete branch `calendarAccess.js:190-200`; the per-day decision in `readCalendar`,
+  `backend/src/calendarQuery.js:845-853`). The estimates exclusion of `d4c5e59d` concerns activity participations;
+  `kinds=event` emits no activity card.
+- **Her card, key by key** (`publicCard`, athlete branch `calendarQuery.js:1268-1277`): `key`, `kind`, `date`, `title`,
+  `eventKind`, `eventTypeLabel`, `span { from, to }`, `startTime`, `endTime`, `location`, `place`, `status`,
+  `cancelled`, `teamIds`, `links { eventId }`. The backend pins it in `central-calendar-k2a-events.test.mjs:878-882`
+  and `central-calendar-k2b-event-details.test.mjs:480`. T7 holds: never a detail, a value, notes, a count, a teammate
+  or a type id.
+- **What the list needs, and where it is:**
+
+  | The list needs | On her card |
+  |---|---|
+  | title | `title` |
+  | type word | `eventTypeLabel`; `null` on a moved team's event (D41), then the kind's word from `eventKind` |
+  | day, end day | `date` (the card's day), `span.from` / `span.to` |
+  | time | `startTime`, `endTime` (either may be `null`) |
+  | place | `place`: `{ source: "library", locationId, name, address, note }`, `{ source: "one_off", text }` or `null`; `location` is its one line |
+  | cancelled | `cancelled` (with `status: "cancelled"`) |
+
+  Not there: the type's own icon (K2b-1d2 adds `eventTypeIconKey` to every card), so the list shows the kind's icon.
+- **Cost:** with `kinds=event` the read runs the workspace's teams, the events, their team targets and the per-day
+  target athletes — about four statements. It reads a referenced external or test schedule only when an event refers to
+  one; she folds nothing. 14 days is under the cap of 62. It is one request, in parallel with Home's four existing reads.
+- **The alternative, extending `GET /api/athlete-home`:** it would repeat the calendar's scope rules in a second route,
+  or call `readCalendar` from there. That is a backend change with the security review and a second allowlist to pin,
+  and it gains nothing. **Not recommended.**
+
+### 22.2 What the list shows
+
+- **One row per event.** The answer has one card per day of an event. The list shows each event once (by
+  `links.eventId`), at its first day in the window. Rows are sorted by that day, then the events with a start time by
+  the time, then those without, then the title (as built: the calendar's own day list puts the untimed cards last,
+  under "No time", and since 22.7 Q2 an event without a time is one whose time is not set).
+- **An explicit pick.** The client copies exactly `title`, `eventKind`, `eventTypeLabel`, `date`, `span`,
+  `startTime`, `endTime`, `place`, `location` and `cancelled` into its own row. A field the server might add later
+  never reaches the screen.
+- **A row:**
+  - **the icon:** the kind's (`centralCalendarItemIconKey`, which gives the kind's for a card that is not a manager's).
+    The type's icon is wired with K2b-1d2, not now;
+  - **the title:** its title, else the type word;
+  - **the type word:** `eventTypeLabel`, else the kind's word (`CENTRAL_CALENDAR_EVENT_KIND_LABELS`); not repeated
+    when it equals the title;
+  - **the day:** "Today", "Tomorrow", else the weekday and the date ("Wed 19 Nov");
+  - **the time:** " · 18:00–19:30", " · 18:00" without an end, " · Time not set" without a start (Q2, decided in
+    22.7);
+  - **several days:** "Fri 21 Nov – Sun 23 Nov · 09:00–17:00", with "Today" / "Tomorrow" at either end. An event that
+    began before today is listed today with its real first date ("Mon 17 Nov – Thu 20 Nov");
+  - **the place:** the K2b-1d panel's `renderCentralCalendarEventPlaceHtml`, reused:
+    - a library place: its name, its address with *Open in maps*, and its note. The link is built in the browser from
+      the address alone (`calendarSettingsMapsUrl`), opens a new tab with `rel="noopener noreferrer"`, and is 44 px
+      high (`.cc-maps`);
+    - a library place without an address: no link;
+    - a one-off place: its text, no link;
+    - no place: no line.
+- **A cancelled event is shown, and marked** (Q1). It stays in its place with "Cancelled" (a glyph and the word, never
+  the colour alone), its title muted, and no place or *Open in maps*. She may have planned around it; a row that
+  silently disappears says less.
+- **How many:** the first 5 rows. With more, one button, "Show N more", opens the rest in place (no request), then
+  "Show fewer". **No "See all":** the athlete shell has no events calendar (`athlete.html`'s *Weekly plan* is the
+  training calendar), so there is nothing to link to.
+- **The heading:** the eyebrow "Upcoming events" (as "This week"), with "Next 14 days" beside it.
+- **The states** (the Interaction principles: one sentence, one next step, no codes):
+  - loading: "Loading events…" inside the section only; the rest of Home is not held up;
+  - empty: "No events in the next 14 days.";
+  - error: "Events could not be loaded." and one *Try again* (one new request);
+  - a lost sign-in (401): the sentence without *Try again* (K2b-1d's D11);
+  - 403 (no athlete profile, no workspace): the section is not shown.
+
+### 22.3 Where on Athlete Home, and how it behaves
+
+- **Place:** after *This week* (the week strip), before the *My training* entry and the quick actions (Q4). Today's
+  training comes first; the events look ahead.
+- **Phones first** (360 / 375 / 390 px): one column; every line wraps (`overflow-wrap: anywhere`, so an unbroken word of
+  60 characters stays inside); *Open in maps*, *Show N more* and *Try again* are at least 44 px; no input, so the 16 px
+  rule does not arise; no horizontal scroll.
+- **Modules** (the frontend pattern):
+  - `frontend/athlete-home-events-data.js`: the read, the cache and the pick and grouping;
+  - `-view.js`: the template;
+  - `-actions.js`: *Try again*, *Show N more*, *Show fewer*;
+  - the state slice `state.athleteHomeEvents`.
+
+  In `app.js` the read starts in `loadAthleteHome`'s `Promise.all` beside the other three and paints through
+  `renderAthleteHomeFromCache` (which paints only while Home is the active tab). Two `data-action`s; **no `data-tab`**.
+- **The cache:** `loadCachedView`, namespace `athlete-home-events`, key `[...currentUserWorkspaceContextParts(),
+  today]`. The range follows from `today`, and the date in the key makes a tab left open past midnight read again. The
+  default 30 s TTL: Home entered again within it paints from the cache. The `athlete-home` entry of
+  `menu-cache-policy.js` names the second namespace. No write of hers changes an event; a coach's change in another
+  browser is covered by the TTL.
+- **A late answer never paints a stale list:**
+  - `getCurrentContextKey` (account, workspace, date) drops an answer of another context;
+  - a module generation, bumped by `resetAthleteHomeEvents()` in `onWorkspaceChanged`, drops an answer that started
+    before the reset;
+  - sign-out reloads the page after `clearAllViewCache()`, as today.
+
+### 22.4 Housekeeping in the same pull request
+
+- **(a) `central-calendar-k2b-settings` tests 1a / 1b: already fixed on `main`.** `53be7089` ("Make migration rehearsal
+  tests portable", 2026-11-12) builds the suite's world through v51 only (`calendarMigrations({ upTo: V51 })`), builds
+  1b's world before v51 the same way, and removed the two known failures from `backend/tests/support/test-manifest.json`.
+  So the v51 post-check's "the last migration" checks hold by construction; the v51-specific checks are unchanged. The
+  calendar's code is still tested on today's schema by the suites that build every migration
+  (`central-calendar-k2b-event-details`, `organization-team-*`, `organization-clubs-summary`).
+
+  **Proposal:** no code change; the suite is run once on this branch, and `docs/ai/CURRENT_STATE.md` is corrected (the
+  LO-2 record's sentence gains "fixed since by `53be7089`"). The alternative is the settings suite on every migration:
+  1a would assert v51 recorded once and the world's own last migration instead of v51 being last. The only later change
+  under `calendar.*` is v54's `CREATE OR REPLACE` of `calendar.lock_event_writer`, so the counts of block 2 should hold;
+  that would be checked by the run. Q6.
+- **(b) `docs/ai/CURRENT_STATE.md`:**
+  - the K2b-1d line: merged as `63019ab` (PR #349, 2026-11-03 12:13 UTC) and deployed 2026-11-03, per the stream
+    manager;
+  - a K2b-1e line (the pull request, open);
+  - "Next by the plan": K2b-1d2, then K2b-2.
+
+### 22.5 Tests and checks
+
+- **A new `frontend/tests/athlete-home-events.actions.test.mjs`**, through the real loader, handlers and template with a
+  fake fetch that keeps her card's shape:
+  1. **The request:** exactly one `GET /api/calendar` with `from` = today, `to` = today + 13, `today`, `kinds=event`.
+  2. **The allowlist:** a fake card that also carries `notes`, `details`, `athletes` with a teammate's name,
+     `eventTypeId`, `canManage` and a value → none of them in the HTML, and the row's keys are exactly the pick.
+  3. **One row per event:** a three-day event (three cards) is one row with its span; an event that began before
+     today; the order.
+  4. **The words:** Today, Tomorrow, a weekday; a time, a start only, Time not set.
+  5. **The place:**
+     - a library place with an address → the link's `href` is exactly the maps URL of the encoded address, with
+       `target="_blank"` and `rel="noopener noreferrer"`;
+     - without an address → no link;
+     - a one-off text → no link;
+     - `null` → nothing;
+     - markup in a title, a name, an address or a note is text.
+  6. **Cancelled:** the glyph and the word, no *Open in maps*.
+  7. **The states:**
+     - loading;
+     - empty;
+     - an error with *Try again* (one new request);
+     - a 401 without *Try again*;
+     - a 403: the section is not shown.
+  8. **The limit:** 5 rows, *Show N more* and *Show fewer*, with no request.
+  9. **The cache and late answers:**
+     - Home entered again within the TTL → no request;
+     - after `resetAthleteHomeEvents()`, an answer that started before it is neither painted nor kept;
+     - an answer for another context is dropped;
+     - a new date reads again.
+  10. **Home:** the section comes after *This week*; nothing on Home carries `data-tab`.
+- **Mutations** on the key guards, about eight: the pick dropped (the card rendered as it came), no limit, a maps link
+  for a one-off place, a maps link on a cancelled event, no generation check, `to` = today + 14, `kinds` left out, and
+  *Try again* after a 401.
+- **Reviewers:** `code-reviewer`, `mobile-qa` and `ux-design-reviewer` (the Interaction principles), each with the full
+  packet of `CLAUDE.md`.
+- **The browser check** at 1280 / 390 / 375 / 360 px, as the athlete, with:
+  - a library place with an address and a note;
+  - a one-off place;
+  - a multi-day event;
+  - a cancelled event;
+  - an event today;
+  - more than five events.
+
+  Preferably on the branch's real server on a disposable `optimove_tests_*` database; otherwise a static harness with
+  an in-page fake of `/api/calendar` and `/api/athlete-home`, as the earlier slices did.
+- **The Frontend PR gate:** the full `--preset frontend-fast` on the head and on a clean `origin/main`, the build and
+  `git diff --check`.
+
+### 22.6 Open questions for the manager
+
+- **Q1 — a cancelled event:** shown and marked, with no place (recommended), or left out?
+- **Q2 — an event without a time:** "All day" (the brief's word, recommended), or the calendar's "No time"?
+- **Q3 — the team on the row** for an athlete in two teams (the card's `teamIds` and the answer's `teams` have it):
+  recommended not now (D28's list), recorded as a follow-up.
+- **Q4 — the place on Home:** after *This week* (recommended), or right after *Today's training*?
+- **Q5 — the limit:** 5 rows with *Show N more* (recommended), or every event of the 14 days.
+- **Q6 — housekeeping (a):** accept `53be7089` as the fix and correct the record (recommended), or move the settings
+  suite onto every migration.
+- **T — the database for the checks:** this session's permission check refused reading the main checkout's
+  `backend/.env` for `DATABASE_URL`. It is needed for the 1a / 1b run and for a real-server browser check. Either that
+  read is allowed, or the browser check uses the static harness and the manager runs the backend suite.
+
+### 22.7 The manager's decisions (2026-11-18) — GO for K2b-1e
+
+GO for K2b-1e as section 22 plans it, frontend only.
+
+- **Q1:** a cancelled event is shown and marked: a glyph and the word "Cancelled", its title muted, no place and no
+  *Open in maps*.
+- **Q2:** **not** "All day". An event without a time is not necessarily a whole-day event; the coach may simply not have
+  entered the time. The row says " · Time not set". (Checked: nothing in the app words it otherwise. The calendar's "No
+  time" is only the heading of a day's untimed cards, and the event panel shows no time line at all.)
+- **Q3:** no team on the row now; recorded as a later task.
+- **Q4:** the section goes after *This week*.
+- **Q5:** the first 5 rows, then *Show N more* / *Show fewer*, with no new request; no "See all".
+- **Q6:** `53be7089` is accepted as the fix of 1a / 1b. No code change; only the record in `docs/ai/CURRENT_STATE.md` is
+  corrected. The manager runs the `central-calendar-k2b-settings` suite on this branch.
+- **T:** no extra right to read `backend/.env`. The browser check runs on a **static harness** with in-page fakes of
+  `/api/calendar` and `/api/athlete-home`, as the earlier slices did, at 1280 / 390 / 375 / 360 px, with every case of
+  22.5: a library place with an address and a note, a one-off place, a multi-day event, a cancelled event, an event
+  today, more than five events. The report says plainly that the check ran on the harness, not on the real server.
+- **The manager's decisions on the open points of PR #603 (2026-11-18, 22.9):**
+  - *Today's training* says "No training plan is assigned for today.", so the card never contradicts a training event
+    listed under *Upcoming events*;
+  - a *Day off* without a time shows no time part, not even "Time not set"; every other kind keeps "Time not set". (The
+    order named the kind `rest`; the calendar has no such kind. The *Day off* type's kind is `day_off`, v49 `:110`, so
+    the rule is built for `day_off`.);
+  - a date range in the new list uses the en dash with a space on each side; the calendar's toolbar is not touched here.
+    A time range keeps the calendar's unspaced "18:00–19:30";
+  - the "✕" stays;
+  - the empty sentence stays, also for a club that does not use the calendar, so the athlete learns where events
+    appear;
+  - the files that fail on the head and on a clean `main` alike are named in the pull request with their counts and,
+    where known, their cause; they are not regressions.
+- **The reviewers' rules relayed by the manager (2026-11-18):** one branch and one **draft** pull request; the full head
+  of 40 characters in the report; a head sent for review never changes; no migration (a calendar migration would be v77
+  or later, on the owner's order naming it); the Imports, Source fields and mapping screens and
+  `backend/src/sourceMetric*`, `sourceField*` and `gpexe*` are not touched; invented names only.
+
+### 22.8 As built
+
+- **Modules:** `frontend/athlete-home-events-data.js` (the read, the cache, the pick and the rows),
+  `-view.js` (the section) and `-actions.js` (*Try again*, *Show N more* / *Show fewer*); `state.athleteHomeEvents`
+  (`frontend/state.js`); `app.js` starts the read in `loadAthleteHome`'s `Promise.all`, dispatches the two actions
+  behind their prefix and resets the slice in `onWorkspaceChanged`; `athlete-home.js` draws the section after *This
+  week*; `styles.css` the `.athlete-home-event*` block; `menu-cache-policy.js` names the second namespace. **No backend
+  change, no migration.**
+- **The read:** `GET /api/calendar?from&to&today&kinds=event`, `today` the device's date and `to` 13 days later;
+  `loadCachedView` under `athlete-home-events`, keyed by account, workspace and that date. An answer is applied only by
+  the newest read (a generation, bumped by every read and by `resetAthleteHomeEvents()`), only for the account and
+  workspace it was asked for, and only if the namespace was not cleared meanwhile.
+- **The pick:** a row holds exactly `eventId, title, eventKind, eventTypeLabel, day, from, to, startTime, endTime,
+  place, cancelled`; a library place keeps `name, address, note` (not its id), and one with none of them is no place; a
+  one-off place keeps its text.
+- **The row:** the kind's icon; the title (else the type word); "Match · Today · 18:00–19:30" (the type word left out
+  when it is the title; "Time not set" without a start, 22.7 Q2, and no time part for a *Day off* without one); several
+  days "Tue 17 Nov – Tomorrow" (the en dash with a space on each side); the place from
+  the K2b-1d panel's helper; a cancelled event the calendar's grey pill "✕ Cancelled" (the glyph `aria-hidden`), its
+  title and icon muted, no place. The order: the first day in the window, the timed events by time, then the untimed
+  ones, then the title.
+- **The states:** "Loading events…"; "No events in the next 14 days."; "Events could not be loaded." with *Try again*;
+  a 401 "Sign in again to see your events." without it; a 403 hides the section, and the next entry into Home keeps it
+  hidden while it asks again.
+- **Show N more / Show fewer:** in place, `aria-expanded` and `aria-controls`, the focus kept on the button; every entry
+  into Home starts with the first 5.
+- **After the review round (22.9):** the day first ("Today · 18:00–19:30 · Match"); the Cancelled mark right under the
+  title, 13 px, its own colours on Home (the calendar declares `--cc-cancelled*` only on `.central-calendar`), the title
+  struck through as on the calendar's card; the error said with `role="alert"` and the focus on the section's heading
+  after *Try again*; `role="list"` on the list; the click dispatch gated by its prefix; a 403 kept hidden on the next
+  entry; a library place with nothing to show draws no line.
+
+### 22.9 The internal review round (on `c1f99f5c`)
+
+`code-reviewer`, `mobile-qa` and `ux-design-reviewer`, each with the full packet. `code-reviewer` READY WITH
+NON-BLOCKING NOTES (three LOW); `mobile-qa` READY WITH NON-BLOCKING NOTES (one MEDIUM, two LOW); `ux-design-reviewer`
+READY (two MEDIUM, five LOW, three NIT). No BLOCKER or HIGH, so no narrow re-review (`CLAUDE.md`, the Definition of
+done).
+
+| Finding | Reviewer, severity | Correction | Test | Status |
+|---|---|---|---|---|
+| The Cancelled pill had no colours on Home: `--cc-cancelled*` live only on `.central-calendar` | mobile, UX — MEDIUM | the two variables on `.athlete-home-events`, a darker text (`#4b5565` on `#eceff3`), 13 px; the title struck through; the mark right under the title | E6 (M25); the colours and the size in the browser check | Fixed |
+| "No training is assigned for today." above a calendar training event on the same Home | UX — MEDIUM | the manager chose the proposed "No training plan is assigned for today." (22.7) | `athlete-home.render` (M28) | Fixed |
+| An ungated `await` in the click dispatch before the synchronous handlers | code — LOW | gated by `type?.startsWith("athlete-home-events-")` | E10 (M19) | Fixed |
+| 22.2 said "an event without a time first" | code, UX — LOW | corrected to the order built | — | Fixed |
+| A 403 flashed "Loading events…" on the next entry into Home | code — LOW | kept hidden for the same context | E7b (M20) | Fixed |
+| The type word before the day made the day hard to scan | UX — LOW | the day first | E3, E4 (M22) | Fixed |
+| The error was not announced, and *Try again* lost the focus | UX — LOW | `role="alert"`; the focus on the heading while it reads and after | E7 (M23, M24) | Fixed |
+| A library place with name, address and note all empty drew an empty line | code (unverified) | no place | E5 (M21) | Fixed |
+| `list-style: none` drops the list semantics in Safari | UX — NIT | `role="list"` | E7 | Fixed |
+| The 44 px *Open in maps* makes the address line tall | mobile — LOW | kept (the K2b-1d panel's link) | browser check | Accepted |
+| "Time not set" on a *Day off* | UX — LOW | the manager: no time part for a *Day off* (`day_off`) without a time | E4b (M26) | Fixed |
+| The range's en dash against the calendar toolbar's " - " | UX — NIT | the manager: the en dash with a space on each side in the new list; the toolbar is not touched | E4b (M27) | Fixed |
+| Today's events that are over still listed | UX — NIT | kept: the window is whole days, as in the calendar | — | Accepted |
+| The "✕" glyph can read as "remove" | UX — note | the manager: it stays | — | Decided |
+| A club that does not use the calendar always shows the empty sentence | UX — note | the manager: it stays, so the athlete learns where events appear | — | Decided |
+
+All 31 mutations are killed. They are in `k2b1e-mutations.mjs` in the session's scratchpad:
+- M1–M18, the first round;
+- M19–M21 for the code review and M22–M25 for the UX review;
+- M26–M28 for the manager's decisions on PR #603 (the *Day off* rule, the range's dash, the *Today* wording);
+- M29–M31 for the independent review's F1–F3 (below).
+
+M16 first survived and was killed after E3 gained an event on the next morning; M11 was pointed again at the line round
+2 changed and is killed.
+
+**The independent review of PR #603** (on `72516db2`): READY WITH NON-BLOCKING NOTES, with no BLOCKER, HIGH or MEDIUM. Its 36
+scenarios pass, and its 29 mutations are all killed by its suite and this one together. The gate matched a clean `main`.
+Its notes are answered in the last round, which changed tests and documents only:
+
+| Finding | Correction | Test | Status |
+|---|---|---|---|
+| F1 — that the default `today` is the device's local date was not pinned (the mutation "the UTC date" survived) | a test with `TZ=Europe/Belgrade` and the clock at 2026-11-17T23:30Z: `today=2026-11-18`, `to=2026-12-01` | E12 (M29) | Fixed |
+| F2 — a type label with markup on the time line was not pinned (the mutation "the time line unescaped" survived) | a label `<img src=x onerror=…>` makes no element and is shown as it is | E5b (M30) | Fixed |
+| F3 — an older read's late 500 after a newer read's list was not pinned (the mutation without `if (!current()) return;` in `applyError` survived) | read A for 18 Nov in flight, read B for 19 Nov succeeds, A answers 500: B's list stays | E9b (M31) | Fixed |
+| F4 — when Home is drawn again, the error sentence with `role="alert"` can be read out more than once; not checked with a screen reader | **a later task, no change now:** check with VoiceOver and TalkBack, and if so announce it once (for example a live region that stays in place while only its text changes) | — | Recorded |
+| F5 — the record named the earlier head and counts | brought up to date here, in 22.10 and in `docs/ai/CURRENT_STATE.md` | — | Fixed |
+
+The manager confirmed the reading of the *Day off* decision: a *Day off* **with** a time shows it (E4b).
+
+### 22.10 Tests and the browser check (Windows, Node 24.12.0)
+
+**What ran where:**
+- **The final head**, after the last round (tests and documents only):
+  - the new suite `frontend/tests/athlete-home-events.actions.test.mjs`, 16 of 16: the 13 of round 2 (E1–E11, E4b,
+    E7b) and the 3 of the last round (E12, E5b, E9b). They run through the real loader, handlers and templates, with
+    a fake fetch in the athlete card's shape;
+  - the Home render test, 17 of 17;
+  - mutations: 31 of 31 killed (22.9).
+- **`72516db2`, the screen code of the final head:** the Frontend PR gate, run again on this head and on a clean `main`
+  (below).
+- **`2e570ee5`:** the browser check on the harness and the first gate. After it only texts changed: the *Day off* time
+  line, the *Today's training* sentence and the range's dash, each pinned by a test. The harness was not run again.
+
+**On `2e570ee5`:**
+- **The Frontend PR gate:** the whole `--preset frontend-fast` on the head and on a clean detached `origin/main`
+  `94aab138` worktree, on the same machine:
+
+  | | Files | pass | known-fail | fail | Tests passed |
+  |---|---|---|---|---|---|
+  | head `2e570ee5` | 255 | 232 | 4 | 19 | 3474 of 3521 |
+  | clean `94aab138` | 254 | 231 | 4 | 19 | 3462 of 3509 |
+  | head `72516db2` (run again) | 255 | 232 | 4 | 19 | 3475 of 3522 |
+  | clean `94aab138` (run again) | 254 | 231 | 4 | 19 | 3462 of 3509 |
+
+  The pull request names the 19 files with their counts on both and their causes.
+
+  - No file fails on the head that passes on `main`. The one file more is the new suite, 12/0.
+  - The same 19 files fail on both with identical per-file counts: `athlete-program-navigation-icons`, `gpexe-period-p4`,
+    `status-dot` and sixteen `om-*` suites.
+  - Three were read: their regexes expect `\n` where this Windows checkout (`core.autocrlf=true`) has `\r\n`. The
+    others' causes are not read.
+- **The build** passed; `git diff --check origin/main..HEAD` is clean.
+- **The backend:** no backend file changed. The manager runs `central-calendar-k2b-settings` on the branch (22.7, Q6).
+- **The browser check, on a static harness, not the real server** (22.7, T):
+  - **What ran:** the branch's real `athlete-home.js` and the three new modules, in the athlete shell's layout with the
+    app's `styles.css`. `/api/athlete-home` and `/api/calendar` were faked in the page with invented data.
+  - **The cases:**
+    - two events today, one of them without a time;
+    - a library place with an address and a note;
+    - a library place without an address;
+    - two one-off places;
+    - a travel event that began yesterday and ends tomorrow;
+    - a three-day camp;
+    - a cancelled match with a library place;
+    - a 70-character unbroken title and one-off text;
+    - an event whose type has no label;
+    - a *Day off*;
+    - nine events in all.
+  - **At 1280, 390, 375 and 360 px:**
+    - the section sits after *This week* and before the quick actions;
+    - 5 rows and "Show 4 more", then 9 and "Show fewer", with the focus on that button;
+    - one calendar request in all;
+    - no element outside the section and no horizontal scroll;
+    - *Open in maps*, *Show N more*, *Show fewer* and *Try again* all at least 44 px high;
+    - the links' `href` is the encoded address, with `target="_blank"` and `rel="noopener noreferrer"`;
+    - the long words wrap inside the row;
+    - the Cancelled pill is `#4b5565` on `#eceff3` at 13 px, with the title struck through and no place.
+
+    The section is 616 px tall folded at 390 px, and 634 px at 360 px.
+  - **The states at 375 px:**
+    - "Loading events…" (`role="status"`);
+    - "No events in the next 14 days." with no button;
+    - "Events could not be loaded." (`role="alert"`) with *Try again* (86 × 44). A real click sent one request and
+      listed the rows, and the focus was on the section's heading;
+    - a 401: "Sign in again to see your events." with no button;
+    - a 403: no section, with Home's other cards in place.
+- **Not checked:**
+  - a physical phone (the owner reviews on one);
+  - the real server and database (no `DATABASE_URL` in this session, 22.7 T);
+  - VoiceOver and TalkBack.

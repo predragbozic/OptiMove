@@ -3,6 +3,7 @@ import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { formatDashboardValue as formatValue, renderDashboardMetricTable } from "./training-load-dashboard-table.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
+import { dashboardGroupLabels } from "./training-load-analysis-group-labels.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
@@ -459,22 +460,10 @@ function safeAthleteName(id) {
   const name = state.trainingLoad.orgPickerData?.athletes?.find(athlete => String(athlete.id).toLowerCase() === String(id).toLowerCase())?.name;
   return name && !uuidPattern.test(name) ? name : "Athlete name unavailable";
 }
-function safeTableBucket(row, labels, groupBy) {
-  const bucket = row.identity.bucketKey;
-  if (bucket && row.identity.athleteId && String(bucket).toLowerCase() === String(row.identity.athleteId).toLowerCase()) return "";
-  if (uuidPattern.test(String(bucket)) || /[{}\[\]]/.test(String(bucket))) {
-    if (!labels.has(bucket)) labels.set(bucket, labels.size + 1);
-    const kind = groupBy === "session" ? "Session" : groupBy === "component" ? "Component" : "Group";
-    return kind + " " + labels.get(bucket);
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(bucket ?? "")) return formatDate(bucket);
-  return typeof bucket === "string" && !/[{}\[\]]/.test(bucket) ? bucket : "";
-}
 function safeTableValue(value, model) {
   return value !== null && typeof value === "object" || uuidPattern.test(String(value)) ? "Unavailable" : formatValue(value, model);
 }
-function renderTableHtml(model) {
-  const bucketLabels = new Map();
+function renderTableHtml(model, groupLabels = dashboardGroupLabels(model)) {
   if (!model.series.length) return `<p class="muted">Add series to build a table.</p>`;
   return `
     <div class="tl-analysis-table-wrap" role="region" aria-label="${escapeAttr(model.title || "Metric")} values" tabindex="0">
@@ -491,7 +480,7 @@ function renderTableHtml(model) {
             return rows.map((row) => `
               <tr>
                 <td>${escapeHtml(label)}</td>
-                <td>${escapeHtml([safeTableBucket(row, bucketLabels, model.groupBy), safeAthleteName(row.identity.athleteId)].filter(Boolean).join(" · "))}</td>
+                <td>${escapeHtml([groupLabels.get(row.identity.bucketKey ?? ""), safeAthleteName(row.identity.athleteId)].filter(Boolean).join(" · "))}</td>
                 <td>${row.status === "value" ? escapeHtml(safeTableValue(row.value, model)) : "-"}</td>
                 <td>${escapeHtml(uuidPattern.test(String(row.identity.unit)) ? "" : row.identity.unit || "")}</td>
                 <td>${row.status === "value" ? "" : escapeHtml(displayStatusLabel(row.status, row.reasons))}</td>
@@ -505,14 +494,15 @@ function renderTableHtml(model) {
 }
 
 function renderChartHtml(model) {
+  const groupLabels = dashboardGroupLabels(model);
   if (!model.series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
   const diagnostics = model.series.flatMap(series => series.current.filter(row => row.chartStatus !== "value").map(row => renderDisplayStatusHtml(row.chartStatus, row.reasons)));
   return `
-    ${renderDashboardChartPlots(model, seriesLabel, row => safeAthleteName(row.identity.athleteId))}
+    ${renderDashboardChartPlots(model, seriesLabel, row => safeAthleteName(row.identity.athleteId), groupLabels)}
     ${diagnostics.join("")}
     <details class="tl-analysis-chart-values" open>
       <summary>Values and status</summary>
-      ${renderTableHtml(model)}
+      ${renderTableHtml(model, groupLabels)}
     </details>
   `;
 }

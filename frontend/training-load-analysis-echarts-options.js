@@ -1,15 +1,8 @@
-import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
+import { escapeAttr, escapeHtml } from "./utils.js";
 
-function chartBucketLabel(key, row, index, rowContext) {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(key ?? "")) return formatDate(key);
-  if (/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}|[{}\[\]]/i.test(String(key))) {
-    return row?.identity.athleteId && String(key).toLowerCase() === String(row.identity.athleteId).toLowerCase()
-      ? rowContext(row) : `Group ${index + 1}`;
-  }
-  return key ?? "";
-}
+import { dashboardGroupLabels } from "./training-load-analysis-group-labels.js";
 
-export function dashboardChartPlots(model, labelForSeries, rowContext) {
+export function dashboardChartPlots(model, labelForSeries, rowContext, groupLabels = dashboardGroupLabels(model)) {
   if (model.status !== "ready" || !["line_chart", "bar_chart"].includes(model.widgetType)) return [];
   const plots = [];
   const precision = model.config.effective.numberFormat.maximumFractionDigits;
@@ -35,7 +28,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
         grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
         legend: { show: model.config.effective.legend.visible, type: "scroll", top: 4 },
         tooltip: { trigger: "axis", renderMode: "richText", confine: true },
-        xAxis: { type: "category", data: keys.map((key, index) => chartBucketLabel(key, series.chartGroups.flatMap(group => group.rows).find(row => row.identity.bucketKey === key), index, rowContext)), axisLabel: { hideOverlap: true } },
+        xAxis: { type: "category", data: keys.map(key => groupLabels.get(key) || rowContext(series.chartGroups.flatMap(group => group.rows).find(row => row.identity.bucketKey === key))), axisLabel: { hideOverlap: true } },
         yAxis: { type: "value", name: series.chartGroups[0].identity.unit || "" },
         series: series.chartGroups.map((group, index) => {
           const rows = new Map(group.rows.map(row => [row.identity.bucketKey, row]));
@@ -62,7 +55,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
           grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
           legend: { show: model.config.effective.legend.visible, type: "scroll", left: 12, right: 12, top: 4 },
           tooltip: { trigger: "axis", renderMode: "richText", confine: true },
-          xAxis: { type: "category", data: rows.map((row, index) => chartBucketLabel(row.identity.bucketKey, row, index, rowContext)), axisLabel: { hideOverlap: true } },
+          xAxis: { type: "category", data: rows.map(row => groupLabels.get(row.identity.bucketKey ?? "") || rowContext(row)), axisLabel: { hideOverlap: true } },
           yAxis: { type: "value", name: unit, nameLocation: "middle", nameGap: 42 },
           series: [{
             name,
@@ -84,8 +77,8 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
   return plots;
 }
 
-export function renderDashboardChartPlots(model, labelForSeries, rowContext) {
-  return dashboardChartPlots(model, labelForSeries, rowContext).map(plot => `
+export function renderDashboardChartPlots(model, labelForSeries, rowContext, groupLabels = dashboardGroupLabels(model)) {
+  return dashboardChartPlots(model, labelForSeries, rowContext, groupLabels).map(plot => `
     <figure class="tl-analysis-plot">
       <figcaption>${escapeHtml(plot.caption)}</figcaption>
       <optimove-dashboard-chart data-chart="${escapeAttr(JSON.stringify(plot))}">
