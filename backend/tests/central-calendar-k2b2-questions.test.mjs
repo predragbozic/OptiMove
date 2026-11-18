@@ -1157,3 +1157,34 @@ test("29. M2: ending a WELLNESS question takes the day key of its window (remove
     assert.ok(key >= 0 && key < firstWrite, `${op}: the day key before the first write (${key}, ${firstWrite})`);
   }
 });
+
+test("30. a Day off that is cancelled or moved takes the day keys of its old span before the first write", async () => {
+  const t = await freshTeam("oldspan", 1);
+  const d1 = addDays(TODAY, 12);
+  const d2 = addDays(TODAY, 13);
+  const d3 = addDays(TODAY, 15);
+  for (const op of ["cancel", "move"]) {
+    const ev = await teamEvent(t, { kind: "day_off", title: `Rest ${op}`, day: d1, endDay: d2, questions: [] });
+    const calls = [];
+    eventHooks.beforeLocks = async ({ client }) => {
+      const original = client.query.bind(client);
+      client.query = (...args) => {
+        const text = typeof args[0] === "string" ? args[0] : args[0]?.text || "";
+        calls.push({ text, params: Array.isArray(args[1]) ? args[1] : args[0]?.values || [] });
+        return original(...args);
+      };
+    };
+    try {
+      const res = op === "cancel"
+        ? await api(`/api/calendar/events/${ev.id}/cancel`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1 } })
+        : await api(`/api/calendar/events/${ev.id}`, { method: "PATCH", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, day: d3, endDay: d3 } });
+      assert.equal(res.status, 200, res.text);
+    } finally {
+      delete eventHooks.beforeLocks;
+    }
+    const firstWrite = calls.findIndex((c) => /^\s*(insert|update|delete)\b/i.test(c.text));
+    const keyedDays = calls.slice(0, firstWrite).filter((c) => /wellness_day_key/.test(c.text)).map((c) => String(c.params[1]));
+    for (const day of [d1, d2]) assert.ok(keyedDays.includes(day), `${op}: the old day ${day} is keyed before the first write (${keyedDays})`);
+    if (op === "move") assert.ok(keyedDays.includes(d3), "move: the new day is keyed too");
+  }
+});

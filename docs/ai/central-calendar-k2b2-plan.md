@@ -683,7 +683,9 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
     COMMIT, the materialization waiting on the key): no `40P01`. Mutations R1 (event row back to `FOR UPDATE`) and R2
     (questions back to `FOR UPDATE`) fail it.
   - **Also closed (found while writing this):** cancelling a Day off, or moving its days, now takes the exclusive day
-    keys of its old span, so a materialization never skips on a Day off that is being cancelled at that moment.
+    keys of its old span (a type change from Day off too), so a materialization never skips on a Day off that is being
+    cancelled or moved at that moment. Test 30 records the keyed days before the first write; mutations R18 (cancel)
+    and R19 (the move's old span) fail it.
 - **H2, two RPE channels.** `PATCH` with `externalScheduleId` (another schedule or `null`) while an RPE question is
   live answers `409 rpe_from_question` ("This event already asks athletes for RPE. Remove that question first.");
   the database twin `calendar.events_rpe_question_link` (a `BEFORE UPDATE` trigger on `calendar.events`) refuses an
@@ -719,7 +721,8 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
 - While the switch is off, `remove_question` keeps working for the event's writers; ask and move stay 404 (test 28,
   mutation R10).
 - A Day off for a past day cancels only assignments whose window has not closed (`closes_at > now()`); a past day
-  stays missed (test 28, mutation R11).
+  stays missed (test 28). The filter sits in the candidate lock and again in the cancel: R11 (the cancel's filter
+  only) is equivalent while the candidate lock filters; R11b (both removed) fails test 28.
 - Recorded with no code: deviation 4 (a change of targets is a move, refused once answered); notifications go to the
   audience known at ask time (a later joiner is asked in the app but not notified); a PATCH of `skip_days_off` takes no
   day key.

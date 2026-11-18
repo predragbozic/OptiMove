@@ -1,7 +1,7 @@
 # Runbook — migration v81: Ask athletes and "Skip days off" (K2b-2a-1)
 
 File: `migrations_v2/202611191000_calendar_v81_athlete_questions.sql` (sha256 at the time of writing
-`8fca6f4922be3d9b505818f09c870d28ccb23ace1152b2fdc02f0861f8bc178a`; the pull request names the final one). Plan: `docs/ai/central-calendar-k2b2-plan.md`, section 9.1 and
+`0397868e95d992f699b99f4052fc0bace112335e271b8f7f1bf687ac8676cb52`; the pull request names the final one). Plan: `docs/ai/central-calendar-k2b2-plan.md`, section 9.1 and
 the manager's GO 9.1.13. Scripts beside this file: `calendar-questions-v81-preflight.sql`,
 `calendar-questions-v81-postcheck.sql`, `calendar-questions-v81-rollback.sql`.
 
@@ -12,6 +12,12 @@ the manager's GO 9.1.13. Scripts beside this file: `calendar-questions-v81-prefl
   schedule), `question_postponements` (the athlete's *Later*, append-only, its own request record),
   `question_assignment_skips` (a WELLNESS assignment made or turned `cancelled` because a Day off or an event's
   own WELLNESS covers the day).
+- **New functions besides the tables' guards:** `calendar.athlete_member_of_owner_on_day` (an athlete target is
+  asked only while she is a member of the event's owner club or team on the window's day; review round 1, M1) and
+  the trigger `calendar.events_rpe_question_link` on `calendar.events` (an event's RPE schedule changes only while no
+  RPE question is live; review round 1, H2).
+- **Dependency check:** the first `do` block refuses unless its eight dependencies are recorded by name with the
+  repository's checksum.
 - **New columns:** `calendar.event_types.default_questions` (null = derived from `default_expects`),
   `tests.test_schedules.skip_days_off` (default false; true only for a daily schedule),
   `calendar.settings_changes.subject_club_id` (the switch's change rows).

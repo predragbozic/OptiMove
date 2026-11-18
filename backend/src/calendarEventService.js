@@ -974,7 +974,12 @@ export async function updateEvent(ctx, eventId, body) {
         extIdSentInBody: "externalScheduleId" in f && Boolean(f.externalScheduleId),
       });
       const dayOffSpan = kind === "day_off" && (daysMoved || targetsMoved || typeChanged) ? { from: next.day, to: next.endDay || next.day } : null;
-      dayOffCandidates = await lockDaysAndDayOff(client, { clubId: club0, enabled: state.enabled, wellnessDays: qplan.wellnessDays, dayOffSpan });
+      // Review round 1: a Day off that moves or stops being one also takes the
+      // day keys of its old span, so a materialization of an old day waits
+      // and sees the committed state.
+      const oldDayOffSpan = row.event_kind === "day_off" && (daysMoved || targetsMoved || typeChanged)
+        ? { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) } : null;
+      dayOffCandidates = await lockDaysAndDayOff(client, { clubId: club0, enabled: state.enabled, wellnessDays: qplan.wellnessDays, dayOffSpan, oldDayOffSpan });
     }
     const before = await readEventView(client, ctx, row.id);
     // K2b-1b, finding 6 (option A) and T8: every edit by a manager of the
@@ -1248,7 +1253,10 @@ export async function cancelEvent(ctx, eventId, body) {
     // K2b-2a-1 (plan 3.5): the live questions end with the event, their
     // schedules cancelled; the answers stay. Locked before the first write.
     const qstate = await lockQuestionState(client, { eventId: row.id, clubId: ownerClubOf(owner) });
-    await Q.lockWellnessDays(client, ownerClubOf(owner), qstate.live.filter((q) => q.kind === "wellness").map((q) => Q.dateOnly(q.window_date)));
+    // Review round 1: a cancelled Day off also takes the day keys of its span.
+    const cancelDays = qstate.live.filter((q) => q.kind === "wellness").map((q) => Q.dateOnly(q.window_date));
+    if (row.event_kind === "day_off") cancelDays.push(...Q.daysBetween(dateStr(row.day), dateStr(row.end_day) || dateStr(row.day)));
+    await Q.lockWellnessDays(client, ownerClubOf(owner), cancelDays);
     for (const q of qstate.live) await Q.endQuestion(client, q, ctx.userId, "event_cancelled");
     // A cancelled event is final and takes no link command, so its live
     // links end with it, in the same transaction (K2a-1b): the slots and the
@@ -1911,9 +1919,10 @@ async function applyQuestionsAfterEventWrite(client, ctx, plan, qev, eventId, cl
 // The Day off's lock step (9.1.4 step 6) for a planned day_off event of a club
 // whose switch is on: the club's day keys of its span (with the WELLNESS
 // days), then the open WELLNESS assignments it may cancel.
-async function lockDaysAndDayOff(client, { clubId, enabled, wellnessDays, dayOffSpan }) {
+async function lockDaysAndDayOff(client, { clubId, enabled, wellnessDays, dayOffSpan, oldDayOffSpan = null }) {
   const days = [...wellnessDays];
   if (dayOffSpan && enabled && clubId) days.push(...Q.daysBetween(dayOffSpan.from, dayOffSpan.to));
+  if (oldDayOffSpan && clubId) days.push(...Q.daysBetween(oldDayOffSpan.from, oldDayOffSpan.to));
   await Q.lockWellnessDays(client, clubId, days);
   if (dayOffSpan && enabled && clubId) return Q.lockDayOffCandidates(client, clubId, dayOffSpan.from, dayOffSpan.to);
   return [];
