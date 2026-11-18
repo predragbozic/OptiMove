@@ -292,3 +292,29 @@ for (const group of ["session", "component", "cohort"]) test(group + " buckets a
   const kind = group === "session" ? "Session" : group === "component" ? "Component" : "Group";
   assert.equal(cells[0], kind + " 1"); assert.equal(cells[1], kind + " 2"); assert.ok(cells[2].startsWith(kind + " 1"));
 });
+
+for (const groupBy of ["session", "component", "cohort"]) test(groupBy + " labels match across every plot and table despite reversed series order and gaps", () => {
+  const first = "11911111-1111-4111-8111-111111111111", second = "22922222-2222-4222-8222-222222222222";
+  const a = setup("bar_chart", [row(null, { bucketKey: first }), row(2, { bucketKey: second })]);
+  a.widgets[0].group_by = groupBy;
+  a.widgets[0].series.push({ ...a.widgets[0].series[0], id: "series-2" });
+  a.queryResult.widgets[0].series.push({ seriesId: "series-2", status: "ok", data: { current: [row(3, { bucketKey: second }), row(4, { bucketKey: first })] } });
+  const before = structuredClone(a);
+  const body = rendered().querySelector(".tl-analysis-widget");
+  const plots = [...body.querySelectorAll("optimove-dashboard-chart")].map(node => JSON.parse(node.getAttribute("data-chart")));
+  const kind = groupBy === "session" ? "Session" : groupBy === "component" ? "Component" : "Group";
+  assert.deepEqual(plots.map(plot => plot.option.xAxis.data), [[kind + " 1", kind + " 2"], [kind + " 2", kind + " 1"]]);
+  assert.deepEqual([...body.querySelectorAll("tbody tr")].map(tr => tr.children[1].textContent), [kind + " 1", kind + " 2", kind + " 2", kind + " 1"]);
+  assert.deepEqual(a, before);
+  assert.doesNotMatch(body.outerHTML, /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/i);
+});
+test("group numbering includes an earlier row omitted from its chart", () => {
+  const first = "11911111-1111-4111-8111-111111111111", second = "22922222-2222-4222-8222-222222222222";
+  const a = setup("line_chart", [row(null, { athleteId: "missing", bucketKey: first }), row(2, { athleteId: "visible", bucketKey: second })]);
+  a.widgets[0].group_by = "session";
+  const body = rendered().querySelector(".tl-analysis-widget");
+  const plots = [...body.querySelectorAll("optimove-dashboard-chart")].map(node => JSON.parse(node.getAttribute("data-chart")));
+  assert.equal(plots.length, 1);
+  assert.deepEqual(plots[0].option.xAxis.data, ["Session 2"]);
+  assert.ok(body.querySelector("tbody tr:nth-child(2)").children[1].textContent.startsWith("Session 2"));
+});
