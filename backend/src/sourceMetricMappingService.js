@@ -575,7 +575,8 @@ export async function listFields({ ctx, query }) {
 
 // The parts of a canonical version the API reads, never the raw
 // condition_description: numbers as their exact numeric text.
-const CANONICAL_VERSION_COLUMNS = `v.id as version_id, v.version_number, v.value_type, v.unit, (v.calculation is not null) as calculated,
+// v77 (J21): whether the version is calculated, read through to_jsonb so a schema before v77 (no column) reads false.
+const CANONICAL_VERSION_COLUMNS = `v.id as version_id, v.version_number, v.value_type, v.unit, ((to_jsonb(v) ->> 'calculation') is not null) as calculated,
   (v.unit is not null and char_length(v.unit) between 1 and 30) as unit_present,
   coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
   jsonb_typeof(v.condition_description) as cd_type,

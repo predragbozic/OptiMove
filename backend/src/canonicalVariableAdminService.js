@@ -268,21 +268,23 @@ async function usedByCalculation(client, definitionId) {
   return (await client.query(
     `select 1 from training_load.metric_definitions cd
        join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
-      where cv.calculation is not null and $1::uuid = any (training_load.metric_calculation_inputs(cv.calculation)) limit 1`,
+      where (to_jsonb(cv) -> 'calculation' -> 'inputs') ? $1::text limit 1`,
     [definitionId],
   )).rowCount > 0;
 }
 async function checkCalculationInputs(client, ctx, calculation, { unit, levels }) {
   const params = [calculation.inputs];
   const readable = readableSql(ctx, params);
+  // The lock first, in its own statement: a row whose current version changed while this waited is then read again with
+  // the new version (one statement that locks and joins would drop it and answer the wrong code).
+  await client.query(`select d.id from training_load.metric_definitions d where d.id = any ($1::uuid[]) and ${readable} order by d.id for share of d`, params);
   const rows = (await client.query(
-    `select d.id::text as id, d.state, v.value_type, v.unit, (v.calculation is not null) as calculated,
+    `select d.id::text as id, d.state, v.value_type, v.unit, ((to_jsonb(v) ->> 'calculation') is not null) as calculated,
             (select array_agg(c.scope_level::text) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
        from training_load.metric_definitions d
        join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
       where d.id = any ($1::uuid[]) and ${readable}
-      order by d.id
-      for share of d`,
+      order by d.id`,
     params,
   )).rows;
   if (rows.length !== calculation.inputs.length || rows.some((r) => r.state !== "active")) {
@@ -310,11 +312,11 @@ function semanticsKey(s) {
 // Output
 // ---------------------------------------------------------------------------
 // v77 (J21): a version's calculation with its inputs' keys and names, in the
-// formula's order (the ids alone in calculation_ids, for semanticsKey).
-const CALCULATION_COLUMNS = `(case when v.calculation is null then null else
-    (select jsonb_agg(jsonb_build_object('id', i.id, 'key', di.key, 'label', di.label) order by i.ord)
-       from unnest(training_load.metric_calculation_inputs(v.calculation)) with ordinality as i(id, ord)
-       left join training_load.metric_definitions di on di.id = i.id) end) as calculation_inputs`;
+// formula's order. The column is read through to_jsonb, so the backend also runs on a schema before v77 (no column: every
+// variable reads as ordinary), as the suites that pin an earlier schema do; a calculation is written only once v77 exists.
+const CALCULATION_COLUMNS = `(select jsonb_agg(jsonb_build_object('id', i.id, 'key', di.key, 'label', di.label) order by i.ord)
+       from jsonb_array_elements_text(to_jsonb(v) -> 'calculation' -> 'inputs') with ordinality as i(id, ord)
+       left join training_load.metric_definitions di on di.id = i.id::uuid) as calculation_inputs`;
 const VARIABLE_COLUMNS = `d.id, d.key, d.label, d.short_label, d.description, d.icon_url, d.owner_scope, d.owner_club_id, d.state, d.created_at, d.updated_at,
   ${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text, trim_scale(v.max_value)::text as max_text,
   v.created_at as version_created_at, ${CALCULATION_COLUMNS},
@@ -866,11 +868,11 @@ export async function createVariable({ ctx, body }) {
       }
       const versionId = (await client.query(
         `insert into training_load.metric_definition_versions
-           (metric_definition_id, version_number, unit, value_type, min_value, max_value, condition_description, daily_aggregation_method, created_by_user_id,
-            calculation)
-         values ($1, 1, $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7, $8::jsonb) returning id`,
+           (metric_definition_id, version_number, unit, value_type, min_value, max_value, condition_description, daily_aggregation_method, created_by_user_id
+            ${calculation ? ", calculation" : ""})
+         values ($1, 1, $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7 ${calculation ? ", $8::jsonb" : ""}) returning id`,
         [definitionId, semantics.unit, semantics.minValue, semantics.maxValue, conditionParam(semantics.condition),
-          semantics.dailyAggregationMethod, ctx.userId, calculationParam(calculation)],
+          semantics.dailyAggregationMethod, ctx.userId, ...(calculation ? [calculationParam(calculation)] : [])],
       )).rows[0].id;
       await client.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [versionId, definitionId]);
       await insertRequest(client, { ctx, requestKey, requestHash, operation: "variable_create", definitionId, versionId });
@@ -952,12 +954,12 @@ export async function createVariableVersion({ ctx, variableId, body }) {
       const versionId = (await client.query(
         `insert into training_load.metric_definition_versions
            (metric_definition_id, version_number, unit, value_type, min_value, max_value, condition_description, daily_aggregation_method,
-            superseded_reason, created_by_user_id, calculation)
+            superseded_reason, created_by_user_id ${semantics.calculation ? ", calculation" : ""})
          select $1, (select coalesce(max(version_number), 0) + 1 from training_load.metric_definition_versions where metric_definition_id = $1),
-                $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7, $8, $9::jsonb
+                $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7, $8 ${semantics.calculation ? ", $9::jsonb" : ""}
          returning id`,
         [id, semantics.unit, semantics.minValue, semantics.maxValue, conditionParam(semantics.condition),
-          semantics.dailyAggregationMethod, reason, ctx.userId, calculationParam(semantics.calculation)],
+          semantics.dailyAggregationMethod, reason, ctx.userId, ...(semantics.calculation ? [calculationParam(semantics.calculation)] : [])],
       )).rows[0].id;
       await client.query(`update training_load.metric_definitions set current_version_id = $1, updated_at = now() where id = $2`, [versionId, id]);
       await insertRequest(client, { ctx, requestKey, requestHash, operation: "variable_version_create", definitionId: id, versionId });

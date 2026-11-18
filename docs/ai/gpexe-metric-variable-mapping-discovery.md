@@ -4406,8 +4406,10 @@ history, a switch per team.
   day); a new version of an input keeps its unit and type while a calculated variable's current version uses it. The inputs
   are locked `FOR SHARE` in id order and the variable's own row `FOR NO KEY UPDATE`, so a unit change of an input and a
   calculation over it wait for each other (an import's `FOR KEY SHARE` never waits).
-- *Level guard* (`metric_definition_scope_capabilities`): a calculated variable gets only a level all its inputs have; an input
-  keeps a level a calculated variable using it has.
+- *Level guard* (`metric_definition_scope_capabilities`): a calculated variable gets only a level all its inputs have and keeps
+  at least one; an input keeps a level a calculated variable using it has. It locks as the version guard does (the
+  definition's own row `FOR NO KEY UPDATE`, the inputs `FOR SHARE` in id order), so a level change and a calculation over the
+  same variable wait for each other.
 - *Mapping guard* (`source_metric_mapping_versions`): a calculated variable is never a mapping target.
 - *Value guard* (BEFORE INSERT on `metric_values`): a value of a calculated version is `is_derived`, `derived_rollup`,
   `complete`, `computed_by_ref` exactly `{formulaVersionId: <its own version>, inputValueIds: [...]}` with one non-derived
@@ -4428,14 +4430,19 @@ history, a switch per team.
   view of a team workspace says only `calculated: true|false`.
 - A calculated variable is no mapping target (`notReadyCodeOf` → `canonical_calculated`, on `/targets`, a mapping version and
   the variable's `mappingTarget`; the database refusal maps to the same code), takes no column on the drag board
-  (`placeable: false`, `target_not_usable`), is never estimated (`not_estimable`) and is not copied into a club in step 1
-  (`copyUnsupportedReason` → `calculated`).
+  (`placeable: false`, `target_not_usable`; 18-3 test C1) and is not copied into a club in step 1
+  (`copyUnsupportedReason` → `calculated`). The estimates leave it out in PR 2: their list names only variables with values
+  in the session, which a calculated variable first has once PR 2 writes them, so its test goes there.
 
 **Tests:** `backend/tests/calculated-variables-v77.test.mjs` (disposable; the migration's preflight / apply / post-check /
 rollback / re-apply and the rollback's refusal; create, replay, every refusal, a club's calculated variable, a coach's view,
-new versions, the mapping refusal through the API and the database, the version and level guards, the value guard with zero as
-a value, a race of an input's unit change against a calculation over it). Mutations: 12 of the guards, 11 killed; the one
-survivor (the API's `usedByCalculation` pre-check) is equivalent: the database guard answers the same `409`.
+new versions, the mapping refusal through the API and the database, the version and level guards with the shape and the owner
+rule on raw rows, the value guard with zero as a value, and three races: an input's unit change against a calculation over
+it in both orders, and an input's level removal against it) and `source-metric-board-save-18-3.test.mjs` test C1 (the
+board). The reduced view's key lists of the R2 and PR-1b suites gain `calculated`. Known limits: a club's calculation over a
+system variable blocks a later unit change of that system variable (`variable_used_by_calculation`, without naming the club);
+an input archived later stays in a stored calculation (the PR 2 writer decides); a manual write naming a calculated variable
+answers a sanitized 500 until PR 2 maps it to a 409.
 
 **Next:** PR 2, the import writer and the preview (C142-C146, C148), then PR 3, the screen (C141, C150).
 

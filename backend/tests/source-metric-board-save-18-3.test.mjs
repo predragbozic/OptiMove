@@ -1090,3 +1090,25 @@ test("13. a value-carrying statement that runs past its own bound is cancelled: 
   assert.ok(took >= VALUE_STATEMENT_TIMEOUT_MS - 200 && took < VALUE_STATEMENT_TIMEOUT_MS + 1400, `cancelled at the value bound, not at the transaction's (${took} ms)`);
   assert.equal(ok(await save(W.caA, t, cand, rows)).confirmation.rows.length, 1);
 });
+
+test("C1 (calculated variables, J21): a calculated variable takes no column on the board - it is not placeable in the board's variables, a placement onto it answers target_not_usable, and a save that names it is refused with nothing written", async () => {
+  const { t, cand } = await freshTeam();
+  const fCol = await field("dist");
+  const a = await variable(W.caA, { unit: "m" });
+  const b = await variable(W.caA, { unit: "m" });
+  const made = await post("/variables", W.caA, { requestKey: key(), label: `Calculated ${uid()}`, unit: "m", levels: ["session", "drill"], dailyAggregationMethod: "sum", calculation: { kind: "sum", inputs: [a.id, b.id] } });
+  assert.equal(made.status, 201, made.text);
+  const calc = { id: made.body.variable.id };
+  const board = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  const listed = board.variables.find((v) => v.id === calc.id);
+  assert.equal(listed?.placeable, false, "listed, never placeable");
+  assert.equal(board.variables.find((v) => v.id === a.id)?.placeable, true, "its input of the same unit is placeable");
+  const plain = await placementOf(W.caA, t, cand, fCol, a);
+  assert.equal(plain.placeable, true, `the same column onto an ordinary variable of the unit is placeable (${JSON.stringify(plain)})`);
+  const p = await placementOf(W.caA, t, cand, fCol, calc);
+  assert.deepEqual([p.placeable, p.code], [false, "target_not_usable"]);
+  const row = await newRow(W.caA, t, cand, fCol, a);
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ ...row, targetId: calc.id, expectedTargetVersionId: made.body.variable.currentVersion.id }]), "target_not_usable", 0);
+  });
+});

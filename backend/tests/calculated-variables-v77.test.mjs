@@ -417,9 +417,30 @@ test("9. the database guards of a version and of the levels: a variable never ch
     /uses this variable; its unit and type stay/);
   dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', $2)`,
     [hmld.id, JSON.stringify({ kind: "sum", inputs: [W.z4.id, crypto.randomUUID()] })])), /active variable of the same owner/);
+  // The shape: an object without the keys is no calculation (the db review's M1: a CHECK passes on NULL).
+  for (const bad of ['{}', '{"kind":"sum"}', '{"inputs":[]}', '[]', '"sum"']) {
+    const r = await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', $2::jsonb)`, [hmld.id, bad]));
+    // The version guard (a trigger) runs before the CHECK; either refuses it.
+    assert.equal(r.ok, false, bad);
+    assert.equal(r.error.code, "23514", `${bad}: ${r.error.message}`);
+    assert.equal((await one(k, `select training_load.metric_calculation_shape_ok($1::jsonb) as ok`, [bad])).ok, false, `the CHECK alone refuses ${bad}`);
+  }
+  // The owner rule in the database itself (the security review): a system calculation never takes a club input, a club
+  // calculation never another club's.
+  const clubAInput = await variable(W.caA, { label: `A input ${uid()}` });
+  const clubBInput = await variable(W.caB, { label: `B input ${uid()}` });
+  dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', $2)`,
+    [hmld.id, JSON.stringify({ kind: "sum", inputs: [W.z4.id, clubAInput.id] })])), /active variable of the same owner or a system one/);
+  dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', $2)`,
+    [W.clubCalc.id, JSON.stringify({ kind: "sum", inputs: [W.z4.id, clubBInput.id] })])), /active variable of the same owner or a system one/);
+  // A calculated variable keeps at least one level (the db review's L1).
+  dbRefused(await attempt(async (c) => {
+    await c.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [W.clubCalc.id]);
+    await c.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'session'`, [W.clubCalc.id]);
+  }), /keeps at least one level/);
   const shape = await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', '{"kind":"sum","inputs":[]}')`, [hmld.id]));
   assert.equal(shape.ok, false);
-  assert.equal(shape.error.constraint, "metric_definition_versions_calculation_shape");
+  assert.equal(shape.error.code, "23514", shape.error.message);
   dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1, 'day')`, [hmld.id])),
     /only a level all its inputs have/);
   dbRefused(await attempt((c) => c.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [W.z5.id])),
@@ -471,7 +492,7 @@ test("10. the value guard: a calculated value is exactly the sum of one non-deri
   }), /names a calculated version/);
 });
 
-test("11. the estimate and board readers never offer a calculated variable; the older catalog keeps writing team variables unchanged", async () => {
+test("11. a calculated system variable is not copied into a club in step 1 (the board: 18-3 test C1; the estimates: PR 2, where values exist)", async () => {
   const { copyUnsupportedReason } = await import("../src/canonicalVariableAdminService.js");
   assert.equal(copyUnsupportedReason({ calculated: true, value_type: "numeric", unit_present: true, unit_is_token: true, scopes: ["session"] }), "calculated");
   const list = await get("/variables?scope=system", W.caA);
@@ -516,4 +537,79 @@ test("12. a race: a new version of an input that changes its unit waits for a ca
   }
   const units = await rows(k, `select v.unit from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id = d.current_version_id where d.id = any($1::uuid[])`, [[p1.id, p2.id]]);
   assert.deepEqual(units.map((u) => u.unit), ["m", "m"]);
+});
+
+// Two concurrent transactions on their own connection (the app's pool is one side; this client the other).
+async function secondClient() {
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  return c;
+}
+async function waitsForLock() {
+  for (let i = 0; i < 100; i += 1) {
+    if ((await one(k, `select count(*)::int n from pg_locks l join pg_stat_activity a on a.pid = l.pid
+                        where not l.granted and l.locktype in ('tuple', 'transactionid') and a.datname = current_database()`)).n > 0) return true;
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  return false;
+}
+
+test("13. the reverse race: a calculation over an input whose unit change is in flight waits for it, then is refused with calculation_unit_mismatch; no calculated version exists", async () => {
+  const variables = await import("../src/canonicalVariableAdminService.js");
+  const p1 = await variable(W.pa, { label: `Rev 1 ${uid()}` });
+  const p2 = await variable(W.pa, { label: `Rev 2 ${uid()}` });
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let reached;
+  const atHold = new Promise((resolve) => { reached = resolve; });
+  variables.setVariableWriteHoldForTests(async (_client, point) => {
+    if (point === "variable_version_create") { reached(); await held; }
+  });
+  try {
+    const changing = post(`/variables/${p1.id}/versions`, W.pa, { requestKey: key(), expectedCurrentVersionId: p1.currentVersion.id, unit: "km", dailyAggregationMethod: "sum" });
+    await atHold; // p1's row is held FOR UPDATE by its new version
+    variables.setVariableWriteHoldForTests(null);
+    const creating = calculated(W.pa2, [p1, p2]);
+    assert.equal(await waitsForLock(), true, "the calculation waits for the unit change");
+    release();
+    assert.equal((await changing).status, 201);
+    refused(await creating, 409, "calculation_unit_mismatch");
+  } finally {
+    release();
+    variables.setVariableWriteHoldForTests(null);
+  }
+  assert.equal((await one(k, `select count(*)::int n from training_load.metric_definition_versions where calculation @> $1::jsonb`, [JSON.stringify({ inputs: [p1.id] })])).n, 0);
+});
+
+test("14. the level race (the db review's M2): removing an input's level while a calculation over it is being created waits for it, then is refused; the calculation keeps every input's level", async () => {
+  const variables = await import("../src/canonicalVariableAdminService.js");
+  const p1 = await variable(W.pa, { label: `Lvl 1 ${uid()}` });
+  const p2 = await variable(W.pa, { label: `Lvl 2 ${uid()}` });
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let reached;
+  const atHold = new Promise((resolve) => { reached = resolve; });
+  variables.setVariableWriteHoldForTests(async (_client, point) => {
+    if (point === "variable_create") { reached(); await held; }
+  });
+  const c2 = await secondClient();
+  try {
+    const creating = calculated(W.pa, [p1, p2]);
+    await atHold; // the inputs are held FOR SHARE
+    variables.setVariableWriteHoldForTests(null);
+    await c2.query("begin");
+    const removing = c2.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [p1.id])
+      .then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+    assert.equal(await waitsForLock(), true, "the level removal waits for the calculation");
+    release();
+    assert.equal((await creating).status, 201);
+    const removed = await removing;
+    await c2.query("rollback").catch(() => {});
+    dbRefused(removed, /uses this level of this variable/);
+  } finally {
+    release();
+    variables.setVariableWriteHoldForTests(null);
+    await c2.end().catch(() => {});
+  }
+  assert.equal((await one(k, `select count(*)::int n from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [p1.id])).n, 2);
 });

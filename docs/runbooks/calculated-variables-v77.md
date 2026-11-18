@@ -14,7 +14,8 @@ and J21.
   * on a version: a variable is calculated from its first version or never; a calculated version is numeric with no bounds or
     condition; its inputs are active, not calculated, numeric variables of the same owner (or system ones) with its unit and
     every level it has; an input keeps its unit while a calculation uses it;
-  * on the levels: a calculated variable gets only a level all its inputs have, and an input keeps a level in use;
+  * on the levels: a calculated variable gets only a level all its inputs have and keeps at least one, and an input keeps
+    a level in use;
   * on a mapping version: a calculated variable is never a mapping target;
   * on a value: a value of a calculated variable is exactly the sum of one non-derived value per input on the same
     occasion, and names its formula version and those values; nothing else may write one.
@@ -30,8 +31,8 @@ and J21.
   `variable_used_by_calculation` (a new version of an input that changes its unit).
 * Reads: `currentVersion.calculation` and each version's `calculation` are null or `{ kind, inputs: [{ id, key, label }] }`;
   a team coach's reduced view says only `calculated`.
-* A calculated variable is no mapping target (`canonical_calculated`), takes no column on the drag board, is never estimated,
-  and is not copied into a club in step 1.
+* A calculated variable is no mapping target (`canonical_calculated`), takes no column on the drag board and is not copied into
+  a club in step 1. The estimates leave it out in PR 2 (it has no value before).
 
 ## The one thing to know when running it
 
@@ -45,4 +46,5 @@ and J21.
 `calculated-variables-v77-rollback.sql` drops the four triggers, the six functions, the CHECK and the column and removes the v77
 record. It refuses (changing nothing) while the migrator runs, when v77 is not the last migration, or once a calculated
 variable or a calculated value exists: from the first calculated variable on, v77 is forward-only. Deploy the backend before
-v77 first (its reads name the column).
+v77 first: the deployed commit must contain neither the v77 file nor PR 1's backend code (every variable, mapping-target,
+board and estimate read names the column), so revert both, deploy, then run the rollback.

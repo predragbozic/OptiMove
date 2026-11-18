@@ -15,8 +15,8 @@
 --       - a new version of an input keeps its unit and numeric type while a calculated variable's current version uses it.
 --     The inputs are locked FOR SHARE and the variable's own row FOR NO KEY UPDATE, so a concurrent change of an input's
 --     unit and a calculation over it wait for each other (an import's FOR KEY SHARE on a definition never waits).
---   * A level guard (metric_definition_scope_capabilities): a calculated variable gets only a level all its inputs have; an
---     input keeps a level a calculated variable using it has.
+--   * A level guard (metric_definition_scope_capabilities): a calculated variable gets only a level all its inputs have and
+--     keeps at least one; an input keeps a level a calculated variable using it has. It locks as the version guard does.
 --   * A mapping guard (source_metric_mapping_versions): a calculated variable is never the target of a mapping.
 --   * A value guard (BEFORE INSERT on metric_values): a value of a calculated version is written only as its calculation -
 --     is_derived, aggregation_role 'derived_rollup', coverage 'complete', computed_by_ref exactly
@@ -35,9 +35,11 @@ set local lock_timeout = '5s';
 -- 1. The shape of a calculation.
 create function training_load.metric_calculation_shape_ok(c jsonb) returns boolean
 language sql immutable as $$
-  select case
+  -- Every branch is decided (coalesce): a CHECK passes on NULL, so an object without the keys ({}) must read false.
+  select coalesce(case
     when c is null then true
     when jsonb_typeof(c) <> 'object' then false
+    when not (c ? 'kind' and c ? 'inputs') then false
     when (select array_agg(k order by k collate "C") from jsonb_object_keys(c) k) <> array['inputs', 'kind']::text[] then false
     when jsonb_typeof(c -> 'kind') <> 'string' or c ->> 'kind' <> 'sum' then false
     when jsonb_typeof(c -> 'inputs') <> 'array' then false
@@ -46,7 +48,7 @@ language sql immutable as $$
                           and (e #>> '{}') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
                  and count(distinct e #>> '{}') = count(*)
             from jsonb_array_elements(c -> 'inputs') e)
-  end
+  end, false)
 $$;
 comment on function training_load.metric_calculation_shape_ok(jsonb) is
   'v77: a calculation is {"kind":"sum","inputs":[2-10 distinct lower-case uuids]} and nothing else.';
@@ -111,6 +113,9 @@ begin
     raise exception 'metric_definition_versions: only a system or a club variable is calculated' using errcode = '23514';
   end if;
   v_inputs := training_load.metric_calculation_inputs(new.calculation);
+  if cardinality(v_inputs) not between 2 and 10 then
+    raise exception 'metric_definition_versions: a calculation sums 2 to 10 inputs' using errcode = '23514';
+  end if;
   if new.metric_definition_id = any (v_inputs) then
     raise exception 'metric_definition_versions: a calculated variable is not its own input' using errcode = '23514';
   end if;
@@ -160,34 +165,51 @@ create trigger metric_definition_versions_calculation_guard
   before insert on training_load.metric_definition_versions
   for each row execute function training_load.metric_calculation_version_guard();
 
--- 3. The level guard.
+-- 3. The level guard. Locks like the version guard (the definition's own row FOR NO KEY UPDATE; a calculation's inputs FOR
+-- SHARE in id order), so a level change and a calculation over the same variable wait for each other.
 create function training_load.metric_calculation_level_guard() returns trigger as $$
 declare
   v_def uuid;
   v_level text;
   v_calc jsonb;
+  v_inputs uuid[];
 begin
+  if tg_op in ('UPDATE', 'DELETE') then
+    v_def := old.metric_definition_id;
+    v_level := old.scope_level;
+    if tg_op = 'DELETE' or new.metric_definition_id is distinct from v_def or new.scope_level is distinct from v_level then
+      perform 1 from training_load.metric_definitions d where d.id = v_def for no key update;
+      if exists (select 1 from training_load.metric_definitions cd
+                   join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
+                   join training_load.metric_definition_scope_capabilities cc on cc.metric_definition_id = cd.id and cc.scope_level = v_level
+                  where cv.calculation is not null and v_def = any (training_load.metric_calculation_inputs(cv.calculation))) then
+        raise exception 'metric_definition_scope_capabilities: a calculated variable uses this level of this variable' using errcode = '23514';
+      end if;
+      -- A calculated variable keeps at least one level.
+      if exists (select 1 from training_load.metric_definitions d
+                   join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+                  where d.id = v_def and v.calculation is not null)
+         and not exists (select 1 from training_load.metric_definition_scope_capabilities c
+                          where c.metric_definition_id = v_def and c.scope_level <> v_level) then
+        raise exception 'metric_definition_scope_capabilities: a calculated variable keeps at least one level' using errcode = '23514';
+      end if;
+    end if;
+  end if;
   if tg_op in ('INSERT', 'UPDATE') then
+    perform 1 from training_load.metric_definitions d where d.id = new.metric_definition_id for no key update;
     select v.calculation into v_calc
       from training_load.metric_definitions d
       join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
      where d.id = new.metric_definition_id;
-    if v_calc is not null and (new.scope_level = 'day'
-       or exists (select 1 from unnest(training_load.metric_calculation_inputs(v_calc)) i(id)
-                   where not exists (select 1 from training_load.metric_definition_scope_capabilities c
-                                      where c.metric_definition_id = i.id and c.scope_level = new.scope_level))) then
-      raise exception 'metric_definition_scope_capabilities: a calculated variable gets only a level all its inputs have' using errcode = '23514';
-    end if;
-  end if;
-  if tg_op in ('UPDATE', 'DELETE') then
-    v_def := old.metric_definition_id;
-    v_level := old.scope_level;
-    if (tg_op = 'DELETE' or new.metric_definition_id is distinct from v_def or new.scope_level is distinct from v_level)
-       and exists (select 1 from training_load.metric_definitions cd
-                     join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
-                     join training_load.metric_definition_scope_capabilities cc on cc.metric_definition_id = cd.id and cc.scope_level = v_level
-                    where cv.calculation is not null and v_def = any (training_load.metric_calculation_inputs(cv.calculation))) then
-      raise exception 'metric_definition_scope_capabilities: a calculated variable uses this level of this variable' using errcode = '23514';
+    if v_calc is not null then
+      v_inputs := training_load.metric_calculation_inputs(v_calc);
+      perform 1 from training_load.metric_definitions d where d.id = any (v_inputs) order by d.id for share;
+      if new.scope_level = 'day'
+         or exists (select 1 from unnest(v_inputs) i(id)
+                     where not exists (select 1 from training_load.metric_definition_scope_capabilities c
+                                        where c.metric_definition_id = i.id and c.scope_level = new.scope_level)) then
+        raise exception 'metric_definition_scope_capabilities: a calculated variable gets only a level all its inputs have' using errcode = '23514';
+      end if;
     end if;
   end if;
   return case when tg_op = 'DELETE' then old else new end;
