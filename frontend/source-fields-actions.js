@@ -348,7 +348,8 @@ export async function handleSourceFieldsAction(action, { render }) {
     const item = s.inventory.items.find((i) => i.endpoint === action.dataset.sfInvEndpoint && i.name === action.dataset.sfInvName) || null;
     if (!createOffered(ctx, item)) return true;
     s.notice = "";
-    s.form = openCreateFieldForm(item, s.inventory.items);
+    // The zone's range from the team's limits, only where the list shows them (the platform admin, P1).
+    s.form = openCreateFieldForm(item, s.inventory.items, ctx.mayVerify ? s.inventory.zoneThresholds : null);
     render();
     toTitle();
     focus(".source-fields-form [data-sf-field]:not([disabled])");

@@ -57,7 +57,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       const plain = await layout(page);
       assert.ok(plain.rows > 0, "the check recorded values that no field covers");
       assert.match(plain.text, /GPEXE also sends these values in your sessions\./);
-      assert.match(plain.text, /Power zone 4 distance \(m\)/);
+      assert.match(plain.text, /Power zone 4 · distance \(m\)/);
       assert.doesNotMatch(plain.text, /athletesession|seen \d+ time|Whole session|Per athlete|Other things GPEXE sends/, "nothing technical by default");
       assert.ok(plain.overflow <= 0, `nothing wider than the screen (overflow ${plain.overflow})`);
       // One click away: the technical view.
@@ -79,7 +79,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
           inFold: fold ? [...fold.querySelectorAll(".source-fields-inventory-raw")].map((e) => e.textContent.trim()) : [],
         };
       });
-      assert.equal(r.zone, "Power zone 4 distance (m)");
+      assert.equal(r.zone, "Power zone 4 · distance (m)");
       assert.ok(r.longName, "the long zone name is listed");
       assert.doesNotMatch(l.text, /team limits/, "a club never sees the team limits");
       assert.equal(r.foldOpen, false, "the names that are not values are folded");
@@ -117,8 +117,8 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
     assert.match(await pa.page.locator(".source-fields-inventory").innerText(), /in the clubs' sessions/);
     // The Rukovodilac's order of 2026-11-18: a numbered zone row shows its expected range from the team's limits.
     const z4 = await pa.page.evaluate(() => [...document.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")]
-      .map((e) => e.textContent.replace(/\s+/g, " ").trim()).find((t) => t.startsWith("Power zone 4 distance")) || "");
-    assert.equal(z4, "Power zone 4 distance (m) · Expected 60–75 W/kg");
+      .map((e) => e.textContent.replace(/\s+/g, " ").trim()).find((t) => t.startsWith("Power zone 4 ·")) || "");
+    assert.equal(z4, "Power zone 4 · 60–75 W/kg · distance (m)");
     assert.match(await pa.page.locator(".source-fields-inventory").innerText(), /Power zone limits of the team: 20 · 25 · 60 · 75 W\/kg, from the newest saved session \(\d{2}\.\d{2}\.\d{4}\)\./);
     // The team limits' fold is in the technical view.
     await pa.page.click('[data-action="source-fields-inv-technical"]');

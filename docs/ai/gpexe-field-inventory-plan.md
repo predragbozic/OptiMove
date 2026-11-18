@@ -975,32 +975,30 @@ read and screen, **no migration**.
   Grouping applies to the loaded page (200 names per page). The small lines keep the 12 px floor.
 - **#601's LOW-1:** `unit_word_ambiguous` is worded by basis too - a platform admin working in a club's workspace is told
   to switch to the platform workspace (route test 23, frontend test R3).
-- **A numbered zone's expected range (the Rukovodilac's order of 2026-11-18).** Wherever a numbered GPEXE zone
+- **A numbered zone's range (the Rukovodilac's orders of 2026-11-18).** Wherever a numbered GPEXE zone
   (`athletesession{power|speed}zone_{distance|time|events}_N`) is shown - a Source fields row, the Create form, Compare
-  with GPEXE, a board column and the variable it fills - its range from the team's limits is shown beside it, always
-  as **expected**, never as a fact: "Expected 60–75 W/kg" on a list row and "Expected 60–75 W/kg (not confirmed)" on a
-  board column, with the step to confirm it said once per screen ("To confirm it, use “Compare with GPEXE” on that
-  zone"); "Expected range of this zone: …" on the Create form and the Compare panel (the UX review: one pattern, and
-  wording that also reads for "below 20 W/kg" and "75 W/kg and above"). Speed ranges are in m/s; whether GPEXE's own
-  screen shows them in km/h is not checked.
-  - **Numbering (expected):** from one; with ascending limits t1 < … < tk, zone 1 is below t1, zone n is t(n-1)–t(n),
-    zone k+1 is tk and above (GPEXE's power limits 20 · 25 · 60 · 75 W/kg make zone 4 60–75 W/kg). Speed limits in
-    m/s. A relative speed zone has no team range and shows none. Pure functions: `frontend/zone-ranges.js`,
-    `backend/src/sourceZoneThresholds.js`.
-  - **Which limits:** the limits are the team threshold set the check read for that session, valid on its day (the
-    mapper checks the validity window), as the stored bundle keeps it. The board and Compare with GPEXE use the session
-    they show. The Source fields list has no session in view: it uses the newest saved session of each linked team,
-    names that day ("from the newest saved session (07.11.2026)"), and shows no range when teams' limits differ.
-  - **Who:** the platform admin only (P1: team limits are the platform's). The board is sent `zoneThresholds` only
-    for the `platform_admin` basis; route 8 is the platform admin's anyway; a club's admin sees no range.
-  - **Why expected:** the details' zone numbering is not proven (`docs/ai/gpexe-details-coverage-plan.md`: 4 power
-    zones in the details against 5 in `/more/`, no numbering reproduces them).
-  - **How the numbering becomes proven (proposal, not built):** Compare with GPEXE on that zone field, with the
-    comparison naming the expected range ("check that GPEXE shows it for that range" - built now) and route O recording
-    that range with the tick, so a match proves the numbering as well as the unit. Recording it needs a column on the
-    comparison record (a migration); until then every range stays "expected". The stored `/more/` zone lists carry
-    their own bounds and could prove it from data already stored, but the owner-run probe of 2026-10-24 found that
-    they do not reproduce the details' zones, so that path proves nothing today.
+  with GPEXE, a board column and the variable it fills - its range from the team's limits is shown: "Power zone 4 ·
+  60–75 W/kg · distance (m)" on a list row, "Zone 60–75 W/kg" on a board column, "From … (60–75 W/kg)" on a variable,
+  "Range of this zone: …" on the Create form and the Compare panel. Compare with GPEXE stays the check before a zone field
+  is used. Speed ranges are in m/s; whether GPEXE's own screen shows them in km/h is not checked.
+  - **Numbering, owner-stated evidence (2026-11-18), not a machine proof:** the owner's screenshot of GPEXE's own team
+    settings shows power zone markers 0, 20, 25, 60, 75 W/kg labelled Z1–Z5 (Z1 0–20, Z2 20–25, Z3 25–60, Z4 60–75, Z5 75
+    and above), jump height 0, 0.25, 0.50 m as Z1–Z3 and impact intensity 0, 75, 90 m/s² as Z1–Z3: zones from one, zone 1
+    from 0, each zone from its limit to the next, N limits above 0 give N+1 zones. It fits the stored facts:
+    `power_thresholds` [20, 25, 60, 75] and the details names `_2`–`_5` (zone 1 is not sent). Pure functions:
+    `frontend/zone-ranges.js`, `backend/src/sourceZoneThresholds.js`.
+  - **Families:** power and speed, the two limit lists the stored bundle holds today. A relative speed or jump height
+    zone shows its number alone until its family's limits are stored.
+  - **Which limits:** the team threshold set the check read for that session, valid on its day (the mapper checks the
+    validity window), as the stored bundle keeps it. The board and Compare with GPEXE use the session they show. The
+    Source fields list has no session in view: it uses the newest saved session of each linked team, names that day
+    ("from the newest saved session (07.11.2026)"), and shows no range when teams' limits differ.
+  - **Who:** the board is sent `zoneThresholds` for its one team: a platform admin's, or the club admin's own team on
+    the club board (the Rukovodilac's decision: a club's own team's limits are that club's data). P1 still keeps the
+    limits off a club's list of GPEXE names and the team-limits fold; route 8 is the platform admin's.
+  - **A machine proof, follow-up (not built):** on a stored session, `/more/`'s zone item k against the details' `_k`
+    for k ≥ 2 (zone 1 omitted in the details) would confirm the numbering from data. The probe of 2026-10-24 compared
+    them without that offset and found no numbering that reproduces them.
 - **Create field for several names at once: a follow-up, not built.** Route C takes one name per request with its own
   key, label and levels, and each lost answer needs its own *Check result*; a sequential batch is cheap to send but needs a
   per-name label and level choice and a per-row outcome (saved, refused, not confirmed). It is its own small screen change.

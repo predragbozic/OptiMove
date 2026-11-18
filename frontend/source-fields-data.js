@@ -8,6 +8,7 @@
 // the server answers everyone else with the same 404. The revision lifecycle
 // (L1-L5: a new revision, activate, retire, replace) is not part of this
 // screen.
+import { zoneRange } from "./zone-ranges.js";
 import { api } from "./api.js";
 import { state } from "./state.js";
 import { LIMITS, UNIT_FORBIDDEN, WRITE_BOUND_MS, errorInfo, newRequestKey, outcomeUnknown } from "./metric-variables-data.js";
@@ -103,9 +104,13 @@ export const inventoryMatches = (item, search) => {
 const ZONE_FAMILY = { power: "Power", speed: "Speed", relativespeed: "Relative speed", jumpheight: "Jump height", heartrate: "Heart rate", metabolicpower: "Metabolic power" };
 const MEASURE = { distance: "distance", time: "time", events: "events" };
 const capitalize = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
-export function readableName(item) {
+// A numbered zone reads "Power zone 4 · distance", or with the team's limits "Power zone 4 · 60–75 W/kg · distance".
+export function readableName(item, thresholds = null) {
   const z = item?.zone;
-  if (z && Number.isInteger(z.number)) return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} ${MEASURE[z.measure] || z.measure}`;
+  if (z && Number.isInteger(z.number)) {
+    const range = thresholds ? zoneRange(z, thresholds) : null;
+    return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} · ${range ? `${range} · ` : ""}${MEASURE[z.measure] || z.measure}`;
+  }
   const name = String(item?.name || "").replace(/^athlete_?session_?/, "").replace(/_+/g, " ").trim();
   return capitalize(name) || String(item?.name || "");
 }
@@ -129,7 +134,7 @@ export function zoneLimitsNote(family, zoneThresholds, day = "") {
   if (!set) return "";
   if (set.differ) return `${pair[0]} zone limits differ between teams, so no zone's range is shown.`;
   return Array.isArray(set.values)
-    ? `${pair[0]} zone limits of the team: ${set.values.join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. The range beside each zone is expected, not confirmed. To confirm it, use the value, then Compare with GPEXE.`
+    ? `${pair[0]} zone limits of the team: ${set.values.join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. Zone 1 starts at 0 and each zone runs to the next limit, as GPEXE's team settings show.`
     : "";
 }
 // Values first by quantity, zones together in zone order; the rest is "not values".
@@ -273,7 +278,7 @@ export const createOffered = (ctx, item) => Boolean(ctx?.mayVerify && item && it
 // `siblings`: the loaded inventory. A details name GPEXE sends both for the whole session and per drill becomes one key
 // (details.players.<name>, plan 8.1), so the form opens with both levels (the code review of G1b-1, MEDIUM).
 const DETAILS = ["details.session", "details.drill"];
-export function openCreateFieldForm(item, siblings = []) {
+export function openCreateFieldForm(item, siblings = [], thresholds = null) {
   const levels = createLevels(item.endpoint);
   const both = DETAILS.includes(item.endpoint) && siblings.some((other) => other !== item && other.name === item.name && DETAILS.includes(other.endpoint) && other.endpoint !== item.endpoint);
   if (both) { levels.supportsSession = true; levels.supportsDrill = true; }
@@ -291,13 +296,13 @@ export function openCreateFieldForm(item, siblings = []) {
     kind: item.kind || "",
     unitWord: item.unitWord || "",
     // The plain name and unit the list showed, for the form's title; the name in OptiMove starts as that name.
-    readable: readableName(item),
+    readable: readableName(item, thresholds),
     unit: item.unit || "",
     drillLocked: levels.drillLocked,
     bothLevels: both,
     fieldId: null,
     fieldName: item.name,
-    draft: { label: readableName(item).slice(0, FIELD_LABEL_MAX), supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
+    draft: { label: readableName(item, thresholds).slice(0, FIELD_LABEL_MAX), supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
   };
 }
 

@@ -15,7 +15,7 @@ import {
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { fieldTileHtml } from "./data-config-tiles.js";
-import { expectedRange, expectedRangeText, numberedZoneOf } from "./zone-ranges.js";
+import { zoneRange, numberedZoneOf } from "./zone-ranges.js";
 
 const fmtDate = (iso) => {
   if (!iso) return "";
@@ -169,7 +169,6 @@ function inventoryRowHtml(item, index, ctx, search, zoneThresholds = null, techn
   const create = createOffered(ctx, item)
     ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Use this value: ${escapeAttr(readableName(item))}">Use this value</button>`
     : "";
-  const range = ctx.mayVerify && item.zone ? expectedRangeText(item.name, zoneThresholds) : null;
   // The plain view: the name, its unit, a zone's expected range and one state. GPEXE's own name and the counts only in
   // the technical view.
   const tech = technical ? `
@@ -179,7 +178,7 @@ function inventoryRowHtml(item, index, ctx, search, zoneThresholds = null, techn
     <li data-sf-inv-row="${index}"${inventoryMatches(item, search) ? "" : " hidden"}>
       <div class="source-fields-inventory-item">
         ${item.isValue === true
-          ? `<span class="metric-variables-item-name">${escapeHtml(readableName(item))} <span class="source-fields-inventory-unit">${escapeHtml(inventoryUnitText(item))}</span>${range ? ` <span class="source-fields-inventory-range">· ${escapeHtml(range)}</span>` : ""}</span>
+          ? `<span class="metric-variables-item-name">${escapeHtml(readableName(item, ctx.mayVerify ? zoneThresholds : null))} <span class="source-fields-inventory-unit">${escapeHtml(inventoryUnitText(item))}</span></span>
         <span class="source-fields-inventory-state"><span class="item-badge${item.covered ? " is-active" : ""}">${escapeHtml(inventoryState(item, ctx))}</span></span>`
           // Not a value (the technical view only): GPEXE's own name and what it holds.
           : `<span class="metric-variables-item-name"><code class="source-fields-code source-fields-inventory-raw">${escapeHtml(item.name)}</code> <span class="source-fields-inventory-unit">${escapeHtml(KIND_LABEL[item.kind] || "")}</span></span>`}
@@ -487,14 +486,14 @@ function renderCreateFormHtml(s) {
 // A numbered zone's expected range on the Create form, from the list's team limits (platform only; route C is too).
 function createRangeHtml(form) {
   const limits = sourceFieldsState().inventory?.zoneThresholds;
-  const range = expectedRange(numberedZoneOf(form.name), limits);
+  const range = zoneRange(numberedZoneOf(form.name), limits);
   const day = fmtDate(limits?.asOf);
-  return range ? `<p class="muted">Expected range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you add it, confirm it with Compare with GPEXE.</p>` : "";
+  return range ? `<p class="muted">Range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you add it, check it once with Compare with GPEXE.</p>` : "";
 }
 // The compared session's own team limits: the range to look for in GPEXE (the Rukovodilac's order of 2026-11-18).
 function observeRangeHtml(o) {
-  const range = expectedRange(numberedZoneOf(o?.gpexeName), o?.zoneThresholds);
-  return range ? `<p class="metric-variables-field-note">Expected range of this zone: ${escapeHtml(range)} (this session's team zone limits). Check that GPEXE shows the same range for it. OptiMove has not confirmed it yet.</p>` : "";
+  const range = zoneRange(numberedZoneOf(o?.gpexeName), o?.zoneThresholds);
+  return range ? `<p class="metric-variables-field-note">Range of this zone: ${escapeHtml(range)} (this session's team zone limits). Check that GPEXE shows the same range for it.</p>` : "";
 }
 
 // G1b-2: the comparison of a generic field with the GPEXE screen (plan sections 8.2 and 8.10). The team, then the server's

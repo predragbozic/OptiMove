@@ -311,14 +311,14 @@ test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zo
   const names = (list) => [...list.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim());
   const [distance, power, other] = [...content.querySelectorAll("[data-sf-inv-group] ul")];
   // The plain view (the owner's rule): the name, the unit, a zone's expected range and one state; no GPEXE name.
-  assert.deepEqual(names(distance), ["Power zone 2 distance (m) · Expected 20–25 W/kg", "Power zone 4 distance (m) · Expected 60–75 W/kg", "Speed zone 3 distance (m)"]);
+  assert.deepEqual(names(distance), ["Power zone 2 · 20–25 W/kg · distance (m)", "Power zone 4 · 60–75 W/kg · distance (m)", "Speed zone 3 · distance (m)"]);
   assert.equal(content.querySelectorAll(".source-fields-inventory-raw, .source-fields-inventory-facts").length, 0, "no GPEXE name or count by default");
   assert.equal($(".source-fields-inventory-other"), null, "the names that are not values are out of sight by default");
   // The team limits once per zone family in the whole list, with the day of the session they come from; each zone row
   // shows its expected range, always marked expected (the Rukovodilac's order of 2026-11-18). Differing limits: no range.
   const notes = [...content.querySelectorAll(".source-fields-inventory-note")].map((e) => e.textContent.trim());
   assert.deepEqual(notes, [
-    "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). The range beside each zone is expected, not confirmed. To confirm it, use the value, then Compare with GPEXE.",
+    "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). Zone 1 starts at 0 and each zone runs to the next limit, as GPEXE's team settings show.",
     "Speed zone limits differ between teams, so no zone's range is shown.",
   ]);
   assert.deepEqual(names(power), ["Metabolic power (W/kg)"]);
@@ -351,8 +351,8 @@ test("R2: a club's admin sees the unit and the zone's own name, never the team t
     item({ name: "athletesessionpowerzone_distance_4", unitWord: null, unit: "m", zone: { family: "power", measure: "distance", number: 4 } }),
   ] } };
   await loadSourceFieldsSection(render);
-  assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 distance (m)");
-  assert.doesNotMatch(text(), /thresholds|team limits|xpected/);
+  assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 · distance (m)");
+  assert.doesNotMatch(text(), /thresholds|team limits|W\/kg/);
 });
 
 test("R3 (#601's LOW-1): a platform admin working in a club's workspace is told to switch to the platform workspace, never to ask a platform administrator", async () => {

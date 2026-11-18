@@ -623,9 +623,10 @@ export async function readBoard({ ctx, queryString }) {
   await removeExpiredBatch();
   const world = await boundedRead((client) => loadWorld(client, ctx, { teamId: q.teamId, candidateId: q.candidateId ?? null }));
   const out = boardOf(world, q.pair ?? 0);
-  // The team zone limits of the session in view, so a numbered zone column can show its expected range. P1: team
-  // limits are the platform admin's only; a club's admin is never sent them.
-  if (ctx.basis === "platform_admin") out.board.zoneThresholds = bundleZoneThresholds(world.candidate?.raw_bundle);
+  // The team zone limits of the session in view, so a numbered zone column shows its range. The board is always of one
+  // team the caller may map (its own club's, or any team for the platform board), so a club's admin sees only its own
+  // team's limits (the Rukovodilac's decision of 2026-11-18); P1 still keeps them off a club's list of GPEXE names.
+  out.board.zoneThresholds = bundleZoneThresholds(world.candidate?.raw_bundle);
   return out;
 }
 

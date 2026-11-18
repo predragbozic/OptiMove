@@ -305,20 +305,20 @@ test("Z (the Rukovodilac, 2026-11-18): comparing a numbered zone names the range
   read = () => ({ status: 200, body: { observation: observation({ gpexeName: "athletesessionpowerzone_distance_4", zoneThresholds: { power: [20, 25, 60, 75], speed: null } }) } });
   try {
     await openComparison();
-    assert.match(text(), /Expected range of this zone: 60–75 W\/kg \(this session's team zone limits\)\. Check that GPEXE shows the same range for it\. OptiMove has not confirmed it yet\./);
+    assert.match(text(), /Range of this zone: 60–75 W\/kg \(this session's team zone limits\)\. Check that GPEXE shows the same range for it\./);
   } finally { read = () => ({ status: 200, body: { observation: observation() } }); }
   resetSourceFields();
   await openComparison();
-  assert.doesNotMatch(text(), /Expected range of this zone/);
+  assert.doesNotMatch(text(), /Range of this zone/);
 });
 
 test("Z2 (the UX review): the lowest and the top zone read as a range too - 'below …' and '… and above'", async () => {
-  for (const [n, want] of [[1, "below 20 W/kg"], [5, "75 W/kg and above"]]) {
+  for (const [n, want] of [[1, "0–20 W/kg"], [5, "75 W/kg and above"]]) {
     resetSourceFields();
     read = () => ({ status: 200, body: { observation: observation({ gpexeName: `athletesessionpowerzone_distance_${n}`, zoneThresholds: { power: [20, 25, 60, 75], speed: null } }) } });
     try {
       await openComparison();
-      assert.ok(text().includes(`Expected range of this zone: ${want} (this session's team zone limits).`), want);
+      assert.ok(text().includes(`Range of this zone: ${want} (this session's team zone limits).`), want);
     } finally { read = () => ({ status: 200, body: { observation: observation() } }); }
   }
 });

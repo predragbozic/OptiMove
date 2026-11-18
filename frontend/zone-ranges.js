@@ -1,10 +1,11 @@
-// The range a numbered GPEXE zone is EXPECTED to cover, from the team zone limits of a stored session (the
-// Rukovodilac's order of 2026-11-18: no one should have to open GPEXE to know what "zone 4" is). Never shown as a fact:
-// the details' zone numbering is not proven (docs/ai/gpexe-details-coverage-plan.md), so every text says "expected" and
-// points to Compare with GPEXE.
+// The range a numbered GPEXE zone covers, from the team zone limits of a stored session (the Rukovodilac's order of
+// 2026-11-18: no one should have to open GPEXE to know what "zone 4" is).
 //
-// Expected numbering, from one: with ascending limits t1 < … < tk, zone 1 is below t1, zone n (2..k) is t(n-1) to t(n),
-// and zone k+1 is t(k) and above. GPEXE's own example: power limits 20 · 25 · 60 · 75 W/kg make zone 4 60–75 W/kg.
+// Numbering, from one, as GPEXE's own team settings show it (the owner's screenshot of 2026-11-18, recorded in
+// docs/ai/gpexe-field-inventory-plan.md 8.13 as owner-stated evidence, not a machine proof): zone 1 starts at 0, each zone
+// runs from its limit to the next, and the top zone is the last limit and above. With power limits 20 · 25 · 60 · 75
+// W/kg: Z1 0–20, Z2 20–25, Z3 25–60, Z4 60–75, Z5 75 and above. Compare with GPEXE stays the check before a zone
+// field is used.
 const NAME = /^athletesession(power|speed)zone_(distance|time|events)_([0-9]{1,2})$/;
 const UNIT = { power: "W/kg", speed: "m/s" };
 
@@ -18,9 +19,9 @@ export function numberedZoneOf(nameOrKey) {
 
 const fmt = (n) => String(Math.round(n * 100) / 100);
 
-// "60–75 W/kg", "below 20 W/kg", "75 W/kg and above", or null when the limits do not reach that zone or are not the
-// team's single set (limits that differ between teams, or none read).
-export function expectedRange(zone, thresholds) {
+// "60–75 W/kg", "0–20 W/kg", "75 W/kg and above", or null when the limits do not reach that zone or are not the team's
+// single set (limits that differ between teams, or none read).
+export function zoneRange(zone, thresholds) {
   if (!zone || !thresholds) return null;
   const set = thresholds[zone.family];
   const list = Array.isArray(set) ? set : Array.isArray(set?.values) ? set.values : null;
@@ -29,14 +30,12 @@ export function expectedRange(zone, thresholds) {
   const unit = UNIT[zone.family];
   const n = zone.number;
   if (n < 1 || n > t.length + 1) return null;
-  if (n === 1) return `below ${fmt(t[0])} ${unit}`;
+  if (n === 1) return `0–${fmt(t[0])} ${unit}`;
   if (n === t.length + 1) return `${fmt(t[t.length - 1])} ${unit} and above`;
   return `${fmt(t[n - 2])}–${fmt(t[n - 1])} ${unit}`;
 }
 
-// The short label beside a zone in a list or on a board: "Expected 60–75 W/kg". The call to confirm it is said once per
-// screen (the UX review: not on every row), with the button name.
-export function expectedRangeText(nameOrKey, thresholds) {
-  const range = expectedRange(numberedZoneOf(nameOrKey), thresholds);
-  return range ? `Expected ${range}` : null;
+// A zone's range from a GPEXE name or a source key, or null.
+export function zoneRangeText(nameOrKey, thresholds) {
+  return zoneRange(numberedZoneOf(nameOrKey), thresholds);
 }

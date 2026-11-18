@@ -2,7 +2,7 @@
 // strings only: every name from the source or from another person is escaped
 // and cleaned. Built from the om-* components Imports uses (page header,
 // tabs, light cards, badges, buttons); the phone sheet is the roster's.
-import { expectedRange, expectedRangeText, numberedZoneOf } from "./zone-ranges.js";
+import { zoneRangeText } from "./zone-ranges.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import {
   BOARD_ERROR, COLUMN_REASON, MAX_ROWS, columnReasonText, parkedSentence, displayNumber, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
@@ -33,8 +33,8 @@ const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest
 const forSupport = () => boardContext()?.isPlatformAdmin === true;
 // A numbered zone column's expected range from the session's team limits (sent to a platform admin only, P1); never a fact.
 const zoneRangeLine = (board, key) => {
-  const text = expectedRangeText(key, board?.zoneThresholds);
-  return text ? `<small class="mb-zone-range">${escapeHtml(text)} (not confirmed)</small>` : "";
+  const text = zoneRangeText(key, board?.zoneThresholds);
+  return text ? `<small class="mb-zone-range">Zone ${escapeHtml(text)}</small>` : "";
 };
 const gpexeTeam = (id) => (forSupport() && id ? ` — linked to GPEXE team ${escapeHtml(id)}` : "");
 
@@ -174,8 +174,8 @@ function slotHtml(s, v, drag) {
   const unit = v.unit ? `<span class="om-badge mb-unit">${escapeHtml(v.unit)}</span>` : "";
   const head = (sub) => `<span class="mb-slot-main"><strong>${name(v.label)}</strong><small>${sub}</small></span>`;
   // A variable filled from a numbered zone names that zone's expected range too (platform only, never a fact).
-  const zoneRange = slot.column ? expectedRange(numberedZoneOf(slot.column.key), board?.zoneThresholds) : null;
-  const col = slot.column ? `${name(slot.column.label)}${zoneRange ? ` (expected ${escapeHtml(zoneRange)})` : ""}` : "a column";
+  const zoneRange = slot.column ? zoneRangeText(slot.column.key, board?.zoneThresholds) : null;
+  const col = slot.column ? `${name(slot.column.label)}${zoneRange ? ` (${escapeHtml(zoneRange)})` : ""}` : "a column";
   const off = busy(s) ? "disabled" : "";
   if (slot.kind === "on") {
     return `<li class="mb-slot is-on">${head(`From ${col}`)}${unit}<span class="om-badge om-badge--success">On for ${name(teamName(s))}</span>
@@ -235,7 +235,7 @@ function boardCards(s) {
         <p class="muted mb-note">${escapeHtml(sessionWords(board.session, dateTime))} ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
         <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <span><strong>${name(board.pair.labels[1])}</strong>.</span>
           ${board.pair.count > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-other-athletes" ${busy(s) ? "disabled" : ""}>Other athletes</button>` : ""}</p>
-        ${board.columns.some((c) => expectedRangeText(c.key, board.zoneThresholds)) ? `<p class="muted mb-note">Zone ranges are expected from this session's team zone limits. To confirm one, open Source fields and use “Compare with GPEXE” on that zone.</p>` : ""}
+        ${board.columns.some((c) => zoneRangeText(c.key, board.zoneThresholds)) ? `<p class="muted mb-note">Zone ranges come from this session's team zone limits in GPEXE.</p>` : ""}
         <ul class="mb-list">${board.columns.filter((c) => !parked(s, c)).map((c) => columnHtml(s, c, drag)).join("")}</ul>
         ${parkedHtml(s)}
       </section>

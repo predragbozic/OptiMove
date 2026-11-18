@@ -867,7 +867,7 @@ test("Z3 (the Rukovodilac, 2026-11-18): a numbered zone column and the variable 
   state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
   await actions.loadBoardSection(render);
   const row = [...content.querySelectorAll(".mb-col-item")].find((li) => li.textContent.includes("Power zone 4 distance"));
-  assert.match(row.querySelector(".mb-zone-range").textContent, /^Expected 60–75 W\/kg \(not confirmed\)$/);
+  assert.match(row.querySelector(".mb-zone-range").textContent, /^Zone 60–75 W\/kg$/);
 
   asUser("club");
   overrides = [];
@@ -877,4 +877,9 @@ test("Z3 (the Rukovodilac, 2026-11-18): a numbered zone column and the variable 
   state.trainingLoad.board = null;
   await open();
   assert.equal(content.querySelectorAll(".mb-zone-range").length, 0, "no limits sent, no range");
+  // The club board is sent its own team's limits (the Rukovodilac's decision of 2026-11-18): the range shows there too.
+  club.board.zoneThresholds = { power: [20, 25, 60, 75], speed: null };
+  state.trainingLoad.board = null;
+  await open();
+  assert.equal(content.querySelector(".mb-zone-range")?.textContent, "Zone 60–75 W/kg");
 });
