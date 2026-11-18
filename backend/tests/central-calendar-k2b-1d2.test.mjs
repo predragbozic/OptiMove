@@ -84,13 +84,17 @@ test("1a. a club's type: its icon and colour on the manager's, the reader's and 
   assert.equal(athleteRes.text.includes(String(clubs.c1)), false, "no club id reaches the athlete");
 });
 
-test("1b. a type without a colour reads null; a colour taken away reads null again", async () => {
+test("1b. a colour set shows on the card; taken away, the card reads null again and keeps the icon", async () => {
   const { roles, teams } = m;
-  const type = await colourType(roles.clubAdmin, "match", null);
-  const created = await createEvent(roles.clubAdmin.cookie, { eventTypeId: type.id, title: `Match ${uid()}`, targets: [{ kind: "team", id: teams.t1 }] });
+  const coloured = await colourType(roles.clubAdmin, "match", "amber");
+  const created = await createEvent(roles.clubAdmin.cookie, { eventTypeId: coloured.id, title: `Match ${uid()}`, targets: [{ kind: "team", id: teams.t1 }] });
   assert.equal(created.status, 201, created.text);
   const [card] = cardsOf(await calendarOf(roles.clubAdmin.cookie), created.body.event.id);
-  assert.deepEqual(keysOf(card), [type.iconKey, null]);
+  assert.deepEqual(keysOf(card), [coloured.iconKey, "amber"]);
+  const cleared = await send(roles.clubAdmin.cookie, "PATCH", `/types/${coloured.id}`, { expectedRevision: coloured.revision, colorKey: null });
+  assert.equal(cleared.status, 200, cleared.text);
+  const [after] = cardsOf(await calendarOf(roles.clubAdmin.cookie), created.body.event.id);
+  assert.deepEqual(keysOf(after), [coloured.iconKey, null]);
 });
 
 test("1c. a system type (a private coach's event): its icon and colour on the card", async () => {
@@ -131,6 +135,14 @@ test("2a. the platform workspace names the active teams of active clubs, ordered
   const { clubs, teams, roles } = m;
   // A team of an archived club (C3 is archived by the matrix): never named.
   const archivedClubTeam = await env.fx.makeTeam(clubs.c3, "k2b1d2 C3 team");
+  // The colour its club chose (Q3): set on T1, read back by the platform.
+  const colour = await api(`/api/calendar/settings/teams/${teams.t1}`, { method: "PUT", cookie: roles.clubAdmin.cookie, body: { requestKey: newKey(), expectedRevision: 0, colorKey: "rust" } });
+  assert.equal(colour.status, 200, colour.text);
+  // The order is by club first: a club whose name sorts first holds a team whose name sorts last (code review).
+  const clubAaa = await env.fx.makeClub(`Aaa order ${uid()}`);
+  const clubBbb = await env.fx.makeClub(`Bbb order ${uid()}`);
+  const zzTeam = await env.fx.makeTeam(clubAaa, "Zz order team");
+  const aaTeam = await env.fx.makeTeam(clubBbb, "Aa order team");
   const res = await calendarOf(roles.platformAdmin.cookie);
   assert.equal(res.status, 200, res.text);
   assert.equal(res.body.workspace.type, "platform");
@@ -141,6 +153,8 @@ test("2a. the platform workspace names the active teams of active clubs, ordered
     [String(clubs.c2), String(teams.u1)],
   ], "T3 (archived) and the archived club's team are left out; club, then team");
   const ids = res.body.teams.map((t) => String(t.teamId));
+  assert.ok(ids.indexOf(String(zzTeam)) >= 0 && ids.indexOf(String(aaTeam)) >= 0);
+  assert.ok(ids.indexOf(String(zzTeam)) < ids.indexOf(String(aaTeam)), "club first, then team: Aaa's Zz before Bbb's Aa");
   assert.equal(ids.includes(String(teams.t3)), false);
   assert.equal(ids.includes(String(archivedClubTeam)), false);
   for (const team of res.body.teams) {
@@ -150,7 +164,8 @@ test("2a. the platform workspace names the active teams of active clubs, ordered
   const t1 = ours.find((t) => String(t.teamId) === String(teams.t1));
   const clubT1 = (await calendarOf(roles.clubAdmin.cookie)).body.teams.find((t) => String(t.teamId) === String(teams.t1));
   assert.equal(t1.athleteCount, clubT1.athleteCount, "the same member count as the club's own answer");
-  assert.equal(t1.colorKey, clubT1.colorKey, "the colour its club chose (Q3)");
+  assert.equal(t1.colorKey, "rust", "the colour its club chose (Q3)");
+  assert.equal(clubT1.colorKey, "rust");
   // The clubs' names, from the database.
   const names = await q(`select id, name from public.clubs where id = any($1::uuid[])`, [[clubs.c1, clubs.c2]]);
   for (const row of names) assert.ok(ours.filter((t) => String(t.clubId) === String(row.id)).every((t) => t.clubName === row.name));
@@ -170,6 +185,22 @@ test("2b. every other workspace answers its teams as before: no club keys; the a
   assert.equal("clubName" in coach.body.teams[0], false);
   assert.deepEqual((await calendarOf(roles.privateCoach.cookie)).body.teams, []);
   assert.deepEqual((await calendarOf(m.athletes.athlete.cookie)).body.teams, []);
+});
+
+test("2b2. a platform admin whose role is revoked: the next answer is no longer the platform's and names no club (security review)", async () => {
+  const pa = await env.fx.platformAdmin(`revoked platform ${uid()}`);
+  const before = await calendarOf(pa.cookie);
+  assert.equal(before.body.workspace.type, "platform");
+  assert.ok(before.body.teams.length > 0 && before.body.teams.every((t) => "clubName" in t));
+  await q(`update public.user_global_roles set is_active = false where user_id = $1 and role = 'platform_admin'`, [pa.id]);
+  const after = await calendarOf(pa.cookie);
+  if (after.status === 200) {
+    assert.notEqual(after.body.workspace.type, "platform");
+    assert.equal(after.body.teams.some((t) => "clubName" in t), false, "no club keys outside the platform workspace");
+  } else {
+    assert.equal(after.status, 403, after.text);
+    assert.equal(after.text.includes("clubName"), false);
+  }
 });
 
 test("2c. the platform's cards name the teams they reach, with the team ids of its list", async () => {

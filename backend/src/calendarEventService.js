@@ -466,6 +466,8 @@ async function reducedViewOf(row, ctx, queryable) {
   const span = { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) };
   const days = [];
   for (let cursor = span.from; cursor <= span.to; cursor = addDay(cursor)) days.push(cursor);
+  // The platform workspace never reaches this reader's view: its platform admin manages every event
+  // (eventWriteBasis). Were that to change, loadWorkspaceTeams would name every club's teams here (K2b-1d2).
   const teams = await loadWorkspaceTeams(ctx);
   const teamIds = teams.map((t) => String(t.teamId));
   const scoped = await readScheduleTargetAthletes(ctx, "calendar.event_targets", {

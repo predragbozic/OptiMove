@@ -1633,3 +1633,52 @@ GO for K2b-1d2 as section 23 plans it.
 - As section 23: no migration; `sourceMetric*`, `sourceField*`, `gpexe*`, Imports and the mapping screens are not
   touched; invented names only; `code-reviewer` and `security-reviewer` on the frozen head; one draft pull request, no
   merge and no deploy.
+
+### 23.7 As built, the internal review round (on `60c7697f`) and what is still open
+
+**As built:**
+- **The cards:** `readEventRows` selects `et.icon_key` and `et.color_key` under `eventShowsTypeSql`, in the same
+  statement. `publicCard` gives `eventTypeIconKey` and `eventTypeColorKey` (or `null`) on the manager's, the reader's
+  and the athlete's card. `eventTypeId` stays the manager's.
+- **The platform:** `loadWorkspaceTeams` has a platform branch with one statement: active teams of active clubs,
+  `order by c.name, c.id, t.name, t.id`, each with `clubId` and `clubName`; the club and team branches are unchanged.
+  `reducedViewOf` states why the platform never reaches it.
+- **The frontend:** `centralCalendarTeamLabel` (`central-calendar-data.js`) is used by `teamName` (cards, dots, pills,
+  panel, day lists), the Groups chips, the legend and the form's labels. The form's `teams` is `[]` in the platform
+  workspace.
+- **The measurement:** `backend/scripts/calendar-platform-read-cost.mjs` (Q4, disposable database only, `--root` for the
+  before run). It fails when the seeding does not reach the read.
+
+**The reviews:**
+- `security-reviewer`: READY WITH NON-BLOCKING NOTES. No BLOCKER, CRITICAL or HIGH; one MEDIUM (the cost, unmeasured);
+  four LOW.
+- `code-reviewer`: **BLOCKED** by its contract, since no database suite ran. On the code: no BLOCKER or HIGH; two MEDIUM
+  and two LOW in the tests and the script.
+
+| Finding | Reviewer, severity | Correction | Test | Status |
+|---|---|---|---|---|
+| Q4's cost is unmeasured | security — MEDIUM | the script is written; it needs a database | the Q4 run, before and after | **Open: needs the database** |
+| Test 2a's order check cannot tell "club first" from "team first" (the fixture's names sort the same both ways) | code — MEDIUM | a club "Aaa…" with a team "Zz…" and a club "Bbb…" with a team "Aa…": Zz comes first | 2a (BM8) | Fixed, not run |
+| The platform's `colorKey` (Q3) was never set, so it was compared as null with null | code — MEDIUM | T1's colour set to "rust" through `PUT /settings/teams/:id`; the platform reads "rust" | 2a (BM11) | Fixed, not run |
+| Test 1b never set a colour before "taking it away" | code — LOW | "amber" set, read, then `null`, read again | 1b | Fixed, not run |
+| The script could measure without planned cards | code — LOW | it fails when no planned card, or fewer event cards than events, reach the read | — | Fixed, not run |
+| No test of a revoked platform role | security — LOW | the next answer is no longer the platform's and names no club | 2b2 | Fixed, not run |
+| `reducedViewOf` relies on the platform admin never being a reader | security — LOW/NIT | a comment that says so | — | Fixed |
+| A reader's card on a moved team's event is not checked (only a manager's) | security — LOW | not added: the same SQL case as the manager's card, and a moved team's event has no reader of the old club in the fixture | — | Recorded |
+| The form's platform guard is the frontend's only | security — LOW/NIT | the server already refuses another club's team on a write | — | Accepted |
+
+**The database:**
+- The owner allowed reading `DATABASE_URL` for disposable databases (relayed by the manager, 2026-11-18). This session's
+  permission check still refused the read, and it is not worked around.
+- **Not run:** the backend suites `central-calendar-k2b-1d2` (now 10 tests), `-k2a-events`, `-k2b-event-details`, `-k1a`,
+  `-k2a-1b` and `-k2b-settings`; the 11 backend mutations (dry-checked: each applies exactly once); the Q4
+  measurement.
+
+**Run:**
+- `backend-fast`: 674 of 676. The same two files fail with the same counts on a clean `main`: `gpexe-rest-v1-adapter-reads`,
+  and `legacy-schema-generator`, whose failing test is about CRLF input.
+- The new frontend suite: 4/4. The calendar frontend suites: 158/158.
+- Frontend mutations: 6/6 killed.
+- The Frontend PR gate on `60c7697f`: no new failure, the same 19 files with the same counts as a clean `main`. No
+  frontend file changed after it.
+- The build passed; `git diff --check` is clean.
