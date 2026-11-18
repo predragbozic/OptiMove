@@ -669,3 +669,53 @@ test("7. the recorded SQL of a create with sessions: writer lock, type, the swit
     assert.ok(eventInsert < targetsInsert && targetsInsert < linksInsert, `${kind}: event, targets, then links (${eventInsert}, ${targetsInsert}, ${linksInsert})`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 8. The db-reviewer's round (MEDIUM-1, MEDIUM-2)
+// ---------------------------------------------------------------------------
+test("8. a create with sessions and the Training Load quick toggle of the same session at once, in both orders: both settle, no 40P01", async () => {
+  for (const first of ["create", "toggle"]) {
+    const w = await teamWorld(`toggle ${first}`, { n: 1 });
+    const holder = gate();
+    const toggle = () => api(`/api/training-load/sessions/${w.sessions[0].sessionId}/rpe-enabled`, { method: "PATCH", cookie: w.coach.cookie, body: { rpeEnabled: false, confirmDisableWithResults: true } });
+    let created;
+    let toggled;
+    if (first === "create") {
+      // The create holds the plan FOR SHARE (after its session locks) while the toggle locks the session row.
+      hooks.afterSessionLocks = async () => { holder.reached(); await holder.opened; };
+      try {
+        const pending = create(w);
+        await reachedOrEnded(holder, pending);
+        toggled = await toggle();
+        holder.open();
+        created = await pending;
+      } finally {
+        delete hooks.afterSessionLocks;
+        holder.open();
+      }
+    } else {
+      [toggled, created] = await Promise.all([toggle(), create(w)]);
+    }
+    assert.equal(toggled.status, 200, `${first}: ${toggled.text}`);
+    assert.equal(created.res.status, 201, `${first}: ${created.res.text}`);
+    assert.equal((await liveLinks(w.ids)).length, 1);
+    assert.equal((await q(`select rpe_enabled from plans.plan_sessions where id = $1`, [w.sessions[0].sessionId]))[0].rpe_enabled, false);
+  }
+});
+
+test("8b. sessions with no targets are refused by the body (invalid_targets) before any session is read; nothing is written", async () => {
+  const w = await teamWorld("no targets", { n: 1 });
+  const tid = await typeId({ clubId: w.clubId });
+  const calls = recordSql();
+  let res;
+  const body = { ...createBody(w, { eventTypeId: tid }), targets: [] };
+  try {
+    res = await api("/api/calendar/events", { method: "POST", cookie: w.coach.cookie, body });
+  } finally {
+    delete hooks.beforeLocks;
+  }
+  assert.equal(res.status, 400, res.text);
+  assert.equal(res.body.error, "invalid_targets");
+  assert.equal(calls.length, 0, "refused before the transaction's locks");
+  assert.deepEqual(await counts(body.title), NOTHING);
+});
