@@ -55,24 +55,41 @@ test("4 (code review): a workspace switch clears Home's waiting count", async ()
   assert.match(renderTrainingLoadWeekButtonHtml(state.trainingLoad.athleteHomeWeek), />Your sessions &rsaquo;</);
 });
 
-test("5 (code review): 'Rate your sessions' opens the sheet on the week's first day that waits; 'Your sessions' keeps the sheet's own week", async () => {
+// Date-free (manager, 2026-11-18): on a Wednesday the old version failed - its fake week answer listed no day, so the
+// sheet's own clamp moved the selected day to Monday. "Today" is frozen to each day of one week in turn, and the fake
+// answer lists the seven days of the week it is asked for.
+test("5 (code review): 'Rate your sessions' opens the sheet on the week's first day that waits; 'Your sessions' keeps the sheet's own week", async (t) => {
   const { handleTrainingLoadAction } = await import("../training-load-actions.js");
-  const { weekMondayIso } = await import("../utils.js");
-  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ weekStart: weekMondayIso(TODAY), weekEnd: TODAY, days: [] }) });
-  const first = shift(-1) >= weekMondayIso(TODAY) ? shift(-1) : TODAY;
-  const html = renderTrainingLoadWeekButtonHtml({ data: weekOf({ [first]: [session(false)], [TODAY]: [session(false)] }) });
-  assert.match(html, new RegExp(`data-first-waiting="${first}"`));
-  state.trainingLoad = emptyTrainingLoadState();
-  state.trainingLoad.athleteWeekly.weekStart = "2020-01-06";
-  state.trainingLoad.athleteWeekly.selectedDate = "2020-01-08";
-  await handleTrainingLoadAction({ dataset: { action: "training-load-athlete-weekly-open", firstWaiting: first } }, { renderTrainingLoad: () => {} });
-  assert.equal(state.trainingLoad.athleteWeekly.weekStart, weekMondayIso(first));
-  assert.equal(state.trainingLoad.athleteWeekly.selectedDate, first);
-  assert.doesNotMatch(renderTrainingLoadWeekButtonHtml({ data: weekOf({ [TODAY]: [session(true)] }) }), /data-first-waiting/);
-  state.trainingLoad.athleteWeekly.weekStart = "2020-01-06";
-  state.trainingLoad.athleteWeekly.selectedDate = "2020-01-08";
-  await handleTrainingLoadAction({ dataset: { action: "training-load-athlete-weekly-open" } }, { renderTrainingLoad: () => {} });
-  assert.equal(state.trainingLoad.athleteWeekly.weekStart, "2020-01-06", "no waiting day: the sheet's own week");
+  const { weekMondayIso, addDaysIso } = await import("../utils.js");
+  const { clearAllViewCache } = await import("../view-cache.js");
+  globalThis.fetch = async (url) => {
+    const weekStart = new URL(String(url), "http://x").searchParams.get("weekStart");
+    const days = Array.from({ length: 7 }, (_, i) => ({ date: addDaysIso(weekStart, i), sessions: [] }));
+    return { ok: true, status: 200, json: async () => ({ weekStart, weekEnd: addDaysIso(weekStart, 6), days }) };
+  };
+  t.after(() => t.mock.timers.reset());
+  for (let i = 0; i < 7; i += 1) {
+    const today = addDaysIso("2026-11-16", i); // Monday 16.11.2026 to Sunday 22.11.2026
+    const [y, m, d] = today.split("-").map(Number);
+    t.mock.timers.reset();
+    t.mock.timers.enable({ apis: ["Date"], now: new Date(y, m - 1, d, 12).getTime() });
+    clearAllViewCache();
+    const yesterday = addDaysIso(today, -1);
+    const first = yesterday >= weekMondayIso(today) ? yesterday : today;
+    const html = renderTrainingLoadWeekButtonHtml({ data: weekOf({ [first]: [session(false)], [today]: [session(false)] }) });
+    assert.match(html, new RegExp(`data-first-waiting="${first}"`), today);
+    state.trainingLoad = emptyTrainingLoadState();
+    state.trainingLoad.athleteWeekly.weekStart = "2020-01-06";
+    state.trainingLoad.athleteWeekly.selectedDate = "2020-01-08";
+    await handleTrainingLoadAction({ dataset: { action: "training-load-athlete-weekly-open", firstWaiting: first } }, { renderTrainingLoad: () => {} });
+    assert.equal(state.trainingLoad.athleteWeekly.weekStart, weekMondayIso(first), today);
+    assert.equal(state.trainingLoad.athleteWeekly.selectedDate, first, today);
+    assert.doesNotMatch(renderTrainingLoadWeekButtonHtml({ data: weekOf({ [today]: [session(true)] }) }), /data-first-waiting/, today);
+    state.trainingLoad.athleteWeekly.weekStart = "2020-01-06";
+    state.trainingLoad.athleteWeekly.selectedDate = "2020-01-08";
+    await handleTrainingLoadAction({ dataset: { action: "training-load-athlete-weekly-open" } }, { renderTrainingLoad: () => {} });
+    assert.equal(state.trainingLoad.athleteWeekly.weekStart, "2020-01-06", `no waiting day: the sheet's own week (${today})`);
+  }
 });
 
 test("6 (code review): after a saved rating Home's week is read again once Home has read it, and not otherwise", async () => {
