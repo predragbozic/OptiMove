@@ -139,6 +139,29 @@ function columnHtml(s, c, drag) {
     </button>${tech}</li>`;
 }
 
+// The Rukovodilac, 2026-11-18: a zone or an event threshold (a field with parameters) cannot be placed by any path
+// today - Mappings refuses a version whose revision is not verified, and no document proves these fields' unit and
+// limits. Such columns leave the list for one closed group at its end. Display only: the server decides as before.
+const parked = (s, c) => !c.placeable && c.reason === "field_has_parameters" && !columnUse(s, c.fieldId);
+function parkedHtml(s) {
+  const board = s.board;
+  const items = board.columns.filter((c) => parked(s, c));
+  if (!items.length) return "";
+  const next = forSupport()
+    ? "For a single zone, create its numbered GPEXE field in Data configuration &gt; Source fields."
+    : "For a single zone, ask OptiMove support to add its numbered GPEXE field.";
+  const rows = items.map((c) => {
+    const unitLine = c.unitProven ? `GPEXE sends values in ${escapeHtml(c.unit)}` : c.expectedUnit ? `Expected ${escapeHtml(c.expectedUnit)}, not confirmed` : "Unit not confirmed";
+    const tech = forSupport() ? `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(c.key)}</code></details>` : "";
+    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small></span></div>${tech}</li>`;
+  }).join("");
+  return `<details class="mb-parked" ${s.parkedOpen ? "open" : ""}>
+    <summary>Not available yet (${items.length})</summary>
+    <p class="muted mb-note">These need a zone or threshold choice that OptiMove does not offer yet. ${next}</p>
+    <ul class="mb-list">${rows}</ul>
+  </details>`;
+}
+
 function slotHtml(s, v, drag) {
   const board = s.board;
   const slot = slotOf(s, v);
@@ -204,7 +227,8 @@ function boardCards(s) {
         <p class="muted mb-note">${escapeHtml(sessionWords(board.session, dateTime))} ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
         <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <span><strong>${name(board.pair.labels[1])}</strong>.</span>
           ${board.pair.count > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-other-athletes" ${busy(s) ? "disabled" : ""}>Other athletes</button>` : ""}</p>
-        <ul class="mb-list">${board.columns.map((c) => columnHtml(s, c, drag)).join("")}</ul>
+        <ul class="mb-list">${board.columns.filter((c) => !parked(s, c)).map((c) => columnHtml(s, c, drag)).join("")}</ul>
+        ${parkedHtml(s)}
       </section>
       <section class="om-card mb-card" aria-labelledby="mb-variables-title">
         <div class="om-card__header"><h3 class="om-card__title" id="mb-variables-title">Variables</h3></div>

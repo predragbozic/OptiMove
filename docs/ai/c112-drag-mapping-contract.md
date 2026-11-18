@@ -247,7 +247,13 @@ section 4.4's lock order (the hide lock), each marked in place.
     J16 refuses to submit a version whose revision is not verified, and no document proves these fields' unit and
     limits. A platform admin is told: "Zones and thresholds cannot be placed yet: their unit and limits need a
     document first. For one zone, create its numbered GPEXE field in Data configuration > Source fields and compare it
-    with GPEXE." A numbered zone name is a field without parameters, so route C creates it and route O compares it.)
+    with GPEXE." A numbered zone name is a field without parameters, so route C creates it and route O compares it.
+    The Rukovodilac's decision of the same day: on both boards such a column, unless it is already on or placed, leaves
+    the list for one closed group at its end, "Not available yet (N)", with one sentence: "These need a zone or
+    threshold choice that OptiMove does not offer yet." and the next step - for a platform admin "For a single zone,
+    create its numbered GPEXE field in Data configuration > Source fields.", for a club's admin "For a single zone, ask
+    OptiMove support to add its numbered GPEXE field." Display only; the server decides as before. The group keeps
+    its open state across a repaint.)
   - "OptiMove cannot read this column yet." There is no extractor.
   - "These two athletes have no value here." The admin can choose *Other athletes*.
 - **Right: the variables.** First the club's own active variables, then OptiMove's system variables, each with its unit.

@@ -500,3 +500,8 @@ export function closeBoardOverlay(render) {
   render();
   return true;
 }
+
+// The "Not available yet" group's open state, from its own "toggle" (app.js), so a repaint keeps it as it was left.
+export function metricBoardParkedToggled(open) {
+  boardState().parkedOpen = Boolean(open);
+}

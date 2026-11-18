@@ -806,3 +806,32 @@ test("Z (the Rukovodilac, 2026-11-18): a zone or threshold column never points t
   assert.equal(club, "OptiMove cannot place zones and thresholds yet. Ask OptiMove support.");
   for (const text of [platform, club]) assert.doesNotMatch(text, /Mappings/);
 });
+
+test("Z2 (the Rukovodilac, 2026-11-18): zone and threshold columns leave the list for one closed 'Not available yet (N)' group with one sentence and a real next step - never Mappings; it keeps its open state across a repaint", async () => {
+  const zone = { fieldId: "f-zone", revisionId: "r-zone", key: "more.complementary_data.power.distance", label: "Example zone set", unit: "m", unitProven: false, expectedUnit: "m", placeable: false, reason: "field_has_parameters", displayRule: null, displayUnits: [], rawA: null, rawB: null };
+  const club = structuredClone(FX.board);
+  club.board.columns.push(zone, { ...zone, fieldId: "f-acc", key: "more.events.acceleration", label: "Example threshold events" });
+  overrides.push((c) => (c.url.startsWith(`${B}/board?`) ? { status: 200, body: club } : null));
+  await open();
+  const group = content.querySelector("details.mb-parked");
+  assert.ok(group && !group.open, "one closed group");
+  assert.equal(group.querySelector("summary").textContent.trim(), "Not available yet (2)");
+  assert.match(group.textContent, /These need a zone or threshold choice that OptiMove does not offer yet\. For a single zone, ask OptiMove support to add its numbered GPEXE field\./);
+  assert.ok(group.textContent.includes("Example zone set") && group.textContent.includes("Example threshold events"));
+  const main = [...content.querySelectorAll(".mb-list")].find((ul) => !ul.closest(".mb-parked"));
+  assert.ok(!main.textContent.includes("Example zone set"), "not in the main column list");
+  assert.ok(main.textContent.includes("Power zone distance"), "a zone column that is already on stays in the list, with what is on");
+  assert.doesNotMatch(text(), /Mappings/);
+  actions.metricBoardParkedToggled(true);
+  render();
+  assert.equal(content.querySelector("details.mb-parked").open, true, "a repaint keeps it open");
+  actions.metricBoardParkedToggled(false);
+
+  asUser("platform", null);
+  const b = platformBoard();
+  b.columns.push(zone);
+  platformWorld(b);
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  assert.match(content.querySelector("details.mb-parked").textContent, /For a single zone, create its numbered GPEXE field in Data configuration > Source fields\./);
+});
