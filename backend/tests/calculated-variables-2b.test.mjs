@@ -163,10 +163,6 @@ test("2. a corrected input (a newer GPEXE answer) supersedes the calculation: th
 
 test("3. a missing input is no value (C142): a team without the 75+ zone gets no HMLD at all, and the preview names the missing input for every result, by name", async () => {
   const org = await mappedTeam({ only: ["gpexe_power_zone_25_60_distance", "gpexe_power_zone_60_75_distance", "gpexe_total_distance"] });
-  await runImport(org, bundleOf(org));
-  const rows = await occasions(org.teamId);
-  assert.ok(rows.length > 0);
-  assert.ok(rows.every((o) => o.derived.length === 0), "never a partial sum");
   const client = new pg.Client({ connectionString: db.url });
   await client.connect();
   try {
@@ -184,6 +180,10 @@ test("3. a missing input is no value (C142): a team without the 75+ zone gets no
   } finally {
     await client.end();
   }
+  await runImport(org, bundleOf(org));
+  const rows = await occasions(org.teamId);
+  assert.ok(rows.length > 0);
+  assert.ok(rows.every((o) => o.derived.length === 0), "never a partial sum");
 });
 
 test("4. the preview of a team with every input lists each result's HMLD value; a team whose club hid HMLD, and a club variable of another club, get none", async () => {
@@ -225,6 +225,85 @@ test("4. the preview of a team with every input lists each result's HMLD value; 
     assert.ok(afterHide.length > 0 && afterHide.every((c) => c.metricDefinitionId === ownCalc), "a hidden calculated variable is not calculated for the club");
     await runImport(org, bundleOf(org));
     assert.ok((await occasions(org.teamId)).every((o) => o.derived.every((d) => d.definition === ownCalc)));
+  } finally {
+    await client.end();
+  }
+});
+
+// The raw 7i hide and show of a calculated variable for a club (the route's own test covers the route).
+async function hideFor(clubId, definitionId) {
+  await admin.query("begin");
+  await admin.query("set local session_replication_role = replica");
+  await admin.query(`insert into training_load.metric_definition_club_hides (club_id, metric_definition_id, hidden_by_user_id, hidden_basis, hide_request_key, hide_request_hash)
+    values ($1, $2, $3, 'platform_admin', $4, $5)`, [clubId, definitionId, pa, key(), "a".repeat(64)]);
+  await admin.query("commit");
+}
+async function showFor(clubId, definitionId) {
+  await admin.query("begin");
+  await admin.query("set local session_replication_role = replica");
+  await admin.query(`update training_load.metric_definition_club_hides set shown_at = now(), shown_by_user_id = $3, shown_basis = 'platform_admin',
+                       show_request_key = $4, show_request_hash = $5 where club_id = $1 and metric_definition_id = $2 and shown_at is null`,
+    [clubId, definitionId, pa, key(), "b".repeat(64)]);
+  await admin.query("commit");
+}
+// A client whose statements are recorded (the SQL text of each call).
+async function recordingClient() {
+  const client = new pg.Client({ connectionString: db.url });
+  await client.connect();
+  const log = [];
+  const query = client.query.bind(client);
+  client.query = (...args) => { log.push(typeof args[0] === "string" ? args[0] : args[0]?.text ?? ""); return query(...args); };
+  return { client, log };
+}
+const isCalculatedInsert = (sql) => /'derived_rollup', 'complete'/.test(sql);
+const isLevelsRead = (sql) => /select distinct sc\.scope_level/.test(sql);
+const isEntriesRead = (sql) => /unnest \(\$1::uuid\[\], \$2::text\[\]\)|unnest\(\$1::uuid\[\], \$2::text\[\]\)/.test(sql);
+
+test("5. an occasion imported before a calculated variable applied keeps no calculated value and its unchanged result carries no calculated entry (no backfill; the code review's MEDIUM 1)", async () => {
+  const org = await mappedTeam();
+  await hideFor(org.clubId, hmld.id);
+  await runImport(org, bundleOf(org));
+  assert.ok((await occasions(org.teamId)).every((o) => o.derived.length === 0), "hidden: nothing calculated");
+  await showFor(org.clubId, hmld.id);
+  const client = new pg.Client({ connectionString: db.url });
+  await client.connect();
+  try {
+    const { preview } = await buildCandidatePreview(client, { bundle: bundleOf(org), ownerTeamId: org.teamId, performedByUserId: org.userId,
+      importPath: { path: "source_connection", bindingId: org.bindingId } });
+    const results = preview.athletes.flatMap((a) => a.results).filter((r) => r.outcome !== "not_imported");
+    assert.ok(results.length > 0 && results.every((r) => r.outcome === "unchanged"), JSON.stringify(results.map((r) => r.outcome)));
+    assert.ok(results.every((r) => r.calculated === undefined), "an unchanged result describes nothing it did not write");
+  } finally {
+    await client.end();
+  }
+  const again = await runImport(org, bundleOf(org));
+  assert.ok(again.results.every((r) => r.outcome === "unchanged"));
+  assert.ok((await occasions(org.teamId)).every((o) => o.derived.length === 0), "and the re-import does not fill it in");
+});
+
+test("6. statements: the import reads the applicable levels once; a team with no calculated variable sends no calculated statement per occasion, and the preview reads its entries in one statement (the reviews' MEDIUM)", async () => {
+  const org = await mappedTeam();
+  await hideFor(org.clubId, hmld.id);
+  let { client, log } = await recordingClient();
+  try {
+    await buildCandidatePreview(client, { bundle: bundleOf(org), ownerTeamId: org.teamId, performedByUserId: org.userId,
+      importPath: { path: "source_connection", bindingId: org.bindingId } });
+    assert.equal(log.filter(isLevelsRead).length, 1, "the levels, once");
+    assert.equal(log.filter(isCalculatedInsert).length, 0, "no calculated insert");
+    assert.ok(log.filter(isEntriesRead).length <= 1, "the entries in at most one statement");
+  } finally {
+    await client.end();
+  }
+  await showFor(org.clubId, hmld.id);
+  ({ client, log } = await recordingClient());
+  try {
+    const { preview } = await buildCandidatePreview(client, { bundle: bundleOf(org), ownerTeamId: org.teamId, performedByUserId: org.userId,
+      importPath: { path: "source_connection", bindingId: org.bindingId } });
+    const withEntries = preview.athletes.flatMap((a) => a.results).filter((r) => r.calculated?.length);
+    assert.ok(withEntries.length > 1, "several results carry HMLD");
+    assert.equal(log.filter(isLevelsRead).length, 1);
+    assert.equal(log.filter(isEntriesRead).length, 1, "every result's entries in one statement");
+    assert.equal(log.filter(isCalculatedInsert).length, withEntries.length, "one calculated statement per written occasion at a level that has one");
   } finally {
     await client.end();
   }

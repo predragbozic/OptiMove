@@ -4496,12 +4496,18 @@ PR 3's screen says so before Save, and zone match refuses overlapping conditione
   arithmetic is the database's (exact numeric), so v77's value guard always agrees. The row is `is_derived`, role
   `derived_rollup`, coverage `complete`, `computed_by_ref` `{formulaVersionId, inputValueIds}` in the formula's input order.
   Each kind is one entry of `KINDS` (today `sum`); v79's ratio and difference are new entries.
-- **The importer** (`gpexeImportWriter.js`) calls it right after an occasion's T6 rows, in the same transaction, for every
-  occasion it writes: created, corrected, supplemented, needs_review. The current occasion is never left with a stale value.
+- **The importer** (`gpexeImportWriter.js`) reads once per import, under the team lock, the levels at which a calculated
+  variable applies to the team (`calculatedLevels`), and calls the writer right after an occasion's T6 rows, in the same
+  transaction, for every occasion it writes at such a level: created, corrected, supplemented, needs_review,
+  stale_resend_ignored. A team with no calculated variable (today's production) sends one statement more per import, none per
+  occasion. A caller that does not pass that set fails closed (`calculation_context_missing`). The current occasion is never
+  left with a stale value.
   The re-import compares non-derived rows only (`importResult`'s current values, so `isPureSupplement` is unchanged).
-- **The preview** (`gpexeImportPreview.js`) reads the calculated entries inside its savepoint, after the import it rolls back:
-  a result gets `calculated: [{metricDefinitionId, label, value, unit, missingInputs}]` only when a calculated variable applies,
-  so every other preview and its hash are unchanged; the current-state comparison reads non-derived rows only. A missing
+- **The preview** (`gpexeImportPreview.js`) reads the calculated entries inside its savepoint, after the import it rolls back,
+  in one statement for the occasions this import writes (`calculatedForOccasions`): such a result gets
+  `calculated: [{metricDefinitionId, label, value, unit, missingInputs}]` only when a calculated variable applies, so every
+  other preview and its hash are unchanged. An `unchanged` or `*_already_recorded` result carries no entry (its occasion is as
+  it was); the current-state comparison reads non-derived rows only. A missing
   input is named per athlete (C142). The labels are of system or own-club variables only, so the audience projection names
   nothing new.
 - **The undo** (v57/v76) removes the calculated values with the rest of the session, in its own transaction, and the deletion
@@ -4521,7 +4527,15 @@ PR 3's screen says so before Save, and zone match refuses overlapping conditione
   routes: import, undo and re-import, estimates, the correction, the dashboard under every policy and a non-calculated derived
   value), `gpexe-import-check-sql.test.mjs` test 6; mutations of the estimates filter, the correction's recalculation and its
   input-only comparison, the dashboard admission (both directions) and the check's two filters, all killed.
-- **Recorded, not built:** re-pointing an input's `current_version_id` to an older version of another unit is not guarded
+- **No backfill (as built; a backfill is a separate decision):** a calculated variable applies to the occasions written
+  after it exists (or after its club shows it again). An occasion imported before keeps no calculated value: a re-import of
+  the same content is `unchanged` and writes nothing, and its preview carries no entry. The same holds for a new version of a
+  calculated variable. A dashboard therefore shows no value of it for sessions imported earlier.
+- **Recorded, not built:** an import in flight takes no lock on the calculated definition, so one archived, hidden or
+  re-versioned at the same instant may still get one value under the version current in the import's snapshot (immutable
+  and valid; v78 already keeps its inputs from being archived): accepted, since `FOR SHARE` on it would lock against v77's
+  order (db-reviewer, LOW). The undo's removed-value count includes calculated values (correct; the import check shows them
+  apart). Re-pointing an input's `current_version_id` to an older version of another unit is not guarded
   (v78's runbook, LOW-1 of 2a): the writer compares each input value's unit with the calculated variable's, so such a value is
   left out, never added. The older catalog API cannot reach v78's guards (it refuses system and club writes, C98, and inputs
   are system or club only), so its 23514 mapping (LOW-2 of 2a) needs no code. `correctSourceIdentityOccasion` and the resend

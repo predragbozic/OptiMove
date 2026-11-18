@@ -72,7 +72,7 @@ import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { prepareImportMapping } from "./gpexeImportMapping.js";
 import { canonicalDecimal } from "./sourceMetricExtractors.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
-import { writeCalculatedValues } from "./calculatedValues.js";
+import { calculatedLevels, writeCalculatedValues } from "./calculatedValues.js";
 
 export class GpexeImportError extends Error {
   constructor(code, message) {
@@ -357,7 +357,7 @@ async function ensureDrillComponents(client, { activityId, segmentsByDrillIndex,
   }
 }
 
-async function insertOccasionWithValues(client, { participantId, segmentId, identityId, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance, supersedesOccasionId = null, conflictStatus = null, level = null, ownerTeamId = null }) {
+async function insertOccasionWithValues(client, { participantId, segmentId, identityId, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance, supersedesOccasionId = null, conflictStatus = null, level = null, ownerTeamId = null, calculated = null }) {
   const batchId = await batch.id();
   const occasion = await client.query(
     `insert into training_load.metric_measurement_occasions
@@ -378,7 +378,10 @@ async function insertOccasionWithValues(client, { participantId, segmentId, iden
     if (written.rowCount !== values.length) throw new GpexeImportError("provenance_incomplete", "Not every imported value has its provenance row.");
     // J21 (C141-C143): the calculated variables of this occasion, from these values, in this transaction. Every new occasion
     // gets its own (a correction, a supplement or a needs-review occasion included), so no calculated value outlives its inputs.
-    if (level && ownerTeamId) await writeCalculatedValues(client, { occasionId, level, ownerTeamId });
+    // `calculated` is the import's set of levels at which a calculated variable applies (read once); a caller that does not
+    // pass it fails closed rather than importing without the calculated values.
+    if (!(calculated instanceof Set) || !level || !ownerTeamId) throw new GpexeImportError("calculation_context_missing", "The import did not say which calculated variables apply.");
+    if (calculated.has(level)) await writeCalculatedValues(client, { occasionId, level, ownerTeamId });
   }
   return occasionId;
 }
@@ -535,11 +538,11 @@ async function supersede(client, { common, currentOccasionId, identityId }) {
   return occasionId;
 }
 
-async function importResult(client, { result, identity, participantId, segmentId, sourceReportedAt, provenance, batch, performedByUserId, ownerTeamId }) {
+async function importResult(client, { result, identity, participantId, segmentId, sourceReportedAt, provenance, batch, performedByUserId, ownerTeamId, calculated }) {
   const values = result.values.map((v) => ({ ...v, ...roleForLevel(result.level) }));
   const contentHash = importedOccasionContentHash({ level: result.level, drillIndex: result.drillIndex, values });
 
-  const common = { participantId, segmentId, identityId: identity.id, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance, level: result.level, ownerTeamId };
+  const common = { participantId, segmentId, identityId: identity.id, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance, level: result.level, ownerTeamId, calculated };
   if (!identity.current_occasion_id) {
     const occasionId = await insertOccasionWithValues(client, common);
     await client.query(`update training_load.metric_source_identities set current_occasion_id = $1 where id = $2`, [occasionId, identity.id]);
@@ -773,6 +776,8 @@ export async function importGpexePlanLocked(client, plan, ctx, { onResultImporte
       },
     };
 
+    // J21: which levels have a calculated variable for this team, once per import (under the team lock already held).
+    const calculated = await calculatedLevels(client, { ownerTeamId: ctx.ownerTeamId });
     const results = [];
     for (const participant of plan.participants) {
       for (const result of participant.results) {
@@ -781,7 +786,7 @@ export async function importGpexePlanLocked(client, plan, ctx, { onResultImporte
         const outcome = await importResult(client, {
           result, identity: identities.get(result.externalId), participantId: participantIds.get(participant.gpexeAthleteId), segmentId,
           sourceReportedAt: plan.event.sourceReportedAt, provenance, batch, performedByUserId: ctx.performedByUserId,
-          ownerTeamId: ctx.ownerTeamId,
+          ownerTeamId: ctx.ownerTeamId, calculated,
         });
         results.push({ externalId: result.externalId, gpexeAthleteId: participant.gpexeAthleteId, ...outcome });
         if (onResultImported) await onResultImported(results[results.length - 1]);
