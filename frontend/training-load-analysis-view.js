@@ -437,16 +437,6 @@ function renderDisplayStatusHtml(status, reasons) {
   return `<div class="tl-analysis-status is-${status === "error" ? "error" : status === "conflict" ? "conflict" : "unresolved"}" role="status">${escapeHtml(displayStatusLabel(status, reasons))}</div>`;
 }
 
-function displayRowContext(row) {
-  const identity = row.identity;
-  const reported = identity.source.reported;
-  const connectionKeys = ["sourceConnectionId", "source_connection_id", "sourceId"];
-  const onlyConnection = Object.keys(reported).length === 1 && connectionKeys.includes(Object.keys(reported)[0]);
-  const sourceId = reported.sourceConnectionId ?? reported.source_connection_id ?? reported.sourceId;
-  const sourceLabel = onlyConnection && typeof sourceId === "string" ? `Source ${sourceId}` : Object.keys(reported).length ? `Source provenance ${JSON.stringify(reported)}` : "";
-  return [identity.athleteId ? `Athlete ${identity.athleteId}` : "", sourceLabel].filter(Boolean).join(" · ");
-}
-
 function renderKpiHtml(model) {
   if (!model.series.length) return `<p class="muted">Add a series to show this KPI.</p>`;
   const kpi = model.kpi;
@@ -456,7 +446,7 @@ function renderKpiHtml(model) {
     <div class="tl-analysis-kpi">
       <span class="tl-analysis-kpi-value">${escapeHtml(formatValue(row.value, model))}</span>
       <span class="tl-analysis-kpi-label">${escapeHtml(seriesLabel(model.series[0].definition))}${row.identity.unit ? ` · ${escapeHtml(row.identity.unit)}` : ""}</span>
-      ${displayRowContext(row) ? `<span class="tl-analysis-kpi-context">${escapeHtml(displayRowContext(row))}</span>` : ""}
+      ${safeAthleteName(row.identity.athleteId) ? `<span class="tl-analysis-kpi-context">${escapeHtml(safeAthleteName(row.identity.athleteId))}</span>` : ""}
       ${kpi.comparison.status === "value" ? `<span class="tl-analysis-kpi-compare">Compare ${escapeHtml(formatValue(kpi.comparison.row.value, model))}</span>` : ""}
       ${["incompatible", "error"].includes(kpi.comparison.status) ? `<span class="tl-analysis-status is-unresolved">Comparison unavailable: results are not unambiguous and compatible.</span>` : ""}
     </div>
@@ -469,9 +459,14 @@ function safeAthleteName(id) {
   const name = state.trainingLoad.orgPickerData?.athletes?.find(athlete => String(athlete.id).toLowerCase() === String(id).toLowerCase())?.name;
   return name && !uuidPattern.test(name) ? name : "Athlete name unavailable";
 }
-function safeTableBucket(row) {
+function safeTableBucket(row, labels, groupBy) {
   const bucket = row.identity.bucketKey;
-  if (uuidPattern.test(String(bucket))) return row.identity.athleteId === bucket ? "" : "Group";
+  if (bucket && row.identity.athleteId && String(bucket).toLowerCase() === String(row.identity.athleteId).toLowerCase()) return "";
+  if (uuidPattern.test(String(bucket)) || /[{}\[\]]/.test(String(bucket))) {
+    if (!labels.has(bucket)) labels.set(bucket, labels.size + 1);
+    const kind = groupBy === "session" ? "Session" : groupBy === "component" ? "Component" : "Group";
+    return kind + " " + labels.get(bucket);
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(bucket ?? "")) return formatDate(bucket);
   return typeof bucket === "string" && !/[{}\[\]]/.test(bucket) ? bucket : "";
 }
@@ -479,6 +474,7 @@ function safeTableValue(value, model) {
   return value !== null && typeof value === "object" || uuidPattern.test(String(value)) ? "Unavailable" : formatValue(value, model);
 }
 function renderTableHtml(model) {
+  const bucketLabels = new Map();
   if (!model.series.length) return `<p class="muted">Add series to build a table.</p>`;
   return `
     <div class="tl-analysis-table-wrap" role="region" aria-label="${escapeAttr(model.title || "Metric")} values" tabindex="0">
@@ -495,7 +491,7 @@ function renderTableHtml(model) {
             return rows.map((row) => `
               <tr>
                 <td>${escapeHtml(label)}</td>
-                <td>${escapeHtml([safeTableBucket(row), safeAthleteName(row.identity.athleteId)].filter(Boolean).join(" · "))}</td>
+                <td>${escapeHtml([safeTableBucket(row, bucketLabels, model.groupBy), safeAthleteName(row.identity.athleteId)].filter(Boolean).join(" · "))}</td>
                 <td>${row.status === "value" ? escapeHtml(safeTableValue(row.value, model)) : "-"}</td>
                 <td>${escapeHtml(uuidPattern.test(String(row.identity.unit)) ? "" : row.identity.unit || "")}</td>
                 <td>${row.status === "value" ? "" : escapeHtml(displayStatusLabel(row.status, row.reasons))}</td>

@@ -1,5 +1,14 @@
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
+function chartBucketLabel(key, row, index, rowContext) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(key ?? "")) return formatDate(key);
+  if (/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}|[{}\[\]]/i.test(String(key))) {
+    return row?.identity.athleteId && String(key).toLowerCase() === String(row.identity.athleteId).toLowerCase()
+      ? rowContext(row) : `Group ${index + 1}`;
+  }
+  return key ?? "";
+}
+
 export function dashboardChartPlots(model, labelForSeries, rowContext) {
   if (model.status !== "ready" || !["line_chart", "bar_chart"].includes(model.widgetType)) return [];
   const plots = [];
@@ -12,16 +21,25 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
       && new Set(series.chartGroups.map(group => group.identity.unit)).size === 1;
     if (athleteLines) {
       const keys = [...new Set(series.chartGroups.flatMap(group => group.rows.map(row => row.identity.bucketKey)))].sort();
-      plots.push({ caption: labelForSeries(series.definition), precision, option: {
+      const usedNames = new Set();
+      const names = series.chartGroups.map(group => {
+        const base = rowContext(group.rows[0]) || "Athlete name unavailable";
+        let name = base;
+        let suffix = 2;
+        while (usedNames.has(name)) name = base + " (" + suffix++ + ")";
+        usedNames.add(name);
+        return name;
+      });
+      plots.push({ caption: labelForSeries(series.definition), precision, shortDateAxis: true, option: {
         animation: false,
         grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
-        legend: { show: true, type: "scroll", top: 4 },
+        legend: { show: model.config.effective.legend.visible, type: "scroll", top: 4 },
         tooltip: { trigger: "axis", renderMode: "richText", confine: true },
-        xAxis: { type: "category", data: keys.map(key => /^\d{4}-\d{2}-\d{2}$/.test(key) ? formatDate(key) : key), axisLabel: { hideOverlap: true } },
+        xAxis: { type: "category", data: keys.map((key, index) => chartBucketLabel(key, series.chartGroups.flatMap(group => group.rows).find(row => row.identity.bucketKey === key), index, rowContext)), axisLabel: { hideOverlap: true } },
         yAxis: { type: "value", name: series.chartGroups[0].identity.unit || "" },
         series: series.chartGroups.map((group, index) => {
           const rows = new Map(group.rows.map(row => [row.identity.bucketKey, row]));
-          return { name: rowContext(group.rows[0]) || "Athlete name unavailable", id: String(index), type: "line", connectNulls: false,
+          return { name: names[index], id: String(index), type: "line", connectNulls: false,
             data: keys.map(key => rows.get(key)?.chartStatus === "value" ? rows.get(key).value : null) };
         }),
       } });
@@ -37,13 +55,14 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
       plots.push({
         caption,
         precision,
+        shortDateAxis: true,
         option: {
           animation: false,
           color: ["#002d9c"],
           grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
           legend: { show: model.config.effective.legend.visible, type: "scroll", left: 12, right: 12, top: 4 },
           tooltip: { trigger: "axis", renderMode: "richText", confine: true },
-          xAxis: { type: "category", data: rows.map(row => /^\d{4}-\d{2}-\d{2}$/.test(row.identity.bucketKey ?? "") ? formatDate(row.identity.bucketKey) : row.identity.bucketKey ?? ""), axisLabel: { hideOverlap: true } },
+          xAxis: { type: "category", data: rows.map((row, index) => chartBucketLabel(row.identity.bucketKey, row, index, rowContext)), axisLabel: { hideOverlap: true } },
           yAxis: { type: "value", name: unit, nameLocation: "middle", nameGap: 42 },
           series: [{
             name,
