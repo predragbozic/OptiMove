@@ -1517,8 +1517,9 @@ migrations end at v76). **Frontend only**: nothing below needs a backend change 
 ### 22.2 What the list shows
 
 - **One row per event.** The answer has one card per day of an event. The list shows each event once (by
-  `links.eventId`), at its first day in the window. Rows are sorted by that day, then an event without a time first,
-  then the start time, then the title.
+  `links.eventId`), at its first day in the window. Rows are sorted by that day, then the events with a start time by
+  the time, then those without, then the title (as built: the calendar's own day list puts the untimed cards last,
+  under "No time", and since 22.7 Q2 an event without a time is one whose time is not set).
 - **An explicit pick.** The client copies exactly `title`, `eventKind`, `eventTypeLabel`, `date`, `span`,
   `startTime`, `endTime`, `place`, `location` and `cancelled` into its own row. A field the server might add later
   never reaches the screen.
@@ -1681,3 +1682,67 @@ GO for K2b-1e as section 22 plans it, frontend only.
   `/api/calendar` and `/api/athlete-home`, as the earlier slices did, at 1280 / 390 / 375 / 360 px, with every case of
   22.5: a library place with an address and a note, a one-off place, a multi-day event, a cancelled event, an event
   today, more than five events. The report says plainly that the check ran on the harness, not on the real server.
+- **The reviewers' rules relayed by the manager (2026-11-18):** one branch and one **draft** pull request; the full head
+  of 40 characters in the report; a head sent for review never changes; no migration (a calendar migration would be v77
+  or later, on the owner's order naming it); the Imports, Source fields and mapping screens and
+  `backend/src/sourceMetric*`, `sourceField*` and `gpexe*` are not touched; invented names only.
+
+### 22.8 As built
+
+- **Modules:** `frontend/athlete-home-events-data.js` (the read, the cache, the pick and the rows),
+  `-view.js` (the section) and `-actions.js` (*Try again*, *Show N more* / *Show fewer*); `state.athleteHomeEvents`
+  (`frontend/state.js`); `app.js` starts the read in `loadAthleteHome`'s `Promise.all`, dispatches the two actions
+  behind their prefix and resets the slice in `onWorkspaceChanged`; `athlete-home.js` draws the section after *This
+  week*; `styles.css` the `.athlete-home-event*` block; `menu-cache-policy.js` names the second namespace. **No backend
+  change, no migration.**
+- **The read:** `GET /api/calendar?from&to&today&kinds=event`, `today` the device's date and `to` 13 days later;
+  `loadCachedView` under `athlete-home-events`, keyed by account, workspace and that date. An answer is applied only by
+  the newest read (a generation, bumped by every read and by `resetAthleteHomeEvents()`), only for the account and
+  workspace it was asked for, and only if the namespace was not cleared meanwhile.
+- **The pick:** a row holds exactly `eventId, title, eventKind, eventTypeLabel, day, from, to, startTime, endTime,
+  place, cancelled`; a library place keeps `name, address, note` (not its id), and one with none of them is no place; a
+  one-off place keeps its text.
+- **The row:** the kind's icon; the title (else the type word); "Match · Today · 18:00–19:30" (the type word left out
+  when it is the title; "Time not set" without a start, 22.7 Q2); several days "Tue 17 Nov – Tomorrow"; the place from
+  the K2b-1d panel's helper; a cancelled event the calendar's grey pill "✕ Cancelled" (the glyph `aria-hidden`), its
+  title and icon muted, no place. The order: the first day in the window, the timed events by time, then the untimed
+  ones, then the title.
+- **The states:** "Loading events…"; "No events in the next 14 days."; "Events could not be loaded." with *Try again*;
+  a 401 "Sign in again to see your events." without it; a 403 hides the section, and the next entry into Home keeps it
+  hidden while it asks again.
+- **Show N more / Show fewer:** in place, `aria-expanded` and `aria-controls`, the focus kept on the button; every entry
+  into Home starts with the first 5.
+- **After the review round (22.9):** the day first ("Today · 18:00–19:30 · Match"); the Cancelled mark right under the
+  title, 13 px, its own colours on Home (the calendar declares `--cc-cancelled*` only on `.central-calendar`), the title
+  struck through as on the calendar's card; the error said with `role="alert"` and the focus on the section's heading
+  after *Try again*; `role="list"` on the list; the click dispatch gated by its prefix; a 403 kept hidden on the next
+  entry; a library place with nothing to show draws no line.
+
+### 22.9 The internal review round (on `c1f99f5c`)
+
+`code-reviewer`, `mobile-qa` and `ux-design-reviewer`, each with the full packet. `code-reviewer` READY WITH
+NON-BLOCKING NOTES (three LOW); `mobile-qa` READY WITH NON-BLOCKING NOTES (one MEDIUM, two LOW); `ux-design-reviewer`
+READY (two MEDIUM, five LOW, three NIT). No BLOCKER or HIGH, so no narrow re-review (`CLAUDE.md`, the Definition of
+done).
+
+| Finding | Reviewer, severity | Correction | Test | Status |
+|---|---|---|---|---|
+| The Cancelled pill had no colours on Home: `--cc-cancelled*` live only on `.central-calendar` | mobile, UX — MEDIUM | the two variables on `.athlete-home-events`, a darker text (`#4b5565` on `#eceff3`), 13 px; the title struck through; the mark right under the title | E6 (M25); the colours and the size in the browser check | Fixed |
+| "No training is assigned for today." above a calendar training event on the same Home | UX — MEDIUM | **not changed here:** the sentence of the *Today's training* card is existing Home wording, the product's to choose. Proposed: "No training plan is assigned for today." | — | **Open, for the manager** |
+| An ungated `await` in the click dispatch before the synchronous handlers | code — LOW | gated by `type?.startsWith("athlete-home-events-")` | E10 (M19) | Fixed |
+| 22.2 said "an event without a time first" | code, UX — LOW | corrected to the order built | — | Fixed |
+| A 403 flashed "Loading events…" on the next entry into Home | code — LOW | kept hidden for the same context | E7b (M20) | Fixed |
+| The type word before the day made the day hard to scan | UX — LOW | the day first | E3, E4 (M22) | Fixed |
+| The error was not announced, and *Try again* lost the focus | UX — LOW | `role="alert"`; the focus on the heading while it reads and after | E7 (M23, M24) | Fixed |
+| A library place with name, address and note all empty drew an empty line | code (unverified) | no place | E5 (M21) | Fixed |
+| `list-style: none` drops the list semantics in Safari | UX — NIT | `role="list"` | E7 | Fixed |
+| The 44 px *Open in maps* makes the address line tall | mobile — LOW | kept (the K2b-1d panel's link) | browser check | Accepted |
+| "Time not set" on a *Day off* | UX — LOW | not changed: it would change Q2 | — | **Open, for the manager** |
+| The range's en dash against the calendar toolbar's " - " | UX — NIT | kept (the plan's own words) | — | Open, for the manager |
+| Today's events that are over still listed | UX — NIT | kept: the window is whole days, as in the calendar | — | Accepted |
+| The "✕" glyph can read as "remove" | UX — note | kept (the manager's "a sign and the word") | — | Open, for the manager |
+| A club that does not use the calendar always shows the empty sentence | UX — note | kept (D28, Q5) | — | Open, for the manager |
+
+All 25 mutations (`k2b1e-mutations.mjs` in the session's scratchpad: the 18 of the first round, M19–M21 for the code
+review and M22–M25 for the UX review) are killed; M16 first survived and was killed after E3 gained an event on the next
+morning.

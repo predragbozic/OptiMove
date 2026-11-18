@@ -44,7 +44,11 @@ const isoDay = (value) => (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.te
 // The place as the list shows it: a library place's name, address and note, or a one-off text. Its id is not kept.
 function pickPlace(place, location) {
   if (place && typeof place === "object") {
-    if (place.source === "library") return { source: "library", name: text(place.name), address: text(place.address), note: text(place.note) };
+    if (place.source === "library") {
+      const picked = { source: "library", name: text(place.name), address: text(place.address), note: text(place.note) };
+      // Nothing to show: no empty place line.
+      return picked.name || picked.address || picked.note ? picked : null;
+    }
     if (place.source === "one_off") return text(place.text) ? { source: "one_off", text: place.text } : null;
     return null;
   }
@@ -113,6 +117,8 @@ export async function loadAthleteHomeEvents({ render, forceRefresh = false, toda
     fetcher: () => api(athleteHomeEventsUrl(today)),
     showLoading: () => {
       if (!current()) return;
+      // A 403 for this same context stays hidden while it is asked again: the section never flashes up (code review).
+      if (g().status === "hidden" && g().contextKey === contextKey) return;
       Object.assign(g(), { status: "loading", error: "", canRetry: true });
       render?.();
     },

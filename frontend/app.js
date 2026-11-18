@@ -3057,8 +3057,12 @@ async function handleContentClick(event) {
     await loadActiveTab();
     return;
   }
-  // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer.
-  if (await handleAthleteHomeEventsAction(action, { render: renderAthleteHomeFromCache })) return;
+  // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer. Gated by its prefix, so every other click
+  // keeps reaching the handlers below without an await.
+  if (type?.startsWith("athlete-home-events-")) {
+    await handleAthleteHomeEventsAction(action, { render: renderAthleteHomeFromCache });
+    return;
+  }
   if (type === "weekly-create-plan") {
     if (isAthleteMode() || state.currentUser?.role === "athlete") return;
     const athleteId = state.selectedAthleteId;

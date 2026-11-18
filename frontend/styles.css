@@ -10845,6 +10845,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
    inside the card. The place's lines and Open in maps are the calendar
    panel's (.cc-panel-place, .cc-maps: 44 px). */
 .athlete-home-events {
+  /* The calendar's Cancelled pill (.cc-badge-cancelled) reads these, which
+     the calendar declares only on .central-calendar; the text is darker
+     here for the pill's small size (mobile-qa). */
+  --cc-cancelled: #4b5565;
+  --cc-cancelled-soft: #eceff3;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -10930,10 +10935,27 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   color: var(--muted);
 }
 
-.athlete-home-event-cancelled {
+/* As the calendar's cancelled card (.is-cancelled .cc-card-title). */
+.athlete-home-event.is-cancelled .athlete-home-event-title {
+  text-decoration: line-through;
+}
+
+.athlete-home-events-head .eyebrow:focus {
+  outline: none;
+}
+
+.athlete-home-events-head .eyebrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Two classes: .cc-badge comes later in this file (11 px, 2px 8px). */
+.athlete-home-event .athlete-home-event-cancelled {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  padding: 3px 8px;
+  font-size: 13px;
 }
 
 .athlete-home-events-button {

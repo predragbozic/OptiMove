@@ -41,26 +41,29 @@ function typeWord(row) {
 function rowHtml(row, today) {
   const word = typeWord(row);
   const title = row.title || word;
-  // The type word only when the title is not that word already.
-  const meta = [title !== word ? word : "", athleteHomeEventWhen(row, today)].filter(Boolean).join(" · ");
+  // The day first (what she scans the list for), then the type word - only when the title is not that word already.
+  const meta = [athleteHomeEventWhen(row, today), title !== word ? word : ""].filter(Boolean).join(" · ");
   // The kind's icon: her card names no type (K2b-1d2 brings the type's own icon to every card).
   const icon = renderIconSvg(centralCalendarItemIconKey({ kind: "event", eventKind: row.eventKind }), { size: 20, className: "athlete-home-event-icon" });
-  const after = row.cancelled
+  // Cancelled (22.7 Q1): the mark right under the title, read before the time; no place.
+  const status = row.cancelled
     ? `<p class="athlete-home-event-status"><span class="cc-badge cc-badge-cancelled athlete-home-event-cancelled"><span aria-hidden="true">✕</span> Cancelled</span></p>`
-    : renderCentralCalendarEventPlaceHtml({ place: row.place, location: null });
+    : "";
+  const place = row.cancelled ? "" : renderCentralCalendarEventPlaceHtml({ place: row.place, location: null });
   return `<li class="athlete-home-event${row.cancelled ? " is-cancelled" : ""}">
       ${icon}
       <div class="athlete-home-event-body">
         <p class="athlete-home-event-title">${escapeHtml(title)}</p>
+        ${status}
         <p class="athlete-home-event-when">${escapeHtml(meta)}</p>
-        ${after}
+        ${place}
       </div>
     </li>`;
 }
 
 function bodyHtml(slice) {
   if (slice.status === "error") {
-    return `<p class="athlete-home-events-state">${escapeHtml(slice.error || "Events could not be loaded.")}</p>
+    return `<p class="athlete-home-events-state" role="alert">${escapeHtml(slice.error || "Events could not be loaded.")}</p>
       ${slice.canRetry ? `<button type="button" class="plain-button compact-button athlete-home-events-button" data-action="athlete-home-events-retry">Try again</button>` : ""}`;
   }
   if (slice.status !== "ready") return `<p class="muted athlete-home-events-state" role="status">Loading events…</p>`;
@@ -71,7 +74,8 @@ function bodyHtml(slice) {
   const toggle = more > 0
     ? `<button type="button" class="plain-button compact-button athlete-home-events-button" data-action="athlete-home-events-toggle" aria-expanded="${slice.expanded ? "true" : "false"}" aria-controls="${LIST_ID}">${slice.expanded ? "Show fewer" : `Show ${more} more`}</button>`
     : "";
-  return `<ul class="athlete-home-events-list" id="${LIST_ID}">${shown.map((row) => rowHtml(row, slice.today)).join("")}</ul>${toggle}`;
+  // role="list": Safari drops a list's semantics under list-style: none.
+  return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, slice.today)).join("")}</ul>${toggle}`;
 }
 
 export function renderAthleteHomeEventsHtml(slice) {
@@ -80,7 +84,7 @@ export function renderAthleteHomeEventsHtml(slice) {
   return `
     <section class="panel athlete-home-events" aria-labelledby="${escapeAttr(TITLE_ID)}">
       <div class="athlete-home-events-head">
-        <p class="eyebrow" id="${escapeAttr(TITLE_ID)}">Upcoming events</p>
+        <p class="eyebrow" id="${escapeAttr(TITLE_ID)}" tabindex="-1">Upcoming events</p>
         <p class="muted athlete-home-events-range">Next ${ATHLETE_HOME_EVENTS_DAYS} days</p>
       </div>
       ${bodyHtml(slice)}

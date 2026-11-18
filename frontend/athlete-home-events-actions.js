@@ -5,7 +5,14 @@ import { loadAthleteHomeEvents, toggleAthleteHomeEvents } from "./athlete-home-e
 export async function handleAthleteHomeEventsAction(action, { render }) {
   const type = action?.dataset?.action;
   if (type === "athlete-home-events-retry") {
-    await loadAthleteHomeEvents({ render, forceRefresh: true });
+    // The button is gone once the section reads again: the focus goes to the section's heading, not the page - while it
+    // loads, and again after the answer is painted (each paint replaces the section) unless she moved on meanwhile.
+    const heading = () => globalThis.document?.getElementById?.("athleteHomeEventsTitle");
+    const read = loadAthleteHomeEvents({ render, forceRefresh: true });
+    heading()?.focus?.();
+    await read;
+    const active = globalThis.document?.activeElement;
+    if (!active || active === globalThis.document?.body) heading()?.focus?.();
     return true;
   }
   if (type === "athlete-home-events-toggle") {

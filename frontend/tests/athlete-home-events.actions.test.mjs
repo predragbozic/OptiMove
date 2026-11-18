@@ -138,8 +138,8 @@ test("E3. one row per event: a three-day event's three cards are one row with it
   assert.equal(state.athleteHomeEvents.rows.find((r) => r.eventId === "trip").day, TODAY, "listed at its first day in the window");
   const texts = rowTexts();
   assert.equal(texts.length, 5);
-  assert.match(texts[2], /Away trip Travel · Mon 16 Nov – Tomorrow · Time not set/);
-  assert.match(texts[4], /Winter camp Camp · Fri 20 Nov – Sun 22 Nov · 09:00–17:00/);
+  assert.match(texts[2], /^Away trip Mon 16 Nov – Tomorrow · Time not set · Travel/);
+  assert.match(texts[4], /^Winter camp Fri 20 Nov – Sun 22 Nov · 09:00–17:00 · Camp/);
 });
 
 test("E4. the words: Today, Tomorrow, a weekday and a date; a time, a start only, Time not set; the type word not repeated; the kind's word without a label", async () => {
@@ -150,9 +150,9 @@ test("E4. the words: Today, Tomorrow, a weekday and a date; a time, a start only
   ]) }));
   await load();
   const texts = rowTexts();
-  assert.match(texts[0], /Cup match Match · Today · 18:00–19:30/);
+  assert.match(texts[0], /^Cup match Today · 18:00–19:30 · Match$/);
   assert.match(texts[1], /^Match Tomorrow · 10:00$/, "the title is the type word: the word is not repeated");
-  assert.match(texts[2], /Team meeting Meeting · Wed 25 Nov · Time not set/, "a moved team's event has no label: the kind's word");
+  assert.match(texts[2], /^Team meeting Wed 25 Nov · Time not set · Meeting$/, "a moved team's event has no label: the kind's word");
   assert.equal(dom.window.document.body.innerHTML.includes("All day"), false, "never All day (the manager's Q2)");
   // The kind's icon (her card names no type).
   assert.ok($$(".athlete-home-event svg.athlete-home-event-icon").length === 3);
@@ -166,9 +166,12 @@ test("E5. the place: a library place's name, address with Open in maps and note;
     card({ id: "oneoff", date: "2026-11-19", title: "Beach run", startTime: "07:00:00", place: { source: "one_off", text: "Strand beach, north entrance" }, location: "Strand beach, north entrance" }),
     card({ id: "none", date: "2026-11-20", title: "Rest day", startTime: "08:00:00" }),
     card({ id: "xss", date: "2026-11-21", title: xss, startTime: "08:00:00", place: { source: "library", locationId: "l3", name: xss, address: xss, note: xss } }),
+    card({ id: "blank", date: "2026-11-22", title: "Empty place", startTime: "08:00:00", place: { source: "library", locationId: "l4", name: null, address: " ", note: null } }),
   ]) }));
   await load();
+  await handleAthleteHomeEventsAction(fakeAction({ action: "athlete-home-events-toggle" }), { render });
   const items = $$(".athlete-home-event");
+  assert.equal(items.length, 6);
   const links = $$("a.cc-maps");
   assert.equal(links.length, 2, "only the library places with an address");
   assert.equal(links[0].getAttribute("href"), MAPS("Main street 1, Novi Sad"));
@@ -183,6 +186,7 @@ test("E5. the place: a library place's name, address with Open in maps and note;
   assert.equal(dom.window.document.querySelector("img"), null, "markup in a title, a name, an address or a note is text");
   assert.equal(links[1].getAttribute("href"), MAPS(xss));
   assert.equal(items[4].querySelector(".athlete-home-event-title").textContent, xss);
+  assert.equal(items[5].querySelector(".cc-panel-place"), null, "a library place with nothing to show draws no empty line");
 });
 
 test("E6. a cancelled event is shown and marked: a glyph and the word, its title muted, no place and no Open in maps", async () => {
@@ -199,6 +203,9 @@ test("E6. a cancelled event is shown and marked: a glyph and the word, its title
   assert.equal(li.querySelector(".cc-panel-place"), null);
   assert.equal(li.querySelector("a"), null);
   assert.equal(li.textContent.includes("City Stadium"), false);
+  // The mark right under the title, read before the time (UX review).
+  const body = [...li.querySelector(".athlete-home-event-body").children].map((el) => el.className);
+  assert.deepEqual(body, ["athlete-home-event-title", "athlete-home-event-status", "athlete-home-event-when"]);
 });
 
 test("E7. the states: loading, empty, an error with one Try again, a lost sign-in without it, a 403 hides the section", async () => {
@@ -219,15 +226,19 @@ test("E7. the states: loading, empty, an error with one Try again, a lost sign-i
   calls = calendarServer(() => (fail ? { status: 500, body: { error: "internal_error" } } : { status: 200, body: answer([card({ id: "x", date: TODAY, title: "Cup match", startTime: "18:00:00" })]) }));
   await load();
   assert.match($(".athlete-home-events").textContent, /Events could not be loaded\./);
+  assert.equal($(".athlete-home-events-state").getAttribute("role"), "alert", "the failure is announced");
   assert.equal($(".athlete-home-events").textContent.includes("internal_error"), false, "no code");
   const retry = $("[data-action='athlete-home-events-retry']");
   assert.ok(retry);
   assert.equal(retry.textContent, "Try again");
+  retry.focus();
   fail = false;
   const before = calls.length;
   assert.equal(await handleAthleteHomeEventsAction(fakeAction({ action: "athlete-home-events-retry" }), { render }), true);
   assert.equal(calls.length - before, 1, "one new request");
   assert.equal(rowTexts().length, 1);
+  assert.equal(dom.window.document.activeElement, $("#athleteHomeEventsTitle"), "the focus is on the section's heading, not lost to the page");
+  assert.equal($("#athleteHomeEventsList").getAttribute("role"), "list");
 
   // A lost sign-in: said, no Try again.
   clearAllViewCache();
@@ -369,7 +380,23 @@ test("E10. Home: the section comes after This week and before My training and th
   const switchStart = app.indexOf("async function onWorkspaceChanged(");
   const switchBody = app.slice(switchStart, app.indexOf("\n}\n", switchStart));
   assert.match(switchBody, /resetAthleteHomeEvents\(\);/);
-  assert.match(app, /if \(await handleAthleteHomeEventsAction\(action, \{ render: renderAthleteHomeFromCache \}\)\) return;/);
+  // Gated by its prefix (code review): every other click keeps reaching the handlers below without an await.
+  assert.match(app, /if \(type\?\.startsWith\("athlete-home-events-"\)\) \{\n\s+await handleAthleteHomeEventsAction\(action, \{ render: renderAthleteHomeFromCache \}\);\n\s+return;\n\s+\}/);
+  assert.equal(/if \(await handleAthleteHomeEventsAction/.test(app), false, "no ungated await in the click dispatch");
+});
+
+test("E7b. after a 403, the next entry into Home never flashes the section while it asks again", async () => {
+  calendarServer(() => ({ status: 403, body: { error: "This account has no athlete profile." } }));
+  await load();
+  assert.equal($(".athlete-home-events"), null);
+  const gate = deferred();
+  calendarServer(() => gate.promise);
+  const pending = load();
+  assert.equal(state.athleteHomeEvents.status, "hidden");
+  assert.equal($(".athlete-home-events"), null, "no Loading events… flash");
+  gate.resolve({ status: 403, body: { error: "This account has no athlete profile." } });
+  await pending;
+  assert.equal($(".athlete-home-events"), null);
 });
 
 test("E11. athleteHomeEventRows keeps only event cards with an id, and reads nothing from a malformed answer", () => {
