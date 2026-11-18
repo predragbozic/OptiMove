@@ -296,6 +296,19 @@ test("2b. each attach step refuses and rolls the whole create back: unpublished,
   assert.equal(sql.filter((c) => isWrite(c.text)).length, 0, "refused before any write (not by the unique index)");
 });
 
+test("2d. a multi-day event: a session on its second day links; one after its last day is session_outside_event", async () => {
+  const day2 = addDays(DAY, 1);
+  const w = await teamWorld("two days", { n: 1, date: day2 });
+  const ok = await create(w, { endDay: day2 });
+  assert.equal(ok.res.status, 201, ok.res.text);
+  assert.equal(ok.res.body.attached, 1);
+  const w2 = await teamWorld("after the span", { n: 1, date: addDays(DAY, 2) });
+  const late = await create(w2, { endDay: day2 });
+  assert.equal(late.res.status, 409, late.res.text);
+  assert.equal(late.res.body.error, "session_outside_event");
+  assert.deepEqual(await counts(late.body.title), NOTHING);
+});
+
 test("2c. a fault after the first write rolls everything back", async () => {
   const w = await teamWorld("fault", { n: 1 });
   hooks.beforeRequestRow = async ({ operation }) => {
@@ -491,6 +504,29 @@ test("5. the attach's targeted SQL is the text it was (stored targets), and a cr
 // ---------------------------------------------------------------------------
 // 6. Races
 // ---------------------------------------------------------------------------
+// Polls until `check()` is true, or fails after `ms` (never a fixed sleep as
+// the proof of a wait: code-reviewer LOW on 7050b1cb).
+async function waitFor(check, ms, what) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+// A backend of this test's database waits on a lock while running a statement like `pattern`.
+async function lockWaitOn(pattern) {
+  return (await q(
+    `select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike $1`,
+    [pattern],
+  ))[0].n > 0;
+}
+function within(promise, ms, onTimeout) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => { onTimeout?.(); reject(new Error(`no answer within ${ms} ms`)); }, ms); })])
+    .finally(() => clearTimeout(timer));
+}
+
 // Waits for the seam, or fails at once when the command ended before it (a
 // mutant refused early must fail the test, never hang it).
 async function reachedOrEnded(g, pending) {
@@ -539,7 +575,8 @@ test("6. a create and an attach of the same slot to another event, in both order
     attachPending = api(`/api/calendar/events/${other2.id}/sessions`, { method: "POST", cookie: w2.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, logicalSessionIds: w2.ids, alignSessions: false } });
     await reachedOrEnded(g2, attachPending);
     const createPending = create(w2);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The create must really wait on the unique index behind the attach's uncommitted link.
+    await waitFor(() => lockWaitOn("%insert into calendar.event_session_links%"), 5000, "the create waiting on the slot's unique index");
     g2.open();
     created = await createPending;
   } finally {
@@ -586,13 +623,11 @@ test("6c. a Builder transaction holding the plan FOR UPDATE: the create waits; t
   try {
     await holder.query("begin");
     await holder.query(`select id from plans.plans where id = $1 for update`, [w.sessions[0].planId]);
-    const started = Date.now();
     const pending = create(w);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await waitFor(() => lockWaitOn("%from plans.plans where id = any%for share%"), 5000, "the create waiting on the plan lock");
     await holder.query(`delete from plans.plans where id = $1`, [w.sessions[0].planId]);
     await holder.query("commit");
     const { body, res } = await pending;
-    assert.ok(Date.now() - started >= 350, "the create waited on the plan");
     assert.equal(res.status, 400, res.text);
     assert.equal(res.body.error, "session_not_available");
     assert.deepEqual(await counts(body.title), NOTHING);
@@ -615,15 +650,71 @@ test("6c. a Builder transaction holding the plan FOR UPDATE: the create waits; t
   }
 });
 
-test("6d. a create with sessions and a Day off of the same club and day at once: both settle, no 40P01", async () => {
+test("6d. a create with sessions and a Day off of the same club and day, each held while the other runs: both settle, no 40P01", async () => {
   const club = await fx.makeClub("k2c2 dayoff race");
   await switchOn(club);
-  const w = await teamWorld("dayoff race", { clubId: club, n: 1 });
-  const results = await Promise.all([
-    create(w),
-    create(w, { noSessions: true, kind: "day_off", title: `Rest ${uid()}`, questions: [] }),
-  ]);
-  for (const { res } of results) assert.equal(res.status, 201, res.text);
+  for (const first of ["sessions", "dayoff"]) {
+    const w = await teamWorld(`dayoff race ${first}`, { clubId: club, n: 1 });
+    const dayOff = () => create(w, { noSessions: true, kind: "day_off", title: `Rest ${uid()}`, questions: [] });
+    const g = gate();
+    let heldOnce = false;
+    const hold = async () => {
+      if (heldOnce) return;
+      heldOnce = true;
+      g.reached();
+      await g.opened;
+    };
+    let a;
+    let b;
+    try {
+      if (first === "sessions") {
+        hooks.afterSessionLocks = hold;
+        const pending = create(w);
+        await reachedOrEnded(g, pending);
+        const other = dayOff();
+        // The Day off either waits on a lock the held create owns, or finishes; both are fine, a 40P01 is not.
+        await within(Promise.race([other, waitFor(() => lockWaitOn("%"), 5000, "a lock wait").catch(() => {})]), 6000, () => g.open());
+        g.open();
+        [a, b] = await Promise.all([pending, other]);
+      } else {
+        hooks.beforeRequestRow = async ({ operation }) => { if (operation === "create") await hold(); };
+        const pending = dayOff();
+        await reachedOrEnded(g, pending);
+        const other = create(w);
+        await within(Promise.race([other, waitFor(() => lockWaitOn("%"), 5000, "a lock wait").catch(() => {})]), 6000, () => g.open());
+        g.open();
+        [a, b] = await Promise.all([pending, other]);
+      }
+    } finally {
+      delete hooks.afterSessionLocks;
+      delete hooks.beforeRequestRow;
+      g.open();
+    }
+    for (const { res } of [a, b]) assert.equal(res.status, 201, `${first}: ${res.text}`);
+  }
+});
+
+test("6e. a lock timeout on the plan lock is 409 try_again and nothing is written", async () => {
+  const w = await teamWorld("lock timeout", { n: 1 });
+  const holder = new pg.Client({ connectionString: env.db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select id from plans.plans where id = $1 for update`, [w.sessions[0].planId]);
+    hooks.beforeLocks = async ({ client }) => { await client.query(`set local lock_timeout = '200ms'`); };
+    let out;
+    try {
+      out = await create(w);
+    } finally {
+      delete hooks.beforeLocks;
+    }
+    assert.equal(out.res.status, 409, out.res.text);
+    assert.equal(out.res.body.error, "try_again");
+    assert.deepEqual(await counts(out.body.title), NOTHING);
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -686,7 +777,7 @@ test("8. a create with sessions and the Training Load quick toggle of the same s
       try {
         const pending = create(w);
         await reachedOrEnded(holder, pending);
-        toggled = await toggle();
+        toggled = await within(toggle(), 5000, () => holder.open());
         holder.open();
         created = await pending;
       } finally {

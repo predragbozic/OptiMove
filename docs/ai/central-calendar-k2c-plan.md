@@ -1115,8 +1115,10 @@ Built on 2.3 with the GO of 2.4; backend only, no migration, no new route. One f
 - **A detach racing a create (2.3.9, group 10):** the contract said the create "waits and then links". Under READ
   COMMITTED the create's read sees the link still live until the detach commits, so it answers
   `session_already_attached` at once; once the detach has committed, the create links. Test 6b pins that behaviour.
-- A `lock_timeout` ending in `try_again` was not staged for a create with sessions (15 s); the runner's mapping of
-  `55P03` / `40P01` is unchanged and covered by the K2a suites.
+- **An external schedule with sessions** (the db-reviewer's LOW-2): a create with `externalScheduleId` and `sessions`,
+  with the question switch off or not installed, makes an event with both, as the attach allows today. "The RPE
+  channel is the session link" (2.4 Q2) governs the event's own RPE question; it adds no refusal of a referenced
+  schedule.
 
 **Tests:** `backend/tests/central-calendar-k2c-2-create-sessions.test.mjs`, 17 tests in the groups of 2.3.9 as
 amended by 2.4 (bases and the identical answers, the body, a refusal at each attach step with nothing written, a
@@ -1125,6 +1127,25 @@ interplay with the questions, the attach's targeted SQL pinned and the attach eq
 target scenarios, the races against an attach in both orders, a detach, a Builder lock and a foreign plan held, a Day
 off, and the recorded SQL order for a training and a Day off). 17 mutations, all killed (the first form of M12 was
 equivalent on v81 and was replaced by one that drops the link counts).
+
+**The review round on `7050b1cb`** (`code-reviewer`, `db-reviewer`, narrow `security-reviewer`; all READY WITH
+NON-BLOCKING NOTES on the code, no BLOCKER or HIGH):
+
+| Finding | Fix | Test (mutation killed) |
+|---|---|---|
+| db MEDIUM-1: a create against the Training Load quick toggle of the same session not shown free of a cycle | a route-against-route test in both orders, the create held at its session locks | 8 |
+| db MEDIUM-2: empty targets | already refused by the body (`invalid_targets`) before the transaction; pinned | 8b |
+| code LOW: 6(b) proved the unique-index wait with a 300 ms sleep | the wait is proven in `pg_stat_activity` (`wait_event_type = 'Lock'` on the link INSERT) before the gate opens | 6 (M8) |
+| code LOW: 6c's "the create waited" was vacuous | the wait on the plan lock is proven in `pg_stat_activity` before the delete | 6c (M3, M4) |
+| code LOW: 6d and 8 claimed "no 40P01" from unforced concurrency; 8 could hang | 6d holds each command at a seam while the other runs, in both orders; 8's toggle is bounded at 5 s | 6d, 8 |
+| code LOW: a `lock_timeout` not staged | the plan held `FOR UPDATE`, `lock_timeout` 200 ms → `409 try_again`, nothing written | 6e |
+| code LOW: no multi-day test | a session on the second day links; one after the span is `session_outside_event` | 2d (M18) |
+| db LOW-2: an external schedule with sessions | one sentence above | — |
+| security LOW-1: `targetsAthleteSql`'s source must end in `where` | recorded; the comment says so | — |
+| security LOW-2: a 409 tells a caller that a session it sees is linked elsewhere | as the attach; recorded for the later info-hiding pass | — |
+| security LOW-4: a replay after a revoked right | the runner takes the writer lock before the replay (unchanged); covered by the K2a suites' right-lost test | — |
+
+21 tests; 18 mutations, all killed (M18: a multi-day event judged on its first day only).
 
 ## 3. K3 — "New training" from an event (named only)
 
