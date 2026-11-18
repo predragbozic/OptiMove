@@ -326,7 +326,9 @@ select c.gpexe_team_session_id as gpexe_session_id,
 --    preview_values = written_values = event_values = t6_rows_of_the_import
 --    = t6_rows_of_the_event; preview_left_out = preview_left_out_entries;
 --    imported_athletes = event_participants;
---    preview_changes_to_imported = 0.
+--    preview_changes_to_imported = 0. The values counted are the imported ones;
+--    calculated_values (OptiMove's own sums of them, J21) is shown only: they
+--    have no T6 row and are listed apart in the preview.
 with ap as (
   select a.*
     from training_load.gpexe_import_approvals a
@@ -350,7 +352,7 @@ occ as (
   select o.id from training_load.metric_measurement_occasions o join ap on o.import_batch_id = ap.import_batch_id
 ),
 val as (
-  select v.id from training_load.metric_values v join occ on occ.id = v.occasion_id
+  select v.id from training_load.metric_values v join occ on occ.id = v.occasion_id where not v.is_derived
 )
 select
   (select (c.preview -> 'counts' ->> 'created')::int from c) as preview_results,
@@ -366,7 +368,9 @@ select
   (select count(*) from training_load.metric_values v
      join training_load.metric_measurement_occasions o on o.id = v.occasion_id
      join training_load.metric_event_participants p on p.id = o.event_participant_id
-     join ap on p.event_id = ap.metric_event_id) as event_values,
+     join ap on p.event_id = ap.metric_event_id
+    where not v.is_derived) as event_values,
+  (select count(*) from training_load.metric_values v join occ on occ.id = v.occasion_id where v.is_derived) as calculated_values,
   (select count(*) from training_load.metric_value_source_provenance p join val on val.id = p.metric_value_id) as t6_rows_of_the_import,
   (select count(*) from training_load.metric_value_source_provenance pp
      join training_load.metric_values vv on vv.id = pp.metric_value_id
@@ -428,7 +432,7 @@ sv as (
     join training_load.metric_measurement_occasions o on o.import_batch_id = ap.import_batch_id
     join training_load.metric_source_identities si on si.id = o.source_identity_id
     join training_load.metric_event_participants par on par.id = o.event_participant_id
-    join training_load.metric_values v on v.occasion_id = o.id
+    join training_load.metric_values v on v.occasion_id = o.id and not v.is_derived
     left join training_load.metric_value_source_provenance p on p.metric_value_id = v.id
 )
 select
@@ -477,6 +481,7 @@ val as (
     from training_load.metric_values v
     join training_load.metric_measurement_occasions o on o.id = v.occasion_id
     join ap on o.import_batch_id = ap.import_batch_id
+   where not v.is_derived -- J21: a calculated value is OptiMove's, with no T6 row (block 11 shows how many)
 ),
 p as (
   select p.* from training_load.metric_value_source_provenance p join val on val.id = p.metric_value_id
