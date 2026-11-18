@@ -129,3 +129,13 @@ test("library and rendering failures leave an explicit fallback and release part
   }
   assert.equal(disposed, 1);
 });
+
+test("athlete lines share one chart and named legend with formatted dates", () => {
+  const display = model([row(1), row(2, "2026-10-02", { athleteId: "other" })]);
+  const result = dashboardChartPlots(display, () => "Distance", r => r.identity.athleteId === "athlete" ? "Alex" : "Bo");
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].option.series.map(series => series.name), ["Alex", "Bo"]);
+  assert.deepEqual(result[0].option.xAxis.data, ["01.10.2026", "02.10.2026"]);
+  assert.equal(result[0].option.legend.show, true);
+  assert.deepEqual(result[0].option.series[0].data, [1, null]);
+});

@@ -1,4 +1,4 @@
-import { escapeAttr, escapeHtml } from "./utils.js";
+import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
 export function dashboardChartPlots(model, labelForSeries, rowContext) {
   if (model.status !== "ready" || !["line_chart", "bar_chart"].includes(model.widgetType)) return [];
@@ -6,6 +6,27 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
   const precision = model.config.effective.numberFormat.maximumFractionDigits;
   for (const series of model.series) {
     if (series.status !== "ready") continue;
+    const athleteLines = model.widgetType === "line_chart" && ["day", "week"].includes(model.groupBy)
+      && series.chartGroups.length > 1 && series.chartGroups.every(group => group.identity.athleteId)
+      && new Set(series.chartGroups.map(group => group.identity.athleteId)).size === series.chartGroups.length
+      && new Set(series.chartGroups.map(group => group.identity.unit)).size === 1;
+    if (athleteLines) {
+      const keys = [...new Set(series.chartGroups.flatMap(group => group.rows.map(row => row.identity.bucketKey)))].sort();
+      plots.push({ caption: labelForSeries(series.definition), precision, option: {
+        animation: false,
+        grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
+        legend: { show: true, type: "scroll", top: 4 },
+        tooltip: { trigger: "axis", renderMode: "richText", confine: true },
+        xAxis: { type: "category", data: keys.map(key => /^\d{4}-\d{2}-\d{2}$/.test(key) ? formatDate(key) : key), axisLabel: { hideOverlap: true } },
+        yAxis: { type: "value", name: series.chartGroups[0].identity.unit || "" },
+        series: series.chartGroups.map((group, index) => {
+          const rows = new Map(group.rows.map(row => [row.identity.bucketKey, row]));
+          return { name: rowContext(group.rows[0]) || "Athlete name unavailable", id: String(index), type: "line", connectNulls: false,
+            data: keys.map(key => rows.get(key)?.chartStatus === "value" ? rows.get(key).value : null) };
+        }),
+      } });
+      continue;
+    }
     for (const group of series.chartGroups) {
       if (!group.rows.some(row => row.chartStatus === "value")) continue;
       const rows = [...group.rows];
@@ -22,7 +43,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext) {
           grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
           legend: { show: model.config.effective.legend.visible, type: "scroll", left: 12, right: 12, top: 4 },
           tooltip: { trigger: "axis", renderMode: "richText", confine: true },
-          xAxis: { type: "category", data: rows.map(row => row.identity.bucketKey ?? ""), axisLabel: { hideOverlap: true } },
+          xAxis: { type: "category", data: rows.map(row => /^\d{4}-\d{2}-\d{2}$/.test(row.identity.bucketKey ?? "") ? formatDate(row.identity.bucketKey) : row.identity.bucketKey ?? ""), axisLabel: { hideOverlap: true } },
           yAxis: { type: "value", name: unit, nameLocation: "middle", nameGap: 42 },
           series: [{
             name,
