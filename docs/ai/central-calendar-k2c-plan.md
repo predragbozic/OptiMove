@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract K2c-2-B (2.3) waits for the manager's GO; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract K2c-2-B (2.3) has the manager's GO (2.4) and is being built; K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -1059,6 +1059,37 @@ independent review and the OptiMove manager's gate.
    refuse `alignSessions: true` on a create (`400 invalid_align`) and keep the shared function as it is: smaller, and
    the Builder never sends it; but the API then differs from the attach.
 4. **Unknown keys on create** stay a follow-up (2.2); this PR adds none and refuses none.
+
+### 2.4 The manager's GO on 2.3 (2026-11-18)
+
+GO on 2.3 at `2554860d`, with these decisions. Where they differ from 2.3, they win.
+
+1. **Q1: yes.** The club's question switch `FOR SHARE` comes before the plans, the attach's own order.
+2. **Q2: yes.** The RPE channel is the session link, not the sessions' flags.
+3. **Q3: the smaller option.** On create, `sessions.alignSessions` is absent or `false`; `true` is `400 invalid_align`
+   ("Create the event first, then align its trainings."), nothing written. `sessions.confirmDisableWithResults` is not
+   accepted on create (it only matters when aligning): the same 400. `writePublishedSessionFlags` is **not** split; the
+   attach and the quick toggles stay byte for byte the same. The Builder sends `alignSessions: false` (decision 5 of
+   2.2); a coach aligns afterwards from the event's panel (K2c-1). So:
+   - the canonical `sessions` is `{ logicalSessionIds }`, sorted and deduplicated, pinned in the hash test;
+   - 2.3.6 does not apply, step 6d of 2.3.3 and the alignment of step 9 go, `has_existing_results` cannot happen on a
+     create, and the answer's `alignment` is always `null`;
+   - the alignment tests (2.3.9 group 9, the draft-copy race of group 10) and the mutation "leave the draft-copy lock
+     inside the write" are replaced by: `alignSessions: true` and `confirmDisableWithResults` (either value) → 400,
+     nothing written.
+4. **Q4: yes.** Unknown keys on create stay a follow-up.
+5. **The "targeted" builder with two sources: yes**, with two guards: a test that the attach's SQL and answers are
+   unchanged for stored targets, and the equality test between the attach and the create. The builder decides who
+   counts as a member on a day, so it is part of the audience contract: a narrow `security-reviewer` pass on it.
+
+**Reviews** after the code, on a frozen head, with the full packet of `CLAUDE.md` (the Agent input contract):
+`code-reviewer`, `db-reviewer` (the locks and the transaction) and `security-reviewer` (narrow: the targeted builder
+and the create rights); then the independent review and the OptiMove manager's gate. ★★ trigger 4, no migration.
+
+**Before the report, with real counts on the head:** the new suite and its mutations; `--kind disposable --filter
+central-calendar`; `--filter tests-`; `--filter training-load-external`; `--preset backend-fast`; `git diff --check`.
+The manager opens the pull request after its check. Base: this branch on #614's head `e98a7378`; `main` is merged in
+when #614 merges.
 
 ## 3. K3 — "New training" from an event (named only)
 
