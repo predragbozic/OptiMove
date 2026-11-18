@@ -65,12 +65,12 @@ const createButton = (endpoint, name) => `[data-action="source-fields-create-ope
 const asPlatform = () => { state.currentUser = { id: "u1", activeWorkspace: { type: "platform", scopeId: null, label: "Platform", role: "platform_admin" } }; };
 const asClub = () => { state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "FK Borac", role: "club_admin" } }; };
 
-const item = (over = {}) => ({ endpoint: "details.session", name: "metabolic_power", kind: "unit_value_object", unitWord: "power", answersSeen: 12, lastSeenOn: "2026-11-10", covered: false, connectionCount: 2, creatable: true, ...over });
+const item = (over = {}) => ({ endpoint: "details.session", name: "metabolic_power", kind: "unit_value_object", unitWord: "power", answersSeen: 12, lastSeenOn: "2026-11-10", covered: false, connectionCount: 2, creatable: true, isValue: true, ...over });
 const inventory = () => [
   item(),
   item({ endpoint: "details.drill", name: "drill_jumps", unitWord: "number" }),
   item({ endpoint: "athlete_session", name: "hsr_distance", kind: "number", unitWord: null }),
-  item({ endpoint: "athlete_session", name: "text_thing", kind: "text", unitWord: null, creatable: false }),
+  item({ endpoint: "athlete_session", name: "text_thing", kind: "text", unitWord: null, creatable: false, isValue: false }),
   item({ endpoint: "more.complementary_data", name: "zones_x", kind: "zone_list", unitWord: null, creatable: false }),
 ];
 const revision = (over = {}) => ({
@@ -82,12 +82,13 @@ const field = (over = {}) => ({ id: NEW, sourceSystem: "gpexe", apiFamily: "rest
 
 let fields = [];
 let invItems = inventory();
+let invLimits = undefined;
 let post = () => ({ status: 404, body: { error: "notFound" } });
 function serve() {
   respond = (call) => {
     if (call.method === "POST") return post(call);
     if (call.url === FB) return { status: 200, body: { fields } };
-    if (call.url.startsWith(INV)) return { status: 200, body: { fields: invItems, nextCursor: null } };
+    if (call.url.startsWith(INV)) return { status: 200, body: { fields: invItems, nextCursor: null, zoneThresholds: invLimits } };
     const one = fields.find((f) => call.url === `${FB}/${f.id}`);
     if (one) return { status: 200, body: { field: one, verifications: [] } };
     return { status: 404, body: { error: "notFound" } };
@@ -116,8 +117,8 @@ async function openCreate(endpoint = "details.session", name = "metabolic_power"
 test("1. Create field is offered only on a name the server marked creatable, in the platform workspace; never on a covered, text or zone name, never to a club (even with a forged flag), and a forged click opens nothing", async () => {
   await loadSourceFieldsSection(render);
   const offered = [...content.querySelectorAll('[data-action="source-fields-create-open"]')].map((b) => `${b.dataset.sfInvEndpoint}:${b.dataset.sfInvName}`);
-  assert.deepEqual(offered, ["details.session:metabolic_power", "details.drill:drill_jumps", "athlete_session:hsr_distance"]);
-  assert.match(text(), /Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet\./);
+  assert.deepEqual(offered.sort(), ["athlete_session:hsr_distance", "details.drill:drill_jumps", "details.session:metabolic_power"]);
+  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not import them yet\. Use this value adds it to OptiMove; once new sessions bring it and you have checked it against GPEXE, you can put it on a variable\./);
   // A forged click on a name the server did not mark opens nothing.
   await handleSourceFieldsAction({ dataset: { action: "source-fields-create-open", sfInvEndpoint: "athlete_session", sfInvName: "text_thing" } }, { render });
   assert.equal(sourceFieldsState().form, null);
@@ -134,20 +135,22 @@ test("1. Create field is offered only on a name the server marked creatable, in 
 
 test("2. the form names the GPEXE name, where it comes from and what happens next; its levels follow the endpoint - a per-drill name is always recorded for each drill; Cancel goes back to the button", async () => {
   await openCreate();
-  assert.match(text(), /Create a field from metabolic_power/);
-  assert.match(text(), /GPEXE · Whole session · number with unit \(GPEXE says: power\)/);
+  // The owner's rule: the plain name first; GPEXE's own name and word only under Technical details.
+  assert.equal($("#source-fields-title").textContent, "Use Metabolic power in OptiMove");
+  assert.match($(".source-fields-tech").textContent, /GPEXE's name metabolic_power · Whole session · number with unit \(GPEXE says: power\)/);
+  assert.equal($(".source-fields-tech").open, false, "technical details closed by default");
   assert.match(text(), /Tick Each drill only if GPEXE also sends this value for each drill\./);
   assert.ok(text().includes(CREATE_NEXT_STEP), "the next step, said once");
-  assert.equal(CREATE_NEXT_STEP, "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.");
+  assert.equal(CREATE_NEXT_STEP, "Nothing is imported yet. After the next Find new sessions brings this value, open it here and use Compare with GPEXE once. Then you can put it on a variable.");
   assert.deepEqual([$('[data-sf-field="supportsSession"]').checked, $('[data-sf-field="supportsDrill"]').checked], [true, false]);
-  assert.equal($('[data-sf-field="label"]').value, "", "nothing preset");
+  assert.equal($('[data-sf-field="label"]').value, "Metabolic power", "the name in OptiMove starts as the list's plain name");
   await click('[data-action="source-fields-cancel"]');
   assert.equal(sourceFieldsState().form, null);
   assert.equal(document.activeElement, $(createButton("details.session", "metabolic_power")), "focus back on the button");
   await click(createButton("details.drill", "drill_jumps"));
   const drill = $('[data-sf-field="supportsDrill"]');
   assert.deepEqual([drill.checked, drill.disabled, $('[data-sf-field="supportsSession"]').checked], [true, true, false]);
-  assert.match(text(), /GPEXE sends this name per drill, so the field is always recorded for each drill\./);
+  assert.match(text(), /GPEXE sends this value for each drill, so OptiMove imports it for each drill\./);
   sourceFieldsState().form = null;
   render();
   await click(createButton("athlete_session", "hsr_distance"));
@@ -156,6 +159,7 @@ test("2. the form names the GPEXE name, where it comes from and what happens nex
 
 test("3. the checks before sending: a name is required and one line of at most 80 characters, at least one level; nothing is sent, and the marked field is said", async () => {
   await openCreate();
+  type("label", "");
   await submit();
   assert.equal(posts().length, 0);
   assert.match(text(), /Check the marked fields\./);
@@ -184,7 +188,7 @@ test("4. created: the last question names the label, the GPEXE name and where it
   confirmAnswer = false;
   await submit();
   assert.equal(posts().length, 0, "a declined last question sends nothing");
-  assert.equal(confirmQuestions.at(-1), "Create the source field \"Metabolic power\" from GPEXE's name metabolic_power (Whole session)? Once created, the field cannot be removed here.");
+  assert.equal(confirmQuestions.at(-1), "Use Metabolic power in OptiMove? Once added, it cannot be removed here.");
   confirmAnswer = true;
   await submit();
   assert.equal(posts().length, 1);
@@ -196,7 +200,7 @@ test("4. created: the last question names the label, the GPEXE name and where it
   assert.equal(sourceFieldsState().form, null);
   assert.equal(sourceFieldsState().detail.id, NEW, "the new field opens");
   assert.ok(calls.some((c) => c.method === "GET" && c.url === `${FB}/${NEW}`));
-  assert.match(text(), new RegExp(`The field was created\\. ${CREATE_NEXT_STEP.replaceAll(".", "\\.")}`));
+  assert.match(text(), new RegExp(`Metabolic power is now in OptiMove\\. ${CREATE_NEXT_STEP.replaceAll(".", "\\.")}`));
   // Back: the list and the names are read again, and the created name has no button any more.
   calls.length = 0;
   await click('[data-action="source-fields-back"]');
@@ -251,7 +255,7 @@ test("6. a lost answer: Result not confirmed, the leave guard asks, Check result
   const second = posts()[1];
   assert.deepEqual(second.body, first.body, "the very same request");
   assert.equal(sourceFieldsState().detail.id, NEW);
-  assert.match(text(), /The field was created\./);
+  assert.match(text(), /is now in OptiMove\./);
 });
 
 test("7. a Check result answered by a refusal from the body settles it (nothing was created); Close without checking reads the list and the names again", async () => {
@@ -317,11 +321,12 @@ test("10. the review fixes: a details name GPEXE sends both for the session and 
   invItems = [item(), item({ endpoint: "details.drill", name: "metabolic_power" }), item({ endpoint: "athlete_session", name: "hsr_distance", kind: "number", unitWord: null })];
   await openCreate();
   assert.deepEqual([$('[data-sf-field="supportsSession"]').checked, $('[data-sf-field="supportsDrill"]').checked], [true, true]);
-  assert.match(text(), /GPEXE sends this name for the whole session and per drill; one field records both\./);
+  assert.match(text(), /GPEXE sends this value for the whole session and for each drill; OptiMove imports both\./);
   sourceFieldsState().form = null;
   render();
   await click(createButton("athlete_session", "hsr_distance"));
-  assert.match(text(), /This field has no values yet\. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document\./);
+  assert.match(text(), /Nothing is imported yet\. GPEXE sends no unit with this value, so it cannot be compared with GPEXE here\. Open it here and use Confirm the unit, naming the GPEXE document that gives its unit, before you put it on a variable\./);
+  assert.equal(/developer/i.test(text()), false);
   assert.doesNotMatch(text(), /confirmed on the board/);
   sourceFieldsState().form = null;
   render();
@@ -333,4 +338,18 @@ test("10. the review fixes: a details name GPEXE sends both for the session and 
   assert.equal(sourceFieldsState().form, null);
   assert.match(text(), /This field already exists, so nothing was created\. The source fields are read again below\./);
   assert.ok(calls.some((c) => c.method === "GET" && c.url === FB), "the list is read again");
+});
+
+test("Z (the Rukovodilac, 2026-11-18): Create field on a numbered zone says the range it is expected to cover, from the team's limits, and that it is not confirmed yet; another name says nothing of a range", async () => {
+  invItems = [...inventory(), item({ name: "athletesessionpowerzone_distance_4", unitWord: "distance", zone: { family: "power", measure: "distance", number: 4 } })];
+  invLimits = { power: { values: [20, 25, 60, 75] }, speed: null, asOf: "2026-11-07T10:00:00Z" };
+  try {
+    await openCreate("details.session", "athletesessionpowerzone_distance_4");
+    assert.equal($('[data-sf-field="label"]').value, "Power zone 4 · distance", "the name kept in OptiMove carries no team's range");
+    assert.match(text(), /Range of this zone: 60–75 W\/kg \(the team's zone limits in the newest saved session, 07\.11\.2026\)\. After you add it, check it once with Compare with GPEXE\./);
+    sourceFieldsState().form = null;
+    render();
+    await openCreate();
+    assert.doesNotMatch(text(), /Range of this zone/);
+  } finally { invLimits = undefined; }
 });

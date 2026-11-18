@@ -6,17 +6,30 @@
 // - a club scope (the club's admin, or a platform admin in that club's workspace): only the names seen through that
 //   club's own connections - club-owned ones and team-owned ones of the club's own teams (P2);
 // - everyone else never reaches this module (the route answers the identical 404 first, adminContext).
-// Never in an answer: a connection or check id, a label, a club or a team. A club scope sees a unit word only when it is
-// a known unit, the token of an active unit conversion (P3). `team_thresholds` names are never a field: a platform admin
+// Never in an answer: a connection or check id, a label, a club or a team. A club scope sees GPEXE's raw unit word only
+// when it is a known unit, the token of an active unit conversion (P3); the unit a word stands for (v74's seed, a
+// migration's data) and whether a name is a value reach every audience (2026-11-18). `team_thresholds` names are never a field: a platform admin
 // reads them with endpoint=team_thresholds only, and a club scope gets an empty list there (P1).
+import { zoneThresholdsOf } from "./sourceZoneThresholds.js";
+export { zoneThresholdsOf };
 import { refusal } from "./sourceMetricAccess.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
-import { FIELD_ENDPOINTS, STRUCTURAL_FIELDS } from "./sourceFieldInventory.js";
+import { FIELD_ENDPOINTS, isStructuralField, STRUCTURAL_FIELDS } from "./sourceFieldInventory.js";
 import { deriveField, FieldCreateRefusal, KEPT_VALUE_KINDS } from "./sourceFieldCreate.js";
 import { mayCreateFields } from "./sourceFieldCreateService.js";
 
 export const INVENTORY_PAGE_SIZE = 200;
+// The kinds that are a measured value (sourceFieldInventory.valueKind).
+const VALUE_KINDS = new Set(["number", "unit_value_object", "zone_list"]);
 const STATES = new Set(["not_supported", "covered", "all"]);
+const COMPLEMENTARY = "more.complementary_data";
+
+// Whether a row is a measured value: never a team threshold or a structural name; otherwise a value kind, a
+// complementary-data family, or a name a source field already covers.
+export function isValueRow(row) {
+  if (row.endpoint === THRESHOLDS || isStructuralField(row.endpoint, row.field_name)) return false;
+  return VALUE_KINDS.has(row.kind) || row.covered === true || row.endpoint === COMPLEMENTARY;
+}
 const ENDPOINTS = new Set(FIELD_ENDPOINTS);
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const CURSOR_TEXT = /^[A-Za-z0-9_-]{1,400}$/;
@@ -119,11 +132,14 @@ const INVENTORY_SQL = `
            ) as unit_known
       from grouped g
   )
-  select endpoint, field_name, kind, unit_word, unit_known, answers::text as answers, last_seen_on, connections, covered, kinds_kept, key_taken
-    from marked
-   where ($3::text = 'all' or endpoint = '${THRESHOLDS}' or covered = ($3::text = 'covered'))
-     and ($4::text is null or (endpoint collate "C", field_name collate "C") > ($4::text collate "C", $5::text collate "C"))
-   order by endpoint collate "C", field_name collate "C"
+  select m.endpoint, m.field_name, m.kind, m.unit_word, m.unit_known, m.answers::text as answers, m.last_seen_on, m.connections, m.covered,
+         m.kinds_kept, m.key_taken, w.source_unit as word_unit
+    from marked m
+    -- The owner's first use (2026-11-18): the unit a word stands for (v74's seed), shown instead of the word.
+    left join training_load.source_unit_words w on w.source_system = 'gpexe' and w.api_family = 'rest_v1' and w.word = m.unit_word
+   where ($3::text = 'all' or m.endpoint = '${THRESHOLDS}' or m.covered = ($3::text = 'covered'))
+     and ($4::text is null or (m.endpoint collate "C", m.field_name collate "C") > ($4::text collate "C", $5::text collate "C"))
+   order by m.endpoint collate "C", m.field_name collate "C"
    limit $6`;
 
 // Route C would create this name: not covered yet, a generic endpoint, a name route C derives a key from, and every
@@ -139,6 +155,45 @@ function creatable(row) {
   }
 }
 
+// A zone name GPEXE sends in a session's details (`athletesessionpowerzone_distance_4`): the family, what is measured and
+// GPEXE's own number, the name's facts only. The range a number stands for is not derived here: the screens take it from
+// the team limits (frontend/zone-ranges.js), as a fact on the owner-stated evidence of GPEXE's settings screen
+// (docs/ai/gpexe-field-inventory-plan.md 8.13), not a machine proof.
+const ZONE_NAME = /^athletesession([a-z]+)zone_(distance|time|events)_([0-9]{1,2})$/;
+export function zoneOf(name) {
+  const m = ZONE_NAME.exec(typeof name === "string" ? name : "");
+  return m ? { family: m[1], measure: m[2], number: Number(m[3]) } : null;
+}
+
+// The team thresholds the list shows with the zone names, to a platform admin only (P1; the club board carries its own
+// team's) (2026-11-18): the power and speed limits of the newest stored session of each active binding of the visible
+// connections (the threshold set GPEXE sent with it; a team
+// setting, never an athlete's value). One set when every such team has the same; otherwise only that they differ.
+// One row per binding is chosen first (the newest stored session, by its id), and only that row's bundle is opened (the
+// code review's MEDIUM: never every stored bundle).
+export const THRESHOLDS_SQL = `
+  select t.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power, t.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed, t.session_started_at
+    from training_load.source_team_bindings b
+    join training_load.source_credential_connections k on k.id = b.connection_id and k.source_system = 'gpexe'
+    cross join lateral (
+      select c.id from training_load.gpexe_import_candidates c
+       where c.owner_team_id = b.team_id and c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
+       order by c.session_started_at desc, c.id limit 1) newest
+    join training_load.gpexe_import_candidates t on t.id = newest.id
+   where b.state = 'active'`;
+// Test seam (never set by the application): called before the thresholds read.
+let thresholdsFault = null;
+export function setInventoryThresholdsFaultForTests(fn) { thresholdsFault = fn ?? null; }
+// The thresholds are a secondary fact: a failed read answers the list with zoneThresholds null, never a failed list.
+async function readZoneThresholds() {
+  try {
+    if (thresholdsFault) await thresholdsFault();
+    return zoneThresholdsOf(await boundedRead(async (client) => (await client.query(THRESHOLDS_SQL)).rows));
+  } catch (error) {
+    console.error(`[source-field-inventory] zone_thresholds_unread (${String(error?.code || error?.name || "Error").replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)})`);
+    return null;
+  }
+}
 export async function listFieldInventory({ ctx, query }) {
   const parsed = parseInventoryQuery(query, ctx);
   const platform = isPlatformScope(ctx);
@@ -152,6 +207,8 @@ export async function listFieldInventory({ ctx, query }) {
   // G1b: whether route C would take this name (its own derivation, never a guess of the screen), for its audience only.
   const mayCreate = mayCreateFields(ctx);
   const r = await boundedRead((client) => client.query(INVENTORY_SQL, params));
+  // Platform only (P1: team thresholds are the platform admin's).
+  const zoneThresholds = platform && parsed.endpoint !== THRESHOLDS ? await readZoneThresholds() : undefined;
   const rows = r.rows.slice(0, INVENTORY_PAGE_SIZE);
   const fields = rows.map((row) => ({
     endpoint: row.endpoint,
@@ -161,9 +218,20 @@ export async function listFieldInventory({ ctx, query }) {
     answersSeen: Number(row.answers),
     lastSeenOn: row.last_seen_on,
     covered: row.covered,
+    // The unit the word stands for (the seed; never the account's own data), and whether the name is a measured value
+    // (the code review's MEDIUM: by what the name is - a number, a number with its unit or a zone list, and not a
+    // reference, a group, a flag or a time - never by whether route C would create it). A complementary-data family
+    // (an object of zone lists) and a name a source field already covers are values too (the re-review's MEDIUM).
+    unit: row.word_unit ?? null,
+    isValue: isValueRow(row),
+    zone: zoneOf(row.field_name),
     ...(platform ? { connectionCount: row.connections } : {}),
     ...(mayCreate ? { creatable: creatable(row) } : {}),
   }));
   const last = rows[rows.length - 1];
-  return { fields, nextCursor: r.rows.length > INVENTORY_PAGE_SIZE ? encodeCursor(ctx, parsed, { endpoint: last.endpoint, name: last.field_name }) : null };
+  return {
+    fields,
+    ...(zoneThresholds !== undefined ? { zoneThresholds } : {}),
+    nextCursor: r.rows.length > INVENTORY_PAGE_SIZE ? encodeCursor(ctx, parsed, { endpoint: last.endpoint, name: last.field_name }) : null,
+  };
 }

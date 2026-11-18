@@ -2,9 +2,10 @@
 // strings only: every name from the source or from another person is escaped
 // and cleaned. Built from the om-* components Imports uses (page header,
 // tabs, light cards, badges, buttons); the phone sheet is the roster's.
+import { zoneRangeText } from "./zone-ranges.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import {
-  BOARD_ERROR, COLUMN_REASON, MAX_ROWS, columnReasonText, displayNumber, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
+  BOARD_ERROR, COLUMN_REASON, MAX_ROWS, columnReasonText, parkedSentence, displayNumber, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
   preplacedRows, sessionWords, slotOf, variableOf,
 } from "./metric-board-data.js";
 import { sourceFieldDragAvailable } from "./metric-board-drag.js";
@@ -30,6 +31,12 @@ const busy = (s) => Boolean(s.write) || s.loading;
 const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest and marks the value as missing. Untick to leave it out quietly.";
 // Keys, codes and the GPEXE team's number are for a platform admin only (the owner, 2026-11-13).
 const forSupport = () => boardContext()?.isPlatformAdmin === true;
+// A numbered zone column's range from the session's team limits (every board caller gets them: a club only its own team's).
+// Shown as a fact, on the owner-stated evidence of GPEXE's settings screen (docs/ai/gpexe-field-inventory-plan.md 8.13).
+const zoneRangeLine = (board, key) => {
+  const text = zoneRangeText(key, board?.zoneThresholds);
+  return text ? `<small class="mb-zone-range">Zone ${escapeHtml(text)}</small>` : "";
+};
 const gpexeTeam = (id) => (forSupport() && id ? ` — linked to GPEXE team ${escapeHtml(id)}` : "");
 
 // ---------------------------------------------------------------------------
@@ -118,17 +125,21 @@ function columnHtml(s, c, drag) {
   const values = c.rawA !== null || c.rawB !== null
     ? `<span class="mb-col-vals" aria-label="${escapeAttr(`${cleanName(board.pair.labels[0])}: ${c.rawA === null || c.rawA === undefined ? "no value" : `${displayNumber(c.rawA)}${c.unitProven ? ` ${c.unit}` : ""}`}; ${cleanName(board.pair.labels[1])}: ${c.rawB === null || c.rawB === undefined ? "no value" : `${displayNumber(c.rawB)}${c.unitProven ? ` ${c.unit}` : ""}`}`)}">${roughWithUnit(c.rawA, c.unitProven ? c.unit : "")}<br>${roughWithUnit(c.rawB, c.unitProven ? c.unit : "")}</span>` : "";
   const tech = forSupport() ? `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(c.key)}</code></details>` : "";
-  const main = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small></span>`;
+  const zone = zoneRangeLine(board, c.key);
+  const main = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}</span>`;
   if (!c.placeable && !use) {
-    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small class="mb-reason">${escapeHtml(columnReasonText(c.reason, { platformAdmin: forSupport() }))}</small></span>${values}</div>${tech}</li>`;
+    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}<small class="mb-reason">${escapeHtml(columnReasonText(c.reason, { platformAdmin: forSupport() }))}</small></span>${values}</div>${tech}</li>`;
   }
   if (use) {
     const badge = use === "on" ? `<span class="om-badge om-badge--success">On</span>` : use === "new" ? `<span class="om-badge om-badge--accent">Placed</span>` : `<span class="om-badge om-badge--info">Placed</span>`;
     // S: on the platform board a column the club fills with its own variable is on, but that variable is not here.
     const onAsClubs = use === "on" && onPlatform() && (board.on || []).some((o) => o.fieldId === c.fieldId && o.badge === "club_mapping");
     const why = onAsClubs ? "On for the team as the club's own variable. To change it, switch to the club's variables."
-      : use === "on" ? "Already on for the team. Switch it off under Variables to place it again." : "Placed. Remove it under Variables to place it elsewhere.";
-    const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small>${why}</small></span>`;
+      // A zone or threshold column cannot be placed by hand, and the board never puts it back (both Add paths refuse
+      // field_has_parameters: placementOf and preplacedOf). The screen promises nothing else (no Mappings on this board).
+      : use === "on" ? (c.reason === "field_has_parameters" ? "Already on for the team. If you switch it off, it can't be placed on this board again."
+        : "Already on for the team. Switch it off under Variables to place it again.") : "Placed. Remove it under Variables to place it elsewhere.";
+    const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}<small>${why}</small></span>`;
     return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;
   }
   const picked = s.picked === c.fieldId;
@@ -139,12 +150,35 @@ function columnHtml(s, c, drag) {
     </button>${tech}</li>`;
 }
 
+// The Rukovodilac, 2026-11-18: a zone or an event threshold (a field with parameters) cannot be placed by any path
+// today - Mappings refuses a version whose revision is not verified, and no document proves these fields' unit and
+// limits. Such columns leave the list for one closed group at its end. Display only: the server decides as before.
+const parked = (s, c) => !c.placeable && c.reason === "field_has_parameters" && !columnUse(s, c.fieldId);
+function parkedHtml(s) {
+  const board = s.board;
+  const items = board.columns.filter((c) => parked(s, c));
+  if (!items.length) return "";
+  const sentence = parkedSentence({ platformAdmin: forSupport() });
+  const rows = items.map((c) => {
+    const unitLine = c.unitProven ? `GPEXE sends values in ${escapeHtml(c.unit)}` : c.expectedUnit ? `Expected ${escapeHtml(c.expectedUnit)}, not confirmed` : "Unit not confirmed";
+    const tech = forSupport() ? `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(c.key)}</code></details>` : "";
+    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small></span></div>${tech}</li>`;
+  }).join("");
+  return `<details class="mb-parked" ${s.parkedOpen ? "open" : ""}>
+    <summary>Zone sets and threshold events: not available yet (${items.length})</summary>
+    <p class="muted mb-note">${escapeHtml(sentence)}</p>
+    <ul class="mb-list">${rows}</ul>
+  </details>`;
+}
+
 function slotHtml(s, v, drag) {
   const board = s.board;
   const slot = slotOf(s, v);
   const unit = v.unit ? `<span class="om-badge mb-unit">${escapeHtml(v.unit)}</span>` : "";
   const head = (sub) => `<span class="mb-slot-main"><strong>${name(v.label)}</strong><small>${sub}</small></span>`;
-  const col = slot.column ? name(slot.column.label) : "a column";
+  // A variable filled from a numbered zone names that zone's expected range too (platform only, never a fact).
+  const zoneRange = slot.column ? zoneRangeText(slot.column.key, board?.zoneThresholds) : null;
+  const col = slot.column ? `${name(slot.column.label)}${zoneRange ? ` (${escapeHtml(zoneRange)})` : ""}` : "a column";
   const off = busy(s) ? "disabled" : "";
   if (slot.kind === "on") {
     return `<li class="mb-slot is-on">${head(`From ${col}`)}${unit}<span class="om-badge om-badge--success">On for ${name(teamName(s))}</span>
@@ -204,7 +238,9 @@ function boardCards(s) {
         <p class="muted mb-note">${escapeHtml(sessionWords(board.session, dateTime))} ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
         <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <span><strong>${name(board.pair.labels[1])}</strong>.</span>
           ${board.pair.count > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-other-athletes" ${busy(s) ? "disabled" : ""}>Other athletes</button>` : ""}</p>
-        <ul class="mb-list">${board.columns.map((c) => columnHtml(s, c, drag)).join("")}</ul>
+        ${board.columns.some((c) => zoneRangeText(c.key, board.zoneThresholds)) ? `<p class="muted mb-note">Zone ranges come from this session's team zone limits in GPEXE.</p>` : ""}
+        <ul class="mb-list">${board.columns.filter((c) => !parked(s, c)).map((c) => columnHtml(s, c, drag)).join("")}</ul>
+        ${parkedHtml(s)}
       </section>
       <section class="om-card mb-card" aria-labelledby="mb-variables-title">
         <div class="om-card__header"><h3 class="om-card__title" id="mb-variables-title">Variables</h3></div>

@@ -26,7 +26,14 @@ export const STRUCTURAL_FIELDS = Object.freeze({
   team_thresholds: Object.freeze(["id", "team", "validity_start", "validity_end"]),
 });
 const STRUCTURAL = new Set(Object.entries(STRUCTURAL_FIELDS).flatMap(([endpoint, names]) => names.map((n) => `${endpoint}\u0000${n}`)));
-export const isStructuralField = (endpoint, name) => STRUCTURAL.has(`${endpoint}\u0000${name}`);
+// The owner's first use of the list (2026-11-18): GPEXE also sends, on every endpoint, names that are a reference, a
+// group, a flag or a time, never a measured value (`athlete` per drill, `athlete_session_id`, `are_*_visible`,
+// `validity_*`). They are never a field (route C refuses them) and the list folds them away. By name, for any endpoint;
+// the collector still skips only the exact pairs above.
+const STRUCTURAL_NAMES = new Set(["id", "athlete", "user", "team", "teamsession", "track", "drill", "created_on", "updated_on"]);
+const STRUCTURAL_NAME_PATTERNS = Object.freeze([/_id$/, /^are_[a-z0-9_]*_visible$/, /^is_[a-z0-9_]*_visible$/, /^validity_/, /_timestamp$/]);
+export const isStructuralName = (name) => typeof name === "string" && (STRUCTURAL_NAMES.has(name) || STRUCTURAL_NAME_PATTERNS.some((p) => p.test(name)));
+export const isStructuralField = (endpoint, name) => STRUCTURAL.has(`${endpoint}\u0000${name}`) || isStructuralName(name);
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const PROTOTYPE_KEYS = DANGEROUS_FIELD_NAMES;

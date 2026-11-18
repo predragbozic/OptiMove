@@ -8,6 +8,7 @@
 // the server answers everyone else with the same 404. The revision lifecycle
 // (L1-L5: a new revision, activate, retire, replace) is not part of this
 // screen.
+import { zoneRange } from "./zone-ranges.js";
 import { api } from "./api.js";
 import { state } from "./state.js";
 import { LIMITS, UNIT_FORBIDDEN, WRITE_BOUND_MS, errorInfo, newRequestKey, outcomeUnknown } from "./metric-variables-data.js";
@@ -30,8 +31,11 @@ export function sourceFieldsContext(user = state.currentUser) {
 
 export function emptyInventory() {
   return {
-    items: [], loaded: false, loading: false, loadingMore: false, error: null, nextCursor: null,
+    items: [], loaded: false, loading: false, loadingMore: false, error: null, nextCursor: null, zoneThresholds: null,
     endpoint: "", showSupported: false, search: "",
+    // The owner's rule (2026-11-18): the plain view first; GPEXE's own names, counts, sources and the names that are not
+    // values are one click away, never the default.
+    technical: false,
     // Team thresholds (P1): the platform workspace only, read when their fold opens.
     thresholds: { items: [], loaded: false, loading: false, error: null, open: false },
   };
@@ -89,8 +93,86 @@ export const KIND_LABEL = {
   object: "group of values",
   list: "list",
 };
-// The search narrows the loaded names in place, by name, ignoring case.
-export const inventoryMatches = (item, search) => !search || String(item.name || "").toLowerCase().includes(String(search).trim().toLowerCase());
+// The search narrows the loaded names in place, by GPEXE's name or the text the row shows (with the same team limits),
+// ignoring case, "·" and repeated spaces (the code review: search what is on screen).
+const searchText = (t) => String(t || "").toLowerCase().replace(/·/g, " ").replace(/\s+/g, " ").trim();
+// Every word of the query must appear, in any order ("zone 4 distance" finds "Power zone 4 · 60–75 W/kg · distance").
+export const inventoryMatches = (item, search, thresholds = null) => {
+  const words = searchText(search).split(" ").filter(Boolean);
+  if (!words.length) return true;
+  const name = searchText(item.name);
+  const shown = searchText(readableName(item, thresholds));
+  return words.every((w) => name.includes(w) || shown.includes(w));
+};
+
+// The owner's first use of the list (2026-11-18): a readable name first, the unit (never GPEXE's word), the zone's own
+// fact, and the names that are not values folded away; grouped by quantity.
+const ZONE_FAMILY = { power: "Power", speed: "Speed", relativespeed: "Relative speed", jumpheight: "Jump height", heartrate: "Heart rate", metabolicpower: "Metabolic power" };
+const MEASURE = { distance: "distance", time: "time", events: "events" };
+const capitalize = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
+// A numbered zone reads "Power zone 4 · distance", or with the team's limits "Power zone 4 · 60–75 W/kg · distance".
+export function readableName(item, thresholds = null) {
+  const z = item?.zone;
+  if (z && Number.isInteger(z.number)) {
+    const range = thresholds ? zoneRange(z, thresholds) : null;
+    return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} · ${range ? `${range} · ` : ""}${MEASURE[z.measure] || z.measure}`;
+  }
+  const name = String(item?.name || "").replace(/^athlete_?session_?/, "").replace(/_+/g, " ").trim();
+  return capitalize(name) || String(item?.name || "");
+}
+export const QUANTITIES = Object.freeze([
+  ["distance", "Distance", ["m"]], ["time", "Time", ["s"]], ["power", "Power", ["W/kg"]], ["energy", "Energy", ["J/kg"]],
+  ["speed", "Speed", ["m/s"]], ["acceleration", "Acceleration", ["m/s2"]], ["count", "Counts", ["count"]],
+]);
+export function quantityOf(item) {
+  const hit = QUANTITIES.find(([, , units]) => units.includes(item?.unit));
+  return hit ? hit[0] : "other";
+}
+export const QUANTITY_LABEL = { ...Object.fromEntries(QUANTITIES.map(([key, label]) => [key, label])), other: "Other values" };
+// The units GPEXE's settings screen shows: speed limits are stored in m/s and shown in km/h (× 3.6).
+const ZONE_THRESHOLD = { power: ["Power", "W/kg", 1], speed: ["Speed", "km/h", 3.6] };
+// The team limits of one zone family, said once in the list (the UX review: once, not in every group). Each zone row
+// shows its own expected range beside it (the Rukovodilac's order of 2026-11-18), always marked expected. The list has
+// no session in view, so the limits are those of the newest saved session of each linked team, with that day. The limits
+// are the platform admin's only (P1).
+export function zoneLimitsNote(family, zoneThresholds, day = "") {
+  const pair = ZONE_THRESHOLD[family];
+  const set = pair && zoneThresholds ? zoneThresholds[family] : null;
+  if (!set) return "";
+  if (set.differ) return `${pair[0]} zone limits differ between teams, so no zone's range is shown.`;
+  return Array.isArray(set.values)
+    ? `${pair[0]} zone limits of the team: ${set.values.map((v) => String(Math.round(v * pair[2] * 100) / 100)).join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. Zone 1 starts at 0 and each zone runs to the next limit, as GPEXE's team settings show.`
+    : "";
+}
+// Values first by quantity, zones together in zone order; the rest is "not values".
+// merge (the plain view): one row per GPEXE name. GPEXE sends many values both for the whole session and per drill (and
+// some per athlete too); with the sources hidden, two rows of one plain name could not be told apart. The row kept is
+// one in use if any is, then the whole session's, then a drill's, then a per-athlete one; Use this value on it opens
+// the form with both levels when GPEXE sends both (openCreateFieldForm's siblings).
+// Only the whole session's and a drill's rows merge: they share one source key (details.players.<name>); a per-athlete
+// or /more/ row of the same name is another field and stays its own row (the code review's LOW). The row kept is the one
+// in use, else the one that can be added, else the whole session's.
+const MERGED = ["details.session", "details.drill"];
+function mergeByName(values) {
+  const rank = (i) => (i.covered ? 0 : 10) + (i.creatable === true ? 0 : 5) + MERGED.indexOf(i.endpoint);
+  const best = new Map();
+  for (const item of values) {
+    if (!MERGED.includes(item.endpoint)) continue;
+    const kept = best.get(item.name);
+    if (!kept || rank(item) < rank(kept)) best.set(item.name, item);
+  }
+  return values.filter((item) => !MERGED.includes(item.endpoint) || best.get(item.name) === item);
+}
+export function inventoryGroups(items, { merge = false } = {}) {
+  const all = items.filter((i) => i.isValue === true);
+  const values = merge ? mergeByName(all) : all;
+  const other = items.filter((i) => i.isValue !== true);
+  const order = [...QUANTITIES.map(([key]) => key), "other"];
+  const sortKey = (i) => [i.zone ? 0 : 1, i.zone?.family || "", i.zone?.measure || "", i.zone?.number ?? 0, readableName(i).toLowerCase()];
+  const cmp = (a, b) => { const x = sortKey(a); const y = sortKey(b); for (let k = 0; k < x.length; k += 1) { if (x[k] < y[k]) return -1; if (x[k] > y[k]) return 1; } return 0; };
+  const groups = order.map((key) => ({ key, label: QUANTITY_LABEL[key], items: values.filter((i) => quantityOf(i) === key).sort(cmp) })).filter((g) => g.items.length);
+  return { groups, other };
+}
 export const fetchField = (id) => api(`${BASE}/${encodeURIComponent(id)}`);
 function write(path, body) {
   const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(WRITE_BOUND_MS) : undefined;
@@ -190,10 +272,10 @@ export const evidenceRefOk = (value) => typeof value === "string" && value.lengt
 // G1b: creating a field from a name GPEXE sent (route C, docs/ai/gpexe-field-inventory-plan.md section 8.1)
 // ---------------------------------------------------------------------------
 // What happens next, said once on the form and once after the save (the Rukovodilac's wording).
-export const CREATE_NEXT_STEP = "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.";
+export const CREATE_NEXT_STEP = "Nothing is imported yet. After the next Find new sessions brings this value, open it here and use Compare with GPEXE once. Then you can put it on a variable.";
 // A per-athlete value carries no unit word, so the board never offers its unit: a document confirms it (the wording of
 // the UX review of G1b-1, approved by the Rukovodilac on 2026-11-17).
-export const CREATE_NEXT_STEP_ROW = "This field has no values yet. GPEXE sends no unit with it, so a platform administrator confirms its unit with a document.";
+export const CREATE_NEXT_STEP_ROW = "Nothing is imported yet. GPEXE sends no unit with this value, so it cannot be compared with GPEXE here. Open it here and use Confirm the unit, naming the GPEXE document that gives its unit, before you put it on a variable.";
 export const createNextStep = (endpoint) => (endpoint === "athlete_session" ? CREATE_NEXT_STEP_ROW : CREATE_NEXT_STEP);
 export const FIELD_LABEL_MAX = 80;
 // The levels a name's endpoint allows, and the one a per-drill name must keep.
@@ -207,7 +289,7 @@ export const createOffered = (ctx, item) => Boolean(ctx?.mayVerify && item && it
 // `siblings`: the loaded inventory. A details name GPEXE sends both for the whole session and per drill becomes one key
 // (details.players.<name>, plan 8.1), so the form opens with both levels (the code review of G1b-1, MEDIUM).
 const DETAILS = ["details.session", "details.drill"];
-export function openCreateFieldForm(item, siblings = []) {
+export function openCreateFieldForm(item, siblings = [], thresholds = null) {
   const levels = createLevels(item.endpoint);
   const both = DETAILS.includes(item.endpoint) && siblings.some((other) => other !== item && other.name === item.name && DETAILS.includes(other.endpoint) && other.endpoint !== item.endpoint);
   if (both) { levels.supportsSession = true; levels.supportsDrill = true; }
@@ -224,11 +306,15 @@ export function openCreateFieldForm(item, siblings = []) {
     name: item.name,
     kind: item.kind || "",
     unitWord: item.unitWord || "",
+    // The plain name and unit the list showed, for the form's title; the name in OptiMove starts as that name.
+    readable: readableName(item, thresholds),
+    unit: item.unit || "",
     drillLocked: levels.drillLocked,
     bothLevels: both,
     fieldId: null,
     fieldName: item.name,
-    draft: { label: "", supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
+    // The name kept in OptiMove carries no range: one team's limits can change or differ between clubs (the UX review).
+    draft: { label: readableName(item).slice(0, FIELD_LABEL_MAX), supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
   };
 }
 
@@ -274,7 +360,7 @@ export function observationLines(o) {
 export const DURATION_HOURS_NOTE = "For a long value GPEXE may show hours as well: 1:36:30 is 96:30.";
 export function observationWordText(o) {
   if (!o?.word) return "";
-  return `GPEXE sends the unit word "${o.word}" with this value; OptiMove reads it as ${o.unit}.`;
+  return `GPEXE sends this value in ${o.unit}.`;
 }
 // Why a comparison cannot be ticked (unit_not_stated's reasons; the server's codes, in plain words).
 export function observationReasonText(o) {
@@ -491,10 +577,11 @@ export const REREADS_OBSERVATION = new Set(["board_changed", "pair_not_comparabl
 export function confirmQuestion(form, body) {
   if (form.act === "observe") {
     const o = form.observation;
-    return `Save the unit of ${form.fieldName} as ${o.unit} (GPEXE's word "${o.word}") and its meaning as GPEXE's own name "${o.gpexeName}", from this comparison of two athletes? It is saved once and never changed; a correction is a new revision.`;
+    // The owner's rule: the decision in plain words; GPEXE's word and name stay under Technical details.
+    return `Save ${o.unit} as the unit of ${form.fieldName}? Both athletes' numbers match GPEXE. You can't change it here later.`;
   }
   if (form.act === "create") {
-    return `Create the source field "${body.label}" from GPEXE's name ${body.name} (${ENDPOINT_LABEL[body.endpoint] || body.endpoint})? Once created, the field cannot be removed here.`;
+    return `Use ${body.label}${form.unit ? ` (${form.unit})` : ""} in OptiMove? Once added, it cannot be removed here.`;
   }
   const what = `${form.fieldName} (revision ${form.revisionNumber})`;
   const value = form.act === "unit"
@@ -507,3 +594,11 @@ export function confirmQuestion(form, body) {
 
 // A refusal that names a field of the form.
 export const FIELD_OF_CODE = { invalid_unit: "sourceUnit", invalid_evidence_ref: "evidenceRef", invalid_operator: "boundOperator" };
+
+// One state per row of the list, in plain words (the owner's rule of 2026-11-18): in use, can be added, or not yet.
+export function inventoryState(item, ctx) {
+  if (item?.covered) return "In use";
+  if (createOffered(ctx, item)) return "Not used yet";
+  // A club cannot add a value (the list says there is nothing to do); the platform cannot add this one yet.
+  return ctx?.mayVerify ? "Can't be added yet" : "Not imported yet";
+}

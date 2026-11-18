@@ -42,7 +42,7 @@ import { closeIconPicker, handleIconPickerInput, trapIconPickerTab } from "./ico
 import { enterIconGallery, handleIconGalleryAction, handleIconGalleryInput } from "./icon-gallery.js";
 import { handleSourceFieldsAction, handleSourceFieldsInput, sourceFieldsThresholdsToggled, submitSourceFieldsForm } from "./source-fields-actions.js";
 import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-actions.js";
-import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput, boardBeforeSwitch, boardSwitchFailed } from "./metric-board-actions.js";
+import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput, boardBeforeSwitch, boardSwitchFailed, metricBoardParkedToggled } from "./metric-board-actions.js";
 import { endSourceFieldDrag, dropSourceFieldDrag, leaveSourceFieldDrag, overSourceFieldDrag, startSourceFieldDrag } from "./metric-board-drag.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
 import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
@@ -569,6 +569,11 @@ function bindEvents() {
     // I3: Source fields' team thresholds fold keeps its open state across repaints.
     if (panel?.classList?.contains("source-fields-inventory-thresholds")) {
       sourceFieldsThresholdsToggled(panel.open);
+      return;
+    }
+    // The board's "Not available yet" group keeps its open state across repaints.
+    if (panel?.classList?.contains("mb-parked")) {
+      metricBoardParkedToggled(panel.open);
       return;
     }
     const settings = panel?.classList?.contains("imports-settings");
