@@ -36,11 +36,18 @@ const text = () => content.textContent.replace(/\s+/g, " ");
 const inventoryGets = () => calls.filter((c) => c.method === "GET" && c.url.startsWith(INV)).map((c) => c.url);
 const rows = () => [...content.querySelectorAll("[data-sf-inv-row]")];
 // GPEXE's own name, small under the readable one (2026-11-18).
-const shownNames = () => rows().filter((r) => !r.hidden).map((r) => r.querySelector(".source-fields-inventory-raw").textContent.trim());
+// The names of the rows shown, by the row's index into the loaded list (the plain view shows no GPEXE name).
+const shownNames = () => rows().filter((r) => !r.hidden).map((r) => sourceFieldsState().inventory.items[Number(r.dataset.sfInvRow)].name);
 async function click(selector) {
   const element = $(selector);
   assert.ok(element, `${selector} is on the screen`);
   await handleSourceFieldsAction(element, { render });
+}
+
+// The technical view (one click away): GPEXE's own names, the counts, the sources and the names that are not values.
+async function loadTech() {
+  await loadSourceFieldsSection(render);
+  if (!sourceFieldsState().inventory.technical) await click('[data-action="source-fields-inv-technical"]');
 }
 
 const item = (over = {}) => ({ endpoint: "details.session", name: "metabolic_power", kind: "unit_value_object", unitWord: "power", unit: "W/kg", isValue: true, zone: null, answersSeen: 12, lastSeenOn: "2026-11-10", covered: false, ...over });
@@ -82,11 +89,11 @@ test("1. a platform admin: the second list in plain words - where the name comes
     item({ connectionCount: 2 }),
     item({ endpoint: "athlete_session", name: "a_b", kind: "number", unitWord: null, unit: null, answersSeen: 1, lastSeenOn: "2026-11-14", connectionCount: 1 }),
   ]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   assert.deepEqual(inventoryGets(), [INV], "one read, the default filter (not supported)");
-  assert.match(text(), /Available in GPEXE, not supported yet/);
+  assert.match(text(), /More values GPEXE sends/);
   // G1b: the platform admin can act on a name now (Create field); the club's sentence keeps "nothing to do" (test 2).
-  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not use them yet, so they are not imported\. Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet\./);
+  assert.match(text(), /GPEXE also sends these values in the clubs' sessions\. OptiMove does not import them yet\. Use this value adds one to OptiMove, so you can then put it on a variable\./);
   // 2026-11-18: the readable name and the unit first (never GPEXE's word), GPEXE's name small, the counts last.
   const lines = rows().map((r) => [r.querySelector(".metric-variables-item-name"), r.querySelector(".source-fields-inventory-raw"), r.querySelector(".metric-variables-item-facts")].map((e) => e.textContent.replace(/\s+/g, " ").trim()));
   assert.deepEqual(lines, [
@@ -106,14 +113,15 @@ test("2. a club admin: the club's own sentence, no connection count and no team 
   assert.match(text(), /GPEXE also sends these values in your sessions\./);
   assert.doesNotMatch(text(), /GPEXE account/);
   assert.equal($(".source-fields-inventory-thresholds"), null, "the thresholds fold is the platform's");
-  assert.match(rows()[0].textContent.replace(/\s+/g, " "), /Metabolic power \(W\/kg\) .*Whole session · seen 12 times/);
+  // The plain view: the name, the unit and one state; never a count or a source.
+  assert.equal(rows()[0].textContent.replace(/\s+/g, " ").trim(), "Metabolic power (W/kg) Not available yet");
 });
 
 test("3. the endpoint chips and Show supported too become the read's query; the chosen chip is pressed; supported names carry a badge", async () => {
   pages.default = ok([item()]);
   pages[`${INV}?endpoint=athlete_session`] = ok([item({ endpoint: "athlete_session", name: "only_rows", kind: "number" })]);
   pages[`${INV}?state=all&endpoint=athlete_session`] = ok([item({ endpoint: "athlete_session", name: "total_distance", kind: "number", covered: true }), item({ endpoint: "athlete_session", name: "only_rows", kind: "number" })]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   await click('[data-action="source-fields-inv-endpoint"][data-endpoint="athlete_session"]');
   assert.equal(inventoryGets().at(-1), `${INV}?endpoint=athlete_session`);
   assert.equal($('[data-endpoint="athlete_session"]').getAttribute("aria-pressed"), "true");
@@ -123,7 +131,7 @@ test("3. the endpoint chips and Show supported too become the read's query; the 
   assert.equal(inventoryGets().at(-1), `${INV}?state=all&endpoint=athlete_session`);
   assert.ok($('[data-action="source-fields-inv-supported"]').checked);
   const used = rows().find((r) => r.querySelector(".source-fields-inventory-raw").textContent.trim() === "total_distance");
-  assert.match(used.querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " "), /Total distance .*Already used/);
+  assert.match(used.textContent.replace(/\s+/g, " "), /Total distance .*In use/);
   const before = inventoryGets().length;
   await click('[data-action="source-fields-inv-endpoint"][data-endpoint="athlete_session"]');
   assert.equal(inventoryGets().length, before, "the chip already chosen reads nothing again");
@@ -131,18 +139,18 @@ test("3. the endpoint chips and Show supported too become the read's query; the 
 
 test("3b (the re-review's MEDIUM): an already used family of objects that the server calls a value is drawn in a group with its badge, never in the not-values fold", async () => {
   pages.default = ok([item({ endpoint: "more.complementary_data", name: "power", kind: "object", unitWord: null, unit: null, covered: true, isValue: true })]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   const row = rows().find((r) => r.querySelector(".source-fields-inventory-raw")?.textContent.trim() === "power");
   assert.ok(row, "the family is listed");
   assert.equal(row.closest(".source-fields-inventory-other"), null, "not folded under the names that are not values");
   assert.ok(row.closest("[data-sf-inv-group]"), "in a value group");
-  assert.match(row.querySelector(".metric-variables-item-name").textContent, /Already used/);
+  assert.match(row.textContent, /In use/);
 });
 
 test("4. Load more sends the cursor and adds the next page; the button goes when there is no next page", async () => {
   pages.default = ok([item({ name: "first" })], "CURSOR_1");
   pages[`${INV}?cursor=CURSOR_1`] = ok([item({ name: "second" })]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   await click('[data-action="source-fields-inv-more"]');
   assert.equal(inventoryGets().at(-1), `${INV}?cursor=CURSOR_1`);
   assert.deepEqual(shownNames(), ["first", "second"]);
@@ -151,7 +159,7 @@ test("4. Load more sends the cursor and adds the next page; the button goes when
 
 test("5. the search narrows the loaded names in place, ignoring case, keeps its field, and says when nothing matches", async () => {
   pages.default = ok([item({ name: "metabolic_power" }), item({ name: "Speed_Zone_A", endpoint: "more.complementary_data", kind: "zone_list" })]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   const input = $("[data-sf-inv-search]");
   input.value = "speed";
   input.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -169,25 +177,25 @@ test("5. the search narrows the loaded names in place, ignoring case, keeps its 
 
 test("6. the empty list, a refusal with Try again, and a busy server each say so; Try again reads again", async () => {
   pages.default = ok([]);
-  await loadSourceFieldsSection(render);
-  assert.match(text(), /No names yet\. They appear after the next Find new sessions in Imports\./);
+  await loadTech();
+  assert.match(text(), /Nothing yet\. Values appear after the next Find new sessions in Imports\./);
   resetSourceFields();
   pages.default = { status: 409, body: { error: "try_again" } };
-  await loadSourceFieldsSection(render);
+  await loadTech();
   assert.match(text(), /The server was busy\. Try again in a moment\./);
   pages.default = ok([item()]);
   await click('[data-action="source-fields-inv-reload"]');
   assert.deepEqual(shownNames(), ["metabolic_power"]);
   resetSourceFields();
   pages.default = { status: 404, body: { error: "notFound" } };
-  await loadSourceFieldsSection(render);
+  await loadTech();
   assert.match(text(), /The names GPEXE sent are not available in this workspace\./);
 });
 
 test("7. team thresholds: the platform's fold reads them only when asked, with endpoint=team_thresholds", async () => {
   pages.default = ok([item()]);
   pages[`${INV}?endpoint=team_thresholds`] = ok([item({ endpoint: "team_thresholds", name: "max_speed", kind: "number", unitWord: "m/s", covered: null, connectionCount: 1 })]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   assert.deepEqual(inventoryGets(), [INV], "not read before it is asked for");
   assert.match(text(), /Team zone limits \(from GPEXE\)/);
   await click('[data-action="source-fields-inv-thresholds"]');
@@ -207,6 +215,7 @@ test("8. a late answer of an older filter is dropped: the chosen chip's answer s
   const first = loadSourceFieldsSection(render);
   await new Promise((resolve) => setTimeout(resolve, 0));
   delay = null;
+  await click('[data-action="source-fields-inv-technical"]');
   await click('[data-action="source-fields-inv-endpoint"][data-endpoint="more.events"]');
   release();
   await first;
@@ -216,7 +225,7 @@ test("8. a late answer of an older filter is dropped: the chosen chip's answer s
 test("9. the list only reads: no write is ever sent", async () => {
   pages.default = ok([item()], "C1");
   pages[`${INV}?cursor=C1`] = ok([item({ name: "more_one" })]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   await click('[data-action="source-fields-inv-more"]');
   await click('[data-action="source-fields-inv-supported"]');
   await click('[data-action="source-fields-inv-thresholds"]');
@@ -227,7 +236,7 @@ test("9. the list only reads: no write is ever sent", async () => {
 test("4b. Load more is not sent while Try again reads the list from the start; the reload's answer is the list", async () => {
   pages.default = ok([item({ name: "first" })], "C1");
   pages[`${INV}?cursor=C1`] = { status: 409, body: { error: "try_again" } };
-  await loadSourceFieldsSection(render);
+  await loadTech();
   await click('[data-action="source-fields-inv-more"]');
   assert.match(text(), /The server was busy/);
   let release;
@@ -247,7 +256,7 @@ test("4b. Load more is not sent while Try again reads the list from the start; t
 test("4c. a read from the start is not sent while Load more is in flight; the page it loads is appended once", async () => {
   pages.default = ok([item({ name: "first" })], "C1");
   pages[`${INV}?cursor=C1`] = { status: 409, body: { error: "try_again" } };
-  await loadSourceFieldsSection(render);
+  await loadTech();
   await click('[data-action="source-fields-inv-more"]');
   assert.match(text(), /The server was busy/);
   let release;
@@ -267,7 +276,7 @@ test("4c. a read from the start is not sent while Load more is in flight; the pa
 test("7b. the team zone limits fold keeps the state the admin left it in across repaints", async () => {
   const { sourceFieldsThresholdsToggled } = await import("../source-fields-actions.js");
   pages.default = ok([item()]);
-  await loadSourceFieldsSection(render);
+  await loadTech();
   assert.equal($(".source-fields-inventory-thresholds").open, false);
   sourceFieldsThresholdsToggled(true);
   render();
@@ -279,11 +288,11 @@ test("7b. the team zone limits fold keeps the state the admin left it in across 
 
 test("5b. with more names to load, a search without a match says to load more", async () => {
   pages.default = ok([item({ name: "metabolic_power" })], "C9");
-  await loadSourceFieldsSection(render);
+  await loadTech();
   const input = $("[data-sf-inv-search]");
   input.value = "speed";
   input.dispatchEvent(new window.Event("input", { bubbles: true }));
-  assert.match($("#sf-inv-no-match").textContent, /No name matches among the names loaded so far\. Load more to search the rest\./);
+  assert.match($("#sf-inv-no-match").textContent, /Nothing matches among the values loaded so far\. Load more to search the rest\./);
 });
 
 test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zones in zone order, each row's readable name with its unit (never GPEXE's word) and the zone's team thresholds; the names that are not values in one closed fold; the search finds both", async () => {
@@ -301,7 +310,10 @@ test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zo
   assert.deepEqual(groups, ["Distance", "Power", "Other values"]);
   const names = (list) => [...list.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim());
   const [distance, power, other] = [...content.querySelectorAll("[data-sf-inv-group] ul")];
-  assert.deepEqual(names(distance), ["Power zone 2 · distance (m)", "Power zone 4 · distance (m)", "Speed zone 3 · distance (m)"]);
+  // The plain view (the owner's rule): the name, the unit, a zone's expected range and one state; no GPEXE name.
+  assert.deepEqual(names(distance), ["Power zone 2 distance (m) · Expected 20–25 W/kg", "Power zone 4 distance (m) · Expected 60–75 W/kg", "Speed zone 3 distance (m)"]);
+  assert.equal(content.querySelectorAll(".source-fields-inventory-raw, .source-fields-inventory-facts").length, 0, "no GPEXE name or count by default");
+  assert.equal($(".source-fields-inventory-other"), null, "the names that are not values are out of sight by default");
   // The team limits once per zone family in the whole list, with the day of the session they come from; each zone row
   // shows its expected range, always marked expected (the Rukovodilac's order of 2026-11-18). Differing limits: no range.
   const notes = [...content.querySelectorAll(".source-fields-inventory-note")].map((e) => e.textContent.trim());
@@ -309,17 +321,17 @@ test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zo
     "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). The range beside each zone is expected, not confirmed. To confirm it, use “Compare with GPEXE” on that zone.",
     "Speed zone limits differ between teams, so no zone's range is shown.",
   ]);
-  const facts = (list) => [...list.querySelectorAll(".source-fields-inventory-facts")].map((e) => e.textContent);
-  const [z2, z4, s3] = facts(distance);
-  assert.match(z2, /^Expected 20–25 W\/kg · Whole session · /);
-  assert.match(z4, /^Expected 60–75 W\/kg · Whole session · /);
-  assert.doesNotMatch(s3, /Expected/, "limits that differ between teams give no range");
   assert.deepEqual(names(power), ["Metabolic power (W/kg)"]);
   assert.deepEqual(names(other), ["Mystery (no unit from GPEXE)"]);
   assert.doesNotMatch(text(), /furlongs|in distance/, "GPEXE's word is never shown as the unit");
+  // One click away: GPEXE's own names and the counts, and the names that are not values in a closed fold.
+  await click('[data-action="source-fields-inv-technical"]');
+  const [distanceT] = [...content.querySelectorAll("[data-sf-inv-group] ul")];
+  assert.deepEqual([...distanceT.querySelectorAll(".source-fields-inventory-raw")].map((e) => e.textContent), ["athletesessionpowerzone_distance_2", "athletesessionpowerzone_distance_4", "athletesessionspeedzone_distance_3"]);
+  assert.match(distanceT.querySelector(".source-fields-inventory-facts").textContent, /^Whole session · seen 12 times/);
   const fold = $(".source-fields-inventory-other");
   assert.ok(fold && !fold.open, "the names that are not values are folded away, closed");
-  assert.match(fold.querySelector("summary").textContent, /Other names GPEXE sends \(not values\) · 2/);
+  assert.match(fold.querySelector("summary").textContent, /Other things GPEXE sends \(not values\) · 2/);
   assert.deepEqual([...fold.querySelectorAll(".metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim()), ["athlete group of values", "athlete_session_id number"], "GPEXE's own name and what it holds, no made-up name");
   // The search narrows by GPEXE's name or the readable one; a group with no match is hidden whole.
   handleSourceFieldsInput(Object.assign($("[data-sf-inv-search]"), { value: "zone 4" }));
@@ -339,8 +351,8 @@ test("R2: a club's admin sees the unit and the zone's own name, never the team t
     item({ name: "athletesessionpowerzone_distance_4", unitWord: null, unit: "m", zone: { family: "power", measure: "distance", number: 4 } }),
   ] } };
   await loadSourceFieldsSection(render);
-  assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 · distance (m)");
-  assert.doesNotMatch(text(), /thresholds|team limits|expected/);
+  assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 distance (m)");
+  assert.doesNotMatch(text(), /thresholds|team limits|xpected/);
 });
 
 test("R3 (#601's LOW-1): a platform admin working in a club's workspace is told to switch to the platform workspace, never to ask a platform administrator", async () => {

@@ -256,12 +256,18 @@ export async function handleSourceFieldsAction(action, { render }) {
   if (type === "source-fields-inv-endpoint") {
     const endpoint = action.dataset.endpoint || "";
     if (s.inventory.endpoint === endpoint) return true;
-    s.inventory = { ...emptyInventory(), endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+    s.inventory = { ...emptyInventory(), endpoint, showSupported: s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical: s.inventory.technical };
     await loadInventory(render);
     return true;
   }
+  if (type === "source-fields-inv-technical") {
+    // The plain view or the technical one: nothing is read again.
+    s.inventory.technical = !s.inventory.technical;
+    render();
+    return true;
+  }
   if (type === "source-fields-inv-supported") {
-    s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: !s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds };
+    s.inventory = { ...emptyInventory(), endpoint: s.inventory.endpoint, showSupported: !s.inventory.showSupported, search: s.inventory.search, thresholds: s.inventory.thresholds, technical: s.inventory.technical };
     await loadInventory(render);
     return true;
   }

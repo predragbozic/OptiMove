@@ -32,6 +32,9 @@ export function emptyInventory() {
   return {
     items: [], loaded: false, loading: false, loadingMore: false, error: null, nextCursor: null, zoneThresholds: null,
     endpoint: "", showSupported: false, search: "",
+    // The owner's rule (2026-11-18): the plain view first; GPEXE's own names, counts, sources and the names that are not
+    // values are one click away, never the default.
+    technical: false,
     // Team thresholds (P1): the platform workspace only, read when their fold opens.
     thresholds: { items: [], loaded: false, loading: false, error: null, open: false },
   };
@@ -102,7 +105,7 @@ const MEASURE = { distance: "distance", time: "time", events: "events" };
 const capitalize = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t);
 export function readableName(item) {
   const z = item?.zone;
-  if (z && Number.isInteger(z.number)) return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} · ${MEASURE[z.measure] || z.measure}`;
+  if (z && Number.isInteger(z.number)) return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} ${MEASURE[z.measure] || z.measure}`;
   const name = String(item?.name || "").replace(/^athlete_?session_?/, "").replace(/_+/g, " ").trim();
   return capitalize(name) || String(item?.name || "");
 }
@@ -272,11 +275,14 @@ export function openCreateFieldForm(item, siblings = []) {
     name: item.name,
     kind: item.kind || "",
     unitWord: item.unitWord || "",
+    // The plain name and unit the list showed, for the form's title; the name in OptiMove starts as that name.
+    readable: readableName(item),
+    unit: item.unit || "",
     drillLocked: levels.drillLocked,
     bothLevels: both,
     fieldId: null,
     fieldName: item.name,
-    draft: { label: "", supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
+    draft: { label: readableName(item).slice(0, FIELD_LABEL_MAX), supportsSession: levels.supportsSession, supportsDrill: levels.supportsDrill },
   };
 }
 
@@ -322,7 +328,7 @@ export function observationLines(o) {
 export const DURATION_HOURS_NOTE = "For a long value GPEXE may show hours as well: 1:36:30 is 96:30.";
 export function observationWordText(o) {
   if (!o?.word) return "";
-  return `GPEXE sends the unit word "${o.word}" with this value; OptiMove reads it as ${o.unit}.`;
+  return `GPEXE sends this value in ${o.unit}.`;
 }
 // Why a comparison cannot be ticked (unit_not_stated's reasons; the server's codes, in plain words).
 export function observationReasonText(o) {
@@ -555,3 +561,10 @@ export function confirmQuestion(form, body) {
 
 // A refusal that names a field of the form.
 export const FIELD_OF_CODE = { invalid_unit: "sourceUnit", invalid_evidence_ref: "evidenceRef", invalid_operator: "boundOperator" };
+
+// One state per row of the list, in plain words (the owner's rule of 2026-11-18): in use, can be added, or not yet.
+export function inventoryState(item, ctx) {
+  if (item?.covered) return "In use";
+  if (createOffered(ctx, item)) return "Not used yet";
+  return "Not available yet";
+}

@@ -65,12 +65,12 @@ const createButton = (endpoint, name) => `[data-action="source-fields-create-ope
 const asPlatform = () => { state.currentUser = { id: "u1", activeWorkspace: { type: "platform", scopeId: null, label: "Platform", role: "platform_admin" } }; };
 const asClub = () => { state.currentUser = { id: "u1", activeWorkspace: { type: "club", scopeId: CLUB, label: "FK Borac", role: "club_admin" } }; };
 
-const item = (over = {}) => ({ endpoint: "details.session", name: "metabolic_power", kind: "unit_value_object", unitWord: "power", answersSeen: 12, lastSeenOn: "2026-11-10", covered: false, connectionCount: 2, creatable: true, ...over });
+const item = (over = {}) => ({ endpoint: "details.session", name: "metabolic_power", kind: "unit_value_object", unitWord: "power", answersSeen: 12, lastSeenOn: "2026-11-10", covered: false, connectionCount: 2, creatable: true, isValue: true, ...over });
 const inventory = () => [
   item(),
   item({ endpoint: "details.drill", name: "drill_jumps", unitWord: "number" }),
   item({ endpoint: "athlete_session", name: "hsr_distance", kind: "number", unitWord: null }),
-  item({ endpoint: "athlete_session", name: "text_thing", kind: "text", unitWord: null, creatable: false }),
+  item({ endpoint: "athlete_session", name: "text_thing", kind: "text", unitWord: null, creatable: false, isValue: false }),
   item({ endpoint: "more.complementary_data", name: "zones_x", kind: "zone_list", unitWord: null, creatable: false }),
 ];
 const revision = (over = {}) => ({
@@ -117,8 +117,8 @@ async function openCreate(endpoint = "details.session", name = "metabolic_power"
 test("1. Create field is offered only on a name the server marked creatable, in the platform workspace; never on a covered, text or zone name, never to a club (even with a forged flag), and a forged click opens nothing", async () => {
   await loadSourceFieldsSection(render);
   const offered = [...content.querySelectorAll('[data-action="source-fields-create-open"]')].map((b) => `${b.dataset.sfInvEndpoint}:${b.dataset.sfInvName}`);
-  assert.deepEqual(offered, ["details.session:metabolic_power", "details.drill:drill_jumps", "athlete_session:hsr_distance"]);
-  assert.match(text(), /Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet\./);
+  assert.deepEqual(offered.sort(), ["athlete_session:hsr_distance", "details.drill:drill_jumps", "details.session:metabolic_power"]);
+  assert.match(text(), /Use this value adds one to OptiMove, so you can then put it on a variable\./);
   // A forged click on a name the server did not mark opens nothing.
   await handleSourceFieldsAction({ dataset: { action: "source-fields-create-open", sfInvEndpoint: "athlete_session", sfInvName: "text_thing" } }, { render });
   assert.equal(sourceFieldsState().form, null);
@@ -135,13 +135,15 @@ test("1. Create field is offered only on a name the server marked creatable, in 
 
 test("2. the form names the GPEXE name, where it comes from and what happens next; its levels follow the endpoint - a per-drill name is always recorded for each drill; Cancel goes back to the button", async () => {
   await openCreate();
-  assert.match(text(), /Create a field from metabolic_power/);
-  assert.match(text(), /GPEXE · Whole session · number with unit \(GPEXE says: power\)/);
+  // The owner's rule: the plain name first; GPEXE's own name and word only under Technical details.
+  assert.equal($("#source-fields-title").textContent, "Use Metabolic power in OptiMove");
+  assert.match($(".source-fields-tech").textContent, /GPEXE's name metabolic_power · Whole session · number with unit \(GPEXE says: power\)/);
+  assert.equal($(".source-fields-tech").open, false, "technical details closed by default");
   assert.match(text(), /Tick Each drill only if GPEXE also sends this value for each drill\./);
   assert.ok(text().includes(CREATE_NEXT_STEP), "the next step, said once");
   assert.equal(CREATE_NEXT_STEP, "This field has no values yet. Its unit is confirmed on the board once new sessions carry it.");
   assert.deepEqual([$('[data-sf-field="supportsSession"]').checked, $('[data-sf-field="supportsDrill"]').checked], [true, false]);
-  assert.equal($('[data-sf-field="label"]').value, "", "nothing preset");
+  assert.equal($('[data-sf-field="label"]').value, "Metabolic power", "the name in OptiMove starts as the list's plain name");
   await click('[data-action="source-fields-cancel"]');
   assert.equal(sourceFieldsState().form, null);
   assert.equal(document.activeElement, $(createButton("details.session", "metabolic_power")), "focus back on the button");
@@ -157,6 +159,7 @@ test("2. the form names the GPEXE name, where it comes from and what happens nex
 
 test("3. the checks before sending: a name is required and one line of at most 80 characters, at least one level; nothing is sent, and the marked field is said", async () => {
   await openCreate();
+  type("label", "");
   await submit();
   assert.equal(posts().length, 0);
   assert.match(text(), /Check the marked fields\./);

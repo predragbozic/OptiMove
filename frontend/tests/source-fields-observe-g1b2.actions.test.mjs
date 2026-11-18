@@ -156,8 +156,13 @@ test("2. the comparison: the team, then two named athletes and the number to com
   await openComparison();
   assert.ok(gets().includes(TEAMS));
   assert.ok(gets().includes(`${FB}/${F}/observation?teamId=${T1}`), JSON.stringify(gets()));
-  assert.match(text(), /GPEXE sends the unit word "energy" with this value; OptiMove reads it as J\/kg\./);
-  assert.match(text(), /Open this session in GPEXE and find the value metabolic_energy for these two athletes:/);
+  // The owner's rule: the plain name and the unit; GPEXE's own name and word only under Technical details.
+  assert.match(text(), /GPEXE sends this value in J\/kg\./);
+  assert.match(text(), /Open this session in GPEXE and find Metabolic energy for these two athletes:/);
+  assert.match($(".source-fields-observe .source-fields-tech").textContent, /GPEXE's name metabolic_energy · GPEXE's unit word "energy"/);
+  const plain = $(".source-fields-observe").cloneNode(true);
+  plain.querySelectorAll(".source-fields-tech").forEach((d) => d.remove());
+  assert.doesNotMatch(plain.textContent, /unit word|metabolic_energy/, "no GPEXE name or word outside Technical details");
   const lines = [...content.querySelectorAll(".source-fields-observe-athletes li")].map((li) => li.textContent.replace(/\s+/g, " ").trim());
   assert.deepEqual(lines, [
     "Ana Petrovic: GPEXE may show this rounded or in another unit. Compare the number: 412.5 J/kg.",

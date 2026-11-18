@@ -27446,6 +27446,11 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
   font-weight: 400;
   color: var(--muted);
 }
+/* The plain view (the owner's rule, 2026-11-18): one state per row, a zone's expected range beside its name. */
+.source-fields-inventory-range { font-weight: 400; color: var(--muted); }
+.source-fields-inventory-state .item-badge.is-active { background: #e6f4ea; color: #1e6b34; }
+.source-fields-tech { margin: 4px 0; font-size: max(0.9em, 12px); color: var(--muted); }
+.source-fields-tech > summary { cursor: pointer; display: list-item; min-height: 44px; padding-block: 12px; box-sizing: border-box; width: fit-content; }
 .source-fields-inventory-raw {
   font-size: max(0.85em, 12px);
   color: var(--muted);
