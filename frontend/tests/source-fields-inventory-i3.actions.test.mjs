@@ -374,3 +374,18 @@ test("T (the code review's MEDIUM): leaving the technical view clears a source f
   assert.equal(sourceFieldsState().inventory.technical, false);
   assert.deepEqual(shownNames(), ["metabolic_power"]);
 });
+
+test("M (the after-screenshots): a name GPEXE sends for the whole session and per drill is one row in the plain view - the one in use if any, else the whole session's - and two in the technical view", async () => {
+  pages.default = ok([
+    item({ endpoint: "details.drill", name: "metabolic_power" }),
+    item({ endpoint: "details.session", name: "metabolic_power", creatable: true }),
+    item({ endpoint: "details.drill", name: "hsr", kind: "number", unit: "m", covered: true }),
+    item({ endpoint: "details.session", name: "hsr", kind: "number", unit: "m" }),
+  ]);
+  await loadSourceFieldsSection(render);
+  const shown = () => rows().filter((r) => !r.hidden).map((r) => sourceFieldsState().inventory.items[Number(r.dataset.sfInvRow)]);
+  assert.deepEqual(shown().map((i) => `${i.endpoint}:${i.name}`).sort(), ["details.drill:hsr", "details.session:metabolic_power"]);
+  assert.match(rows().find((r) => /Hsr/.test(r.textContent)).textContent, /In use/);
+  await click('[data-action="source-fields-inv-technical"]');
+  assert.equal(shown().length, 4, "the technical view lists each source");
+});

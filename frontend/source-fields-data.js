@@ -133,8 +133,23 @@ export function zoneLimitsNote(family, zoneThresholds, day = "") {
     : "";
 }
 // Values first by quantity, zones together in zone order; the rest is "not values".
-export function inventoryGroups(items) {
-  const values = items.filter((i) => i.isValue === true);
+// merge (the plain view): one row per GPEXE name. GPEXE sends many values both for the whole session and per drill (and
+// some per athlete too); with the sources hidden, two rows of one plain name could not be told apart. The row kept is
+// one in use if any is, then the whole session's, then a drill's, then a per-athlete one; Use this value on it opens
+// the form with both levels when GPEXE sends both (openCreateFieldForm's siblings).
+const MERGE_ORDER = ["details.session", "details.drill", "athlete_session", "more.events", "more.complementary_data"];
+function mergeByName(values) {
+  const rank = (i) => (i.covered ? 0 : 1) * 10 + (MERGE_ORDER.indexOf(i.endpoint) + 1 || 9);
+  const best = new Map();
+  for (const item of values) {
+    const kept = best.get(item.name);
+    if (!kept || rank(item) < rank(kept)) best.set(item.name, item);
+  }
+  return values.filter((item) => best.get(item.name) === item);
+}
+export function inventoryGroups(items, { merge = false } = {}) {
+  const all = items.filter((i) => i.isValue === true);
+  const values = merge ? mergeByName(all) : all;
   const other = items.filter((i) => i.isValue !== true);
   const order = [...QUANTITIES.map(([key]) => key), "other"];
   const sortKey = (i) => [i.zone ? 0 : 1, i.zone?.family || "", i.zone?.measure || "", i.zone?.number ?? 0, readableName(i).toLowerCase()];

@@ -210,7 +210,7 @@ function renderThresholdsHtml(inv, ctx) {
 function inventoryListHtml(inv, ctx) {
   const index = new Map(inv.items.map((item, i) => [item, i]));
   const row = (item) => inventoryRowHtml(item, index.get(item), ctx, inv.search, inv.zoneThresholds, inv.technical);
-  const { groups, other } = inventoryGroups(inv.items);
+  const { groups, other } = inventoryGroups(inv.items, { merge: !inv.technical });
   const matches = (items) => items.some((item) => inventoryMatches(item, inv.search));
   // The team limits of the zone families in a group, once (platform only).
   // Each family's limits once in the whole list, in the first group that has one of its zones (the UX review).
@@ -237,7 +237,7 @@ function renderInventoryHtml(s, ctx) {
   if (!inv) return "";
   const chips = [["", "All"], ...INVENTORY_ENDPOINTS.map((e) => [e, ENDPOINT_LABEL[e]])];
   // The plain view lists the values only; the technical view adds the names that are not values.
-  const shown = inv.technical ? inv.items : inv.items.filter((item) => item.isValue === true);
+  const shown = inv.technical ? inv.items : inventoryGroups(inv.items, { merge: true }).groups.flatMap((g) => g.items);
   const matching = shown.filter((item) => inventoryMatches(item, inv.search)).length;
   return `
     <section class="metric-classification-section source-fields-inventory" aria-labelledby="sf-inventory-title">
