@@ -6,16 +6,19 @@
 // - a club scope (the club's admin, or a platform admin in that club's workspace): only the names seen through that
 //   club's own connections - club-owned ones and team-owned ones of the club's own teams (P2);
 // - everyone else never reaches this module (the route answers the identical 404 first, adminContext).
-// Never in an answer: a connection or check id, a label, a club or a team. A club scope sees a unit word only when it is
-// a known unit, the token of an active unit conversion (P3). `team_thresholds` names are never a field: a platform admin
+// Never in an answer: a connection or check id, a label, a club or a team. A club scope sees GPEXE's raw unit word only
+// when it is a known unit, the token of an active unit conversion (P3); the unit a word stands for (v74's seed, a
+// migration's data) and whether a name is a value reach every audience (2026-11-18). `team_thresholds` names are never a field: a platform admin
 // reads them with endpoint=team_thresholds only, and a club scope gets an empty list there (P1).
 import { refusal } from "./sourceMetricAccess.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
-import { FIELD_ENDPOINTS, STRUCTURAL_FIELDS } from "./sourceFieldInventory.js";
+import { FIELD_ENDPOINTS, isStructuralField, STRUCTURAL_FIELDS } from "./sourceFieldInventory.js";
 import { deriveField, FieldCreateRefusal, KEPT_VALUE_KINDS } from "./sourceFieldCreate.js";
 import { mayCreateFields } from "./sourceFieldCreateService.js";
 
 export const INVENTORY_PAGE_SIZE = 200;
+// The kinds that are a measured value (sourceFieldInventory.valueKind).
+const VALUE_KINDS = new Set(["number", "unit_value_object", "zone_list"]);
 const STATES = new Set(["not_supported", "covered", "all"]);
 const ENDPOINTS = new Set(FIELD_ENDPOINTS);
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -155,14 +158,31 @@ export function zoneOf(name) {
 // The team thresholds a platform admin sees with the zone names (2026-11-18): the power and speed limits of the newest
 // stored session of each active binding of the visible connections (the threshold set GPEXE sent with it; a team
 // setting, never an athlete's value). One set when every such team has the same; otherwise only that they differ.
-const THRESHOLDS_SQL = `
-  select distinct on (b.id) c.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power,
-         c.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed
+// One row per binding is chosen first (the newest stored session, by its id), and only that row's bundle is opened (the
+// code review's MEDIUM: never every stored bundle).
+export const THRESHOLDS_SQL = `
+  select t.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power, t.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed
     from training_load.source_team_bindings b
     join training_load.source_credential_connections k on k.id = b.connection_id and k.source_system = 'gpexe'
-    join training_load.gpexe_import_candidates c on c.owner_team_id = b.team_id
-   where b.state = 'active' and c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
-   order by b.id, c.session_started_at desc, c.id`;
+    cross join lateral (
+      select c.id from training_load.gpexe_import_candidates c
+       where c.owner_team_id = b.team_id and c.raw_purged_at is null and c.raw_expires_at > now() and c.session_started_at is not null
+       order by c.session_started_at desc, c.id limit 1) newest
+    join training_load.gpexe_import_candidates t on t.id = newest.id
+   where b.state = 'active'`;
+// Test seam (never set by the application): called before the thresholds read.
+let thresholdsFault = null;
+export function setInventoryThresholdsFaultForTests(fn) { thresholdsFault = fn ?? null; }
+// The thresholds are a secondary fact: a failed read answers the list with zoneThresholds null, never a failed list.
+async function readZoneThresholds() {
+  try {
+    if (thresholdsFault) await thresholdsFault();
+    return zoneThresholdsOf(await boundedRead(async (client) => (await client.query(THRESHOLDS_SQL)).rows));
+  } catch (error) {
+    console.error(`[source-field-inventory] zone_thresholds_unread (${String(error?.code || error?.name || "Error").replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)})`);
+    return null;
+  }
+}
 const numberList = (v) => (Array.isArray(v) && v.length > 0 && v.length <= 12 && v.every((x) => typeof x === "number" && Number.isFinite(x)) ? v : null);
 export function zoneThresholdsOf(rows) {
   const out = {};
@@ -186,11 +206,9 @@ export async function listFieldInventory({ ctx, query }) {
   ];
   // G1b: whether route C would take this name (its own derivation, never a guess of the screen), for its audience only.
   const mayCreate = mayCreateFields(ctx);
-  const { r, thresholdRows } = await boundedRead(async (client) => ({
-    r: await client.query(INVENTORY_SQL, params),
-    // Platform only (P1: team thresholds are the platform admin's).
-    thresholdRows: platform && parsed.endpoint !== THRESHOLDS ? (await client.query(THRESHOLDS_SQL)).rows : [],
-  }));
+  const r = await boundedRead((client) => client.query(INVENTORY_SQL, params));
+  // Platform only (P1: team thresholds are the platform admin's).
+  const zoneThresholds = platform && parsed.endpoint !== THRESHOLDS ? await readZoneThresholds() : undefined;
   const rows = r.rows.slice(0, INVENTORY_PAGE_SIZE);
   const fields = rows.map((row) => ({
     endpoint: row.endpoint,
@@ -200,10 +218,11 @@ export async function listFieldInventory({ ctx, query }) {
     answersSeen: Number(row.answers),
     lastSeenOn: row.last_seen_on,
     covered: row.covered,
-    // The unit the word stands for (the seed; never the account's own data), and whether the name is a value that is a
-    // field or could become one (the rest is folded away on the screen).
+    // The unit the word stands for (the seed; never the account's own data), and whether the name is a measured value
+    // (the code review's MEDIUM: by what the name is - a number, a number with its unit or a zone list, and not a
+    // reference, a group, a flag or a time - never by whether route C would create it).
     unit: row.word_unit ?? null,
-    isValue: row.endpoint !== THRESHOLDS && (row.covered === true || creatable(row)),
+    isValue: row.endpoint !== THRESHOLDS && VALUE_KINDS.has(row.kind) && !isStructuralField(row.endpoint, row.field_name),
     zone: zoneOf(row.field_name),
     ...(platform ? { connectionCount: row.connections } : {}),
     ...(mayCreate ? { creatable: creatable(row) } : {}),
@@ -211,7 +230,7 @@ export async function listFieldInventory({ ctx, query }) {
   const last = rows[rows.length - 1];
   return {
     fields,
-    ...(platform && parsed.endpoint !== THRESHOLDS ? { zoneThresholds: zoneThresholdsOf(thresholdRows) } : {}),
+    ...(zoneThresholds !== undefined ? { zoneThresholds } : {}),
     nextCursor: r.rows.length > INVENTORY_PAGE_SIZE ? encodeCursor(ctx, parsed, { endpoint: last.endpoint, name: last.field_name }) : null,
   };
 }

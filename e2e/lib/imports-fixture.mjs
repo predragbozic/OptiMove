@@ -33,6 +33,11 @@ export function inventoryBundles(sourceTeam = 7001) {
         // G1b-2: two names whose values differ by athlete, so the platform can compare two of them with the GPEXE screen.
         values.e2e_metabolic_energy = { unit: "energy", value: 410.5 + 20 * i };
         values.e2e_work_energy = { unit: "energy_std", value: 1200 + 75 * i };
+        // The readable list (2026-11-18): zone names, and names that are not values (a reference, a flag).
+        values.athletesessionpowerzone_distance_4 = { unit: "distance", value: 310 + i };
+        values.athletesessionrelativespeedzone_distance_3 = { unit: "distance", value: 120 + i };
+        values.athlete_session_id = 5000 + i;
+        values.are_values_visible = true;
       });
     }
     return bundle;

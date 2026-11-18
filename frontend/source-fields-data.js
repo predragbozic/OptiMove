@@ -115,17 +115,17 @@ export function quantityOf(item) {
   return hit ? hit[0] : "other";
 }
 export const QUANTITY_LABEL = { ...Object.fromEntries(QUANTITIES.map(([key, label]) => [key, label])), other: "Other values" };
-const ZONE_THRESHOLD = { power: ["power", "W/kg"], speed: ["speed", "m/s"] };
-// "Power zone 4 · team thresholds: 20, 25, 60, 75 W/kg" - the name's number and the team's limits, never a range (which
-// range a number stands for is not proven). The limits are the platform admin's only (P1).
-export function zoneFactText(item, zoneThresholds) {
-  const z = item?.zone;
-  if (!z) return "";
-  const pair = ZONE_THRESHOLD[z.family];
-  const set = pair && zoneThresholds ? zoneThresholds[pair[0]] : null;
+const ZONE_THRESHOLD = { power: ["Power", "W/kg"], speed: ["Speed", "m/s"] };
+// The team limits of one zone family, said once for the group (the UX review's MEDIUM: on every row they read as that
+// zone's own range, which is not proven). The limits are the platform admin's only (P1).
+export function zoneLimitsNote(family, zoneThresholds) {
+  const pair = ZONE_THRESHOLD[family];
+  const set = pair && zoneThresholds ? zoneThresholds[family] : null;
   if (!set) return "";
-  if (set.differ) return "team thresholds differ between teams";
-  return Array.isArray(set.values) ? `team thresholds: ${set.values.join(", ")} ${pair[1]}` : "";
+  if (set.differ) return `${pair[0]} zone limits differ between teams.`;
+  return Array.isArray(set.values)
+    ? `${pair[0]} zones in GPEXE use the team limits ${set.values.join(" · ")} ${pair[1]}. Which zone covers which range is not confirmed yet.`
+    : "";
 }
 // Values first by quantity, zones together in zone order; the rest is "not values".
 export function inventoryGroups(items) {

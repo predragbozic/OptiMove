@@ -951,22 +951,26 @@ of the unit, no zone fact, and names that are not values among the ones that can
 read and screen, **no migration**.
 
 - **The unit, not the word:** the read joins v74's `source_unit_words` and returns `unit` (the seed's token, so every
-  audience sees it); the row shows "m", "s", "W/kg"… A details word without a seed row reads "unit not stated by GPEXE";
-  a per-athlete number reads "number (GPEXE sends no unit)".
+  audience sees it); the row shows it in its own brackets, "(m)", "(s)", "(W/kg)"…, and "(no unit from GPEXE)" otherwise.
 - **The zone fact, never a range:** `zoneOf(name)` reads only the name (`athletesession<family>zone_<distance|time|events>_<n>`)
   and the row is titled "Power zone 4 · distance". Which range a number stands for is not proven: the details carry four
   power zones where `/more/` carries five and no numbering reproduces them (`docs/ai/gpexe-details-coverage-plan.md`), so
-  no range is derived. A platform admin also reads the team thresholds ("team thresholds: 20, 25, 60, 75 W/kg"), from the
-  `teamThresholds` of the newest stored session of each active binding: one set while they all agree, otherwise "team
-  thresholds differ between teams" (`zoneThresholdsOf`; route test 22). A club never gets them (P1). Relative speed and
-  the other families show the zone's name only.
+  no range is derived. A platform admin also reads the team limits once per zone family, above the group's rows, never on
+  a row (the UX review: on a row they read as that zone's range): "Power zones in GPEXE use the team limits 20 · 25 · 60 ·
+  75 W/kg. Which zone covers which range is not confirmed yet." They come from the `teamThresholds` of the newest stored
+  session of each active binding - one stored bundle per binding is opened (`LIMIT 1` per binding first) - one set while
+  they all agree, otherwise "Power zone limits differ between teams" (`zoneThresholdsOf`; route test 22). The read is
+  secondary: a failure answers the list with `zoneThresholds` null (inventory test R3). A club never gets them (P1).
 - **Not values:** `isStructuralName` (`id`, `athlete`, `user`, `team`, …, `*_id`, `are_*_visible`, `is_*_visible`,
   `validity_*`, `*_timestamp`) joins `isStructuralField`, so route C refuses them and they are never creatable. Each row
-  carries `isValue` (a field, or one route C would create); the screen folds the rest under one closed "Other names GPEXE
-  sends (not values)". The collector still skips only the exact pairs it skipped before.
+  carries `isValue`: a number, a number with its unit or a zone list that is not a structural name - by what the name is,
+  never by whether route C would create it (the code review: an uncovered events value stays a value). The screen folds
+  the rest under one closed "Other names GPEXE sends (not values)", each by GPEXE's own name and what it holds. The
+  collector still skips only the exact pairs it skipped before.
 - **Readable and grouped:** the readable name and unit first, GPEXE's own name small under it, the counts last; values
   grouped by quantity (distance, time, power, energy, speed, acceleration, counts, other), zones together in zone order.
-  The search finds a GPEXE name or a readable one. Grouping applies to the loaded page (200 names per page).
+  The search finds a GPEXE name or a readable one, hides a group with no match and opens the fold when a match is in it.
+  Grouping applies to the loaded page (200 names per page). The small lines keep the 12 px floor.
 - **#601's LOW-1:** `unit_word_ambiguous` is worded by basis too - a platform admin working in a club's workspace is told
   to switch to the platform workspace (route test 23, frontend test R3).
 - **Create field for several names at once: a follow-up, not built.** Route C takes one name per request with its own

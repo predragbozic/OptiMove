@@ -169,6 +169,10 @@ function applyInventorySearch(search) {
     row.hidden = !match;
     if (match) shown += 1;
   });
+  // A group with no matching row is hidden whole; a match in the fold opens it (the code review's LOW).
+  doc.querySelectorAll("[data-sf-inv-group]").forEach((group) => { group.hidden = !group.querySelector("[data-sf-inv-row]:not([hidden])"); });
+  const fold = doc.querySelector(".source-fields-inventory-other");
+  if (fold && search && fold.querySelector("[data-sf-inv-row]:not([hidden])")) fold.open = true;
   const none = doc.getElementById("sf-inv-no-match");
   if (none) none.hidden = shown > 0 || !items.length;
 }

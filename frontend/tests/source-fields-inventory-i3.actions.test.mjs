@@ -90,8 +90,8 @@ test("1. a platform admin: the second list in plain words - where the name comes
   // 2026-11-18: the readable name and the unit first (never GPEXE's word), GPEXE's name small, the counts last.
   const lines = rows().map((r) => [r.querySelector(".metric-variables-item-name"), r.querySelector(".source-fields-inventory-raw"), r.querySelector(".metric-variables-item-facts")].map((e) => e.textContent.replace(/\s+/g, " ").trim()));
   assert.deepEqual(lines, [
-    ["Metabolic power W/kg", "metabolic_power", "Whole session · seen 12 times, last 10.11.2026 · in 2 GPEXE accounts"],
-    ["A b number (GPEXE sends no unit)", "a_b", "Per athlete · seen 1 time, last 14.11.2026 · in 1 GPEXE account"],
+    ["Metabolic power (W/kg)", "metabolic_power", "Whole session · seen 12 times, last 10.11.2026 · in 2 GPEXE accounts"],
+    ["A b (no unit from GPEXE)", "a_b", "Per athlete · seen 1 time, last 14.11.2026 · in 1 GPEXE account"],
   ]);
   assert.doesNotMatch(text(), /number with unit in|\bpower\b · /, "GPEXE's word is never shown as the unit");
   assert.doesNotMatch(text(), /details\.session|athlete_session|unit_value_object|complementary_data/, "no endpoint or kind code in what is shown (codes live only in data- attributes)");
@@ -106,7 +106,7 @@ test("2. a club admin: the club's own sentence, no connection count and no team 
   assert.match(text(), /GPEXE also sends these values in your sessions\./);
   assert.doesNotMatch(text(), /GPEXE account/);
   assert.equal($(".source-fields-inventory-thresholds"), null, "the thresholds fold is the platform's");
-  assert.match(rows()[0].textContent.replace(/\s+/g, " "), /Metabolic power W\/kg .*Whole session · seen 12 times/);
+  assert.match(rows()[0].textContent.replace(/\s+/g, " "), /Metabolic power \(W\/kg\) .*Whole session · seen 12 times/);
 });
 
 test("3. the endpoint chips and Show supported too become the read's query; the chosen chip is pressed; supported names carry a badge", async () => {
@@ -290,23 +290,31 @@ test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zo
   const groups = [...content.querySelectorAll(".source-fields-inventory-group")].map((h) => h.textContent.trim());
   assert.deepEqual(groups, ["Distance", "Power", "Other values"]);
   const names = (list) => [...list.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim());
-  const [distance, power, other] = [...content.querySelectorAll(".source-fields-inventory-group + ul")];
-  assert.deepEqual(names(distance), [
-    "Power zone 2 · distance m · team thresholds: 20, 25, 60, 75 W/kg",
-    "Power zone 4 · distance m · team thresholds: 20, 25, 60, 75 W/kg",
-    "Speed zone 3 · distance m · team thresholds differ between teams",
+  const [distance, power, other] = [...content.querySelectorAll("[data-sf-inv-group] ul")];
+  assert.deepEqual(names(distance), ["Power zone 2 · distance (m)", "Power zone 4 · distance (m)", "Speed zone 3 · distance (m)"]);
+  // The team limits once per zone family, never on a row (they would read as that zone's range).
+  const notes = [...content.querySelectorAll(".source-fields-inventory-note")].map((e) => e.textContent.trim());
+  assert.deepEqual(notes, [
+    "Power zones in GPEXE use the team limits 20 · 25 · 60 · 75 W/kg. Which zone covers which range is not confirmed yet.",
+    "Speed zone limits differ between teams.",
   ]);
-  assert.deepEqual(names(power), ["Metabolic power W/kg"]);
-  assert.deepEqual(names(other), ["Mystery unit not stated by GPEXE"]);
+  assert.deepEqual(names(power), ["Metabolic power (W/kg)"]);
+  assert.deepEqual(names(other), ["Mystery (no unit from GPEXE)"]);
   assert.doesNotMatch(text(), /furlongs|in distance/, "GPEXE's word is never shown as the unit");
   const fold = $(".source-fields-inventory-other");
   assert.ok(fold && !fold.open, "the names that are not values are folded away, closed");
   assert.match(fold.querySelector("summary").textContent, /Other names GPEXE sends \(not values\) · 2/);
-  assert.deepEqual([...fold.querySelectorAll(".source-fields-inventory-raw")].map((e) => e.textContent.trim()), ["athlete", "athlete_session_id"]);
-  assert.match(fold.textContent, /group of values/, "a name that is not a value says what it holds");
-  // The search narrows by GPEXE's name or the readable one.
+  assert.deepEqual([...fold.querySelectorAll(".metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim()), ["athlete group of values", "athlete_session_id number"], "GPEXE's own name and what it holds, no made-up name");
+  // The search narrows by GPEXE's name or the readable one; a group with no match is hidden whole.
   handleSourceFieldsInput(Object.assign($("[data-sf-inv-search]"), { value: "zone 4" }));
   assert.deepEqual(shownNames(), ["athletesessionpowerzone_distance_4"]);
+  const visibleGroups = () => [...content.querySelectorAll("[data-sf-inv-group]")].filter((g) => !g.hidden).map((g) => g.querySelector("h4").textContent.trim());
+  assert.deepEqual(visibleGroups(), ["Distance"]);
+  // A match only in the fold opens it.
+  handleSourceFieldsInput(Object.assign($("[data-sf-inv-search]"), { value: "athlete_session_id" }));
+  assert.deepEqual(shownNames(), ["athlete_session_id"]);
+  assert.equal($(".source-fields-inventory-other").open, true);
+  assert.deepEqual(visibleGroups(), []);
 });
 
 test("R2: a club's admin sees the unit and the zone's own name, never the team thresholds (the platform's, P1)", async () => {
@@ -315,8 +323,8 @@ test("R2: a club's admin sees the unit and the zone's own name, never the team t
     item({ name: "athletesessionpowerzone_distance_4", unitWord: null, unit: "m", zone: { family: "power", measure: "distance", number: 4 } }),
   ] } };
   await loadSourceFieldsSection(render);
-  assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 · distance m");
-  assert.doesNotMatch(text(), /thresholds/);
+  assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 · distance (m)");
+  assert.doesNotMatch(text(), /thresholds|team limits/);
 });
 
 test("R3 (#601's LOW-1): a platform admin working in a club's workspace is told to switch to the platform workspace, never to ask a platform administrator", async () => {

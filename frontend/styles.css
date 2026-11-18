@@ -27442,12 +27442,15 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
   color: var(--muted);
 }
 .source-fields-inventory-raw {
-  font-size: 0.85em;
+  font-size: max(0.85em, 12px);
   color: var(--muted);
   justify-self: start;
 }
 .source-fields-inventory-facts {
-  font-size: 0.85em;
+  font-size: max(0.85em, 12px);
+}
+.source-fields-inventory-note {
+  margin: 0 0 6px;
 }
 .source-fields-inventory-group {
   margin: 16px 0 6px;
@@ -27462,6 +27465,14 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
   align-items: center;
   cursor: pointer;
   font-weight: 700;
+}
+/* It shows that it opens (mobile-qa: a flex summary loses the default marker). */
+.source-fields-inventory-other summary::after {
+  content: "▸";
+  margin-left: 8px;
+}
+.source-fields-inventory-other[open] summary::after {
+  content: "▾";
 }
 .source-fields-inventory-thresholds summary {
   min-height: 44px;

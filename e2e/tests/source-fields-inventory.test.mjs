@@ -57,7 +57,31 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.ok(l.rows > 0, "the check recorded names that no field covers");
       assert.match(l.text, /GPEXE also sends these values in your sessions\./);
       assert.match(l.text, /seen \d+ times?, last \d{2}\.\d{2}\.\d{4}/);
-      assert.doesNotMatch(l.text, /athlete_session|details\.session|more\.events|unit_value_object|GPEXE account/, "plain words; no account count for a club");
+      assert.doesNotMatch(l.text, /details\.session|more\.events|unit_value_object|GPEXE account/, "plain words; no account count for a club");
+      // The readable list (2026-11-18): a zone row by its name and unit, no team limits for a club; the names that are
+      // not values in a closed fold whose summary is a 44 px target; opened, nothing is wider than the screen.
+      const r = await page.evaluate(() => {
+        const name = (raw) => [...document.querySelectorAll("[data-sf-inv-row]")].find((row) => row.querySelector(".source-fields-inventory-raw")?.textContent.trim() === raw);
+        const fold = document.querySelector(".source-fields-inventory-other");
+        const summary = fold?.querySelector("summary");
+        return {
+          zone: name("athletesessionpowerzone_distance_4")?.querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim() || "",
+          longName: Boolean(name("athletesessionrelativespeedzone_distance_3")),
+          foldOpen: fold?.open ?? null,
+          summaryHeight: summary ? Math.round(summary.getBoundingClientRect().height) : 0,
+          inFold: fold ? [...fold.querySelectorAll(".source-fields-inventory-raw")].map((e) => e.textContent.trim()) : [],
+        };
+      });
+      assert.equal(r.zone, "Power zone 4 · distance (m)");
+      assert.ok(r.longName, "the long zone name is listed");
+      assert.doesNotMatch(l.text, /team limits/, "a club never sees the team limits");
+      assert.equal(r.foldOpen, false, "the names that are not values are folded");
+      assert.ok(r.summaryHeight >= 44, `the fold's summary is a 44 px target (${r.summaryHeight})`);
+      assert.ok(r.inFold.includes("athlete_session_id") && r.inFold.includes("are_values_visible"), JSON.stringify(r.inFold));
+      await page.click(".source-fields-inventory-other summary");
+      const opened = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert.ok(opened <= 0, `the open fold stays within the screen (${opened})`);
+      await page.click(".source-fields-inventory-other summary");
       assert.ok(l.checkbox > 0 && l.checkbox <= 24, `the checkbox keeps its own size (${l.checkbox})`);
       assert.ok(l.overflow <= 0, `nothing wider than the screen (overflow ${l.overflow})`);
       assert.ok(l.chips.length >= 6 && l.chips.every((h) => h >= 44), `chips are 44 px (${l.chips})`);

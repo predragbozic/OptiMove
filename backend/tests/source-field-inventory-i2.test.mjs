@@ -476,11 +476,12 @@ test("R (the owner's first use, 2026-11-18): each row carries the unit its word 
     ["details.session", "are_values_visible", { kind: "boolean" }],
     ["details.session", "validity_start_r", { kind: "text" }],
     ["athlete_session", "r_hsr", { kind: "number" }],
+    ["more.events", "r_ev_hits", { kind: "number" }],
   ]);
   // Each endpoint on its own (an earlier test fills the first page of athlete_session names).
   const read = async (who) => {
     const out = { fields: [], zoneThresholds: undefined };
-    for (const endpoint of ["details.session", "details.drill", "athlete_session"]) {
+    for (const endpoint of ["details.session", "details.drill", "athlete_session", "more.events"]) {
       let cursor = null;
       do {
         const body = (await api(`/field-inventory?state=all&endpoint=${endpoint}${cursor ? `&cursor=${cursor}` : ""}`, { cookie: who.cookie })).body;
@@ -498,6 +499,8 @@ test("R (the owner's first use, 2026-11-18): each row carries the unit its word 
     ["m", true, { family: "power", measure: "distance", number: 4 }]);
   assert.deepEqual([rows.r_energy_like.unit, rows.r_energy_like.isValue], [null, true], "a word without a seed row has no unit; the name can still become a field");
   assert.deepEqual([rows.r_hsr.unit, rows.r_hsr.isValue, rows.r_hsr.zone], [null, true, null]);
+  // A value route C cannot create (the code review's MEDIUM) is still a value, never folded as "not values".
+  assert.deepEqual([rows.r_ev_hits.isValue, rows.r_ev_hits.creatable], [true, false]);
   for (const name of ["athlete", "athlete_session_id", "are_values_visible", "validity_start_r"]) {
     assert.deepEqual([rows[name].isValue, rows[name].creatable], [false, false], name);
   }
@@ -521,4 +524,19 @@ test("R2: the zone thresholds - one set when every bound team's newest stored se
   assert.deepEqual(zoneThresholdsOf([{ power: ["x"], speed: [] }]), { power: null, speed: null }, "only finite number lists");
   assert.deepEqual(zoneOf("athletesessionrelativespeedzone_distance_3"), { family: "relativespeed", measure: "distance", number: 3 });
   for (const name of ["ext_work_over_zone0", "athletesessionpowerzone_distance", "powerzone_distance_4", "athletesessionpowerzone_speed_4"]) assert.equal(zoneOf(name), null, name);
+});
+
+test("R3 (the code review's MEDIUM): the zone thresholds are a secondary read - when it fails, the list is answered with zoneThresholds null, never a failed list", async () => {
+  const mod = await import("../src/sourceFieldInventoryRead.js");
+  mod.setInventoryThresholdsFaultForTests(async () => { throw Object.assign(new Error("slow"), { code: "57014" }); });
+  try {
+    const r = await api("/field-inventory?endpoint=details.session", { cookie: W.pa.cookie });
+    assert.equal(r.status, 200, r.text);
+    assert.ok(r.body.fields.length > 0);
+    assert.equal(r.body.zoneThresholds, null);
+  } finally {
+    mod.setInventoryThresholdsFaultForTests(null);
+  }
+  // The read opens one stored bundle per binding: the newest session is chosen by its id first (a LIMIT 1 per binding).
+  assert.match(mod.THRESHOLDS_SQL.replace(/\s+/g, " "), /cross join lateral \( select c\.id from training_load\.gpexe_import_candidates c .* limit 1\) newest join training_load\.gpexe_import_candidates t on t\.id = newest\.id/);
 });
