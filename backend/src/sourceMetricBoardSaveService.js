@@ -20,6 +20,8 @@ import { bindingClubHolds } from "./sourceMetricAccess.js";
 import { lockHides, lockListedBindings } from "./sourceMetricActivationSteps.js";
 import { boardKit, isSystemBoard, mayUseBoard } from "./sourceMetricBoardService.js";
 import { DISPLAY_REGISTRY_VERSION } from "./sourceMetricBoard.js";
+import { isGenericDetailsKey } from "./sourceMetricExtractors.js";
+import { unitWordCodeOf } from "./sourceUnitWords.js";
 
 const { runWrite, rightsStillHold, refusal, NOT_FOUND, plainObject, uuidField, hashOf } = adminWriteKit;
 const { loadWorld, columnsOf, choosePair, placementOf, preplacedOf } = boardKit;
@@ -51,6 +53,9 @@ const MESSAGES = {
   variable_taken_on_binding: "This variable is already filled for the team.",
   variable_hidden: "The club hides this OptiMove variable.",
   row_refused: "A row of the board cannot be saved as it is. Nothing was saved.",
+  // G1b-3 (the Independent's LOW-2): the save's own check of a created column's GPEXE word, besides the column's reason.
+  unit_word_missing: "OptiMove does not know GPEXE's unit word for this column, so it cannot import its values. Nothing was saved.",
+  unit_word_ambiguous: "OptiMove does not know which GPEXE word this column's unit is. Nothing was saved. OptiMove support proves the word on a new revision of the field (Compare with GPEXE).",
 };
 const invalid = (message = MESSAGES.invalid_body) => refusal(400, "invalid_body", message);
 const rowRefusal = (code, rowIndex, extra = {}) => refusal(409, code, MESSAGES[code] ?? MESSAGES.row_refused, { current: { rowIndex, ...extra } });
@@ -157,6 +162,15 @@ function evaluate(world, pairIndex, rows) {
         kind: "preplaced", row, fieldId: out.v.field_id, variableId: out.v.variable_id, revisionId: out.v.revision_id, targetVersionId: out.v.target_version_id,
         versionId: out.v.id, mappingId: out.v.mapping_id, levels: out.row.levels, collisions: out.row.collisions, system: out.v.owner_key === "system",
       };
+    }
+    // G1b-3 (the Independent's LOW-2): a created details column is saved only with a GPEXE word OptiMove can read - the
+    // exact word of a route O proof, or the one word of a unit no other word shares (the import's rule, explicit here
+    // and not only through the column's reason).
+    const column = shared.columns.find((c) => c.field.id === item.fieldId);
+    const f = column?.field;
+    if (f && isGenericDetailsKey({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })) {
+      const code = unitWordCodeOf({ unitWords: world.unitWords, sourceUnit: f.source_unit, provenWord: f.proven_word ?? null });
+      if (code) throw rowRefusal(code, rowIndex);
     }
     if (fields.has(item.fieldId) || variables.has(item.variableId)) throw invalid("A column and a variable appear in one row only.");
     fields.add(item.fieldId);

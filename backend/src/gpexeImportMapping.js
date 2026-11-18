@@ -17,7 +17,7 @@
 //
 // Errors carry fixed messages only: no id, value, key or name.
 
-import { unitWordsFor } from "./sourceUnitWords.js";
+import { provenWordSql, unitWordsFor } from "./sourceUnitWords.js";
 
 export class ImportMappingChangedError extends Error {
   constructor() {
@@ -83,7 +83,7 @@ const ACTIVATIONS_SQL = `
          m.owner_scope as mapping_owner_scope, m.owner_club_id as mapping_owner_club_id,
          d.source_system, d.api_family, d.source_metric_key, d.source_label, d.state as field_state,
          r.value_shape, r.parameter_kind as revision_parameter_kind, r.source_unit as revision_source_unit,
-         r.state as revision_state, r.evidence_status,
+         r.state as revision_state, r.evidence_status, ${provenWordSql("r")} as revision_unit_word,
          md.key as definition_key, md.label as definition_label, md.owner_scope as definition_owner_scope,
          md.state as definition_state, md.current_version_id,
          mv.value_type, trim_scale(mv.min_value)::text as min_value, trim_scale(mv.max_value)::text as max_value,
@@ -128,6 +128,8 @@ function rowOf(r) {
     revisionValueShape: r.value_shape,
     revisionParameterKind: r.revision_parameter_kind,
     revisionSourceUnit: r.revision_source_unit,
+    // G1b-3: the exact word a route O proof saw (null for a seeded field or a document proof).
+    revisionUnitWord: r.revision_unit_word ?? null,
     revisionState: r.revision_state,
     revisionEvidence: r.evidence_status,
     definitionKey: r.definition_key,

@@ -327,10 +327,18 @@ function genericRowNumber(key, field) {
 // unit; any other word, an unknown word, or a read without that context is unexpected_unit - a shape refusal, which
 // blocks the session (never a silent skip). The value stays in that source unit (rule (c)): the version's conversion
 // does the rest, and T6 keeps the raw value.
+// G1b-3: a revision proven through route O names its exact word (context.provenWord, from T9i), and only that word is
+// read. Without one (a document proof) the token rule holds only where the unit has exactly one seeded word; a shared
+// token (J/kg: energy, energy_std; s: time, duration) reads nothing (the mapping refuses such a version, this is the
+// importer's own fail-closed twin).
 function unitWordFits(word, context) {
   if (typeof word !== "string" || context === null || typeof context !== "object") return false;
-  const { sourceUnit, unitWords } = context;
-  return typeof sourceUnit === "string" && unitWords instanceof Map && unitWords.get(word) === sourceUnit;
+  const { sourceUnit, unitWords, provenWord = null } = context;
+  if (typeof sourceUnit !== "string" || !(unitWords instanceof Map) || unitWords.get(word) !== sourceUnit) return false;
+  if (typeof provenWord === "string") return word === provenWord;
+  let same = 0;
+  for (const token of unitWords.values()) if (token === sourceUnit) same += 1;
+  return same === 1;
 }
 
 function genericDetailsNumber(key, field) {

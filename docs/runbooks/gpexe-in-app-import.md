@@ -1564,6 +1564,16 @@ pinned set, plan section 9.1). Only a field with an active revision is kept.
     active revision (L5, as above), or end the field's activation on that team; a new field (or a new revision) is
     confirmed for the other word.
   - The interim refusal of G1b-1 (`409 unit_not_importable`) is gone.
+- **The exact word (G1b-3).** A field whose unit was confirmed on the board (*Compare with GPEXE*) is read only with the
+  very word GPEXE sent then (kept on its comparison row). Two seeded pairs share a unit - `energy` and `energy_std`
+  (J/kg), `time` and `duration` (s) - and a change inside a pair may be another quantity, so it blocks the session like
+  any other word. A field whose unit was confirmed by a document carries no word: it is read only where its unit has one
+  GPEXE word (`number`, `speed`, `distance`, `power`, `acceleration`). For J/kg or s a mapping version, an activation, a
+  club's copy and a save on the board are refused with `409 unit_word_ambiguous` (no word at all: `unit_word_missing`).
+  - *A mapping of a created field is refused as `unit_word_ambiguous`.* A document cannot tell the two words apart, and
+    the board does not compare a revision a document already proved. Retire the revision (L5), add a new unproven
+    revision of the field (L1) and activate it (L3) - these three are API routes of the platform admin, with no screen
+    yet - then compare it with GPEXE in Source fields. The comparison records the word, and the version is created.
 - **Confirming a created field's unit on the board (G1b-2).** A platform admin, in the platform workspace, opens the field
   in Source fields and chooses *Compare with GPEXE*: a team, then two named athletes of its newest saved session with the
   number GPEXE should show. If both match the GPEXE screen, the tick saves the unit GPEXE states and GPEXE's own label as

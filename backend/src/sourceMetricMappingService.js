@@ -55,7 +55,7 @@ import {
   operationEndCount, operationStarts, startAuditRows,
 } from "./sourceMetricActivationSteps.js";
 import { extractabilityCode, extractorFor, isGenericDetailsKey } from "./sourceMetricExtractors.js";
-import { readUnitWords } from "./sourceUnitWords.js";
+import { provenWordSql, readUnitWords, unitWordCodeOf } from "./sourceUnitWords.js";
 
 export { SourceMetricMappingError, mayTransitionMappings };
 const { DatabaseError } = pg;
@@ -378,6 +378,10 @@ const MESSAGES = {
   // G1b-2 (rule (b), the code review's MEDIUM): a created details field is read only with a GPEXE unit word whose token is
   // its proven unit; with no such word every value would be a shape refusal and block the session.
   unit_word_missing: "OptiMove does not know a GPEXE unit word for this field's unit, so it cannot import its values.",
+  // G1b-3: a document proof of a unit two GPEXE words share (J/kg: energy, energy_std; s: time, duration).
+  // The way out the server takes (the Rukovodilac's point): route O refuses a revision a document already proved
+  // (unit_already_verified), so the word is proved on a new revision - L5, L1 and L3, then routes 8 and O (route test 19).
+  unit_word_ambiguous: "A document cannot tell which GPEXE word this unit is. Retire this revision, add a new unproven revision of the field and activate it, then compare it with GPEXE (Source fields > Compare with GPEXE).",
   ...ACTIVATION_MESSAGES,
 };
 
@@ -395,16 +399,21 @@ function assertExtractable(facts) {
   });
   if (code) throw refusal(409, code, MESSAGES[code]);
 }
-// G1b-2: a created details field (a generic key) only with a unit word for its proven unit (the seed of v74's
-// source_unit_words; seed-only, so a plain read). A seeded field never reads the table. Returns the code or null.
-async function unitWordCode(client, facts, sourceUnit) {
+// G1b-2 / G1b-3: a created details field (a generic key) only with a unit word for its proven unit (the seed of v74's
+// source_unit_words; seed-only, so a plain read): the exact word of a route O proof (T9i, final), or, for a document
+// proof, the one word of a unit no other word shares. A seeded field never reads the table. Returns the code or null.
+// `revisionId` is the T2b revision the version pins (its unit observation names the word).
+export async function unitWordCode(client, facts, sourceUnit, revisionId) {
   const field = { sourceSystem: facts.source_system, apiFamily: facts.api_family, sourceMetricKey: facts.source_metric_key };
   if (!isGenericDetailsKey(field)) return null;
-  const words = await readUnitWords(client, field);
-  return [...words.values()].includes(sourceUnit) ? null : "unit_word_missing";
+  const unitWords = await readUnitWords(client, field);
+  const provenWord = (await client.query(
+    `select ${provenWordSql("r")} as word from training_load.source_metric_definition_versions r where r.id = $1`, [revisionId],
+  )).rows[0]?.word ?? null;
+  return unitWordCodeOf({ unitWords, sourceUnit, provenWord });
 }
-async function assertUnitWord(client, facts, sourceUnit) {
-  const code = await unitWordCode(client, facts, sourceUnit);
+async function assertUnitWord(client, facts, sourceUnit, revisionId) {
+  const code = await unitWordCode(client, facts, sourceUnit, revisionId);
   if (code) throw refusal(409, code, MESSAGES[code]);
 }
 export function classifyDatabaseError(error) {
@@ -1109,7 +1118,7 @@ export async function createVersion({ ctx, mappingId, body }) {
         [mapping.source_metric_definition_id, sourceRevisionId],
       )).rows[0];
       assertExtractable({ ...field, parameter_kind: revision.parameter_kind, source_parameters: revision.parameter_kind === "none" ? {} : source });
-      await assertUnitWord(client, field, revision.source_unit);
+      await assertUnitWord(client, field, revision.source_unit, sourceRevisionId);
       const canonicalSql = `select d.state, d.current_version_id, ${CANONICAL_VERSION_COLUMNS},
                                    (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
                               from training_load.metric_definitions d
@@ -1522,7 +1531,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       // Phase 7f: the field and the parameters again, after the right and the
       // states (R3): a draft created before 7f is caught here.
       const extractFacts = (await client.query(
-        `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind, v.source_unit,
+        `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind, v.source_unit, v.source_metric_version_id,
                 ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters
            from training_load.source_metric_mapping_versions v
            join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -1531,7 +1540,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
         [vId],
       )).rows[0];
       assertExtractable(extractFacts);
-      await assertUnitWord(client, extractFacts, extractFacts.source_unit);
+      await assertUnitWord(client, extractFacts, extractFacts.source_unit, extractFacts.source_metric_version_id);
       if (replacing) await databaseTextAgrees(client, reason);
       if (listed.length > 0) await databaseTextAgrees(client, activationReason);
       if (writeHold) await writeHold(client, replacing ? "mapping_version_replace" : "mapping_version_activate");
@@ -1754,7 +1763,7 @@ export async function copiedMappingRefusal(client, versions, { fields, revisions
     const revision = revisions.get(v.source_metric_version_id);
     if (!revision || !["draft", "active"].includes(revision.state) || revision.source_unit === null) return named("revision_not_usable");
     const facts = (await client.query(
-      `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind, v.source_unit,
+      `select d.source_system, d.api_family, d.source_metric_key, r.value_shape, v.parameter_kind, v.source_unit, v.source_metric_version_id,
               ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters
          from training_load.source_metric_mapping_versions v
          join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -1767,7 +1776,7 @@ export async function copiedMappingRefusal(client, versions, { fields, revisions
       valueShape: facts.value_shape, parameterKind: facts.parameter_kind, sourceParameters: facts.source_parameters,
     });
     if (extractable) return named(extractable);
-    const unitWord = await unitWordCode(client, facts, facts.source_unit);
+    const unitWord = await unitWordCode(client, facts, facts.source_unit, facts.source_metric_version_id);
     if (unitWord) return named(unitWord);
     const conversion = await conversionsHold(client, v);
     if (conversion) return named(conversion);

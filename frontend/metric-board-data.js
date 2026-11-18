@@ -241,6 +241,9 @@ export const COLUMN_REASON = {
   field_has_parameters: "Map zones and thresholds in Mappings.",
   source_metric_unsupported: "OptiMove cannot read this column yet.",
   display_rule_missing: "OptiMove cannot show how GPEXE displays this column yet, so it cannot be compared here.",
+  // G1b-3: a created column without a GPEXE unit word OptiMove can read.
+  unit_word_missing: "OptiMove does not know GPEXE's unit word for this column, so it cannot import its values.",
+  unit_word_ambiguous: "OptiMove does not know which GPEXE word this column's unit is. Ask OptiMove support to compare it with GPEXE.",
   no_value_for_pair: "These two athletes have no value here. Choose other athletes.",
 };
 // Why a placement is refused (sections 3.5 and 4.2).

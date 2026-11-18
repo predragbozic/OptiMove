@@ -372,7 +372,7 @@ test("3. the importer's specs come only from the extractor registry: the mapping
   const props = [...mapper.code.matchAll(/\bextract\s*:/g)];
   assert.equal(props.length, 1, "the mapper defines one extract");
   // G1b-2 (rule (b)): the one context the entry takes is the version's proven unit and GPEXE's seeded words - never a value.
-  assert.match(mapper.code.slice(props[0].index, props[0].index + 160), /^extract\s*:\s*\(input\)\s*=>\s*extractor\.extract\(input,\s*sourceParameters,\s*\{\s*sourceUnit:\s*activation\.revisionSourceUnit,\s*unitWords\s*\}\)/);
+  assert.match(mapper.code.slice(props[0].index, props[0].index + 220), /^extract\s*:\s*\(input\)\s*=>\s*extractor\.extract\(input,\s*sourceParameters,\s*\{\s*sourceUnit:\s*activation\.revisionSourceUnit,\s*unitWords,\s*provenWord:\s*activation\.revisionUnitWord \?\? null\s*\}\)/);
   assert.equal(enclosing(mapper, props[0].index, { named: true })?.name, "mappedMetricSpecs");
   const decls = [...mapper.code.matchAll(/\b(?:const|let|var)\s+extractor\s*=\s*/g)];
   assert.ok(decls.length >= 1, "the mapper holds a registry entry");
@@ -455,7 +455,7 @@ test("3. the importer's specs come only from the extractor registry: the mapping
     assert.match(body, /\bconst extractor = extractorFor\s*\(/, `${where(g, call.index)}: each extract is a registry entry's`);
     assert.deepEqual([...body.matchAll(/\bextracts\s*(?:\.\s*(\w+)|=)/g)].map((m) => m[1] ?? "=").filter((use) => use !== "length"), ["=", "push"], `${where(g, call.index)}: extracts is declared once and only pushed to`);
     // G1b-2 (rule (b)): with the column's own unit context (its revision's proven unit and GPEXE's words).
-    assert.match(body, /const context = \{ sourceUnit: col\.field\.source_unit, unitWords \};\s*extracts\.push\(\(input\) => extractor\.extract\(input, \{\}, context\)\);/, `${where(g, call.index)}: the pushed function is the registry entry's extract`);
+    assert.match(body, /const context = \{ sourceUnit: col\.field\.source_unit, unitWords, provenWord: col\.field\.proven_word \?\? null \};\s*extracts\.push\(\(input\) => extractor\.extract\(input, \{\}, context\)\);/, `${where(g, call.index)}: the pushed function is the registry entry's extract`);
   }
   // The board's two test seams and the removal's are never set by a source module (the board service re-exports one).
   for (const seam of ["setDisplayRuleFallbackForTests", "setBoardRemovalFaultForTests", "setBoardSaveHoldForTests"]) {

@@ -231,7 +231,7 @@ export function mappedMetricSpecs(rows, { unitWords = new Map() } = {}) {
         min: activation.minValue === null || activation.minValue === undefined ? null : canonicalDecimal(activation.minValue),
         max: activation.maxValue === null || activation.maxValue === undefined ? null : canonicalDecimal(activation.maxValue),
       }),
-      extract: (input) => extractor.extract(input, sourceParameters, { sourceUnit: activation.revisionSourceUnit, unitWords }),
+      extract: (input) => extractor.extract(input, sourceParameters, { sourceUnit: activation.revisionSourceUnit, unitWords, provenWord: activation.revisionUnitWord ?? null }),
     });
   });
   return { block: null, specs };

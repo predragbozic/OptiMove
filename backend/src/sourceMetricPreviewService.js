@@ -25,7 +25,7 @@ import { GPEXE_SOURCE_SYSTEM, gpexeLevelValues } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { PREVIEW_MINIMUM_ATHLETES, previewLevel } from "./sourceMetricPreview.js";
 import { revisionProven } from "./sourceFieldEvidence.js";
-import { unitWordsFor } from "./sourceUnitWords.js";
+import { provenWordSql, unitWordsFor } from "./sourceUnitWords.js";
 
 const { boundedRead, refusal, NOT_FOUND, MESSAGES, UUID, PARAMS_AS_TEXT } = adminWriteKit;
 
@@ -72,7 +72,8 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
               trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
               v.parameter_kind, ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters, v.applies_to_session, v.applies_to_drill,
               d.source_system, d.api_family, d.source_metric_key, r.value_shape,
-              d.created_by_user_id is not null as created, r.evidence_status, r.source_unit as revision_unit
+              d.created_by_user_id is not null as created, r.evidence_status, r.source_unit as revision_unit,
+              ${provenWordSql("r")} as proven_word
          from training_load.source_metric_mapping_versions v
          join training_load.source_metric_mappings m on m.id = v.mapping_id
          join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -143,7 +144,7 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
   // Fail closed: every check above lets the bundle through or refuses.
   if (bundle === null || typeof bundle !== "object") throw new Error("preview bundle missing");
   const entry = extractorFor({ sourceSystem: v.source_system, apiFamily: v.api_family, sourceMetricKey: v.source_metric_key });
-  const out = gpexeLevelValues(bundle, (input) => entry.extract(input, v.source_parameters, { sourceUnit: v.source_unit, unitWords }), { teamTimezone });
+  const out = gpexeLevelValues(bundle, (input) => entry.extract(input, v.source_parameters, { sourceUnit: v.source_unit, unitWords, provenWord: v.proven_word ?? null }), { teamTimezone });
   if (out.code) throw refusal(409, "candidate_not_importable", PREVIEW_MESSAGES.candidate_not_importable, { current: { reason: out.code } });
   const factors = { scale: v.scale, divisor: v.scale_divisor, offset: v.offset };
   return {
