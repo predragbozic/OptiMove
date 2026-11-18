@@ -466,9 +466,10 @@ async function reducedViewOf(row, ctx, queryable) {
   const span = { from: dateStr(row.day), to: dateStr(row.end_day) || dateStr(row.day) };
   const days = [];
   for (let cursor = span.from; cursor <= span.to; cursor = addDay(cursor)) days.push(cursor);
-  // The platform workspace never reaches this reader's view: its platform admin manages every event
-  // (eventWriteBasis). Were that to change, loadWorkspaceTeams would name every club's teams here (K2b-1d2).
-  const teams = await loadWorkspaceTeams(ctx);
+  // The platform workspace does not reach this reader's view today (its platform admin manages every event,
+  // eventWriteBasis), and the branch below keeps it so in code: since K2b-1d2 loadWorkspaceTeams names every club's
+  // teams for the platform, so here the platform gets no team at all (K2b-1d3, LOW-1 of PR #605's review).
+  const teams = ctx.workspace?.type === "platform" ? [] : await loadWorkspaceTeams(ctx);
   const teamIds = teams.map((t) => String(t.teamId));
   const scoped = await readScheduleTargetAthletes(ctx, "calendar.event_targets", {
     pairs: days.map((day) => ({ scheduleId: row.id, day })), filters: {}, teamIds, idColumn: "event_id", queryable,
@@ -515,6 +516,13 @@ async function readableActivityIdsOf(queryable, ctx, row) {
 }
 async function managerViewOf(queryable, ctx, row) {
   return viewOf(row, await readableActivityIdsOf(queryable, ctx, row), await readEventFields(queryable, row.id));
+}
+
+// Test-only seam (K2b-1d3): the reader's view of an event for a given context, whatever its manage right - no route
+// reaches it for the platform workspace, so the suite pins the platform branch above through this.
+export async function reducedEventViewForTests(ctx, eventId, queryable = pool) {
+  const row = (await queryable.query(EVENT_VIEW_SQL, [eventId])).rows[0];
+  return row ? reducedViewOf(row, ctx, queryable) : null;
 }
 
 async function readEventView(queryable, ctx, eventId) {

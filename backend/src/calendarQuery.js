@@ -470,7 +470,7 @@ async function readEventRows(ctx, { from, to }) {
     `select e.id, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id,
             -- The type's id, as its label: only on its own club's events (D41).
             case when ${eventShowsTypeSql("e", "t", "et")} then e.event_type_id end as event_type_id,
-            e.title, e.day, e.end_day, e.start_time, e.end_time, e.location, e.status, e.expects, e.notes,
+            e.title, e.day, e.end_day, e.start_time, e.end_time, e.timezone, e.location, e.status, e.expects, e.notes,
             e.external_schedule_id, e.test_schedule_id, e.revision,
             et.kind as event_kind,
             -- A club's type is shown only on its own club's events (a team moved to
@@ -1176,6 +1176,8 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     const card = newCard({
       key: `event:${row.id}:${day}`, kind: "event", date: day, title: row.title,
       startTime: timeStr(row.start_time), endTime: timeStr(row.end_time),
+      // K2b-1d3: the event's own IANA zone (a place's clock, never a person's data).
+      timezone: row.timezone ?? null,
       // K2b-1b: the place (D41) and, for the K2a-2 screen, its one line.
       place: eventPlaceOf(row), location: row.place_id ? row.place_name : row.location,
       details: canManage ? (detailCounts.get(String(row.id)) ?? { selected: 0, filled: 0, required: 0, filledRequired: 0 }) : undefined,
@@ -1290,7 +1292,7 @@ function publicCard(card, includeAthletes) {
       eventKind: card.eventKind, eventTypeLabel: card.eventTypeLabel,
       eventTypeIconKey: card.eventTypeIconKey ?? null, eventTypeColorKey: card.eventTypeColorKey ?? null,
       span: card.span,
-      startTime: card.startTime, endTime: card.endTime, location: card.location, place: card.place,
+      startTime: card.startTime, endTime: card.endTime, timezone: card.timezone ?? null, location: card.location, place: card.place,
       status: card.cancelled ? "cancelled" : "planned", cancelled: card.cancelled,
       teamIds: [...card.teamIds].sort(),
       links: { eventId: card.eventId },
@@ -1319,6 +1321,7 @@ function publicCard(card, includeAthletes) {
     out.eventTypeIconKey = card.eventTypeIconKey ?? null;
     out.eventTypeColorKey = card.eventTypeColorKey ?? null;
     out.endTime = card.endTime;
+    out.timezone = card.timezone ?? null;
     out.location = card.location;
     out.place = card.place;
     out.span = card.span;

@@ -876,11 +876,13 @@ test("9. GET /api/calendar: event cards per workspace with canManage, kinds, inc
   assert.deepEqual(teamsByEvent[directClub.id], [], "a direct athlete target on a club-owned event names no team");
   assert.deepEqual(teamsByEvent[directTeam.id], [c.team1], "a direct athlete target on a team-owned event names the owner team");
   // K2b-1b adds the place (D27); never a detail or a value. K2b-1d2 adds the
-  // type's icon and colour, under D41 as the label.
-  const allowed = ["key", "kind", "date", "title", "eventKind", "eventTypeLabel", "eventTypeIconKey", "eventTypeColorKey", "span", "startTime", "endTime", "location", "place", "status", "cancelled", "teamIds", "links"].sort();
+  // type's icon and colour, under D41 as the label. K2b-1d3 adds the event's
+  // own time zone (a place's clock, never a person's data).
+  const allowed = ["key", "kind", "date", "title", "eventKind", "eventTypeLabel", "eventTypeIconKey", "eventTypeColorKey", "span", "startTime", "endTime", "timezone", "location", "place", "status", "cancelled", "teamIds", "links"].sort();
   for (const card of athleteCards) {
     assert.deepEqual(Object.keys(card).sort(), allowed, `the athlete's card carries only the allowed fields: ${Object.keys(card).join(",")}`);
     assert.deepEqual(Object.keys(card.links), ["eventId"]);
+    assert.equal(card.timezone, TZ, "the event's own zone");
     assert.equal(card.status, "planned");
   }
   assert.equal(JSON.stringify(athleteRes.body).includes(c.a2.athleteId), false, "no teammate id anywhere");

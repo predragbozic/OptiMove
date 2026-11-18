@@ -16,9 +16,12 @@ const { renderAthleteHomeEventsHtml } = await import("../athlete-home-events-vie
 const { renderAthleteHomeHtml } = await import("../athlete-home.js");
 const { state } = await import("../state.js");
 const { clearAllViewCache } = await import("../view-cache.js");
+const { renderIconSvg } = await import("../icon-render.js");
 
 const {
   ATHLETE_HOME_EVENT_ROW_KEYS, ATHLETE_HOME_EVENTS_LIMIT, athleteHomeEventRows, loadAthleteHomeEvents, resetAthleteHomeEvents,
+  setAthleteHomeEventsClock, athleteHomeEventEnded, athleteHomeEventsTick, stopAthleteHomeEventsTick, ATHLETE_HOME_EVENTS_TICK_MS,
+  athleteHomeWallTimeInstant,
 } = data;
 
 // A Wednesday: Thursday 19 Nov is Tomorrow.
@@ -36,10 +39,10 @@ function addDays(iso, days) {
 
 // One of her cards, exactly the athlete branch's keys (plus `extra` when a test adds fields the server must never send
 // her, to prove the list never shows them).
-function card({ id, date, title = "Event", eventKind = "match", eventTypeLabel = "Match", span = null, startTime = null, endTime = null, place = null, location = null, cancelled = false, extra = {} }) {
+function card({ id, date, title = "Event", eventKind = "match", eventTypeLabel = "Match", span = null, startTime = null, endTime = null, place = null, location = null, cancelled = false, eventTypeIconKey = null, eventTypeColorKey = null, timezone = null, extra = {} }) {
   return {
-    key: `event:${id}:${date}`, kind: "event", date, title, eventKind, eventTypeLabel,
-    span: span || { from: date, to: date }, startTime, endTime, location, place,
+    key: `event:${id}:${date}`, kind: "event", date, title, eventKind, eventTypeLabel, eventTypeIconKey, eventTypeColorKey,
+    span: span || { from: date, to: date }, startTime, endTime, timezone, location, place,
     status: cancelled ? "cancelled" : "planned", cancelled, teamIds: ["team-1"], links: { eventId: id }, ...extra,
   };
 }
@@ -85,6 +88,8 @@ beforeEach(() => {
   dom = new JSDOM("<!doctype html><body></body>");
   globalThis.document = dom.window.document;
   renders = 0;
+  // K2b-1d3: an ended event leaves the list, so the clock is pinned: 06:00 on TODAY, the device's time.
+  setAthleteHomeEventsClock(() => new Date(2026, 10, 18, 6, 0).getTime());
 });
 
 const load = (opts = {}) => loadAthleteHomeEvents({ render, today: TODAY, ...opts });
@@ -110,7 +115,10 @@ test("E2. the explicit pick: notes, details, athletes, a type id, canManage, a v
   await load();
   const rows = state.athleteHomeEvents.rows;
   assert.equal(rows.length, 1);
-  assert.deepEqual(Object.keys(rows[0]), ATHLETE_HOME_EVENT_ROW_KEYS);
+  // A literal list (K2b-1d3, LOW-3): the module's constant cannot vouch for itself.
+  const literalKeys = ["eventId", "title", "eventKind", "eventTypeLabel", "eventTypeIconKey", "eventTypeColorKey", "day", "from", "to", "startTime", "endTime", "timezone", "place", "cancelled"];
+  assert.deepEqual(Object.keys(rows[0]), literalKeys);
+  assert.deepEqual([...ATHLETE_HOME_EVENT_ROW_KEYS], literalKeys);
   assert.deepEqual(Object.keys(rows[0].place), ["source", "name", "address", "note"]);
   const html = dom.window.document.body.innerHTML;
   for (const word of ["Internal coach note", "Teammate Tina", "a-2", "type-uuid-1", "secret-value-42", "loc-uuid-9", "hidden-place-thing", "e1", "team-1", "rpe"]) {
@@ -486,4 +494,368 @@ test("E9b (F3). read A for 18 Nov is on its way, read B for 19 Nov succeeds, the
   assert.deepEqual(state.athleteHomeEvents.rows.map((r) => r.eventId), ["b"]);
   assert.equal($(".athlete-home-events").textContent.includes("could not be loaded"), false);
   assert.match(rowTexts()[0], /^Read B /);
+});
+
+// --- K2b-1d3 (plan 24.2): the type's look, and an ended event leaves the list ------------------------------------------
+
+const pathsOf = (key) => new JSDOM(`<!doctype html><body>${renderIconSvg(key)}</body>`).window.document.querySelector("svg").innerHTML;
+const iconOf = (li) => li.querySelector("svg.athlete-home-event-icon");
+
+test("E13. the row's icon: the type's icon tinted with its colour; null keys (D41) the kind's icon untinted; a key outside the library or the palette ignored", async () => {
+  calendarServer(() => ({ status: 200, body: answer([
+    card({ id: "typed", date: TODAY, title: "Cup match", startTime: "18:00:00", eventTypeIconKey: "football", eventTypeColorKey: "indigo" }),
+    card({ id: "plain", date: TODAY, title: "Plain match", startTime: "19:00:00" }),
+    card({ id: "foreign", date: TODAY, title: "Odd match", startTime: "20:00:00", eventTypeIconKey: "not-an-icon", eventTypeColorKey: "magenta" }),
+    card({ id: "gone", date: TODAY, title: "Cancelled match", startTime: "21:00:00", eventTypeIconKey: "flag", eventTypeColorKey: "teal", cancelled: true }),
+  ]) }));
+  await load();
+  const row = state.athleteHomeEvents.rows.find((r) => r.eventId === "typed");
+  assert.deepEqual([row.eventTypeIconKey, row.eventTypeColorKey], ["football", "indigo"], "the pick keeps the type's look");
+  const [typed, plain, foreign, gone] = $$(".athlete-home-event");
+  assert.equal(iconOf(typed).innerHTML, pathsOf("football"), "the type's icon");
+  assert.ok(iconOf(typed).classList.contains("has-type-color"));
+  assert.equal(iconOf(typed).closest(".cc-type-tint").getAttribute("style"), "--cc-type-color: var(--cc-team-2)", "indigo is the third colour");
+  for (const li of [plain, foreign]) {
+    assert.equal(iconOf(li).innerHTML, pathsOf("trophy"), "the kind's icon (match)");
+    assert.equal(iconOf(li).classList.contains("has-type-color"), false);
+    assert.equal(li.querySelector(".cc-type-tint"), null);
+  }
+  assert.equal(iconOf(gone).innerHTML, pathsOf("flag"), "a cancelled event keeps its type's icon (muted by the stylesheet)");
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.athlete-home-events \{\n  --cc-team-0/, "the palette's tokens reach Home's section");
+  assert.match(css, /\.athlete-home-event-icon\.has-type-color \{\n  color: var\(--cc-type-color\);/);
+});
+
+// The device zone of the next tests: Europe/Belgrade (UTC+1 in November). `at` is an instant in UTC.
+async function withZone(fn) {
+  const realTz = process.env.TZ;
+  process.env.TZ = "Europe/Belgrade";
+  try {
+    return await fn();
+  } finally {
+    if (realTz === undefined) delete process.env.TZ;
+    else process.env.TZ = realTz;
+  }
+}
+const at = (iso) => Date.parse(iso);
+const row = (over = {}) => ({ eventId: "x", from: TODAY, to: TODAY, startTime: "18:00", endTime: "19:30", timezone: "Europe/Belgrade", cancelled: false, ...over });
+
+test("E14. the end exactly now is gone (>=); one minute before it stays; an event across midnight ends on its next day", () => withZone(() => {
+  // 19:30 in Belgrade is 18:30Z.
+  assert.equal(athleteHomeEventEnded(row(), at("2026-11-18T18:29:00Z")), false, "one minute before its end");
+  assert.equal(athleteHomeEventEnded(row(), at("2026-11-18T18:30:00Z")), true, "at the very minute of its end");
+  assert.equal(athleteHomeEventEnded(row(), at("2026-11-18T18:31:00Z")), true);
+  const night = row({ startTime: "22:00", endTime: "01:00", to: "2026-11-19" });
+  assert.equal(athleteHomeEventEnded(night, at("2026-11-18T23:30:00Z")), false, "past midnight, before its end on the next day");
+  assert.equal(athleteHomeEventEnded(night, at("2026-11-19T00:00:00Z")), true, "01:00 on the 19th in Belgrade");
+}));
+
+test("E15. a multi-day event stays until its last day's end time; without an end time an event stays until the end of its last day (the device's date)", () => withZone(() => {
+  const camp = row({ from: "2026-11-18", to: "2026-11-20", startTime: "09:00", endTime: "17:00" });
+  assert.equal(athleteHomeEventEnded(camp, at("2026-11-19T20:00:00Z")), false, "its middle day's evening");
+  assert.equal(athleteHomeEventEnded(camp, at("2026-11-20T15:59:00Z")), false, "16:59 on its last day");
+  assert.equal(athleteHomeEventEnded(camp, at("2026-11-20T16:00:00Z")), true, "17:00 on its last day");
+  const open = row({ startTime: "18:00", endTime: null });
+  assert.equal(athleteHomeEventEnded(open, at("2026-11-18T22:59:00Z")), false, "23:59 on its day, by the device");
+  assert.equal(athleteHomeEventEnded(open, at("2026-11-18T23:00:00Z")), true, "00:00 the next day, by the device");
+  const untimed = row({ startTime: null, endTime: null, to: "2026-11-19" });
+  assert.equal(athleteHomeEventEnded(untimed, at("2026-11-19T22:59:00Z")), false);
+  assert.equal(athleteHomeEventEnded(untimed, at("2026-11-19T23:00:00Z")), true);
+  assert.equal(athleteHomeEventEnded(row({ cancelled: true }), at("2026-11-18T18:30:00Z")), true, "a cancelled event follows the same rule");
+  assert.equal(athleteHomeEventEnded(row({ cancelled: true }), at("2026-11-18T18:29:00Z")), false);
+}));
+
+test("E16. the event's own zone, not the device's: ended there but not here, and the reverse; an invalid or missing zone falls back to the device's", () => withZone(() => {
+  // 19:30 in London is 19:30Z, an hour after it is 19:30 in Belgrade (the device).
+  const london = row({ timezone: "Europe/London" });
+  assert.equal(athleteHomeEventEnded(london, at("2026-11-18T18:45:00Z")), false, "19:45 on the device, but 18:45 in London: not ended there");
+  assert.equal(athleteHomeEventEnded(london, at("2026-11-18T19:30:00Z")), true);
+  // 19:30 in Tokyo is 10:30Z, long before it is 19:30 in Belgrade.
+  const tokyo = row({ timezone: "Asia/Tokyo" });
+  assert.equal(athleteHomeEventEnded(tokyo, at("2026-11-18T10:30:00Z")), true, "11:30 on the device, but 19:30 in Tokyo: ended there");
+  assert.equal(athleteHomeEventEnded(tokyo, at("2026-11-18T10:29:00Z")), false);
+  // On the day summer time starts (New York, 8 Mar 2026, 02:00 EST -> 03:00 EDT): 03:30 EDT is 07:30Z.
+  const spring = row({ from: "2026-03-08", to: "2026-03-08", startTime: "03:00", endTime: "03:30", timezone: "America/New_York" });
+  assert.equal(athleteHomeEventEnded(spring, at("2026-03-08T07:29:00Z")), false, "03:29 EDT");
+  assert.equal(athleteHomeEventEnded(spring, at("2026-03-08T07:30:00Z")), true, "03:30 EDT, the offset of the instant itself");
+  for (const timezone of ["Mars/Olympus", "", null, 42]) {
+    const fallback = row({ timezone });
+    assert.equal(athleteHomeEventEnded(fallback, at("2026-11-18T18:29:00Z")), false, `fallback (${timezone}): 19:29 on the device`);
+    assert.equal(athleteHomeEventEnded(fallback, at("2026-11-18T18:30:00Z")), true, `fallback (${timezone}): 19:30 on the device`);
+  }
+}));
+
+test("E16b. through the loader: the card's zone reaches the row, and the drawn list leaves out an event that ended in its own zone but not on the device", async () => withZone(async () => {
+  calendarServer(() => ({ status: 200, body: answer([
+    card({ id: "tokyo", date: TODAY, title: "Tokyo call", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "18:00:00", endTime: "19:00:00", timezone: "Asia/Tokyo" }),
+    card({ id: "home", date: TODAY, title: "Home call", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "18:00:00", endTime: "19:00:00", timezone: "Europe/Belgrade" }),
+  ]) }));
+  // 12:00 in Belgrade: 20:00 in Tokyo.
+  setAthleteHomeEventsClock(() => at("2026-11-18T11:00:00Z"));
+  await load();
+  assert.equal(state.athleteHomeEvents.rows.find((r) => r.eventId === "tokyo").timezone, "Asia/Tokyo");
+  assert.deepEqual(rowTexts().map((t) => t.split(" ")[0]), ["Home"], "the Tokyo call ended at 19:00 in Tokyo");
+}));
+
+test("E17. drawn: an ended event is not in the list, a cancelled one too; Show N more counts the rows still to come; all ended: the empty sentence", async () => {
+  calendarServer(() => ({ status: 200, body: answer([
+    card({ id: "early", date: TODAY, title: "Morning session", eventKind: "training", eventTypeLabel: "Training", startTime: "07:00:00", endTime: "08:00:00" }),
+    card({ id: "noon", date: TODAY, title: "Noon session", eventKind: "training", eventTypeLabel: "Training", startTime: "12:00:00", endTime: "13:00:00" }),
+    card({ id: "off", date: TODAY, title: "Called off", startTime: "07:30:00", endTime: "08:30:00", cancelled: true }),
+    card({ id: "open", date: TODAY, title: "Open gym", eventKind: "training", eventTypeLabel: "Training", startTime: "07:00:00" }),
+    ...[1, 2, 3, 4, 5].map((n) => card({ id: `later${n}`, date: addDays(TODAY, n), title: `Later ${n}`, eventKind: "training", eventTypeLabel: "Training", startTime: "10:00:00", endTime: "11:00:00" })),
+  ]) }));
+  setAthleteHomeEventsClock(() => new Date(2026, 10, 18, 9, 0).getTime());
+  await load();
+  assert.equal(state.athleteHomeEvents.rows.length, 9, "the rows read are kept; the paint filters");
+  assert.deepEqual(rowTexts().map((t) => t.split(" ")[0]), ["Open", "Noon", "Later", "Later", "Later"], "the ended and the ended cancelled one are gone");
+  assert.equal($('[data-action="athlete-home-events-toggle"]').textContent, "Show 2 more", "7 rows still to come, 5 shown");
+  setAthleteHomeEventsClock(() => new Date(2026, 10, 18, 13, 0).getTime());
+  render();
+  assert.equal($('[data-action="athlete-home-events-toggle"]').textContent, "Show 1 more", "Noon ended too");
+  setAthleteHomeEventsClock(() => new Date(2026, 10, 24, 0, 0).getTime());
+  render();
+  assert.match($(".athlete-home-events-state").textContent, /No events in the next 14 days\./);
+});
+
+test("E18. the minute's tick: an event that ends while Home is open leaves the list with no request; nothing is swapped while nothing changed; off Home the tick stops", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 18, 0).getTime();
+    setAthleteHomeEventsClock(() => now);
+    const calls = calendarServer(() => ({ status: 200, body: answer([
+      card({ id: "a", date: TODAY, title: "Evening session", eventKind: "training", eventTypeLabel: "Training", startTime: "17:00:00", endTime: "18:30:00" }),
+      card({ id: "b", date: TODAY, title: "Late meeting", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "20:00:00", endTime: "21:00:00" }),
+    ]) }));
+    await load();
+    const paints = renders;
+    const section = () => $("section.athlete-home-events");
+    const first = section();
+    assert.equal(rowTexts().length, 2);
+    now += 60_000;
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(section(), first, "nothing ended: the section is not swapped");
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.notEqual(section(), first, "the section is swapped when an event ends");
+    assert.equal(renders, paints, "the tick never paints the whole of Home");
+    assert.deepEqual(rowTexts().map((x) => x.split(" ")[0]), ["Late"]);
+    assert.equal(calls.length, 1, "no new request");
+    const second = section();
+    state.activeTab = "athlete-calendar";
+    now = new Date(2026, 10, 18, 21, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(section(), second, "off Home: nothing swapped");
+    state.activeTab = "athlete-home";
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(section(), second, "the tick stopped when Home was left");
+    assert.equal(athleteHomeEventsTick(), true, "a direct tick still sees the change");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
+});
+
+// --- K2b-1d3, the review round ------------------------------------------------------------------------------------------
+
+test("E19 (MEDIUM-A). the tick replaces only Upcoming events: an open RPE note keeps its focus while an event ends; Show N more keeps it too", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  // The whole of Home as app.js paints it: an RPE form (as athlete-home.js's overlays) beside the section.
+  const wholeHome = () => {
+    renders += 1;
+    dom.window.document.body.innerHTML = `<div class="rpe-overlay"><textarea id="rpeNote"></textarea></div>${renderAthleteHomeEventsHtml(state.athleteHomeEvents)}`;
+  };
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 18, 0).getTime();
+    setAthleteHomeEventsClock(() => now);
+    calendarServer(() => ({ status: 200, body: answer([
+      card({ id: "a", date: TODAY, title: "Evening session", eventKind: "training", eventTypeLabel: "Training", startTime: "17:00:00", endTime: "18:30:00" }),
+      ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => card({ id: `later${n}`, date: addDays(TODAY, n), title: `Later ${n}`, eventKind: "training", eventTypeLabel: "Training", startTime: "10:00:00", endTime: "11:00:00" })),
+    ]) }));
+    await loadAthleteHomeEvents({ render: wholeHome, today: TODAY });
+    const note = $("#rpeNote");
+    note.focus();
+    note.value = "Felt heavy";
+    assert.equal(dom.window.document.activeElement, note);
+    const paints = renders;
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(renders, paints, "Home is not painted again");
+    assert.equal(dom.window.document.activeElement, note, "the same textarea keeps the focus");
+    assert.equal($("#rpeNote"), note, "the same node");
+    assert.equal(note.value, "Felt heavy");
+    assert.equal(rowTexts().some((x) => x.startsWith("Evening")), false, "the ended row is gone");
+    // Show N more had the focus: the same control has it after the swap.
+    const toggle = () => $('[data-action="athlete-home-events-toggle"]');
+    toggle().focus();
+    now = new Date(2026, 10, 19, 11, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(rowTexts().some((x) => x.startsWith("Later 1")), false, "Later 1 ended");
+    assert.equal(dom.window.document.activeElement, toggle(), "Show N more keeps the focus");
+    // Without the section on the page: nothing changes, and a later tick tries again.
+    dom.window.document.body.innerHTML = `<textarea id="other"></textarea>`;
+    now = new Date(2026, 10, 20, 11, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(renders, paints, "never a whole-Home paint from the timer");
+    assert.equal($("section.athlete-home-events"), null);
+    dom.window.document.body.innerHTML = renderAthleteHomeEventsHtml({ ...state.athleteHomeEvents, rows: [] });
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.deepEqual(rowTexts().map((x) => x.split(" ").slice(0, 2).join(" ")), ["Later 3", "Later 4", "Later 5", "Later 6", "Later 7"], "the next tick swapped the section in");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
+});
+
+test("E16c (LOW-1). an end time in a spring-forward gap is read forward, as PostgreSQL: the later instant; east of UTC too", () => {
+  // New York, 8 Mar 2026: 02:30 does not exist; read with the offset before the change (EST): 07:30Z.
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-03-08", "02:30", "America/New_York")).toISOString(), "2026-03-08T07:30:00.000Z");
+  const gap = row({ from: "2026-03-08", to: "2026-03-08", startTime: "01:00", endTime: "02:30", timezone: "America/New_York" });
+  assert.equal(athleteHomeEventEnded(gap, at("2026-03-08T07:29:00Z")), false);
+  assert.equal(athleteHomeEventEnded(gap, at("2026-03-08T07:30:00Z")), true);
+  // Belgrade, 29 Mar 2026 (02:00 CET -> 03:00 CEST): 01:30 CET is 00:30Z.
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-03-29", "01:30", "Europe/Belgrade")).toISOString(), "2026-03-29T00:30:00.000Z");
+  // Sydney, 4 Oct 2026 (02:00 AEST -> 03:00 AEDT): 01:30 AEST is 15:30Z the day before; 02:30 does not exist (16:30Z).
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-04", "01:30", "Australia/Sydney")).toISOString(), "2026-10-03T15:30:00.000Z");
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-04", "02:30", "Australia/Sydney")).toISOString(), "2026-10-03T16:30:00.000Z");
+  // A time that comes twice (Belgrade, 25 Oct 2026, 03:00 CEST -> 02:00 CET): 02:30 is read as the later, CET (01:30Z).
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-25", "02:30", "Europe/Belgrade")).toISOString(), "2026-10-25T01:30:00.000Z");
+  // West of UTC (LOW-A): New York, 1 Nov 2026, 02:00 EDT -> 01:00 EST: 01:30 comes twice and is read as EST (06:30Z).
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-11-01", "01:30", "America/New_York")).toISOString(), "2026-11-01T06:30:00.000Z");
+  const twice = row({ from: "2026-11-01", to: "2026-11-01", startTime: "00:30", endTime: "01:30", timezone: "America/New_York" });
+  assert.equal(athleteHomeEventEnded(twice, at("2026-11-01T06:00:00Z")), false, "01:00 EST: not ended");
+  assert.equal(athleteHomeEventEnded(twice, at("2026-11-01T06:30:00Z")), true);
+});
+
+test("E20 (LOW-2). the tick's lifecycle: a reset stops it; two loads in a row (a cache hit, then a refresh) keep one interval: one swap per change", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 18, 0).getTime();
+    setAthleteHomeEventsClock(() => now);
+    const body = answer([
+      card({ id: "a", date: TODAY, title: "Evening session", eventKind: "training", eventTypeLabel: "Training", startTime: "17:00:00", endTime: "18:30:00" }),
+      card({ id: "b", date: TODAY, title: "Late meeting", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "20:00:00", endTime: "21:00:00" }),
+    ]);
+    calendarServer(() => ({ status: 200, body }));
+    // A reset stops the tick: a timer tick past an end swaps nothing.
+    await load();
+    const before = $("section.athlete-home-events");
+    resetAthleteHomeEvents();
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal($("section.athlete-home-events"), before, "after a reset nothing is swapped");
+
+    // Two loads: applyData runs twice (the cache, then the refresh); the first interval is stopped.
+    now = new Date(2026, 10, 18, 18, 0).getTime();
+    await load();
+    await load({ forceRefresh: true });
+    const swaps = [];
+    const observer = new dom.window.MutationObserver((records) => swaps.push(...records.filter((r) => r.addedNodes.length)));
+    observer.observe(dom.window.document.body, { childList: true });
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    await new Promise((resolve) => setImmediate(resolve));
+    observer.disconnect();
+    assert.equal(swaps.length, 1, "one swap for one change");
+    // The first load's interval was stopped by the second: after a reset no interval is left to swap anything.
+    resetAthleteHomeEvents();
+    const afterReset = $("section.athlete-home-events");
+    now = new Date(2026, 10, 18, 21, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal($("section.athlete-home-events"), afterReset, "no interval left behind by the first load");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
+});
+
+test("E21 (LOW-5). Today and Tomorrow come from the device's date at the paint, not the date the list was read", async () => {
+  calendarServer(() => ({ status: 200, body: answer([
+    card({ id: "tmr", date: addDays(TODAY, 1), title: "Morning run", eventKind: "training", eventTypeLabel: "Training", startTime: "09:00:00", endTime: "10:00:00" }),
+  ]) }));
+  await load();
+  assert.match(rowTexts()[0], /Tomorrow · 09:00/);
+  // Past midnight, the list read yesterday is drawn again (the tick): the event is today's now.
+  setAthleteHomeEventsClock(() => new Date(2026, 10, 19, 0, 5).getTime());
+  render();
+  assert.match(rowTexts()[0], /Today · 09:00/);
+});
+
+test("E22 (MEDIUM-B / LOW-6). a cancelled row's icon is muted over the type's tint on Home and on the calendar's card, mini card and panel", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const ruleOf = (selector) => {
+    const at = css.indexOf(`${selector}`);
+    assert.ok(at >= 0, `a rule names ${selector}`);
+    return { at, block: css.slice(css.indexOf("{", at), css.indexOf("}", at) + 1) };
+  };
+  const specificity = (selector) => (selector.match(/\.[a-z0-9-]+/gi) || []).length;
+  // Home.
+  const homeTint = ruleOf(".athlete-home-event-icon.has-type-color {");
+  const homeMuted = ruleOf(".athlete-home-event.is-cancelled .athlete-home-event-icon {");
+  assert.match(homeMuted.block, /color: var\(--muted\)/);
+  assert.ok(specificity(".athlete-home-event.is-cancelled .athlete-home-event-icon") > specificity(".athlete-home-event-icon.has-type-color"));
+  assert.ok(homeTint.at > 0);
+  // The calendar.
+  const tint = ruleOf(".cc-card-icon.has-type-color,");
+  for (const selector of [".is-cancelled .cc-card-icon.has-type-color", ".is-cancelled .cc-mini-icon.has-type-color", ".cc-panel-kind.is-cancelled .cc-panel-icon.has-type-color"]) {
+    const muted = ruleOf(selector);
+    assert.ok(muted.at > tint.at, `${selector} comes after the tint`);
+    assert.match(muted.block, /color: var\(--muted\)/);
+    assert.ok(specificity(selector) > specificity(".cc-card-icon.has-type-color"), `${selector} out-specifies the tint`);
+  }
+});
+
+test("E21b (LOW-B). at midnight the tick swaps the section when only the date changed: Tomorrow becomes Today", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 23, 59).getTime();
+    setAthleteHomeEventsClock(() => now);
+    calendarServer(() => ({ status: 200, body: answer([
+      card({ id: "tmr", date: addDays(TODAY, 1), title: "Morning run", eventKind: "training", eventTypeLabel: "Training", startTime: "09:00:00", endTime: "10:00:00" }),
+    ]) }));
+    await load();
+    assert.match(rowTexts()[0], /Tomorrow · 09:00/);
+    now = new Date(2026, 10, 19, 0, 1).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.match(rowTexts()[0], /Today · 09:00/, "the tick drew the new day's words");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
+});
+
+test("E19b (LOW-C). a focused Open in maps of a row that stays keeps the focus when another row ends; when its own row ends, the section's title takes it", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 18, 0).getTime();
+    setAthleteHomeEventsClock(() => now);
+    const place = (name) => ({ source: "library", locationId: `loc-${name}`, name, address: `${name} street 1`, note: null });
+    calendarServer(() => ({ status: 200, body: answer([
+      card({ id: "a", date: TODAY, title: "Evening session", eventKind: "training", eventTypeLabel: "Training", startTime: "17:00:00", endTime: "18:30:00", place: place("Hall") }),
+      card({ id: "b", date: TODAY, title: "Long meeting", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "20:00:00", endTime: "22:00:00", place: place("Board room") }),
+      card({ id: "c", date: TODAY, title: "Late meeting", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "20:30:00", endTime: "21:00:00", place: place("Club house") }),
+    ]) }));
+    await load();
+    const linkOf = (title) => $$(".athlete-home-event").find((li) => li.textContent.includes(title))?.querySelector("a.cc-maps");
+    linkOf("Late meeting").focus();
+    assert.equal(dom.window.document.activeElement, linkOf("Late meeting"));
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(rowTexts().some((x) => x.startsWith("Evening")), false, "the other row ended");
+    const active = dom.window.document.activeElement;
+    assert.equal(active, linkOf("Late meeting"), "the same row's Open in maps has the focus (its row moved from the third place to the second)");
+    assert.ok(active.closest("section.athlete-home-events"));
+    // Its own row ends: the section's title takes the focus, never the page.
+    now = new Date(2026, 10, 18, 21, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(dom.window.document.activeElement?.id, "athleteHomeEventsTitle");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
 });

@@ -478,7 +478,7 @@ test("6. reads: the card's place and line, the manager's details counts; the red
   assert.ok(athleteCard, "the athlete reads the event of their team");
   assert.deepEqual(athleteCard.place, expectedPlace);
   // K2b-1d2 adds the type's icon and colour (a type's look, never a person's data), under D41 as the label.
-  assert.deepEqual(Object.keys(athleteCard).sort(), ["cancelled", "date", "endTime", "eventKind", "eventTypeColorKey", "eventTypeIconKey", "eventTypeLabel", "key", "kind", "links", "location", "place", "span", "startTime", "status", "teamIds", "title"]);
+  assert.deepEqual(Object.keys(athleteCard).sort(), ["cancelled", "date", "endTime", "eventKind", "eventTypeColorKey", "eventTypeIconKey", "eventTypeLabel", "key", "kind", "links", "location", "place", "span", "startTime", "status", "teamIds", "timezone", "title"]);
   for (const text of [coachRes.text, reduced.text, athleteRes.text]) {
     for (const secret of [required.id, optional.id, required.label, optional.label, "Secret answer"]) assert.ok(!text.includes(secret), `no detail reaches a non-manager (${secret})`);
   }

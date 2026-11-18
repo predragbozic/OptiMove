@@ -103,11 +103,6 @@ export function setCentralCalendarAppliedHook(hook) {
   calendarAppliedHook = typeof hook === "function" ? hook : null;
 }
 
-// Whether the answer holds a card that names its type (a manager's event card).
-export function centralCalendarNeedsCatalog(data) {
-  return (data?.days || []).some((day) => (day.items || []).some((item) => item.kind === "event" && item.canManage === true && item.eventTypeId));
-}
-
 export function resetCentralCalendarForWorkspaceChange() {
   state.centralCalendar = emptyCentralCalendarState();
   rangeGeneration += 1;
@@ -199,13 +194,8 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {},
         cal.notice = "The item you had open is no longer on this day; the calendar is up to date.";
       }
       render?.();
-      // K2b-1d: a manager's event card shows its type's icon and colour from
-      // the catalog - read once, and only when such a card is in the answer.
-      if (!cal.eventTypes && centralCalendarNeedsCatalog(data)) {
-        void readCentralCalendarCatalog(cal).then((outcome) => {
-          if (!outcome.error && state.centralCalendar === cal) render?.();
-        });
-      }
+      // K2b-1d3: the cards wear their type's look from the card itself; the
+      // catalog is read only when the event form opens (the actions' ensureEventTypes).
       void calendarAppliedHook?.(cal, render);
     },
     applyError: (error) => {

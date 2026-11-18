@@ -10907,6 +10907,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   color: var(--accent);
 }
 
+/* K2b-1d3: the type's colour, as on the calendar's card (a cancelled event's icon stays muted, below). */
+.athlete-home-event-icon.has-type-color {
+  color: var(--cc-type-color);
+}
+
 .athlete-home-event-body {
   display: flex;
   flex-direction: column;
@@ -20564,7 +20569,8 @@ body.exercise-header-pinned #viewToolbar {
    stripe, a tinted icon). Settings -> Calendar draws its swatches from the
    same tokens. */
 .central-calendar,
-.calendar-settings {
+.calendar-settings,
+.athlete-home-events {
   --cc-team-0: #1f6f68;
   --cc-team-1: #b5542b;
   --cc-team-2: #4a5fc1;
@@ -22455,6 +22461,14 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .cc-mini-icon.has-type-color,
 .cc-panel-icon.has-type-color {
   color: var(--cc-type-color);
+}
+
+/* K2b-1d3: a cancelled event's icon is muted, as its title (and as Athlete Home's cancelled row): the type's tint
+   gives way on the card, the month's mini card and the panel. */
+.is-cancelled .cc-card-icon.has-type-color,
+.is-cancelled .cc-mini-icon.has-type-color,
+.cc-panel-kind.is-cancelled .cc-panel-icon.has-type-color {
+  color: var(--muted);
 }
 
 .cc-panel-place-text {

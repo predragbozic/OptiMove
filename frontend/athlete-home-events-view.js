@@ -2,13 +2,19 @@
 // strings over state.athleteHomeEvents (athlete-home-events-data.js). A row shows the event's title, its type word, its
 // day(s) and time, and its place with *Open in maps* (the K2b-1d panel's place, reused); a cancelled event is marked and
 // shows no place. Nothing here talks to the server.
-import { ATHLETE_HOME_EVENTS_DAYS, ATHLETE_HOME_EVENTS_LIMIT } from "./athlete-home-events-data.js";
+import {
+  ATHLETE_HOME_EVENTS_DAYS, ATHLETE_HOME_EVENTS_LIMIT, athleteHomeEventsNow, athleteHomeVisibleEventRows, registerAthleteHomeEventsSectionPainter,
+} from "./athlete-home-events-data.js";
 import { renderCentralCalendarEventPlaceHtml } from "./central-calendar-event-details.js";
-import { CENTRAL_CALENDAR_EVENT_KIND_LABELS, centralCalendarItemIconKey } from "./central-calendar-view.js";
+import { CENTRAL_CALENDAR_EVENT_KIND_LABELS, centralCalendarItemColorIndex, centralCalendarItemIconKey } from "./central-calendar-view.js";
 import { renderIconSvg } from "./icon-render.js";
-import { addDaysIso, escapeAttr, escapeHtml } from "./utils.js";
+import { state } from "./state.js";
+import { addDaysIso, escapeAttr, escapeHtml, localDateIso } from "./utils.js";
 
 const LIST_ID = "athleteHomeEventsList";
+// The event ids of the rows the last paint drew, in their order (never in the page): the tick's swap finds a focused
+// row's control again by its event, not by an id on screen.
+let paintedRowIds = [];
 const TITLE_ID = "athleteHomeEventsTitle";
 
 // "Today", "Tomorrow", else the weekday and the date ("Thu 19 Nov").
@@ -45,8 +51,11 @@ function rowHtml(row, today) {
   const title = row.title || word;
   // The day first (what she scans the list for), then the type word - only when the title is not that word already.
   const meta = [athleteHomeEventWhen(row, today), title !== word ? word : ""].filter(Boolean).join(" · ");
-  // The kind's icon: her card names no type (K2b-1d2 brings the type's own icon to every card).
-  const icon = renderIconSvg(centralCalendarItemIconKey({ kind: "event", eventKind: row.eventKind }), { size: 20, className: "athlete-home-event-icon" });
+  // K2b-1d3: the type's icon tinted with its colour, as on the calendar card; else the kind's icon, untinted.
+  const look = { kind: "event", eventKind: row.eventKind, eventTypeIconKey: row.eventTypeIconKey, eventTypeColorKey: row.eventTypeColorKey };
+  const colorIndex = centralCalendarItemColorIndex(look);
+  const svg = renderIconSvg(centralCalendarItemIconKey(look), { size: 20, className: colorIndex < 0 ? "athlete-home-event-icon" : "athlete-home-event-icon has-type-color" });
+  const icon = colorIndex < 0 ? svg : `<span class="cc-type-tint" style="--cc-type-color: var(--cc-team-${colorIndex})">${svg}</span>`;
   // Cancelled (22.7 Q1): the mark right under the title, read before the time; no place.
   const status = row.cancelled
     ? `<p class="athlete-home-event-status"><span class="cc-badge cc-badge-cancelled athlete-home-event-cancelled"><span aria-hidden="true">✕</span> Cancelled</span></p>`
@@ -69,7 +78,8 @@ function bodyHtml(slice) {
       ${slice.canRetry ? `<button type="button" class="plain-button compact-button athlete-home-events-button" data-action="athlete-home-events-retry">Try again</button>` : ""}`;
   }
   if (slice.status !== "ready") return `<p class="muted athlete-home-events-state" role="status">Loading events…</p>`;
-  const rows = slice.rows || [];
+  // K2b-1d3: an event that has ended is left out (filtered at every paint and at the minute's tick).
+  const rows = athleteHomeVisibleEventRows(slice.rows, athleteHomeEventsNow());
   if (!rows.length) return `<div class="empty-state athlete-home-events-state">No events in the next ${ATHLETE_HOME_EVENTS_DAYS} days.</div>`;
   const shown = slice.expanded ? rows : rows.slice(0, ATHLETE_HOME_EVENTS_LIMIT);
   const more = rows.length - ATHLETE_HOME_EVENTS_LIMIT;
@@ -77,7 +87,11 @@ function bodyHtml(slice) {
     ? `<button type="button" class="plain-button compact-button athlete-home-events-button" data-action="athlete-home-events-toggle" aria-expanded="${slice.expanded ? "true" : "false"}" aria-controls="${LIST_ID}">${slice.expanded ? "Show fewer" : `Show ${more} more`}</button>`
     : "";
   // role="list": Safari drops a list's semantics under list-style: none.
-  return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, slice.today)).join("")}</ul>${toggle}`;
+  // K2b-1d3: "Today" / "Tomorrow" from the device's date at this paint, not the date the list was read (a paint after
+  // midnight never calls today "Tomorrow").
+  const today = localDateIso(new Date(athleteHomeEventsNow()));
+  paintedRowIds = shown.map((row) => row.eventId);
+  return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, today)).join("")}</ul>${toggle}`;
 }
 
 export function renderAthleteHomeEventsHtml(slice) {
@@ -93,3 +107,41 @@ export function renderAthleteHomeEventsHtml(slice) {
     </section>
   `;
 }
+
+// K2b-1d3: the minute's tick replaces only this section, in place (athlete-home-events-data.js). The control of the
+// section that had the focus has it again after the swap: a button by its data-action (Show N more / Show fewer), a
+// control of a row (Open in maps) by its row's event and its place in that row, the title by its id; when its row has
+// gone, the section's title takes the focus. Without the section on the page it changes nothing and answers false.
+const FOCUSABLE = "a[href], button, [tabindex]";
+export function repaintAthleteHomeEventsSection(doc = globalThis.document) {
+  const section = doc?.querySelector?.("section.athlete-home-events");
+  if (!section) return false;
+  const active = doc.activeElement;
+  const inside = Boolean(active && active !== section && section.contains(active));
+  const focusAction = inside ? active.getAttribute("data-action") : null;
+  let focusRow = null;
+  let focusId = null;
+  if (inside && !focusAction) {
+    const li = active.closest("li.athlete-home-event");
+    if (li) {
+      const index = [...section.querySelectorAll("li.athlete-home-event")].indexOf(li);
+      focusRow = { eventId: paintedRowIds[index] ?? null, position: [...li.querySelectorAll(FOCUSABLE)].indexOf(active) };
+    } else if (active.id) focusId = active.id;
+  }
+  const template = doc.createElement("template");
+  template.innerHTML = renderAthleteHomeEventsHtml(state.athleteHomeEvents).trim();
+  const next = template.content.firstElementChild;
+  if (next) section.replaceWith(next);
+  else section.remove();
+  if (!next || !inside) return true;
+  const title = () => next.querySelector(`#${TITLE_ID}`);
+  if (focusAction) (next.querySelector(`[data-action="${focusAction}"]`) || title())?.focus?.();
+  else if (focusRow) {
+    const index = focusRow.eventId ? paintedRowIds.indexOf(focusRow.eventId) : -1;
+    const li = index >= 0 ? next.querySelectorAll("li.athlete-home-event")[index] : null;
+    const control = li ? li.querySelectorAll(FOCUSABLE)[focusRow.position] : null;
+    (control || title())?.focus?.();
+  } else if (focusId) (next.querySelector(`#${focusId}`) || title())?.focus?.();
+  return true;
+}
+registerAthleteHomeEventsSectionPainter(() => repaintAthleteHomeEventsSection());

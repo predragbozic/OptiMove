@@ -559,7 +559,7 @@ function placeFormHtml(form, d) {
       ${textInput(form, "name", "Name", { max: LIMITS.locationName, required: true, first: true })}
       ${textInput(form, "address", "Address", { max: LIMITS.address, hint: "Street, number and town, as a map would find it." })}
       <p class="cs-maps-preview" data-cs-maps-preview${address ? "" : " hidden"}>${mapsLink(address || " ", "", "Open in maps: the address typed above (opens a new tab)")} <span class="muted">to check the address.</span></p>
-      ${textInput(form, "note", "Note", { max: LIMITS.note, hint: "For example the entrance, parking or the changing room. Coaches and athletes can see it on the event.", textarea: true })}
+      ${textInput(form, "note", "Note", { max: LIMITS.note, hint: "For example the entrance, parking or the changing room. Coaches and athletes can see it on the event, so write nothing about a person here.", textarea: true })}
       ${!create && (place?.eventCount || 0) ? `<p class="cs-field-hint">${escapeHtml(`A change shows on every event at this place (${plural(place.eventCount, "event", "events")}), past ones included.`)}</p>` : ""}
     `);
 }
