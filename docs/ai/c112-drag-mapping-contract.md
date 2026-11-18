@@ -251,7 +251,7 @@ section 4.4's lock order (the hide lock), each marked in place.
     admin "To use one zone, create its numbered GPEXE field in Data configuration > Source fields and confirm it
     there." (in a club workspace: "switch to the platform workspace, then create …"); then "Events above a threshold
     cannot be added yet." A numbered zone name is a field without parameters, so route C creates it. A zone column
-    that is on says that once off it cannot be placed again here yet, and so does its switch-off question. Display
+    that is on says how it comes back: "If you switch it off, Add under Variables puts it back." (its variable's switched-off row). Display
     only; the server decides as before. The group keeps its open state across a repaint.
   - "OptiMove cannot read this column yet." There is no extractor.
   - "These two athletes have no value here." The admin can choose *Other athletes*.

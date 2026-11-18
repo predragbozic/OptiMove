@@ -29,7 +29,9 @@ async function prepareBoard(world) {
   // The Rukovodilac, 2026-11-18: a zone or threshold column that is not on is listed only in "Not available yet".
   const used = new Set([...board.on, ...(board.preplaced || [])].map((o) => o.fieldId));
   const parked = board.columns.filter((c) => !c.placeable && c.reason === "field_has_parameters" && !used.has(c.fieldId)).length;
-  return { setup, fieldId: column.fieldId, variableId: made.body.variable.id, activationId: on.activationId, parked };
+  // A zone or threshold column that is on, to switch off through the screen (the one-way path) when none is parked.
+  const zoneOn = board.on.find((o) => board.columns.some((c) => c.fieldId === o.fieldId && c.reason === "field_has_parameters"));
+  return { setup, fieldId: column.fieldId, variableId: made.body.variable.id, activationId: on.activationId, parked, zoneOn };
 }
 
 async function openBoard(page) {
@@ -99,32 +101,35 @@ test("18-4a. (1280 px) a club admin drags a column onto a variable, ticks, saves
 test("18-4b. (390 px) the same flow by tapping: one bottom sheet at a time, no drag, no overflow", async () => {
   const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "board" } });
   try {
-    const { fieldId, variableId, activationId, parked } = await prepareBoard(world);
+    const { fieldId, variableId, activationId, parked: parkedAtStart, zoneOn } = await prepareBoard(world);
     const admin = await openAs(browser, world, "club_admin", WIDTHS.phone);
     try {
       const page = admin.page;
       await openBoard(page);
       // Zone and threshold columns that are not on: one closed group at the end, a 44 px summary, no Mappings pointer.
+      // In this world every zone or threshold column is on: no group is drawn, and such a column says how it comes back
+      // once switched off (the group itself is covered by the JSDOM tests Z2 / Z2c).
       const group = page.locator("details.mb-parked");
-      assert.ok(parked > 0, "the board world has a zone or threshold column that is not on");
-      assert.equal(await group.count(), 1, `${parked} column(s) not available yet`);
-      {
+      if (parkedAtStart === 0) {
+        assert.equal(await group.count(), 0, "nothing to park");
+        assert.ok(zoneOn, "the board world has a zone or threshold column");
+        assert.match(await page.locator(".mb-cols").innerText(), /If you switch it off, Add under Variables puts it back\./);
+      } else {
         const summary = group.locator("summary");
-        assert.equal((await summary.innerText()).trim(), `Zone sets and threshold events: not available yet (${parked})`);
+        assert.equal((await summary.innerText()).trim(), `Zone sets and threshold events: not available yet (${parkedAtStart})`);
         assert.ok((await summary.boundingBox()).height >= 44, "the summary is a 44 px target");
         assert.equal(await group.evaluate((d) => d.open), false, "closed by default");
         await summary.tap();
-        assert.match((await group.innerText()).replace(/\s+/g, " "), /These need a zone or threshold choice that OptiMove does not offer yet\. For a single zone, ask OptiMove support to add its numbered GPEXE field\./);
+        assert.match((await group.innerText()).replace(/\s+/g, " "), /OptiMove cannot yet choose which zone or threshold to use for these\./);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0, "no horizontal overflow with the group open");
         // The open state survives repaints through the real toggle event (the switch-off sheet opens and closes).
         await page.tap(`[data-action="metric-board-switch-off-open"][data-activation-id="${activationId}"]`);
         await page.waitForSelector(".mb-sheet");
         await page.tap('.mb-sheet [data-action="metric-board-switch-off-cancel"]');
         await page.waitForSelector(".mb-sheet", { state: "detached" });
-        assert.equal(await page.locator("details.mb-parked").evaluate((d) => d.open), true, "still open after the repaint");
-        await page.locator("details.mb-parked summary").tap();
+        assert.equal(await group.evaluate((d) => d.open), true, "still open after the repaint");
       }
-      assert.doesNotMatch(await page.locator("[data-mb-board]").innerText(), /Map zones and thresholds in Mappings/);
+      assert.doesNotMatch(await page.locator(".mb-cols").innerText(), /Map zones and thresholds in Mappings/);
       assert.equal(await page.locator("[data-mb-drag-field]").count(), 0, "nothing drags on a phone");
       assert.equal(await page.locator(".mb-tech").count(), 0, "a club admin is shown no technical details");
       // Switch off asks in the bottom sheet, in view, not somewhere up the page.

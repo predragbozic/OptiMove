@@ -134,7 +134,8 @@ function columnHtml(s, c, drag) {
     // S: on the platform board a column the club fills with its own variable is on, but that variable is not here.
     const onAsClubs = use === "on" && onPlatform() && (board.on || []).some((o) => o.fieldId === c.fieldId && o.badge === "club_mapping");
     const why = onAsClubs ? "On for the team as the club's own variable. To change it, switch to the club's variables."
-      : use === "on" ? (c.reason === "field_has_parameters" ? "Already on for the team. If you switch it off, it cannot be placed again here yet."
+      // A zone or threshold column cannot be placed by hand; once switched off, its variable's Add puts it back.
+      : use === "on" ? (c.reason === "field_has_parameters" ? "Already on for the team. If you switch it off, Add under Variables puts it back."
         : "Already on for the team. Switch it off under Variables to place it again.") : "Placed. Remove it under Variables to place it elsewhere.";
     const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}<small>${why}</small></span>`;
     return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;
@@ -425,10 +426,7 @@ function switchOffHtml(s) {
   const x = s.switchOff;
   if (!x) return "";
   const team = teamOf(s);
-  // A zone or threshold column cannot be placed again on this board once it is off (the UX review): say so here too.
-  const onRow = (s.board?.on || []).find((o) => o.activationId === x.activationId);
-  const oneWay = onRow && columnOf(s.board, onRow.fieldId)?.reason === "field_has_parameters" ? " It cannot be placed again here yet." : "";
-  const body = `<p id="mb-switch-off-title" tabindex="-1"><strong>Switch off ${name(x.label)} for ${name(teamName(s))}${team ? gpexeTeam(team.sourceTeamId) : ""}?</strong> Sessions found from then on are imported without it.${oneWay}</p>
+  const body = `<p id="mb-switch-off-title" tabindex="-1"><strong>Switch off ${name(x.label)} for ${name(teamName(s))}${team ? gpexeTeam(team.sourceTeamId) : ""}?</strong> Sessions found from then on are imported without it.</p>
     ${s.write?.kind === "switch-off" ? writeHtml(s) : ""}
     <div class="om-card__actions"><button type="button" class="om-btn om-btn--danger" data-action="metric-board-switch-off" ${s.write ? "disabled" : ""}>Switch off</button>
       <button type="button" class="om-btn om-btn--ghost" data-action="metric-board-switch-off-cancel" ${s.write ? "disabled" : ""}>Keep it on</button></div>`;

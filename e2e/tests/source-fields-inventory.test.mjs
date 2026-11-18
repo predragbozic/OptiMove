@@ -141,7 +141,7 @@ test("I3 the platform admin opens the team thresholds' fold; another club's admi
   try {
     await openSourceFields(other.page);
     assert.equal(await other.page.locator("[data-sf-inv-row]").count(), 0);
-    assert.match(await other.page.locator(".source-fields-inventory").innerText(), /No names yet/);
+    assert.match(await other.page.locator(".source-fields-inventory").innerText(), /Nothing yet\. Values appear after the next Find new sessions in Imports\./);
   } finally {
     await other.context.close();
   }
