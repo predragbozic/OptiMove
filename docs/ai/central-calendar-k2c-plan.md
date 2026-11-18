@@ -351,6 +351,10 @@ with no BLOCKER or HIGH. The manager ordered one fix round. As built:
 
 The section order is unchanged: the links, then *Edit* / *Cancel event*.
 
+**Known limit, accepted by the manager for K2c-1 (F5):** two same-named trainings of two different owners in the same
+slot and order on one event share one row of *Linked trainings*, and its *Unlink* sends the links of both. The proper
+fix, the plan owner on the manager view's `sessionLinks`, is a small backend follow-up and not part of K2c-1.
+
 **Tests after the round:** `central-calendar-links` 24/24; the other four calendar suites 33, 52, 5 and 41, all passing.
 28 mutations (the first round's 10 and 18 new), all killed. `--preset frontend-fast` failed in the same files with the
 same counts as a clean `origin/main` (`8288b38f`). The build passes and `git diff --check` is clean. Browser check
