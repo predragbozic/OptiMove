@@ -532,6 +532,8 @@ function boardOf(world, pairIndex) {
     // version's revision is the column's active one, its variable is active, current and not hidden.
     if (!col || !col.readable || v.parameter_kind !== "none" || col.field.revision_id !== v.revision_id) continue;
     if (!variable || variable.version_id !== v.target_version_id || variable.hidden) continue;
+    // A field without a condition never fills a variable with one (the review of 2026-11-18): never offered, never feeds.
+    if (variable.has_condition) continue;
     if (v.owner_key === "system") {
       if (!fedBySystem.has(v.variable_id)) fedBySystem.set(v.variable_id, []);
       fedBySystem.get(v.variable_id).push(v.field_id);
@@ -660,6 +662,7 @@ function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
     const v = world.versions.find((x) => x.owner_key === "system" && x.field_id === fieldId && x.variable_id === targetId && x.parameter_kind === "none"
       && x.revision_id === col.field.revision_id && x.target_version_id === variable.version_id);
     if (!v || !col.readable) return refuse("target_scope_mismatch");
+    if (variable.has_condition) return refuse("condition_mismatch");
     if (world.open.some((o) => o.mapping_version_id === v.id)) return refuse("activation_exists");
     const row = versionRow(world, pair, col, v);
     return { placement: { placeable: true, ...row, collisions: collisionsOf(world, { fieldId, variableId: targetId, levels: row.levels }) } };
@@ -731,6 +734,9 @@ function preplacedOf(world, shared, mappingVersionId) {
   if (!col || !variable) throw NOT_FOUND();
   if (world.sessionRefusal) throw world.sessionRefusal;
   if (!col.readable || v.parameter_kind !== "none") return { code: col.reason ?? "field_has_parameters", v };
+  // A field without a condition never fills a variable with one (the review of 2026-11-18), even through an existing
+  // version: the save never switches such a version on.
+  if (variable.has_condition) return { code: "condition_mismatch", v };
   if (col.field.revision_id !== v.revision_id) return { code: "revision_not_usable", v };
   if (variable.version_id !== v.target_version_id) return { code: "canonical_version_changed", v };
   if (variable.hidden) return { code: "variable_hidden", v };
