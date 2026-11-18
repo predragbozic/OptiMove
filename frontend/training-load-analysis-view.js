@@ -463,6 +463,21 @@ function renderKpiHtml(model) {
   `;
 }
 
+const uuidPattern = /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/i;
+function safeAthleteName(id) {
+  if (!id) return "";
+  const name = state.trainingLoad.orgPickerData?.athletes?.find(athlete => String(athlete.id).toLowerCase() === String(id).toLowerCase())?.name;
+  return name && !uuidPattern.test(name) ? name : "Athlete name unavailable";
+}
+function safeTableBucket(row) {
+  const bucket = row.identity.bucketKey;
+  if (uuidPattern.test(String(bucket))) return row.identity.athleteId === bucket ? "" : "Group";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(bucket ?? "")) return formatDate(bucket);
+  return typeof bucket === "string" && !/[{}\[\]]/.test(bucket) ? bucket : "";
+}
+function safeTableValue(value, model) {
+  return value !== null && typeof value === "object" || uuidPattern.test(String(value)) ? "Unavailable" : formatValue(value, model);
+}
 function renderTableHtml(model) {
   if (!model.series.length) return `<p class="muted">Add series to build a table.</p>`;
   return `
@@ -472,16 +487,17 @@ function renderTableHtml(model) {
         <thead><tr><th scope="col">Series</th><th scope="col">Bucket</th><th scope="col">Value</th><th scope="col">Unit</th><th scope="col">Status</th></tr></thead>
         <tbody>
           ${model.series.map((series) => {
-            const label = seriesLabel(series.definition);
+            const reportedLabel = seriesLabel(series.definition);
+            const label = uuidPattern.test(reportedLabel) ? "Metric" : reportedLabel;
             if (series.status !== "ready") return `<tr><td>${escapeHtml(label)}</td><td colspan="4">${renderDisplayStatusHtml(series.status, series.reasons)}</td></tr>`;
             const rows = series.current;
             if (!rows.length) return `<tr><td>${escapeHtml(label)}</td><td colspan="4" class="muted">No data</td></tr>`;
             return rows.map((row) => `
               <tr>
                 <td>${escapeHtml(label)}</td>
-                <td>${escapeHtml([row.identity.bucketKey, displayRowContext(row)].filter(Boolean).join(" · "))}</td>
-                <td>${row.status === "value" ? escapeHtml(formatValue(row.value, model)) : "-"}</td>
-                <td>${escapeHtml(row.identity.unit || "")}</td>
+                <td>${escapeHtml([safeTableBucket(row), safeAthleteName(row.identity.athleteId)].filter(Boolean).join(" · "))}</td>
+                <td>${row.status === "value" ? escapeHtml(safeTableValue(row.value, model)) : "-"}</td>
+                <td>${escapeHtml(uuidPattern.test(String(row.identity.unit)) ? "" : row.identity.unit || "")}</td>
                 <td>${row.status === "value" ? "" : escapeHtml(displayStatusLabel(row.status, row.reasons))}</td>
               </tr>
             `).join("");
@@ -496,7 +512,7 @@ function renderChartHtml(model) {
   if (!model.series.length) return `<p class="muted">Add a series to draw the chart.</p>`;
   const diagnostics = model.series.flatMap(series => series.current.filter(row => row.chartStatus !== "value").map(row => renderDisplayStatusHtml(row.chartStatus, row.reasons)));
   return `
-    ${renderDashboardChartPlots(model, seriesLabel, displayRowContext)}
+    ${renderDashboardChartPlots(model, seriesLabel, row => safeAthleteName(row.identity.athleteId))}
     ${diagnostics.join("")}
     <details class="tl-analysis-chart-values" open>
       <summary>Values and status</summary>
@@ -512,7 +528,7 @@ function renderWidgetBodyHtml(widget, results) {
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
-  if (model.status === "error") return analysis.simpleWorkspaceRequired ? "" : renderDisplayStatusHtml("error", model.reasons);
+  if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
   if (widget.widget_type === "kpi") return renderKpiHtml(model);
   if (widget.widget_type === "table") {
     if (model.series.length === 1 && model.series[0].status === "ready" && ["day", "athlete"].includes(model.groupBy)) {
