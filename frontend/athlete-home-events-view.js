@@ -2,9 +2,9 @@
 // strings over state.athleteHomeEvents (athlete-home-events-data.js). A row shows the event's title, its type word, its
 // day(s) and time, and its place with *Open in maps* (the K2b-1d panel's place, reused); a cancelled event is marked and
 // shows no place. Nothing here talks to the server.
-import { ATHLETE_HOME_EVENTS_DAYS, ATHLETE_HOME_EVENTS_LIMIT } from "./athlete-home-events-data.js";
+import { ATHLETE_HOME_EVENTS_DAYS, ATHLETE_HOME_EVENTS_LIMIT, athleteHomeEventsNow, athleteHomeVisibleEventRows } from "./athlete-home-events-data.js";
 import { renderCentralCalendarEventPlaceHtml } from "./central-calendar-event-details.js";
-import { CENTRAL_CALENDAR_EVENT_KIND_LABELS, centralCalendarItemIconKey } from "./central-calendar-view.js";
+import { CENTRAL_CALENDAR_EVENT_KIND_LABELS, centralCalendarItemColorIndex, centralCalendarItemIconKey } from "./central-calendar-view.js";
 import { renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml } from "./utils.js";
 
@@ -45,8 +45,11 @@ function rowHtml(row, today) {
   const title = row.title || word;
   // The day first (what she scans the list for), then the type word - only when the title is not that word already.
   const meta = [athleteHomeEventWhen(row, today), title !== word ? word : ""].filter(Boolean).join(" · ");
-  // The kind's icon: her card names no type (K2b-1d2 brings the type's own icon to every card).
-  const icon = renderIconSvg(centralCalendarItemIconKey({ kind: "event", eventKind: row.eventKind }), { size: 20, className: "athlete-home-event-icon" });
+  // K2b-1d3: the type's icon tinted with its colour, as on the calendar card; else the kind's icon, untinted.
+  const look = { kind: "event", eventKind: row.eventKind, eventTypeIconKey: row.eventTypeIconKey, eventTypeColorKey: row.eventTypeColorKey };
+  const colorIndex = centralCalendarItemColorIndex(look);
+  const svg = renderIconSvg(centralCalendarItemIconKey(look), { size: 20, className: colorIndex < 0 ? "athlete-home-event-icon" : "athlete-home-event-icon has-type-color" });
+  const icon = colorIndex < 0 ? svg : `<span class="cc-type-tint" style="--cc-type-color: var(--cc-team-${colorIndex})">${svg}</span>`;
   // Cancelled (22.7 Q1): the mark right under the title, read before the time; no place.
   const status = row.cancelled
     ? `<p class="athlete-home-event-status"><span class="cc-badge cc-badge-cancelled athlete-home-event-cancelled"><span aria-hidden="true">✕</span> Cancelled</span></p>`
@@ -69,7 +72,8 @@ function bodyHtml(slice) {
       ${slice.canRetry ? `<button type="button" class="plain-button compact-button athlete-home-events-button" data-action="athlete-home-events-retry">Try again</button>` : ""}`;
   }
   if (slice.status !== "ready") return `<p class="muted athlete-home-events-state" role="status">Loading events…</p>`;
-  const rows = slice.rows || [];
+  // K2b-1d3: an event that has ended is left out (filtered at every paint and at the minute's tick).
+  const rows = athleteHomeVisibleEventRows(slice.rows, athleteHomeEventsNow());
   if (!rows.length) return `<div class="empty-state athlete-home-events-state">No events in the next ${ATHLETE_HOME_EVENTS_DAYS} days.</div>`;
   const shown = slice.expanded ? rows : rows.slice(0, ATHLETE_HOME_EVENTS_LIMIT);
   const more = rows.length - ATHLETE_HOME_EVENTS_LIMIT;

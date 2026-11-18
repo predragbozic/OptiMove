@@ -20,7 +20,12 @@ export const ATHLETE_HOME_EVENTS_DAYS = 14;
 // The rows shown before *Show N more* (the manager's Q5).
 export const ATHLETE_HOME_EVENTS_LIMIT = 5;
 // The keys of a row: the pick, and nothing else.
-export const ATHLETE_HOME_EVENT_ROW_KEYS = Object.freeze(["eventId", "title", "eventKind", "eventTypeLabel", "day", "from", "to", "startTime", "endTime", "place", "cancelled"]);
+// K2b-1d3 (plan 24.2): the type's icon and colour, and the event's own time zone (when its end has passed).
+export const ATHLETE_HOME_EVENT_ROW_KEYS = Object.freeze([
+  "eventId", "title", "eventKind", "eventTypeLabel", "eventTypeIconKey", "eventTypeColorKey", "day", "from", "to", "startTime", "endTime", "timezone", "place", "cancelled",
+]);
+// The list is filtered again on this tick while Home is open (no request).
+export const ATHLETE_HOME_EVENTS_TICK_MS = 60_000;
 
 const g = () => state.athleteHomeEvents;
 let generation = 0;
@@ -74,11 +79,14 @@ export function athleteHomeEventRows(answer) {
         title: text(item.title),
         eventKind: text(item.eventKind),
         eventTypeLabel: text(item.eventTypeLabel),
+        eventTypeIconKey: text(item.eventTypeIconKey),
+        eventTypeColorKey: text(item.eventTypeColorKey),
         day: date,
         from,
         to: to < from ? from : to,
         startTime: text(item.startTime),
         endTime: text(item.endTime),
+        timezone: text(item.timezone),
         place: pickPlace(item.place, item.location),
         cancelled: item.cancelled === true,
       });
@@ -93,10 +101,97 @@ export function athleteHomeEventRows(answer) {
   });
 }
 
+// --- K2b-1d3 (plan 24.2): an ended event leaves the list ---------------------------------------------------------------
+
+// The event's zone when the device's Intl knows it, else null (the device's own zone is used then).
+export function athleteHomeEventZone(timeZone) {
+  if (typeof timeZone !== "string" || !timeZone) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+// How far the zone's wall clock is ahead of UTC at the instant `ms`.
+function zoneOffsetMs(timeZone, ms) {
+  const parts = {};
+  for (const part of new Intl.DateTimeFormat("en-US", {
+    timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(ms))) parts[part.type] = part.value;
+  const wall = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  return wall - (ms - (((ms % 1000) + 1000) % 1000));
+}
+
+// The instant of a wall-clock time on a day in a zone (null: the device's zone).
+export function athleteHomeWallTimeInstant(day, time, timeZone) {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || "");
+  const t = /^(\d{2}):(\d{2})/.exec(time || "");
+  if (!d || !t) return null;
+  const [y, mo, da, h, mi] = [Number(d[1]), Number(d[2]), Number(d[3]), Number(t[1]), Number(t[2])];
+  const zone = athleteHomeEventZone(timeZone);
+  if (!zone) return new Date(y, mo - 1, da, h, mi).getTime();
+  const wall = Date.UTC(y, mo - 1, da, h, mi);
+  let instant = wall - zoneOffsetMs(zone, wall);
+  // Once more at the instant found: the offset may differ there (a change of summer time between the two).
+  const again = zoneOffsetMs(zone, instant);
+  if (wall - again !== instant) instant = wall - again;
+  return instant;
+}
+
+// Whether the event has ended at `now` (ms): with an end time, at its last day's end time in the event's own zone (at
+// that very minute it is gone); without one, once its last day is over by the device's date.
+export function athleteHomeEventEnded(row, now = Date.now()) {
+  const end = row?.endTime ? athleteHomeWallTimeInstant(row.to || row.from, row.endTime, row.timezone) : null;
+  if (end !== null) return now >= end;
+  return String(row?.to || row?.from || "") < localDateIso(new Date(now));
+}
+
+// The rows still to come at `now`.
+export function athleteHomeVisibleEventRows(rows, now = Date.now()) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => !athleteHomeEventEnded(row, now));
+}
+
+// The clock (tests set it).
+let clock = () => Date.now();
+export function setAthleteHomeEventsClock(fn) {
+  clock = typeof fn === "function" ? fn : () => Date.now();
+}
+export const athleteHomeEventsNow = () => clock();
+
+// The minute's tick: while Home is open, the list is drawn again when an event has ended since the last tick. Nothing
+// is read. It stops by itself once Home is left (the next entry into Home starts it again).
+let tickTimer = null;
+let tickSignature = "";
+const signatureOf = () => (g()?.status === "ready" ? athleteHomeVisibleEventRows(g().rows, clock()).map((row) => row.eventId).join(",") : "");
+export function stopAthleteHomeEventsTick() {
+  if (tickTimer !== null) globalThis.clearInterval(tickTimer);
+  tickTimer = null;
+}
+export function startAthleteHomeEventsTick({ render } = {}) {
+  stopAthleteHomeEventsTick();
+  tickSignature = signatureOf();
+  tickTimer = globalThis.setInterval(() => athleteHomeEventsTick({ render }), ATHLETE_HOME_EVENTS_TICK_MS);
+  tickTimer?.unref?.();
+}
+export function athleteHomeEventsTick({ render } = {}) {
+  if (state.activeTab !== "athlete-home") {
+    stopAthleteHomeEventsTick();
+    return false;
+  }
+  const next = signatureOf();
+  if (next === tickSignature) return false;
+  tickSignature = next;
+  render?.();
+  return true;
+}
+
 // A workspace switch (app.js onWorkspaceChanged): nothing of the old workspace's list stays, and an answer on its way
 // is dropped.
 export function resetAthleteHomeEvents() {
   generation += 1;
+  stopAthleteHomeEventsTick();
   invalidateCacheNamespace(ATHLETE_HOME_EVENTS_NAMESPACE);
   state.athleteHomeEvents = emptyAthleteHomeEventsState();
 }
@@ -126,6 +221,7 @@ export async function loadAthleteHomeEvents({ render, forceRefresh = false, toda
       if (!current()) return;
       Object.assign(g(), { status: "ready", rows: athleteHomeEventRows(data), today, contextKey, error: "", canRetry: true });
       render?.();
+      startAthleteHomeEventsTick({ render });
     },
     applyError: (error) => {
       if (!current()) return;

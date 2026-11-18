@@ -137,29 +137,28 @@ export function centralCalendarChipCounts(byDate, days) {
   return { teams, kinds, eventKinds, total };
 }
 
-// The workspace's event types by id (the catalog the calendar holds, set on
-// every render): a manager's event card carries its `eventTypeId`, and shows
-// that type's icon and colour (K2b-1d, Q1 (a)). A reader's card names no type
-// and keeps its kind's icon (K2b-1d2 adds the icon to every card).
-let cardTypes = new Map();
-
-export function centralCalendarCardType(item, types = cardTypes) {
-  if (item?.kind !== "event" || item.canManage !== true || !item.eventTypeId) return null;
-  return types.get(String(item.eventTypeId)) || null;
-}
-
-export function centralCalendarItemIconKey(item, types = cardTypes) {
+// K2b-1d3 (plan 24.1): every event card - a manager's, a reader's and the
+// athlete's - carries its type's look (K2b-1d2: `eventTypeIconKey` /
+// `eventTypeColorKey`, null when the type is not shown under D41), so the
+// cards read no catalog. A key outside the icon library falls back to the
+// kind's icon; a colour outside the palette gives no tint.
+export function centralCalendarItemIconKey(item) {
   if (item?.kind === "event") {
-    const type = centralCalendarCardType(item, types);
-    if (type && isLibraryKey(type.iconKey)) return type.iconKey;
+    if (isLibraryKey(item.eventTypeIconKey)) return item.eventTypeIconKey;
     return CENTRAL_CALENDAR_EVENT_KIND_ICONS[item.eventKind] || CENTRAL_CALENDAR_KIND_ICONS.event;
   }
   return CENTRAL_CALENDAR_KIND_ICONS[item?.kind] || CENTRAL_CALENDAR_KIND_ICONS.event;
 }
 
+// The type's palette index for an event card, -1 for none.
+export function centralCalendarItemColorIndex(item) {
+  if (item?.kind !== "event") return -1;
+  return calendarColorIndex(item.eventTypeColorKey);
+}
+
 // The type's colour on its icon (the stripe stays the team's colour).
 function typeColorStyle(item) {
-  const index = calendarColorIndex(centralCalendarCardType(item)?.colorKey);
+  const index = centralCalendarItemColorIndex(item);
   return index < 0 ? null : `--cc-type-color: var(--cc-team-${index})`;
 }
 
@@ -955,7 +954,6 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   // The panel column exists only while the open item is really in the answer,
   // or while the event form is open.
   const panelOpen = Boolean(cal.form) || Boolean(panelItemOf(cal));
-  cardTypes = new Map((cal.eventTypes || []).map((type) => [String(type.id), type]));
   // K2b-1d2 (the manager's Q1): the form never takes the platform's teams - they are every club's; the platform's
   // support edit keeps the event's own targets read-only, and the platform creates no event.
   const formTeams = cal.data?.workspace?.type === "platform" ? [] : teams;

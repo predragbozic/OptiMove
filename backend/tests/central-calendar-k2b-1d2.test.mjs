@@ -80,7 +80,9 @@ test("1a. a club's type: its icon and colour on the manager's, the reader's and 
   const [athleteCard] = cardsOf(athleteRes, id);
   assert.ok(athleteCard, "the athlete of the team reads it");
   assert.deepEqual(keysOf(athleteCard), [type.iconKey, "green"]);
-  assert.deepEqual(Object.keys(athleteCard).sort(), ["cancelled", "date", "endTime", "eventKind", "eventTypeColorKey", "eventTypeIconKey", "eventTypeLabel", "key", "kind", "links", "location", "place", "span", "startTime", "status", "teamIds", "title"], "the athlete's allowlist, key by key");
+  // K2b-1d3: the event's own time zone on every viewer's card.
+  assert.deepEqual([managerCard.timezone, readerCard.timezone, athleteCard.timezone], [TZ, TZ, TZ], "the event's zone on every card");
+  assert.deepEqual(Object.keys(athleteCard).sort(), ["cancelled", "date", "endTime", "eventKind", "eventTypeColorKey", "eventTypeIconKey", "eventTypeLabel", "key", "kind", "links", "location", "place", "span", "startTime", "status", "teamIds", "timezone", "title"], "the athlete's allowlist, key by key");
   assert.equal(athleteRes.text.includes(String(clubs.c1)), false, "no club id reaches the athlete");
 });
 

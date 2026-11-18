@@ -2326,3 +2326,50 @@ write nothing about a person here."
 GO for K2b-1d3 as 24.1–24.4 plan it. The rule of 24.2 is the one agreed with the OptiMove manager. No migration; no file
 of the mapping and import track (`sourceMetric*`, `sourceField*`, `gpexe*`, Imports, Source fields, the mapping board)
 is touched.
+
+### 24.6 As built (2026-11-18)
+
+- **24.1, the cards.** `centralCalendarItemIconKey` takes `item.eventTypeIconKey` when `isLibraryKey`, else the kind's
+  icon, else the event icon; the new `centralCalendarItemColorIndex` gives the palette index of `item.eventTypeColorKey`
+  (event cards only, -1 outside the palette), and `typeColorStyle` uses it — the same for a manager's, a reader's and the
+  athlete's card, in every view and the panel. `centralCalendarCardType`, the `cardTypes` map and
+  `centralCalendarNeedsCatalog` with its catalog read after a range is applied are removed
+  (`frontend/central-calendar-view.js`, `central-calendar-data.js`); the form's `ensureEventTypes` is unchanged.
+- **24.2, *Upcoming events*.** `frontend/athlete-home-events-data.js`: the pick gains `eventTypeIconKey`,
+  `eventTypeColorKey` and `timezone` (the zone is kept on the row: the filter needs it; nothing else of the card is
+  added). `athleteHomeEventEnded(row, now)`: with an end time, `now >=` the instant of `span.to` at `endTime` in the
+  event's zone (`athleteHomeWallTimeInstant`, two offset passes so a summer-time change between the wall time and its
+  instant is right); an unknown or missing zone uses the device's; without an end time, gone once `span.to` is before
+  the device's date. The view filters at every paint (`athleteHomeVisibleEventRows`, also behind *Show N more*); a
+  one-minute tick (`startAthleteHomeEventsTick`, started when an answer is applied, stopped by a reset and by itself once
+  Home is left) paints only when the set of rows still to come changed, with no request. The row's icon is the type's,
+  tinted (`.cc-type-tint`, `has-type-color`; the palette tokens now also on `.athlete-home-events`), else the kind's,
+  untinted; a cancelled row's icon stays muted. **Backend:** `readEventRows` selects `e.timezone`, and `publicCard`
+  puts `timezone` on every event card, the athlete's branch included (`backend/src/calendarQuery.js`).
+- **24.3.** The Places form's note hint is the sentence of 24.3 (`frontend/calendar-settings-view.js`).
+- **Tests** (this run, Node 22, PostgreSQL 16):
+  - `node scripts/test-runner.mjs --project backend --kind disposable --filter central-calendar`: 7 files, 134/134
+    (the athlete's allowlist gains `timezone` key by key in `-k2a-events`, `-k2b-event-details`, `-k2b-1d2`; the
+    zone asserted on the manager's, the reader's and the athlete's card in `-k2b-1d2` 1a and on the athlete's in
+    `-k2a-events`).
+  - Frontend: `central-calendar-event-details.actions` D18 / D18b / D18c / D19 rewritten for the card's own look (a
+    manager's, a reader's and the athlete's card, the panel, `null` and foreign keys, no catalog read for the cards, one
+    when the form opens); `central-calendar-events.actions` 4b no longer expects a catalog read;
+    `athlete-home-events.actions` E13–E18 (icon and tint; the end exactly now and a minute before; across midnight; a
+    multi-day event's last day; no end time; cancelled; the event's zone both ways, a summer-time day, an invalid
+    zone; the drawn list and *Show N more*; the tick), with the clock pinned for the older tests.
+  - `--preset frontend-fast`: head 257 files, 3557/3578, failing only `exercise-editor-thumbnail` (11/4),
+    `exercise-media-thumbnail` (2/8), `training-load.actions` (115/2) — the same files and counts as a clean
+    `origin/main` (`946914f`, 256 files, 3543/3564). `--preset backend-fast`: 676 tests, 591 passed, failing only
+    `gpexe-client` (17/2) and `gpexe-rest-v1-adapter-reads` (14/83), identical on `main`. Build green;
+    `git diff --check` clean.
+  - Mutations, each killed: the library-key check, the palette guard, colour on a non-event card, `>=` → `>`, the
+    event's zone ignored, the first day instead of the last, the fallback in UTC instead of the device, no-end-time
+    events never leaving, the pick dropping the icon key, the pick dropping the zone, the view not filtering, the tick
+    painting every minute, the tick running off Home, the second offset pass removed; backend: `timezone` off the
+    athlete's card (3 suites fail).
+- **Browser** (`npm run e2e:demo`, invented data, Chromium at 360 / 375 / 390 / 1280 px): the manager's and the reader's
+  cards and panel wear the type's colour (an untyped colour's card untinted), the athlete's list leaves out an event
+  that ended in Belgrade and one that ended in Tokyo, the cancelled row stays muted; no horizontal scroll, no target
+  under 44 px; no JS error (one pre-existing 403 of `POST /api/tests/athlete/timezone` for a coach). No catalog read
+  before the form; one when it opens. The tick (clock moved four hours on) dropped the ended match with no request.
