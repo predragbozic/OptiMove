@@ -1652,31 +1652,61 @@ GO for K2b-1d2 as section 23 plans it.
 **The reviews:**
 - `security-reviewer`: READY WITH NON-BLOCKING NOTES. No BLOCKER, CRITICAL or HIGH; one MEDIUM (the cost, unmeasured);
   four LOW.
-- `code-reviewer`: **BLOCKED** by its contract, since no database suite ran. On the code: no BLOCKER or HIGH; two MEDIUM
-  and two LOW in the tests and the script.
+- `code-reviewer`, first round (on `60c7697f`): **BLOCKED** by its contract, since no database suite had run. On the
+  code: no BLOCKER or HIGH; two MEDIUM and two LOW in the tests and the script.
+- `code-reviewer`, narrow round (on `b7d81acd`, with the manager's database results below): **READY WITH NON-BLOCKING
+  NOTES**.
+  - All four first-round findings are closed.
+  - The database results prove A1–A5: A1–A3 by tests 1a–1d and BM1–BM4; A4 by 2a, 2b and 2b2 and BM5–BM11; A5 by test
+    2d's statement count.
+  - A6 and A7 rest on the frontend evidence; no frontend file changed.
+  - Its one LOW was this record, out of date in that head ("not run", "10 tests"); it is corrected here.
 
 | Finding | Reviewer, severity | Correction | Test | Status |
 |---|---|---|---|---|
-| Q4's cost is unmeasured | security — MEDIUM | the script is written; it needs a database | the Q4 run, before and after | **Open: needs the database** |
-| Test 2a's order check cannot tell "club first" from "team first" (the fixture's names sort the same both ways) | code — MEDIUM | a club "Aaa…" with a team "Zz…" and a club "Bbb…" with a team "Aa…": Zz comes first | 2a (BM8) | Fixed, not run |
-| The platform's `colorKey` (Q3) was never set, so it was compared as null with null | code — MEDIUM | T1's colour set to "rust" through `PUT /settings/teams/:id`; the platform reads "rust" | 2a (BM11) | Fixed, not run |
-| Test 1b never set a colour before "taking it away" | code — LOW | "amber" set, read, then `null`, read again | 1b | Fixed, not run |
-| The script could measure without planned cards | code — LOW | it fails when no planned card, or fewer event cards than events, reach the read | — | Fixed, not run |
-| No test of a revoked platform role | security — LOW | the next answer is no longer the platform's and names no club | 2b2 | Fixed, not run |
+| Q4's cost is unmeasured | security — MEDIUM | measured by the manager: 1.17×, 0.79 s, under the bound; no rewrite | the Q4 run, before and after | Measured |
+| Test 2a's order check cannot tell "club first" from "team first" (the fixture's names sort the same both ways) | code — MEDIUM | a club "Aaa…" with a team "Zz…" and a club "Bbb…" with a team "Aa…": Zz comes first | 2a (BM8) | Fixed; 2a passes, BM8 killed |
+| The platform's `colorKey` (Q3) was never set, so it was compared as null with null | code — MEDIUM | T1's colour set to "rust" through `PUT /settings/teams/:id`; the platform reads "rust" | 2a (BM11) | Fixed; 2a passes, BM11 killed |
+| Test 1b never set a colour before "taking it away" | code — LOW | "amber" set, read, then `null`, read again | 1b | Fixed; 1b passes |
+| The script could measure without planned cards | code — LOW | it fails when no planned card, or fewer event cards than events, reach the read | — | Fixed; the Q4 run passed it |
+| No test of a revoked platform role | security — LOW | the next answer is no longer the platform's and names no club | 2b2 | Fixed; 2b2 passes |
 | `reducedViewOf` relies on the platform admin never being a reader | security — LOW/NIT | a comment that says so | — | Fixed |
 | A reader's card on a moved team's event is not checked (only a manager's) | security — LOW | not added: the same SQL case as the manager's card, and a moved team's event has no reader of the old club in the fixture | — | Recorded |
 | The form's platform guard is the frontend's only | security — LOW/NIT | the server already refuses another club's team on a write | — | Accepted |
 
-**The database:**
-- The owner allowed reading `DATABASE_URL` for disposable databases (relayed by the manager, 2026-11-18). This session's
-  permission check still refused the read, and it is not worked around.
-- **Not run:** the backend suites `central-calendar-k2b-1d2` (now 10 tests), `-k2a-events`, `-k2b-event-details`, `-k1a`,
-  `-k2a-1b` and `-k2b-settings`; the 11 backend mutations (dry-checked: each applies exactly once); the Q4
-  measurement.
+**The database checks, run by the calendar manager** (the *Rukovodilac*) in this session's worktree on head `b7d81acd`
+(this session's permission check refused the `DATABASE_URL` read, although the owner allowed it; the tree stayed clean
+and the head the same):
+- **The backend suites** (`node scripts/test-runner.mjs --project backend --kind disposable` with six `--file`): 131/131,
+  cleanup audit clean:
 
-**Run:**
-- `backend-fast`: 674 of 676. The same two files fail with the same counts on a clean `main`: `gpexe-rest-v1-adapter-reads`,
-  and `legacy-schema-generator`, whose failing test is about CRLF input.
+  | Suite | Result |
+  |---|---|
+  | `central-calendar-k1a` | 28/0 |
+  | `central-calendar-k2a-1b` | 23/0 |
+  | `central-calendar-k2a-events` | 31/0 |
+  | `central-calendar-k2b-1d2` | 9/0 (the suite has nine tests: 1a–1d, 2a, 2b, 2b2, 2c, 2d) |
+  | `central-calendar-k2b-event-details` | 11/0 |
+  | `central-calendar-k2b-settings` | 29/0 |
+
+  `k2b-settings` at 29/0 also confirms that 1a / 1b are fixed on `main` (22.7, Q6).
+- **The backend mutations:** BM1–BM11 (`K2b-1d2-backend-mutations.mjs`), 11 of 11 killed.
+- **Q4** (`backend/scripts/calendar-platform-read-cost.mjs --runs 7`; 3 clubs × 10 teams, 300 athletes, 3900 sessions,
+  240 events, 630 cards, 1–30 Nov):
+
+  | | Median | Range | Teams in the answer |
+  |---|---|---|---|
+  | after, `b7d81acd` | 790 ms | 769–854 | 30 |
+  | before, `94aab138` (a clean detached tree) | 674 ms | 662–741 | 0 |
+
+  The ratio is 1.17× and the read takes 0.79 s, under the bound (1.5× / 1 s). So the `athleteTeamIdsSql` rewrite is
+  **not** part of this step; the numbers are recorded here.
+
+**Run in this session:**
+- `backend-fast` (on `60c7697f`): 674 of 676. The same two files fail with the same counts on a clean `main`:
+  `gpexe-rest-v1-adapter-reads`, and `legacy-schema-generator`, whose failing test is about CRLF input.
+- `backend-fast` on `b7d81acd`: 673 of 676, the same two plus `gpexe-client` 18/1 once. That is a timing test ("a GPEXE
+  that never answers is stopped at the time limit"); it then passed 19/0 three times alone.
 - The new frontend suite: 4/4. The calendar frontend suites: 158/158.
 - Frontend mutations: 6/6 killed.
 - The Frontend PR gate on `60c7697f`: no new failure, the same 19 files with the same counts as a clean `main`. No
