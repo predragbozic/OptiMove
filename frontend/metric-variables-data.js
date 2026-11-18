@@ -257,6 +257,7 @@ const READINESS_TEXT = {
   canonical_not_numeric: "Not numeric, so no mapping can use it.",
   canonical_unit_missing: "It has no unit, so no mapping can use it.",
   canonical_unit_not_a_token: "Its unit is not a unit token, so no mapping can use it.",
+  canonical_calculated: "Calculated by OptiMove from other variables, so no mapping can use it.",
 };
 export function readinessText(target) {
   if (!target) return "";

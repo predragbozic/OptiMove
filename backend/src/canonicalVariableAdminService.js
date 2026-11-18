@@ -73,6 +73,8 @@ const ONE_SIDED = new Set([">=", ">", "<=", "<"]);
 // v34's guard on metric_definitions (decision 9), exactly: a new version of a
 // variable whose current version an active mapping version pins.
 const PIN_GUARD = "metric_definitions: an active mapping version pins the current version; disable it first";
+// v77's version guard, exactly: a new version of an input of a calculated variable that changes its unit or type.
+const CALCULATION_INPUT_GUARD = "metric_definition_versions: a calculated variable uses this variable; its unit and type stay as they are";
 const KEY_CONSTRAINT = "metric_definitions_owner_scope_owner_user_id_owner_club_id__key";
 const RETRY_CONSTRAINTS = new Set(["metric_variable_requests_one_per_key", "metric_definition_versions_metric_definition_id_version_num_key"]);
 
@@ -103,6 +105,13 @@ const TEXT = {
   hide_not_system: "Only an OptiMove variable can be hidden; the club archives its own variables.",
   variable_in_use: "The club's teams still use this variable; switch it off for them first.",
   label_required: "The OptiMove variable's name cannot be used here. Send a label: one line of 1-80 visible characters without surrounding spaces.",
+  // v77 (J21): calculated variables.
+  calculation_input_unavailable: "An input is not an active variable of this workspace or an OptiMove variable.",
+  calculation_input_calculated: "An input is calculated itself; a calculation adds up ordinary variables only.",
+  calculation_unit_mismatch: "Every input must have the calculated variable's unit.",
+  calculation_level_mismatch: "Every input must have every level of the calculated variable.",
+  calculation_kind_fixed: "A variable is calculated from its first version or never.",
+  variable_used_by_calculation: "A calculated variable adds up this variable; its unit stays as it is.",
 };
 // A rename's precondition: the server's SHA-256 of the stored label, short
 // label, description and state (hex).
@@ -227,6 +236,65 @@ function semanticsInput(body) {
   const condition = conditionInput(body.condition);
   return { unit, valueType: "numeric", dailyAggregationMethod, minValue, maxValue, condition };
 }
+// v77 (J21): a calculation - the sum of 2-10 other variables, named by id, in
+// the order the admin chose (it is how the formula reads). Null for none. A
+// calculated version has no bounds and no condition (a sum outside a bound
+// would refuse an import).
+export const CALCULATION_INPUTS = Object.freeze({ min: 2, max: 10 });
+function calculationInput(raw, semantics) {
+  if (raw === undefined || raw === null) return null;
+  const shape = "calculation is { kind: \"sum\", inputs: [2-10 distinct variable ids] }.";
+  if (typeof raw !== "object" || Array.isArray(raw)) throw invalidBody(shape);
+  const keys = Object.keys(raw).sort().join(",");
+  if (keys !== "inputs,kind" || raw.kind !== "sum" || !Array.isArray(raw.inputs)) throw invalidBody(shape);
+  if (raw.inputs.length < CALCULATION_INPUTS.min || raw.inputs.length > CALCULATION_INPUTS.max) throw invalidBody(shape);
+  const inputs = raw.inputs.map((id) => {
+    if (typeof id !== "string" || !UUID.test(id)) throw invalidBody(shape);
+    return id.toLowerCase();
+  });
+  if (new Set(inputs).size !== inputs.length) throw invalidBody(shape);
+  if (semantics.minValue !== null || semantics.maxValue !== null || semantics.condition !== null) {
+    throw invalidBody("A calculated variable has no minValue, maxValue or condition.");
+  }
+  return { kind: "sum", inputs };
+}
+const calculationParam = (calculation) => (calculation === null ? null : JSON.stringify(calculation));
+// The inputs of a calculation, locked FOR SHARE in id order (the version
+// guard's order), each checked: readable by this owner (its own or a system
+// variable), active, not calculated, numeric, with the unit and every level.
+// An input this owner cannot read reads exactly like a missing one.
+// Whether a calculated variable's current version adds up this variable.
+async function usedByCalculation(client, definitionId) {
+  return (await client.query(
+    `select 1 from training_load.metric_definitions cd
+       join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
+      where cv.calculation is not null and $1::uuid = any (training_load.metric_calculation_inputs(cv.calculation)) limit 1`,
+    [definitionId],
+  )).rowCount > 0;
+}
+async function checkCalculationInputs(client, ctx, calculation, { unit, levels }) {
+  const params = [calculation.inputs];
+  const readable = readableSql(ctx, params);
+  const rows = (await client.query(
+    `select d.id::text as id, d.state, v.value_type, v.unit, (v.calculation is not null) as calculated,
+            (select array_agg(c.scope_level::text) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
+       from training_load.metric_definitions d
+       join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+      where d.id = any ($1::uuid[]) and ${readable}
+      order by d.id
+      for share of d`,
+    params,
+  )).rows;
+  if (rows.length !== calculation.inputs.length || rows.some((r) => r.state !== "active")) {
+    throw refusal(409, "calculation_input_unavailable", TEXT.calculation_input_unavailable);
+  }
+  if (rows.some((r) => r.calculated)) throw refusal(409, "calculation_input_calculated", TEXT.calculation_input_calculated);
+  if (rows.some((r) => r.value_type !== "numeric" || r.unit !== unit)) throw refusal(409, "calculation_unit_mismatch", TEXT.calculation_unit_mismatch);
+  if (rows.some((r) => levels.some((level) => !(r.scopes ?? []).includes(LEVELS[level])))) {
+    throw refusal(409, "calculation_level_mismatch", TEXT.calculation_level_mismatch);
+  }
+}
+
 // One deterministic text of a version's semantics (C83: no JSON key order is
 // relied on - every value is placed by code, in a fixed order).
 function semanticsKey(s) {
@@ -234,15 +302,22 @@ function semanticsKey(s) {
   const conditionPart = c === null ? null
     : c.kind === "unsupported" ? ["unsupported"]
       : [c.kind, c.operator, c.lower ?? c.value ?? null, c.upper ?? null, c.durationSeconds ?? null, c.unit];
-  return JSON.stringify([s.unit, s.valueType, s.dailyAggregationMethod, s.minValue, s.maxValue, conditionPart]);
+  const calculationPart = s.calculation ? [s.calculation.kind, ...s.calculation.inputs] : null;
+  return JSON.stringify([s.unit, s.valueType, s.dailyAggregationMethod, s.minValue, s.maxValue, conditionPart, calculationPart]);
 }
 
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
+// v77 (J21): a version's calculation with its inputs' keys and names, in the
+// formula's order (the ids alone in calculation_ids, for semanticsKey).
+const CALCULATION_COLUMNS = `(case when v.calculation is null then null else
+    (select jsonb_agg(jsonb_build_object('id', i.id, 'key', di.key, 'label', di.label) order by i.ord)
+       from unnest(training_load.metric_calculation_inputs(v.calculation)) with ordinality as i(id, ord)
+       left join training_load.metric_definitions di on di.id = i.id) end) as calculation_inputs`;
 const VARIABLE_COLUMNS = `d.id, d.key, d.label, d.short_label, d.description, d.icon_url, d.owner_scope, d.owner_club_id, d.state, d.created_at, d.updated_at,
   ${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text, trim_scale(v.max_value)::text as max_text,
-  v.created_at as version_created_at,
+  v.created_at as version_created_at, ${CALCULATION_COLUMNS},
   (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes,
   exists (select 1 from training_load.source_metric_mapping_versions mv
            where mv.metric_definition_id = d.id and mv.metric_definition_version_id = d.current_version_id and mv.status = 'active') as pinned,
@@ -255,7 +330,7 @@ const VARIABLE_FROM = `training_load.metric_definitions d
                        left join training_load.metric_variable_requests r on r.metric_variable_change_id = c.id
                       where c.metric_definition_id = d.id order by c.seq desc limit 1) lc on true`;
 const VERSION_ROW_COLUMNS = `${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text,
-  trim_scale(v.max_value)::text as max_text, v.superseded_reason, v.created_at as version_created_at`;
+  trim_scale(v.max_value)::text as max_text, v.superseded_reason, v.created_at as version_created_at, ${CALCULATION_COLUMNS}`;
 
 // The API form of a stored condition_description: the three supported shapes,
 // null for none, and only the marker {kind: "unsupported"} for any other shape
@@ -269,17 +344,30 @@ function conditionOut(row) {
   if (canonical.kind === "zone_bounds") return { kind: "zone", operator: p.operator, value: p.lower, unit: p.unit };
   return { kind: "event_threshold", operator: p.operator, value: p.value, durationSeconds: p.duration_seconds, unit: p.unit };
 }
+function calculationOut(row) {
+  if (!Array.isArray(row.calculation_inputs)) return { value: null, cut: false };
+  let cut = false;
+  const inputs = row.calculation_inputs.map((input) => {
+    const key = boundedOut(input.key ?? null, TEXT_LIMITS.key);
+    const label = boundedOut(input.label ?? null, TEXT_LIMITS.label);
+    cut = cut || key.cut || label.cut;
+    return { id: input.id, key: key.text, label: label.text };
+  });
+  return { value: { kind: "sum", inputs }, cut };
+}
 function versionOut(row, { current }) {
   const unit = boundedOut(row.unit, TEXT_LIMITS.unit);
   const reason = boundedOut(row.superseded_reason ?? null, TEXT_LIMITS.reason);
+  const calculation = calculationOut(row);
   return {
     value: {
       id: row.version_id, versionNumber: row.version_number, unit: unit.text, valueType: row.value_type,
       dailyAggregationMethod: row.daily_aggregation_method,
       minValue: row.min_text === null ? null : canonicalDecimal(row.min_text), maxValue: row.max_text === null ? null : canonicalDecimal(row.max_text),
-      condition: conditionOut(row), ...(current === undefined ? {} : { current, reason: reason.text }), createdAt: row.version_created_at,
+      condition: conditionOut(row), calculation: calculation.value,
+      ...(current === undefined ? {} : { current, reason: reason.text }), createdAt: row.version_created_at,
     },
-    cut: unit.cut || reason.cut,
+    cut: unit.cut || reason.cut || calculation.cut,
   };
 }
 const isOwn = (row, ctx) => row.owner_scope === ctx.owner.scope && (row.owner_scope === "system" || String(row.owner_club_id) === ctx.owner.clubId);
@@ -308,6 +396,8 @@ export function iconOut(iconUrl) {
 // condition, a day level, no level at all.
 export function copyUnsupportedReason(row) {
   const notReady = notReadyCodeOf(row);
+  // v77 (J21): a calculated system variable is not copied in step 1.
+  if (notReady === "canonical_calculated") return "calculated";
   if (notReady === "canonical_not_numeric") return "not_numeric";
   if (notReady) return "unit";
   const condition = conditionOut(row);
@@ -400,6 +490,8 @@ function reducedOut(row, ctx, club = null) {
   return {
     id: row.id, key: key.text, label: label.text, shortLabel: shortLabel.text, description: description.text, icon: iconOut(row.icon_url),
     ownerScope: row.owner_scope, state: row.state, editable, actions: actionsOf(row, ctx, editable, club), labelsToken: labelsTokenOf(row),
+    // v77 (J21): whether OptiMove calculates it (never its inputs in this view).
+    calculated: row.calculated === true,
     // v53 (J15 section 4.4): a team workspace of the club reads only the hide.
     ...(club && row.owner_scope === "system" ? { club: { hidden: club.hidden } } : {}),
     truncated: key.cut || label.cut || shortLabel.cut || description.cut,
@@ -440,6 +532,7 @@ function storedSemantics(row) {
     unit: row.unit, valueType: row.value_type, dailyAggregationMethod: row.daily_aggregation_method,
     minValue: row.min_text === null ? null : canonicalDecimal(row.min_text), maxValue: row.max_text === null ? null : canonicalDecimal(row.max_text),
     condition: conditionOut(row),
+    calculation: Array.isArray(row.calculation_inputs) ? { kind: "sum", inputs: row.calculation_inputs.map((i) => String(i.id)) } : null,
   };
 }
 
@@ -643,6 +736,8 @@ export function classifyVariableError(error) {
     if (RETRY_CONSTRAINTS.has(error.constraint)) return refusal(409, "try_again", MESSAGES.try_again);
   }
   if (code === "23514" && !error.constraint && error.message === PIN_GUARD) return refusal(409, "variable_pinned", TEXT.variable_pinned);
+  // v77's guard, the backstop of the checks made under the same locks.
+  if (code === "23514" && !error.constraint && error.message === CALCULATION_INPUT_GUARD) return refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
   return null;
 }
 
@@ -708,7 +803,7 @@ export function setVariableClassifyObserverForTests(fn) { classifyObserver = fn 
 export async function createVariable({ ctx, body }) {
   adminOnly(ctx);
   plainObject(body,
-    ["requestKey", "label", "shortLabel", "description", "key", "iconKey", "unit", "levels", "dailyAggregationMethod", "minValue", "maxValue", "condition"],
+    ["requestKey", "label", "shortLabel", "description", "key", "iconKey", "unit", "levels", "dailyAggregationMethod", "minValue", "maxValue", "condition", "calculation"],
     ["requestKey", "label", "unit", "levels", "dailyAggregationMethod"]);
   const requestKey = uuidField(body.requestKey);
   if (!boundedText(body.label, TEXT_LIMITS.label)) throw invalidBody("label is one line of 1-80 visible characters without surrounding spaces.");
@@ -729,6 +824,7 @@ export async function createVariable({ ctx, body }) {
   }
   const levels = levelsInput(body.levels);
   const semantics = semanticsInput(body);
+  const calculation = calculationInput(body.calculation, semantics);
   const key = sentKey ?? suggestVariableKey(label);
   if (key === null) throw refusal(400, "key_required", TEXT.key_required);
   // A create without an icon hashes exactly as before the icon existed, so a
@@ -740,6 +836,7 @@ export async function createVariable({ ctx, body }) {
       label, shortLabel, description, key: sentKey, unit: semantics.unit, levels, dailyAggregationMethod: semantics.dailyAggregationMethod,
       minValue: semantics.minValue, maxValue: semantics.maxValue, condition: semantics.condition,
       ...(iconKey === null ? {} : { iconKey }),
+      ...(calculation === null ? {} : { calculation }),
     },
   });
   return runWrite({
@@ -750,6 +847,9 @@ export async function createVariable({ ctx, body }) {
       return variable ? { variable } : null;
     },
     body: async (client) => {
+      // v77 (J21): the inputs FOR SHARE before the rights (a new version's
+      // order: definitions, then the role, user and club rows).
+      if (calculation) await checkCalculationInputs(client, ctx, calculation, { unit: semantics.unit, levels });
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       const units = [semantics.unit, ...(semantics.condition ? [semantics.condition.unit] : [])];
       if (!(await unitsAgree(client, units))) throw refusal(400, "invalid_unit", TEXT.invalid_unit);
@@ -759,17 +859,20 @@ export async function createVariable({ ctx, body }) {
          values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
         [key, label, shortLabel, description, iconKey === null ? null : `${ICON_PREFIX}${iconKey}`, ctx.owner.scope, ctx.owner.clubId, ctx.userId],
       )).rows[0].id;
-      const versionId = (await client.query(
-        `insert into training_load.metric_definition_versions
-           (metric_definition_id, version_number, unit, value_type, min_value, max_value, condition_description, daily_aggregation_method, created_by_user_id)
-         values ($1, 1, $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7) returning id`,
-        [definitionId, semantics.unit, semantics.minValue, semantics.maxValue, conditionParam(semantics.condition),
-          semantics.dailyAggregationMethod, ctx.userId],
-      )).rows[0].id;
-      await client.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [versionId, definitionId]);
+      // The levels before the version: v77's guard reads a calculated
+      // version's levels when it is written.
       for (const level of levels) {
         await client.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1, $2)`, [definitionId, LEVELS[level]]);
       }
+      const versionId = (await client.query(
+        `insert into training_load.metric_definition_versions
+           (metric_definition_id, version_number, unit, value_type, min_value, max_value, condition_description, daily_aggregation_method, created_by_user_id,
+            calculation)
+         values ($1, 1, $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7, $8::jsonb) returning id`,
+        [definitionId, semantics.unit, semantics.minValue, semantics.maxValue, conditionParam(semantics.condition),
+          semantics.dailyAggregationMethod, ctx.userId, calculationParam(calculation)],
+      )).rows[0].id;
+      await client.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [versionId, definitionId]);
       await insertRequest(client, { ctx, requestKey, requestHash, operation: "variable_create", definitionId, versionId });
       return { operation: "variable_create", metric_definition_id: definitionId, metric_definition_version_id: versionId, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
@@ -784,11 +887,12 @@ export async function createVariableVersion({ ctx, variableId, body }) {
   adminOnly(ctx);
   if (typeof variableId !== "string" || !UUID.test(variableId)) throw NOT_FOUND();
   plainObject(body,
-    ["requestKey", "expectedCurrentVersionId", "unit", "dailyAggregationMethod", "minValue", "maxValue", "condition", "reason"],
+    ["requestKey", "expectedCurrentVersionId", "unit", "dailyAggregationMethod", "minValue", "maxValue", "condition", "reason", "calculation"],
     ["requestKey", "expectedCurrentVersionId", "unit", "dailyAggregationMethod"]);
   const requestKey = uuidField(body.requestKey);
   const expectedCurrentVersionId = uuidField(body.expectedCurrentVersionId);
-  const semantics = semanticsInput(body);
+  const semantics = { ...semanticsInput(body) };
+  semantics.calculation = calculationInput(body.calculation, semantics);
   const reason = optionalText(body, "reason", TEXT_LIMITS.reason);
   const id = variableId.toLowerCase();
   const requestHash = hashOf({
@@ -796,6 +900,7 @@ export async function createVariableVersion({ ctx, variableId, body }) {
     body: {
       expectedCurrentVersionId, unit: semantics.unit, dailyAggregationMethod: semantics.dailyAggregationMethod,
       minValue: semantics.minValue, maxValue: semantics.maxValue, condition: semantics.condition, reason,
+      ...(semantics.calculation === null ? {} : { calculation: semantics.calculation }),
     },
   });
   return runWrite({
@@ -825,7 +930,21 @@ export async function createVariableVersion({ ctx, variableId, body }) {
         throw refusal(409, "current_version_changed", TEXT.current_version_changed,
           current ? { current: { versionId: current.version_id, versionNumber: current.version_number } } : undefined);
       }
-      if (semanticsKey(storedSemantics(current)) === semanticsKey(semantics)) throw refusal(409, "version_unchanged", TEXT.version_unchanged);
+      // v77 (J21): a variable keeps its kind; a calculation's inputs are
+      // checked and locked before the rights; an input of a calculated
+      // variable keeps its unit.
+      const stored = storedSemantics(current);
+      if ((stored.calculation === null) !== (semantics.calculation === null)) throw refusal(409, "calculation_kind_fixed", TEXT.calculation_kind_fixed);
+      if (semanticsKey(stored) === semanticsKey(semantics)) throw refusal(409, "version_unchanged", TEXT.version_unchanged);
+      if (semantics.calculation) {
+        const scopes = (await client.query(
+          `select scope_level::text as level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id],
+        )).rows.map((r) => r.level);
+        const levels = ["session", "drill"].filter((level) => scopes.includes(LEVELS[level]));
+        await checkCalculationInputs(client, ctx, semantics.calculation, { unit: semantics.unit, levels });
+      } else if (semantics.unit !== stored.unit && (await usedByCalculation(client, id))) {
+        throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+      }
       if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       const units = [semantics.unit, ...(semantics.condition ? [semantics.condition.unit] : [])];
       if (!(await unitsAgree(client, units))) throw refusal(400, "invalid_unit", TEXT.invalid_unit);
@@ -833,12 +952,12 @@ export async function createVariableVersion({ ctx, variableId, body }) {
       const versionId = (await client.query(
         `insert into training_load.metric_definition_versions
            (metric_definition_id, version_number, unit, value_type, min_value, max_value, condition_description, daily_aggregation_method,
-            superseded_reason, created_by_user_id)
+            superseded_reason, created_by_user_id, calculation)
          select $1, (select coalesce(max(version_number), 0) + 1 from training_load.metric_definition_versions where metric_definition_id = $1),
-                $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7, $8
+                $2, 'numeric', $3::numeric, $4::numeric, ${CONDITION_SQL("$5")}, $6, $7, $8, $9::jsonb
          returning id`,
         [id, semantics.unit, semantics.minValue, semantics.maxValue, conditionParam(semantics.condition),
-          semantics.dailyAggregationMethod, reason, ctx.userId],
+          semantics.dailyAggregationMethod, reason, ctx.userId, calculationParam(semantics.calculation)],
       )).rows[0].id;
       await client.query(`update training_load.metric_definitions set current_version_id = $1, updated_at = now() where id = $2`, [versionId, id]);
       await insertRequest(client, { ctx, requestKey, requestHash, operation: "variable_version_create", definitionId: id, versionId });

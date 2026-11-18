@@ -174,6 +174,7 @@ export async function loadEstimateContext(client, { canonicalId, activity, team,
   const defIds = [...new Set(measured.map((m) => m.def))];
   const variables = (await client.query(
     `select d.id, d.key, d.label, d.short_label, d.current_version_id, dv.unit, dv.value_type, dv.daily_aggregation_method,
+            (dv.calculation is not null) as calculated,
             (d.owner_scope <> 'club' or d.owner_club_id = $2) as named
        from training_load.metric_definitions d
        join training_load.metric_definition_versions dv on dv.id = d.current_version_id
@@ -186,7 +187,8 @@ export async function loadEstimateContext(client, { canonicalId, activity, team,
     .map((d) => {
       const def = String(d.id);
       let reason = null;
-      if (d.value_type !== "numeric" || !["sum", "avg"].includes(d.daily_aggregation_method)) reason = "not_estimable";
+      // v77 (J21): a calculated variable is never estimated; it follows its inputs.
+      if (d.calculated || d.value_type !== "numeric" || !["sum", "avg"].includes(d.daily_aggregation_method)) reason = "not_estimable";
       else if (real.has(def)) reason = "measured_exists";
       return {
         metricDefinitionId: def, versionId: String(d.current_version_id), key: d.key ?? null, label: d.label ?? null,
@@ -325,6 +327,7 @@ async function scaleRecording(client, ctx) {
   const defIds = [...new Set((scaled.values ?? []).map((v) => String(v.metricDefinitionId)))];
   const defs = new Map((await client.query(
     `select d.id, d.key, d.label, d.short_label, d.current_version_id, dv.unit, dv.value_type, dv.daily_aggregation_method,
+            (dv.calculation is not null) as calculated,
             (d.owner_scope <> 'club' or d.owner_club_id = $2) as named
        from training_load.metric_definitions d
        join training_load.metric_definition_versions dv on dv.id = d.current_version_id
@@ -340,7 +343,7 @@ async function scaleRecording(client, ctx) {
       shortLabel: d?.short_label ?? null, unit: d?.unit ?? null, aggregation: d?.daily_aggregation_method ?? null,
     };
     let reason = null;
-    if (d.value_type !== "numeric" || d.daily_aggregation_method !== "sum") reason = "not_estimable";
+    if (d.calculated || d.value_type !== "numeric" || d.daily_aggregation_method !== "sum") reason = "not_estimable";
     else if (String(d.current_version_id) !== String(v.metricDefinitionVersionId) || !sameUnit(d.unit, v.unit)) reason = "definition_changed";
     else if (ctx.real.has(def)) reason = "measured_exists";
     const measured = Number(v.value);
