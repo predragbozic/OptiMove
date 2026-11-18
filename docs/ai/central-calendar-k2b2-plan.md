@@ -128,6 +128,11 @@ An event's RPE comes from **exactly one** channel:
 
 ### 3.5 Changes after asking (Q5, the manager's recommendation, waiting for the owner)
 
+- **Known limit (accepted in K2b-2a-1 review round 1):** a skip is not reversed. If a covering question is removed or
+  moved, or a Day off is cancelled, after the day's daily WELLNESS assignment was made as skipped, that day's daily
+  WELLNESS stays skipped. The coach can ask WELLNESS on the event again; the refusal rule allows it once the daily one
+  is cancelled.
+
 - **The event is cancelled:** its questions are cancelled in the same transaction. The schedules are cancelled, nobody
   is asked any more, and the answers already given stay.
 - **The event's day or time changes:**
@@ -433,9 +438,9 @@ All under `requireAuth`; the active workspace decides (`calendarEventAccess.js`)
 - **The one order** (calendar → Training Load → Tests → the Day off locks), all taken in `prepare` / at the start of
   `apply`, **before the first write**:
   1. `calendar.lock_event_writer` (v54: users first, role, owner team / club `FOR SHARE`), then the event row
-     `FOR UPDATE` (the runner's `prepare`, unchanged);
+     `FOR NO KEY UPDATE` (the runner's `prepare`; **corrected in review round 1**, it was `FOR UPDATE`, 9.1.15 H1);
   2. `calendar.club_question_settings` of the owner club `FOR SHARE` (the switch read once, held);
-  3. the event's live `calendar.event_questions` `FOR UPDATE`, ordered by id;
+  3. the event's live `calendar.event_questions` `FOR NO KEY UPDATE`, ordered by id (corrected in round 1, as step 1);
   4. Training Load: the linked `external_schedules` row `FOR UPDATE` → its `external_schedule_occurrences` `FOR UPDATE`
      (id order) → its `external_assignments` `FOR UPDATE` (id order), then the `session_feedback` read ("answered");
   5. Tests: the linked `test_schedules` `FOR UPDATE` → `test_schedule_occurrences` `FOR UPDATE` → `test_assignments`
@@ -444,10 +449,12 @@ All under `requireAuth`; the active workspace decides (`calendarEventAccess.js`)
      exclusive `pg_advisory_xact_lock('calendar.day_off:<club>:<day>')` for each day of its span, ascending, then the
      open, unanswered `test_assignments` it cancels `FOR UPDATE` (id order).
   - The Tests side takes schedule (`FOR SHARE`, `ensureCurrentOccurrence`) → occurrence (`FOR UPDATE`) → the shared
-    advisory lock (step 6's key) → inserts. Both orders agree (schedule → occurrence → advisory → assignments), so a Day
-    off and a materialization serialize on the day's key and neither can deadlock the other: a Day off committed first
-    is seen by the next statement of the materialization; a materialization committed first leaves rows the Day off's
-    update then sees.
+    advisory lock (step 6's key) → inserts. **Corrected in review round 1:** the claim that neither can deadlock the
+    other was wrong while steps 1 and 3 were `FOR UPDATE`: the materialization's skip row has real foreign keys to the
+    event and the question, whose checks take `FOR KEY SHARE` on rows the command held `FOR UPDATE` while it waited for
+    the key the materialization held (probe R3, a `40P01`). With `FOR NO KEY UPDATE` those checks never wait on the
+    command, so a Day off and a materialization serialize on the day's key alone: a Day off committed first is seen by
+    the next statement of the materialization; a materialization committed first leaves rows the Day off then sees.
   - A lock refusal (`55P03` after 15 s) or `40P01` is `409 try_again`, nothing written.
 - **Proof required (the rule of PR #346):** a test records the SQL each question command sends and asserts no locking
   clause after the first write, and the order of steps 1–6.
@@ -650,3 +657,87 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   the advisory key is `calendar.wellness_day:<club>:<day>` (`calendar.wellness_day_key`).
 - **One more helper function** than 9.1 named: `calendar.event_audience_on_day(event, day)` (the recipients of A2, the
   WELLNESS check).
+
+#### 9.1.15 Review round 1 (2026-11-18, on `d638b478`): every item and what was done
+
+**HIGH**
+- **H1, 40P01 (probe R3, reproduced by the independent review).** Fixed by the manager's option (1): the runner's event
+  row lock (`calendarEventService.js`, `prepare`) and the live questions (`calendarQuestions.js`, `lockLiveQuestions`)
+  are `FOR NO KEY UPDATE`. Why it is safe:
+  - every event command still serializes on the event row: `FOR NO KEY UPDATE` conflicts with itself, with
+    `FOR UPDATE` and with `FOR SHARE`, so two commands on one event wait for each other exactly as before;
+  - what it no longer blocks is `FOR KEY SHARE`, the lock a foreign key check of another transaction takes (the skip
+    row of a materialization, a question, a target). An event's key (its id) never changes (no command and no trigger
+    updates it) and an event is never deleted (v49's `events_no_delete`), so nothing that relied on the lock needed
+    the key to be stable against a concurrent key change; the same holds for `event_questions` (no delete trigger,
+    only the end columns change);
+  - the v51 triggers that lock the event row `FOR UPDATE` (`event_selected_fields_guard`) run inside an event
+    command, after its own `FOR NO KEY UPDATE`: an upgrade in the same transaction. It can wait for a materialization
+    that holds `FOR KEY SHARE` on the event, but that materialization waits for nothing the command holds (when the
+    command has taken the day key exclusive, the materialization has not reached its skip row yet), so it is a wait,
+    not a cycle;
+  - the reads of the calendar take no lock; the settings commands do not lock events.
+  - Test 21 reproduces R3 (a Day off widened by a PATCH held at a gate right after its row lock, while the day's
+    materialization takes the key shared and writes its skip row), the WELLNESS ask on a Day off, the WELLNESS move
+    while a `covered_by_event` row references the moved question, and the reverse order (the command held at its
+    COMMIT, the materialization waiting on the key): no `40P01`. Mutations R1 (event row back to `FOR UPDATE`) and R2
+    (questions back to `FOR UPDATE`) fail it.
+  - **Also closed (found while writing this):** cancelling a Day off, or moving its days, now takes the exclusive day
+    keys of its old span, so a materialization never skips on a Day off that is being cancelled at that moment.
+- **H2, two RPE channels.** `PATCH` with `externalScheduleId` (another schedule or `null`) while an RPE question is
+  live answers `409 rpe_from_question` ("This event already asks athletes for RPE. Remove that question first.");
+  the database twin `calendar.events_rpe_question_link` (a `BEFORE UPDATE` trigger on `calendar.events`) refuses an
+  `external_schedule_id` that differs from the live RPE question's schedule (the commands end the question before they
+  change the link). Test 22 (8b): X and `null`, the link and the question unchanged, and the raw write refused.
+  Mutation R4 (the twin removed) fails it; R3 (the service check removed) is equivalent, because the twin then gives
+  the same answer.
+
+**MEDIUM**
+- **M1, stale athlete targets.** `calendar.athlete_member_of_owner_on_day(scope, club, team, athlete, day)` (new): an
+  athlete target counts only while she is a member of the event's owner (the owner team for a team event, the owner
+  club for a club event) on that day, by the calendar's membership-on-the-day rule. `athlete_reached_on_day` uses it
+  (so the notifications, the panel, the Day off and `covered_by_event` all do), and the schedule's athlete targets are
+  written only for those athletes (`askableTargets`). Nobody left: `409 no_athletes` ("Nobody on this event can be
+  asked on that day."); a type default with nobody to ask is skipped. Test 23. Mutations R5, R6.
+- **M2, no day key on ending a WELLNESS question.** The `window_date` of every WELLNESS question being ended (remove,
+  a move's old day, an update) joins the exclusive key set, ascending and de-duplicated; a cancel takes the keys of its
+  live WELLNESS questions. Test 29 (the recorded SQL: the key before the first write). Mutations R7, R8.
+- **M3, check-in links.** `cancelTestSchedule` revokes the schedule's active `tests.test_access_links` with
+  `revoked_by_user_id`, as the module's DELETE does. Creating a link on a calendar-managed schedule stays allowed.
+  Test 24 (12b). Mutation R9.
+- **M4, missing proofs.** (a) test 25: realtime 0 calls when `beforeCommit` throws, exactly the athletes' users after
+  an ask, 0 on a replay (a test seam `testHooks.emitRealtime`); mutation R12. (b) test 26: a team period that starts on
+  the window's day is notified, one that ended before it is not; mutation R14. (c) test 26: a late joiner is not asked
+  and not counted. (d) test 27: an athlete of two clubs with the other club's WELLNESS that day is still asked;
+  mutation R13. (e) test 28: Remind answers 200 with `notifiedCount` 1 and the assignment `notified`, for both
+  modules. (f) test 28: *Later* while the switch is off is 404. (g) test 28: `wellness_not_available` (the fixture
+  archives the WELLNESS version, then restores it with the Tests module's freeze trigger off on the disposable
+  database only).
+
+**Decisions applied**
+- The skip is not reversed: a known limit, recorded in 3.5 and in the runbook.
+- While the switch is off, `remove_question` keeps working for the event's writers; ask and move stay 404 (test 28,
+  mutation R10).
+- A Day off for a past day cancels only assignments whose window has not closed (`closes_at > now()`); a past day
+  stays missed (test 28, mutation R11).
+- Recorded with no code: deviation 4 (a change of targets is a move, refused once answered); notifications go to the
+  audience known at ask time (a later joiner is asked in the app but not notified); a PATCH of `skip_days_off` takes no
+  day key.
+
+**LOW**
+- db L1: the migration checks in its first `do` block that its eight dependencies are recorded by name and the
+  repository's checksum (test 2; mutation R17).
+- db L2: `.gitattributes` binds `docs/runbooks/calendar-questions-v81*.sql` to `eol=lf`; `migrations_v2/**` was already
+  covered.
+- db L3: the rollback also checks `calendar.lock_event_writer`'s md5, and a "later" migration is later by name **or**
+  by `applied_at` (the runner's column) (test 3; mutations R15, R16).
+- db L4: `skipDaysOff` with a non-WELLNESS test is refused by the Tests route (`400`, the route accepts WELLNESS only;
+  test 28). Rules the database does **not** enforce (service or function only):
+  - the skip table: that the event is a Day off, or the question covers that day, and that it reaches the athlete on
+    the assignment's day (the materialization and the Day off command are its only writers; the database checks the
+    reason / question shape, the athlete and that the assignment is `cancelled`);
+  - the window: what *After the event* / *Next morning* / *Custom* mean (from the event's end, 07:00–12:00 the next
+    day, the event's days or the day after); the database checks one day (`opens_time < closes_time`) and that the
+    schedule is exactly the question's window;
+  - `skip_days_off` for WELLNESS only, and the switch on when it is set (the route; the materialization re-checks the
+    switch every time); the database checks daily-only.

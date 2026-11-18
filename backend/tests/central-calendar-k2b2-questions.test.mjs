@@ -612,9 +612,9 @@ test("15. the recorded SQL of an ask: every locking clause before the first writ
   assert.deepEqual(locksAfter, [], "no locking clause after the first write");
   const order = [
     sql.findIndex((s) => /lock_event_writer/.test(s)),
-    sql.findIndex((s) => /from calendar\.events e[\s\S]*for update of e/.test(s)),
+    sql.findIndex((s) => /from calendar\.events e[\s\S]*for no key update of e/.test(s)),
     sql.findIndex((s) => /club_question_settings[\s\S]*for share/.test(s)),
-    sql.findIndex((s) => /calendar\.event_questions[\s\S]*for update/.test(s)),
+    sql.findIndex((s) => /calendar\.event_questions[\s\S]*for no key update/.test(s)),
     sql.findIndex((s) => /training_load\.external_schedules[\s\S]*for update/.test(s)),
     sql.findIndex((s) => /wellness_day_key/.test(s)),
   ];
@@ -768,4 +768,392 @@ test("20. the Day off's effect stays inside its club (⚑7): another club's Day 
   await materialize(sched.body.schedule.id);
   const rows = await assignmentsOf(sched.body.schedule.id);
   assert.deepEqual(rows.map((r) => [r.status, r.skip_reason]), [["pending", null]], "C2's Day off is not C1's");
+});
+
+// ---------------------------------------------------------------------------
+// Review round 1 (plan 9.1.15)
+// ---------------------------------------------------------------------------
+async function freshTeam(label, n = 2) {
+  const team = await fx.makeTeam(m.clubs.c1, `q ${label}`);
+  const coach = await fx.coachOf(team, `q ${label} coach`);
+  const athletes = [];
+  for (let i = 0; i < n; i += 1) athletes.push(await fx.makeAthlete(`q ${label} athlete ${i + 1}`, { clubId: m.clubs.c1, teamId: team }));
+  return { team, coach, athletes };
+}
+async function teamEvent(t, body) {
+  const res = await createTeamEvent({ ...body, targets: body.targets || [{ kind: "team", id: t.team }] }, t.coach.cookie);
+  assert.equal(res.status, 201, res.text);
+  return res.body.event;
+}
+async function teamDaily(t, { skipDaysOff, startDate = TODAY } = {}) {
+  const res = await api("/api/tests/schedules", {
+    method: "POST", cookie: t.coach.cookie,
+    body: { testVersionId: WELLNESS, scheduleKind: "daily", timezone: "UTC", startDate, endDate: addDays(startDate, 3), opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "team", id: t.team }], skipDaysOff },
+  });
+  assert.equal(res.status, 201, res.text);
+  return res.body.schedule.id;
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Resolves to { ok, value | error } and never rejects; `done` tells whether it settled.
+function track(promise) {
+  const t = { done: false };
+  t.p = promise.then((value) => { t.done = true; t.value = value; return t; }, (error) => { t.done = true; t.error = error; return t; });
+  return t;
+}
+
+// H1, probe R3 and its variants: the command holds the event row (and the
+// live questions) and is held at a gate right after the row lock; the day's
+// materialization runs meanwhile, takes the day key SHARED and writes its skip
+// row (a foreign key check on the event / the question); then the command
+// goes on and wants the key EXCLUSIVE. With FOR UPDATE that is a 40P01; with
+// FOR NO KEY UPDATE the materialization never waits on the command.
+async function gatedRace({ label, operation, startCommand, scheduleId, expectReason }) {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let reached;
+  const atGate = new Promise((r) => { reached = r; });
+  eventHooks.afterEventLock = async (info) => {
+    if (info.operation !== operation) return;
+    reached();
+    await gate;
+  };
+  const holder = new pg.Client({ connectionString: env.db.url });
+  await holder.connect();
+  let command;
+  let mat;
+  try {
+    command = track(startCommand());
+    await Promise.race([atGate, sleep(5000)]);
+    await holder.query("begin");
+    mat = track((async () => {
+      const occ = (await holder.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, TODAY])).rows[0].id;
+      await holder.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occ]);
+    })());
+    await Promise.race([mat.p, sleep(2500)]);
+    assert.equal(mat.done, true, `${label}: the materialization must not wait on the command's event / question lock`);
+    assert.equal(mat.error, undefined, `${label}: ${mat.error?.code} ${mat.error?.message}`);
+    release();
+    await sleep(300);
+    await holder.query("commit");
+    const res = (await command.p);
+    assert.equal(res.error, undefined, `${label}: ${res.error?.message}`);
+    assert.ok([200, 201].includes(res.value.status), `${label}: ${res.value.text}`);
+    if (expectReason) assert.deepEqual([...new Set((await assignmentsOf(scheduleId)).map((r) => r.skip_reason))], [expectReason]);
+  } finally {
+    release();
+    delete eventHooks.afterEventLock;
+    if (mat) await mat.p;
+    if (command) await command.p;
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+}
+
+test("21. H1 (probe R3): a Day off widened, a WELLNESS asked on a Day off and a WELLNESS moved, each while the day's materialization runs — no 40P01 in either order", async () => {
+  // R3: a planned Day off today, a daily skip-days-off WELLNESS, a PATCH that
+  // widens the Day off while the day's materialization runs.
+  const a = await freshTeam("r3a");
+  const dayOff = await teamEvent(a, { kind: "day_off", title: "Rest R3", questions: [] });
+  const dailyA = await teamDaily(a, { skipDaysOff: true });
+  await gatedRace({
+    label: "R3 widen", operation: "update", scheduleId: dailyA, expectReason: "day_off",
+    startCommand: () => api(`/api/calendar/events/${dayOff.id}`, { method: "PATCH", cookie: a.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, endDay: addDays(TODAY, 1) } }),
+  });
+  // A WELLNESS ask on the Day off itself (the coach may ask on a day off).
+  const b = await freshTeam("r3b");
+  const dayOffB = await teamEvent(b, { kind: "day_off", title: "Rest R3b", questions: [] });
+  const dailyB = await teamDaily(b, { skipDaysOff: true });
+  await gatedRace({
+    label: "ask", operation: "ask_question", scheduleId: dailyB, expectReason: "day_off",
+    startCommand: () => api(`/api/calendar/events/${dayOffB.id}/questions`, { method: "POST", cookie: b.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, kind: "wellness", window: ALL_DAY } }),
+  });
+  // A WELLNESS move while the daily's materialization records covered_by_event
+  // against the question being moved.
+  const c = await freshTeam("r3c");
+  const ev = await teamEvent(c, { title: "Covered R3c", questions: [{ kind: "wellness", window: ALL_DAY }] });
+  const [wq] = await liveQuestions(ev.id);
+  const dailyC = await teamDaily(c, { skipDaysOff: false });
+  await gatedRace({
+    label: "move", operation: "move_question", scheduleId: dailyC, expectReason: "covered_by_event",
+    startCommand: () => api(`/api/calendar/events/${ev.id}/questions/${wq.id}/move`, { method: "POST", cookie: c.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, window: { kind: "custom", date: TODAY, from: "00:01", to: "23:58" } } }),
+  });
+  // The other order: the command holds everything at its COMMIT (the key
+  // exclusive included); the materialization waits for it, then sees the
+  // widened Day off.
+  const d = await freshTeam("r3d");
+  const dayOffD = await teamEvent(d, { kind: "day_off", title: "Rest R3d", day: addDays(TODAY, -1), questions: [] });
+  const dailyD = await teamDaily(d, { skipDaysOff: true });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  eventHooks.beforeCommit = async ({ operation }) => { if (operation === "update") await gate; };
+  const holder = new pg.Client({ connectionString: env.db.url });
+  await holder.connect();
+  try {
+    const command = track(api(`/api/calendar/events/${dayOffD.id}`, { method: "PATCH", cookie: d.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, endDay: TODAY } }));
+    await sleep(500);
+    const mat = track((async () => {
+      const occ = (await holder.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [dailyD, TODAY])).rows[0].id;
+      await holder.query(`select tests.materialize_test_assignments_for_occurrence($1)`, [occ]);
+    })());
+    await sleep(500);
+    assert.equal(mat.done, false, "the materialization waits for the Day off's key");
+    release();
+    const res = await command.p;
+    assert.equal(res.value.status, 200, res.value.text);
+    await mat.p;
+    assert.equal(mat.error, undefined, String(mat.error?.message));
+    assert.deepEqual((await assignmentsOf(dailyD)).map((r) => [r.status, r.skip_reason]), [["cancelled", "day_off"], ["cancelled", "day_off"]]);
+  } finally {
+    release();
+    delete eventHooks.beforeCommit;
+    await holder.end();
+  }
+});
+
+test("22. H2 (test 8b): while an RPE question is live, the event's RPE link changes neither to another schedule nor to null; the database twin refuses a raw write", async () => {
+  const t = await freshTeam("h2");
+  const ev = await teamEvent(t, { day: addDays(TODAY, 2), questions: [{ kind: "rpe", window: { kind: "after_event" } }] });
+  const [rpe] = await liveQuestions(ev.id);
+  const other = await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: t.coach.cookie,
+    body: { eventName: "Other RPE", scheduleKind: "one_time", startDate: addDays(TODAY, 2), timezone: "UTC", opensTime: "18:00", closesTime: "22:00", targets: [{ kind: "team", id: t.team }] },
+  });
+  assert.equal(other.status, 201, other.text);
+  for (const value of [other.body.schedules[0].id, null]) {
+    const res = await api(`/api/calendar/events/${ev.id}`, { method: "PATCH", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, externalScheduleId: value } });
+    assert.equal(res.status, 409, res.text);
+    assert.equal(res.body.error, "rpe_from_question");
+    assert.equal(res.body.message, "This event already asks athletes for RPE. Remove that question first.");
+    assert.equal(String((await eventRow(ev.id)).external_schedule_id), String(rpe.external_schedule_id));
+    assert.equal((await liveQuestions(ev.id)).length, 1);
+  }
+  await assert.rejects(
+    q(`update calendar.events set external_schedule_id = $2, revision = revision + 1 where id = $1`, [ev.id, other.body.schedules[0].id]),
+    /live RPE question keeps the event's RPE schedule/,
+  );
+});
+
+test("23. M1: an athlete target who left the club before the window's day gets no schedule target, no notification, and is not in the panel; nobody left is 409 no_athletes", async () => {
+  const t = await freshTeam("m1", 1);
+  const leaver = await fx.makeAthlete("q m1 leaver", { clubId: m.clubs.c1, teamId: t.team });
+  await q(`update public.athlete_memberships set status = 'archived', archived_at = now() where athlete_id = $1`, [leaver.athleteId]);
+  const day = addDays(TODAY, 3);
+  const ev = await teamEvent(t, { day, questions: [], targets: [{ kind: "athlete", id: t.athletes[0].athleteId }, { kind: "athlete", id: leaver.athleteId }] }).catch(() => null);
+  // The event's own create judges its targets by the calendar's rule; fall back to
+  // writing the leaver's target directly when the create already refuses her.
+  let eventId = ev?.id;
+  if (!eventId) {
+    const made = await teamEvent(t, { day, questions: [], targets: [{ kind: "athlete", id: t.athletes[0].athleteId }] });
+    eventId = made.id;
+    await q(`insert into calendar.event_targets (event_id, target_kind, target_athlete_id) values ($1, 'athlete', $2)`, [eventId, leaver.athleteId]);
+  }
+  const ask = await api(`/api/calendar/events/${eventId}/questions`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: (await eventRow(eventId)).revision, kind: "rpe", window: { kind: "after_event" } } });
+  assert.equal(ask.status, 200, ask.text);
+  const [rpe] = await liveQuestions(eventId);
+  const targets = await q(`select target_athlete_id from training_load.external_schedule_targets where schedule_id = $1`, [rpe.external_schedule_id]);
+  assert.deepEqual(targets.map((r) => String(r.target_athlete_id)), [String(t.athletes[0].athleteId)], "the leaver is not a schedule target");
+  const notified = await q(`select recipient_user_id from public.app_notifications where entity_id = $1`, [eventId]);
+  assert.deepEqual(notified.map((r) => String(r.recipient_user_id)), [String(t.athletes[0].userId)]);
+  const panel = await api(`/api/calendar/events/${eventId}/questions`, { cookie: t.coach.cookie });
+  assert.deepEqual(panel.body.questions[0].notAnswered.map((a) => a.athleteId), [String(t.athletes[0].athleteId)]);
+  // Only the leaver targeted: nobody to ask. Her target is swapped in by a raw
+  // write in one transaction (v49 keeps every event with a target at COMMIT).
+  const solo = await teamEvent(t, { day, questions: [], targets: [{ kind: "athlete", id: t.athletes[0].athleteId }] });
+  await q("begin");
+  try {
+    await q(`delete from calendar.event_targets where event_id = $1`, [solo.id]);
+    await q(`insert into calendar.event_targets (event_id, target_kind, target_athlete_id) values ($1, 'athlete', $2)`, [solo.id, leaver.athleteId]);
+    await q("commit");
+  } catch (error) {
+    await q("rollback");
+    throw error;
+  }
+  const none = await api(`/api/calendar/events/${solo.id}/questions`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, kind: "rpe", window: { kind: "after_event" } } });
+  assert.equal(none.status, 409, none.text);
+  assert.equal(none.body.error, "no_athletes");
+  assert.equal(none.body.message, "Nobody on this event can be asked on that day.");
+  assert.equal((await liveQuestions(solo.id)).length, 0);
+});
+
+test("24. M3 (test 12b): a check-in link made on a calendar question's schedule is revoked when the question is removed; its token answers 404", async () => {
+  const t = await freshTeam("m3", 1);
+  const ev = await teamEvent(t, { day: addDays(TODAY, 4), questions: [{ kind: "wellness", window: { kind: "next_morning" } }] });
+  const [wq] = await liveQuestions(ev.id);
+  const link = await api(`/api/tests/schedules/${wq.test_schedule_id}/link`, { method: "POST", cookie: t.coach.cookie, body: {} });
+  assert.equal(link.status, 201, link.text);
+  const token = link.body.link.publicToken;
+  assert.equal((await api(`/api/tests/check-in/${token}`, { cookie: t.athletes[0].cookie })).status, 200);
+  const rm = await api(`/api/calendar/events/${ev.id}/questions/${wq.id}/remove`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1 } });
+  assert.equal(rm.status, 200, rm.text);
+  const [row] = await q(`select status, revoked_by_user_id from tests.test_access_links where public_token = $1`, [token]);
+  assert.equal(row.status, "revoked");
+  assert.equal(String(row.revoked_by_user_id), String(t.coach.id));
+  assert.equal((await api(`/api/tests/check-in/${token}`, { cookie: t.athletes[0].cookie })).status, 404);
+});
+
+test("25. M4 (a): the realtime event only after the COMMIT — none when the command fails, exactly the athletes' users after an ask, none on a replay", async () => {
+  const t = await freshTeam("m4a");
+  const calls = [];
+  eventHooks.emitRealtime = (userId, type) => calls.push([String(userId), type]);
+  try {
+    eventHooks.beforeCommit = async ({ operation }) => { if (operation === "ask_question") throw new Error("forced"); };
+    const ev = await teamEvent(t, { day: addDays(TODAY, 5), questions: [] });
+    const failing = await api(`/api/calendar/events/${ev.id}/questions`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, kind: "rpe", window: { kind: "after_event" } } });
+    assert.equal(failing.status, 500);
+    assert.deepEqual(calls, []);
+    delete eventHooks.beforeCommit;
+    const body = { requestKey: newKey(), expectedRevision: 1, kind: "rpe", window: { kind: "after_event" } };
+    const ok = await api(`/api/calendar/events/${ev.id}/questions`, { method: "POST", cookie: t.coach.cookie, body });
+    assert.equal(ok.status, 200, ok.text);
+    assert.deepEqual(calls.map((c) => c[0]).sort(), t.athletes.map((a) => String(a.userId)).sort());
+    assert.ok(calls.every((c) => c[1] === "notifications_changed"));
+    calls.length = 0;
+    const replay = await api(`/api/calendar/events/${ev.id}/questions`, { method: "POST", cookie: t.coach.cookie, body });
+    assert.equal(replay.body.replayed, true);
+    assert.deepEqual(calls, []);
+  } finally {
+    delete eventHooks.beforeCommit;
+    delete eventHooks.emitRealtime;
+  }
+});
+
+test("26. M4 (b, c): A2's recipients by membership on the window's day; a late joiner is not asked", async () => {
+  const t = await freshTeam("m4b", 0);
+  const day = addDays(TODAY, 6);
+  const starter = await fx.makeAthlete("q m4b starter");
+  await fx.addMembership({ athleteId: starter.athleteId, clubId: m.clubs.c1, type: "club", startsAt: `${day}T00:00:00Z` });
+  await fx.addMembership({ athleteId: starter.athleteId, clubId: m.clubs.c1, teamId: t.team, startsAt: `${day}T00:00:00Z` });
+  const ended = await fx.makeAthlete("q m4b ended", { clubId: m.clubs.c1, teamId: t.team });
+  await q(`update public.athlete_memberships set status = 'archived', archived_at = now() where athlete_id = $1`, [ended.athleteId]);
+  const ev = await teamEvent(t, { day: addDays(day, -1), questions: [{ kind: "rpe", window: { kind: "next_morning" } }] });
+  const notified = (await q(`select recipient_user_id from public.app_notifications where entity_id = $1`, [ev.id])).map((r) => String(r.recipient_user_id));
+  assert.ok(notified.includes(String(starter.userId)), "a period that starts on the window's day: notified");
+  assert.ok(!notified.includes(String(ended.userId)), "a period that ended before it: not notified");
+  // (c) Late joiners: a member added after the day's snapshot is not asked.
+  const lt = await freshTeam("m4c", 1);
+  const lev = await teamEvent(lt, { questions: [{ kind: "wellness", window: ALL_DAY }] });
+  const [wq] = await liveQuestions(lev.id);
+  await materialize(wq.test_schedule_id);
+  const late = await fx.makeAthlete("q m4c late", { clubId: m.clubs.c1, teamId: lt.team });
+  const mine = await api("/api/calendar/questions/mine", { cookie: late.cookie });
+  assert.ok(!mine.body.questions.some((x) => x.questionId === wq.id), "the late joiner is not asked");
+  const panel = await api(`/api/calendar/events/${lev.id}/questions`, { cookie: lt.coach.cookie });
+  assert.equal(panel.body.questions[0].counts.asked, 1);
+});
+
+test("27. M4 (d): an athlete of two clubs who has the other club's WELLNESS that day is still asked by this club's event", async () => {
+  const t = await freshTeam("m4d", 0);
+  const both = await fx.makeAthlete("q m4d both", { clubId: m.clubs.c1, teamId: t.team });
+  await fx.addMembership({ athleteId: both.athleteId, clubId: m.clubs.c2, type: "club" });
+  const c2 = await api("/api/tests/schedules", {
+    method: "POST", cookie: role("stranger").cookie,
+    body: { testVersionId: WELLNESS, scheduleKind: "one_time", timezone: "UTC", startDate: TODAY, opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: both.athleteId }] },
+  });
+  assert.equal(c2.status, 201, c2.text);
+  await materialize(c2.body.schedule.id);
+  assert.equal((await assignmentsOf(c2.body.schedule.id))[0].status, "pending", "C2's WELLNESS today");
+  const ev = await teamEvent(t, { questions: [] });
+  const ask = await api(`/api/calendar/events/${ev.id}/questions`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, kind: "wellness", window: ALL_DAY } });
+  assert.equal(ask.status, 200, ask.text);
+});
+
+test("28. M4 (e, f, g) and the decisions: Remind's exact answer; Later and ask/move while the switch is off are 404, remove still works; wellness_not_available; a Day off for a past day leaves a closed window missed; skipDaysOff refused for a non-WELLNESS test", async () => {
+  const t = await freshTeam("m4e", 1);
+  const ev = await teamEvent(t, { questions: [{ kind: "rpe", window: ALL_DAY }, { kind: "wellness", window: ALL_DAY }] });
+  const qs = await liveQuestions(ev.id);
+  const rpe = qs.find((x) => x.kind === "rpe");
+  const wel = qs.find((x) => x.kind === "wellness");
+  // (e) Remind on a calendar-managed schedule: allowed, with its own answer.
+  const mineE = await api("/api/calendar/questions/mine", { cookie: t.athletes[0].cookie });
+  const formOf = (kind) => mineE.body.questions.find((x) => x.questionId === (kind === "rpe" ? rpe.id : wel.id)).form;
+  const remindT = await api(`/api/tests/schedules/${wel.test_schedule_id}/remind`, { method: "POST", cookie: t.coach.cookie, body: { assignmentIds: [formOf("wellness").assignmentId] } });
+  const remindL = await api(`/api/training-load/external-schedules/${rpe.external_schedule_id}/remind`, { method: "POST", cookie: t.coach.cookie, body: { assignmentIds: [formOf("rpe").externalAssignmentId] } });
+  for (const [r, id] of [[remindT, formOf("wellness").assignmentId], [remindL, formOf("rpe").externalAssignmentId]]) {
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.notifiedCount, 1);
+    assert.deepEqual(r.body.results.map((x) => [x.assignmentId, x.outcome]), [[id, "notified"]]);
+  }
+  // (f) The switch off: Later, ask and move are 404; remove still works.
+  await api("/api/calendar/questions/mine", { cookie: t.athletes[0].cookie });
+  await switchOn(m.clubs.c1, false);
+  try {
+    const later = await api(`/api/calendar/questions/${wel.id}/later`, { method: "POST", cookie: t.athletes[0].cookie, body: { requestKey: newKey() } });
+    assert.equal(later.status, 404, later.text);
+    const ev2 = await teamEvent(t, { day: addDays(TODAY, 7) });
+    const ask = await api(`/api/calendar/events/${ev2.id}/questions`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, kind: "rpe", window: { kind: "after_event" } } });
+    assert.equal(ask.status, 404);
+    const move = await api(`/api/calendar/events/${ev.id}/questions/${rpe.id}/move`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, window: { kind: "custom", date: TODAY, from: "01:00", to: "02:00" } } });
+    assert.equal(move.status, 404);
+    const rm = await api(`/api/calendar/events/${ev.id}/questions/${rpe.id}/remove`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1 } });
+    assert.equal(rm.status, 200, rm.text);
+  } finally {
+    await switchOn(m.clubs.c1, true);
+  }
+  // (g) WELLNESS not available: the version is not active.
+  const status = (await q(`select status from tests.test_versions where id = $1`, [WELLNESS]))[0].status;
+  let changed = false;
+  try {
+    await q(`update tests.test_versions set status = 'archived' where id = $1`, [WELLNESS]);
+    changed = true;
+  } catch (error) {
+    // The Tests module freezes an active version: then nothing can make it unavailable here.
+    assert.match(error.message, /immutable|frozen|cannot|active/i);
+  }
+  if (changed) {
+    try {
+      const ev3 = await teamEvent(t, { day: addDays(TODAY, 8) });
+      const ask = await api(`/api/calendar/events/${ev3.id}/questions`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, kind: "wellness", window: { kind: "after_event" } } });
+      assert.equal(ask.status, 409, ask.text);
+      assert.equal(ask.body.error, "wellness_not_available");
+    } finally {
+      // The Tests module freezes an archived version; the disposable database
+      // gets WELLNESS back with that one trigger off for the restore.
+      await q(`alter table tests.test_versions disable trigger freeze_test_versions`);
+      await q(`update tests.test_versions set status = $2, archived_at = null, archived_by = null where id = $1`, [WELLNESS, status]);
+      await q(`alter table tests.test_versions enable trigger freeze_test_versions`);
+    }
+  }
+  // A Day off for a past day: a window already closed stays missed; today's open one is cancelled.
+  const p = await freshTeam("past", 1);
+  const daily = await teamDaily(p, { skipDaysOff: true, startDate: addDays(TODAY, -1) });
+  const yesterday = addDays(TODAY, -1);
+  const occY = (await q(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [daily, yesterday]))[0].id;
+  await q(`insert into tests.test_occurrence_target_snapshot (occurrence_id, athlete_id) values ($1, $2)`, [occY, p.athletes[0].athleteId]);
+  await q(`insert into tests.test_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, closes_at) values ($1,$2,'UTC',$3,$4,$5)`,
+    [occY, p.athletes[0].athleteId, yesterday, `${yesterday}T00:00:00Z`, `${yesterday}T23:59:00Z`]);
+  await materialize(daily);
+  const off = await teamEvent(p, { kind: "day_off", title: "Rest past", day: yesterday, endDay: TODAY, questions: [] });
+  void off;
+  const rows = await q(`select a.local_scheduled_date::text as d, a.status from tests.test_assignments a join tests.test_schedule_occurrences o on o.id = a.occurrence_id where o.schedule_id = $1 order by 1`, [daily]);
+  assert.deepEqual(rows.map((r) => [r.d, r.status]), [[yesterday, "pending"], [TODAY, "cancelled"]]);
+  // skipDaysOff for a test that is not WELLNESS.
+  const fms = await api("/api/tests/schedules", {
+    method: "POST", cookie: p.coach.cookie,
+    body: { testVersionId: "560cf251-50b1-4728-b317-a2c38fe9107a", scheduleKind: "daily", timezone: "UTC", startDate: TODAY, endDate: addDays(TODAY, 2), opensTime: "06:00", closesTime: "09:00", targets: [{ kind: "team", id: p.team }], skipDaysOff: true },
+  });
+  assert.equal(fms.status, 400, fms.text);
+});
+
+test("29. M2: ending a WELLNESS question takes the day key of its window (remove and cancel)", async () => {
+  const t = await freshTeam("m2", 1);
+  for (const op of ["remove", "cancel"]) {
+    const ev = await teamEvent(t, { day: addDays(TODAY, 9), title: `M2 ${op}`, questions: [{ kind: "wellness", window: { kind: "next_morning" } }] });
+    const [wq] = await liveQuestions(ev.id);
+    const sql = [];
+    eventHooks.beforeLocks = async ({ client }) => {
+      const original = client.query.bind(client);
+      client.query = (...args) => { sql.push(typeof args[0] === "string" ? args[0] : args[0]?.text || ""); return original(...args); };
+    };
+    try {
+      const res = op === "remove"
+        ? await api(`/api/calendar/events/${ev.id}/questions/${wq.id}/remove`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1 } })
+        : await api(`/api/calendar/events/${ev.id}/cancel`, { method: "POST", cookie: t.coach.cookie, body: { requestKey: newKey(), expectedRevision: 1 } });
+      assert.equal(res.status, 200, res.text);
+    } finally {
+      delete eventHooks.beforeLocks;
+    }
+    const key = sql.findIndex((s) => /wellness_day_key/.test(s));
+    const firstWrite = sql.findIndex((s) => /^\s*(insert|update|delete)\b/i.test(s));
+    assert.ok(key >= 0 && key < firstWrite, `${op}: the day key before the first write (${key}, ${firstWrite})`);
+  }
 });

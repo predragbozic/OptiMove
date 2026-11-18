@@ -43,7 +43,7 @@ select
      (('calendar', 'event_types', 'default_questions'), ('tests', 'test_schedules', 'skip_days_off'), ('calendar', 'settings_changes', 'subject_club_id'))) as v81_columns,
   (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar'
      and p.proname in ('questions_ok', 'owner_club_id', 'event_club_id', 'questions_enabled', 'athlete_reached_on_day', 'event_audience_on_day',
-                       'wellness_day_key', 'is_wellness_version', 'question_open_for')) as v81_functions;
+                       'wellness_day_key', 'is_wellness_version', 'question_open_for', 'athlete_member_of_owner_on_day', 'events_rpe_question_link')) as v81_functions;
 
 -- 5. The Tests schema and WELLNESS (v81 needs both). Expected: every column true.
 select to_regclass('tests.test_schedules') is not null as test_schedules,

@@ -56,6 +56,10 @@ it).
 
 ## Known limits
 
+- **A skip is not reversed** (accepted in review round 1): if a covering question is removed or moved, or a Day off
+  is cancelled, after the day's daily WELLNESS assignment was made as skipped, that day's daily WELLNESS stays
+  skipped. The coach can ask WELLNESS on the event again.
+
 - A raw write that bypasses the services can still write a question row in a transaction that also bumps the event
   (the guards check the shape, the owner, the window and the switch, not who wrote it).
 - The audience of the notifications is the calendar's rule on the window's day; the module schedules ask by their

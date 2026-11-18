@@ -10,8 +10,9 @@
 select (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611191000_calendar_v81_athlete_questions.sql') as v81_rows,
        (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202611191000_calendar_v81_athlete_questions.sql') as v81_checksum;
 
--- 2. The objects. Expected: v81_tables = 4, v81_columns = 3, v81_functions = 15,
---    v81_triggers = 14 (all enabled: disabled = 0), switch_index = 1.
+-- 2. The objects. Expected: v81_tables = 4, v81_columns = 3, v81_functions = 17,
+--    v81_triggers = 14 (all enabled: disabled = 0), switch_index = 1,
+--    rpe_link_trigger = 1 (enabled, on calendar.events).
 select
   (select count(*) from pg_tables where schemaname = 'calendar' and tablename in ('club_question_settings', 'event_questions', 'question_postponements', 'question_assignment_skips')) as v81_tables,
   (select count(*) from information_schema.columns where (table_schema, table_name, column_name) in
@@ -19,13 +20,15 @@ select
   (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar'
      and p.proname in ('questions_ok', 'owner_club_id', 'event_club_id', 'questions_enabled', 'athlete_reached_on_day', 'event_audience_on_day',
                        'wellness_day_key', 'is_wellness_version', 'question_open_for', 'club_question_settings_guard', 'club_question_settings_need_change',
-                       'event_questions_guard', 'event_questions_need_parent', 'question_postponements_guard', 'question_assignment_skips_guard')) as v81_functions,
+                       'event_questions_guard', 'event_questions_need_parent', 'question_postponements_guard', 'question_assignment_skips_guard',
+                       'athlete_member_of_owner_on_day', 'events_rpe_question_link')) as v81_functions,
   (select count(*) from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace
      where not t.tgisinternal and n.nspname = 'calendar' and c.relname in ('club_question_settings', 'event_questions', 'question_postponements', 'question_assignment_skips')) as v81_triggers,
   (select count(*) from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace
      where not t.tgisinternal and n.nspname = 'calendar' and c.relname in ('club_question_settings', 'event_questions', 'question_postponements', 'question_assignment_skips')
        and t.tgenabled = 'D') as disabled,
-  (select count(*) from pg_indexes where schemaname = 'calendar' and indexname = 'settings_changes_club_revision_key') as switch_index;
+  (select count(*) from pg_indexes where schemaname = 'calendar' and indexname = 'settings_changes_club_revision_key') as switch_index,
+  (select count(*) from pg_trigger where tgname = 'events_rpe_question_link' and not tgisinternal and tgenabled <> 'D') as rpe_link_trigger;
 
 -- 3. The two bodies v81 wrote. Expected: materialize_md5 = 15a79e10b95ef31b30286935f28b7db5,
 --    settings_changes_md5 = b4189ddb507e607263ee6cb89760a891.

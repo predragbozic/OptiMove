@@ -84,8 +84,8 @@ test("1. the preflight on the database before v81, the apply, the post-check; th
     assert.equal(Number(post[0][0].v81_rows), 1, "block 1");
     assert.equal(post[0][0].v81_checksum, V81_SHA256);
     assert.deepEqual(
-      [post[1][0].v81_tables, post[1][0].v81_columns, post[1][0].v81_functions, post[1][0].v81_triggers, post[1][0].disabled, post[1][0].switch_index].map(Number),
-      [4, 3, 15, 14, 0, 1], "block 2",
+      [post[1][0].v81_tables, post[1][0].v81_columns, post[1][0].v81_functions, post[1][0].v81_triggers, post[1][0].disabled, post[1][0].switch_index, post[1][0].rpe_link_trigger].map(Number),
+      [4, 3, 17, 14, 0, 1, 1], "block 2",
     );
     assert.deepEqual(post[2][0], { materialize_md5: MD5.materializeAfter, settings_changes_md5: MD5.settingsAfter }, "block 3");
     assert.deepEqual(Object.values(post[3][0]).map(Number), [0, 0, 0, 0, 0, 0], "block 4");
@@ -111,6 +111,14 @@ test("2. the md5 gate: a changed body refuses v81 with nothing applied", async (
     await client.query(settings.replace("begin\n", "begin\n  -- changed\n"));
     await assert.rejects(applyGpexeTestMigrations(db.url, [V81]), (e) => /is not the v51 body/.test(String(e?.cause?.message ?? e?.message)));
     assert.equal((await client.query(`select to_regclass('calendar.event_questions') as t`)).rows[0].t, null);
+    await client.query(settings);
+    // A dependency recorded with another checksum (review round 1, db L1).
+    const dep = "migrations_v2/202609020900_training_load_v7_external_schedule_notification_rules.sql";
+    const saved = (await client.query(`select checksum from public.schema_migrations where migration_name = $1`, [dep])).rows[0].checksum;
+    await client.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, [dep, "0".repeat(64)]);
+    await assert.rejects(applyGpexeTestMigrations(db.url, [V81]), (e) => /dependency is not recorded with its checksum/.test(String(e?.cause?.message ?? e?.message)));
+    assert.equal((await client.query(`select to_regclass('calendar.event_questions') as t`)).rows[0].t, null);
+    await client.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, [dep, saved]);
   } finally {
     await client.end().catch(() => {});
     await db.drop();
@@ -152,6 +160,15 @@ test("3. the rollback: refused without v81; apply -> rollback -> the catalog ide
     await client.query(body.replace("begin\n", "begin\n  -- later\n"));
     await refused("a changed body", /not v81's body/);
     await client.query(body);
+    // lock_event_writer changed since (review round 1, db L3).
+    const writer = (await client.query(`select pg_get_functiondef('calendar.lock_event_writer(uuid, character varying, uuid, character varying)'::regprocedure) as d`)).rows[0].d;
+    await client.query(writer.replace("begin\n", "begin\n  -- later\n"));
+    await refused("a changed lock_event_writer", /lock_event_writer is not the body/);
+    await client.query(writer);
+    // A calendar migration whose name sorts before v81 but was applied after it.
+    await client.query(`insert into public.schema_migrations (migration_name, checksum, runner_version, applied_at) values ('migrations_v2/202601010000_calendar_applied_late_test_only.sql', $1, 'test', now() + interval '1 minute')`, ["f".repeat(64)]);
+    await refused("applied after v81", /later calendar \/ tests migration/);
+    await client.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/202601010000_calendar_applied_late_test_only.sql'`);
     // A row that depends on v81.
     const clubId = (await client.query(`insert into public.clubs (name) values ('rb club') returning id`)).rows[0].id;
     await client.query(`alter table calendar.club_question_settings disable trigger club_question_settings_need_change`);

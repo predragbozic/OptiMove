@@ -65,3 +65,5 @@ docs/runbooks/gpexe-check-finalization-v33-rollback.sql text eol=lf
 docs/runbooks/dashboard-simple-v71*.sql text eol=lf
 # MT-D (v68, v69): the v69 rollback restores v63's estimate_basis_ok body, which the preflight compares by md5; new files only.
 docs/runbooks/scale-recording-v6*.sql text eol=lf
+# K2b-2a-1 (v81): the rollback restores the phase-4 and v51 bodies verbatim and compares them by md5; new files only.
+docs/runbooks/calendar-questions-v81*.sql text eol=lf
