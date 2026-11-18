@@ -389,3 +389,14 @@ test("M (the after-screenshots): a name GPEXE sends for the whole session and pe
   await click('[data-action="source-fields-inv-technical"]');
   assert.equal(shown().length, 4, "the technical view lists each source");
 });
+
+test("K (the owner's second screenshot): speed zones read in km/h as GPEXE shows them - the stored 5.5 and 7 m/s are 19.8 and 25.2 km/h", async () => {
+  pages.default = { status: 200, body: { nextCursor: null, zoneThresholds: { power: null, speed: { values: [5.5, 7] }, asOf: "2026-11-07T10:00:00Z" }, fields: [
+    item({ name: "athletesessionspeedzone_distance_2", unitWord: "distance", unit: "m", zone: { family: "speed", measure: "distance", number: 2 } }),
+    item({ name: "athletesessionspeedzone_distance_3", unitWord: "distance", unit: "m", zone: { family: "speed", measure: "distance", number: 3 } }),
+  ] } };
+  await loadSourceFieldsSection(render);
+  const names = [...content.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim());
+  assert.deepEqual(names, ["Speed zone 2 · 19.8–25.2 km/h · distance (m)", "Speed zone 3 · 25.2 km/h and above · distance (m)"]);
+  assert.match(text(), /Speed zone limits of the team: 19\.8 · 25\.2 km\/h, from the newest saved session/);
+});

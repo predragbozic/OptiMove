@@ -123,7 +123,8 @@ export function quantityOf(item) {
   return hit ? hit[0] : "other";
 }
 export const QUANTITY_LABEL = { ...Object.fromEntries(QUANTITIES.map(([key, label]) => [key, label])), other: "Other values" };
-const ZONE_THRESHOLD = { power: ["Power", "W/kg"], speed: ["Speed", "m/s"] };
+// The units GPEXE's settings screen shows: speed limits are stored in m/s and shown in km/h (× 3.6).
+const ZONE_THRESHOLD = { power: ["Power", "W/kg", 1], speed: ["Speed", "km/h", 3.6] };
 // The team limits of one zone family, said once in the list (the UX review: once, not in every group). Each zone row
 // shows its own expected range beside it (the Rukovodilac's order of 2026-11-18), always marked expected. The list has
 // no session in view, so the limits are those of the newest saved session of each linked team, with that day. The limits
@@ -134,7 +135,7 @@ export function zoneLimitsNote(family, zoneThresholds, day = "") {
   if (!set) return "";
   if (set.differ) return `${pair[0]} zone limits differ between teams, so no zone's range is shown.`;
   return Array.isArray(set.values)
-    ? `${pair[0]} zone limits of the team: ${set.values.join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. Zone 1 starts at 0 and each zone runs to the next limit, as GPEXE's team settings show.`
+    ? `${pair[0]} zone limits of the team: ${set.values.map((v) => String(Math.round(v * pair[2] * 100) / 100)).join(" · ")} ${pair[1]}${day ? `, from the newest saved session (${day})` : ""}. Zone 1 starts at 0 and each zone runs to the next limit, as GPEXE's team settings show.`
     : "";
 }
 // Values first by quantity, zones together in zone order; the rest is "not values".

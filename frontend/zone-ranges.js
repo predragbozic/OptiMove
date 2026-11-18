@@ -7,7 +7,10 @@
 // W/kg: Z1 0–20, Z2 20–25, Z3 25–60, Z4 60–75, Z5 75 and above. Compare with GPEXE stays the check before a zone
 // field is used.
 const NAME = /^athletesession(power|speed)zone_(distance|time|events)_([0-9]{1,2})$/;
-const UNIT = { power: "W/kg", speed: "m/s" };
+// The unit GPEXE's own settings screen shows, and the factor from the stored limits: speed is stored in m/s and shown by
+// GPEXE in km/h (the owner's second screenshot: 0, 19.8, 25.2 km/h = the stored 5.5 and 7 m/s).
+const UNIT = { power: "W/kg", speed: "km/h" };
+const FACTOR = { power: 1, speed: 3.6 };
 
 // A numbered zone from a GPEXE name or a source key (details.players.<name>); null for anything else, a relative speed
 // zone included (its limits are per athlete, not the team's).
@@ -26,7 +29,7 @@ export function zoneRange(zone, thresholds) {
   const set = thresholds[zone.family];
   const list = Array.isArray(set) ? set : Array.isArray(set?.values) ? set.values : null;
   if (!list || list.length === 0 || !list.every((x) => typeof x === "number" && Number.isFinite(x))) return null;
-  const t = [...list].sort((a, b) => a - b);
+  const t = [...list].sort((a, b) => a - b).map((x) => x * (FACTOR[zone.family] ?? 1));
   const unit = UNIT[zone.family];
   const n = zone.number;
   if (n < 1 || n > t.length + 1) return null;

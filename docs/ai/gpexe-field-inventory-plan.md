@@ -980,15 +980,20 @@ read and screen, **no migration**.
   with GPEXE, a board column and the variable it fills - its range from the team's limits is shown: "Power zone 4 ·
   60–75 W/kg · distance (m)" on a list row, "Zone 60–75 W/kg" on a board column, "From … (60–75 W/kg)" on a variable,
   "Range of this zone: …" on the Create form and the Compare panel. Compare with GPEXE stays the check before a zone field
-  is used. Speed ranges are in m/s; whether GPEXE's own screen shows them in km/h is not checked.
+  is used. Speed ranges are shown in km/h, as GPEXE's settings screen shows them (the stored limits are m/s, × 3.6).
   - **Numbering, owner-stated evidence (2026-11-18), not a machine proof:** the owner's screenshot of GPEXE's own team
     settings shows power zone markers 0, 20, 25, 60, 75 W/kg labelled Z1–Z5 (Z1 0–20, Z2 20–25, Z3 25–60, Z4 60–75, Z5 75
     and above), jump height 0, 0.25, 0.50 m as Z1–Z3 and impact intensity 0, 75, 90 m/s² as Z1–Z3: zones from one, zone 1
     from 0, each zone from its limit to the next, N limits above 0 give N+1 zones. It fits the stored facts:
     `power_thresholds` [20, 25, 60, 75] and the details names `_2`–`_5` (zone 1 is not sent). Pure functions:
     `frontend/zone-ranges.js`, `backend/src/sourceZoneThresholds.js`.
+  - **Second owner screenshot (2026-11-18, owner-stated evidence):** speed zones 0, 19.8, 25.2 km/h as Z1–Z3 (the
+    stored 5.5 and 7 m/s); relative speed 0, 60, 80, 90 % as Z1–Z4; acceleration 0, 2.50 m/s² as Z1–Z2; deceleration 0,
+    −2.50 m/s² as Z1–Z2 (Z2 is −2.50 and below, the axis runs the other way); the event thresholds 25.2 km/h (0.0 s),
+    60 % (0.0 s), 2.50 and −2.50 m/s² (0.3 s). The same rule: zones from one, each from its marker.
   - **Families:** power and speed, the two limit lists the stored bundle holds today. A relative speed or jump height
-    zone shows its number alone until its family's limits are stored.
+    zone shows its number alone until its family's limits are stored (a follow-up may read them; a deceleration
+    range must read "−2.5 m/s² and below").
   - **Which limits:** the team threshold set the check read for that session, valid on its day (the mapper checks the
     validity window), as the stored bundle keeps it. The board and Compare with GPEXE use the session they show. The
     Source fields list has no session in view: it uses the newest saved session of each linked team, names that day
