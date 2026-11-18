@@ -10840,6 +10840,107 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   background: var(--accent, #1f7a6f);
 }
 
+/* K2b-1e: the athlete's Upcoming events (athlete-home-events-view.js). One
+   column at every width; every line wraps, so a long unbroken word stays
+   inside the card. The place's lines and Open in maps are the calendar
+   panel's (.cc-panel-place, .cc-maps: 44 px). */
+.athlete-home-events {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.athlete-home-events-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.athlete-home-events-head p {
+  margin: 0;
+}
+
+.athlete-home-events-range {
+  font-size: 13px;
+}
+
+.athlete-home-events-state {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.athlete-home-events-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.athlete-home-event {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.athlete-home-event:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.athlete-home-event:last-child {
+  padding-bottom: 0;
+}
+
+.athlete-home-event-icon {
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.athlete-home-event-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.athlete-home-event-title,
+.athlete-home-event-when,
+.athlete-home-event-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.athlete-home-event-title {
+  font-weight: 700;
+}
+
+.athlete-home-event-when {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.athlete-home-event.is-cancelled .athlete-home-event-title,
+.athlete-home-event.is-cancelled .athlete-home-event-icon {
+  color: var(--muted);
+}
+
+.athlete-home-event-cancelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.athlete-home-events-button {
+  align-self: flex-start;
+  min-height: 44px;
+}
+
 .athlete-home-quick-actions {
   display: flex;
   flex-direction: column;

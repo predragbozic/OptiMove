@@ -93,6 +93,8 @@ import { enterMyTraining, handleMyTrainingAction, handleMyTrainingBack, refreshM
 import { resetMyTraining } from "./my-training-data.js";
 import { renderMyTrainingHtml } from "./my-training-view.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
+import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
+import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
@@ -2545,6 +2547,8 @@ async function loadAthleteHome({ forceRefresh = false } = {}) {
     loadTrainingLoadAthleteHomeWeek(renderAthleteHomeFromCache),
     // "My training" (owner, 2026-11-16): the entry shows only once the server says she has a recorded session.
     refreshMyTrainingEntry({ render: () => { renderLibraryNav(); renderAthleteHomeFromCache(); } }),
+    // Her events of the next 14 days (K2b-1e, D28): her own GET /api/calendar, painted into Home's section.
+    loadAthleteHomeEvents({ render: renderAthleteHomeFromCache, forceRefresh }),
   ]);
 }
 
@@ -3053,6 +3057,8 @@ async function handleContentClick(event) {
     await loadActiveTab();
     return;
   }
+  // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer.
+  if (await handleAthleteHomeEventsAction(action, { render: renderAthleteHomeFromCache })) return;
   if (type === "weekly-create-plan") {
     if (isAthleteMode() || state.currentUser?.role === "athlete") return;
     const athleteId = state.selectedAthleteId;
@@ -3439,6 +3445,8 @@ async function onWorkspaceChanged() {
   resetTrainingLoadForWorkspaceChange();
   // My training is the athlete workspace's own: nothing of another workspace's answer is kept.
   resetMyTraining();
+  // So are Home's Upcoming events (K2b-1e): the list and an answer on its way are dropped.
+  resetAthleteHomeEvents();
   if (state.activeTab === "my-training") state.activeTab = isAthleteMode() ? "athlete-home" : "coach-home";
   renderTabs();
   renderLibraryNav();

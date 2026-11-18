@@ -1473,7 +1473,7 @@ clean `1cfaf64`. The manager ordered one small round with no new internal review
 All 8 mutations of the round were killed (scratchpad `k2b1d-mutations-r3.mjs`). The earlier known limit — a refresh
 from elsewhere did not read an open panel's details again — is closed by the first row.
 
-## 22. K2b-1e — the athlete's *Upcoming events* on Athlete Home (the plan; waiting for the manager's GO)
+## 22. K2b-1e — the athlete's *Upcoming events* on Athlete Home (the manager's GO in 22.7)
 
 D28: the athlete's *Upcoming events* on Athlete Home — 14 days; name, type, day, time; the place with its address and
 note; *Open in maps*. Branch `claude/central-calendar-k2b-1e-3b2784` from `origin/main` `94aab138` (production; the
@@ -1529,7 +1529,8 @@ migrations end at v76). **Frontend only**: nothing below needs a backend change 
   - **the type word:** `eventTypeLabel`, else the kind's word (`CENTRAL_CALENDAR_EVENT_KIND_LABELS`); not repeated
     when it equals the title;
   - **the day:** "Today", "Tomorrow", else the weekday and the date ("Wed 19 Nov");
-  - **the time:** " · 18:00–19:30", " · 18:00" without an end, " · All day" without a start (Q2);
+  - **the time:** " · 18:00–19:30", " · 18:00" without an end, " · Time not set" without a start (Q2, decided in
+    22.7);
   - **several days:** "Fri 21 Nov – Sun 23 Nov · 09:00–17:00", with "Today" / "Tomorrow" at either end. An event that
     began before today is listed today with its real first date ("Mon 17 Nov – Thu 20 Nov");
   - **the place:** the K2b-1d panel's `renderCentralCalendarEventPlaceHtml`, reused:
@@ -1608,7 +1609,7 @@ migrations end at v76). **Frontend only**: nothing below needs a backend change 
      `eventTypeId`, `canManage` and a value → none of them in the HTML, and the row's keys are exactly the pick.
   3. **One row per event:** a three-day event (three cards) is one row with its span; an event that began before
      today; the order.
-  4. **The words:** Today, Tomorrow, a weekday; a time, a start only, All day.
+  4. **The words:** Today, Tomorrow, a weekday; a time, a start only, Time not set.
   5. **The place:**
      - a library place with an address → the link's `href` is exactly the maps URL of the encoded address, with
        `target="_blank"` and `rel="noopener noreferrer"`;
@@ -1661,3 +1662,22 @@ migrations end at v76). **Frontend only**: nothing below needs a backend change 
 - **T — the database for the checks:** this session's permission check refused reading the main checkout's
   `backend/.env` for `DATABASE_URL`. It is needed for the 1a / 1b run and for a real-server browser check. Either that
   read is allowed, or the browser check uses the static harness and the manager runs the backend suite.
+
+### 22.7 The manager's decisions (2026-11-18) — GO for K2b-1e
+
+GO for K2b-1e as section 22 plans it, frontend only.
+
+- **Q1:** a cancelled event is shown and marked: a glyph and the word "Cancelled", its title muted, no place and no
+  *Open in maps*.
+- **Q2:** **not** "All day". An event without a time is not necessarily a whole-day event; the coach may simply not have
+  entered the time. The row says " · Time not set". (Checked: nothing in the app words it otherwise. The calendar's "No
+  time" is only the heading of a day's untimed cards, and the event panel shows no time line at all.)
+- **Q3:** no team on the row now; recorded as a later task.
+- **Q4:** the section goes after *This week*.
+- **Q5:** the first 5 rows, then *Show N more* / *Show fewer*, with no new request; no "See all".
+- **Q6:** `53be7089` is accepted as the fix of 1a / 1b. No code change; only the record in `docs/ai/CURRENT_STATE.md` is
+  corrected. The manager runs the `central-calendar-k2b-settings` suite on this branch.
+- **T:** no extra right to read `backend/.env`. The browser check runs on a **static harness** with in-page fakes of
+  `/api/calendar` and `/api/athlete-home`, as the earlier slices did, at 1280 / 390 / 375 / 360 px, with every case of
+  22.5: a library place with an address and a note, a one-off place, a multi-day event, a cancelled event, an event
+  today, more than five events. The report says plainly that the check ran on the harness, not on the real server.

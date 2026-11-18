@@ -1,3 +1,4 @@
+import { renderAthleteHomeEventsHtml } from "./athlete-home-events-view.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
 import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadHomeCardHtml, renderTrainingLoadWeekButtonHtml } from "./training-load-view.js";
@@ -65,6 +66,7 @@ export function renderAthleteHomeHtml({ data, error }) {
       ${renderTrainingLoadHomeCardHtml(state.trainingLoad.athleteToday)}
       ${renderTodayCard(today)}
       ${renderWeekStrip(week)}
+      ${renderAthleteHomeEventsHtml(state.athleteHomeEvents)}
       ${renderMyTrainingHomeEntryHtml()}
       ${renderQuickActions()}
     </section>
