@@ -8,9 +8,14 @@ import assert from "node:assert/strict";
 // - GET /api/calendar/events/types answers questions.enabled from the fake
 //   club's switch (B1's shape; a failure or a missing field is "off");
 // - POST / PATCH /api/tests/schedules refuse skipDaysOff: true with
-//   400 skip_days_off_unavailable unless the schedule is daily and the
-//   switch is on (skipDaysOffRefusal in backend/src/routes/tests.js), and
-//   answer 409 schedule_managed_by_calendar for a calendar-managed schedule.
+//   400 skip_days_off_unavailable unless the RESULTING schedule is daily and
+//   the switch is on (skipDaysOffRefusal in backend/src/routes/tests.js, as
+//   fixed in #614); a full edit to a non-daily kind without skipDaysOff resets
+//   it to false, a daily one keeps it; the v81 CHECK (skip_days_off only on a
+//   recurring schedule) answers 500 if a write would break it; and both answer
+//   409 schedule_managed_by_calendar for a calendar-managed schedule;
+// - GET /api/tests/library lists one schedulable test (WELLNESS, or another
+//   test when the case says so).
 
 globalThis.document = {
   querySelector: () => null,
@@ -36,6 +41,8 @@ function installServer(overrides = {}) {
     managed: false,
     stored: { scheduleKind: "recurring", skipDaysOff: false },
     typesGate: null,
+    holdNextTypes: null,
+    libraryTest: "WELLNESS",
     ...overrides,
   };
   calls = [];
@@ -55,10 +62,16 @@ function refusesSkip(body, scheduleKind) {
 async function answer(call) {
   if (call.url === "/api/calendar/events/types") {
     if (server.typesGate) await server.typesGate;
+    if (server.holdNextTypes) {
+      const { gate, enabled } = server.holdNextTypes;
+      server.holdNextTypes = null;
+      await gate;
+      return { status: 200, body: { types: [], questions: { enabled } } };
+    }
     if (server.typesFails) return { status: 500, body: { error: "internal_error" } };
     return { status: 200, body: { types: [], ...(server.typesWithoutField ? {} : { questions: { enabled: server.switchOn } }) } };
   }
-  if (call.url === "/api/tests/library") return { status: 200, body: { tests: [{ testVersionId: "wellness-v1", schedulable: true }] } };
+  if (call.url === "/api/tests/library") return { status: 200, body: { tests: [{ testVersionId: "test-v1", name: server.libraryTest, schedulable: true }] } };
   if (call.url === "/api/organization") return { status: 404, body: { error: "notFound" } };
   if (call.url === "/api/tests/schedules" && call.method === "POST") {
     const kind = call.body.scheduleKind === "daily" ? "recurring" : "one_time";
@@ -71,7 +84,7 @@ async function answer(call) {
       body: {
         schedule: {
           id: SCHEDULE_ID, scheduleKind: server.stored.scheduleKind, timezone: "UTC", startDate: "2026-11-20", endDate: "2026-11-30",
-          opensTime: "07:00", closesTime: "10:00", status: "active", skipDaysOff: server.stored.skipDaysOff,
+          opensTime: "07:00", closesTime: "10:00", status: "active", skipDaysOff: server.stored.skipDaysOff, testName: "WELLNESS",
         },
         targets: [{ kind: "team", id: "team-1" }],
         notificationRules: [],
@@ -81,8 +94,13 @@ async function answer(call) {
   if (call.url === `/api/tests/schedules/${SCHEDULE_ID}` && (call.method === "PATCH" || call.method === "DELETE")) {
     if (server.managed) return { status: 409, body: { error: "schedule_managed_by_calendar", message: "This question belongs to a calendar event. Change it on the event." } };
     if (call.method === "DELETE") return { status: 200, body: { deleted: true } };
-    if (refusesSkip(call.body, server.stored.scheduleKind)) return { status: 400, body: { error: "skip_days_off_unavailable", message: "Skipping days off is not available for this schedule." } };
-    return { status: 200, body: { schedule: { id: SCHEDULE_ID, scheduleKind: server.stored.scheduleKind, status: "active" } } };
+    // The fixed rule: decided from the RESULTING kind of a full edit.
+    const kind = call.body.scheduleKind === undefined ? server.stored.scheduleKind : call.body.scheduleKind === "daily" ? "recurring" : "one_time";
+    if (refusesSkip(call.body, kind)) return { status: 400, body: { error: "skip_days_off_unavailable", message: "Skipping days off is not available for this schedule." } };
+    const skip = call.body.skipDaysOff !== undefined ? call.body.skipDaysOff === true : kind === "recurring" ? server.stored.skipDaysOff : false;
+    if (skip && kind !== "recurring") return { status: 500, body: { error: "internal_error" } }; // the v81 CHECK
+    server.stored = { scheduleKind: kind, skipDaysOff: skip };
+    return { status: 200, body: { schedule: { id: SCHEDULE_ID, scheduleKind: kind, status: "active", skipDaysOff: skip } } };
   }
   return { status: 404, body: { error: "notFound" } };
 }
@@ -274,6 +292,7 @@ test("8. skip_days_off_unavailable: its sentence, the switch read again, the opt
   assert.equal(form.open, true, "the form stays open with the coach's input");
   assert.equal(form.error, "Skipping days off isn't available for this schedule now. Untick Skip days off and save again.");
   assert.doesNotMatch(form.error, /skip_days_off/);
+  assert.equal(form.skipDaysOff, false, "hidden and unticked (contract 1.3)");
   assert.equal(calls.filter((c) => c.url === "/api/calendar/events/types").length, 2, "read again after the refusal");
   assert.equal(form.questionsEnabled, false);
   assert.equal(renderTestsSkipDaysOffHtml(form), "");
@@ -305,4 +324,97 @@ test("10. any other error keeps the module's existing text", () => {
   const error = Object.assign(new Error("Only WELLNESS can be scheduled in this phase."), { data: { error: "Only WELLNESS can be scheduled in this phase." } });
   assert.equal(testsScheduleErrorText(error, "fallback"), "Only WELLNESS can be scheduled in this phase.");
   assert.equal(testsScheduleErrorText({}, "fallback"), "fallback");
+});
+
+// ------------------------------------------------------------
+// Review round 1 of 2a-2a (the manager's plan, 2026-11-18)
+// ------------------------------------------------------------
+
+test("11. an edit of a daily schedule with Skip days off on to Specific dates saves without skipDaysOff (switch on and off)", async () => {
+  for (const switchOn of [true, false]) {
+    resetState();
+    installServer({ switchOn, stored: { scheduleKind: "recurring", skipDaysOff: true } });
+    const form = await openEdit();
+    assert.equal(renderTestsSkipDaysOffHtml(form) !== "", switchOn, "shown on the daily edit only while the switch is on");
+    await chooseDaily(false);
+    assert.equal(state.tests.scheduleForm.scheduleKind, "one_time");
+    assert.equal(renderTestsSkipDaysOffHtml(state.tests.scheduleForm), "");
+    await submit("edit-schedule");
+    const patch = lastWrite();
+    assert.equal(patch.method, "PATCH");
+    assert.equal(patch.body.scheduleKind, "one_time");
+    assert.equal("skipDaysOff" in patch.body, false, `nothing sent (switch ${switchOn ? "on" : "off"})`);
+    assert.equal(state.tests.scheduleForm.open, false, "saved: the form closes");
+    assert.equal(state.tests.scheduleForm.error, "");
+    assert.deepEqual(server.stored, { scheduleKind: "one_time", skipDaysOff: false }, "the server reset it");
+  }
+});
+
+test("12. an edit of a one-time schedule to Repeat daily shows the box; ticked, it saves skipDaysOff: true", async () => {
+  resetState();
+  installServer({ stored: { scheduleKind: "one_time", skipDaysOff: false } });
+  const form = await openEdit();
+  assert.equal(renderTestsSkipDaysOffHtml(form), "", "one-time: not offered");
+  await chooseDaily();
+  const html = renderTestsSkipDaysOffHtml(state.tests.scheduleForm);
+  assert.match(html, /Skip days off/);
+  assert.doesNotMatch(html, /checked/, "the stored value (off)");
+  await handleTestsAction(action({ action: "tests-schedule-skip-days-off" }, { checked: true }), { renderTests: render });
+  await submit("edit-schedule");
+  assert.equal(lastWrite().body.scheduleKind, "daily");
+  assert.equal(lastWrite().body.skipDaysOff, true);
+  assert.equal(state.tests.scheduleForm.open, false);
+  assert.deepEqual(server.stored, { scheduleKind: "recurring", skipDaysOff: true });
+});
+
+test("13. two reads of the switch on one open form: only the newest writes", async () => {
+  resetState();
+  installServer();
+  await openCreate();
+  await chooseDaily();
+  server.switchOn = false;
+  let releaseFirst;
+  server.holdNextTypes = { gate: new Promise((resolve) => { releaseFirst = resolve; }), enabled: true };
+  const first = submit("create-schedule"); // refused; its re-read is held and will answer true
+  await settle();
+  state.tests.scheduleForm.skipDaysOff = true;
+  state.tests.scheduleForm.questionsEnabled = true;
+  await submit("create-schedule"); // refused again; its re-read answers false at once
+  assert.equal(state.tests.scheduleForm.questionsEnabled, false);
+  releaseFirst();
+  await first;
+  await settle();
+  assert.equal(state.tests.scheduleForm.questionsEnabled, false, "the older read (true) does not overwrite the newer one");
+  assert.equal(renderTestsSkipDaysOffHtml(state.tests.scheduleForm), "");
+});
+
+test("14. Schedule again of a daily schedule with Skip days off off sends skipDaysOff: false", async () => {
+  resetState();
+  installServer({ stored: { scheduleKind: "recurring", skipDaysOff: false } });
+  await handleTestsAction(action({ action: "tests-schedule-again", scheduleId: SCHEDULE_ID }), { renderTests: render });
+  await settle();
+  const form = state.tests.scheduleForm;
+  assert.equal(form.editingScheduleId, "", "a create");
+  assert.equal(form.scheduleKind, "daily");
+  assert.doesNotMatch(renderTestsSkipDaysOffHtml(form), /checked/);
+  Object.assign(form, { startDate: "2026-12-01", endDate: "2026-12-07" });
+  await submit("create-schedule");
+  const post = lastWrite();
+  assert.equal(post.url, "/api/tests/schedules");
+  assert.equal(post.method, "POST");
+  assert.equal(post.body.skipDaysOff, false);
+});
+
+test("15. a schedulable test other than WELLNESS: the box is hidden and nothing is sent", async () => {
+  resetState();
+  installServer({ libraryTest: "FMS" });
+  await openCreate();
+  const form = await chooseDaily();
+  assert.equal(form.questionsEnabled, true);
+  assert.equal(form.testName, "FMS");
+  assert.equal(renderTestsSkipDaysOffHtml(form), "");
+  await handleTestsAction(action({ action: "tests-schedule-skip-days-off" }, { checked: false }), { renderTests: render });
+  assert.equal(form.skipDaysOff, true, "the hidden box cannot be changed");
+  await submit("create-schedule");
+  assert.equal("skipDaysOff" in lastWrite().body, false);
 });

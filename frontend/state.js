@@ -406,9 +406,12 @@ export const emptyScheduleForm = (overrides = {}) => ({
   // GET /api/calendar/events/types; null = not read yet, false = off or the
   // read failed). skipDaysOffInitial is an edited schedule's stored value
   // (null on a create); an edit sends skipDaysOff only when it differs.
+  // testName: the schedule's test (an edit) or the library's schedulable
+  // test (a create); the option is offered for WELLNESS only.
   skipDaysOff: true,
   skipDaysOffInitial: null,
   questionsEnabled: null,
+  testName: "",
   // Calendar picker state, shared by BOTH interaction modes (see the
   // scheduleKind comment above). calendarMonth is a "YYYY-MM" string (the
   // month currently displayed). selectedDates (multi-select mode only)

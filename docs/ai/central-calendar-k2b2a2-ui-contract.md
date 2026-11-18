@@ -47,7 +47,8 @@ All of these:
 - the form's recurrence is **Repeat daily** (client `scheduleKind === "daily"`, the server's `recurring`); never for
   *Specific dates* (a bulk of one-time schedules) or a one-time edit;
 - the test is WELLNESS (today the only schedulable test; the server refuses `skipDaysOff` for anything else, 9.1.15
-  db L4);
+  db L4). The client knows the test by its library name only: on a create, the library's schedulable test; on an edit
+  or *Schedule again*, the schedule's `testName` (review round 1, LOW-3);
 - **the active workspace's club has *Ask athletes* switched on.** The client has no read of that today (section 0).
   Proposed: B1 (section 8). Until B1 exists, the option is **not shown** and nothing is sent.
 

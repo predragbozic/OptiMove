@@ -12067,6 +12067,13 @@ button.tests-assignment-card {
   width: 22px;
   height: 22px;
   margin: 1px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.tests-skip-days-off:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .tests-skip-days-off-text {

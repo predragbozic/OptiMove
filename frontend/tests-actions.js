@@ -3,24 +3,43 @@ import { isAthleteMode } from "./access.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
-import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, remindableAthletesFor, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
+import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, remindableAthletesFor, reminderSelectedSet, renderTestsBadge, testsSkipDaysOffShown, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
 import { fetchTestsQuestionsEnabled, loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadTestsWeekly, loadWellnessForm } from "./tests-data.js";
 
 // ------------------------------------------------------------
 // K2b-2a-2a: "Skip days off" (docs/ai/central-calendar-k2b2a2-ui-contract.md
-// section 1). The option exists only for a daily schedule while the club's
-// Ask athletes switch is on; the switch is read once per opened form, and a
-// slower answer for a form that is no longer open is dropped.
+// section 1). The option exists only for a daily WELLNESS schedule while the
+// club's Ask athletes switch is on (testsSkipDaysOffShown, tests-view.js). The
+// switch is read once per opened form (and again after a refusal); only the
+// newest read writes, and an answer for a closed form is dropped.
 // ------------------------------------------------------------
-export function testsSkipDaysOffShown(form) {
-  return form.scheduleKind === "daily" && form.questionsEnabled === true;
-}
+// One read sequence per form: only the newest read of the switch writes
+// questionsEnabled, so an older, slower answer never overwrites a newer one.
+const questionsReadSeq = new WeakMap();
 
 async function loadScheduleFormQuestionsSwitch(renderTests) {
   const form = state.tests.scheduleForm;
+  const seq = (questionsReadSeq.get(form) || 0) + 1;
+  questionsReadSeq.set(form, seq);
   const enabled = await fetchTestsQuestionsEnabled();
-  if (state.tests.scheduleForm !== form || !form.open) return;
+  if (state.tests.scheduleForm !== form || !form.open || questionsReadSeq.get(form) !== seq) return enabled;
   form.questionsEnabled = enabled;
+  renderTests();
+  return enabled;
+}
+
+// A create's test: the library's schedulable test (the one submit sends).
+async function loadScheduleFormTestName(renderTests) {
+  const form = state.tests.scheduleForm;
+  let name = "";
+  try {
+    const library = await api("/api/tests/library");
+    name = library?.tests?.find((t) => t.schedulable)?.name || "";
+  } catch {
+    name = "";
+  }
+  if (state.tests.scheduleForm !== form || !form.open) return;
+  form.testName = name;
   renderTests();
 }
 
@@ -216,6 +235,7 @@ export async function handleTestsAction(action, { renderTests }) {
     state.tests.bulkResult = null;
     renderTests();
     void loadOrgPickerData().then(renderTests).catch(() => {});
+    void loadScheduleFormTestName(renderTests);
     void loadScheduleFormQuestionsSwitch(renderTests);
     return true;
   }
@@ -1102,6 +1122,7 @@ async function openEditSchedule(scheduleId, renderTests) {
       // form renders that as a visible unconfigured state, never silently
       // treating it as either all-enabled or all-disabled.
       notificationRules: detail.notificationRules || [],
+      testName: detail.schedule.testName || "",
       skipDaysOff: detail.schedule.skipDaysOff === true,
       skipDaysOffInitial: detail.schedule.skipDaysOff === true,
     });
@@ -1161,6 +1182,7 @@ async function openScheduleAgain(scheduleId, renderTests) {
       notificationRules: (detail.notificationRules || []).map((rule) => ({ ...rule })),
       // A new schedule: the original's choice when it has one, else the
       // create default (ticked).
+      testName: detail.schedule.testName || "",
       skipDaysOff: typeof detail.schedule.skipDaysOff === "boolean" ? detail.schedule.skipDaysOff : true,
     });
     // Round 2 correction: "Schedule again" is reachable from the result-
@@ -1339,7 +1361,14 @@ async function submitScheduleForm(renderTests) {
     renderTests();
     // The switch may have been turned off meanwhile: read it again, so the
     // option disappears when it is no longer offered.
-    if (error?.data?.error === "skip_days_off_unavailable") await loadScheduleFormQuestionsSwitch(renderTests);
+    if (error?.data?.error === "skip_days_off_unavailable") {
+      // Hidden and unticked when the switch is off now (contract 1.3).
+      const enabled = await loadScheduleFormQuestionsSwitch(renderTests);
+      if (enabled === false && state.tests.scheduleForm === scheduleForm) {
+        scheduleForm.skipDaysOff = false;
+        renderTests();
+      }
+    }
     return;
   }
   renderTests();
