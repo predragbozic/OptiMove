@@ -22218,6 +22218,117 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   gap: 8px;
 }
 
+/* K2c-1: an event's links (its trainings and activities) and a planned
+   card's "Link to an event" (docs/ai/central-calendar-k2c-plan.md 1.1.8). */
+.cc-panel-links {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cc-link-heading {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted, #5b6472);
+}
+
+.cc-link-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 0;
+  border-top: 1px solid var(--line, #e3e6eb);
+}
+
+.cc-link-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cc-link-name,
+.cc-link-meta,
+.cc-link-refused {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-link-name {
+  font-weight: 700;
+}
+
+.cc-link-meta,
+.cc-link-refused {
+  font-size: 13px;
+  color: var(--muted, #5b6472);
+}
+
+/* A refused pair's short reason sits under its meta line (review LOW). */
+.cc-link-refused {
+  font-style: italic;
+}
+
+/* Long button words wrap inside the sheet (the Align and Check result
+   buttons; review LOW). */
+.cc-link-wrap {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.cc-link-align-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-link-button {
+  min-height: 44px;
+  min-width: 44px;
+  flex: 0 0 auto;
+}
+
+.cc-link-one,
+.cc-link-align,
+.cc-link-unconfirmed {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.cc-link-one .cc-link-button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+@media (max-width: 390px) {
+  .cc-link-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cc-link-row .cc-link-button,
+  .cc-link-one .cc-link-button,
+  .cc-link-align .cc-link-button,
+  .cc-link-unconfirmed .cc-panel-button {
+    width: 100%;
+    justify-self: stretch;
+  }
+}
+
 /* The event form: every field 16 px (iOS never zooms) and 44 px tall. */
 .cc-event-form {
   display: grid;

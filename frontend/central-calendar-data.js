@@ -266,6 +266,10 @@ export const updateCentralCalendarEvent = (eventId, body) => eventWrite(eventPat
 export const cancelCentralCalendarEvent = (eventId, body) => eventWrite(`${eventPath(eventId)}/cancel`, "POST", body);
 // K2b-1b's values command: { requestKey, expectedRevision, values: [{ fieldId, value }] }.
 export const setCentralCalendarEventFields = (eventId, body) => eventWrite(`${eventPath(eventId)}/fields`, "POST", body);
+// K2c-1: a link command of an event (central-calendar-links.js builds the
+// path and the body: /sessions, /sessions/detach, /sessions/align,
+// /activities, /activities/detach), sent again unchanged by Check result.
+export const sendCentralCalendarLinkWrite = (path, body) => eventWrite(path, "POST", body);
 
 // The workspace's event catalog (GET /events/types, K2b-1a): the types for
 // the form and the cards, and - additively - the details, the club's places
@@ -321,6 +325,8 @@ export function centralCalendarErrorInfo(error) {
     current: data?.current || null,
     // K2b-1b's invalid_value names the detail it refused.
     fieldId: typeof data?.fieldId === "string" ? data.fieldId : "",
+    // K2c-1: the alignment's has_existing_results counts the answers given.
+    resultCount: Number.isInteger(data?.resultCount) ? data.resultCount : null,
   };
 }
 

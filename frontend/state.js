@@ -111,6 +111,21 @@ export const emptyCentralCalendarState = () => ({
   eventCatalog: null,
   panelEvent: null,
   form: null,
+  // K2c-1 (docs/ai/central-calendar-k2c-plan.md 1.1): the link command in
+  // flight ({ act, eventId, panelKey, requestKey, … }, null when none; a
+  // command whose result is not confirmed waits in the actions module's
+  // memory instead), the last refusal's sentence under the panel's links
+  // ({ panelKey, text }), and the links the server refused for a reason the
+  // read cannot see (central-calendar-links.js centralCalendarRefusedPairKey ->
+  // the code). `alignStep`: the Align row's second step ({ eventKey, stage:
+  // "confirm" | "results", resultCount }); `alignBlocked`: an Align that could
+  // change nothing here ({ eventId, revision }), not offered again until the
+  // event's revision moves.
+  linkWrite: null,
+  linkMessage: null,
+  linkRefused: new Map(),
+  alignStep: null,
+  alignBlocked: null,
 });
 
 export const emptyExerciseOptions = () => ({
