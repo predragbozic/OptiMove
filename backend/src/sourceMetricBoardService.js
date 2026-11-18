@@ -254,7 +254,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     `select d.id, d.owner_scope, d.key, d.label, v.id as version_id, v.value_type, v.unit,
             coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
             trim_scale(v.min_value)::text as min_value, trim_scale(v.max_value)::text as max_value,
-            v.condition_description is not null as has_condition, ((to_jsonb(v) ->> 'calculation') is not null) as calculated,
+            v.condition_description is not null as has_condition, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
             (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes,
             exists (select 1 from training_load.metric_definition_club_hides h
                      where h.club_id = $1::uuid and h.metric_definition_id = d.id and h.shown_at is null) as hidden

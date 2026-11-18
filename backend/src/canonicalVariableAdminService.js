@@ -268,7 +268,7 @@ async function usedByCalculation(client, definitionId) {
   return (await client.query(
     `select 1 from training_load.metric_definitions cd
        join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
-      where (to_jsonb(cv) -> 'calculation' -> 'inputs') ? $1::text limit 1`,
+      where (to_jsonb(cv.*) -> 'calculation' -> 'inputs') ? $1::text limit 1`,
     [definitionId],
   )).rowCount > 0;
 }
@@ -279,7 +279,7 @@ async function checkCalculationInputs(client, ctx, calculation, { unit, levels }
   // the new version (one statement that locks and joins would drop it and answer the wrong code).
   await client.query(`select d.id from training_load.metric_definitions d where d.id = any ($1::uuid[]) and ${readable} order by d.id for share of d`, params);
   const rows = (await client.query(
-    `select d.id::text as id, d.state, v.value_type, v.unit, ((to_jsonb(v) ->> 'calculation') is not null) as calculated,
+    `select d.id::text as id, d.state, v.value_type, v.unit, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
             (select array_agg(c.scope_level::text) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
        from training_load.metric_definitions d
        join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
@@ -315,7 +315,7 @@ function semanticsKey(s) {
 // formula's order. The column is read through to_jsonb, so the backend also runs on a schema before v77 (no column: every
 // variable reads as ordinary), as the suites that pin an earlier schema do; a calculation is written only once v77 exists.
 const CALCULATION_COLUMNS = `(select jsonb_agg(jsonb_build_object('id', i.id, 'key', di.key, 'label', di.label) order by i.ord)
-       from jsonb_array_elements_text(to_jsonb(v) -> 'calculation' -> 'inputs') with ordinality as i(id, ord)
+       from jsonb_array_elements_text(to_jsonb(v.*) -> 'calculation' -> 'inputs') with ordinality as i(id, ord)
        left join training_load.metric_definitions di on di.id = i.id::uuid) as calculation_inputs`;
 const VARIABLE_COLUMNS = `d.id, d.key, d.label, d.short_label, d.description, d.icon_url, d.owner_scope, d.owner_club_id, d.state, d.created_at, d.updated_at,
   ${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text, trim_scale(v.max_value)::text as max_text,

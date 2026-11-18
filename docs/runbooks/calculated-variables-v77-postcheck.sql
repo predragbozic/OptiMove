@@ -16,7 +16,7 @@ select e.f as fn, md5(p.prosrc) as actual_md5, md5(p.prosrc) = e.m as ok
   from (values ('metric_calculation_shape_ok', '2d2a17ae713005d116fc1ab96b783b9d'),
                ('metric_calculation_inputs', '9ab77d5eb11f05a09408f478311dd58b'),
                ('metric_calculation_version_guard', '85caa715f400d4149d4c999ed7a39271'),
-               ('metric_calculation_level_guard', '3f8be79eef79c3cda4f15011be6c5a0f'),
+               ('metric_calculation_level_guard', '4476523461e60244d0a2aadbcaf25914'),
                ('metric_calculation_mapping_guard', '942b8196a4e8356585044cc308840ca7'),
                ('metric_calculation_value_guard', '22e88230de37aba4646d49cc49986f6f')) e(f, m)
   join pg_namespace n on n.nspname = 'training_load' join pg_proc p on p.pronamespace = n.oid and p.proname = e.f

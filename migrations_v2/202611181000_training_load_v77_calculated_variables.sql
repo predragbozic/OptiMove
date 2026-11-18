@@ -173,20 +173,29 @@ declare
   v_level text;
   v_calc jsonb;
   v_inputs uuid[];
+  v_rows uuid[] := '{}';
 begin
+  -- The definition rows this change touches, FOR NO KEY UPDATE once, in id order (an UPDATE may name two).
+  if tg_op in ('UPDATE', 'DELETE') then
+    v_rows := v_rows || old.metric_definition_id;
+  end if;
+  if tg_op in ('INSERT', 'UPDATE') then
+    v_rows := v_rows || new.metric_definition_id;
+  end if;
+  perform 1 from training_load.metric_definitions d where d.id = any (v_rows) order by d.id for no key update;
   if tg_op in ('UPDATE', 'DELETE') then
     v_def := old.metric_definition_id;
     v_level := old.scope_level;
     if tg_op = 'DELETE' or new.metric_definition_id is distinct from v_def or new.scope_level is distinct from v_level then
-      perform 1 from training_load.metric_definitions d where d.id = v_def for no key update;
       if exists (select 1 from training_load.metric_definitions cd
                    join training_load.metric_definition_versions cv on cv.id = cd.current_version_id and cv.metric_definition_id = cd.id
                    join training_load.metric_definition_scope_capabilities cc on cc.metric_definition_id = cd.id and cc.scope_level = v_level
                   where cv.calculation is not null and v_def = any (training_load.metric_calculation_inputs(cv.calculation))) then
         raise exception 'metric_definition_scope_capabilities: a calculated variable uses this level of this variable' using errcode = '23514';
       end if;
-      -- A calculated variable keeps at least one level.
-      if exists (select 1 from training_load.metric_definitions d
+      -- A calculated variable keeps at least one level (a level renamed in place stays one).
+      if (tg_op = 'DELETE' or new.metric_definition_id is distinct from v_def)
+         and exists (select 1 from training_load.metric_definitions d
                    join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
                   where d.id = v_def and v.calculation is not null)
          and not exists (select 1 from training_load.metric_definition_scope_capabilities c
@@ -196,7 +205,6 @@ begin
     end if;
   end if;
   if tg_op in ('INSERT', 'UPDATE') then
-    perform 1 from training_load.metric_definitions d where d.id = new.metric_definition_id for no key update;
     select v.calculation into v_calc
       from training_load.metric_definitions d
       join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id

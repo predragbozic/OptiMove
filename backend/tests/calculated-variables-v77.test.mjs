@@ -445,6 +445,10 @@ test("9. the database guards of a version and of the levels: a variable never ch
     /only a level all its inputs have/);
   dbRefused(await attempt((c) => c.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [W.z5.id])),
     /uses this level of this variable/);
+  // A calculated variable's only level renamed in place stays one level (the db re-review's L4).
+  const oneLevel = (await calculated(W.pa, [W.z4, W.z5], { levels: ["session"] })).body.variable;
+  const renamed = await attempt((c) => c.query(`update training_load.metric_definition_scope_capabilities set scope_level = 'component' where metric_definition_id = $1 and scope_level = 'session'`, [oneLevel.id]));
+  assert.equal(renamed.ok, true, renamed.error?.message);
   const zUnused = await variable(W.pa, { label: `Unused zone ${uid()}` });
   const dropped = await attempt((c) => c.query(`delete from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 and scope_level = 'component'`, [zUnused.id]));
   assert.equal(dropped.ok, true, dropped.error?.message);
@@ -612,4 +616,12 @@ test("14. the level race (the db review's M2): removing an input's level while a
     await c2.end().catch(() => {});
   }
   assert.equal((await one(k, `select count(*)::int n from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [p1.id])).n, 2);
+});
+
+test("15. the whole-row reads name the version row itself (the code re-review): a FROM item with a column named v never shadows the alias", async () => {
+  const { CANONICAL_VERSION_COLUMNS } = (await import("../src/sourceMetricMappingService.js")).adminWriteKit;
+  const row = await one(k, `select ${CANONICAL_VERSION_COLUMNS} from (select 1 as v) x, training_load.metric_definition_versions v where v.id = $1`, [W.hmldVersion]);
+  assert.equal(row.calculated, true);
+  const plain = await one(k, `select ${CANONICAL_VERSION_COLUMNS} from (select 1 as v) x, training_load.metric_definition_versions v where v.id = $1`, [W.z5.currentVersion.id]);
+  assert.equal(plain.calculated, false);
 });

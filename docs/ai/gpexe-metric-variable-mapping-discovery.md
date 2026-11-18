@@ -4442,7 +4442,9 @@ it in both orders, and an input's level removal against it) and `source-metric-b
 board). The reduced view's key lists of the R2 and PR-1b suites gain `calculated`. Known limits: a club's calculation over a
 system variable blocks a later unit change of that system variable (`variable_used_by_calculation`, without naming the club);
 an input archived later stays in a stored calculation (the PR 2 writer decides); a manual write naming a calculated variable
-answers a sanitized 500 until PR 2 maps it to a 409.
+answers a sanitized 500 until PR 2 maps it to a 409. The backend reads the column through `to_jsonb(v.*)` (the suites that pin
+an earlier schema run the current code, and a deploy runs the migrator first); a plain column read is the cleanup once every
+suite reaches v77.
 
 **Next:** PR 2, the import writer and the preview (C142-C146, C148), then PR 3, the screen (C141, C150).
 
