@@ -795,13 +795,13 @@ test("22. the inventory's zone thresholds come from the newest stored session of
   const t = await gpexeTeam(W.clubA);
   await candidate(t, () => ({}), { startedAt: "2026-10-01T18:00:00Z" });
   await candidate(W.tA, () => ({}), { startedAt: "2026-10-01T18:00:00Z" });
-  assert.deepEqual(await zone(W.pa), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] } });
+  assert.deepEqual(await zone(W.pa), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] }, asOf: "2026-10-01T18:00:00.000Z" }, "the day of the newest session the limits come from");
   // The newer session of one team carries another power set.
   const newer = await candidate(t, () => ({}), { startedAt: "2026-10-02T18:00:00Z" });
   const stored = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [newer.id])).raw_bundle;
   stored.teamThresholds.power_thresholds = [20, 25, 60, 80];
   await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [newer.id, stored]);
-  assert.deepEqual(await zone(W.pa), { power: { differ: true }, speed: { values: [5.5, 7] } });
+  assert.deepEqual(await zone(W.pa), { power: { differ: true }, speed: { values: [5.5, 7] }, asOf: "2026-10-02T18:00:00.000Z" });
   assert.equal(await zone(W.caA), undefined, "a club never gets the team thresholds (P1)");
 });
 
@@ -817,4 +817,12 @@ test("23. #601's LOW-1: a platform admin working in a club's workspace is told t
     const body = refused(await post(`/mappings/${mapping.id}/versions`, who, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false }), 409, "unit_word_ambiguous");
     assert.match(body.message, expected);
   }
+});
+
+test("24 (the Rukovodilac, 2026-11-18): route 8 carries the compared session's own team zone limits, the range a numbered zone is expected to cover", async () => {
+  const f = await created("g1b2_limits", { expected: "J/kg" });
+  const cand = await candidate(W.tA, energyOf(f.name));
+  const stored = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [cand.id])).raw_bundle;
+  const body = (await observationOf(W.pa, f, { candidateId: cand.id })).body;
+  assert.deepEqual(body.observation.zoneThresholds, { power: stored.teamThresholds.power_thresholds, speed: stored.teamThresholds.speed_thresholds });
 });

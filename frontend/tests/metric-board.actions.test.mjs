@@ -856,3 +856,25 @@ test("Z2c (the code review): a platform admin who is also the club's admin, on t
   await open();
   assert.equal(content.querySelector("details.mb-parked .mb-note").textContent, SWITCH_STEP);
 });
+
+test("Z3 (the Rukovodilac, 2026-11-18): a numbered zone column and the variable it fills show the zone's expected range from the session's team limits - never as a fact; a board sent no limits (a club's admin, P1) shows none", async () => {
+  asUser("platform", null);
+  const b = platformBoard();
+  const zoneCol = { ...b.columns[0], fieldId: "f-z4", key: "details.players.athletesessionpowerzone_distance_4", label: "Power zone 4 distance", placeable: true, reason: null };
+  b.columns.push(zoneCol);
+  b.zoneThresholds = { power: [20, 25, 60, 75], speed: null };
+  platformWorld(b);
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  const row = [...content.querySelectorAll(".mb-col-item")].find((li) => li.textContent.includes("Power zone 4 distance"));
+  assert.match(row.querySelector(".mb-zone-range").textContent, /^Expected 60–75 W\/kg, confirm with Compare with GPEXE$/);
+
+  asUser("club");
+  overrides = [];
+  const club = structuredClone(FX.board);
+  club.board.columns.push(zoneCol);
+  overrides.push((c) => (c.url.startsWith(`${B}/board?`) ? { status: 200, body: club } : null));
+  state.trainingLoad.board = null;
+  await open();
+  assert.equal(content.querySelectorAll(".mb-zone-range").length, 0, "no limits sent, no range");
+});

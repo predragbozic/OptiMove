@@ -2,6 +2,7 @@
 // strings only: every name from the source or from another person is escaped
 // and cleaned. Built from the om-* components Imports uses (page header,
 // tabs, light cards, badges, buttons); the phone sheet is the roster's.
+import { expectedRange, expectedRangeText, numberedZoneOf } from "./zone-ranges.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import {
   BOARD_ERROR, COLUMN_REASON, MAX_ROWS, columnReasonText, parkedSentence, displayNumber, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
@@ -30,6 +31,11 @@ const busy = (s) => Boolean(s.write) || s.loading;
 const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest and marks the value as missing. Untick to leave it out quietly.";
 // Keys, codes and the GPEXE team's number are for a platform admin only (the owner, 2026-11-13).
 const forSupport = () => boardContext()?.isPlatformAdmin === true;
+// A numbered zone column's expected range from the session's team limits (sent to a platform admin only, P1); never a fact.
+const zoneRangeLine = (board, key) => {
+  const text = expectedRangeText(key, board?.zoneThresholds);
+  return text ? `<small class="mb-zone-range">${escapeHtml(text.charAt(0).toUpperCase() + text.slice(1))}</small>` : "";
+};
 const gpexeTeam = (id) => (forSupport() && id ? ` — linked to GPEXE team ${escapeHtml(id)}` : "");
 
 // ---------------------------------------------------------------------------
@@ -118,9 +124,10 @@ function columnHtml(s, c, drag) {
   const values = c.rawA !== null || c.rawB !== null
     ? `<span class="mb-col-vals" aria-label="${escapeAttr(`${cleanName(board.pair.labels[0])}: ${c.rawA === null || c.rawA === undefined ? "no value" : `${displayNumber(c.rawA)}${c.unitProven ? ` ${c.unit}` : ""}`}; ${cleanName(board.pair.labels[1])}: ${c.rawB === null || c.rawB === undefined ? "no value" : `${displayNumber(c.rawB)}${c.unitProven ? ` ${c.unit}` : ""}`}`)}">${roughWithUnit(c.rawA, c.unitProven ? c.unit : "")}<br>${roughWithUnit(c.rawB, c.unitProven ? c.unit : "")}</span>` : "";
   const tech = forSupport() ? `<details class="mb-tech"><summary>Technical details</summary><code>${escapeHtml(c.key)}</code></details>` : "";
-  const main = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small></span>`;
+  const zone = zoneRangeLine(board, c.key);
+  const main = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}</span>`;
   if (!c.placeable && !use) {
-    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small class="mb-reason">${escapeHtml(columnReasonText(c.reason, { platformAdmin: forSupport() }))}</small></span>${values}</div>${tech}</li>`;
+    return `<li class="mb-col-item"><div class="mb-col is-off"><span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}<small class="mb-reason">${escapeHtml(columnReasonText(c.reason, { platformAdmin: forSupport() }))}</small></span>${values}</div>${tech}</li>`;
   }
   if (use) {
     const badge = use === "on" ? `<span class="om-badge om-badge--success">On</span>` : use === "new" ? `<span class="om-badge om-badge--accent">Placed</span>` : `<span class="om-badge om-badge--info">Placed</span>`;
@@ -129,7 +136,7 @@ function columnHtml(s, c, drag) {
     const why = onAsClubs ? "On for the team as the club's own variable. To change it, switch to the club's variables."
       : use === "on" ? (c.reason === "field_has_parameters" ? "Already on for the team. If you switch it off, it cannot be placed again here yet."
         : "Already on for the team. Switch it off under Variables to place it again.") : "Placed. Remove it under Variables to place it elsewhere.";
-    const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small><small>${why}</small></span>`;
+    const usedMain = `<span class="mb-col-main"><strong>${name(c.label)}</strong><small>${unitLine}</small>${zone}<small>${why}</small></span>`;
     return `<li class="mb-col-item"><div class="mb-col is-used">${usedMain}${badge}${values}</div>${tech}</li>`;
   }
   const picked = s.picked === c.fieldId;
@@ -166,7 +173,9 @@ function slotHtml(s, v, drag) {
   const slot = slotOf(s, v);
   const unit = v.unit ? `<span class="om-badge mb-unit">${escapeHtml(v.unit)}</span>` : "";
   const head = (sub) => `<span class="mb-slot-main"><strong>${name(v.label)}</strong><small>${sub}</small></span>`;
-  const col = slot.column ? name(slot.column.label) : "a column";
+  // A variable filled from a numbered zone names that zone's expected range too (platform only, never a fact).
+  const zoneRange = slot.column ? expectedRange(numberedZoneOf(slot.column.key), board?.zoneThresholds) : null;
+  const col = slot.column ? `${name(slot.column.label)}${zoneRange ? ` (expected ${escapeHtml(zoneRange)})` : ""}` : "a column";
   const off = busy(s) ? "disabled" : "";
   if (slot.kind === "on") {
     return `<li class="mb-slot is-on">${head(`From ${col}`)}${unit}<span class="om-badge om-badge--success">On for ${name(teamName(s))}</span>

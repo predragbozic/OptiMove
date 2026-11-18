@@ -10,6 +10,8 @@
 // when it is a known unit, the token of an active unit conversion (P3); the unit a word stands for (v74's seed, a
 // migration's data) and whether a name is a value reach every audience (2026-11-18). `team_thresholds` names are never a field: a platform admin
 // reads them with endpoint=team_thresholds only, and a club scope gets an empty list there (P1).
+import { zoneThresholdsOf } from "./sourceZoneThresholds.js";
+export { zoneThresholdsOf };
 import { refusal } from "./sourceMetricAccess.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
 import { FIELD_ENDPOINTS, isStructuralField, STRUCTURAL_FIELDS } from "./sourceFieldInventory.js";
@@ -169,7 +171,7 @@ export function zoneOf(name) {
 // One row per binding is chosen first (the newest stored session, by its id), and only that row's bundle is opened (the
 // code review's MEDIUM: never every stored bundle).
 export const THRESHOLDS_SQL = `
-  select t.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power, t.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed
+  select t.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power, t.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed, t.session_started_at
     from training_load.source_team_bindings b
     join training_load.source_credential_connections k on k.id = b.connection_id and k.source_system = 'gpexe'
     cross join lateral (
@@ -191,17 +193,6 @@ async function readZoneThresholds() {
     return null;
   }
 }
-const numberList = (v) => (Array.isArray(v) && v.length > 0 && v.length <= 12 && v.every((x) => typeof x === "number" && Number.isFinite(x)) ? v : null);
-export function zoneThresholdsOf(rows) {
-  const out = {};
-  for (const kind of ["power", "speed"]) {
-    const sets = rows.map((r) => numberList(r[kind])).filter(Boolean).map((v) => JSON.stringify(v));
-    const distinct = [...new Set(sets)];
-    out[kind] = distinct.length === 0 ? null : distinct.length === 1 && sets.length === rows.length ? { values: JSON.parse(distinct[0]) } : { differ: true };
-  }
-  return out;
-}
-
 export async function listFieldInventory({ ctx, query }) {
   const parsed = parseInventoryQuery(query, ctx);
   const platform = isPlatformScope(ctx);

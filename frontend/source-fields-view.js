@@ -15,6 +15,7 @@ import {
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { fieldTileHtml } from "./data-config-tiles.js";
+import { expectedRange, expectedRangeText, numberedZoneOf } from "./zone-ranges.js";
 
 const fmtDate = (iso) => {
   if (!iso) return "";
@@ -149,9 +150,11 @@ function renderListHtml(s, ctx) {
 // ---------------------------------------------------------------------------
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const fmtDay = (day) => (/^\d{4}-\d{2}-\d{2}$/.test(day || "") ? `${day.slice(8, 10)}.${day.slice(5, 7)}.${day.slice(0, 4)}` : "");
-function inventoryFacts(item, ctx, { withEndpoint = true, withKind = false } = {}) {
+function inventoryFacts(item, ctx, { withEndpoint = true, withKind = false, zoneThresholds = null } = {}) {
   const kind = KIND_LABEL[item.kind] || "";
   return [
+    // A numbered zone's expected range from the team limits (platform only, P1), never as a fact.
+    ctx.mayVerify && item.zone ? expectedRangeText(item.name, zoneThresholds) || "" : "",
     withEndpoint ? ENDPOINT_LABEL[item.endpoint] || "" : "",
     // The team zone limits' fold keeps what each name holds (they are never a field).
     withKind ? (item.unitWord ? `${kind} in ${item.unitWord}` : kind) : "",
@@ -163,7 +166,7 @@ function inventoryFacts(item, ctx, { withEndpoint = true, withKind = false } = {
 function inventoryUnitText(item) {
   return item.unit ? `(${item.unit})` : "(no unit from GPEXE)";
 }
-function inventoryRowHtml(item, index, ctx, search) {
+function inventoryRowHtml(item, index, ctx, search, zoneThresholds = null) {
   // G1b: Create field only where the server said route C would take the name.
   const create = createOffered(ctx, item)
     ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Create a field from ${escapeAttr(item.name)}">Create field</button>`
@@ -176,7 +179,7 @@ function inventoryRowHtml(item, index, ctx, search) {
         <code class="source-fields-code source-fields-inventory-raw">${escapeHtml(item.name)}</code>`
           // Not a value: GPEXE's own name and what it holds (no made-up readable name).
           : `<span class="metric-variables-item-name"><code class="source-fields-code source-fields-inventory-raw">${escapeHtml(item.name)}</code> <span class="source-fields-inventory-unit">${escapeHtml(KIND_LABEL[item.kind] || "")}</span></span>`}
-        <span class="metric-variables-item-facts muted source-fields-inventory-facts">${inventoryFacts(item, ctx)}</span>
+        <span class="metric-variables-item-facts muted source-fields-inventory-facts">${inventoryFacts(item, ctx, { zoneThresholds })}</span>
         ${create}
       </div>
     </li>`;
@@ -202,11 +205,15 @@ function renderThresholdsHtml(inv, ctx) {
 // row keeps its index in the loaded list, so the search narrows it in place.
 function inventoryListHtml(inv, ctx) {
   const index = new Map(inv.items.map((item, i) => [item, i]));
-  const row = (item) => inventoryRowHtml(item, index.get(item), ctx, inv.search);
+  const row = (item) => inventoryRowHtml(item, index.get(item), ctx, inv.search, inv.zoneThresholds);
   const { groups, other } = inventoryGroups(inv.items);
   const matches = (items) => items.some((item) => inventoryMatches(item, inv.search));
   // The team limits of the zone families in a group, once (platform only).
-  const notes = (items) => (ctx.mayVerify ? [...new Set(items.filter((i) => i.zone).map((i) => i.zone.family))].map((f) => zoneLimitsNote(f, inv.zoneThresholds)).filter(Boolean) : []);
+  // Each family's limits once in the whole list, in the first group that has one of its zones (the UX review).
+  const said = new Set();
+  const asOf = fmtDate(inv.zoneThresholds?.asOf);
+  const notes = (items) => (ctx.mayVerify ? [...new Set(items.filter((i) => i.zone).map((i) => i.zone.family))]
+    .filter((f) => !said.has(f) && said.add(f)).map((f) => zoneLimitsNote(f, inv.zoneThresholds, asOf)).filter(Boolean) : []);
   return `
     ${groups.map((g) => `
       <div class="source-fields-inventory-group-block" data-sf-inv-group${matches(g.items) ? "" : " hidden"}>
@@ -441,6 +448,7 @@ function renderCreateFormHtml(s) {
       <h2 id="source-fields-title">Create a field from ${code(form.name)}</h2>
       <p class="muted source-fields-summary">GPEXE · ${escapeHtml(ENDPOINT_LABEL[form.endpoint] || form.endpoint)} · ${escapeHtml(KIND_LABEL[form.kind] || form.kind || "")}${form.unitWord ? ` (GPEXE says: ${escapeHtml(form.unitWord)})` : ""}</p>
       <p class="metric-variables-field-note">${escapeHtml(createNextStep(form.endpoint))}</p>
+      ${createRangeHtml(form)}
       <label class="search-field"><span>Name in OptiMove</span>
         <input type="text" data-sf-field="label" value="${escapeAttr(form.draft.label ?? "")}" maxlength="${FIELD_LABEL_MAX}" autocomplete="off" ${locked ? "disabled" : ""}${described(form, "label", "hint")}${invalid(form, "label")}>
         <span class="muted" id="sf-hint-label">How the field is named on OptiMove's screens, for example High-speed distance. At most ${FIELD_LABEL_MAX} characters.</span>
@@ -465,6 +473,17 @@ function renderCreateFormHtml(s) {
         <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
       </div>`}
     </form>`;
+}
+
+// A numbered zone's expected range on the Create form, from the list's team limits (platform only; route C is too).
+function createRangeHtml(form) {
+  const range = expectedRange(numberedZoneOf(form.name), sourceFieldsState().inventory?.zoneThresholds);
+  return range ? `<p class="muted">This zone is expected to cover ${escapeHtml(range)} (the team's limits). That is not confirmed until you compare the field with GPEXE.</p>` : "";
+}
+// The compared session's own team limits: the range to look for in GPEXE (the Rukovodilac's order of 2026-11-18).
+function observeRangeHtml(o) {
+  const range = expectedRange(numberedZoneOf(o?.gpexeName), o?.zoneThresholds);
+  return range ? `<p class="metric-variables-field-note">It is expected to be the zone ${escapeHtml(range)} (this session's team limits). Check that GPEXE shows it for that range; the range is not confirmed by OptiMove yet.</p>` : "";
 }
 
 // G1b-2: the comparison of a generic field with the GPEXE screen (plan sections 8.2 and 8.10). The team, then the server's
@@ -498,6 +517,7 @@ function renderObserveFormHtml(s) {
         <p><strong>${escapeHtml(o.session?.label || "Saved session")}</strong> <span class="muted">${escapeHtml(fmtDate(o.session?.startedAt))} · ${escapeHtml(o.team?.name || "")}</span></p>
         ${o.word ? `<p class="metric-variables-field-note">${escapeHtml(observationWordText(o))}</p>` : ""}
         <p>Open this session in GPEXE and find the value ${code(o.gpexeName || "")} for these two athletes:</p>
+        ${observeRangeHtml(o)}
         <ul class="source-fields-observe-athletes">
           ${lines.map((l) => `<li><strong>${escapeHtml(l.name)}</strong>: ${escapeHtml(l.text)}</li>`).join("")}
         </ul>

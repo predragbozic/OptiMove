@@ -975,6 +975,28 @@ read and screen, **no migration**.
   Grouping applies to the loaded page (200 names per page). The small lines keep the 12 px floor.
 - **#601's LOW-1:** `unit_word_ambiguous` is worded by basis too - a platform admin working in a club's workspace is told
   to switch to the platform workspace (route test 23, frontend test R3).
+- **A numbered zone's expected range (the Rukovodilac's order of 2026-11-18).** Wherever a numbered GPEXE zone
+  (`athletesession{power|speed}zone_{distance|time|events}_N`) is shown - a Source fields row, the Create form, Compare
+  with GPEXE, a board column and the variable it fills - its range from the team's limits is shown beside it, always
+  as **expected** ("expected 60–75 W/kg, confirm with Compare with GPEXE"), never as a fact.
+  - **Numbering (expected):** from one; with ascending limits t1 < … < tk, zone 1 is below t1, zone n is t(n-1)–t(n),
+    zone k+1 is tk and above (GPEXE's power limits 20 · 25 · 60 · 75 W/kg make zone 4 60–75 W/kg). Speed limits in
+    m/s. A relative speed zone has no team range and shows none. Pure functions: `frontend/zone-ranges.js`,
+    `backend/src/sourceZoneThresholds.js`.
+  - **Which limits:** the limits are the team threshold set the check read for that session, valid on its day (the
+    mapper checks the validity window), as the stored bundle keeps it. The board and Compare with GPEXE use the session
+    they show. The Source fields list has no session in view: it uses the newest saved session of each linked team,
+    names that day ("from the newest saved session (07.11.2026)"), and shows no range when teams' limits differ.
+  - **Who:** the platform admin only (P1: team limits are the platform's). The board is sent `zoneThresholds` only
+    for the `platform_admin` basis; route 8 is the platform admin's anyway; a club's admin sees no range.
+  - **Why expected:** the details' zone numbering is not proven (`docs/ai/gpexe-details-coverage-plan.md`: 4 power
+    zones in the details against 5 in `/more/`, no numbering reproduces them).
+  - **How the numbering becomes proven (proposal, not built):** Compare with GPEXE on that zone field, with the
+    comparison naming the expected range ("check that GPEXE shows it for that range" - built now) and route O recording
+    that range with the tick, so a match proves the numbering as well as the unit. Recording it needs a column on the
+    comparison record (a migration); until then every range stays "expected". The stored `/more/` zone lists carry
+    their own bounds and could prove it from data already stored, but the owner-run probe of 2026-10-24 found that
+    they do not reproduce the details' zones, so that path proves nothing today.
 - **Create field for several names at once: a follow-up, not built.** Route C takes one name per request with its own
   key, label and levels, and each lost answer needs its own *Check result*; a sequential batch is cheap to send but needs a
   per-name label and level choice and a per-row outcome (saved, refused, not confirmed). It is its own small screen change.

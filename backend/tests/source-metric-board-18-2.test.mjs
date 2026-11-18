@@ -1136,3 +1136,12 @@ test("16. G1b-2/G1b-3, rule (b) on the board: a created details field proven by 
     await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [W.cA.id, before]);
   }
 });
+
+test("2z (the Rukovodilac, 2026-11-18): the board of a platform admin carries the session's team zone limits, so a numbered zone column shows its expected range; a club's admin's board never does (P1)", async () => {
+  const stored = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [W.cA.id])).raw_bundle;
+  const { board: forPlatform } = ok(await boardOf(W.paA, W.tA));
+  assert.equal(forPlatform.session.candidateId, W.cA.id);
+  assert.deepEqual(forPlatform.zoneThresholds, { power: stored.teamThresholds.power_thresholds, speed: stored.teamThresholds.speed_thresholds });
+  const { board: forClub } = ok(await boardOf(W.caA, W.tA));
+  assert.equal("zoneThresholds" in forClub, false, "a club's admin is never sent the team limits");
+});

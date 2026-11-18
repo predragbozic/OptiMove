@@ -20,6 +20,7 @@
 // FOR SHARE -> the acting user and role (users first), then the team's club FOR SHARE -> the inserts and the update ->
 // the T8 rows. No T4 is touched; the candidate is never locked (v65's session guard checks it at the insert). The order
 // is pinned by a test of the statements' recorded order (.claude/rules/migrations.md).
+import { bundleZoneThresholds } from "./sourceZoneThresholds.js";
 import crypto from "node:crypto";
 import { adminWriteKit, SourceMetricMappingError, STATEMENT_TIMEOUT_MS } from "./sourceMetricMappingService.js";
 import { classifyFieldError, mayVerify } from "./sourceFieldVerificationService.js";
@@ -378,7 +379,10 @@ export async function readObservation({ ctx, fieldId: rawField, queryString }) {
   }
   await removeExpiredBatch();
   const world = await boundedRead((client) => loadComparison(client, { fieldId, teamId: q.teamId ?? null, candidateId: q.candidateId ?? null, selector: { pair: q.pair, pairs: q.pairs } }));
-  return comparisonOut(world);
+  // The compared session's team zone limits (route 8 is a platform admin's, as P1 asks): a numbered zone field shows
+  // the range it is expected to cover, the one to look for in GPEXE.
+  const out = comparisonOut(world);
+  return { ...out, observation: { ...out.observation, zoneThresholds: bundleZoneThresholds(world.candidate?.raw_bundle) } };
 }
 
 // ---------------------------------------------------------------------------

@@ -287,7 +287,7 @@ test("5b. with more names to load, a search without a match says to load more", 
 });
 
 test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zones in zone order, each row's readable name with its unit (never GPEXE's word) and the zone's team thresholds; the names that are not values in one closed fold; the search finds both", async () => {
-  pages.default = { status: 200, body: { nextCursor: null, zoneThresholds: { power: { values: [20, 25, 60, 75] }, speed: { differ: true } }, fields: [
+  pages.default = { status: 200, body: { nextCursor: null, zoneThresholds: { power: { values: [20, 25, 60, 75] }, speed: { differ: true }, asOf: "2026-11-07T10:00:00Z" }, fields: [
     item({ name: "athletesessionpowerzone_distance_4", unitWord: "distance", unit: "m", zone: { family: "power", measure: "distance", number: 4 }, connectionCount: 1 }),
     item({ name: "athletesessionpowerzone_distance_2", unitWord: "distance", unit: "m", zone: { family: "power", measure: "distance", number: 2 }, connectionCount: 1 }),
     item({ name: "athletesessionspeedzone_distance_3", unitWord: "distance", unit: "m", zone: { family: "speed", measure: "distance", number: 3 }, connectionCount: 1 }),
@@ -302,12 +302,18 @@ test("R1 (the owner's first use, 2026-11-18): values grouped by quantity with zo
   const names = (list) => [...list.querySelectorAll("[data-sf-inv-row] .metric-variables-item-name")].map((e) => e.textContent.replace(/\s+/g, " ").trim());
   const [distance, power, other] = [...content.querySelectorAll("[data-sf-inv-group] ul")];
   assert.deepEqual(names(distance), ["Power zone 2 · distance (m)", "Power zone 4 · distance (m)", "Speed zone 3 · distance (m)"]);
-  // The team limits once per zone family, never on a row (they would read as that zone's range).
+  // The team limits once per zone family in the whole list, with the day of the session they come from; each zone row
+  // shows its expected range, always marked expected (the Rukovodilac's order of 2026-11-18). Differing limits: no range.
   const notes = [...content.querySelectorAll(".source-fields-inventory-note")].map((e) => e.textContent.trim());
   assert.deepEqual(notes, [
-    "Power zones in GPEXE use the team limits 20 · 25 · 60 · 75 W/kg. Which zone covers which range is not confirmed yet.",
-    "Speed zone limits differ between teams.",
+    "Power zone limits of the team: 20 · 25 · 60 · 75 W/kg, from the newest saved session (07.11.2026). The range beside each zone is expected, not confirmed: Compare with GPEXE confirms it.",
+    "Speed zone limits differ between teams, so no zone's range is shown.",
   ]);
+  const facts = (list) => [...list.querySelectorAll(".source-fields-inventory-facts")].map((e) => e.textContent);
+  const [z2, z4, s3] = facts(distance);
+  assert.match(z2, /^expected 20–25 W\/kg, confirm with Compare with GPEXE · /);
+  assert.match(z4, /^expected 60–75 W\/kg, confirm with Compare with GPEXE · /);
+  assert.doesNotMatch(s3, /expected/, "limits that differ between teams give no range");
   assert.deepEqual(names(power), ["Metabolic power (W/kg)"]);
   assert.deepEqual(names(other), ["Mystery (no unit from GPEXE)"]);
   assert.doesNotMatch(text(), /furlongs|in distance/, "GPEXE's word is never shown as the unit");
@@ -334,7 +340,7 @@ test("R2: a club's admin sees the unit and the zone's own name, never the team t
   ] } };
   await loadSourceFieldsSection(render);
   assert.equal(rows()[0].querySelector(".metric-variables-item-name").textContent.replace(/\s+/g, " ").trim(), "Power zone 4 · distance (m)");
-  assert.doesNotMatch(text(), /thresholds|team limits/);
+  assert.doesNotMatch(text(), /thresholds|team limits|expected/);
 });
 
 test("R3 (#601's LOW-1): a platform admin working in a club's workspace is told to switch to the platform workspace, never to ask a platform administrator", async () => {

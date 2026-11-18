@@ -295,3 +295,14 @@ test("G1b-3 (the code review's HIGH): a unit_word_ambiguous refusal names only s
     assert.doesNotMatch(text, /Retire|revision|Source fields/, `${act}: no step the club's admin may not take`);
   }
 });
+
+test("Z (the Rukovodilac, 2026-11-18): comparing a numbered zone names the range it is expected to cover, from the compared session's own team limits, never as confirmed; without limits nothing is said", async () => {
+  read = () => ({ status: 200, body: { observation: observation({ gpexeName: "athletesessionpowerzone_distance_4", zoneThresholds: { power: [20, 25, 60, 75], speed: null } }) } });
+  try {
+    await openComparison();
+    assert.match(text(), /It is expected to be the zone 60–75 W\/kg \(this session's team limits\)\. Check that GPEXE shows it for that range; the range is not confirmed by OptiMove yet\./);
+  } finally { read = () => ({ status: 200, body: { observation: observation() } }); }
+  resetSourceFields();
+  await openComparison();
+  assert.doesNotMatch(text(), /expected to be the zone/);
+});

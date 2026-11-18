@@ -82,12 +82,13 @@ const field = (over = {}) => ({ id: NEW, sourceSystem: "gpexe", apiFamily: "rest
 
 let fields = [];
 let invItems = inventory();
+let invLimits = undefined;
 let post = () => ({ status: 404, body: { error: "notFound" } });
 function serve() {
   respond = (call) => {
     if (call.method === "POST") return post(call);
     if (call.url === FB) return { status: 200, body: { fields } };
-    if (call.url.startsWith(INV)) return { status: 200, body: { fields: invItems, nextCursor: null } };
+    if (call.url.startsWith(INV)) return { status: 200, body: { fields: invItems, nextCursor: null, zoneThresholds: invLimits } };
     const one = fields.find((f) => call.url === `${FB}/${f.id}`);
     if (one) return { status: 200, body: { field: one, verifications: [] } };
     return { status: 404, body: { error: "notFound" } };
@@ -333,4 +334,17 @@ test("10. the review fixes: a details name GPEXE sends both for the session and 
   assert.equal(sourceFieldsState().form, null);
   assert.match(text(), /This field already exists, so nothing was created\. The source fields are read again below\./);
   assert.ok(calls.some((c) => c.method === "GET" && c.url === FB), "the list is read again");
+});
+
+test("Z (the Rukovodilac, 2026-11-18): Create field on a numbered zone says the range it is expected to cover, from the team's limits, and that it is not confirmed yet; another name says nothing of a range", async () => {
+  invItems = [...inventory(), item({ name: "athletesessionpowerzone_distance_4", unitWord: "distance", zone: { family: "power", measure: "distance", number: 4 } })];
+  invLimits = { power: { values: [20, 25, 60, 75] }, speed: null, asOf: "2026-11-07T10:00:00Z" };
+  try {
+    await openCreate("details.session", "athletesessionpowerzone_distance_4");
+    assert.match(text(), /This zone is expected to cover 60–75 W\/kg \(the team's limits\)\. That is not confirmed until you compare the field with GPEXE\./);
+    sourceFieldsState().form = null;
+    render();
+    await openCreate();
+    assert.doesNotMatch(text(), /expected to cover/);
+  } finally { invLimits = undefined; }
 });

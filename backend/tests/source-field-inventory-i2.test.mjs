@@ -529,11 +529,12 @@ test("R2: the zone thresholds - one set when every bound team's newest stored se
   assert.equal(isValueRow({ endpoint: "details.session", field_name: "r_obj", kind: "object", covered: false }), false);
   assert.equal(isValueRow({ endpoint: "team_thresholds", field_name: "power_thresholds", kind: "number", covered: false }), false);
   assert.equal(isValueRow({ endpoint: "details.drill", field_name: "athlete_session_id", kind: "number", covered: true }), false);
-  assert.deepEqual(zoneThresholdsOf([]), { power: null, speed: null });
-  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 75], speed: [5.5, 7] }]), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] } });
-  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 80], speed: [5.5, 7] }]), { power: { differ: true }, speed: { values: [5.5, 7] } });
-  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25], speed: null }, { power: [20, 25], speed: [5.5, 7] }]), { power: { values: [20, 25] }, speed: { differ: true } }, "a team without a set is not a match");
-  assert.deepEqual(zoneThresholdsOf([{ power: ["x"], speed: [] }]), { power: null, speed: null }, "only finite number lists");
+  assert.deepEqual(zoneThresholdsOf([]), { power: null, speed: null, asOf: null });
+  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 75], speed: [5.5, 7] }]), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] }, asOf: null });
+  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 80], speed: [5.5, 7] }]), { power: { differ: true }, speed: { values: [5.5, 7] }, asOf: null });
+  assert.deepEqual(zoneThresholdsOf([{ power: [20, 25], speed: null }, { power: [20, 25], speed: [5.5, 7] }]), { power: { values: [20, 25] }, speed: { differ: true }, asOf: null }, "a team without a set is not a match");
+  assert.deepEqual(zoneThresholdsOf([{ power: ["x"], speed: [] }]), { power: null, speed: null, asOf: null }, "only finite number lists");
+  assert.equal(zoneThresholdsOf([{ power: [20], speed: null, session_started_at: "2026-11-01T09:00:00Z" }, { power: [20], speed: null, session_started_at: "2026-11-03T09:00:00Z" }]).asOf, "2026-11-03T09:00:00.000Z", "the newest session's day");
   assert.deepEqual(zoneOf("athletesessionrelativespeedzone_distance_3"), { family: "relativespeed", measure: "distance", number: 3 });
   for (const name of ["ext_work_over_zone0", "athletesessionpowerzone_distance", "powerzone_distance_4", "athletesessionpowerzone_speed_4"]) assert.equal(zoneOf(name), null, name);
 });
