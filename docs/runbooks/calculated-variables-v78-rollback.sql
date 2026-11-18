@@ -34,7 +34,8 @@ begin
   if not exists (select 1 from public.schema_migrations where migration_name = v78) then
     raise exception 'v78 rollback refused: v78 is not recorded';
   end if;
-  if not exists (select 1 from pg_trigger where tgname = 'metric_definitions_calculation_state_guard') then
+  if not exists (select 1 from pg_trigger where tgname = 'metric_definitions_calculation_state_guard'
+                  and tgrelid = 'training_load.metric_definitions'::regclass) then
     raise exception 'v78 rollback refused: the state guard''s trigger is missing';
   end if;
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
