@@ -278,3 +278,42 @@ test("2. the estimates for an athlete without GPS data neither propose nor write
   )).rows[0].n;
   assert.equal(danDerived, 0, "an estimate does not compute HMLD from estimated inputs");
 });
+
+test("3. a coach's correction of an imported occasion carries its inputs only: the new occasion gets HMLD again from the corrected inputs in the same transaction; a correction that names HMLD is refused, nothing written", async () => {
+  const team = await setupTeam();
+  await importSession(team, 9821);
+  const identity = (await admin.query(
+    `select si.id, si.current_occasion_id from training_load.metric_source_identities si
+       join training_load.metric_source_connections c on c.id = si.source_connection_id
+      where c.owner_team_id = $1 and si.source_external_id like 'athlete_session:%:full'
+        and exists (select 1 from training_load.metric_values v where v.occasion_id = si.current_occasion_id and v.metric_definition_id = $2)
+      order by si.source_external_id limit 1`, [team.teamId, hmld.id])).rows[0];
+  assert.ok(identity, "an imported session occasion with HMLD");
+  const old = (await admin.query(
+    `select metric_definition_id::text as def, metric_definition_version_id::text as ver, value_numeric::float8 as value, is_derived
+       from training_load.metric_values where occasion_id = $1`, [identity.current_occasion_id])).rows;
+  const oldHmld = old.find((v) => v.is_derived).value;
+  const first = String(world[ZONES[0]].variableId);
+  const inputs = old.filter((v) => !v.is_derived).map((v) => ({ metricDefinitionId: v.def, metricDefinitionVersionId: v.ver, value: v.def === first ? v.value + 100 : v.value }));
+  const correct = (values) => call("/api/training-load/metrics", "/occasions/imported-correction", {
+    method: "POST", cookie: team.coach.cookie,
+    body: { requestKey: key(), sourceIdentityId: identity.id, expectedCurrentOccasionId: identity.current_occasion_id, values },
+  });
+
+  const named = await correct([...inputs, { metricDefinitionId: String(hmld.id), metricDefinitionVersionId: String(hmld.currentVersion.id), value: 1 }]);
+  assert.equal(named.status, 409, named.text);
+  assert.equal(named.body.code ?? named.body.error, "calculated_variable_not_entered", named.text);
+  assert.equal((await admin.query(`select current_occasion_id from training_load.metric_source_identities where id = $1`, [identity.id])).rows[0].current_occasion_id, identity.current_occasion_id);
+
+  const ok = await correct(inputs);
+  assert.equal(ok.status, 201, ok.text);
+  const now = (await admin.query(`select current_occasion_id from training_load.metric_source_identities where id = $1`, [identity.id])).rows[0].current_occasion_id;
+  assert.notEqual(now, identity.current_occasion_id);
+  const after = (await admin.query(
+    `select metric_definition_id::text as def, value_numeric::float8 as value, is_derived, computed_by_ref from training_load.metric_values where occasion_id = $1`, [now])).rows;
+  const derived = after.filter((v) => v.is_derived);
+  assert.equal(derived.length, 1);
+  assert.equal(derived[0].value, oldHmld + 100, "HMLD from the corrected inputs");
+  assert.equal(derived[0].computed_by_ref.inputValueIds.length, 3);
+  assert.equal(after.filter((v) => !v.is_derived).length, inputs.length, "the inputs as corrected, nothing added");
+});

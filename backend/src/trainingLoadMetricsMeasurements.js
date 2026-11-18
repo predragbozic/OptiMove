@@ -11,6 +11,7 @@
 // the catalog's client-requested-scope model.
 import crypto from "crypto";
 import { pool, query } from "./db.js";
+import { writeCalculatedValues } from "./calculatedValues.js";
 import { isAthleteInWorkspaceScope, canManageMetricEventInScope, metricEventScopeSqlForWorkspace, catalogVisibilitySql } from "./trainingLoadMetricsAccess.js";
 import { linkMetricEventToActivity } from "./trainingActivityMetricsLink.js";
 
@@ -97,6 +98,21 @@ function validateCompleteValueSet(oldValues, newValues) {
     return { error: "A correction must carry the complete set of metrics from the original measurement — none may be dropped or added.", status: 400 };
   }
   return null;
+}
+
+// J21 (C141-C148): a correction of an imported occasion carries only its inputs (a calculated value is OptiMove's, never
+// entered or compared); the new occasion gets its calculated values again from its own inputs, in the same transaction.
+// Team events only: a calculated variable applies through the team's club (system or that club's own).
+async function recalculate(client, occasionId) {
+  const row = (await client.query(
+    `select e.owner_team_id, o.segment_id from training_load.metric_measurement_occasions o
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+       join training_load.metric_events e on e.id = p.event_id
+      where o.id = $1`,
+    [occasionId],
+  )).rows[0];
+  if (!row?.owner_team_id) return [];
+  return writeCalculatedValues(client, { occasionId, level: row.segment_id ? "drill" : "full", ownerTeamId: row.owner_team_id });
 }
 
 // §6 fix: strict type parsing — never silently coerces null/empty/
@@ -651,7 +667,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
     // Still under the lock acquired above — this read of `target` is current.
     if (target.superseded_by_occasion_id) throw httpError(409, "This revision was already superseded — reload and retry.");
 
-    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id = $1`, [targetOccasionId]);
+    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id = $1 and not is_derived`, [targetOccasionId]);
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error, valuesResult.code);
     const newValues = valuesResult.values;
@@ -753,7 +769,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
     const target = targetLookup.rows[0];
     if (!target || !canManageMetricEventInScope(scope, target)) throw httpError(404, "Measurement not found.");
 
-    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id = $1`, [expectedCurrentOccasionId]);
+    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id = $1 and not is_derived`, [expectedCurrentOccasionId]);
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
     if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error, valuesResult.code);
     const newValues = valuesResult.values;
@@ -776,6 +792,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
         [newOccasionId, v.metric_definition_id, v.metric_definition_version_id, v.value_numeric, v.value_boolean, v.value_text, v.unit_at_capture],
       );
     }
+    await recalculate(client, newOccasionId);
     await client.query(`update training_load.metric_measurement_occasions set superseded_by_occasion_id = $1 where id = $2`, [newOccasionId, expectedCurrentOccasionId]);
     await client.query(`update training_load.metric_source_identities set current_occasion_id = $1 where id = $2`, [newOccasionId, sourceIdentityId]);
     await client.query(`update training_load.metric_write_requests set result_occasion_id = $1 where requested_by_user_id = $2 and request_key = $3`, [newOccasionId, req.user.id, requestKey]);
@@ -809,7 +826,7 @@ export async function correctSourceIdentityOccasion(client, { sourceIdentityId, 
     }
     const oldOccRes = await client.query(`select content_hash, segment_id, event_participant_id from training_load.metric_measurement_occasions where id=$1`, [expectedCurrentOccasionId]);
     const oldOcc = oldOccRes.rows[0];
-    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id=$1`, [expectedCurrentOccasionId]);
+    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id=$1 and not is_derived`, [expectedCurrentOccasionId]);
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);
     if (completeness) throw new Error(`INCOMPLETE_CORRECTION: ${completeness.error}`);
     const newContentHash = occasionContentHash(newValues);
@@ -881,7 +898,7 @@ export async function importResendSynthetic(client, { sourceIdentityId, newValue
       await client.query("commit");
       return { outcome: conflictStatus, occasionId: newOccasionId };
     }
-    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id=$1`, [currentOcc.id]);
+    const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id=$1 and not is_derived`, [currentOcc.id]);
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);
     if (completeness) throw new Error(`INCOMPLETE_CORRECTION: ${completeness.error}`);
     await client.query(
