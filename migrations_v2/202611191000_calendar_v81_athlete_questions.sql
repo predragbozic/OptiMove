@@ -23,6 +23,9 @@
 -- Changed (md5 preconditions below):
 --   calendar.settings_changes_before_insert()   + the club switch subject
 --   tests.materialize_test_assignments_for_occurrence()  + the day's skips
+--   training_load.materialize_external_assignments_for_occurrence()
+--                                     + no assignment for an athlete a live
+--                                       question does not reach on its day
 --   event_requests / event_changes / settings_requests / settings_changes
 --   CHECKs gain the new operations.
 -- No row of any table is written by this file.
@@ -66,6 +69,11 @@ begin
     raise exception 'calendar v81: calendar.settings_changes_before_insert is not the v51 body (md5 %)', v_md5;
   end if;
   select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'training_load' and p.proname = 'materialize_external_assignments_for_occurrence';
+  if v_md5 is distinct from '8410bf7298d6b3d5e4aea6dfb94e1a18' then
+    raise exception 'calendar v81: training_load.materialize_external_assignments_for_occurrence is not the v4 body (md5 %)', v_md5;
+  end if;
+  select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'calendar' and p.proname = 'lock_event_writer';
   if v_md5 is distinct from '7ebf1bcf39cbb930fb913d89f25fd406' then
     raise exception 'calendar v81: calendar.lock_event_writer is not the v54 body (md5 %)', v_md5;
@@ -99,15 +107,19 @@ create function calendar.event_club_id(p_event_id uuid) returns uuid
 
 -- Review round 1 (security M1): an athlete TARGET of an event counts for a
 -- question or a Day off only while she is a member of the event's owner on
--- that day — the owner team for a team event, the owner club (any of its
--- memberships) for a club event — by the same membership-on-the-day rule.
+-- that day — the owner team for a team event; for a club event a club period
+-- of the owner club or a team period of one of its active teams (the
+-- calendar's own club rule, calendarAccess.js; round 1b) — by the same
+-- membership-on-the-day rule.
 create function calendar.athlete_member_of_owner_on_day(p_scope varchar, p_club_id uuid, p_team_id uuid, p_athlete_id uuid, p_day date)
 returns boolean language sql stable as $$
   select p_scope in ('club', 'team') and exists (
     select 1 from public.athlete_membership_periods mp
      where mp.athlete_id = p_athlete_id
        and ((p_scope = 'team' and mp.membership_type = 'team' and mp.team_id = p_team_id)
-         or (p_scope = 'club' and mp.club_id = p_club_id))
+         or (p_scope = 'club' and ((mp.membership_type = 'club' and mp.club_id = p_club_id)
+                                or (mp.membership_type = 'team' and mp.team_id in (
+                                      select t.id from public.teams t where t.club_id = p_club_id and coalesce(t.is_active, true))))))
        and (((mp.valid_from at time zone 'UTC')::date <= p_day
              and p_day <= coalesce((mp.valid_to at time zone 'UTC')::date, 'infinity'::date))
             or (mp.valid_to is null
@@ -472,6 +484,8 @@ create function calendar.question_open_for(p_question_id uuid, p_athlete_id uuid
         join calendar.events e on e.id = q.event_id and e.status = 'planned'
        where q.id = p_question_id and q.ended_at is null
          and calendar.questions_enabled(calendar.event_club_id(e.id))
+         -- round 1b: the event still reaches her on the question's day
+         and calendar.athlete_reached_on_day(e.id, p_athlete_id, q.window_date)
          and ((q.kind = 'rpe' and exists (
                 select 1 from training_load.external_schedule_occurrences o
                   join training_load.external_assignments a on a.occurrence_id = o.id
@@ -625,6 +639,11 @@ begin
      where s.occurrence_id = p_occurrence_id
        and (now() at time zone coalesce(a.device_timezone, v_schedule.timezone))::date = v_occurrence.scheduled_date
        and not exists (select 1 from tests.test_assignments x where x.occurrence_id = p_occurrence_id and x.athlete_id = s.athlete_id)
+       -- round 1b: a live calendar question's schedule makes no assignment for
+       -- an athlete its event does not reach on the question's day.
+       and not exists (select 1 from calendar.event_questions q
+                        where q.test_schedule_id = v_schedule.id and q.ended_at is null
+                          and not calendar.athlete_reached_on_day(q.event_id, s.athlete_id, q.window_date))
      order by s.athlete_id
   loop
     v_reason := null;
@@ -682,6 +701,50 @@ begin
     v_assignment_id := null;
   end loop;
 
+  return v_inserted_count;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 8b. Training Load's materialization (v4 body, md5 precondition above):
+--     the same round-1b rule for an event's RPE question.
+-- ---------------------------------------------------------------------------
+create or replace function training_load.materialize_external_assignments_for_occurrence(p_occurrence_id uuid)
+returns integer language plpgsql as $$
+declare
+  v_occurrence training_load.external_schedule_occurrences%rowtype;
+  v_schedule training_load.external_schedules%rowtype;
+  v_inserted_count integer;
+begin
+  select * into v_occurrence from training_load.external_schedule_occurrences where id = p_occurrence_id for update;
+  if v_occurrence.id is null then raise exception 'occurrence % does not exist', p_occurrence_id; end if;
+  select * into v_schedule from training_load.external_schedules where id = v_occurrence.schedule_id;
+
+  if v_occurrence.assignments_materialized_at is null then
+    insert into training_load.external_occurrence_target_snapshot (occurrence_id, athlete_id)
+    select p_occurrence_id, ta.athlete_id
+    from training_load.resolve_external_schedule_target_athletes(v_schedule.id) ta
+    on conflict (occurrence_id, athlete_id) do nothing;
+    update training_load.external_schedule_occurrences set assignments_materialized_at = now() where id = p_occurrence_id;
+  end if;
+
+  insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+  select p_occurrence_id, e.athlete_id, e.effective_timezone, v_occurrence.scheduled_date,
+         (v_occurrence.scheduled_date + v_schedule.opens_time) at time zone e.effective_timezone,
+         case when v_schedule.due_time is null then null else (v_occurrence.scheduled_date + v_schedule.due_time) at time zone e.effective_timezone end,
+         (v_occurrence.scheduled_date + v_schedule.closes_time) at time zone e.effective_timezone
+  from (
+    select s.athlete_id, coalesce(a.device_timezone, v_schedule.timezone) as effective_timezone
+    from training_load.external_occurrence_target_snapshot s
+    join public.athletes a on a.id = s.athlete_id
+    where s.occurrence_id = p_occurrence_id
+  ) e
+  where (now() at time zone e.effective_timezone)::date = v_occurrence.scheduled_date
+    and not exists (select 1 from calendar.event_questions q
+                     where q.external_schedule_id = v_schedule.id and q.ended_at is null
+                       and not calendar.athlete_reached_on_day(q.event_id, e.athlete_id, q.window_date))
+  on conflict (occurrence_id, athlete_id) do nothing;
+
+  get diagnostics v_inserted_count = row_count;
   return v_inserted_count;
 end $$;
 

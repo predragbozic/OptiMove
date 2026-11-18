@@ -25,7 +25,9 @@ const V81_SHA256 = (await import("node:crypto")).createHash("sha256").update(fs.
 const BEFORE = calendarMigrations().filter((x) => x !== V81);
 const MD5 = {
   materializeBefore: "2d961f5acd6c6309baa51de868773ba4",
-  materializeAfter: "15a79e10b95ef31b30286935f28b7db5",
+  materializeAfter: "ef7e1093ca427ba0bf2f2bab120ba14f",
+  tlBefore: "8410bf7298d6b3d5e4aea6dfb94e1a18",
+  tlAfter: "a700c67786e79af8c03aae0b2d4a5fc3",
   settingsBefore: "75ed99731f6d61d19a8f0c2e473fedd1",
   settingsAfter: "b4189ddb507e607263ee6cb89760a891",
 };
@@ -73,7 +75,7 @@ test("1. the preflight on the database before v81, the apply, the post-check; th
     const deps = pre[1][0];
     for (const [k, v] of Object.entries(deps)) if (k !== "v81_rows") assert.equal(v, true, `block 2 ${k}`);
     assert.equal(Number(deps.v81_rows), 0);
-    assert.deepEqual(pre[2][0], { materialize_md5: MD5.materializeBefore, settings_changes_md5: MD5.settingsBefore, lock_event_writer_md5: "7ebf1bcf39cbb930fb913d89f25fd406" }, "block 3");
+    assert.deepEqual(pre[2][0], { materialize_md5: MD5.materializeBefore, settings_changes_md5: MD5.settingsBefore, lock_event_writer_md5: "7ebf1bcf39cbb930fb913d89f25fd406", tl_materialize_md5: MD5.tlBefore }, "block 3");
     assert.deepEqual(Object.values(pre[3][0]).map(Number), [0, 0, 0], "block 4");
     assert.ok(Object.values(pre[4][0]).every((v) => v === true), `block 5 ${JSON.stringify(pre[4][0])}`);
     assert.ok("idle_in_transaction" in pre[5][0], "block 6 runs");
@@ -87,7 +89,7 @@ test("1. the preflight on the database before v81, the apply, the post-check; th
       [post[1][0].v81_tables, post[1][0].v81_columns, post[1][0].v81_functions, post[1][0].v81_triggers, post[1][0].disabled, post[1][0].switch_index, post[1][0].rpe_link_trigger].map(Number),
       [4, 3, 17, 14, 0, 1, 1], "block 2",
     );
-    assert.deepEqual(post[2][0], { materialize_md5: MD5.materializeAfter, settings_changes_md5: MD5.settingsAfter }, "block 3");
+    assert.deepEqual(post[2][0], { materialize_md5: MD5.materializeAfter, settings_changes_md5: MD5.settingsAfter, tl_materialize_md5: MD5.tlAfter }, "block 3");
     assert.deepEqual(Object.values(post[3][0]).map(Number), [0, 0, 0, 0, 0, 0], "block 4");
     assert.ok("lock_waits" in post[4][0], "block 5 runs");
   } finally {
@@ -112,6 +114,12 @@ test("2. the md5 gate: a changed body refuses v81 with nothing applied", async (
     await assert.rejects(applyGpexeTestMigrations(db.url, [V81]), (e) => /is not the v51 body/.test(String(e?.cause?.message ?? e?.message)));
     assert.equal((await client.query(`select to_regclass('calendar.event_questions') as t`)).rows[0].t, null);
     await client.query(settings);
+    // Round 1b: the Training Load v4 body is gated too.
+    const tlDef = (await client.query(`select pg_get_functiondef('training_load.materialize_external_assignments_for_occurrence(uuid)'::regprocedure) as d`)).rows[0].d;
+    await client.query(tlDef.replace("begin\n", "begin\n  -- changed\n"));
+    await assert.rejects(applyGpexeTestMigrations(db.url, [V81]), (e) => /is not the v4 body/.test(String(e?.cause?.message ?? e?.message)));
+    assert.equal((await client.query(`select to_regclass('calendar.event_questions') as t`)).rows[0].t, null);
+    await client.query(tlDef);
     // A dependency recorded with another checksum (review round 1, db L1).
     const dep = "migrations_v2/202609020900_training_load_v7_external_schedule_notification_rules.sql";
     const saved = (await client.query(`select checksum from public.schema_migrations where migration_name = $1`, [dep])).rows[0].checksum;
@@ -146,6 +154,7 @@ test("3. the rollback: refused without v81; apply -> rollback -> the catalog ide
     assert.equal((await client.query(DIGEST_SQL)).rows[0].d, digestBefore, "the catalog is exactly the one before v81 (columns, constraints, bodies, triggers, indexes)");
     assert.equal(await md5Of(client, "tests", "materialize_test_assignments_for_occurrence"), MD5.materializeBefore);
     assert.equal(await md5Of(client, "calendar", "settings_changes_before_insert"), MD5.settingsBefore);
+    assert.equal(await md5Of(client, "training_load", "materialize_external_assignments_for_occurrence"), MD5.tlBefore);
     await applyGpexeTestMigrations(db.url, [V81]);
     assert.ok((await client.query(`select to_regclass('calendar.event_questions') as t`)).rows[0].t, "re-applied");
 
@@ -160,6 +169,11 @@ test("3. the rollback: refused without v81; apply -> rollback -> the catalog ide
     await client.query(body.replace("begin\n", "begin\n  -- later\n"));
     await refused("a changed body", /not v81's body/);
     await client.query(body);
+    // The Training Load body changed since (round 1b).
+    const tlBody = (await client.query(`select pg_get_functiondef('training_load.materialize_external_assignments_for_occurrence(uuid)'::regprocedure) as d`)).rows[0].d;
+    await client.query(tlBody.replace("begin\n", "begin\n  -- later\n"));
+    await refused("a changed training_load body", /materialize_external_assignments_for_occurrence is not v81's body/);
+    await client.query(tlBody);
     // lock_event_writer changed since (review round 1, db L3).
     const writer = (await client.query(`select pg_get_functiondef('calendar.lock_event_writer(uuid, character varying, uuid, character varying)'::regprocedure) as d`)).rows[0].d;
     await client.query(writer.replace("begin\n", "begin\n  -- later\n"));
@@ -213,7 +227,7 @@ test("4. the whole chain: the real legacy snapshot, every migration of migration
       assert.ok(!files.some((f) => /_v7[89]_|_v80_/.test(f)), "v78-v80 are not on this branch");
       const post = await runbookBlocks(client, "calendar-questions-v81-postcheck.sql");
       assert.equal(post[0][0].v81_checksum, V81_SHA256);
-      assert.deepEqual(post[2][0], { materialize_md5: MD5.materializeAfter, settings_changes_md5: MD5.settingsAfter });
+      assert.deepEqual(post[2][0], { materialize_md5: MD5.materializeAfter, settings_changes_md5: MD5.settingsAfter, tl_materialize_md5: MD5.tlAfter });
       assert.deepEqual(Object.values(post[3][0]).map(Number), [0, 0, 0, 0, 0, 0]);
     } finally {
       await client.end();

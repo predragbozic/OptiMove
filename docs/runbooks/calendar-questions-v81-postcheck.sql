@@ -30,11 +30,13 @@ select
   (select count(*) from pg_indexes where schemaname = 'calendar' and indexname = 'settings_changes_club_revision_key') as switch_index,
   (select count(*) from pg_trigger where tgname = 'events_rpe_question_link' and not tgisinternal and tgenabled <> 'D') as rpe_link_trigger;
 
--- 3. The two bodies v81 wrote. Expected: materialize_md5 = 15a79e10b95ef31b30286935f28b7db5,
---    settings_changes_md5 = b4189ddb507e607263ee6cb89760a891.
+-- 3. The three bodies v81 wrote. Expected: materialize_md5 = ef7e1093ca427ba0bf2f2bab120ba14f,
+--    settings_changes_md5 = b4189ddb507e607263ee6cb89760a891,
+--    tl_materialize_md5 = a700c67786e79af8c03aae0b2d4a5fc3.
 select
   (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'tests' and p.proname = 'materialize_test_assignments_for_occurrence') as materialize_md5,
-  (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar' and p.proname = 'settings_changes_before_insert') as settings_changes_md5;
+  (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar' and p.proname = 'settings_changes_before_insert') as settings_changes_md5,
+  (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname = 'materialize_external_assignments_for_occurrence') as tl_materialize_md5;
 
 -- 4. Nothing written by the migration; the switch is off everywhere. Expected:
 --    every column 0.

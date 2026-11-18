@@ -30,11 +30,13 @@ select
 -- 3. The bodies v81 replaces or relies on, by md5 (the package names them).
 --    Expected: materialize_md5 = 2d961f5acd6c6309baa51de868773ba4,
 --    settings_changes_md5 = 75ed99731f6d61d19a8f0c2e473fedd1,
---    lock_event_writer_md5 = 7ebf1bcf39cbb930fb913d89f25fd406 (v54).
+--    lock_event_writer_md5 = 7ebf1bcf39cbb930fb913d89f25fd406 (v54),
+--    tl_materialize_md5 = 8410bf7298d6b3d5e4aea6dfb94e1a18 (training_load v4).
 select
   (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'tests' and p.proname = 'materialize_test_assignments_for_occurrence') as materialize_md5,
   (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar' and p.proname = 'settings_changes_before_insert') as settings_changes_md5,
-  (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar' and p.proname = 'lock_event_writer') as lock_event_writer_md5;
+  (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'calendar' and p.proname = 'lock_event_writer') as lock_event_writer_md5,
+  (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'training_load' and p.proname = 'materialize_external_assignments_for_occurrence') as tl_materialize_md5;
 
 -- 4. No v81 object yet. Expected: every column 0.
 select

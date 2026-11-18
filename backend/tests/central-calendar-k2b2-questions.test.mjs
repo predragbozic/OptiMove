@@ -975,6 +975,93 @@ test("23. M1: an athlete target who left the club before the window's day gets n
   assert.equal((await liveQuestions(solo.id)).length, 0);
 });
 
+test("23b. round 1b: an athlete target whose membership ended before the window's day is not asked on that day (RPE and WELLNESS): not in /mine, Later 404, not counted, no assignment; question_open_for refuses her even with a backdated assignment", async () => {
+  const t = await freshTeam("m1b", 2);
+  const [stay, leave] = t.athletes;
+  const ev = await teamEvent(t, {
+    title: "M1b", targets: [{ kind: "athlete", id: stay.athleteId }, { kind: "athlete", id: leave.athleteId }],
+    questions: [{ kind: "rpe", window: ALL_DAY }, { kind: "wellness", window: ALL_DAY }],
+  });
+  const qs = await liveQuestions(ev.id);
+  const rpe = qs.find((x) => x.kind === "rpe");
+  const wel = qs.find((x) => x.kind === "wellness");
+  const endPeriods = async (athleteId) => {
+    await q(`alter table public.athlete_membership_periods disable trigger athlete_membership_periods_protect`);
+    try {
+      await q(`update public.athlete_membership_periods set valid_from = least(valid_from, now() - interval '5 days'), valid_to = now() - interval '2 days' where athlete_id = $1`, [athleteId]);
+    } finally {
+      await q(`alter table public.athlete_membership_periods enable trigger athlete_membership_periods_protect`);
+    }
+  };
+  // (A) Her periods end before the window's day, after the ask and before any
+  // occurrence of the day: the module's resolvers still list her as a target.
+  await endPeriods(leave.athleteId);
+  const mineStay = await api("/api/calendar/questions/mine", { cookie: stay.cookie });
+  assert.deepEqual(mineStay.body.questions.map((x) => x.questionId).sort(), [rpe.id, wel.id].sort(), "the one who stays is asked");
+  const mineLeave = await api("/api/calendar/questions/mine", { cookie: leave.cookie });
+  assert.equal(mineLeave.status, 200, mineLeave.text);
+  assert.deepEqual(mineLeave.body.questions, [], "nothing for the leaver");
+  for (const question of [rpe, wel]) {
+    const later = await api(`/api/calendar/questions/${question.id}/later`, { method: "POST", cookie: leave.cookie, body: { requestKey: newKey() } });
+    assert.equal(later.status, 404, later.text);
+  }
+  const panel = await api(`/api/calendar/events/${ev.id}/questions`, { cookie: t.coach.cookie });
+  for (const pq of panel.body.questions) {
+    assert.equal(pq.counts.asked, 1, `${pq.kind}: counts.asked excludes her`);
+    assert.deepEqual(pq.notAnswered.map((a) => a.athleteId), [String(stay.athleteId)]);
+  }
+  const assignments = async () => ({
+    rpe: (await q(`select count(*)::int as n from training_load.external_assignments a join training_load.external_schedule_occurrences o on o.id = a.occurrence_id where o.schedule_id = $1 and a.athlete_id = $2`, [rpe.external_schedule_id, leave.athleteId]))[0].n,
+    wel: (await q(`select count(*)::int as n from tests.test_assignments a join tests.test_schedule_occurrences o on o.id = a.occurrence_id where o.schedule_id = $1 and a.athlete_id = $2`, [wel.test_schedule_id, leave.athleteId]))[0].n,
+  });
+  assert.deepEqual(await assignments(), { rpe: 0, wel: 0 }, "no assignment for her (her answer has nothing to attach to)");
+  // The module's own materialization, called again, still makes none for her.
+  await q(`select training_load.materialize_external_assignments_for_occurrence(o.id) from training_load.external_schedule_occurrences o where o.schedule_id = $1`, [rpe.external_schedule_id]);
+  await q(`select tests.materialize_test_assignments_for_occurrence(o.id) from tests.test_schedule_occurrences o where o.schedule_id = $1`, [wel.test_schedule_id]);
+  assert.deepEqual(await assignments(), { rpe: 0, wel: 0 });
+
+  // (B) A backdated end: her assignments were made while she was a member, then
+  // her periods are ended before the day. The calendar no longer offers them.
+  const t2 = await freshTeam("m1bb", 2);
+  const [stay2, late2] = t2.athletes;
+  const ev2 = await teamEvent(t2, {
+    title: "M1b backdated", targets: [{ kind: "athlete", id: stay2.athleteId }, { kind: "athlete", id: late2.athleteId }],
+    questions: [{ kind: "rpe", window: ALL_DAY }, { kind: "wellness", window: ALL_DAY }],
+  });
+  const qs2 = await liveQuestions(ev2.id);
+  const before = await api("/api/calendar/questions/mine", { cookie: late2.cookie });
+  assert.equal(before.body.questions.length, 2, "asked while a member");
+  await endPeriods(late2.athleteId);
+  const after = await api("/api/calendar/questions/mine", { cookie: late2.cookie });
+  assert.deepEqual(after.body.questions, []);
+  for (const question of qs2) {
+    assert.equal((await q(`select calendar.question_open_for($1, $2) as o`, [question.id, late2.athleteId]))[0].o, false, `${question.kind}: not open for her`);
+    assert.equal((await q(`select calendar.question_open_for($1, $2) as o`, [question.id, stay2.athleteId]))[0].o, true, `${question.kind}: open for the one who stays`);
+    await assert.rejects(
+      q(`insert into calendar.question_postponements (question_id, athlete_id, performed_by_user_id, request_key) values ($1, $2, $3, $4)`, [question.id, late2.athleteId, late2.userId, newKey()]),
+      (e) => e.constraint === "question_postponements_open",
+      `${question.kind}: the database refuses her Later`,
+    );
+    const later = await api(`/api/calendar/questions/${question.id}/later`, { method: "POST", cookie: late2.cookie, body: { requestKey: newKey() } });
+    assert.equal(later.status, 404, later.text);
+  }
+  const panel2 = await api(`/api/calendar/events/${ev2.id}/questions`, { cookie: t2.coach.cookie });
+  for (const pq of panel2.body.questions) assert.equal(pq.counts.asked, 1, `${pq.kind}: not counted after the backdated end`);
+});
+
+test("23c. round 1b (db LOW): a club event's athlete target counts through a club period, or a team period of one of the club's ACTIVE teams", async () => {
+  const team = await fx.makeTeam(m.clubs.c1, "q m1c");
+  const only = (await q(`insert into public.athletes (full_name, display_name) values ('q m1c team only', 'q m1c team only') returning id`))[0].id;
+  await fx.addMembership({ athleteId: only, clubId: m.clubs.c1, teamId: team });
+  const member = async () => (await q(`select calendar.athlete_member_of_owner_on_day('club', $1, null, $2, current_date) as ok`, [m.clubs.c1, only]))[0].ok;
+  assert.equal(await member(), true, "a team period of an active team of the club");
+  await q(`update public.teams set is_active = false where id = $1`, [team]);
+  assert.equal(await member(), false, "a team period of an inactive team does not count");
+  await fx.addMembership({ athleteId: only, clubId: m.clubs.c1, type: "club" });
+  assert.equal(await member(), true, "a club period counts");
+  assert.equal((await q(`select calendar.athlete_member_of_owner_on_day('team', $1, $2, $3, current_date) as ok`, [m.clubs.c1, team, only]))[0].ok, true, "the team rule is unchanged");
+});
+
 test("24. M3 (test 12b): a check-in link made on a calendar question's schedule is revoked when the question is removed; its token answers 404", async () => {
   const t = await freshTeam("m3", 1);
   const ev = await teamEvent(t, { day: addDays(TODAY, 4), questions: [{ kind: "wellness", window: { kind: "next_morning" } }] });

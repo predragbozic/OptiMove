@@ -1,7 +1,7 @@
 # Runbook — migration v81: Ask athletes and "Skip days off" (K2b-2a-1)
 
 File: `migrations_v2/202611191000_calendar_v81_athlete_questions.sql` (sha256 at the time of writing
-`0397868e95d992f699b99f4052fc0bace112335e271b8f7f1bf687ac8676cb52`; the pull request names the final one). Plan: `docs/ai/central-calendar-k2b2-plan.md`, section 9.1 and
+`1b39835adaaaf8d12d5f4d8599e82908dcc3b00a78328ad62b4d8d9a6d0cef17`; the pull request names the final one). Plan: `docs/ai/central-calendar-k2b2-plan.md`, section 9.1 and
 the manager's GO 9.1.13. Scripts beside this file: `calendar-questions-v81-preflight.sql`,
 `calendar-questions-v81-postcheck.sql`, `calendar-questions-v81-rollback.sql`.
 
@@ -16,6 +16,9 @@ the manager's GO 9.1.13. Scripts beside this file: `calendar-questions-v81-prefl
   asked only while she is a member of the event's owner club or team on the window's day; review round 1, M1) and
   the trigger `calendar.events_rpe_question_link` on `calendar.events` (an event's RPE schedule changes only while no
   RPE question is live; review round 1, H2).
+- **No assignment for an athlete a question does not reach (round 1b):** both modules' materializations skip an
+  athlete a live calendar question's event does not reach on the question's day; `calendar.question_open_for` and the
+  panel apply the same rule.
 - **Dependency check:** the first `do` block refuses unless its eight dependencies are recorded by name with the
   repository's checksum.
 - **New columns:** `calendar.event_types.default_questions` (null = derived from `default_expects`),
@@ -27,7 +30,8 @@ the manager's GO 9.1.13. Scripts beside this file: `calendar-questions-v81-prefl
 
   | Function | md5 before | md5 after |
   |---|---|---|
-  | `tests.materialize_test_assignments_for_occurrence(uuid)` | `2d961f5acd6c6309baa51de868773ba4` | `15a79e10b95ef31b30286935f28b7db5` |
+  | `tests.materialize_test_assignments_for_occurrence(uuid)` | `2d961f5acd6c6309baa51de868773ba4` | `ef7e1093ca427ba0bf2f2bab120ba14f` |
+  | `training_load.materialize_external_assignments_for_occurrence(uuid)` | `8410bf7298d6b3d5e4aea6dfb94e1a18` | `a700c67786e79af8c03aae0b2d4a5fc3` |
   | `calendar.settings_changes_before_insert()` | `75ed99731f6d61d19a8f0c2e473fedd1` | `b4189ddb507e607263ee6cb89760a891` |
 
   It also checks, without replacing it, that `calendar.lock_event_writer` is v54's body (`7ebf1bcf39cbb930fb913d89f25fd406`).

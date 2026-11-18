@@ -384,6 +384,9 @@ All new tables refuse TRUNCATE (`calendar.refuse_truncate`), and every guard rai
    the form ticks it by default, plan 8). CHECK: true only for `schedule_kind = 'recurring'` with `freq = 'daily'`.
 8. **`tests.materialize_test_assignments_for_occurrence(uuid)`** — `create or replace`, **md5 precondition
    `2d961f5acd6c6309baa51de868773ba4`** (the phase-4 body; refused with `23514`-style `raise` if the live body differs).
+   (Round 1b: its md5 after is `ef7e1093ca427ba0bf2f2bab120ba14f`, and v81 also replaces
+   `training_load.materialize_external_assignments_for_occurrence` behind md5 `8410bf7298d6b3d5e4aea6dfb94e1a18`; see
+   9.1.15, round 1b.)
    The new body is the phase-4 body plus one step, between the snapshot and the insert:
    - only when the schedule has `skip_days_off` and its owner club (club, or the team's club) has the switch on;
    - after the occurrence's `FOR UPDATE`, take `pg_advisory_xact_lock_shared(hashtextextended('calendar.day_off:' ||
@@ -744,3 +747,42 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
     schedule is exactly the question's window;
   - `skip_days_off` for WELLNESS only, and the switch on when it is set (the route; the materialization re-checks the
     switch every time); the database checks daily-only.
+
+**Round 1b (2026-11-18, on `43b8ca93`): the narrow re-reviews' one MEDIUM and one LOW**
+- **MEDIUM (security; M1 was closed only at ask time).** An athlete target who passed `askableTargets` at the ask and
+  whose membership ended before the window's day was still asked on that day: the module resolvers
+  (`tests.resolve_schedule_target_athletes`, `training_load.resolve_external_schedule_target_athletes`) list her
+  without a membership check, `ensureCurrent*` made her assignment, and `calendar.question_open_for` checked only that
+  the assignment existed. Fixed in three places:
+  1. `calendar.question_open_for` also requires `calendar.athlete_reached_on_day(event, athlete, q.window_date)`
+     (so the *Later* route and its database guard `question_postponements_open` refuse her);
+  2. `ASKED_SQL` (`calendarQuestionService.js`) keeps only athletes the event reaches on the question's `window_date`:
+     the panel's lists and counts, `/questions/mine`'s candidates and *Later*'s "hers" check;
+  3. the materializations make **no assignment** (not a `cancelled` one) for an athlete a live question's event does
+     not reach on the question's day: `tests.materialize_test_assignments_for_occurrence` (md5 after:
+     `ef7e1093ca427ba0bf2f2bab120ba14f`) and, newly replaced by v81 behind its own md5 precondition,
+     `training_load.materialize_external_assignments_for_occurrence` (v4 body `8410bf7298d6b3d5e4aea6dfb94e1a18` →
+     `a700c67786e79af8c03aae0b2d4a5fc3`). Why none rather than `cancelled`: a `cancelled` row is final and would show
+     as a cancelled assignment in the Tests and Training Load views with no reason row explaining it; no row keeps the
+     decision live (a membership restored the same day, or backdated, is asked at the next materialization), and the
+     service filter alone would not stop the module's own answer form, which works from the assignment. The rollback
+     restores the v4 body and checks both md5s; the preflight and post-check show it.
+
+  Test 23b: (A) her periods end before the day, after the ask and before any occurrence: `/mine` empty for her, *Later*
+  404 for both kinds, `counts.asked` 1 for both, no RPE or WELLNESS assignment (also after calling both modules'
+  materializations again). (B) a backdated end after her assignments were made: `/mine` empty, `question_open_for`
+  false for her and true for the one who stays, the raw postponement refused by `question_postponements_open`, *Later*
+  404, not counted. Mutations B1 (the `question_open_for` condition), B2 (`ASKED_SQL`), B3 (the Tests filter) and B4
+  (the Training Load filter) each fail it; B6 (the rollback's Training Load md5 check) and B7 (the migration's v4 gate)
+  fail migration tests 3 and 2.
+
+  **Known limit (B):** an assignment made while she was a member stays answerable on that day through the module's own
+  form (the Tests or Training Load route, out of this piece); the calendar no longer offers, counts or postpones it.
+  Only a backdated membership change reaches this state, since an assignment is made on its own day.
+- **LOW (db): the club rule of `athlete_member_of_owner_on_day`.** For a club event, an athlete target counts through a
+  `club` period of the owner club or a `team` period of one of its **active** teams, as `calendarAccess.js` does (it
+  accepted any period with the club's `club_id`). Test 23c; mutation B5.
+- **Recorded, no change:** the insert-side twin of `events_rpe_question_link` (db LOW-1: no command can insert an event
+  with an RPE question already live); the *Later* replay before the ownership re-check (security LOW: the replayed
+  answer is her own immutable record).
+- R1 and R2 (the deadlock mutations) were run again on the changed functions: both still fail test 15 (R1 also 21).

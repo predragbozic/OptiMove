@@ -1,8 +1,10 @@
 -- Rollback of migration v81 (migrations_v2/202611191000_calendar_v81_athlete_questions.sql):
 -- Ask athletes and the daily WELLNESS "Skip days off" (K2b-2a-1). Drops v81's
 -- tables, columns, constraints, triggers and functions, restores the v51 body of
--- calendar.settings_changes_before_insert and the phase-4 body of
--- tests.materialize_test_assignments_for_occurrence (each checked by md5 after),
+-- calendar.settings_changes_before_insert, the phase-4 body of
+-- tests.materialize_test_assignments_for_occurrence and the v4 body of
+-- training_load.materialize_external_assignments_for_occurrence (each checked
+-- by md5 after),
 -- restores the four CHECKs v81 widened, and deletes v81's migration record, so
 -- the migrator applies v81 again on the next start.
 --
@@ -12,7 +14,7 @@
 --   - v81 is not recorded;
 --   - a migration recorded after v81 has `calendar` or `tests` in its file name
 --     (a later migration of another part, e.g. training_load, does not stop it:
---     plan 9 "a narrow rollback guard"), or either body v81 replaced no longer
+--     plan 9 "a narrow rollback guard"), or any body v81 replaced no longer
 --     has v81's md5 (a later migration touched it);
 --   - any row depends on v81: a switch row, a question, a postponement, a skip
 --     row, a schedule with skip_days_off, a type with default_questions, a
@@ -68,8 +70,13 @@ begin
   end if;
   select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'tests' and p.proname = 'materialize_test_assignments_for_occurrence';
-  if v_md5 is distinct from '15a79e10b95ef31b30286935f28b7db5' then
+  if v_md5 is distinct from 'ef7e1093ca427ba0bf2f2bab120ba14f' then
     raise exception 'v81 rollback refused: tests.materialize_test_assignments_for_occurrence is not v81''s body (md5 %)', v_md5;
+  end if;
+  select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'training_load' and p.proname = 'materialize_external_assignments_for_occurrence';
+  if v_md5 is distinct from 'a700c67786e79af8c03aae0b2d4a5fc3' then
+    raise exception 'v81 rollback refused: training_load.materialize_external_assignments_for_occurrence is not v81''s body (md5 %)', v_md5;
   end if;
   select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'calendar' and p.proname = 'settings_changes_before_insert';
@@ -209,6 +216,43 @@ begin
   return new;
 end $$;
 
+create or replace function training_load.materialize_external_assignments_for_occurrence(p_occurrence_id uuid)
+returns integer language plpgsql as $$
+declare
+  v_occurrence training_load.external_schedule_occurrences%rowtype;
+  v_schedule training_load.external_schedules%rowtype;
+  v_inserted_count integer;
+begin
+  select * into v_occurrence from training_load.external_schedule_occurrences where id = p_occurrence_id for update;
+  if v_occurrence.id is null then raise exception 'occurrence % does not exist', p_occurrence_id; end if;
+  select * into v_schedule from training_load.external_schedules where id = v_occurrence.schedule_id;
+
+  if v_occurrence.assignments_materialized_at is null then
+    insert into training_load.external_occurrence_target_snapshot (occurrence_id, athlete_id)
+    select p_occurrence_id, ta.athlete_id
+    from training_load.resolve_external_schedule_target_athletes(v_schedule.id) ta
+    on conflict (occurrence_id, athlete_id) do nothing;
+    update training_load.external_schedule_occurrences set assignments_materialized_at = now() where id = p_occurrence_id;
+  end if;
+
+  insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, due_at, closes_at)
+  select p_occurrence_id, e.athlete_id, e.effective_timezone, v_occurrence.scheduled_date,
+         (v_occurrence.scheduled_date + v_schedule.opens_time) at time zone e.effective_timezone,
+         case when v_schedule.due_time is null then null else (v_occurrence.scheduled_date + v_schedule.due_time) at time zone e.effective_timezone end,
+         (v_occurrence.scheduled_date + v_schedule.closes_time) at time zone e.effective_timezone
+  from (
+    select s.athlete_id, coalesce(a.device_timezone, v_schedule.timezone) as effective_timezone
+    from training_load.external_occurrence_target_snapshot s
+    join public.athletes a on a.id = s.athlete_id
+    where s.occurrence_id = p_occurrence_id
+  ) e
+  where (now() at time zone e.effective_timezone)::date = v_occurrence.scheduled_date
+  on conflict (occurrence_id, athlete_id) do nothing;
+
+  get diagnostics v_inserted_count = row_count;
+  return v_inserted_count;
+end $$;
+
 
 drop trigger events_rpe_question_link on calendar.events;
 drop function calendar.events_rpe_question_link();
@@ -282,6 +326,11 @@ begin
    where n.nspname = 'calendar' and p.proname = 'settings_changes_before_insert';
   if v_md5 is distinct from '75ed99731f6d61d19a8f0c2e473fedd1' then
     raise exception 'v81 rollback: the v51 body was not restored (md5 %)', v_md5;
+  end if;
+  select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'training_load' and p.proname = 'materialize_external_assignments_for_occurrence';
+  if v_md5 is distinct from '8410bf7298d6b3d5e4aea6dfb94e1a18' then
+    raise exception 'v81 rollback: the training_load v4 body was not restored (md5 %)', v_md5;
   end if;
 end $$;
 

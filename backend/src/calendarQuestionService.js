@@ -27,7 +27,9 @@ async function questionsInstalled(queryable) {
 
 // Who is asked: the schedule's frozen snapshot once an occurrence exists,
 // else its targets resolved now (the module's own rule, so the panel never
-// counts someone the module will not ask).
+// counts someone the module will not ask), kept only while the event reaches
+// her on the question's day (round 1b: the module resolvers' athlete branch
+// has no membership check).
 const ASKED_SQL = `
   select x.athlete_id from (
     select s.athlete_id from training_load.external_occurrence_target_snapshot s
@@ -43,7 +45,8 @@ const ASKED_SQL = `
     union
     select r.athlete_id from tests.resolve_schedule_target_athletes(q.test_schedule_id) r
      where q.kind = 'wellness' and not exists (select 1 from tests.test_schedule_occurrences o where o.schedule_id = q.test_schedule_id)
-  ) x`;
+  ) x
+  where calendar.athlete_reached_on_day(q.event_id, x.athlete_id, q.window_date)`;
 
 const ANSWERED_SQL = (athleteExpr) => `(
   (q.kind = 'rpe' and exists (
