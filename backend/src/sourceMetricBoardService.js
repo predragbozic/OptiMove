@@ -729,6 +729,9 @@ function preplacedOf(world, shared, mappingVersionId) {
   if (!col || !variable) throw NOT_FOUND();
   if (world.sessionRefusal) throw world.sessionRefusal;
   if (!col.readable || v.parameter_kind !== "none") return { code: col.reason ?? "field_has_parameters", v };
+  // A field without a condition never fills a variable with one (the review of 2026-11-18), even through an existing
+  // version: the save never switches such a version on.
+  if (variable.has_condition) return { code: "condition_mismatch", v };
   if (col.field.revision_id !== v.revision_id) return { code: "revision_not_usable", v };
   if (variable.version_id !== v.target_version_id) return { code: "canonical_version_changed", v };
   if (variable.hidden) return { code: "variable_hidden", v };

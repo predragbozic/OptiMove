@@ -359,6 +359,9 @@ const MESSAGES = {
   revision_not_usable: "The source revision is not a draft or active revision of this mapping's source metric.",
   level_not_allowed: "A chosen level is not supported by the source revision or the canonical definition.",
   canonical_not_numeric: "The canonical definition's current version is not numeric.",
+  // The review of 2026-11-18: a field without a condition never fills a variable that counts only values under one (no
+  // check could tell that the field's values are the ones the condition names). Zone match is the later way in.
+  condition_mismatch: "This variable counts only values under a condition, and this field has none, so it cannot fill it.",
   canonical_unit_missing: "The canonical definition's current version has no unit.",
   canonical_unit_not_a_token: "The canonical definition's unit is not a unit token.",
   conversion_unavailable: "No active unit conversion exists for this unit pair.",
@@ -1137,6 +1140,9 @@ export async function createVersion({ ctx, mappingId, body }) {
       if (!target || target.state !== "active" || !target.version_id) throw refusal(409, "target_not_active", MESSAGES.target_not_active);
       const notReady = notReadyCodeOf(target);
       if (notReady) throw refusal(409, notReady, MESSAGES[notReady]);
+      if (revision.parameter_kind === "none" && target.cd_type !== null && target.cd_type !== undefined) {
+        throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
+      }
       const scopes = target.scopes ?? [];
       if ((body.appliesToSession && !scopes.includes("session")) || (body.appliesToDrill && !scopes.includes("component"))) {
         throw refusal(409, "level_not_allowed", MESSAGES.level_not_allowed);
@@ -1491,6 +1497,10 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       const md = (await client.query(
         `select state, current_version_id from training_load.metric_definitions where id = $1 for share`, [v.metric_definition_id],
       )).rows[0];
+      // The current version is immutable and the row above holds it in place, so its condition is read without a lock.
+      const hasCondition = md?.current_version_id ? (await client.query(
+        `select condition_description is not null as c from training_load.metric_definition_versions where id = $1`, [md.current_version_id],
+      )).rows[0]?.c === true : false;
       const scopes = (await client.query(
         `select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level for share`,
         [v.metric_definition_id],
@@ -1524,6 +1534,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       if (!revision || revision.state !== "active" || !statusProven(revision.evidence_status)) throw refusal(409, "revision_not_verified", MESSAGES.revision_not_verified);
       if (!md || md.state !== "active") throw refusal(409, "target_not_active", MESSAGES.target_not_active);
       if (md.current_version_id !== v.metric_definition_version_id) throw refusal(409, "canonical_version_changed", MESSAGES.canonical_version_changed);
+      if (v.parameter_kind === "none" && hasCondition) throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
       const conversion = await conversionsHold(client, v);
       if (conversion) throw refusal(409, conversion, MESSAGES[conversion]);
       if ((v.applies_to_session && !scopes.includes("session")) || (v.applies_to_drill && !scopes.includes("component"))) {

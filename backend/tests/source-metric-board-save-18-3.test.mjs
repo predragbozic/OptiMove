@@ -1125,3 +1125,56 @@ test("Z4 (the review of PR #602): a zone mapping that is not on for the team is 
     rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: versionId, placementHash: "0".repeat(64), requirement: "optional", replaces: [] }]), "field_has_parameters", 0);
   });
 });
+
+test("CM (the review of 2026-11-18): a field without a condition never fills a variable with one - creating its mapping version is refused for a platform admin and a club admin, activating an existing one is refused, and the board's save never switches one on; nothing written", async () => {
+  const cond = { kind: "zone", operator: ">=", value: "25.2", unit: "km/h" };
+  const fSys = await field("dist");
+  const fClub = await field("dist");
+  const sysCond = await variable(W.pa, { unit: "m", condition: cond, label: `OptiMove sprint ${uid()}` });
+  const clubCond = await variable(W.caA, { unit: "m", condition: cond, label: `Club sprint ${uid()}` });
+  const versionCount = async () => (await one(`select count(*)::int n from ${T4}`)).n;
+  // Creating the version: both bases, the identical code and nothing written.
+  const cases = [[W.pa, fSys, sysCond], [W.caA, fClub, clubCond]];
+  const mappings = [];
+  for (const [who, f, target] of cases) {
+    const m = await post("/mappings", who, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: target.id });
+    assert.equal(m.status, 201, m.text);
+    mappings.push(m.body.mapping.id);
+    const before = await versionCount();
+    const res = await post(`/mappings/${m.body.mapping.id}/versions`, who, { requestKey: key(), sourceRevisionId: f.revId, appliesToSession: true, appliesToDrill: true, conversionNote: "Converted by the active unit conversion." });
+    assert.deepEqual([res.status, res.body.error], [409, "condition_mismatch"], res.text);
+    assert.equal(await versionCount(), before, "nothing written");
+  }
+  // The same field onto a variable without a condition still works (the control).
+  const free = await variable(W.pa, { unit: "m", label: `OptiMove distance ${uid()}` });
+  const control = await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: fSys.fieldId, metricDefinitionId: free.id });
+  assert.equal(control.status, 201, control.text);
+  const controlVersion = await post(`/mappings/${control.body.mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: fSys.revId, appliesToSession: true, appliesToDrill: true, conversionNote: "Converted by the active unit conversion." });
+  assert.equal(controlVersion.status, 201, controlVersion.text);
+  // An existing version (planted, as a raw writer or an older backend could have left it): activation is refused.
+  const copyVersion = async (mappingId, f, target, set) => planted(async () => {
+    const cols = (await k.query(`select column_name from information_schema.columns where table_schema = 'training_load' and table_name = 'source_metric_mapping_versions' and is_generated = 'NEVER' order by ordinal_position`)).rows.map((c) => `"${c.column_name}"`).join(", ");
+    const targetVersion = (await one(`select current_version_id from training_load.metric_definitions where id = $1`, [target.id])).current_version_id;
+    return (await one(`insert into ${T4} (${cols}) select ${cols} from jsonb_populate_record(null::${T4}, (select to_jsonb(x) || $2::jsonb from ${T4} x where x.id = $1)) returning id`,
+      [controlVersion.body.version.id, JSON.stringify({ id: crypto.randomUUID(), mapping_id: mappingId, source_metric_definition_id: f.fieldId, source_metric_version_id: f.revId,
+        metric_definition_id: target.id, metric_definition_version_id: targetVersion, version_number: 1, ...set })])).id;
+  });
+  const submitted = { status: "needs_review", submitted_by_user_id: W.pa.id, submitted_at: new Date().toISOString(), submitted_basis: "platform_admin",
+    activated_by_user_id: null, activated_at: null, activated_basis: null };
+  const pendingSys = await copyVersion(mappings[0], fSys, sysCond, submitted);
+  const pendingClub = await copyVersion(mappings[1], fClub, clubCond, submitted);
+  for (const [who, mappingId, versionId] of [[W.pa, mappings[0], pendingSys], [W.paA, mappings[1], pendingClub]]) {
+    const before = await one(`select status from ${T4} where id = $1`, [versionId]);
+    const res = await post(`/mappings/${mappingId}/versions/${versionId}/activate`, who, { requestKey: key(), expectedActiveVersionId: null });
+    assert.deepEqual([res.status, res.body.error], [409, "condition_mismatch"], res.text);
+    assert.deepEqual(await one(`select status from ${T4} where id = $1`, [versionId]), before, "still waiting, never active");
+  }
+  // An active OptiMove version of it (planted): the club board's save never switches it on.
+  const activeSys = await copyVersion(mappings[0], fSys, sysCond, { status: "active", version_number: 2, submitted_by_user_id: W.pa.id, submitted_at: new Date().toISOString(), submitted_basis: "platform_admin",
+    activated_by_user_id: W.pa.id, activated_at: new Date().toISOString(), activated_basis: "platform_admin" });
+  await k.query(`delete from ${T4} where id = $1`, [pendingSys]).catch(() => {});
+  const { t, cand } = await freshTeam();
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: activeSys, placementHash: "0".repeat(64), requirement: "optional", replaces: [] }]), "condition_mismatch", 0);
+  });
+});

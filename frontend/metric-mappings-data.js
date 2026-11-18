@@ -470,6 +470,7 @@ const DRAFT_TEXT = {
   bound_conversion_unavailable: "There is no usable conversion between these units now.",
   conversion_not_normal: "There is no usable conversion between these units now.",
   parameters_not_equivalent: "The bound does not match the variable's bound.",
+  condition_mismatch: "This variable counts only values under a condition, and this field has none, so it cannot fill it.",
   condition_description_unsupported: "The bound does not match the variable's bound.",
   canonical_not_numeric: "This variable cannot be the target of a mapping now.",
   canonical_unit_missing: "This variable cannot be the target of a mapping now.",
