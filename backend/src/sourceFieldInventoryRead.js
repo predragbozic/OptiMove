@@ -20,6 +20,14 @@ export const INVENTORY_PAGE_SIZE = 200;
 // The kinds that are a measured value (sourceFieldInventory.valueKind).
 const VALUE_KINDS = new Set(["number", "unit_value_object", "zone_list"]);
 const STATES = new Set(["not_supported", "covered", "all"]);
+const COMPLEMENTARY = "more.complementary_data";
+
+// Whether a row is a measured value: never a team threshold or a structural name; otherwise a value kind, a
+// complementary-data family, or a name a source field already covers.
+export function isValueRow(row) {
+  if (row.endpoint === THRESHOLDS || isStructuralField(row.endpoint, row.field_name)) return false;
+  return VALUE_KINDS.has(row.kind) || row.covered === true || row.endpoint === COMPLEMENTARY;
+}
 const ENDPOINTS = new Set(FIELD_ENDPOINTS);
 const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const CURSOR_TEXT = /^[A-Za-z0-9_-]{1,400}$/;
@@ -220,9 +228,10 @@ export async function listFieldInventory({ ctx, query }) {
     covered: row.covered,
     // The unit the word stands for (the seed; never the account's own data), and whether the name is a measured value
     // (the code review's MEDIUM: by what the name is - a number, a number with its unit or a zone list, and not a
-    // reference, a group, a flag or a time - never by whether route C would create it).
+    // reference, a group, a flag or a time - never by whether route C would create it). A complementary-data family
+    // (an object of zone lists) and a name a source field already covers are values too (the re-review's MEDIUM).
     unit: row.word_unit ?? null,
-    isValue: row.endpoint !== THRESHOLDS && VALUE_KINDS.has(row.kind) && !isStructuralField(row.endpoint, row.field_name),
+    isValue: isValueRow(row),
     zone: zoneOf(row.field_name),
     ...(platform ? { connectionCount: row.connections } : {}),
     ...(mayCreate ? { creatable: creatable(row) } : {}),

@@ -129,6 +129,16 @@ test("3. the endpoint chips and Show supported too become the read's query; the 
   assert.equal(inventoryGets().length, before, "the chip already chosen reads nothing again");
 });
 
+test("3b (the re-review's MEDIUM): an already used family of objects that the server calls a value is drawn in a group with its badge, never in the not-values fold", async () => {
+  pages.default = ok([item({ endpoint: "more.complementary_data", name: "power", kind: "object", unitWord: null, unit: null, covered: true, isValue: true })]);
+  await loadSourceFieldsSection(render);
+  const row = rows().find((r) => r.querySelector(".source-fields-inventory-raw")?.textContent.trim() === "power");
+  assert.ok(row, "the family is listed");
+  assert.equal(row.closest(".source-fields-inventory-other"), null, "not folded under the names that are not values");
+  assert.ok(row.closest("[data-sf-inv-group]"), "in a value group");
+  assert.match(row.querySelector(".metric-variables-item-name").textContent, /Already used/);
+});
+
 test("4. Load more sends the cursor and adds the next page; the button goes when there is no next page", async () => {
   pages.default = ok([item({ name: "first" })], "CURSOR_1");
   pages[`${INV}?cursor=CURSOR_1`] = ok([item({ name: "second" })]);

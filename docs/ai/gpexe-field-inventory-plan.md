@@ -964,7 +964,9 @@ read and screen, **no migration**.
 - **Not values:** `isStructuralName` (`id`, `athlete`, `user`, `team`, …, `*_id`, `are_*_visible`, `is_*_visible`,
   `validity_*`, `*_timestamp`) joins `isStructuralField`, so route C refuses them and they are never creatable. Each row
   carries `isValue`: a number, a number with its unit or a zone list that is not a structural name - by what the name is,
-  never by whether route C would create it (the code review: an uncovered events value stays a value). The screen folds
+  never by whether route C would create it (the code review: an uncovered events value stays a value). A
+  complementary-data family (an object of zone lists) and a name a source field already covers are values too
+  (`isValueRow`; the narrow re-review: the mapped `power` and `speed` families must never be folded). The screen folds
   the rest under one closed "Other names GPEXE sends (not values)", each by GPEXE's own name and what it holds. The
   collector still skips only the exact pairs it skipped before.
 - **Readable and grouped:** the readable name and unit first, GPEXE's own name small under it, the counts last; values

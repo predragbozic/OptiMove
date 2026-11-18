@@ -477,11 +477,13 @@ test("R (the owner's first use, 2026-11-18): each row carries the unit its word 
     ["details.session", "validity_start_r", { kind: "text" }],
     ["athlete_session", "r_hsr", { kind: "number" }],
     ["more.events", "r_ev_hits", { kind: "number" }],
+    ["more.complementary_data", "power", { kind: "object" }],
+    ["more.complementary_data", "r_cd_other", { kind: "object" }],
   ]);
   // Each endpoint on its own (an earlier test fills the first page of athlete_session names).
   const read = async (who) => {
     const out = { fields: [], zoneThresholds: undefined };
-    for (const endpoint of ["details.session", "details.drill", "athlete_session", "more.events"]) {
+    for (const endpoint of ["details.session", "details.drill", "athlete_session", "more.events", "more.complementary_data"]) {
       let cursor = null;
       do {
         const body = (await api(`/field-inventory?state=all&endpoint=${endpoint}${cursor ? `&cursor=${cursor}` : ""}`, { cookie: who.cookie })).body;
@@ -501,6 +503,9 @@ test("R (the owner's first use, 2026-11-18): each row carries the unit its word 
   assert.deepEqual([rows.r_hsr.unit, rows.r_hsr.isValue, rows.r_hsr.zone], [null, true, null]);
   // A value route C cannot create (the code review's MEDIUM) is still a value, never folded as "not values".
   assert.deepEqual([rows.r_ev_hits.isValue, rows.r_ev_hits.creatable], [true, false]);
+  // A complementary-data family is an object of zone lists: a value, covered or not (the re-review's MEDIUM).
+  assert.deepEqual([rows.power.isValue, rows.power.covered], [true, true], "an already used family is never folded as not a value");
+  assert.deepEqual([rows.r_cd_other.isValue, rows.r_cd_other.covered], [true, false]);
   for (const name of ["athlete", "athlete_session_id", "are_values_visible", "validity_start_r"]) {
     assert.deepEqual([rows[name].isValue, rows[name].creatable], [false, false], name);
   }
@@ -516,7 +521,14 @@ test("R (the owner's first use, 2026-11-18): each row carries the unit its word 
 });
 
 test("R2: the zone thresholds - one set when every bound team's newest stored session carries the same, otherwise only that they differ (zoneThresholdsOf); zoneOf reads only the name's facts", async () => {
-  const { zoneThresholdsOf, zoneOf } = await import("../src/sourceFieldInventoryRead.js");
+  const { zoneThresholdsOf, zoneOf, isValueRow } = await import("../src/sourceFieldInventoryRead.js");
+  // isValueRow (the re-review's MEDIUM): a covered object and a complementary family are values; a threshold or a
+  // structural name never is, even when covered.
+  assert.equal(isValueRow({ endpoint: "details.session", field_name: "r_obj", kind: "object", covered: true }), true);
+  assert.equal(isValueRow({ endpoint: "more.complementary_data", field_name: "speed", kind: "object", covered: false }), true);
+  assert.equal(isValueRow({ endpoint: "details.session", field_name: "r_obj", kind: "object", covered: false }), false);
+  assert.equal(isValueRow({ endpoint: "team_thresholds", field_name: "power_thresholds", kind: "number", covered: false }), false);
+  assert.equal(isValueRow({ endpoint: "details.drill", field_name: "athlete_session_id", kind: "number", covered: true }), false);
   assert.deepEqual(zoneThresholdsOf([]), { power: null, speed: null });
   assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 75], speed: [5.5, 7] }]), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] } });
   assert.deepEqual(zoneThresholdsOf([{ power: [20, 25, 60, 75], speed: [5.5, 7] }, { power: [20, 25, 60, 80], speed: [5.5, 7] }]), { power: { differ: true }, speed: { values: [5.5, 7] } });
