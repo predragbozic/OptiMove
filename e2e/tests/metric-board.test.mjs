@@ -26,7 +26,9 @@ async function prepareBoard(world) {
   const column = board.columns.find((c) => c.key === "athlete_session.total_distance");
   const on = board.on.find((o) => o.fieldId === column.fieldId);
   assert.ok(on, "OptiMove's mapping of TotDist is on at the start");
-  return { setup, fieldId: column.fieldId, variableId: made.body.variable.id, activationId: on.activationId };
+  // The Rukovodilac, 2026-11-18: a zone or threshold column that is not on is listed only in "Not available yet".
+  const parked = board.columns.filter((c) => !c.placeable && c.reason === "field_has_parameters" && !board.on.some((o) => o.fieldId === c.fieldId)).length;
+  return { setup, fieldId: column.fieldId, variableId: made.body.variable.id, activationId: on.activationId, parked };
 }
 
 async function openBoard(page) {
@@ -96,11 +98,25 @@ test("18-4a. (1280 px) a club admin drags a column onto a variable, ticks, saves
 test("18-4b. (390 px) the same flow by tapping: one bottom sheet at a time, no drag, no overflow", async () => {
   const world = await startWorld({ fakeSource: { visibleTeams: ["7001"], sessions: "board" } });
   try {
-    const { fieldId, variableId, activationId } = await prepareBoard(world);
+    const { fieldId, variableId, activationId, parked } = await prepareBoard(world);
     const admin = await openAs(browser, world, "club_admin", WIDTHS.phone);
     try {
       const page = admin.page;
       await openBoard(page);
+      // Zone and threshold columns that are not on: one closed group at the end, a 44 px summary, no Mappings pointer.
+      const group = page.locator("details.mb-parked");
+      assert.equal(await group.count(), parked > 0 ? 1 : 0, `${parked} column(s) not available yet`);
+      if (parked > 0) {
+        const summary = group.locator("summary");
+        assert.equal((await summary.innerText()).trim(), `Not available yet (${parked})`);
+        assert.ok((await summary.boundingBox()).height >= 44, "the summary is a 44 px target");
+        assert.equal(await group.evaluate((d) => d.open), false, "closed by default");
+        await summary.tap();
+        assert.match((await group.innerText()).replace(/\s+/g, " "), /These need a zone or threshold choice that OptiMove does not offer yet\. For a single zone, ask OptiMove support to add its numbered GPEXE field\./);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0, "no horizontal overflow with the group open");
+        await summary.tap();
+      }
+      assert.doesNotMatch(await page.locator("[data-mb-board]").innerText(), /Map zones and thresholds in Mappings/);
       assert.equal(await page.locator("[data-mb-drag-field]").count(), 0, "nothing drags on a phone");
       assert.equal(await page.locator(".mb-tech").count(), 0, "a club admin is shown no technical details");
       // Switch off asks in the bottom sheet, in view, not somewhere up the page.
