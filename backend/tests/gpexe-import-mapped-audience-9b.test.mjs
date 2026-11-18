@@ -418,7 +418,13 @@ async function assertBlockedAs(team, code, checkId) {
   assert.equal(pa.summary.blockedSourceCode, code);
   assert.equal(pa.summary.previewHash, cand.preview_hash);
   assert.ok(pa.summary.approvalBlockers.includes("blocked"));
-  assert.deepEqual(pa.candidate.preview.blocked, { code, message: BLOCK_MESSAGES[code] });
+  if (code === "source_shape_mismatch") {
+    // G1b-2 (the Independent's LOW-1): the administrator's sentence names the field and the variable it fills.
+    assert.equal(pa.candidate.preview.blocked.code, code);
+    assert.match(pa.candidate.preview.blocked.message, /^GPEXE sent ".+" \(it fills .+\) in another shape or unit than its field has\. Switch that mapping off for this team to import the other values, or ask a platform administrator to check that GPEXE field\.$/);
+  } else {
+    assert.deepEqual(pa.candidate.preview.blocked, { code, message: BLOCK_MESSAGES[code] });
+  }
   assertNoLeak("other", pa.check.text, `${code} (check, platform)`);
   const co = await reads(team, team.coach, cand.id, checkId);
   assert.equal(co.summary.blockedCode, STABLE_CODE);
