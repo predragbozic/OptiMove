@@ -10840,6 +10840,129 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   background: var(--accent, #1f7a6f);
 }
 
+/* K2b-1e: the athlete's Upcoming events (athlete-home-events-view.js). One
+   column at every width; every line wraps, so a long unbroken word stays
+   inside the card. The place's lines and Open in maps are the calendar
+   panel's (.cc-panel-place, .cc-maps: 44 px). */
+.athlete-home-events {
+  /* The calendar's Cancelled pill (.cc-badge-cancelled) reads these, which
+     the calendar declares only on .central-calendar; the text is darker
+     here for the pill's small size (mobile-qa). */
+  --cc-cancelled: #4b5565;
+  --cc-cancelled-soft: #eceff3;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.athlete-home-events-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.athlete-home-events-head p {
+  margin: 0;
+}
+
+.athlete-home-events-range {
+  font-size: 13px;
+}
+
+.athlete-home-events-state {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.athlete-home-events-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.athlete-home-event {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.athlete-home-event:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.athlete-home-event:last-child {
+  padding-bottom: 0;
+}
+
+.athlete-home-event-icon {
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.athlete-home-event-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.athlete-home-event-title,
+.athlete-home-event-when,
+.athlete-home-event-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.athlete-home-event-title {
+  font-weight: 700;
+}
+
+.athlete-home-event-when {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.athlete-home-event.is-cancelled .athlete-home-event-title,
+.athlete-home-event.is-cancelled .athlete-home-event-icon {
+  color: var(--muted);
+}
+
+/* As the calendar's cancelled card (.is-cancelled .cc-card-title). */
+.athlete-home-event.is-cancelled .athlete-home-event-title {
+  text-decoration: line-through;
+}
+
+.athlete-home-events-head .eyebrow:focus {
+  outline: none;
+}
+
+.athlete-home-events-head .eyebrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Two classes: .cc-badge comes later in this file (11 px, 2px 8px). */
+.athlete-home-event .athlete-home-event-cancelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 13px;
+}
+
+.athlete-home-events-button {
+  align-self: flex-start;
+  min-height: 44px;
+}
+
 .athlete-home-quick-actions {
   display: flex;
   flex-direction: column;
