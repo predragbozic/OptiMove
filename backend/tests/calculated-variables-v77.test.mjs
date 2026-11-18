@@ -698,3 +698,83 @@ test("16. a sum adds only amounts (the owner, 2026-11-18): an input whose day ru
   const freed = await post(`/variables/${q1.id}/archive`, W.pa, { requestKey: key(), reason: "Not used any more" });
   assert.equal(freed.status, 200, freed.text);
 });
+
+test("17. a calculated variable's value is never entered by hand: a manual measurement naming one is a plain 409 calculated_variable_not_entered (never a 500), nothing written; the same write of an ordinary variable is saved", async () => {
+  const athlete = (await one(k, `insert into public.athletes (full_name, display_name, device_timezone) values ($1,$1,'UTC') returning id`, [`Athlete ${uid()}`])).id;
+  await k.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [athlete, W.clubA, W.teamA]);
+  const write = async (who, def, value = 500) => {
+    const res = await fetch(`${apiBase}/api/training-load/metrics/events`, {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: who.cookie },
+      body: JSON.stringify({ requestKey: `k-${uid()}`, occurredDate: "2026-11-02", scopeLevel: "session",
+        participants: [{ athleteId: athlete, timezone: "UTC", values: [{ metricDefinitionId: def, metricDefinitionVersionId: await versionOf(def), value }] }] }),
+    });
+    const text = await res.text();
+    return { status: res.status, body: JSON.parse(text), text };
+  };
+  const values = async () => (await one(k, `select count(*)::int as n from training_load.metric_values`)).n;
+  for (const who of [W.coachA, W.caA]) {
+    const before = await values();
+    const res = await write(who, W.hmld.id);
+    assert.equal(res.status, 409, res.text);
+    assert.deepEqual([res.body.code, res.body.error], ["calculated_variable_not_entered", "OptiMove calculates this variable from other variables, so its value cannot be entered by hand."]);
+    assert.equal(await values(), before, "nothing written");
+  }
+  const ok = await write(W.coachA, W.z3.id);
+  assert.equal(ok.status, 201, ok.text);
+});
+
+test("18. the raw-write guards the review asked to pin by behaviour (LOW-1): (a) an input without a level of the calculated variable; (b) a derived value of an input is never a calculated value's input; (c) the variable's own row lock: two first versions of one kind each, and a level against a version, wait for each other and the second is refused", async () => {
+  // (a) The version guard's level check: a raw calculated version over an input without the drill level.
+  const sessionOnly = await variable(W.pa, { label: `Session only ${uid()}`, levels: ["session"] });
+  dbRefused(await attempt((c) => c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 9, 'm', 'numeric', $2)`,
+    [W.hmld.id, JSON.stringify({ kind: "sum", inputs: [W.z4.id, sessionOnly.id] })])), /every input has every level/);
+  // (b) The value guard's `not is_derived`: an input value that is itself derived is refused, even with the right sum.
+  const occ = await occasion(W.teamA);
+  dbRefused(await attempt(async (c) => {
+    const a = await value(c, occ, W.z4.id, 100, { is_derived: true, aggregation_role: "derived_rollup", coverage: "complete", computed_by_ref: JSON.stringify({ note: "a rollup" }) });
+    const b = await value(c, occ, W.z5.id, 20);
+    return value(c, occ, W.hmld.id, 120, { is_derived: true, aggregation_role: "derived_rollup", coverage: "complete",
+      computed_by_ref: JSON.stringify({ formulaVersionId: await versionOf(W.hmld.id), inputValueIds: [a, b] }) });
+  }), /one input value per input, on its own occasion/);
+  // (c1) Two first versions of a new variable, one calculated and one not: the second waits for the first, then is refused.
+  const def = (await one(k, `insert into training_load.metric_definitions (key, label, owner_scope) values ($1,$1,'system') returning id`, [`race_kind_${uid()}`])).id;
+  await k.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'session')`, [def]);
+  const a = await secondClient();
+  const b = await secondClient();
+  try {
+    await a.query("begin");
+    await a.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 1, 'm', 'numeric', $2)`,
+      [def, JSON.stringify({ kind: "sum", inputs: [W.z3.id, W.z4.id] })]);
+    await b.query("begin");
+    const plain = b.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) values ($1, 2, 'm', 'numeric')`, [def])
+      .then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+    assert.equal(await waitsForLock(), true, "the second first version waits for the variable's row");
+    await a.query("commit");
+    dbRefused(await plain, /calculated from its first version or never/);
+    await b.query("rollback");
+  } finally {
+    await a.query("rollback").catch(() => {});
+    await b.query("rollback").catch(() => {});
+  }
+  // (c2) A level against a version on the calculated row: a new version over an input without the level being added waits,
+  // then is refused (it would leave the calculated variable with a level an input lacks).
+  const i1 = await variable(W.pa, { label: `Race in 1 ${uid()}` });
+  const i2 = await variable(W.pa, { label: `Race in 2 ${uid()}` });
+  const calc = (await calculated(W.pa, [i1, i2], { levels: ["session"] })).body.variable;
+  try {
+    await a.query("begin");
+    await a.query(`insert into training_load.metric_definition_scope_capabilities (metric_definition_id, scope_level) values ($1,'component')`, [calc.id]);
+    await b.query("begin");
+    const version = b.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, calculation) values ($1, 2, 'm', 'numeric', $2)`,
+      [calc.id, JSON.stringify({ kind: "sum", inputs: [i1.id, sessionOnly.id] })]).then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+    assert.equal(await waitsForLock(), true, "the version waits for the level");
+    await a.query("commit");
+    dbRefused(await version, /every input has every level/);
+    await b.query("rollback");
+  } finally {
+    await a.query("rollback").catch(() => {});
+    await b.query("rollback").catch(() => {});
+    await a.end();
+    await b.end();
+  }
+});
