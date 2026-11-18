@@ -427,3 +427,63 @@ test("E11. athleteHomeEventRows keeps only event cards with an id, and reads not
   ] }] });
   assert.deepEqual(rows.map((r) => r.title), ["Kept"]);
 });
+
+// The independent review of PR #603 (F1-F3): three guards its own mutations found unpinned here.
+
+test("E12 (F1). without a `today`, the read takes the DEVICE's local date: Europe/Belgrade at 2026-11-17T23:30Z is 18 Nov, so today=2026-11-18 and to=2026-12-01 (never the UTC date)", async () => {
+  const RealDate = globalThis.Date;
+  const realTz = process.env.TZ;
+  const fixed = RealDate.parse("2026-11-17T23:30:00Z");
+  class FixedDate extends RealDate {
+    constructor(...args) {
+      super(...(args.length ? args : [fixed]));
+    }
+    static now() {
+      return fixed;
+    }
+  }
+  process.env.TZ = "Europe/Belgrade";
+  globalThis.Date = FixedDate;
+  try {
+    assert.equal(new Date().getDate(), 18, "the clock is set: 00:30 on 18 Nov in Belgrade");
+    const calls = calendarServer(() => ({ status: 200, body: answer([], "2026-11-18") }));
+    await loadAthleteHomeEvents({ render });
+    assert.equal(calls.length, 1);
+    const url = new URL(calls[0].url, "http://x");
+    assert.equal(url.searchParams.get("today"), "2026-11-18");
+    assert.equal(url.searchParams.get("from"), "2026-11-18");
+    assert.equal(url.searchParams.get("to"), "2026-12-01");
+  } finally {
+    globalThis.Date = RealDate;
+    if (realTz === undefined) delete process.env.TZ;
+    else process.env.TZ = realTz;
+  }
+});
+
+test("E5b (F2). a type label with markup is text on the time line: no element is made, the label is shown as it is", async () => {
+  const xss = "<img src=x onerror=alert(1)>";
+  calendarServer(() => ({ status: 200, body: answer([
+    card({ id: "lbl", date: TODAY, title: "Cup match", eventTypeLabel: xss, startTime: "18:00:00" }),
+  ]) }));
+  await load();
+  assert.equal(dom.window.document.querySelector("img"), null);
+  assert.equal($(".athlete-home-event-when").textContent, `Today · 18:00 · ${xss}`);
+});
+
+test("E9b (F3). read A for 18 Nov is on its way, read B for 19 Nov succeeds, then A answers 500: B's list stays, never A's error", async () => {
+  const a = deferred();
+  let n = 0;
+  calendarServer(() => {
+    n += 1;
+    return n === 1 ? a.promise : { status: 200, body: answer([card({ id: "b", date: addDays(TODAY, 1), title: "Read B", startTime: "18:00:00" })], addDays(TODAY, 1)) };
+  });
+  const readA = load();
+  await loadAthleteHomeEvents({ render, today: addDays(TODAY, 1) });
+  assert.deepEqual(state.athleteHomeEvents.rows.map((r) => r.eventId), ["b"]);
+  a.resolve({ status: 500, body: { error: "internal_error" } });
+  await readA;
+  assert.equal(state.athleteHomeEvents.status, "ready");
+  assert.deepEqual(state.athleteHomeEvents.rows.map((r) => r.eventId), ["b"]);
+  assert.equal($(".athlete-home-events").textContent.includes("could not be loaded"), false);
+  assert.match(rowTexts()[0], /^Read B /);
+});

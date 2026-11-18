@@ -1757,15 +1757,44 @@ done).
 | The "✕" glyph can read as "remove" | UX — note | the manager: it stays | — | Decided |
 | A club that does not use the calendar always shows the empty sentence | UX — note | the manager: it stays, so the athlete learns where events appear | — | Decided |
 
-All 25 mutations (`k2b1e-mutations.mjs` in the session's scratchpad: the 18 of the first round, M19–M21 for the code
-review and M22–M25 for the UX review) are killed; M16 first survived and was killed after E3 gained an event on the next
-morning.
+All 31 mutations are killed. They are in `k2b1e-mutations.mjs` in the session's scratchpad:
+- M1–M18, the first round;
+- M19–M21 for the code review and M22–M25 for the UX review;
+- M26–M28 for the manager's decisions on PR #603 (the *Day off* rule, the range's dash, the *Today* wording);
+- M29–M31 for the independent review's F1–F3 (below).
 
-### 22.10 Tests and the browser check (on `2e570ee5`; Windows, Node 24.12.0)
+M16 first survived and was killed after E3 gained an event on the next morning; M11 was pointed again at the line round
+2 changed and is killed.
 
-- **The new suite** `frontend/tests/athlete-home-events.actions.test.mjs`: 12 of 12 (E1–E11 and E7b), through the real
-  loader, handlers and templates with a fake fetch in the athlete card's shape.
-- **Mutations:** 25 of 25 killed (22.9).
+**The independent review of PR #603** (on `72516db2`): READY WITH NON-BLOCKING NOTES, with no BLOCKER, HIGH or MEDIUM. Its 36
+scenarios pass, and its 29 mutations are all killed by its suite and this one together. The gate matched a clean `main`.
+Its notes are answered in the last round, which changed tests and documents only:
+
+| Finding | Correction | Test | Status |
+|---|---|---|---|
+| F1 — that the default `today` is the device's local date was not pinned (the mutation "the UTC date" survived) | a test with `TZ=Europe/Belgrade` and the clock at 2026-11-17T23:30Z: `today=2026-11-18`, `to=2026-12-01` | E12 (M29) | Fixed |
+| F2 — a type label with markup on the time line was not pinned (the mutation "the time line unescaped" survived) | a label `<img src=x onerror=…>` makes no element and is shown as it is | E5b (M30) | Fixed |
+| F3 — an older read's late 500 after a newer read's list was not pinned (the mutation without `if (!current()) return;` in `applyError` survived) | read A for 18 Nov in flight, read B for 19 Nov succeeds, A answers 500: B's list stays | E9b (M31) | Fixed |
+| F4 — when Home is drawn again, the error sentence with `role="alert"` can be read out more than once; not checked with a screen reader | **a later task, no change now:** check with VoiceOver and TalkBack, and if so announce it once (for example a live region that stays in place while only its text changes) | — | Recorded |
+| F5 — the record named the earlier head and counts | brought up to date here, in 22.10 and in `docs/ai/CURRENT_STATE.md` | — | Fixed |
+
+The manager confirmed the reading of the *Day off* decision: a *Day off* **with** a time shows it (E4b).
+
+### 22.10 Tests and the browser check (Windows, Node 24.12.0)
+
+**What ran where:**
+- **The final head**, after the last round (tests and documents only):
+  - the new suite `frontend/tests/athlete-home-events.actions.test.mjs`, 16 of 16: the 13 of round 2 (E1–E11, E4b,
+    E7b) and the 3 of the last round (E12, E5b, E9b). They run through the real loader, handlers and templates, with
+    a fake fetch in the athlete card's shape;
+  - the Home render test, 17 of 17;
+  - mutations: 31 of 31 killed (22.9).
+- **`72516db2`, the screen code of the final head:** the Frontend PR gate, run again on this head and on a clean `main`
+  (below).
+- **`2e570ee5`:** the browser check on the harness and the first gate. After it only texts changed: the *Day off* time
+  line, the *Today's training* sentence and the range's dash, each pinned by a test. The harness was not run again.
+
+**On `2e570ee5`:**
 - **The Frontend PR gate:** the whole `--preset frontend-fast` on the head and on a clean detached `origin/main`
   `94aab138` worktree, on the same machine:
 
@@ -1773,6 +1802,10 @@ morning.
   |---|---|---|---|---|---|
   | head `2e570ee5` | 255 | 232 | 4 | 19 | 3474 of 3521 |
   | clean `94aab138` | 254 | 231 | 4 | 19 | 3462 of 3509 |
+  | head `72516db2` (run again) | 255 | 232 | 4 | 19 | 3475 of 3522 |
+  | clean `94aab138` (run again) | 254 | 231 | 4 | 19 | 3462 of 3509 |
+
+  The pull request names the 19 files with their counts on both and their causes.
 
   - No file fails on the head that passes on `main`. The one file more is the new suite, 12/0.
   - The same 19 files fail on both with identical per-file counts: `athlete-program-navigation-icons`, `gpexe-period-p4`,

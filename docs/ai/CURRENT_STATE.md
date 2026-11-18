@@ -363,9 +363,13 @@ deploys and post-checks without a record in this file are as the stream manager 
   (2026-11-03 12:13 UTC); deployed 2026-11-03, per the stream manager. With it K2b-1 is complete.
 - **K2b-1e**, the athlete's *Upcoming events* on Athlete Home (D28; plan section 22, the manager's decisions in 22.7;
   frontend only, no migration, no backend change): her own `GET /api/calendar` for today and the 13 days after it
-  (`kinds=event`), one row per event with its title, type word, day(s), time ("Time not set" without one) and place
+  (`kinds=event`), one row per event with its title, type word, day(s), time ("Time not set" without one, except a *Day
+  off*, which then has no time part) and place
   with *Open in maps*; a cancelled event marked, without its place; the first 5 rows, then *Show N more*. The pull
-  request that adds this line, open. Recorded for later: the team on the row for an athlete in two teams (22.7, Q3).
+  request that adds this line, open. Recorded for later:
+  - the team on the row for an athlete in two teams (22.7, Q3);
+  - whether the error's `role="alert"` is read out more than once when Home is drawn again, not checked with a screen
+    reader (22.9, F4).
 - Next by the plan: K2b-1d2 (a small backend step: the type's icon and colour on every card, the athlete's included,
   and the platform workspace's teams with their clubs; plan 21.9), then K2b-2 (athlete questions through the Tests
   module, D40).
