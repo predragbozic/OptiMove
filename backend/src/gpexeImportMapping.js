@@ -17,7 +17,7 @@
 //
 // Errors carry fixed messages only: no id, value, key or name.
 
-import { provenWordSql, unitWordsFor } from "./sourceUnitWords.js";
+import { provenWordsFor, unitWordsFor } from "./sourceUnitWords.js";
 
 export class ImportMappingChangedError extends Error {
   constructor() {
@@ -83,7 +83,7 @@ const ACTIVATIONS_SQL = `
          m.owner_scope as mapping_owner_scope, m.owner_club_id as mapping_owner_club_id,
          d.source_system, d.api_family, d.source_metric_key, d.source_label, d.state as field_state,
          r.value_shape, r.parameter_kind as revision_parameter_kind, r.source_unit as revision_source_unit,
-         r.state as revision_state, r.evidence_status, ${provenWordSql("r")} as revision_unit_word,
+         r.state as revision_state, r.evidence_status,
          md.key as definition_key, md.label as definition_label, md.owner_scope as definition_owner_scope,
          md.state as definition_state, md.current_version_id,
          mv.value_type, trim_scale(mv.min_value)::text as min_value, trim_scale(mv.max_value)::text as max_value,
@@ -128,8 +128,9 @@ function rowOf(r) {
     revisionValueShape: r.value_shape,
     revisionParameterKind: r.revision_parameter_kind,
     revisionSourceUnit: r.revision_source_unit,
-    // G1b-3: the exact word a route O proof saw (null for a seeded field or a document proof).
-    revisionUnitWord: r.revision_unit_word ?? null,
+    // G1b-3: the exact word a route O proof saw (null for a seeded field or a document proof); filled by
+    // prepareImportMapping for a generic details field only.
+    revisionUnitWord: null,
     revisionState: r.revision_state,
     revisionEvidence: r.evidence_status,
     definitionKey: r.definition_key,
@@ -320,6 +321,9 @@ export async function prepareImportMapping(client, { teamId, bindingId, sessionE
   const unactivated = await unactivatedLabels(client, binding);
   // G1b-2 (rule (b)): GPEXE's unit words, once for this plan, only when a generic details field is read.
   const unitWords = await unitWordsFor(client, rows);
+  // G1b-3: the exact word of each generic details field's proof, read only when such a field is planned (as the words).
+  const proven = await provenWordsFor(client, rows);
+  for (const r of rows) r.revisionUnitWord = proven.get(String(r.sourceMetricVersionId)) ?? null;
   const activationSet = rows.map((r) => [r.activationId, r.mappingVersionId]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const base = { binding, rows, activationSet, unactivated, unitWords, connection: null };
   if (rows.length === 0) return { ...base, block: "no_mapped_values", blockReason: "no_activation" };

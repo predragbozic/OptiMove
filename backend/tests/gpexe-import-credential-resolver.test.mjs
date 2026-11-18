@@ -3143,6 +3143,7 @@ test("54. G1b-3, the exact proven word through the real routes: four created det
       await mappingsSvc.submitVersion({ ctx, mappingId: mapping.id, versionId: version.id, body: { requestKey: rk() } });
       await mappingsSvc.activateVersion({ ctx, mappingId: mapping.id, versionId: version.id, body: { requestKey: rk(), expectedActiveVersionId: null } });
       await activationsSvc.startActivations({ ctx, body: { requestKey: rk(), mappingId: mapping.id, versionId: version.id, bindings: [{ bindingId: binding.bindingId, requirement: "required" }], reason: "G1b-3 test activation." } });
+      Object.assign(f, { mappingId: mapping.id, versionId: version.id });
     }
     // The exact words: imported, each converted to its canonical unit.
     src.state.bundle = structuredClone(original);
@@ -3169,6 +3170,12 @@ test("54. G1b-3, the exact proven word through the real routes: four created det
         assert.ok(Math.abs(Number(r.value_text) - f.convert(raw)) < 1e-9, `${f.name}: ${raw} ${f.unit} is ${f.convert(raw)} ${f.target} (${r.value_text})`);
         assert.equal(r.unit_at_capture, f.target);
       }
+    }
+    // The 7e preview reads the proven word as the importer does: each field's values of the session are counted.
+    for (const f of FIELDS) {
+      const p = await api(`${M}/mappings/${f.mappingId}/versions/${f.versionId}/preview?candidateId=${cand.id}`, { cookie: o.padmin.cookie });
+      assert.equal(p.status, 200, JSON.stringify(p.body));
+      assert.ok(p.body.preview.levels.session.athletesWithValue >= 2, `${f.name}: ${JSON.stringify(p.body.preview.levels.session)}`);
     }
     const t6Before = (await q(`select count(*)::int n from training_load.metric_value_source_provenance`))[0].n;
     // A change of word inside a pair after the proof: the session is blocked, nothing more is imported.

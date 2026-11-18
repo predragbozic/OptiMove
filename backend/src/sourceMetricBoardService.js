@@ -24,7 +24,7 @@ import { BLOCK_MESSAGES } from "./gpexeImportPreview.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
 import { canonicalDecimal, compareDecimal, extractorFor, isGenericDetailsKey } from "./sourceMetricExtractors.js";
-import { provenWordSql, unitWordCodeOf, unitWordsFor } from "./sourceUnitWords.js";
+import { provenWordsOf, unitWordCodeOf, unitWordsFor } from "./sourceUnitWords.js";
 import { removeExpiredBatch as removeExpiredValuesBatch, setRemovalFaultForTests } from "./sourceMetricConfirmationRemoval.js";
 import { DISPLAY_REGISTRY_VERSION, displayRuleFor, displayValue, distinctPair, placementHash, rankPairs } from "./sourceMetricBoard.js";
 
@@ -134,7 +134,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   const fields = (await client.query(
     `select d.id, d.source_system, d.api_family, d.source_metric_key, d.source_label,
             r.id as revision_id, r.value_shape, r.parameter_kind, r.supports_session, r.supports_drill,
-            r.source_unit, r.expected_source_unit, r.evidence_status, ${provenWordSql("r")} as proven_word,
+            r.source_unit, r.expected_source_unit, r.evidence_status,
             d.created_by_user_id is not null as created
        from training_load.source_metric_definitions d
        join training_load.source_metric_definition_versions r on r.source_metric_definition_id = d.id and r.state = 'active'
@@ -145,6 +145,10 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   // G1b-2 (rule (b)): GPEXE's unit words, once for this board, only when a generic details field is among the fields: a
   // column reads exactly the words of its revision's proven unit, as its import does.
   const unitWords = await unitWordsFor(client, fields.map((f) => ({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key })));
+  // G1b-3: the exact word of each generic details field's proof, read only when such a field is on the board.
+  const generic = fields.filter((f) => isGenericDetailsKey({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key }));
+  const proven = generic.length > 0 ? await provenWordsOf(client, generic.map((f) => f.revision_id)) : new Map();
+  for (const f of fields) f.proven_word = proven.get(String(f.revision_id)) ?? null;
 
   // The stored session. Never an undone import (v57) or a superseded one; its
   // last check succeeded through this binding (as the importer requires).

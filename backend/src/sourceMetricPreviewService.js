@@ -25,7 +25,7 @@ import { GPEXE_SOURCE_SYSTEM, gpexeLevelValues } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { PREVIEW_MINIMUM_ATHLETES, previewLevel } from "./sourceMetricPreview.js";
 import { revisionProven } from "./sourceFieldEvidence.js";
-import { provenWordSql, unitWordsFor } from "./sourceUnitWords.js";
+import { provenWordsOf, unitWordsFor } from "./sourceUnitWords.js";
 
 const { boundedRead, refusal, NOT_FOUND, MESSAGES, UUID, PARAMS_AS_TEXT } = adminWriteKit;
 
@@ -72,8 +72,7 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
               trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
               v.parameter_kind, ${PARAMS_AS_TEXT("v.source_parameters")} as source_parameters, v.applies_to_session, v.applies_to_drill,
               d.source_system, d.api_family, d.source_metric_key, r.value_shape,
-              d.created_by_user_id is not null as created, r.evidence_status, r.source_unit as revision_unit,
-              ${provenWordSql("r")} as proven_word
+              d.created_by_user_id is not null as created, r.evidence_status, r.source_unit as revision_unit, r.id as revision_id
          from training_load.source_metric_mapping_versions v
          join training_load.source_metric_mappings m on m.id = v.mapping_id
          join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -138,6 +137,8 @@ export async function previewVersion({ ctx, mappingId, versionId, queryString })
     // v62: the candidate team's session time zone, read in the same transaction, so a mixed session passes the import's gates.
     // G1b-2 (rule (b)): GPEXE's unit words, read only for a generic details field, so its preview reads what its import reads.
     const unitWords = await unitWordsFor(client, [{ sourceSystem: version.source_system, apiFamily: version.api_family, sourceMetricKey: version.source_metric_key }]);
+    // G1b-3: the exact word of its proof, read only for a generic details field (as the words are).
+    version.proven_word = unitWords.size > 0 ? ((await provenWordsOf(client, [version.revision_id])).get(String(version.revision_id)) ?? null) : null;
     return { v: version, bundle: candidate.raw_bundle, teamTimezone: await teamSessionTimezone(client, candidate.owner_team_id), unitWords };
   });
   // After the transaction: the values.

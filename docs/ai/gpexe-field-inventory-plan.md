@@ -936,7 +936,11 @@ The *Rukovodilac*'s order after the Independent's GO on G1b-2: one small pull re
     is killed. The first mutation record called the save check killed; that was wrong (the mutation script counted a
     failed cleanup audit as a failed test) and the script now counts only a failed test.
   - LOWs: test 17 waits until the tick is seen waiting on a lock; the copy's `unit_word_ambiguous` is in test 16.
-- **Mutations** (counted by failed tests only): 15 of the new guards, 13 killed. Two are equivalent at the outcome:
+- **The proven word is read only for a created details field** (the full disposable run): read inside the importer's
+  activations query it broke every plan on a database without v74's comparison tables. It is now read, like the words,
+  only when a generic details field is planned (`sourceUnitWords.provenWordsFor` / `provenWordsOf`), in the importer, the
+  7e preview and the board; the mapping context still never imports the registry (9b architecture test 3).
+- **Mutations** (counted by failed tests only): 17 of the new guards, 15 killed. Two are equivalent at the outcome:
   removing the save's own check (the column's reason refuses the same row from the same inputs), and dropping the
   board's "no value" for a column without a readable word (the extractor reads nothing for it either).
 
