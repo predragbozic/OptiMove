@@ -68,11 +68,12 @@ new registry; `.claude/rules/metrics-core-mapping.md`, ADR-007).
   (invitation and one reminder), through a helper extracted from `routes/tests.js` (`insertScheduleRow`, the targets, the
   rules) so both modules write the same rows; then the event's link. A lost answer is *Result not confirmed* · *Check
   result* with the same key, never a second schedule.
-- **The link (★ migration, v79 or later):** a new table `calendar.event_questionnaires` (event, test schedule, who, when),
+- **The link (★ migration, v81 or later):** a new table `calendar.event_questionnaires` (event, test schedule, who, when),
   one live questionnaire per event, trigger-checked like v49's reference (the shared fixture has no Tests schema), with
   its audit row; v49's `test_schedule_id` of a `test` event keeps its meaning (the test the event *is*). The numbers
-  agreed with the Metrics Core line (2026-11-18): v75 is reserved (dashboards D2a), v77 is PR #608 (computed variables),
-  v78 is its zone-with-condition step; the calendar takes v79 or later, checked against `origin/main` and the 12-digit
+  agreed with the Metrics Core line (2026-11-18, its correction of the same day): v75 is reserved (dashboards D2a); v77
+  (PR #608, computed variables part 1), v78 (computed variables part 2), v79 (ratio and difference) and v80 (zone with a
+  condition) are the mapping line's; the calendar takes v81 or later, checked against `origin/main` and the 12-digit
   prefix rule when the file is written, and only on the owner's order naming the file.
 - **Afterwards:**
   - the event's card and panel: "Questions: 3 of 18 answered" for a manager (a count, never a name on the card; the panel
