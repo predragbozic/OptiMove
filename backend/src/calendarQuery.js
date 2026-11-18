@@ -39,7 +39,7 @@ import crypto from "node:crypto";
 import { query } from "./db.js";
 import {
   calendarActivityFilterSql, calendarActivityScopeSql, calendarAthleteFilterSql, calendarAthleteScopeSql,
-  calendarScheduleCandidateSql, calendarScheduleStructuralSql, loadWorkspaceTeams, membershipOnDaySql,
+  calendarScheduleCandidateSql, calendarScheduleStructuralSql, loadWorkspaceTeams, membershipOnDaySql, membershipPeriodOnDaySql,
 } from "./calendarAccess.js";
 import { eventOwnerOfRow, eventPlaceOf, eventShowsFieldSql, eventShowsPlaceSql, eventShowsTypeSql, eventWriteBasis } from "./calendarEventAccess.js";
 // The one published-weekly-plan rule, shared with GET /weekly and GET
@@ -53,12 +53,22 @@ export const CALENDAR_STATUSES = Object.freeze(["planned", "done", "awaiting_ent
 const athleteNameSql = (alias) => `coalesce(${alias}.display_name, ${alias}.full_name, concat_ws(' ', ${alias}.first_name, ${alias}.last_name), ${alias}.athlete_id)`;
 // The athlete's team memberships among the workspace's teams
 // ($<teamsParam>::uuid[]) ON THE DAY `dayExpr`, by the calendar's one
-// membership rule (calendarAccess.js membershipOnDaySql), as an array; '{}'
-// outside a club / team / platform workspace (since K2b-1d2 the platform's
-// list holds every active team of an active club, so it gets team ids too).
-const athleteTeamIdsSql = (alias, teamsParam, dayExpr) =>
-  `(select coalesce(array_agg(distinct wt.id), '{}') from unnest($${teamsParam}::uuid[]) as wt(id)
-     where ${membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = wt.id)`, dayExpr)})`;
+// membership rule (calendarAccess.js membershipOnDaySql), as an array sorted
+// by id; '{}' outside a club / team / platform workspace (since K2b-1d2 the
+// platform's list holds every active team of an active club, so it gets team
+// ids too).
+// K2b-1d2 (the owner, 2026-11-18, plan 23.6): it goes from the athlete's own
+// team periods to the teams of the list, instead of from every team of the
+// list to the athlete (rows x teams), with the same day condition
+// (membershipPeriodOnDaySql, the one membershipOnDaySql uses) and the same
+// result; the index athlete_membership_periods_athlete_idx (v25) serves it.
+// central-calendar-k2b-1d2-team-ids.test.mjs proves it equal to the earlier
+// form for every viewer's list and every day.
+export const athleteTeamIdsSql = (alias, teamsParam, dayExpr) =>
+  `(select coalesce(array_agg(distinct mpt.team_id order by mpt.team_id), '{}')
+      from public.athlete_membership_periods mpt
+     where mpt.athlete_id = ${alias}.id and mpt.membership_type = 'team' and mpt.team_id = any($${teamsParam}::uuid[])
+       and ${membershipPeriodOnDaySql("mpt", `${alias}.id`, dayExpr)})`;
 // A terminal assignment status: the entry can no longer be made (plan 2.5,
 // status `missed`).
 const MISSED_ASSIGNMENT_STATUSES = new Set(["missed"]);

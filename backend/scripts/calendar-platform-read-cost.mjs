@@ -3,7 +3,9 @@
 // team), a month of planned sessions (3 a week per athlete) and 8 events per team - through the real app over HTTP
 // with a platform admin's session. A measurement, not a test.
 //
-//   node backend/scripts/calendar-platform-read-cost.mjs [--root <checkout>] [--runs 7]
+//   node backend/scripts/calendar-platform-read-cost.mjs [--root <checkout>] [--runs 7] [--workspace platform|club]
+//
+// `--workspace club` times club 1's admin in that club's workspace instead of the platform admin (the same world).
 //
 // `--root` names the checkout whose backend is measured (default: this one). Run it once from this branch and once
 // with --root pointing at a clean origin/main worktree: the same world, before and after. DATABASE_URL must name a
@@ -23,6 +25,9 @@ const option = (name, fallback) => {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(option("--root", path.resolve(here, "../..")));
 const runs = Math.max(1, Number(option("--runs", "7")) || 7);
+// Whose read is timed: the platform admin's (every club), or club 1's admin in that club's workspace.
+const workspace = option("--workspace", "platform");
+if (!["platform", "club"].includes(workspace)) throw new Error("--workspace must be platform or club");
 const CLUBS = 3;
 const TEAMS_PER_CLUB = 10;
 const ATHLETES_PER_TEAM = 10;
@@ -111,7 +116,9 @@ try {
   }
 
   const url = `/api/calendar?from=${from}&to=${to}&today=${today}`;
-  const warm = await api(url, { cookie: platform.cookie });
+  const reader = workspace === "club" ? teams[0].admin : platform;
+  const expectedEvents = workspace === "club" ? EVENTS_PER_TEAM * TEAMS_PER_CLUB : events;
+  const warm = await api(url, { cookie: reader.cookie });
   if (warm.status !== 200) throw new Error(`read: ${warm.status} ${warm.text}`);
   // The seeding must really reach the read, or the numbers would leave out the athletes x teams cost Q4 is about
   // (code review): the planned sessions and the events come back as cards.
@@ -119,11 +126,11 @@ try {
   const plannedCards = answerItems.filter((i) => i.kind === "planned").length;
   const eventCards = answerItems.filter((i) => i.kind === "event").length;
   if (plannedCards === 0) throw new Error("no planned cards in the read: the seeding did not reach the calendar");
-  if (eventCards < events) throw new Error(`only ${eventCards} event cards for ${events} events`);
+  if (eventCards < expectedEvents) throw new Error(`only ${eventCards} event cards for ${expectedEvents} events`);
   const times = [];
   for (let i = 0; i < runs; i += 1) {
     const t0 = performance.now();
-    const res = await api(url, { cookie: platform.cookie });
+    const res = await api(url, { cookie: reader.cookie });
     times.push(performance.now() - t0);
     if (res.status !== 200) throw new Error(`read: ${res.status}`);
   }
@@ -132,7 +139,7 @@ try {
     commit = execFileSync("git", ["-C", root, "rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).trim();
   } catch {}
   console.log(JSON.stringify({
-    root, commit, from, to, clubs: CLUBS, teams: teams.length, athletes: n, sessions, events,
+    workspace, root, commit, from, to, clubs: CLUBS, teams: teams.length, athletes: n, sessions, events,
     answerTeams: warm.body.teams.length, items: answerItems.length, plannedCards, eventCards,
     runs, medianMs: Math.round(median(times)), minMs: Math.round(Math.min(...times)), maxMs: Math.round(Math.max(...times)),
   }));

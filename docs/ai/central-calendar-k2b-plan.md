@@ -1620,6 +1620,9 @@ GO for K2b-1d2 as section 23 plans it.
     (from the athlete's memberships to the teams, under the same `membershipOnDaySql` rule) becomes part of this step,
     with tests that prove the same result;
   - otherwise only the measured numbers are recorded.
+- **Q4, changed by the owner (2026-11-18):** after the slowdown was explained, the owner said „pa reši ti to na vreme,
+  posle toga će biti problem" (relayed by the manager). So the rewrite of `athleteTeamIdsSql` **is part of this pull
+  request**, although the measured cost (1.17–1.30×, 23.7) was under the bound. As built: 23.8.
 - **T, the database:** the read of `backend/.env` is a permission of this session, so it is the owner's to decide; the
   manager asks the owner. Until then, everything that needs no database is done:
   - `npm --prefix backend ci` in this worktree;
@@ -1733,3 +1736,47 @@ and the head the same):
 - The Frontend PR gate on `60c7697f`: no new failure, the same 19 files with the same counts as a clean `main`. No
   frontend file changed after it.
 - The build passed; `git diff --check` is clean.
+
+### 23.8 The rewrite of `athleteTeamIdsSql` (the owner's decision of 2026-11-18, 23.6)
+
+- **What it was:** `athleteTeamIdsSql` (`backend/src/calendarQuery.js`) gave an athlete's teams on a day by unnesting
+  the whole team list of the viewer **for every athlete row** and running `membershipOnDaySql` for each pair (rows ×
+  teams). With the platform's list of every club's teams, that is what grew (23.2, 23.7).
+- **What it is:** from the athlete's own team periods (`public.athlete_membership_periods`, v25) to the teams of the list
+  (`team_id = any($teams)`), under **the same day condition**, now one shared function
+  (`membershipPeriodOnDaySql`, `backend/src/calendarAccess.js`), which `membershipOnDaySql` itself uses. That condition
+  is:
+  - the period covers the day, the joining and the leaving day included, as UTC dates;
+  - or the period is open and the day lies before the athlete's first period in the period's club (the fallback).
+
+  The array is sorted by id, as before. The existing index `athlete_membership_periods_athlete_idx` (v25) serves it.
+  **No migration, no index added.**
+- **Why it is the same result:** the old form keeps a team T of the list when some team period of T satisfies the
+  condition; the new form collects the team of every team period of the list that satisfies it. These are the same set,
+  and `distinct` with the explicit order gives the same array. The rule reads the periods, not the memberships'
+  `status`: an archived membership is a closed period, and a paused one an open period, as before.
+- **The proof**, `backend/tests/central-calendar-k2b-1d2-team-ids.test.mjs`: the old form and the old text of
+  `membershipOnDaySql` are frozen in the test.
+  - **The world:** an athlete who changes team mid-range; a membership archived before the range; the fallback (no
+    earlier period in the club) and its refusal (an earlier club period); two teams; a paused membership; a team archived
+    mid-range (D45); an empty team moved to another club with a raw write and joined afterwards (D43; a team with members
+    cannot move, since the membership holds the `(team, club)` key); joining and leaving at the edges of a UTC day.
+  - **Test 1:** old against new for every athlete, every day of a 14-day range, and every team list a viewer can have:
+    the platform's, each club's, a club's list before its team was archived, each single team, all of them, and none.
+    The arrays must be identical, in order.
+  - **Test 2:** anchors for those cases.
+  - **Test 3:** `membershipOnDaySql` against its old text on single days and on windows of up to 5 days, and every window
+    against the union of its days.
+- **The measurement:** `calendar-platform-read-cost.mjs` gained `--workspace club`, which times club 1's admin in the
+  same world. It is to be run before (`94aab138`) and after, for the platform and for a club.
+- **Mutations** (`K2b-1d2-backend-mutations.mjs`, BM13–BM20; each checked to apply):
+  - the day's upper bound dropped;
+  - the leaving day no longer counted;
+  - the fallback dropped;
+  - the fallback for any period, not only an open one (the rule's "current" membership);
+  - the fallback's club condition dropped;
+  - the team list filter dropped;
+  - the team-type filter dropped, expected equivalent (a club period has no team id);
+  - the explicit order dropped, expected equivalent (`distinct` sorts).
+- **Not run in this session** (no database): the two suites, the mutations and the measurement; the manager runs them.
+  `backend-fast` here: 674/676, the two known files.

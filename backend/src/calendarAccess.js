@@ -90,11 +90,19 @@ export function periodCoversSql(mp, fromExpr, toExpr = fromExpr) {
 export function membershipOnDaySql(athleteIdExpr, cond, fromExpr, toExpr = fromExpr) {
   return `exists (select 1 from public.athlete_membership_periods mp
            where mp.athlete_id = ${athleteIdExpr} and ${cond("mp")}
-             and (${periodCoversSql("mp", fromExpr, toExpr)}
-                  or (mp.valid_to is null
-                      and not exists (select 1 from public.athlete_membership_periods mp0
-                                       where mp0.athlete_id = ${athleteIdExpr} and mp0.club_id = mp.club_id
-                                         and ${periodDaySql("mp0.valid_from")} <= (${fromExpr})::date))))`;
+             and ${membershipPeriodOnDaySql("mp", athleteIdExpr, fromExpr, toExpr)})`;
+}
+
+// The day condition of THE rule above, for one period `mp` of the athlete `athleteIdExpr`: it covers the day(s), or it
+// is open and the day lies before the athlete's first period in the period's club. Shared by membershipOnDaySql and by
+// the athletes' team ids of calendarQuery.js (K2b-1d2: from the athlete's periods to the teams), so the rule exists
+// once. `firstAlias` names the inner alias of the first-period check.
+export function membershipPeriodOnDaySql(mp, athleteIdExpr, fromExpr, toExpr = fromExpr, firstAlias = `${mp}0`) {
+  return `(${periodCoversSql(mp, fromExpr, toExpr)}
+                  or (${mp}.valid_to is null
+                      and not exists (select 1 from public.athlete_membership_periods ${firstAlias}
+                                       where ${firstAlias}.athlete_id = ${athleteIdExpr} and ${firstAlias}.club_id = ${mp}.club_id
+                                         and ${periodDaySql(`${firstAlias}.valid_from`)} <= (${fromExpr})::date)))`;
 }
 
 // `alias` is a public.athletes alias of the calling query; `fromExpr` /
