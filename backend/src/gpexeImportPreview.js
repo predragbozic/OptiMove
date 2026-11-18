@@ -19,6 +19,7 @@ import { buildGpexeImportPlan, classifyMappedPlan, GpexeMappingError, leftOutRea
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { ImportBindingNotActiveError, prepareImportMapping } from "./gpexeImportMapping.js";
 import { importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "./gpexeImportWriter.js";
+import { calculatedForOccasion } from "./calculatedValues.js";
 import { canonicalDecimal, compareDecimal } from "./sourceMetricExtractors.js";
 
 // 2: changesToImported (phase F2). 3: values through mapping activations (9-B,
@@ -215,7 +216,9 @@ async function currentState(client, ownerTeamId, externalIds) {
      from training_load.metric_source_connections c
      join training_load.metric_source_identities si on si.source_connection_id = c.id
      left join training_load.metric_measurement_occasions o on o.id = si.current_occasion_id
-     left join training_load.metric_values v on v.occasion_id = o.id
+     -- J21: OptiMove's calculated values are no imported fact; the preview compares the imported values only and lists the
+     -- calculated ones apart.
+     left join training_load.metric_values v on v.occasion_id = o.id and not v.is_derived
      left join training_load.metric_definitions d on d.id = v.metric_definition_id
      left join training_load.metric_value_source_provenance p on p.metric_value_id = v.id
      where c.source_system = 'gpexe' and c.owner_scope = 'team' and c.owner_team_id = $1 and c.state = 'active'
@@ -464,6 +467,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
 
   let outcomes = new Map();
   let summary = null;
+  const calculatedByResult = new Map();
   // 6b-B (contract rule 6): the estimates this import would replace - effective estimate occasions of the session's event
   // before the import, compared after it. Listed apart, only when there are some (so an existing preview's hash stays as
   // it was), and never part of acceptChanges.
@@ -485,6 +489,13 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
         },
       );
       outcomes = new Map(summary.results.map((r) => [r.externalId, r]));
+      // J21 (C142): the calculated values each result would get, or the inputs each one lacks, read inside the savepoint.
+      const levelOf = new Map(plan.participants.flatMap((p) => p.results.map((r) => [r.externalId, r.level])));
+      for (const r of summary.results) {
+        if (!r.occasionId) continue;
+        const entries = await calculatedForOccasion(client, { occasionId: r.occasionId, level: levelOf.get(r.externalId), ownerTeamId });
+        if (entries.length) calculatedByResult.set(r.externalId, entries);
+      }
       if (estimatesBefore.length) {
         const still = new Set((await effectiveEstimates(client, ownerTeamId, plan.event.sourceExternalId)).map((e) => e.occasionId));
         supersededEstimates = estimatesBefore.filter((e) => !still.has(e.occasionId)).map(({ occasionId, ...rest }) => rest)
@@ -590,6 +601,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
           outcome: outcome ?? "not_imported",
           ...(previous?.entryMethod === "manual" ? { manualCorrectionKept: true } : {}),
           values,
+          // J21: present only when a calculated variable applies, so every other preview (and its hash) is unchanged.
+          ...(calculatedByResult.has(result.externalId) ? { calculated: calculatedByResult.get(result.externalId) } : {}),
         });
         // A result imported before that this import would write to: listed
         // on its own, with the values that differ, for acceptChanges.
