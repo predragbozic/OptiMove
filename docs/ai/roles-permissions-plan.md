@@ -71,6 +71,25 @@ club that needs it, without waiting for the platform.
 **The ceiling rule.** A person may put into a role, and assign, only permissions they hold
 themselves in that scope. Platform-only permissions can never be in a club's role.
 
+**Several roles on one account stay the normal case.** How they combine:
+
+- in one scope the permissions add up: a person holds what any of their roles there gives; a role
+  never takes away what another gives, so a person is narrowed by replacing the wider role, not by
+  adding a narrower one;
+- a role assigned for a club holds in every team of that club (as `club_admin` does today);
+- scopes stay apart: the active workspace decides which roles count, and a permission held in one
+  club gives nothing in another; the ceiling rule is evaluated per scope the same way;
+- the athlete's own workspace follows the profile and is independent of staff roles;
+- a platform admin passes every check in every workspace, as today. So an account that is a
+  platform admin and a club's admin is not narrowed in that club by an adjustment of the basic
+  "Club admin" role; the effect of an adjustment is checked with the "what this role sees" preview
+  or an account without the platform role.
+
+Example (the owner's own account): platform admin, club admin of two clubs and independent coach
+are four workspaces. Roles made in one club do not exist in the other; a role wanted in both is
+made as a basic role from the platform workspace. The private workspace holds only the coach's own
+athletes and programs.
+
 **Ownership stays above permissions.** A permission answers "may this person do this kind of thing
 in this scope". `owner_scope` (ADR-002) still answers "whose is this row". A coach's private
 program is not opened by another person's "edit programs" in the team.
