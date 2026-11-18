@@ -1,4 +1,4 @@
-import { CENTRAL_CALENDAR_EVENT_EXPECTS } from "./central-calendar-data.js";
+import { CENTRAL_CALENDAR_EVENT_EXPECTS, centralCalendarTeamLabel } from "./central-calendar-data.js";
 import {
   applyCentralCalendarTeamPlace,
   buildCentralCalendarValuesRequest,
@@ -408,7 +408,7 @@ function targetsHtml(form, { teams, roster }) {
   if (owner.scope === "club") {
     rows.push(checkHtml({ checked: chosen.has(targetKey({ kind: "club", id: owner.id })), attrs: `data-cc-event-target="club" data-target-id="${escapeAttr(owner.id)}" data-target-name="${escapeAttr(owner.name || "")}"`, label: `The whole club${owner.name ? ` (${owner.name})` : ""}`, focus: `target:club:${owner.id}` }));
     for (const team of teams || []) {
-      rows.push(checkHtml({ checked: chosen.has(targetKey({ kind: "team", id: team.teamId })), attrs: `data-cc-event-target="team" data-target-id="${escapeAttr(team.teamId)}" data-target-name="${escapeAttr(team.name || "")}"`, label: team.name || "Team", focus: `target:team:${team.teamId}` }));
+      rows.push(checkHtml({ checked: chosen.has(targetKey({ kind: "team", id: team.teamId })), attrs: `data-cc-event-target="team" data-target-id="${escapeAttr(team.teamId)}" data-target-name="${escapeAttr(team.name || "")}"`, label: centralCalendarTeamLabel(team), focus: `target:team:${team.teamId}` }));
     }
   } else if (owner.scope === "team") {
     rows.push(checkHtml({ checked: chosen.has(targetKey({ kind: "team", id: owner.id })), attrs: `data-cc-event-target="team" data-target-id="${escapeAttr(owner.id)}" data-target-name="${escapeAttr(owner.name || "")}"`, label: `The whole team${owner.name ? ` (${owner.name})` : ""}`, focus: `target:team:${owner.id}` }));

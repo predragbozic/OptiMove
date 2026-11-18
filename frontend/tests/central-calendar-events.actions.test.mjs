@@ -474,9 +474,10 @@ test("4b. Edit and Cancel event only on an event whose card says canManage and t
   await act({ action: "central-calendar-edit-event", key: `event:${E_CAMP}:${DAY(3)}`, date: DAY(3) });
   await act({ action: "central-calendar-cancel-event", key: `event:${E_MEETING}:${DAY(0)}`, date: DAY(0) });
   assert.equal(state.centralCalendar.form, null);
-  // K2b-1d: a manager's card names its type, so the calendar reads the
-  // catalog once for the type's icon; no event is read (no chosen details).
-  assert.deepEqual(calls.filter((call) => call.url.startsWith("/api/calendar/events")).map((call) => call.url), ["/api/calendar/events/types"], "not even the event is read");
+  // K2b-1d3: the cards wear their type's look from the card itself, so no
+  // catalog is read. K2c-1: the manager's planned event is read once for its
+  // links; the reader's and the cancelled event's panels read nothing.
+  assert.deepEqual(calls.filter((call) => call.url.startsWith("/api/calendar/events")).map((call) => call.url), [`/api/calendar/events/${E_MATCH}`], "only the manager's planned event");
 });
 
 // --- 5. Create --------------------------------------------------------------------
@@ -860,7 +861,8 @@ test("7a. Edit reads the event, fills the form, and PATCHes only what changed wi
   const calls = await openEdit();
   const form = state.centralCalendar.form;
   assert.equal(form.mode, "edit");
-  assert.equal(calls.filter((call) => call.url === `/api/calendar/events/${E_MATCH}`).length, 1);
+  // One read for the panel's links (K2c-1), one fresh read for the form.
+  assert.equal(calls.filter((call) => call.url === `/api/calendar/events/${E_MATCH}`).length, 2);
   assert.equal(form.draft.title, "Cup match");
   assert.equal(form.draft.notes, "Bring both kits");
   assert.deepEqual(form.draft.targets.map((t) => `${t.kind}:${t.id}`), [`team:${U17}`]);

@@ -69,7 +69,8 @@ test("1. the preflight on the database before v81, the apply, the post-check; th
   const client = new pg.Client({ connectionString: db.url });
   await client.connect();
   try {
-    assert.ok(!BEFORE.some((f) => /_v7[89]_|_v80_/.test(f)), "this chain has no v78-v80 (v81 depends on none of them)");
+    // v81 depends on none of v78-v80 (its dependency check names its eight by
+    // name and checksum); whichever of them this chain carries is irrelevant.
     const pre = await runbookBlocks(client, "calendar-questions-v81-preflight.sql");
     assert.equal(pre[0][0].pg15_or_later, true, "block 1");
     const deps = pre[1][0];
@@ -211,7 +212,7 @@ test("3. the rollback: refused without v81; apply -> rollback -> the catalog ide
   }
 });
 
-test("4. the whole chain: the real legacy snapshot, every migration of migrations_v2 on this branch (v81 included, v78-v80 absent), and the post-check", async () => {
+test("4. the whole chain: the real legacy snapshot, every migration of migrations_v2 on this branch (v81 included, with main's v78), and the post-check", async () => {
   const snapshotSql = fs.readFileSync(path.join(__dirname, "support/legacy-schema.sql"), "utf8");
   const last = snapshotSql.match(/^-- Last migration contained in the dump: (\S+)\.$/m)[1];
   const db = await createDisposableDatabase({ prefix: "calendar", label: "k2b2_chain", baseDatabaseUrl: process.env.DATABASE_URL });
@@ -224,7 +225,10 @@ test("4. the whole chain: the real legacy snapshot, every migration of migration
       const recorded = (await client.query(`select migration_name from public.schema_migrations where migration_name like 'migrations_v2/%' order by 1`)).rows.map((r) => r.migration_name.replace("migrations_v2/", ""));
       const files = fs.readdirSync(MIGRATIONS).filter((f) => /^\d{12}_.*\.sql$/.test(f)).sort();
       assert.deepEqual(recorded, files, "every file applied, v81 included");
-      assert.ok(!files.some((f) => /_v7[89]_|_v80_/.test(f)), "v78-v80 are not on this branch");
+      // Since the merge of main after PR #612, v78 is in the chain and sorts before v81;
+      // v81 applies after it and its post-check holds (it depends on neither v78 nor v79-v80).
+      assert.ok(files.includes("202611181100_training_load_v78_calculated_variables_additive.sql"), "main's v78 is in the chain");
+      assert.ok(files.indexOf("202611191000_calendar_v81_athlete_questions.sql") > files.indexOf("202611181100_training_load_v78_calculated_variables_additive.sql"));
       const post = await runbookBlocks(client, "calendar-questions-v81-postcheck.sql");
       assert.equal(post[0][0].v81_checksum, V81_SHA256);
       assert.deepEqual(post[2][0], { materialize_md5: MD5.materializeAfter, settings_changes_md5: MD5.settingsAfter, tl_materialize_md5: MD5.tlAfter });

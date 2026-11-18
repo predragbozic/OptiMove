@@ -1015,7 +1015,22 @@ export async function eventFormOptions(ctx) {
     club = owner.teamClubId;
     teamIds = [owner.teamId];
   }
-  return { types, ...(await formCatalog(pool, { club, teamIds })) };
+  // K2b-2a-1, B1 (additive): the club's switch, and each type's default
+  // questions only while it is on (the value a create without `questions`
+  // asks, typeQuestions). No club (a private coach, the platform) is off;
+  // nothing else of the switch leaves the server.
+  const questionsOn = club ? (await readQuestionsSwitch(pool, club))?.enabled === true : false;
+  let formTypes = types;
+  if (questionsOn && types.length) {
+    const rows = (await pool.query(
+      `select t.id, t.default_expects, to_jsonb(t) -> 'default_questions' as default_questions
+         from calendar.event_types t where t.id = any($1::uuid[])`,
+      [types.map((t) => t.id)],
+    )).rows;
+    const byId = new Map(rows.map((r) => [String(r.id), r]));
+    formTypes = types.map((t) => ({ ...t, defaultQuestions: typeQuestions(byId.get(String(t.id))) }));
+  }
+  return { types: formTypes, ...(await formCatalog(pool, { club, teamIds })), questions: { enabled: questionsOn } };
 }
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,8 @@ export const ACTIVATION_MESSAGES = Object.freeze({
   binding_not_active: "A listed team binding has ended.",
   binding_source_mismatch: "A listed team binding is not of this source field's source and API family.",
   field_retired: "The source field is retired.",
+  // The review of 2026-11-18 (the Independent's LOW on PR #609): S1 refuses it too, as the version's create and A1 do.
+  condition_mismatch: "This variable counts only values under a condition, and this field has none, so it cannot fill it.",
   activation_exists: "A listed team binding already imports this source field with these parameters.",
   variable_taken_on_binding: "A listed team binding already imports this canonical variable at this level through another activation.",
   activation_not_open: "The activation has ended.",

@@ -204,7 +204,9 @@ async function resolveValueEntries(client, req, rawEntries, { requireActive, req
   const uniqueVersionIds = [...new Set(rawEntries.map((e) => e.metricDefinitionVersionId))];
   const versionCache = new Map();
   const versionResult = await client.query(
-    `select id, metric_definition_id, value_type, min_value, max_value, unit from training_load.metric_definition_versions where id = any($1::uuid[])`,
+    // v77's calculation is read through the whole row, so a database before v77 reads it as none.
+    `select v.id, v.metric_definition_id, v.value_type, v.min_value, v.max_value, v.unit, (to_jsonb(v.*) -> 'calculation') is not null and (to_jsonb(v.*) -> 'calculation') <> 'null'::jsonb as calculated
+       from training_load.metric_definition_versions v where v.id = any($1::uuid[])`,
     [uniqueVersionIds],
   );
   for (const v of versionResult.rows) versionCache.set(v.id, v);
@@ -215,6 +217,10 @@ async function resolveValueEntries(client, req, rawEntries, { requireActive, req
     const version = versionCache.get(entry.metricDefinitionVersionId);
     if (!version || String(version.metric_definition_id) !== String(def.id)) {
       return { error: `metricDefinitionVersionId ${entry.metricDefinitionVersionId} does not belong to definition ${entry.metricDefinitionId}.`, status: 400 };
+    }
+    // A calculated variable's values are OptiMove's sum of its inputs (J21), never entered or corrected by hand.
+    if (version.calculated) {
+      return { error: "OptiMove calculates this variable from other variables, so its value cannot be entered by hand.", status: 409, code: "calculated_variable_not_entered" };
     }
     if (requireCurrentVersion && String(version.id) !== String(def.current_version_id)) {
       return { error: `Metric definition ${def.id} has changed since this was loaded — reload and confirm before submitting.`, status: 409 };
@@ -427,7 +433,7 @@ export async function createGroupEvent(req, scope, body, { onLocked, onActivityN
       for (const v of p.values || []) flatEntries.push({ ...v, __participantIndex: participantIndex });
     });
     const valuesResult = await resolveValueEntries(client, req, flatEntries, { requireActive: true, requireCurrentVersion: true });
-    if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
+    if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error, valuesResult.code);
     await lockDefinitionsForKeyShare(client, valuesResult.values.map((v) => v.metric_definition_id));
     if (onLocked) await onLocked(client);
     const resolvedByParticipant = new Map();
@@ -647,7 +653,7 @@ export async function correctManualOccasion(req, scope, body, { onLocked } = {})
 
     const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id = $1`, [targetOccasionId]);
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
-    if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
+    if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error, valuesResult.code);
     const newValues = valuesResult.values;
     await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);
@@ -749,7 +755,7 @@ export async function correctImportedOccasionManually(req, scope, body) {
 
     const oldValuesRes = await client.query(`select metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text from training_load.metric_values where occasion_id = $1`, [expectedCurrentOccasionId]);
     const valuesResult = await resolveValueEntries(client, req, body.values, { requireActive: false, requireCurrentVersion: false });
-    if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error);
+    if (valuesResult.error) throw httpError(valuesResult.status, valuesResult.error, valuesResult.code);
     const newValues = valuesResult.values;
     await lockDefinitionsForKeyShare(client, newValues.map((v) => v.metric_definition_id));
     const completeness = validateCompleteValueSet(oldValuesRes.rows, newValues);

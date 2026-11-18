@@ -1,11 +1,29 @@
 import { calendarColorIndex, calendarTeamColorIndexes } from "./calendar-colors.js";
-import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS } from "./central-calendar-data.js";
+import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS, centralCalendarTeamLabel } from "./central-calendar-data.js";
 import {
   centralCalendarCatalogOf,
   renderCentralCalendarEventDetailsHtml,
   renderCentralCalendarEventPlaceHtml,
 } from "./central-calendar-event-details.js";
 import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
+import {
+  CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED,
+  CENTRAL_CALENDAR_LINK_EMPTY,
+  CENTRAL_CALENDAR_LINKED_HINT,
+  CENTRAL_CALENDAR_LINKS_LOAD_FAILED,
+  CENTRAL_CALENDAR_ORPHANED_META,
+  centralCalendarActivityLinksOf,
+  centralCalendarAlignLine,
+  centralCalendarEventLinkable,
+  centralCalendarEventsForPlanned,
+  centralCalendarLinkBusyWord,
+  centralCalendarLinkSuggestions,
+  centralCalendarOrphanedLine,
+  centralCalendarPartialLine,
+  centralCalendarPlannedPartialLine,
+  centralCalendarResultsQuestion,
+  centralCalendarSessionLinkGroups,
+} from "./central-calendar-links.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -137,29 +155,28 @@ export function centralCalendarChipCounts(byDate, days) {
   return { teams, kinds, eventKinds, total };
 }
 
-// The workspace's event types by id (the catalog the calendar holds, set on
-// every render): a manager's event card carries its `eventTypeId`, and shows
-// that type's icon and colour (K2b-1d, Q1 (a)). A reader's card names no type
-// and keeps its kind's icon (K2b-1d2 adds the icon to every card).
-let cardTypes = new Map();
-
-export function centralCalendarCardType(item, types = cardTypes) {
-  if (item?.kind !== "event" || item.canManage !== true || !item.eventTypeId) return null;
-  return types.get(String(item.eventTypeId)) || null;
-}
-
-export function centralCalendarItemIconKey(item, types = cardTypes) {
+// K2b-1d3 (plan 24.1): every event card - a manager's, a reader's and the
+// athlete's - carries its type's look (K2b-1d2: `eventTypeIconKey` /
+// `eventTypeColorKey`, null when the type is not shown under D41), so the
+// cards read no catalog. A key outside the icon library falls back to the
+// kind's icon; a colour outside the palette gives no tint.
+export function centralCalendarItemIconKey(item) {
   if (item?.kind === "event") {
-    const type = centralCalendarCardType(item, types);
-    if (type && isLibraryKey(type.iconKey)) return type.iconKey;
+    if (isLibraryKey(item.eventTypeIconKey)) return item.eventTypeIconKey;
     return CENTRAL_CALENDAR_EVENT_KIND_ICONS[item.eventKind] || CENTRAL_CALENDAR_KIND_ICONS.event;
   }
   return CENTRAL_CALENDAR_KIND_ICONS[item?.kind] || CENTRAL_CALENDAR_KIND_ICONS.event;
 }
 
+// The type's palette index for an event card, -1 for none.
+export function centralCalendarItemColorIndex(item) {
+  if (item?.kind !== "event") return -1;
+  return calendarColorIndex(item.eventTypeColorKey);
+}
+
 // The type's colour on its icon (the stripe stays the team's colour).
 function typeColorStyle(item) {
-  const index = calendarColorIndex(centralCalendarCardType(item)?.colorKey);
+  const index = centralCalendarItemColorIndex(item);
   return index < 0 ? null : `--cc-type-color: var(--cc-team-${index})`;
 }
 
@@ -191,7 +208,7 @@ function teamColorStyle(teamId, teams) {
 }
 
 function teamName(teamId, teams) {
-  return (teams || []).find((team) => team.teamId === teamId)?.name || "Team";
+  return centralCalendarTeamLabel((teams || []).find((team) => team.teamId === teamId));
 }
 
 function eventTypeLabel(eventType) {
@@ -496,7 +513,7 @@ function renderFiltersHtml(cal, counts, teams) {
         <span class="cc-chip-row-label">Groups</span>
         ${renderChipHtml({ action: "central-calendar-all-groups", label: "All groups", count: counts.total, active: !filters.teamIds.length })}
         ${teams.map((team) => renderChipHtml({
-          action: "central-calendar-toggle-team", dataAttr: "data-team-id", value: team.teamId, label: team.name || "Team",
+          action: "central-calendar-toggle-team", dataAttr: "data-team-id", value: team.teamId, label: centralCalendarTeamLabel(team),
           count: counts.teams.get(team.teamId) || 0, active: filters.teamIds.includes(team.teamId), style: teamColorStyle(team.teamId, teams), dot: true,
         })).join("")}
       </div>`
@@ -555,7 +572,7 @@ function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
   // K2a-2: New event only where this workspace may create one (a club, a
   // team, a private coach); the server decides again on the write.
   const newEvent = canCreate
-    ? `<button type="button" class="plain-button cc-primary cc-new-event" data-action="central-calendar-new-event"${cal.form ? " disabled" : ""}>${renderIconSvg("calendar-event", { size: 18 })}<span>New event</span></button>`
+    ? `<button type="button" class="plain-button cc-primary cc-new-event" data-action="central-calendar-new-event"${cal.form || cal.linkWrite ? " disabled" : ""}>${renderIconSvg("calendar-event", { size: 18 })}<span>New event</span></button>`
     : "";
   const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}" aria-label="${label}" title="${label}">${renderSwitchIcon(value)}</button>`;
   const modeSwitch = layout === "wide" && cal.view === "week"
@@ -712,7 +729,7 @@ function renderDayTeamsHtml(items, cal, teams) {
   return `<ul class="cc-day-teams" role="list" aria-label="Per group on this day">
       ${shown.map((team) => {
         const count = items.filter((item) => (item.teamIds || []).includes(team.teamId)).length;
-        return `<li class="cc-team-pill${count ? "" : " is-empty"}"${teamColorStyle(team.teamId, teams)}><span class="cc-team-dot" aria-hidden="true"></span><span class="cc-team-pill-name">${escapeHtml(`${team.name || "Team"} · ${count} item${count === 1 ? "" : "s"}`)}</span></li>`;
+        return `<li class="cc-team-pill${count ? "" : " is-empty"}"${teamColorStyle(team.teamId, teams)}><span class="cc-team-dot" aria-hidden="true"></span><span class="cc-team-pill-name">${escapeHtml(`${centralCalendarTeamLabel(team)} · ${count} item${count === 1 ? "" : "s"}`)}</span></li>`;
       }).join("")}
     </ul>`;
 }
@@ -877,12 +894,177 @@ function renderEventFactsHtml(item) {
 // Edit and Cancel only where the card says the server would take them
 // (`canManage`, D18) and the event is not cancelled. K2a-1b: "Attach a
 // training" and "Attach an activity" join this row (the attach routes).
-function renderEventActionsHtml(item) {
+function renderEventActionsHtml(item, { locked = false } = {}) {
   if (item.kind !== "event" || item.canManage !== true || item.cancelled) return "";
+  const off = locked ? " disabled" : "";
   return `<div class="cc-panel-actions">
-      <button type="button" class="plain-button cc-panel-button" data-action="central-calendar-edit-event" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}">Edit</button>
-      <button type="button" class="plain-button cc-panel-button cc-danger-outline" data-action="central-calendar-cancel-event" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}">Cancel event</button>
+      <button type="button" class="plain-button cc-panel-button" data-action="central-calendar-edit-event" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${off}>Edit</button>
+      <button type="button" class="plain-button cc-panel-button cc-danger-outline" data-action="central-calendar-cancel-event" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${off}>Cancel event</button>
     </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// K2c-1 (docs/ai/central-calendar-k2c-plan.md 1.1): the links of an event, in
+// its panel and in a planned card's panel. `pending` is this panel's link
+// command whose result is not confirmed (the actions module's memory), and
+// `cal.linkWrite` the one in flight: while either exists every button here,
+// and the event's Edit / Cancel, is off (one control at a time).
+// ---------------------------------------------------------------------------
+function linkButtonHtml({ act, label, attrs = "", busy = false, off = false, primary = false, aria = "", extraClass = "" }) {
+  // The calendar's primary look is `plain-button cc-primary` (the app has no base .primary-button rule).
+  const cls = `plain-button${primary ? " cc-primary" : ""} cc-panel-button cc-link-button${extraClass ? ` ${extraClass}` : ""}`;
+  return `<button type="button" class="${cls}" data-action="central-calendar-link" data-act="${escapeAttr(act)}" ${attrs}${aria ? ` aria-label="${escapeAttr(aria)}"` : ""}${off ? " disabled" : ""}>${escapeHtml(busy ? centralCalendarLinkBusyWord(act) : label)}</button>`;
+}
+
+// One row: the name, its quiet line, a refused pair's short reason under it,
+// and the row's button (none for a refused pair).
+function linkRowHtml(title, meta, button, refusedReason = "") {
+  return `<li class="cc-link-row"><div class="cc-link-text"><p class="cc-link-name">${escapeHtml(title)}</p>${meta ? `<p class="cc-link-meta">${escapeHtml(meta)}</p>` : ""}${refusedReason ? `<p class="cc-link-refused">${escapeHtml(refusedReason)}</p>` : ""}</div>${refusedReason ? "" : button}</li>`;
+}
+
+function linkFeedbackHtml(cal, panelKey, pending) {
+  const message = cal.linkMessage && cal.linkMessage.panelKey === panelKey ? cal.linkMessage : null;
+  const messageHtml = message ? `<p class="cc-panel-note cc-link-message" role="${message.alert ? "alert" : "status"}" tabindex="-1">${escapeHtml(message.text)}</p>` : "";
+  if (!pending) return messageHtml;
+  const checking = cal.linkWrite?.check === true;
+  return `<div class="cc-link-unconfirmed" role="status"><p class="cc-panel-note">The result is not confirmed.</p>${messageHtml}
+      <button type="button" class="plain-button cc-panel-button cc-link-wrap" data-action="central-calendar-link-check" data-request-key="${escapeAttr(pending.requestKey)}"${checking ? " disabled" : ""}>${checking ? "Checking…" : "Check result"}</button></div>`;
+}
+
+function busyOn(cal, act, attr, value) {
+  const write = cal.linkWrite;
+  return Boolean(write && !write.check && write.act === act && String(write[attr] ?? "") === String(value ?? ""));
+}
+
+// The Align row (review M3, M6): always drawn while the card counts sessions
+// that do not follow the event, its buttons off during another write; a first
+// press shows the step in the same row and only its second button sends; the
+// server's has_existing_results asks its own question there.
+function renderAlignHtml(item, cal, off) {
+  const align = centralCalendarAlignLine(item);
+  if (!align) return "";
+  const blocked = cal.alignBlocked && cal.alignBlocked.eventId === item.eventId && cal.alignBlocked.revision === item.revision;
+  if (blocked) return `<div class="cc-link-align"><p class="cc-panel-note">${escapeHtml(CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED)}</p></div>`;
+  // A step belongs to the event as it was when it opened (review LOW): a
+  // re-read that moved the revision or what the event collects drops it.
+  const step = cal.alignStep && cal.alignStep.eventKey === item.key && cal.alignStep.revision === item.revision
+    && cal.alignStep.expects === (item.expects || []).join(",") ? cal.alignStep : null;
+  const busy = busyOn(cal, "align", "act", "align") || busyOn(cal, "align-confirm", "act", "align-confirm") || busyOn(cal, "align-results", "act", "align-results");
+  if (step) {
+    const question = step.stage === "results" ? centralCalendarResultsQuestion(step.resultCount) : align.step;
+    const confirmAct = step.stage === "results" ? "align-results" : "align-confirm";
+    const confirmLabel = step.stage === "results" ? "Stop asking" : align.confirm;
+    return `<div class="cc-link-align cc-link-align-step"><p class="cc-panel-note" role="status">${escapeHtml(question)}</p>
+        <div class="cc-link-align-buttons">${linkButtonHtml({ act: confirmAct, label: confirmLabel, busy, off: off || busy, primary: true })}
+        <button type="button" class="plain-button cc-panel-button cc-link-button" data-action="central-calendar-align-cancel"${off || busy ? " disabled" : ""}>Not now</button></div></div>`;
+  }
+  return `<div class="cc-link-align"><p class="cc-panel-note">${escapeHtml(align.text)}</p>${linkButtonHtml({ act: "align", label: align.button, off, extraClass: "cc-link-wrap" })}</div>`;
+}
+
+function renderEventLinksHtml(item, cal, pending) {
+  if (!centralCalendarEventLinkable(item)) return "";
+  const busy = Boolean(cal.linkWrite);
+  const off = busy || Boolean(pending);
+  const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent : null;
+  const suggestions = centralCalendarLinkSuggestions(cal.data, item, cal.linkRefused);
+  const parts = [];
+  // 1. The linked trainings (the manager view).
+  let linkedCount = 0;
+  if (!view || view.loading) {
+    parts.push(`<p class="cc-panel-note" role="status">Loading linked trainings…</p>`);
+  } else if (view.error || !view.event) {
+    parts.push(`<p class="cc-panel-note" role="alert">${escapeHtml(CENTRAL_CALENDAR_LINKS_LOAD_FAILED)}</p>${view.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-details-retry">Try again</button>`}`);
+  } else {
+    const { groups, orphaned, orphanedCount } = centralCalendarSessionLinkGroups(view.event, item.date);
+    linkedCount += groups.length + orphaned.length;
+    if (groups.length || orphaned.length) {
+      const rows = groups.map((group) => {
+        const name = group.name || "Training";
+        const meta = [centralCalendarWhenLabel({ slot: group.slot }), athleteCountLabel(group.athleteCount), group.renamedFrom ? `was “${group.renamedFrom}”` : ""].filter(Boolean).join(" · ");
+        return linkRowHtml(name, meta, linkButtonHtml({ act: "unlink-sessions", label: "Unlink", attrs: `data-group="${escapeAttr(group.key)}"`, busy: busyOn(cal, "unlink-sessions", "group", group.key), off, aria: `Unlink ${name}` }));
+      });
+      if (orphaned.length) {
+        rows.push(linkRowHtml(centralCalendarOrphanedLine(orphanedCount), CENTRAL_CALENDAR_ORPHANED_META, linkButtonHtml({ act: "unlink-sessions", label: "Unlink", attrs: `data-group="orphaned"`, busy: busyOn(cal, "unlink-sessions", "group", "orphaned"), off, aria: "Unlink the deleted trainings" })));
+      }
+      parts.push(`<h5 class="cc-link-heading">Linked trainings</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
+      if (groups.length) parts.push(`<p class="cc-panel-note cc-link-hint">${escapeHtml(CENTRAL_CALENDAR_LINKED_HINT)}</p>`);
+    }
+  }
+  // 2. Align (the card's own count).
+  const alignHtml = renderAlignHtml(item, cal, off);
+  if (alignHtml) parts.push(alignHtml);
+  // 3. The trainings of the day.
+  if (suggestions.trainings.length) {
+    const rows = suggestions.trainings.map(({ item: planned, refused }) => {
+      const title = centralCalendarTitle(planned);
+      const meta = [centralCalendarWhenLabel(planned), athleteCountLabel(Number(planned.athleteCount) || 0)].filter(Boolean).join(" · ");
+      return linkRowHtml(title, meta, linkButtonHtml({ act: "link-session", label: "Link", attrs: `data-planned-key="${escapeAttr(planned.key)}"`, busy: busyOn(cal, "link-session", "plannedKey", planned.key), off, aria: `Link ${title}` }), refused);
+    });
+    parts.push(`<h5 class="cc-link-heading">Trainings on this day</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
+  }
+  const partial = centralCalendarPartialLine(suggestions.partial);
+  if (partial) parts.push(`<p class="cc-panel-note">${escapeHtml(partial)}</p>`);
+  // 4. The linked activities (the manager view).
+  if (view?.event && !view.loading && !view.error) {
+    const links = centralCalendarActivityLinksOf(view.event, item.date);
+    linkedCount += links.length;
+    if (links.length) {
+      const rows = links.map((link) => {
+        const name = link.visible ? link.name || "Activity" : "An activity you cannot open here";
+        return linkRowHtml(name, "", linkButtonHtml({ act: "unlink-activity", label: "Unlink", attrs: `data-activity-id="${escapeAttr(link.activityId)}"`, busy: busyOn(cal, "unlink-activity", "activityId", link.activityId), off, aria: `Unlink ${name}` }));
+      });
+      parts.push(`<h5 class="cc-link-heading">Linked activities</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
+    }
+  }
+  // 5. The activities of the day.
+  if (suggestions.activities.length) {
+    const rows = suggestions.activities.map(({ item: activity, refused }) => {
+      const title = centralCalendarTitle(activity);
+      const meta = [centralCalendarWhenLabel(activity), centralCalendarKindLabel(activity)].filter(Boolean).join(" · ");
+      return linkRowHtml(title, meta, linkButtonHtml({ act: "link-activity", label: "Link", attrs: `data-activity-key="${escapeAttr(activity.key)}"`, busy: busyOn(cal, "link-activity", "activityKey", activity.key), off, aria: `Link ${title}` }), refused);
+    });
+    parts.push(`<h5 class="cc-link-heading">Activities on this day</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
+  }
+  // 6. Nothing at all.
+  const viewSettled = view && !view.loading && !view.error && view.event;
+  if (viewSettled && !linkedCount && !suggestions.trainings.length && !suggestions.activities.length && !alignHtml) {
+    parts.push(`<p class="cc-panel-note">${escapeHtml(CENTRAL_CALENDAR_LINK_EMPTY)}</p>`);
+  }
+  return `<section class="cc-panel-links" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}>
+      <h4 class="cc-panel-subtitle" id="ccLinksTitle" tabindex="-1">Trainings and activities</h4>
+      ${linkFeedbackHtml(cal, item.key, pending)}
+      ${parts.join("")}
+    </section>`;
+}
+
+// `linkEntries`: every link command not confirmed in this workspace - an
+// event with one waiting is not offered here until it is checked (review LOW).
+function renderPlannedLinksHtml(item, cal, pending, linkEntries = []) {
+  if (item.kind !== "planned") return "";
+  const { events, partial } = centralCalendarEventsForPlanned(cal.data, item, cal.linkRefused);
+  const feedback = linkFeedbackHtml(cal, item.key, pending);
+  const partialHtml = partial.map((event) => `<p class="cc-panel-note">${escapeHtml(centralCalendarPlannedPartialLine(event))}</p>`).join("");
+  if (!events.length) {
+    if (!partialHtml && !feedback) return "";
+    return `<section class="cc-panel-links" aria-labelledby="ccLinksTitle"><h4 class="cc-panel-subtitle" id="ccLinksTitle">Link to an event</h4>${feedback}${partialHtml}</section>`;
+  }
+  const busy = Boolean(cal.linkWrite);
+  const off = busy || Boolean(pending);
+  const waits = (event) => linkEntries.some((entry) => entry.eventId === event.eventId);
+  const meta = (event) => [centralCalendarWhenLabel(event), eventKindWord(event)].filter(Boolean).join(" · ");
+  let body;
+  if (events.length === 1 && !events[0].refused) {
+    const { item: event } = events[0];
+    const title = centralCalendarTitle(event);
+    body = `<div class="cc-link-one">${linkButtonHtml({ act: "link-to-event", label: `Link to “${title}”`, attrs: `data-event-key="${escapeAttr(event.key)}"`, busy: busyOn(cal, "link-to-event", "eventKey", event.key), off: off || waits(event), primary: true })}<p class="cc-link-meta">${escapeHtml(meta(event))}</p></div>`;
+  } else {
+    body = `<ul class="cc-link-list" role="list">${events.map(({ item: event, refused }) => {
+      const title = centralCalendarTitle(event);
+      const button = linkButtonHtml({ act: "link-to-event", label: "Link", attrs: `data-event-key="${escapeAttr(event.key)}"`, busy: busyOn(cal, "link-to-event", "eventKey", event.key), off: off || waits(event), aria: `Link to ${title}` });
+      return linkRowHtml(title, meta(event), button, refused);
+    }).join("")}</ul>`;
+  }
+  return `<section class="cc-panel-links" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}><h4 class="cc-panel-subtitle" id="ccLinksTitle">Link to an event</h4>${feedback}${body}${partialHtml}</section>`;
 }
 
 function panelHost(body, layout) {
@@ -891,7 +1073,7 @@ function panelHost(body, layout) {
     <aside class="cc-panel cc-sheet" role="dialog" aria-modal="true" aria-labelledby="ccPanelTitle">${body}</aside>`;
 }
 
-function renderPanelHtml(cal, layout, today, roster, formCtx) {
+function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = []) {
   // The event form takes the panel's place (K2a-2); the item's panel comes
   // back when the form closes.
   if (cal.form) return panelHost(renderCentralCalendarEventFormHtml(cal.form, { ...formCtx, longDate: centralCalendarLongDate }), layout);
@@ -910,17 +1092,23 @@ function renderPanelHtml(cal, layout, today, roster, formCtx) {
     : activityIds.length > 1
       ? `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-open-training-load" data-date="${escapeAttr(item.date)}">Open the day in Training Load</button><p class="cc-panel-note">${activityIds.length} activities are recorded for this ${thing}.</p>`
       : "";
+  // K2c-1: this panel's link command left not confirmed (by the event, or by
+  // the planned card it was sent from).
+  const pending = uncertainWrites.find((entry) => entry.mode === "link" && (entry.panelKey === item.key || (item.kind === "event" && entry.eventId === item.eventId))) || null;
+  const linksLocked = Boolean(cal.linkWrite) || Boolean(pending && item.kind === "event");
   const body = `<header class="cc-panel-head">
         <h3 class="cc-panel-title" id="ccPanelTitle">${escapeHtml(centralCalendarTitle(item))}</h3>
         <button type="button" class="plain-button icon-button cc-panel-close" data-action="central-calendar-close-panel" aria-label="Close">&times;</button>
       </header>
-      <p class="cc-panel-kind">${itemIconHtml(item, "cc-panel-icon")}<span>${escapeHtml(centralCalendarKindLabel(item))}</span></p>
+      <p class="cc-panel-kind${item.cancelled ? " is-cancelled" : ""}">${itemIconHtml(item, "cc-panel-icon")}<span>${escapeHtml(centralCalendarKindLabel(item))}</span></p>
       <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when ? ` · ${escapeHtml(when)}` : ""}</p>
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item) : ""}
       ${item.kind === "event" ? renderCentralCalendarEventDetailsHtml(item, cal.panelEvent) : ""}
-      ${renderEventActionsHtml(item)}
+      ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending) : ""}
+      ${renderEventActionsHtml(item, { locked: linksLocked })}
+      ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
       ${trainingLoad}
       <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`;
   return panelHost(body, layout);
@@ -935,11 +1123,12 @@ function renderUncertainWritesHtml(cal, writes) {
   const label = (entry) => {
     const title = String(entry.eventTitle || "").replace(/\s+/g, " ").trim() || (entry.mode === "create" ? "the new event" : "the event");
     if (entry.mode === "values") return `Check the details of “${title}”`;
+    if (entry.mode === "link") return `Check linking for “${title}”`;
     return entry.mode === "create" ? `Check “${title}”` : entry.mode === "cancel" ? `Check cancelling “${title}”` : `Check the change to “${title}”`;
   };
   return `<div class="cc-refresh-note cc-uncertain-line" role="status">
       <span>${writes.length === 1 ? "1 save of an event is not confirmed." : `${writes.length} saves of events are not confirmed.`}</span>
-      ${writes.map((entry) => `<button type="button" class="plain-button cc-inline-button" data-action="central-calendar-event-pending" data-request-key="${escapeAttr(entry.requestKey)}">${escapeHtml(label(entry))}</button>`).join("")}
+      ${writes.map((entry) => `<button type="button" class="plain-button cc-inline-button" data-action="central-calendar-event-pending" data-request-key="${escapeAttr(entry.requestKey)}"${cal.linkWrite ? " disabled" : ""}>${escapeHtml(label(entry))}</button>`).join("")}
     </div>`;
 }
 
@@ -955,8 +1144,10 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   // The panel column exists only while the open item is really in the answer,
   // or while the event form is open.
   const panelOpen = Boolean(cal.form) || Boolean(panelItemOf(cal));
-  cardTypes = new Map((cal.eventTypes || []).map((type) => [String(type.id), type]));
-  const formCtx = { types: cal.eventTypes || [], teams, roster: eventRoster, catalog: centralCalendarCatalogOf(cal) };
+  // K2b-1d2 (the manager's Q1): the form never takes the platform's teams - they are every club's; the platform's
+  // support edit keeps the event's own targets read-only, and the platform creates no event.
+  const formTeams = cal.data?.workspace?.type === "platform" ? [] : teams;
+  const formCtx = { types: cal.eventTypes || [], teams: formTeams, roster: eventRoster, catalog: centralCalendarCatalogOf(cal) };
   return `<section class="central-calendar cc-layout-${escapeAttr(layout)} cc-view-${escapeAttr(cal.view)}${panelOpen ? " cc-panel-open" : ""}" aria-label="Calendar">
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
       ${renderFiltersHtml(cal, counts, teams)}
@@ -965,7 +1156,7 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
       ${renderUncertainWritesHtml(cal, uncertainWrites)}
       <div class="cc-body">
         <div class="cc-main">${cal.anchor ? renderBodyHtml(cal, layout, today) : renderStateHtml(cal)}</div>
-        ${renderPanelHtml(cal, layout, today, roster, formCtx)}
+        ${renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites)}
       </div>
     </section>`;
 }

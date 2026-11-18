@@ -236,6 +236,10 @@ link.
 - **The soft prompt: decided** (3.4). The strict variant is not built.
 - **Q7, who turns it on: decided.** A platform admin, per club, recorded with a reason, as for the import switch. It
   stays off everywhere until then.
+- **The legal basis: stated by the owner (2026-11-18).** Asked whether the legal basis for asking athletes, minors
+  included, blocks switching it on, the owner answered „Slobodno bez problema sa tim" and, asked what that referred to,
+  „Na to". This is the owner's own assessment, not a legal confirmation, as with O10 of the import line. The club's
+  switch stays off until a platform admin turns it on for a club with a reason, after the screens are built.
 
 ## 8. Daily WELLNESS that skips days off: an option of the Tests schedule (K2b-2c; the owner, 2026-11-18)
 
@@ -660,6 +664,12 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   the advisory key is `calendar.wellness_day:<club>:<day>` (`calendar.wellness_day_key`).
 - **One more helper function** than 9.1 named: `calendar.event_audience_on_day(event, day)` (the recipients of A2, the
   WELLNESS check).
+- **B1 (the manager's decision, after the ★★ GO; no migration):** `GET /api/calendar/events/types` (`eventFormOptions`)
+  adds `questions: { enabled }`, the switch of the club it already resolves (the owner club, or the team's club; false
+  for a private coach, the platform or without v81; nothing else of the switch), and on each type `defaultQuestions`
+  (`typeQuestions`, the value a create without `questions` asks) only while it is on. `listEventTypes` is unchanged.
+  Test 34; mutations C1 (another club's switch), C2 (`defaultQuestions` while off), C3 (on without a club). The pinned
+  key list of `central-calendar-k2b-settings` test 0c gains `questions` (asserted off there, with no type defaults).
 
 #### 9.1.15 Review round 1 (2026-11-18, on `d638b478`): every item and what was done
 
@@ -795,3 +805,16 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   query, after both locks: R2 (questions back to `FOR UPDATE`) now fails tests 15 and 21, as R1 does.
 - **NIT.** The comment at the top of `calendarEventService.js` and plan section 2 (around line 170) now say the event
   row is locked `FOR NO KEY UPDATE`.
+- **After the independent ★★ GO on `c51a298b` (tests only):** LOW-1 is closed by test 31 (*Later*'s key reused with
+  another body → `409 request_key_reused`, nothing written; mutation L1 fails it). INFO-2 is closed by test 32: each
+  pre-v81 body (Tests phase 4, md5 `2d961f5a…`; Training Load **v4**, the only file that defines it, md5 `8410bf72…`) and
+  each v81 body is created under another name from its file and proven by md5; on ordinary schedules (club, team and
+  athlete targets, a joiner and a leaver; Training Load with the switch on and off, the WELLNESS schedule with the switch
+  off, since with it on a live event WELLNESS question of the day covers it by design) both make identical rows. Mutation
+  I2 (the test's v81 copy changed) fails it.
+- **Test 33 (the manager's addition to INFO-2), the switch ON, in a club of its own:** (1) with no event question
+  covering the day, the old and v81 Tests rows are identical and none is `cancelled` (the switch alone cancels nothing);
+  (2) with a team event's WELLNESS question covering the day, exactly the athletes that event reaches on the day (the two
+  team members and the joiner) are `cancelled` with a `covered_by_event` skip naming that question, nothing else in their
+  rows changes, and the club-only athlete and the schedule's own athlete target stay identical to the old body. Mutation
+  I3 (the test's v81 copy ignores the event's audience in the covered check) fails it.

@@ -772,7 +772,9 @@ test("13d. a team moved to another club while the right waits on the team row: t
 // The migration, its preflight, post-check and rollback
 // ---------------------------------------------------------------------------
 const V76_PATH = `migrations_v2/${V76_FILE}`;
-const beforeV76 = () => GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("v76"));
+// The migrations up to v76 (later ones, v77 on, are their own suites': this one pins v76 as the last).
+const UP_TO_V76 = GPEXE_TEST_MIGRATIONS.filter((m) => m <= "202611171000_training_load_v76_undo_by_importer.sql");
+const beforeV76 = () => UP_TO_V76.filter((m) => !m.includes("v76"));
 // The disposable world does not run the error-tracking migrations; production has v73 recorded, which the preflight reads.
 const V73_PATH = "migrations_v2/202611151500_app_error_events_v73_request_and_restart.sql";
 async function recordV73(client) {
@@ -807,7 +809,7 @@ test("14. migration v76: the preflight passes before it, the post-check after it
     assert.ok(pre.length >= 12, `the preflight returned its booleans (${pre.length})`);
     assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v76");
     const before = await catalogOf(client);
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, UP_TO_V76);
     const post = await booleansOf(client, fs.readFileSync(RUNBOOK("undo-by-importer-v76-postcheck.sql"), "utf8"));
     assert.ok(post.length >= 9, `the post-check returned its booleans (${post.length})`);
     assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok after v76");
@@ -821,7 +823,7 @@ test("14. migration v76: the preflight passes before it, the post-check after it
     }
     await client.query(fs.readFileSync(RUNBOOK("undo-by-importer-v76-rollback.sql"), "utf8"));
     assert.deepEqual(await catalogOf(client), before, "the rollback restores the catalog before v76 exactly");
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, UP_TO_V76);
     assert.deepEqual(await catalogOf(client), after, "re-applied: the same catalog");
   } finally {
     await client.end();
@@ -857,7 +859,7 @@ test("15. the rollback refuses, changing nothing, once a deletion log row names 
       assert.equal((await client.query(`select to_regprocedure('training_load.lock_gpexe_session_undo_right(uuid,uuid)') is null as n`)).rows[0].n, true, "a refused run changes nothing");
       await client.query(original);
     }
-    await applyGpexeTestMigrations(rb.url, GPEXE_TEST_MIGRATIONS);
+    await applyGpexeTestMigrations(rb.url, UP_TO_V76);
     await client.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912310000_later.sql', repeat('0', 64), 'test')`);
     const before = await catalogOf(client);
     await assert.rejects(client.query(fs.readFileSync(RUNBOOK("undo-by-importer-v76-rollback.sql"), "utf8")), /later migrations are applied/);

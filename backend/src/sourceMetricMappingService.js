@@ -326,6 +326,8 @@ const TRIGGER_REFUSALS = new Map([
   ["source_metric_mapping_versions: the canonical version is not numeric", [409, "canonical_not_numeric"]],
   ["source_metric_mapping_versions: canonical_unit_missing", [409, "canonical_unit_missing"]],
   ["source_metric_mapping_versions: canonical_unit_not_a_token", [409, "canonical_unit_not_a_token"]],
+  // v77 (J21): the backstop of notReadyCodeOf's canonical_calculated.
+  ["source_metric_mapping_versions: a calculated variable is never the target of a mapping", [409, "canonical_calculated"]],
   ["source_metric_mapping_versions: the conversion must equal the active unit conversion of its unit pair", [409, "conversion_unavailable"]],
   ["source_metric_mapping_versions: the bound conversion must equal the active unit conversion of its unit pair", [409, "bound_conversion_unavailable"]],
   ["source_metric_mapping_versions: the canonical condition description has no supported shape", [409, "condition_description_unsupported"]],
@@ -359,6 +361,10 @@ const MESSAGES = {
   revision_not_usable: "The source revision is not a draft or active revision of this mapping's source metric.",
   level_not_allowed: "A chosen level is not supported by the source revision or the canonical definition.",
   canonical_not_numeric: "The canonical definition's current version is not numeric.",
+  // The review of 2026-11-18: a field without a condition never fills a variable that counts only values under one (no
+  // check could tell that the field's values are the ones the condition names). Zone match is the later way in.
+  condition_mismatch: "This variable counts only values under a condition, and this field has none, so it cannot fill it.",
+  canonical_calculated: "The canonical definition is calculated by OptiMove from other variables; no mapping feeds it.",
   canonical_unit_missing: "The canonical definition's current version has no unit.",
   canonical_unit_not_a_token: "The canonical definition's unit is not a unit token.",
   conversion_unavailable: "No active unit conversion exists for this unit pair.",
@@ -575,7 +581,8 @@ export async function listFields({ ctx, query }) {
 
 // The parts of a canonical version the API reads, never the raw
 // condition_description: numbers as their exact numeric text.
-const CANONICAL_VERSION_COLUMNS = `v.id as version_id, v.version_number, v.value_type, v.unit,
+// v77 (J21): whether the version is calculated, read through to_jsonb so a schema before v77 (no column) reads false.
+const CANONICAL_VERSION_COLUMNS = `v.id as version_id, v.version_number, v.value_type, v.unit, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
   (v.unit is not null and char_length(v.unit) between 1 and 30) as unit_present,
   coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
   jsonb_typeof(v.condition_description) as cd_type,
@@ -611,6 +618,8 @@ function canonicalParametersOf(row) {
   return null;
 }
 function notReadyCodeOf(row) {
+  // v77 (J21): a calculated variable's values are its calculation; no source feeds it.
+  if (row.calculated === true) return "canonical_calculated";
   if (row.value_type !== "numeric") return "canonical_not_numeric";
   if (!row.unit_present) return "canonical_unit_missing";
   if (!row.unit_is_token) return "canonical_unit_not_a_token";
@@ -1137,6 +1146,9 @@ export async function createVersion({ ctx, mappingId, body }) {
       if (!target || target.state !== "active" || !target.version_id) throw refusal(409, "target_not_active", MESSAGES.target_not_active);
       const notReady = notReadyCodeOf(target);
       if (notReady) throw refusal(409, notReady, MESSAGES[notReady]);
+      if (revision.parameter_kind === "none" && target.cd_type !== null && target.cd_type !== undefined) {
+        throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
+      }
       const scopes = target.scopes ?? [];
       if ((body.appliesToSession && !scopes.includes("session")) || (body.appliesToDrill && !scopes.includes("component"))) {
         throw refusal(409, "level_not_allowed", MESSAGES.level_not_allowed);
@@ -1491,6 +1503,10 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       const md = (await client.query(
         `select state, current_version_id from training_load.metric_definitions where id = $1 for share`, [v.metric_definition_id],
       )).rows[0];
+      // The current version is immutable and the row above holds it in place, so its condition is read without a lock.
+      const hasCondition = md?.current_version_id ? (await client.query(
+        `select condition_description is not null as c from training_load.metric_definition_versions where id = $1`, [md.current_version_id],
+      )).rows[0]?.c === true : false;
       const scopes = (await client.query(
         `select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level for share`,
         [v.metric_definition_id],
@@ -1524,6 +1540,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       if (!revision || revision.state !== "active" || !statusProven(revision.evidence_status)) throw refusal(409, "revision_not_verified", MESSAGES.revision_not_verified);
       if (!md || md.state !== "active") throw refusal(409, "target_not_active", MESSAGES.target_not_active);
       if (md.current_version_id !== v.metric_definition_version_id) throw refusal(409, "canonical_version_changed", MESSAGES.canonical_version_changed);
+      if (v.parameter_kind === "none" && hasCondition) throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
       const conversion = await conversionsHold(client, v);
       if (conversion) throw refusal(409, conversion, MESSAGES[conversion]);
       if ((v.applies_to_session && !scopes.includes("session")) || (v.applies_to_drill && !scopes.includes("component"))) {

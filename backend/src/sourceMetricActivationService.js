@@ -129,6 +129,16 @@ export async function startActivations({ ctx, body }) {
       // Step 6: the states, answered only now.
       if (version.status !== "active") throw refusal(409, "version_not_active", ACTIVATION_MESSAGES.version_not_active, { current: { status: version.status } });
       if (!field || field.state !== "active") throw refusal(409, "field_retired", ACTIVATION_MESSAGES.field_retired);
+      // A field without a condition never fills a variable with one (the review of 2026-11-18; the version's create and A1
+      // refuse it, and S1 too, as defence in depth). The revision and the variable's current version are immutable rows; the
+      // variable's current version is read as it stands.
+      const conditionMismatch = (await client.query(
+        `select r.parameter_kind = 'none' and cv.condition_description is not null as mismatch
+           from training_load.source_metric_definition_versions r, training_load.metric_definitions d
+           join training_load.metric_definition_versions cv on cv.id = d.current_version_id and cv.metric_definition_id = d.id
+          where r.id = $1 and d.id = $2`, [v.source_metric_version_id, v.metric_definition_id],
+      )).rows[0]?.mismatch === true;
+      if (conditionMismatch) throw refusal(409, "condition_mismatch", ACTIVATION_MESSAGES.condition_mismatch);
       // G1b-3 (the code review's MEDIUM): a version active from before the exact-word rule (a created field proven by a
       // document in a unit two GPEXE words share) is not switched on for another team - its import would read nothing.
       const unitWord = await unitWordCode(client, v, v.source_unit, v.source_metric_version_id);

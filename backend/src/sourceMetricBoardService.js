@@ -255,7 +255,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     `select d.id, d.owner_scope, d.key, d.label, v.id as version_id, v.value_type, v.unit,
             coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
             trim_scale(v.min_value)::text as min_value, trim_scale(v.max_value)::text as max_value,
-            v.condition_description is not null as has_condition,
+            v.condition_description is not null as has_condition, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
             (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes,
             exists (select 1 from training_load.metric_definition_club_hides h
                      where h.club_id = $1::uuid and h.metric_definition_id = d.id and h.shown_at is null) as hidden
@@ -532,6 +532,8 @@ function boardOf(world, pairIndex) {
     // version's revision is the column's active one, its variable is active, current and not hidden.
     if (!col || !col.readable || v.parameter_kind !== "none" || col.field.revision_id !== v.revision_id) continue;
     if (!variable || variable.version_id !== v.target_version_id || variable.hidden) continue;
+    // A field without a condition never fills a variable with one (the review of 2026-11-18): never offered, never feeds.
+    if (variable.has_condition) continue;
     if (v.owner_key === "system") {
       if (!fedBySystem.has(v.variable_id)) fedBySystem.set(v.variable_id, []);
       fedBySystem.get(v.variable_id).push(v.field_id);
@@ -581,7 +583,9 @@ function boardOf(world, pairIndex) {
         unit: v.unit_is_token ? v.unit : null,
         // A club variable takes a column; an OptiMove variable only where its system mapping of a column fills it (C61) -
         // except on the platform board, where OptiMove's variables are the owner's own and take a column (S).
-        placeable: v.owner_scope === "club" || world.systemBoard ? v.value_type === "numeric" && v.unit_is_token === true : fedBySystem.has(v.id),
+        // v77 (J21): a calculated variable takes no column; its value is its calculation.
+        placeable: v.calculated !== true
+          && (v.owner_scope === "club" || world.systemBoard ? v.value_type === "numeric" && v.unit_is_token === true : fedBySystem.has(v.id)),
         filledByFieldIds: v.owner_scope === "system" ? fedBySystem.get(v.id) ?? [] : [],
       })),
       on: world.open.map((o) => ({
@@ -658,13 +662,14 @@ function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
     const v = world.versions.find((x) => x.owner_key === "system" && x.field_id === fieldId && x.variable_id === targetId && x.parameter_kind === "none"
       && x.revision_id === col.field.revision_id && x.target_version_id === variable.version_id);
     if (!v || !col.readable) return refuse("target_scope_mismatch");
+    if (variable.has_condition) return refuse("condition_mismatch");
     if (world.open.some((o) => o.mapping_version_id === v.id)) return refuse("activation_exists");
     const row = versionRow(world, pair, col, v);
     return { placement: { placeable: true, ...row, collisions: collisionsOf(world, { fieldId, variableId: targetId, levels: row.levels }) } };
   }
 
   if (col.reason !== null) return refuse(col.reason);
-  if (variable.value_type !== "numeric" || !variable.unit_is_token) return refuse("target_not_usable");
+  if (variable.calculated === true || variable.value_type !== "numeric" || !variable.unit_is_token) return refuse("target_not_usable");
   if (variable.has_condition) return refuse("condition_mismatch");
   const conversion = conversionBetween(world, col.field.source_unit, variable.unit);
   if (!conversion) return refuse("conversion_unavailable", { sourceUnit: col.field.source_unit, targetUnit: variable.unit });
@@ -729,6 +734,9 @@ function preplacedOf(world, shared, mappingVersionId) {
   if (!col || !variable) throw NOT_FOUND();
   if (world.sessionRefusal) throw world.sessionRefusal;
   if (!col.readable || v.parameter_kind !== "none") return { code: col.reason ?? "field_has_parameters", v };
+  // A field without a condition never fills a variable with one (the review of 2026-11-18), even through an existing
+  // version: the save never switches such a version on.
+  if (variable.has_condition) return { code: "condition_mismatch", v };
   if (col.field.revision_id !== v.revision_id) return { code: "revision_not_usable", v };
   if (variable.version_id !== v.target_version_id) return { code: "canonical_version_changed", v };
   if (variable.hidden) return { code: "variable_hidden", v };
