@@ -778,6 +778,12 @@ test("23. every row of the refusal table (J16 section 8) has its own sentence; r
     assert.match(data.refusalText("activate", { code, status: 409 }), /^This version cannot be activated now: /, code);
   }
   assert.match(data.refusalText("activate", { code: "source_metric_target_taken", status: 409 }), /already fills .+\. Only one of them can be active at a time\./);
+  // The review of 2026-11-18: a field without a condition onto a variable with one is refused by the draft and by the
+  // activation, in words, and a lost activation's Check result settles on it.
+  assert.equal(data.refusalText("draft", { code: "condition_mismatch", status: 409 }), "This variable counts only values under a condition, and this field has none, so it cannot fill it.");
+  assert.equal(data.refusalText("activate", { code: "condition_mismatch", status: 409 }),
+    "This version cannot be activated now: this variable counts only values under a condition, and this field has none, so it cannot fill it.");
+  assert.equal(data.checkSettles("activate", { code: "condition_mismatch", status: 409 }), true);
   assert.deepEqual([...data.TEAM_CODES].sort(), ["activation_exists", "binding_not_active", "binding_source_mismatch", "variable_taken_on_binding"]);
   for (const code of data.TEAM_CODES) assert.ok(data.TEAM_CODE_TEXT[code], code);
   for (const act of ["create", "draft", "submit", "activate", "disable", "switchOn", "switchOff"]) {

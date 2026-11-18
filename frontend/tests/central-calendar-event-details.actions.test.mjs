@@ -83,6 +83,7 @@ const CATALOG = { types: TYPES, fields: FIELDS, locations: LOCATIONS, teamDefaul
 function eventItem(id, date, overrides = {}) {
   return {
     key: `event:${id}:${date}`, kind: "event", date, eventId: id, eventKind: "match", eventTypeLabel: "Match", eventTypeId: T_MATCH,
+    eventTypeIconKey: "football", eventTypeColorKey: "indigo",
     title: "Cup match", slot: null, startTime: "15:00", endTime: "17:00", startsAt: null, location: "City stadium",
     place: { source: "library", locationId: L_STADIUM, name: "City stadium", address: "Main street 1, Novi Sad", note: "Gate B" },
     teamIds: [U17], athleteIds: [], athleteCount: 18, expects: [], status: "planned", rpe: null, attendance: null, results: null,
@@ -460,12 +461,18 @@ test("D10. a manager's event with details: one read on open, each value in words
     "Weather=Snow", "Our score (required)=Not filled in", "Old note=Not filled in",
   ]);
   assert.ok(doc.querySelector(`[data-action="central-calendar-enter-details"][data-key="event:${E_MATCH}:${DAY(1)}"]`));
-  // A manager's event without chosen details: no read.
+  // A manager's planned event without chosen details: since K2c-1 the panel
+  // reads it once for its links (the manager's GO (a)), and shows no details.
   clearAllViewCache();
   resetCentralCalendarForWorkspaceChange();
   const plain = await openPanel({ items: [eventItem(E_MATCH, DAY(1), { details: { selected: 0, filled: 0, required: 0, filledRequired: 0 } })] });
-  assert.equal(eventReads(plain).length, 0);
+  assert.equal(eventReads(plain).length, 1);
   assert.equal(dom().querySelector(".cc-panel-details"), null);
+  // A manager's cancelled event without details: nothing to link, no read.
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  const cancelled = await openPanel({ items: [eventItem(E_MATCH, DAY(1), { cancelled: true, status: "cancelled", details: { selected: 0, filled: 0, required: 0, filledRequired: 0 } })] });
+  assert.equal(eventReads(cancelled).length, 0);
 });
 
 test("D11. the panel's read fails: a sentence and Try again, which reads once more", async () => {
@@ -652,44 +659,113 @@ test("D17. Enter details on an event cancelled meanwhile, or not the coach's any
 
 // --- 5. The cards ----------------------------------------------------------------
 
-test("D18. a manager's card wears its type's icon and colour from the catalog; a reader's keeps its kind's icon; the catalog is read once, and only when a card needs it", async () => {
-  const calls = installFetchMock(server());
+test("D18. every card wears its type's icon and colour from the card itself (K2b-1d3): a manager's, a reader's and the athlete's; no catalog read for the cards", async () => {
+  // A reader's card of a system type (a type's look, no type id) and the athlete's reduced card of a club's type.
+  const reader = { ...readerItem(DAY(2)), eventTypeIconKey: "flag", eventTypeColorKey: "teal" };
+  const athleteCard = {
+    key: `event:e0000000-0000-4000-8000-0000000000bb:${DAY(3)}`, kind: "event", date: DAY(3), title: "Away trip", eventKind: "travel", eventTypeLabel: "Travel",
+    eventTypeIconKey: "trophy", eventTypeColorKey: "rose", span: { from: DAY(3), to: DAY(3) }, startTime: "08:00", endTime: "10:00", timezone: "Europe/Belgrade",
+    location: null, place: null, status: "planned", cancelled: false, teamIds: [U17], links: { eventId: "e0000000-0000-4000-8000-0000000000bb" },
+  };
+  const calls = installFetchMock(server({ items: [eventItem(E_MATCH, DAY(1)), reader, athleteCard] }));
   await loadCentralCalendar({ render });
   await tick();
-  assert.equal(typesReads(calls).length, 1, "a manager's card names its type: one catalog read");
+  assert.equal(typesReads(calls).length, 0, "the cards read no catalog");
   const doc = dom();
-  const card = doc.querySelector(`.cc-card[data-key="event:${E_MATCH}:${DAY(1)}"]`);
-  const icon = card.querySelector("svg.cc-card-icon");
-  assert.ok(icon.classList.contains("has-type-color"));
-  assert.equal(icon.closest(".cc-type-tint").getAttribute("style"), "--cc-type-color: var(--cc-team-2)", "indigo is the third colour");
-  assert.equal(view.centralCalendarItemIconKey(eventItem(E_MATCH, DAY(1))), "football", "Match's own icon");
-  const reader = doc.querySelector(`.cc-card[data-key="event:${E_READ}:${DAY(2)}"] svg.cc-card-icon`);
-  assert.equal(reader.classList.contains("has-type-color"), false);
-  assert.equal(view.centralCalendarItemIconKey(readerItem(DAY(2))), "team", "a reader's card: the kind's icon (meeting)");
-  assert.equal(view.centralCalendarItemIconKey({ ...eventItem(E_MATCH, DAY(1)), canManage: false }), "trophy", "a type id without the manager's right is not trusted");
-  // The new event form uses the same read.
-  await act({ action: "central-calendar-new-event" });
-  assert.equal(typesReads(calls).length, 1);
-  // Only readers' cards: no catalog read at all.
-  clearAllViewCache();
-  resetCentralCalendarForWorkspaceChange();
-  const none = installFetchMock(server({ items: [readerItem(DAY(2))] }));
-  await loadCentralCalendar({ render });
+  const tintOf = (key) => {
+    const icon = doc.querySelector(`.cc-card[data-key="${key}"] svg.cc-card-icon`);
+    return { tinted: icon.classList.contains("has-type-color"), style: icon.closest(".cc-type-tint")?.getAttribute("style") ?? null };
+  };
+  assert.deepEqual(tintOf(`event:${E_MATCH}:${DAY(1)}`), { tinted: true, style: "--cc-type-color: var(--cc-team-2)" }, "indigo is the third colour");
+  assert.deepEqual(tintOf(reader.key), { tinted: true, style: "--cc-type-color: var(--cc-team-0)" }, "a reader's card: its type's colour too");
+  assert.deepEqual(tintOf(athleteCard.key), { tinted: true, style: "--cc-type-color: var(--cc-team-6)" }, "the athlete's card: rose");
+  assert.equal(view.centralCalendarItemIconKey(eventItem(E_MATCH, DAY(1))), "football", "a manager's card: the type's icon");
+  assert.equal(view.centralCalendarItemIconKey(reader), "flag", "a reader's card: the type's icon");
+  assert.equal(view.centralCalendarItemIconKey(athleteCard), "trophy", "the athlete's card: the type's icon");
+  // The month view's mini card wears it too (K2b-1d3, LOW-4).
+  await act({ action: "central-calendar-view", view: "month" });
   await tick();
-  assert.equal(typesReads(none).length, 0);
+  assert.equal(state.centralCalendar.view, "month");
+  const mini = dom().querySelector(`.cc-mini[data-key="event:${E_MATCH}:${DAY(1)}"] svg.cc-mini-icon`);
+  assert.ok(mini, "the month view draws the manager's card as a mini card");
+  assert.ok(mini.classList.contains("has-type-color"));
+  assert.equal(mini.closest(".cc-type-tint").getAttribute("style"), "--cc-type-color: var(--cc-team-2)");
+  await act({ action: "central-calendar-view", view: "week" });
+  await tick();
+  // The panel wears the same look.
+  await act({ action: "central-calendar-open-item", key: reader.key, date: DAY(2) });
+  const panelIcon = dom().querySelector(".cc-panel .cc-type-tint");
+  assert.ok(panelIcon, "the panel's icon is tinted too");
+  assert.equal(panelIcon.getAttribute("style"), "--cc-type-color: var(--cc-team-0)");
+  assert.equal(panelIcon.closest(".cc-panel-kind").classList.contains("is-cancelled"), false, "a planned event's panel line is not marked cancelled");
+  // The new event form reads the catalog, once.
+  await act({ action: "central-calendar-new-event" });
+  await tick();
+  assert.equal(typesReads(calls).length, 1, "the form reads the catalog when it opens");
 });
 
-test("D19. a Settings → Calendar change drops the catalog: the next calendar read reads it again", async () => {
+test("D18d (MEDIUM-B). a cancelled event: its card, mini card and panel carry is-cancelled around the tinted icon (the stylesheet mutes it)", async () => {
+  const cancelled = eventItem(E_MATCH, DAY(1), { status: "cancelled", cancelled: true });
+  installFetchMock(server({ items: [cancelled] }));
+  await loadCentralCalendar({ render });
+  await tick();
+  const card = dom().querySelector(`.cc-card[data-key="${cancelled.key}"]`);
+  assert.ok(card.classList.contains("is-cancelled"));
+  assert.ok(card.querySelector("svg.cc-card-icon.has-type-color"), "the icon under is-cancelled");
+  await act({ action: "central-calendar-open-item", key: cancelled.key, date: DAY(1) });
+  const kind = dom().querySelector(".cc-panel .cc-panel-kind");
+  assert.ok(kind.classList.contains("is-cancelled"), "the panel's kind line says cancelled");
+  assert.ok(kind.querySelector("svg.cc-panel-icon.has-type-color"));
+  await act({ action: "central-calendar-close-panel" });
+  await act({ action: "central-calendar-view", view: "month" });
+  await tick();
+  const mini = dom().querySelector(`.cc-mini[data-key="${cancelled.key}"]`);
+  assert.ok(mini.classList.contains("is-cancelled"));
+  assert.ok(mini.querySelector("svg.cc-mini-icon.has-type-color"));
+});
+
+test("D18b. a moved team's event (D41, null keys) shows its kind's icon untinted; a key outside the library or the palette is ignored", () => {
+  const nulls = eventItem(E_MATCH, DAY(1), { eventTypeIconKey: null, eventTypeColorKey: null });
+  assert.equal(view.centralCalendarItemIconKey(nulls), "trophy", "the kind's icon (match)");
+  assert.equal(view.centralCalendarItemColorIndex(nulls), -1);
+  const foreign = eventItem(E_MATCH, DAY(1), { eventTypeIconKey: "not-an-icon", eventTypeColorKey: "magenta" });
+  assert.equal(view.centralCalendarItemIconKey(foreign), "trophy", "an icon outside the library: the kind's");
+  assert.equal(view.centralCalendarItemColorIndex(foreign), -1, "a colour outside the palette: no tint");
+  assert.equal(view.centralCalendarItemIconKey({ ...nulls, eventKind: "unknown" }), "calendar-event", "no kind's icon: the event icon");
+  assert.equal(view.centralCalendarItemColorIndex({ kind: "planned", eventTypeColorKey: "teal" }), -1, "only an event card is tinted");
+});
+
+test("D18c. rendered: a card with null keys and one with foreign keys wear the kind's icon, untinted", async () => {
+  const nulls = eventItem(E_MATCH, DAY(1), { eventTypeIconKey: null, eventTypeColorKey: null });
+  const foreign = { ...readerItem(DAY(2)), eventTypeIconKey: "not-an-icon", eventTypeColorKey: "magenta" };
+  installFetchMock(server({ items: [nulls, foreign] }));
+  await loadCentralCalendar({ render });
+  await tick();
+  const doc = dom();
+  for (const key of [nulls.key, foreign.key]) {
+    const icon = doc.querySelector(`.cc-card[data-key="${key}"] svg.cc-card-icon`);
+    assert.ok(icon, key);
+    assert.equal(icon.classList.contains("has-type-color"), false);
+    assert.equal(icon.closest(".cc-type-tint"), null);
+  }
+});
+
+test("D19. a Settings → Calendar change drops the form's catalog and reads the calendar again: the cards wear the new look", async () => {
   const calls = installFetchMock(server());
   await loadCentralCalendar({ render });
   await tick();
+  await act({ action: "central-calendar-new-event" });
+  await tick();
+  await act({ action: "central-calendar-event-form-close" });
   assert.equal(typesReads(calls).length, 1);
   centralCalendarCatalogChanged();
   assert.equal(state.centralCalendar.eventTypes, null);
   assert.equal(state.centralCalendar.eventCatalog, null);
+  const before = rangeReads(calls).length;
   await loadCentralCalendar({ render });
   await tick();
-  assert.equal(typesReads(calls).length, 2);
+  assert.equal(rangeReads(calls).length, before + 1, "the calendar is read again");
+  assert.equal(typesReads(calls).length, 1, "the cards still read no catalog");
 });
 
 test("D20. Awaiting details: after RPE, a result and attendance, before device data; its sentence; Details x/y beside RPE", () => {
@@ -837,7 +913,8 @@ test("D27. a panel opened before its card had details reads them on the next cal
   await loadCentralCalendar({ render });
   await tick();
   await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
-  assert.equal(eventReads(calls).length, 0, "no details: no read");
+  // K2c-1: the open panel of a manager's planned event reads it once for its links.
+  assert.equal(eventReads(calls).length, 1, "no details: one read for the links");
   // Details are chosen elsewhere meanwhile; the coach reads the calendar again.
   current = eventView({ revision: 3, fields: F6.map((id, i) => textField(id, `Detail ${i + 1}`, i < 4 ? `v${i + 1}` : null)) });
   item = eventItem(E_MATCH, DAY(1), { revision: 3, details: { selected: 6, filled: 4, required: 0, filledRequired: 0 } });

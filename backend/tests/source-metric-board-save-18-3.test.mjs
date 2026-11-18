@@ -905,6 +905,9 @@ test("8. route 6, erasure on request: only a platform admin in the platform work
   refused(await nothingWritten(() => erase(W.pa, { requestKey: key(), reasonCode: "wrong_confirmation" })), 409, "values_already_removed");
 });
 
+// Known (the Independent, 2026-11-18): this test fails when the file is run directly with
+// `node --test --experimental-test-isolation=none` and passes through the T1 runner; the cause is not established yet (a
+// follow-up). Run this suite through the runner.
 test("9. route 7 and the scheduled removal: values past their date are removed in batches, under the admin's identity with one audit row per confirmation (the last keyed) or by the schedule with none; two runs never remove the same confirmation; a run that removes nothing writes nothing; the schedule starts nothing inside the test runner or without a database", async () => {
   const removal = await import("../src/sourceMetricConfirmationRemoval.js");
   const remove = (who, body = { requestKey: key() }) => post("/confirmations/expired-values/remove", who, body);
@@ -1091,6 +1094,28 @@ test("13. a value-carrying statement that runs past its own bound is cancelled: 
   assert.equal(ok(await save(W.caA, t, cand, rows)).confirmation.rows.length, 1);
 });
 
+test("C1 (calculated variables, J21): a calculated variable takes no column on the board - it is not placeable in the board's variables, a placement onto it answers target_not_usable, and a save that names it is refused with nothing written", async () => {
+  const { t, cand } = await freshTeam();
+  const fCol = await field("dist");
+  const a = await variable(W.caA, { unit: "m" });
+  const b = await variable(W.caA, { unit: "m" });
+  const made = await post("/variables", W.caA, { requestKey: key(), label: `Calculated ${uid()}`, unit: "m", levels: ["session", "drill"], dailyAggregationMethod: "sum", calculation: { kind: "sum", inputs: [a.id, b.id] } });
+  assert.equal(made.status, 201, made.text);
+  const calc = { id: made.body.variable.id };
+  const board = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  const listed = board.variables.find((v) => v.id === calc.id);
+  assert.equal(listed?.placeable, false, "listed, never placeable");
+  assert.equal(board.variables.find((v) => v.id === a.id)?.placeable, true, "its input of the same unit is placeable");
+  const plain = await placementOf(W.caA, t, cand, fCol, a);
+  assert.equal(plain.placeable, true, `the same column onto an ordinary variable of the unit is placeable (${JSON.stringify(plain)})`);
+  const p = await placementOf(W.caA, t, cand, fCol, calc);
+  assert.deepEqual([p.placeable, p.code], [false, "target_not_usable"]);
+  const row = await newRow(W.caA, t, cand, fCol, a);
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ ...row, targetId: calc.id, expectedTargetVersionId: made.body.variable.currentVersion.id }]), "target_not_usable", 0);
+  });
+});
+
 test("Z4 (the review of PR #602): a zone mapping that is not on for the team is never placed again from the board - the placement read and a save's pre-placed row both answer field_has_parameters, and nothing is written", async () => {
   const { t, cand } = await freshTeam();
   const fZone = await field("zone");
@@ -1123,5 +1148,77 @@ test("Z4 (the review of PR #602): a zone mapping that is not on for the team is 
     assert.deepEqual(await placementOf(W.caA, t, cand, fZone, target), { placeable: false, code: "target_scope_mismatch", fieldId: fZone.fieldId, targetId: target.id });
     assert.equal((await placementOf(W.caA, t, cand, fZone, own)).code, "field_has_parameters");
     rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: versionId, placementHash: "0".repeat(64), requirement: "optional", replaces: [] }]), "field_has_parameters", 0);
+  });
+});
+
+test("CM (the review of 2026-11-18): a field without a condition never fills a variable with one - creating its mapping version is refused for a platform admin and a club admin, activating an existing one is refused, starting it for a team (S1) is refused, and the board's save never switches one on; nothing written", async () => {
+  const cond = { kind: "zone", operator: ">=", value: "25.2", unit: "km/h" };
+  const fSys = await field("dist");
+  const fClub = await field("dist");
+  const sysCond = await variable(W.pa, { unit: "m", condition: cond, label: `OptiMove sprint ${uid()}` });
+  const clubCond = await variable(W.caA, { unit: "m", condition: cond, label: `Club sprint ${uid()}` });
+  const versionCount = async () => (await one(`select count(*)::int n from ${T4}`)).n;
+  // Creating the version: both bases, the identical code and nothing written.
+  const cases = [[W.pa, fSys, sysCond], [W.caA, fClub, clubCond]];
+  const mappings = [];
+  for (const [who, f, target] of cases) {
+    const m = await post("/mappings", who, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: target.id });
+    assert.equal(m.status, 201, m.text);
+    mappings.push(m.body.mapping.id);
+    const before = await versionCount();
+    const res = await post(`/mappings/${m.body.mapping.id}/versions`, who, { requestKey: key(), sourceRevisionId: f.revId, appliesToSession: true, appliesToDrill: true, conversionNote: "Converted by the active unit conversion." });
+    assert.deepEqual([res.status, res.body.error], [409, "condition_mismatch"], res.text);
+    assert.equal(await versionCount(), before, "nothing written");
+  }
+  // The same field onto a variable without a condition still works (the control).
+  const free = await variable(W.pa, { unit: "m", label: `OptiMove distance ${uid()}` });
+  const control = await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: fSys.fieldId, metricDefinitionId: free.id });
+  assert.equal(control.status, 201, control.text);
+  const controlVersion = await post(`/mappings/${control.body.mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: fSys.revId, appliesToSession: true, appliesToDrill: true, conversionNote: "Converted by the active unit conversion." });
+  assert.equal(controlVersion.status, 201, controlVersion.text);
+  // An existing version (planted, as a raw writer or an older backend could have left it): activation is refused.
+  const copyVersion = async (mappingId, f, target, set) => planted(async () => {
+    const cols = (await k.query(`select column_name from information_schema.columns where table_schema = 'training_load' and table_name = 'source_metric_mapping_versions' and is_generated = 'NEVER' order by ordinal_position`)).rows.map((c) => `"${c.column_name}"`).join(", ");
+    const targetVersion = (await one(`select current_version_id from training_load.metric_definitions where id = $1`, [target.id])).current_version_id;
+    return (await one(`insert into ${T4} (${cols}) select ${cols} from jsonb_populate_record(null::${T4}, (select to_jsonb(x) || $2::jsonb from ${T4} x where x.id = $1)) returning id`,
+      [controlVersion.body.version.id, JSON.stringify({ id: crypto.randomUUID(), mapping_id: mappingId, source_metric_definition_id: f.fieldId, source_metric_version_id: f.revId,
+        metric_definition_id: target.id, metric_definition_version_id: targetVersion, version_number: 1, ...set })])).id;
+  });
+  const submitted = { status: "needs_review", submitted_by_user_id: W.pa.id, submitted_at: new Date().toISOString(), submitted_basis: "platform_admin",
+    activated_by_user_id: null, activated_at: null, activated_basis: null };
+  const pendingSys = await copyVersion(mappings[0], fSys, sysCond, submitted);
+  const pendingClub = await copyVersion(mappings[1], fClub, clubCond, submitted);
+  for (const [who, mappingId, versionId] of [[W.pa, mappings[0], pendingSys], [W.paA, mappings[1], pendingClub]]) {
+    const before = await one(`select status from ${T4} where id = $1`, [versionId]);
+    const res = await post(`/mappings/${mappingId}/versions/${versionId}/activate`, who, { requestKey: key(), expectedActiveVersionId: null });
+    assert.deepEqual([res.status, res.body.error], [409, "condition_mismatch"], res.text);
+    assert.deepEqual(await one(`select status from ${T4} where id = $1`, [versionId]), before, "still waiting, never active");
+  }
+  // An active OptiMove version of it (planted): the club board's save never switches it on.
+  const activeSys = await copyVersion(mappings[0], fSys, sysCond, { status: "active", version_number: 2, submitted_by_user_id: W.pa.id, submitted_at: new Date().toISOString(), submitted_basis: "platform_admin",
+    activated_by_user_id: W.pa.id, activated_at: new Date().toISOString(), activated_basis: "platform_admin" });
+  await k.query(`delete from ${T4} where id = $1`, [pendingSys]).catch(() => {});
+  const { t, cand } = await freshTeam();
+  // S1 refuses it too (the Independent's LOW on PR #609), for a platform admin and the club's admin; no activation written.
+  const activations = async () => (await one(`select count(*)::int n from training_load.source_metric_mapping_activations`)).n;
+  for (const who of [W.pa, W.caA]) {
+    const before = await activations();
+    const res = await start(who, { mappingId: mappings[0], versionId: activeSys }, t);
+    assert.deepEqual([res.status, res.body.error], [409, "condition_mismatch"], res.text);
+    assert.equal(await activations(), before);
+  }
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: activeSys, placementHash: "0".repeat(64), requirement: "optional", replaces: [] }]), "condition_mismatch", 0);
+  });
+  // The code review of 2026-11-18 (MEDIUM): every way in, not one. The board never offers it, the placement of the
+  // column on that OptiMove variable refuses it, and a save naming the column and the variable refuses it too.
+  const b = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  assert.equal([...b.preplaced, ...b.replaceable].some((x) => x.mappingVersionId === activeSys), false, "not offered");
+  const shown = b.variables.find((x) => x.id === sysCond.id);
+  if (shown) assert.deepEqual([shown.placeable, shown.filledByFieldIds], [false, []]);
+  assert.deepEqual(await placementOf(W.caA, t, cand, fSys, sysCond), { placeable: false, code: "condition_mismatch", fieldId: fSys.fieldId, targetId: sysCond.id });
+  await nothingWritten(async () => {
+    rowRefused(await save(W.caA, t, cand, [{ kind: "new", fieldId: fSys.fieldId, targetId: sysCond.id, expectedTargetVersionId: (await one(`select current_version_id from training_load.metric_definitions where id = $1`, [sysCond.id])).current_version_id, displayUnit: "m",
+      placementHash: "0".repeat(64), checked: true, requirement: "optional", replaces: [] }]), "condition_mismatch", 0);
   });
 });

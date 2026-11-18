@@ -265,6 +265,24 @@ test("opening a variable shows its facts, versions and Technical details; New ve
   assert.match(text(), /Archived: kept with its recorded values and its history; until it is restored, no new values can be entered for it, it gets no new version and no new mapping can use it\./);
 });
 
+test("a calculated variable's condition says it is the maker's statement, not checked against its inputs (the Rukovodilac, 2026-11-18); an ordinary variable's condition says nothing more", async () => {
+  const calc = { kind: "sum", inputs: [{ id: "c1", key: "pz2", label: "Speed zone 2" }, { id: "c2", key: "pz3", label: "Speed zone 3" }] };
+  const condition = { kind: "zone", operator: ">=", value: "19.8", unit: "km/h" };
+  const note = "Stated by the person who made this variable. OptiMove does not check it against the variables it adds up yet.";
+  respond = () => ({ status: 200, body: detail({ currentVersion: version({ minValue: null, condition, calculation: calc }) }, [{ ...version({ minValue: null, condition, calculation: calc }), current: true, reason: null }]) });
+  render();
+  content.innerHTML = `<button data-action="metric-variables-open" data-variable-id="${VAR_ID}"></button>`;
+  await click('[data-action="metric-variables-open"]');
+  assert.ok(fact("Condition").startsWith("Zone"), fact("Condition"));
+  assert.ok(fact("Condition").includes(note), "beside the condition in the facts");
+  assert.ok($(".metric-variables-version").textContent.includes(note), "and on the version");
+  resetToList();
+  respond = () => ({ status: 200, body: detail({ currentVersion: version({ condition }) }, [{ ...version({ condition }), current: true, reason: null }]) });
+  content.innerHTML = `<button data-action="metric-variables-open" data-variable-id="${VAR_ID}"></button>`;
+  await click('[data-action="metric-variables-open"]');
+  assert.equal(text().includes("Stated by the person"), false, "an ordinary variable's condition is checked by its mappings");
+});
+
 test("a variable that is not available reads as such, with Try again", async () => {
   respond = () => ({ status: 404, body: { error: "notFound" } });
   content.innerHTML = `<button data-action="metric-variables-open" data-variable-id="${VAR_ID}"></button>`;

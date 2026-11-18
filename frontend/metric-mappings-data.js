@@ -263,6 +263,7 @@ const READINESS = {
   canonical_not_numeric: "Not numeric, so no mapping can use it.",
   canonical_unit_missing: "It has no unit, so no mapping can use it.",
   canonical_unit_not_a_token: "Its unit is not a unit token, so no mapping can use it.",
+  canonical_calculated: "Calculated by OptiMove from other variables, so no mapping can use it.",
 };
 // The bound values the field must hold for this variable, in the field's
 // bound unit (J16 4.4), or null when one has no exact value there.
@@ -437,7 +438,8 @@ const SETTLES_ON_CHECK = {
   submit: ["version_not_draft", "revision_not_usable"],
   activate: ["version_not_submitted", "active_version_changed", "revision_not_verified", "canonical_version_changed", "source_metric_target_taken",
     "target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported",
-    "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"],
+    "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding",
+    "condition_mismatch"],
   disable: ["version_status_changed"],
   switchOn: ["version_not_active", "field_retired", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"],
   switchOff: ["activation_not_open"],
@@ -470,10 +472,12 @@ const DRAFT_TEXT = {
   bound_conversion_unavailable: "There is no usable conversion between these units now.",
   conversion_not_normal: "There is no usable conversion between these units now.",
   parameters_not_equivalent: "The bound does not match the variable's bound.",
+  condition_mismatch: "This variable counts only values under a condition, and this field has none, so it cannot fill it.",
   condition_description_unsupported: "The bound does not match the variable's bound.",
   canonical_not_numeric: "This variable cannot be the target of a mapping now.",
   canonical_unit_missing: "This variable cannot be the target of a mapping now.",
   canonical_unit_not_a_token: "This variable cannot be the target of a mapping now.",
+  canonical_calculated: "This variable is calculated by OptiMove from other variables, so no mapping can use it.",
   target_not_active: "This variable cannot be the target of a mapping now.",
   revision_not_usable: "The field changed; choose it again.",
   invalid_parameters: "The bound does not match the variable's bound.",
@@ -498,7 +502,7 @@ const ACT_TEXT = {
     // J18 (v66): a club's admin switches a version of a field without parameters on only from the board, with its check.
     confirmation_required: "Switch this version on from Map by drag and drop.",
     source_metric_target_taken: "This field already fills another variable. Only one of them can be active at a time.",
-    ...Object.fromEntries(["target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported", "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous"]
+    ...Object.fromEntries(["target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported", "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous", "condition_mismatch"]
       .map((code) => [code, `This version cannot be activated now: ${DRAFT_TEXT[code].replace(/^(There|The|This)\b/, (w) => w.toLowerCase())}`])),
   },
   disable: { version_status_changed: "This version changed meanwhile." },
@@ -521,7 +525,7 @@ export const READ_AGAIN = new Set([
   "target_scope_mismatch", "target_not_active", "source_metric_retired", "revision_not_usable", "version_not_draft",
   "version_not_submitted", "active_version_changed", "canonical_version_changed", "version_status_changed",
   "version_not_active", "field_retired", "activation_not_open",
-  "canonical_not_numeric", "canonical_unit_missing", "canonical_unit_not_a_token",
+  "canonical_not_numeric", "canonical_unit_missing", "canonical_unit_not_a_token", "canonical_calculated",
 ]);
 const MAPPING_ACTS = new Set(["create", "draft", "submit", "activate", "disable"]);
 export function refusalText(act, info) {

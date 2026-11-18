@@ -29,6 +29,16 @@ export const CENTRAL_CALENDAR_EVENT_KINDS = Object.freeze(["training", "match", 
 // What an event may expect (D19), in the server's order.
 export const CENTRAL_CALENDAR_EVENT_EXPECTS = Object.freeze(["rpe", "device_data", "test_result"]);
 
+// A team's name as the calendar shows it (K2b-1d2, plan section 23, the
+// manager's Q1): with its club when the team carries one - the platform
+// workspace's teams, where teams of several clubs meet - as "U19 · Borac";
+// otherwise its name, as before. One helper for the team's name on cards and
+// in the panel, the Groups chips, the legend and the form's names.
+export function centralCalendarTeamLabel(team) {
+  const name = team?.name || "Team";
+  return team?.clubName ? `${name} · ${team.clubName}` : name;
+}
+
 let rangeGeneration = 0;
 let dayGeneration = 0;
 
@@ -91,11 +101,6 @@ export function centralCalendarCatalogChanged() {
 let calendarAppliedHook = null;
 export function setCentralCalendarAppliedHook(hook) {
   calendarAppliedHook = typeof hook === "function" ? hook : null;
-}
-
-// Whether the answer holds a card that names its type (a manager's event card).
-export function centralCalendarNeedsCatalog(data) {
-  return (data?.days || []).some((day) => (day.items || []).some((item) => item.kind === "event" && item.canManage === true && item.eventTypeId));
 }
 
 export function resetCentralCalendarForWorkspaceChange() {
@@ -189,13 +194,8 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {},
         cal.notice = "The item you had open is no longer on this day; the calendar is up to date.";
       }
       render?.();
-      // K2b-1d: a manager's event card shows its type's icon and colour from
-      // the catalog - read once, and only when such a card is in the answer.
-      if (!cal.eventTypes && centralCalendarNeedsCatalog(data)) {
-        void readCentralCalendarCatalog(cal).then((outcome) => {
-          if (!outcome.error && state.centralCalendar === cal) render?.();
-        });
-      }
+      // K2b-1d3: the cards wear their type's look from the card itself; the
+      // catalog is read only when the event form opens (the actions' ensureEventTypes).
       void calendarAppliedHook?.(cal, render);
     },
     applyError: (error) => {
@@ -266,6 +266,10 @@ export const updateCentralCalendarEvent = (eventId, body) => eventWrite(eventPat
 export const cancelCentralCalendarEvent = (eventId, body) => eventWrite(`${eventPath(eventId)}/cancel`, "POST", body);
 // K2b-1b's values command: { requestKey, expectedRevision, values: [{ fieldId, value }] }.
 export const setCentralCalendarEventFields = (eventId, body) => eventWrite(`${eventPath(eventId)}/fields`, "POST", body);
+// K2c-1: a link command of an event (central-calendar-links.js builds the
+// path and the body: /sessions, /sessions/detach, /sessions/align,
+// /activities, /activities/detach), sent again unchanged by Check result.
+export const sendCentralCalendarLinkWrite = (path, body) => eventWrite(path, "POST", body);
 
 // The workspace's event catalog (GET /events/types, K2b-1a): the types for
 // the form and the cards, and - additively - the details, the club's places
@@ -321,6 +325,8 @@ export function centralCalendarErrorInfo(error) {
     current: data?.current || null,
     // K2b-1b's invalid_value names the detail it refused.
     fieldId: typeof data?.fieldId === "string" ? data.fieldId : "",
+    // K2c-1: the alignment's has_existing_results counts the answers given.
+    resultCount: Number.isInteger(data?.resultCount) ? data.resultCount : null,
   };
 }
 
