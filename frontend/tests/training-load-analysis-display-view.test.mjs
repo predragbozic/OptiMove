@@ -135,7 +135,8 @@ test("loading is not an empty result and malformed results do not crash any widg
 
 test("KPI shows actual identity context and tables expose keyboard-accessible readable equivalents", () => {
   setup("kpi", [row(12, { athleteId: "athlete-1", sourceConnectionId: "source-1" })]);
-  assert.match(rendered().querySelector(".tl-analysis-kpi-context").textContent, /Athlete athlete-1.*Source source-1/);
+  state.trainingLoad.orgPickerData = { athletes: [{ id: "athlete-1", name: "Alex" }] };
+  assert.equal(rendered().querySelector(".tl-analysis-kpi-context").textContent, "Alex");
   for (const type of ["table", "line_chart", "bar_chart"]) {
     setup(type, [row(-12), row(0, { bucketKey: "2026-10-02" })]);
     const document = rendered();
@@ -272,4 +273,22 @@ test("workspace explanation does not hide each widget error", () => {
   a.simpleWorkspaceRequired = true;
   a.queryError = "Failed";
   assert.match(rendered().querySelector(".tl-analysis-widget").textContent, /could not be loaded|Invalid or unavailable/);
+});
+
+for (const type of ["kpi", "table", "line_chart", "bar_chart"]) test(type + " hides identity and provenance", () => {
+  const id = "11911111-1111-4111-8111-111111111111";
+  setup(type, [row(12, { athleteId: id, bucketKey: id.toUpperCase(), sourceConnectionId: id, sourceSystem: "private-system" })]);
+  state.trainingLoad.orgPickerData = { athletes: [{ id, name: "Alex" }] };
+  const body = rendered().querySelector(".tl-analysis-widget");
+  assert.match(body.textContent, /Alex/);
+  if (type !== "kpi") assert.equal(body.querySelector("tbody tr").children[1].textContent, "Alex");
+  assert.doesNotMatch(body.outerHTML, /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}|Source|private-system|sourceConnectionId|sourceSystem/i);
+});
+for (const group of ["session", "component", "cohort"]) test(group + " buckets are distinct and stable", () => {
+  const first = "11911111-1111-4111-8111-111111111111", second = "22922222-2222-4222-8222-222222222222";
+  const a = setup("table", [row(1, { bucketKey: first }), row(2, { bucketKey: second }), row(3, { bucketKey: first, athleteId: "other" })]);
+  a.widgets[0].group_by = group;
+  const cells = [...rendered().querySelectorAll("tbody tr")].map(tr => tr.children[1].textContent);
+  const kind = group === "session" ? "Session" : group === "component" ? "Component" : "Group";
+  assert.equal(cells[0], kind + " 1"); assert.equal(cells[1], kind + " 2"); assert.ok(cells[2].startsWith(kind + " 1"));
 });

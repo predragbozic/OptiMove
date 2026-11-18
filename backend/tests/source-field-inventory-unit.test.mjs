@@ -89,6 +89,9 @@ test("structural keys (the Rukovodilac's decision (b)): an identifier, a referen
   ]);
   assert.equal(c.rejected, 0, "a structural key is skipped, not counted as a refused name");
   assert.deepEqual(Object.keys(STRUCTURAL_FIELDS).sort(), ["athlete_session", "team_thresholds"]);
-  assert.ok(isStructuralField("athlete_session", "teamsession") && !isStructuralField("details.session", "id"));
+  assert.ok(isStructuralField("athlete_session", "teamsession"));
+  // 2026-11-18: by name on every endpoint too (route C and the list); the collector still skips only the exact pairs.
+  for (const name of ["id", "athlete", "athlete_session_id", "are_values_visible", "is_x_visible", "validity_end", "start_timestamp"]) assert.ok(isStructuralField("details.session", name), name);
+  for (const name of ["metabolic_power", "athletesessionpowerzone_distance_4", "idle_time", "video"]) assert.ok(!isStructuralField("details.session", name), name);
   assert.ok(Object.isFrozen(STRUCTURAL_FIELDS) && Object.isFrozen(STRUCTURAL_FIELDS.athlete_session));
 });

@@ -27113,6 +27113,11 @@ button.mb-col:focus-visible, .mb-slot-open:focus-visible { outline: none; box-sh
 .mb-reason { color: var(--om-warning) !important; }
 .mb-col-vals { color: var(--muted); font-size: var(--om-text-xs); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .mb-tech { font-size: var(--om-text-xs); color: var(--muted); }
+.mb-tech code { overflow-wrap: anywhere; }
+.mb-zone-range { color: var(--muted); }
+.mb-parked { margin-top: var(--om-space-3); border-top: 1px solid var(--om-border-subtle); padding-top: var(--om-space-2); }
+.mb-parked > summary { display: list-item; cursor: pointer; box-sizing: border-box; min-height: var(--om-tap-target); padding-block: 12px; color: var(--text); font-weight: 600; }
+.mb-parked > .mb-note { margin: 0 0 var(--om-space-2); }
 .mb-tech summary { cursor: pointer; width: fit-content; padding: 2px 0; }
 .mb-slot {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--om-space-2); min-height: 58px; min-width: 0;
@@ -27434,6 +27439,52 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
 }
 .source-fields-inventory-thresholds {
   margin-top: 12px;
+}
+/* The owner's first use (2026-11-18): the readable name and unit first, GPEXE's own name small under it, the counts
+   last; values grouped by quantity; the names that are not values in one closed fold. */
+.source-fields-inventory-unit {
+  font-weight: 400;
+  color: var(--muted);
+}
+/* The plain view (the owner's rule, 2026-11-18): one state per row, a zone's expected range beside its name. */
+.source-fields-inventory-range { font-weight: 400; color: var(--muted); }
+.source-fields-inventory-state .item-badge { font-size: 12px; color: #4a5568; }
+.source-fields-inventory-state .item-badge.is-active { background: #e6f4ea; color: #1e6b34; }
+.source-fields-tech { margin: 4px 0; font-size: max(0.9em, 12px); color: var(--muted); }
+/* The data-sources-tech summary draws its own ▸/▾ (flex); only the 44 px height is added. */
+.source-fields-tech > summary { min-height: 44px; padding-block: 12px; box-sizing: border-box; width: fit-content; }
+.source-fields-inventory-raw {
+  font-size: max(0.85em, 12px);
+  color: var(--muted);
+  justify-self: start;
+}
+.source-fields-inventory-facts {
+  font-size: max(0.85em, 12px);
+}
+.source-fields-inventory-note {
+  margin: 0 0 6px;
+}
+.source-fields-inventory-group {
+  margin: 16px 0 6px;
+  font-size: 1rem;
+}
+.source-fields-inventory-other {
+  margin-top: 16px;
+}
+.source-fields-inventory-other summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+/* It shows that it opens (mobile-qa: a flex summary loses the default marker). */
+.source-fields-inventory-other summary::after {
+  content: "▸";
+  margin-left: 8px;
+}
+.source-fields-inventory-other[open] summary::after {
+  content: "▾";
 }
 .source-fields-inventory-thresholds summary {
   min-height: 44px;

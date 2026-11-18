@@ -8,13 +8,14 @@ import {
   EVIDENCE_EXAMPLE, EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
   ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
   ENDPOINT_LABEL, INVENTORY_ENDPOINTS, KIND_LABEL,
-  currentRevision, hasBound, inventoryMatches, levelsText, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
+  currentRevision, hasBound, inventoryGroups, inventoryState, inventoryMatches, levelsText, readableName, zoneLimitsNote, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
   unitActOffered, createOffered, createNextStep, FIELD_LABEL_MAX,
   DURATION_HOURS_NOTE, observationLines, observationReasonText, observationWordText, observeOffered,
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { fieldTileHtml } from "./data-config-tiles.js";
+import { zoneRange, numberedZoneOf } from "./zone-ranges.js";
 
 const fmtDate = (iso) => {
   if (!iso) return "";
@@ -149,25 +150,39 @@ function renderListHtml(s, ctx) {
 // ---------------------------------------------------------------------------
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const fmtDay = (day) => (/^\d{4}-\d{2}-\d{2}$/.test(day || "") ? `${day.slice(8, 10)}.${day.slice(5, 7)}.${day.slice(0, 4)}` : "");
-function inventoryFacts(item, ctx, { withEndpoint = true } = {}) {
+function inventoryFacts(item, ctx, { withEndpoint = true, withKind = false } = {}) {
   const kind = KIND_LABEL[item.kind] || "";
   return [
     withEndpoint ? ENDPOINT_LABEL[item.endpoint] || "" : "",
-    item.unitWord ? `${kind} in ${item.unitWord}` : kind,
+    // The team zone limits' fold keeps what each name holds (they are never a field).
+    withKind ? (item.unitWord ? `${kind} in ${item.unitWord}` : kind) : "",
     `seen ${plural(Number(item.answersSeen) || 0, "time", "times")}${item.lastSeenOn ? `, last ${fmtDay(item.lastSeenOn)}` : ""}`,
     ctx.mayVerify && Number.isInteger(item.connectionCount) ? `in ${plural(item.connectionCount, "GPEXE account", "GPEXE accounts")}` : "",
   ].filter(Boolean).map(escapeHtml).join(" · ");
 }
-function inventoryRowHtml(item, index, ctx, search) {
-  // G1b: Create field only where the server said route C would take the name.
+// The unit GPEXE's word stands for, never the word, in its own brackets; one wording when GPEXE sends none.
+function inventoryUnitText(item) {
+  return item.unit ? `(${item.unit})` : "(no unit from GPEXE)";
+}
+function inventoryRowHtml(item, index, ctx, search, zoneThresholds = null, technical = false) {
+  // G1b: the button only where the server said route C would take the name. Named after its result (the owner's rule).
   const create = createOffered(ctx, item)
-    ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Create a field from ${escapeAttr(item.name)}">Create field</button>`
+    ? `<button class="plain-button source-fields-create" type="button" data-action="source-fields-create-open" data-sf-inv-endpoint="${escapeAttr(item.endpoint)}" data-sf-inv-name="${escapeAttr(item.name)}" aria-label="Use this value: ${escapeAttr(readableName(item))}">Use this value</button>`
     : "";
+  // The plain view: the name, its unit, a zone's expected range and one state. GPEXE's own name and the counts only in
+  // the technical view.
+  const tech = technical ? `
+        <code class="source-fields-code source-fields-inventory-raw">${escapeHtml(item.name)}</code>
+        <span class="metric-variables-item-facts muted source-fields-inventory-facts">${inventoryFacts(item, ctx)}</span>` : "";
   return `
-    <li data-sf-inv-row="${index}"${inventoryMatches(item, search) ? "" : " hidden"}>
+    <li data-sf-inv-row="${index}"${inventoryMatches(item, search, ctx.mayVerify ? zoneThresholds : null) ? "" : " hidden"}>
       <div class="source-fields-inventory-item">
-        <span class="metric-variables-item-name"><code class="source-fields-code">${escapeHtml(item.name)}</code>${item.covered ? ` <span class="item-badge">Already used</span>` : ""}</span>
-        <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx)}</span>
+        ${item.isValue === true
+          ? `<span class="metric-variables-item-name">${escapeHtml(readableName(item, ctx.mayVerify ? zoneThresholds : null))} <span class="source-fields-inventory-unit">${escapeHtml(inventoryUnitText(item))}</span></span>
+        <span class="source-fields-inventory-state"><span class="item-badge${item.covered ? " is-active" : ""}">${escapeHtml(inventoryState(item, ctx))}</span></span>`
+          // Not a value (the technical view only): GPEXE's own name and what it holds.
+          : `<span class="metric-variables-item-name"><code class="source-fields-code source-fields-inventory-raw">${escapeHtml(item.name)}</code> <span class="source-fields-inventory-unit">${escapeHtml(KIND_LABEL[item.kind] || "")}</span></span>`}
+        ${item.isValue === true ? tech : `<span class="metric-variables-item-facts muted source-fields-inventory-facts">${inventoryFacts(item, ctx)}</span>`}
         ${create}
       </div>
     </li>`;
@@ -185,37 +200,68 @@ function renderThresholdsHtml(inv, ctx) {
         : `<ul class="metric-variables-list">${t.items.map((item, i) => `
             <li data-sf-threshold-row="${i}"><div class="source-fields-inventory-item">
               <span class="metric-variables-item-name"><code class="source-fields-code">${escapeHtml(item.name)}</code></span>
-              <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx, { withEndpoint: false })}</span>
+              <span class="metric-variables-item-facts muted">${inventoryFacts(item, ctx, { withEndpoint: false, withKind: true })}</span>
             </div></li>`).join("")}</ul>`}
     </details>`;
+}
+// Values grouped by quantity (zones together, in zone order); the names that are not values in one closed fold. Each
+// row keeps its index in the loaded list, so the search narrows it in place.
+function inventoryListHtml(inv, ctx) {
+  const index = new Map(inv.items.map((item, i) => [item, i]));
+  const row = (item) => inventoryRowHtml(item, index.get(item), ctx, inv.search, inv.zoneThresholds, inv.technical);
+  const { groups, other } = inventoryGroups(inv.items, { merge: !inv.technical });
+  const limits = ctx.mayVerify ? inv.zoneThresholds : null;
+  const matches = (items) => items.some((item) => inventoryMatches(item, inv.search, limits));
+  // The team limits of the zone families in a group, once (platform only).
+  // Each family's limits once in the whole list, in the first group that has one of its zones (the UX review).
+  const said = new Set();
+  const asOf = fmtDate(inv.zoneThresholds?.asOf);
+  const notes = (items) => (ctx.mayVerify ? [...new Set(items.filter((i) => i.zone).map((i) => i.zone.family))]
+    .filter((f) => !said.has(f) && said.add(f)).map((f) => zoneLimitsNote(f, inv.zoneThresholds, asOf)).filter(Boolean) : []);
+  return `
+    ${groups.map((g) => `
+      <div class="source-fields-inventory-group-block" data-sf-inv-group${matches(g.items) ? "" : " hidden"}>
+        <h4 class="source-fields-inventory-group" id="sf-inv-group-${escapeAttr(g.key)}">${escapeHtml(g.label)}</h4>
+        ${notes(g.items).map((n) => `<p class="muted source-fields-inventory-note">${escapeHtml(n)}</p>`).join("")}
+        <ul class="metric-variables-list" aria-labelledby="sf-inv-group-${escapeAttr(g.key)}">${g.items.map(row).join("")}</ul>
+      </div>`).join("")}
+    ${other.length && inv.technical ? `
+      <details class="source-fields-inventory-other"${inv.search && matches(other) ? " open" : ""}>
+        <summary>Other things GPEXE sends (not values) · ${other.length}</summary>
+        <p class="muted">Identifiers, groups, flags, times and text GPEXE sends with the values. They are not measured values.</p>
+        <ul class="metric-variables-list">${other.map(row).join("")}</ul>
+      </details>` : ""}`;
 }
 function renderInventoryHtml(s, ctx) {
   const inv = s.inventory;
   if (!inv) return "";
   const chips = [["", "All"], ...INVENTORY_ENDPOINTS.map((e) => [e, ENDPOINT_LABEL[e]])];
-  const matching = inv.items.filter((item) => inventoryMatches(item, inv.search)).length;
+  // The plain view lists the values only; the technical view adds the names that are not values.
+  const shown = inv.technical ? inv.items : inventoryGroups(inv.items, { merge: true }).groups.flatMap((g) => g.items);
+  const matching = shown.filter((item) => inventoryMatches(item, inv.search, ctx.mayVerify ? inv.zoneThresholds : null)).length;
   return `
     <section class="metric-classification-section source-fields-inventory" aria-labelledby="sf-inventory-title">
-      <h3 id="sf-inventory-title">Available in GPEXE, not supported yet</h3>
+      <h3 id="sf-inventory-title">More values GPEXE sends</h3>
       <p class="muted">${ctx.mayVerify
-        ? "GPEXE also sends these values in the clubs' sessions. OptiMove does not use them yet, so they are not imported. Create field, where it is offered, turns a number GPEXE sends into a source field; the other names cannot become a field yet."
-        : "GPEXE also sends these values in your sessions. OptiMove does not use them yet, so they are not imported. There is nothing to do here: this list shows what could be added later."}</p>
+        ? "GPEXE also sends these values in the clubs' sessions. OptiMove does not import them yet. Use this value adds it to OptiMove; once new sessions bring it and you have checked it against GPEXE, you can put it on a variable."
+        : "GPEXE also sends these values in your sessions. OptiMove does not import them yet. There is nothing to do here: this list shows what could be added later."}</p>
       <div class="source-fields-inventory-tools">
-        <label class="source-fields-inventory-search"><span class="visually-hidden">Search the GPEXE names</span>
-          <input type="search" data-sf-inv-search placeholder="Search the GPEXE names" value="${escapeAttr(inv.search)}" autocomplete="off">
+        <label class="source-fields-inventory-search"><span class="visually-hidden">Search the values</span>
+          <input type="search" data-sf-inv-search placeholder="Search the values" value="${escapeAttr(inv.search)}" autocomplete="off">
         </label>
-        <div class="source-fields-inventory-chips" role="group" aria-label="Where the value comes from">
+        ${inv.technical ? `<div class="source-fields-inventory-chips" role="group" aria-label="Where the value comes from">
           ${chips.map(([endpoint, label]) => `<button type="button" class="chip${inv.endpoint === endpoint ? " is-active" : ""}" data-action="source-fields-inv-endpoint" data-endpoint="${escapeAttr(endpoint)}" aria-pressed="${inv.endpoint === endpoint ? "true" : "false"}">${escapeHtml(label)}</button>`).join("")}
-        </div>
+        </div>` : ""}
         <label class="source-fields-choice"><input type="checkbox" data-action="source-fields-inv-supported" ${inv.showSupported ? "checked" : ""}><span>Also show the ones OptiMove already uses</span></label>
+        <label class="source-fields-choice"><input type="checkbox" data-action="source-fields-inv-technical" ${inv.technical ? "checked" : ""}><span>Show technical details</span></label>
       </div>
-      ${inv.loading ? `<p class="muted" role="status">Loading names...</p>` : ""}
+      ${inv.loading ? `<p class="muted" role="status">Loading values...</p>` : ""}
       ${inv.error ? `<div class="error" role="alert"><p>${escapeHtml(inv.error)}</p><button class="plain-button" type="button" data-action="source-fields-inv-reload">Try again</button></div>` : ""}
-      ${inv.loaded && !inv.items.length && !inv.error ? `<p class="empty">No names yet. They appear after the next Find new sessions in Imports.</p>` : ""}
-      ${inv.items.length ? `<p class="empty" id="sf-inv-no-match"${matching ? " hidden" : ""}>${inv.nextCursor ? "No name matches among the names loaded so far. Load more to search the rest." : "No name matches the search."}</p>` : ""}
-      ${inv.items.length ? `<ul class="metric-variables-list" aria-labelledby="sf-inventory-title">${inv.items.map((item, i) => inventoryRowHtml(item, i, ctx, inv.search)).join("")}</ul>` : ""}
+      ${inv.loaded && !shown.length && !inv.error ? `<p class="empty">${inv.items.length ? "No values here yet. Show technical details lists the other things GPEXE sends." : "Nothing yet. Values appear after the next Find new sessions in Imports."}</p>` : ""}
+      ${shown.length ? `<p class="empty" id="sf-inv-no-match"${matching ? " hidden" : ""}>${inv.nextCursor ? "Nothing matches among the values loaded so far. Load more to search the rest." : "Nothing matches the search."}</p>` : ""}
+      ${inv.items.length ? inventoryListHtml(inv, ctx) : ""}
       ${inv.nextCursor ? `<button class="plain-button" type="button" data-action="source-fields-inv-more" ${inv.loadingMore ? "disabled" : ""}>${inv.loadingMore ? "Loading..." : "Load more"}</button>` : ""}
-      ${renderThresholdsHtml(inv, ctx)}
+      ${inv.technical ? renderThresholdsHtml(inv, ctx) : ""}
     </section>`;
 }
 
@@ -406,22 +452,25 @@ function renderCreateFormHtml(s) {
           </label>`;
   return `
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="create" novalidate autocomplete="off">
-      <h2 id="source-fields-title">Create a field from ${code(form.name)}</h2>
-      <p class="muted source-fields-summary">GPEXE · ${escapeHtml(ENDPOINT_LABEL[form.endpoint] || form.endpoint)} · ${escapeHtml(KIND_LABEL[form.kind] || form.kind || "")}${form.unitWord ? ` (GPEXE says: ${escapeHtml(form.unitWord)})` : ""}</p>
+      <h2 id="source-fields-title">Use ${escapeHtml(form.readable || form.name)}${form.unit ? ` (${escapeHtml(form.unit)})` : ""} in OptiMove</h2>
+      <details class="data-sources-tech source-fields-tech"><summary>Technical details</summary>
+        <p class="muted source-fields-summary">GPEXE's name ${code(form.name)} · ${escapeHtml(ENDPOINT_LABEL[form.endpoint] || form.endpoint)} · ${escapeHtml(KIND_LABEL[form.kind] || form.kind || "")}${form.unitWord ? ` (GPEXE says: ${escapeHtml(form.unitWord)})` : ""}</p>
+      </details>
       <p class="metric-variables-field-note">${escapeHtml(createNextStep(form.endpoint))}</p>
+      ${createRangeHtml(form)}
       <label class="search-field"><span>Name in OptiMove</span>
         <input type="text" data-sf-field="label" value="${escapeAttr(form.draft.label ?? "")}" maxlength="${FIELD_LABEL_MAX}" autocomplete="off" ${locked ? "disabled" : ""}${described(form, "label", "hint")}${invalid(form, "label")}>
         <span class="muted" id="sf-hint-label">How the field is named on OptiMove's screens, for example High-speed distance. At most ${FIELD_LABEL_MAX} characters.</span>
         ${fieldError(form, "label")}
       </label>
       <fieldset class="metric-variables-fieldset">
-        <legend>Recorded for</legend>
+        <legend>Import it for</legend>
         <div${form.errors.levels ? ` aria-describedby="sf-err-levels"` : ""}>
           ${box("supportsSession", "The whole session")}
           ${box("supportsDrill", "Each drill", { lockedOn: form.drillLocked })}
         </div>
-        ${form.drillLocked ? `<span class="muted">GPEXE sends this name per drill, so the field is always recorded for each drill.</span>`
-          : form.bothLevels ? `<span class="muted">GPEXE sends this name for the whole session and per drill; one field records both.</span>`
+        ${form.drillLocked ? `<span class="muted">GPEXE sends this value for each drill, so OptiMove imports it for each drill.</span>`
+          : form.bothLevels ? `<span class="muted">GPEXE sends this value for the whole session and for each drill; OptiMove imports both.</span>`
           : form.endpoint === "details.session" ? `<span class="muted">Tick Each drill only if GPEXE also sends this value for each drill.</span>` : ""}
         ${levelsError}
       </fieldset>
@@ -429,10 +478,23 @@ function renderCreateFormHtml(s) {
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? unconfirmedHtml(form) : `
       <div class="data-sources-form-actions">
-        <button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Creating..." : "Create field"}</button>
+        <button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Adding..." : "Use this value"}</button>
         <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
       </div>`}
     </form>`;
+}
+
+// A numbered zone's expected range on the Create form, from the list's team limits (platform only; route C is too).
+function createRangeHtml(form) {
+  const limits = sourceFieldsState().inventory?.zoneThresholds;
+  const range = zoneRange(numberedZoneOf(form.name), limits);
+  const day = fmtDate(limits?.asOf);
+  return range ? `<p class="muted">Range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you add it, check it once with Compare with GPEXE.</p>` : "";
+}
+// The compared session's own team limits: the range to look for in GPEXE (the Rukovodilac's order of 2026-11-18).
+function observeRangeHtml(o) {
+  const range = zoneRange(numberedZoneOf(o?.gpexeName), o?.zoneThresholds);
+  return range ? `<p class="metric-variables-field-note">Range of this zone: ${escapeHtml(range)} (this session's team zone limits). Check that GPEXE shows the same range for it.</p>` : "";
 }
 
 // G1b-2: the comparison of a generic field with the GPEXE screen (plan sections 8.2 and 8.10). The team, then the server's
@@ -465,7 +527,11 @@ function renderObserveFormHtml(s) {
       <div class="source-fields-observe" aria-live="polite">
         <p><strong>${escapeHtml(o.session?.label || "Saved session")}</strong> <span class="muted">${escapeHtml(fmtDate(o.session?.startedAt))} · ${escapeHtml(o.team?.name || "")}</span></p>
         ${o.word ? `<p class="metric-variables-field-note">${escapeHtml(observationWordText(o))}</p>` : ""}
-        <p>Open this session in GPEXE and find the value ${code(o.gpexeName || "")} for these two athletes:</p>
+        <details class="data-sources-tech source-fields-tech"><summary>Technical details</summary>
+          <p class="muted">GPEXE's name ${code(o.gpexeName || "")}${o.word ? ` · GPEXE's unit word "${escapeHtml(o.word)}"` : ""}</p>
+        </details>
+        <p>Open this session in GPEXE and find ${escapeHtml(o.label || "this value")} for these two athletes:</p>
+        ${observeRangeHtml(o)}
         <ul class="source-fields-observe-athletes">
           ${lines.map((l) => `<li><strong>${escapeHtml(l.name)}</strong>: ${escapeHtml(l.text)}</li>`).join("")}
         </ul>
@@ -482,13 +548,13 @@ function renderObserveFormHtml(s) {
   return `
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="observe" novalidate autocomplete="off">
       <h2 id="source-fields-title">Compare ${escapeHtml(form.fieldName)} with GPEXE</h2>
-      <p class="metric-variables-field-note">If both athletes' numbers match the GPEXE screen, OptiMove saves the unit GPEXE states and GPEXE's own label as the meaning. It is saved once and never changed: a correction is a new revision.</p>
+      <p class="metric-variables-field-note">If both athletes' numbers match the GPEXE screen, OptiMove saves this value's unit. You can't change it here later.</p>
       ${teamPicker}
       ${comparison}
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? unconfirmedHtml(form) : `
       <div class="data-sources-form-actions">
-        ${o?.confirmable ? `<button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Saving..." : "Save unit and meaning"}</button>` : ""}
+        ${o?.confirmable ? `<button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Saving..." : "Save: the numbers match"}</button>` : ""}
         <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
       </div>`}
       <details class="data-sources-tech"><summary>Technical details</summary><dl>

@@ -156,8 +156,13 @@ test("2. the comparison: the team, then two named athletes and the number to com
   await openComparison();
   assert.ok(gets().includes(TEAMS));
   assert.ok(gets().includes(`${FB}/${F}/observation?teamId=${T1}`), JSON.stringify(gets()));
-  assert.match(text(), /GPEXE sends the unit word "energy" with this value; OptiMove reads it as J\/kg\./);
-  assert.match(text(), /Open this session in GPEXE and find the value metabolic_energy for these two athletes:/);
+  // The owner's rule: the plain name and the unit; GPEXE's own name and word only under Technical details.
+  assert.match(text(), /GPEXE sends this value in J\/kg\./);
+  assert.match(text(), /Open this session in GPEXE and find Metabolic energy for these two athletes:/);
+  assert.match($(".source-fields-observe .source-fields-tech").textContent, /GPEXE's name metabolic_energy · GPEXE's unit word "energy"/);
+  const plain = $(".source-fields-observe").cloneNode(true);
+  plain.querySelectorAll(".source-fields-tech").forEach((d) => d.remove());
+  assert.doesNotMatch(plain.textContent, /unit word|metabolic_energy/, "no GPEXE name or word outside Technical details");
   const lines = [...content.querySelectorAll(".source-fields-observe-athletes li")].map((li) => li.textContent.replace(/\s+/g, " ").trim());
   assert.deepEqual(lines, [
     "Ana Petrovic: GPEXE may show this rounded or in another unit. Compare the number: 412.5 J/kg.",
@@ -212,7 +217,7 @@ test("5. the tick: refused until the box is ticked; the last question names the 
   confirmAnswer = false;
   await submit();
   assert.equal(posts().length, 0, "the last question was declined");
-  assert.match(confirmQuestions.at(-1), /Save the unit of Metabolic energy as J\/kg \(GPEXE's word "energy"\) and its meaning as GPEXE's own name "metabolic_energy"/);
+  assert.equal(confirmQuestions.at(-1), "Save J/kg as the unit of Metabolic energy? Both athletes' numbers match GPEXE. You can't change it here later.");
   confirmAnswer = true;
   post = () => {
     theField = field({ revisions: [revision({ evidenceStatus: "source_stated", sourceUnit: "J/kg", unitVerifiedAt: "2026-11-17T00:00:00Z", meaningVerifiedAt: "2026-11-17T00:00:00Z" })] });
@@ -293,5 +298,27 @@ test("G1b-3 (the code review's HIGH): a unit_word_ambiguous refusal names only s
     const text = refusalText(act, info);
     assert.match(text, /(^|: )A document cannot tell which GPEXE word this unit is\. Ask a platform administrator to compare this field with GPEXE\.$/, `${act}: ${text}`);
     assert.doesNotMatch(text, /Retire|revision|Source fields/, `${act}: no step the club's admin may not take`);
+  }
+});
+
+test("Z (the Rukovodilac, 2026-11-18): comparing a numbered zone names the range it is expected to cover, from the compared session's own team limits, never as confirmed; without limits nothing is said", async () => {
+  read = () => ({ status: 200, body: { observation: observation({ gpexeName: "athletesessionpowerzone_distance_4", zoneThresholds: { power: [20, 25, 60, 75], speed: null } }) } });
+  try {
+    await openComparison();
+    assert.match(text(), /Range of this zone: 60–75 W\/kg \(this session's team zone limits\)\. Check that GPEXE shows the same range for it\./);
+  } finally { read = () => ({ status: 200, body: { observation: observation() } }); }
+  resetSourceFields();
+  await openComparison();
+  assert.doesNotMatch(text(), /Range of this zone/);
+});
+
+test("Z2 (the UX review): the lowest and the top zone read as a range too - 'below …' and '… and above'", async () => {
+  for (const [n, want] of [[1, "0–20 W/kg"], [5, "75 W/kg and above"]]) {
+    resetSourceFields();
+    read = () => ({ status: 200, body: { observation: observation({ gpexeName: `athletesessionpowerzone_distance_${n}`, zoneThresholds: { power: [20, 25, 60, 75], speed: null } }) } });
+    try {
+      await openComparison();
+      assert.ok(text().includes(`Range of this zone: ${want} (this session's team zone limits).`), want);
+    } finally { read = () => ({ status: 200, body: { observation: observation() } }); }
   }
 });

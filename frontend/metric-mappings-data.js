@@ -542,7 +542,11 @@ export function refusalText(act, info) {
   if (text && act === "activate" && CLUB_NEXT_STEP[info.code] && mappingsContext()?.owner === "club") return `${text} ${CLUB_NEXT_STEP[info.code]}`;
   // G1b-3 (the code review's HIGH): the way out names only steps this workspace may take.
   if (info.code === "unit_word_ambiguous") {
-    return `${text || DRAFT_TEXT.unit_word_ambiguous} ${mappingsContext()?.owner === "club" ? "Ask a platform administrator to compare this field with GPEXE." : "Retire this revision, add a new unproven revision of the field and activate it, then compare it with GPEXE (Source fields > Compare with GPEXE)."}`;
+    const where = mappingsContext();
+    const next = where?.owner !== "club" ? "Retire this revision, add a new unproven revision of the field and activate it, then compare it with GPEXE (Source fields > Compare with GPEXE)."
+      : where.isPlatformAdmin ? "Switch to the platform workspace, then retire this revision, add a new unproven revision of the field and activate it, and compare it with GPEXE (Source fields > Compare with GPEXE)."
+      : "Ask a platform administrator to compare this field with GPEXE.";
+    return `${text || DRAFT_TEXT.unit_word_ambiguous} ${next}`;
   }
   if (text) return text;
   return info.status ? "It was not saved: the server refused it." : "No answer from the server.";
