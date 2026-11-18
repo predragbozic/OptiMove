@@ -511,7 +511,9 @@ test("11. the preflight on v72, v74, the post-check (a verified revision's diges
   // production first. v73 sorts before v74 by file name, so no "later than v74" check counts it. v76 (the undo by the
   // importer) sorts after v74 but reached production first too: it shares no object with v74, so the preflight expects
   // it, the post-check and the rollback do not count it, and only another later migration is a stop.
-  const withAppHealth = [...GPEXE_TEST_MIGRATIONS, "202611131400_app_error_events_v70_device_and_keyed_hash.sql", "202611151500_app_error_events_v73_request_and_restart.sql"].sort();
+  // Up to v76, as this test pins it (v77 on are their own suites').
+  const withAppHealth = [...GPEXE_TEST_MIGRATIONS, "202611131400_app_error_events_v70_device_and_keyed_hash.sql", "202611151500_app_error_events_v73_request_and_restart.sql"].sort()
+    .filter((m) => m <= "202611171000_training_load_v76_undo_by_importer.sql");
   const before72 = withAppHealth.filter((m) => m !== V74);
   const rdb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "g1rb", migrations: before72 });
   const c = new pg.Client({ connectionString: rdb.url });

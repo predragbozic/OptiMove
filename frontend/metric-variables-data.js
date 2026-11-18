@@ -257,6 +257,7 @@ const READINESS_TEXT = {
   canonical_not_numeric: "Not numeric, so no mapping can use it.",
   canonical_unit_missing: "It has no unit, so no mapping can use it.",
   canonical_unit_not_a_token: "Its unit is not a unit token, so no mapping can use it.",
+  canonical_calculated: "Calculated by OptiMove from other variables, so no mapping can use it.",
 };
 export function readinessText(target) {
   if (!target) return "";
@@ -271,6 +272,10 @@ export const aggregationLabel = (value) => AGGREGATIONS.find((a) => a.value === 
 export const levelLabel = (value) => LEVELS.find((l) => l.value === value)?.label || value;
 const OPERATOR_SIGN = { ">=": "≥", ">": ">", "<=": "≤", "<": "<" };
 
+// v77 (J21): a calculated variable's condition is the maker's statement; OptiMove does not check it against the
+// variables it adds up yet (the Rukovodilac, 2026-11-18).
+export const CALCULATED_CONDITION_NOTE = "Stated by the person who made this variable. OptiMove does not check it against the variables it adds up yet.";
+export const conditionNoteFor = (version) => (version?.calculation && version?.condition ? CALCULATED_CONDITION_NOTE : "");
 export function conditionSummary(condition) {
   if (!condition) return "None";
   if (condition.kind === "zone" && condition.operator === "between") return `Zone ${condition.lower}–${condition.upper} ${condition.unit}`;
