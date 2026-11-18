@@ -155,7 +155,7 @@ test("1. Compare with GPEXE is offered only on the active, unproven revision of 
 test("2. the comparison: the team, then two named athletes and the number to compare by the word's rule; as_sent says the plain sentence; no athlete id; Other athletes reads the next pair of the same session", async () => {
   await openComparison();
   assert.ok(gets().includes(TEAMS));
-  assert.ok(gets().includes(`${FB}/${F}/observation?teamId=${T1}&pair=0`), JSON.stringify(gets()));
+  assert.ok(gets().includes(`${FB}/${F}/observation?teamId=${T1}`), JSON.stringify(gets()));
   assert.match(text(), /GPEXE sends the unit word "energy" with this value; OptiMove reads it as J\/kg\./);
   assert.match(text(), /Open this session in GPEXE and find the value metabolic_energy for these two athletes:/);
   const lines = [...content.querySelectorAll(".source-fields-observe-athletes li")].map((li) => li.textContent.replace(/\s+/g, " ").trim());

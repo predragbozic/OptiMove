@@ -423,7 +423,7 @@ async function loadObservation(render, { pair = 0, candidateId = null, keepError
   form.draft.attested = false;
   render();
   try {
-    const data = await fetchObservation(form.fieldId, { teamId: candidateId ? null : teamId, candidateId, pair });
+    const data = await fetchObservation(form.fieldId, candidateId ? { teamId: null, candidateId, pair } : { teamId, candidateId: null, pair: null });
     if (s.form !== form || form.draft.teamId !== teamId) return;
     form.observation = data?.observation || null;
     // The comparison is of this field's revision only; another one closes nothing here, the tick would refuse it.

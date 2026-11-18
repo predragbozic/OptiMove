@@ -552,3 +552,74 @@ test("12. what the comparison stands on is read again under the locks: a stored 
     if (label === "name") await k.query(`update public.athletes a set display_name = replace(display_name, ' (renamed)', '') from training_load.gpexe_athlete_links l where l.athlete_id = a.id and l.owner_team_id = $1 and l.gpexe_athlete_id = $2`, [W.tA.teamId, ATHLETE(1)]);
   }
 });
+
+test("13. rule (b) at the mapping (the code review's MEDIUM): a created details field proven by a document in a unit no GPEXE unit word carries (bpm) gets no mapping version - 409 unit_word_missing, nothing written; the same field proven in J/kg does", async () => {
+  const variable = ok(await post("/variables", W.pa, { requestKey: key(), label: `Word rule ${uid()}`, unit: "J/kg", levels: ["session"], dailyAggregationMethod: "sum" }), 201).variable;
+  for (const [unit, expect] of [["bpm", 409], ["J/kg", 201]]) {
+    const f = await created(`g1b2_word_${unit === "bpm" ? "bpm" : "jkg"}`, { expected: unit });
+    const proven = await post(`/fields/${f.fieldId}/revisions/${f.revisionId}/unit-verification`, W.pa, { requestKey: key(), sourceUnit: unit, evidenceRef: UNIT_REF });
+    assert.ok([200, 201].includes(proven.status), proven.text);
+    const mapping = ok(await post("/mappings", W.pa, { requestKey: key(), sourceMetricId: f.fieldId, metricDefinitionId: variable.id }), 201).mapping;
+    const res = await post(`/mappings/${mapping.id}/versions`, W.pa, { requestKey: key(), sourceRevisionId: f.revisionId, appliesToSession: true, appliesToDrill: false, conversionNote: unit === "bpm" ? "not the same unit" : undefined });
+    const versions = (await one(`select count(*)::int n from training_load.source_metric_mapping_versions where mapping_id = $1`, [mapping.id])).n;
+    if (expect === 409) {
+      refused(res, 409, "unit_word_missing");
+      assert.equal(versions, 0, "nothing written");
+    } else {
+      ok(res, 201);
+      assert.equal(versions, 1);
+    }
+  }
+});
+
+test("14. route O's lost COMMIT (the code review's MEDIUM): a rollback then a lost answer is 503 outcome_unknown with nothing written, and the same key then writes once; a COMMIT whose answer is lost is verified through the request record (one proof); its replay writes nothing; a failed read after the COMMIT still answers the write", async () => {
+  const proofs = async (f) => (await one(`select count(*)::int n from training_load.source_metric_confirmations where source_metric_version_id = $1`, [f.revisionId])).n;
+  const lost = (sql) => ({ fault: (client) => client.query(sql).then(() => { throw Object.assign(new Error("lost"), { code: "08006" }); }) });
+  // A rollback, then the answer lost.
+  const f1 = await created("g1b2_lost_rb", { expected: "J/kg" });
+  const o1 = ok(await observationOf(W.pa, f1, { candidateId: (await candidate(W.tA, energyOf(f1.name))).id })).observation;
+  const body1 = tickBody(o1);
+  mappingService.setMappingCommitForTests(lost("rollback"));
+  let unknown;
+  try { unknown = await tick(W.pa, f1, body1); } finally { mappingService.setMappingCommitForTests(); }
+  assert.deepEqual([unknown.status, unknown.body.error, unknown.body.requestKey], [503, "outcome_unknown", body1.requestKey], unknown.text);
+  assert.equal(await proofs(f1), 0, "nothing written");
+  ok(await tick(W.pa, f1, body1), 201);
+  assert.equal(await proofs(f1), 1, "the same key then writes once");
+  // A real COMMIT, then the answer lost.
+  const f2 = await created("g1b2_lost_commit", { expected: "J/kg" });
+  const o2 = ok(await observationOf(W.pa, f2, { candidateId: (await candidate(W.tA, energyOf(f2.name))).id })).observation;
+  const body2 = tickBody(o2);
+  mappingService.setMappingCommitForTests(lost("commit"));
+  let verified;
+  try { verified = await tick(W.pa, f2, body2); } finally { mappingService.setMappingCommitForTests(); }
+  assert.ok([200, 201].includes(verified.status), verified.text);
+  assert.equal(verified.body.commitConfirmation, "verified_after_commit_error");
+  assert.equal(await proofs(f2), 1, "one proof");
+  const replay = ok(await tick(W.pa, f2, body2));
+  assert.equal(replay.replayed, true);
+  assert.equal(await proofs(f2), 1, "the replay writes nothing");
+  // A read that fails after the COMMIT.
+  const f3 = await created("g1b2_lost_read", { expected: "J/kg" });
+  const o3 = ok(await observationOf(W.pa, f3, { candidateId: (await candidate(W.tA, energyOf(f3.name))).id })).observation;
+  mappingService.setMappingRereadFaultForTests(async () => { throw new Error("read broke"); });
+  let read;
+  try { read = await tick(W.pa, f3, tickBody(o3)); } finally { mappingService.setMappingRereadFaultForTests(null); }
+  assert.deepEqual([read.status, read.body.readError], [201, true], read.text);
+  assert.equal(await proofs(f3), 1);
+});
+
+test("15. route 8 without a session (the code review's LOWs): a pair without candidateId is 400 invalid_query; a newest stored session the plan cannot walk is passed by (200 on an older one), never a 500 for the team", async () => {
+  const f = await created("g1b2_default_loop", { expected: "J/kg" });
+  for (const bad of [`teamId=${W.tA.teamId}&pair=1`, `teamId=${W.tA.teamId}&pairs=0,1`]) {
+    const res = await get(`/fields/${f.fieldId}/observation?${bad}`, W.pa);
+    refused(res, 400, "invalid_query");
+  }
+  const t = await gpexeTeam(W.clubA);
+  for (const n of [1, 2, 3]) await link(t, n);
+  const good = await candidate(t, energyOf(f.name), { startedAt: "2026-09-10T18:00:00Z" });
+  const broken = await candidate(t, energyOf(f.name), { startedAt: "2026-09-20T18:00:00Z" });
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{details,full,players}', '5'::jsonb) where id = $1`, [broken.id]);
+  const answer = ok(await observationOf(W.pa, f, { teamId: t.teamId })).observation;
+  assert.equal(answer.session.candidateId, good.id);
+});

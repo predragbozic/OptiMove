@@ -879,8 +879,24 @@ and `e2e/tests/source-fields-observe.test.mjs`.
   that guard. The application already offers `as_sent` only for a field without parameters.
 - **Recorded, not changed:** routes 8 and 10 run the removal of expired values before the read (a write in a GET, as the
   board does); the club check under the locks uses the team read before them (teams do not change club, D43).
-- **Mutations:** 14 of the new guards; 13 killed. One is equivalent: without the state check after the revision lock,
-  the comparison read again after the locks refuses the proven field with the same code.
+- **Rule (b) at the mapping** (the code review's MEDIUM): T4 create, A1 and a club's copy refuse a created details field
+  whose proven unit no seeded word carries (`409 unit_word_missing`, nothing written; route test 13), since every value
+  of it would be a shape refusal and block the session. Route 8's `word_unknown`, and its `no_unit_word` for a details
+  value, now say the field cannot be imported until OptiMove knows GPEXE's word for it. The club board's column reason
+  is unchanged (a follow-up: the column carries no value, so it is never placeable).
+- **Under the locks** route O reads again the candidate's metadata (not the bundle: no second parse while the locks are
+  held) and the two athletes' names; a change is `board_changed` with nothing written (route test 12). v65's T9s trigger
+  refuses a session whose bundle hash moved as a backstop.
+- **Route O's COMMIT outcomes** go through the shared `runWrite`: a rollback with a lost answer is `503
+  outcome_unknown` and the same key then writes once; a COMMIT with a lost answer is verified through the request record;
+  a failed read after the COMMIT answers the write with `readError` (route test 14).
+- **Route 8 without a session:** a pair without `candidateId` is `400 invalid_query`; a stored session the plan cannot
+  walk is passed by, its error name logged only (route test 15).
+- **Mutations:** 22 of the new guards; 21 killed. One is equivalent at the outcome: removing route O's under-lock
+  bundle-hash comparison (v65's T9s trigger refuses the same write, still `board_changed` with nothing written). Removing
+  the under-lock `evidenceRefusal` is killed by route test 8 (document first).
+- **Recorded:** route test 9 covers the tick-first order against Unbind only; the Unbind-first order (the tick waits
+  on the binding lock, then `binding_not_active`) is a follow-up test.
 - **Not run:** PostgreSQL 17; 360 and 375 px; a physical device.
 
 ## 9. G2: the pinned set, the generic extractors and the club-board guard (as built, 2026-11-17)

@@ -333,8 +333,13 @@ async function loadComparison(client, { fieldId, teamId = null, candidateId = nu
     try {
       return { ...world, candidate: read, comparison: comparisonOf({ ...world, candidate: read }, selector) };
     } catch (error) {
-      // A session without a pair (or one the import would not take) is passed by; anything else is the answer.
-      if (!(error instanceof SourceMetricMappingError) || error.status !== 409) throw error;
+      // A session without a pair (or one the import would not take) is passed by, and so is a stored session the plan
+      // cannot walk (the board's rule: never a failed answer for the team; the name only is logged, never the value).
+      if (!(error instanceof SourceMetricMappingError)) {
+        console.error(`[source-field-observation] a stored session was passed by (${error?.name ?? "Error"})`);
+        continue;
+      }
+      if (error.status !== 409) throw error;
     }
   }
   throw refusal(409, "no_comparable_session", OBSERVATION_TEXT.no_comparable_session, { current: { tried } });
@@ -366,7 +371,11 @@ export async function readObservation({ ctx, fieldId: rawField, queryString }) {
   if (!mayObserve(ctx)) throw NOT_FOUND();
   const fieldId = pathId(rawField);
   const q = readQuery(queryString, { teamId: "uuid", candidateId: "uuid", pair: "index", pairs: "pairs" });
-  if ((!q.teamId && !q.candidateId) || (q.pair !== undefined && q.pairs)) throw refusal(400, "invalid_query", OBSERVATION_TEXT.invalid_query);
+  // A pair names athletes of one session: only with candidateId (the code review's LOW; without it the default loop
+  // would answer another session's pair).
+  if ((!q.teamId && !q.candidateId) || (q.pair !== undefined && q.pairs) || ((q.pair !== undefined || q.pairs) && !q.candidateId)) {
+    throw refusal(400, "invalid_query", OBSERVATION_TEXT.invalid_query);
+  }
   await removeExpiredBatch();
   const world = await boundedRead((client) => loadComparison(client, { fieldId, teamId: q.teamId ?? null, candidateId: q.candidateId ?? null, selector: { pair: q.pair, pairs: q.pairs } }));
   return comparisonOut(world);

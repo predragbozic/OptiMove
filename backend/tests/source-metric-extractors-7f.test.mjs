@@ -351,7 +351,7 @@ test("13. architecture: no module of backend/src sets the test seam; only the re
     }
   }
   const service = fs.readFileSync(path.join(SRC, "sourceMetricMappingService.js"), "utf8");
-  assert.match(service, /import \{ extractabilityCode, extractorFor \} from "\.\/sourceMetricExtractors\.js";/);
+  assert.match(service, /import \{ extractabilityCode, extractorFor(, isGenericDetailsKey)? \} from "\.\/sourceMetricExtractors\.js";/);
   assert.equal((service.match(/assertExtractable\(/g) || []).length, 3, "the definition, T4 create and A1");
   const fieldsService = fs.readFileSync(path.join(SRC, "sourceFieldVerificationService.js"), "utf8");
   assert.match(fieldsService, /extractorAvailable: extractorFor\(/);

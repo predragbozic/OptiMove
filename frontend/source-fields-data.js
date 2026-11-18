@@ -281,9 +281,10 @@ export function observationReasonText(o) {
   const words = (o?.words || []).map((w) => (w === null || w === undefined ? "none" : `"${w}"`));
   switch (o?.reason) {
     case "words_disagree": return `The two athletes' values carry different unit words (${words.join(" and ")}), so this session cannot confirm the unit. Try Other athletes or another team.`;
-    case "word_unknown": return `GPEXE sends a unit word OptiMove does not know${o.words?.[0] ? ` (${words[0]})` : ""}. Only a document can confirm this field's unit (Confirm the unit).`;
+    case "word_unknown": return `GPEXE sends a unit word OptiMove does not know${o.words?.[0] ? ` (${words[0]})` : ""}. Only a document can confirm this field's unit (Confirm the unit). OptiMove cannot import its values until it knows GPEXE's unit word for it.`;
     case "expected_unit_differs": return `GPEXE sends this value here as ${words[0]}, which is not the unit the field was created with${o.expectedUnit ? ` (${o.expectedUnit})` : ""}. Another GPEXE account may send it differently: confirm the unit with a document.`;
-    case "no_unit_word": return "GPEXE sends no unit with this value. A platform administrator confirms it with a document (Confirm the unit).";
+    // With words (a details value that came without one) the field cannot import either; an athlete-row field can.
+    case "no_unit_word": return `GPEXE sends no unit with this value. A platform administrator confirms it with a document (Confirm the unit).${Array.isArray(o.words) ? " OptiMove cannot import its values until it knows GPEXE's unit word for it." : ""}`;
     default: return "";
   }
 }
