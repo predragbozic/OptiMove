@@ -280,9 +280,9 @@ export function observationWordText(o) {
 export function observationReasonText(o) {
   const words = (o?.words || []).map((w) => (w === null || w === undefined ? "none" : `"${w}"`));
   switch (o?.reason) {
-    case "words_disagree": return `The two athletes' values carry different unit words (${words.join(" and ")}), so this session cannot confirm the unit. Choose other athletes or another session.`;
-    case "word_unknown": return `GPEXE sends a unit word OptiMove does not know (${words[0] || "none"}). Only a document can confirm this field's unit (Confirm the unit).`;
-    case "expected_unit_differs": return `GPEXE sends this value here as ${words[0] || "an unknown word"}, which is not the unit the field was created with${o.expectedUnit ? ` (${o.expectedUnit})` : ""}. Another GPEXE account may send it differently: confirm the unit with a document.`;
+    case "words_disagree": return `The two athletes' values carry different unit words (${words.join(" and ")}), so this session cannot confirm the unit. Try Other athletes or another team.`;
+    case "word_unknown": return `GPEXE sends a unit word OptiMove does not know${o.words?.[0] ? ` (${words[0]})` : ""}. Only a document can confirm this field's unit (Confirm the unit).`;
+    case "expected_unit_differs": return `GPEXE sends this value here as ${words[0]}, which is not the unit the field was created with${o.expectedUnit ? ` (${o.expectedUnit})` : ""}. Another GPEXE account may send it differently: confirm the unit with a document.`;
     case "no_unit_word": return "GPEXE sends no unit with this value. A platform administrator confirms it with a document (Confirm the unit).";
     default: return "";
   }
@@ -380,7 +380,7 @@ const SETTLED_ON_CHECK = new Set([
   // Route C's refusals, decided from the body and the inventory before anything is written.
   "name_not_observed", "name_not_supported", "shape_not_generic", "field_exists", "too_many_fields", "value_not_number",
   // Route O's refusals: nothing is written with them.
-  "field_has_parameters", "revision_not_active", "unit_not_stated", "board_changed", "binding_not_active", "pair_not_comparable",
+  "field_has_parameters", "field_has_evidence", "revision_not_active", "unit_not_stated", "board_changed", "binding_not_active", "pair_not_comparable",
   "not_enough_athletes", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "candidate_too_large", "session_start_unknown",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
@@ -440,6 +440,7 @@ const OBSERVE_CODE_TEXT = {
   board_changed: "Not saved: the session or the field changed since you compared. The comparison is read again; compare once more.",
   unit_not_stated: "Not saved: GPEXE does not state a unit OptiMove can read for this field in this session.",
   unit_already_verified: "Not saved: this field's unit is already confirmed, perhaps by someone else in the meantime. The field is read again.",
+  field_has_evidence: "Not saved: this field already carries other evidence; its unit is confirmed with a document. The field is read again.",
   field_has_parameters: "Not saved: this field has parameters; its unit is confirmed with a document.",
   revision_not_active: "Not saved: this revision is no longer the field's active one. The field is read again.",
   binding_not_active: "Not saved: the team is no longer linked to GPEXE. Choose another team.",
@@ -457,6 +458,7 @@ export function observationReadText(info) {
     not_enough_athletes: "OptiMove needs two athletes it can name, with different values of this field. Link the team's athletes in Imports (Link athletes).",
     unit_not_stated: "GPEXE sends no unit with this value. A platform administrator confirms it with a document (Confirm the unit).",
     unit_already_verified: "This field's unit is already confirmed.",
+    field_has_evidence: "This field already carries other evidence; its unit is confirmed with a document.",
     field_has_parameters: "This field has parameters; its unit is confirmed with a document.",
     snapshot_expired: "The saved session is no longer available. Run a new search in Imports.",
     candidate_source_mismatch: "This session was not read through the team's current GPEXE link.",
@@ -479,7 +481,7 @@ export const CLOSES_FORM = new Set([
   "notFound", "bound_unit_required", "bound_unit_not_allowed", "operator_required", "operator_not_allowed",
   "unit_already_verified", "meaning_already_verified", "revision_retired",
   // Route O (G1b-2): the comparison no longer fits the field.
-  "field_has_parameters", "revision_not_active",
+  "field_has_parameters", "field_has_evidence", "revision_not_active",
 ]);
 // Route O's refusals after which the comparison is read again (the form stays).
 export const REREADS_OBSERVATION = new Set(["board_changed", "pair_not_comparable", "unit_not_stated", "binding_not_active"]);
@@ -488,7 +490,7 @@ export const REREADS_OBSERVATION = new Set(["board_changed", "pair_not_comparabl
 export function confirmQuestion(form, body) {
   if (form.act === "observe") {
     const o = form.observation;
-    return `Save the unit of ${form.fieldName} as ${o.unit} (GPEXE's word "${o.word}") and its meaning as GPEXE's own label, from this comparison of two athletes? It is saved once and never changed; a correction is a new revision.`;
+    return `Save the unit of ${form.fieldName} as ${o.unit} (GPEXE's word "${o.word}") and its meaning as GPEXE's own name "${o.gpexeName}", from this comparison of two athletes? It is saved once and never changed; a correction is a new revision.`;
   }
   if (form.act === "create") {
     return `Create the source field "${body.label}" from GPEXE's name ${body.name} (${ENDPOINT_LABEL[body.endpoint] || body.endpoint})? Once created, the field cannot be removed here.`;

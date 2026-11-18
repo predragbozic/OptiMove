@@ -419,6 +419,13 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   let blocked = null;
   let specs = [];
   const block = (code) => ({ code, message: BLOCK_MESSAGES[code] ?? BLOCK_MESSAGES.mapping_not_usable });
+  // G1b-2: a value of one mapped field refused for its shape or GPEXE's unit word names that field and its variable, so an
+  // administrator can switch that one mapping off for the team and import the rest (a coach reads the plain sentence).
+  const shapeBlock = (all, activationId) => {
+    const spec = (all || []).find((x) => x.activationId === activationId) ?? null;
+    if (!spec) return block("source_shape_mismatch");
+    return { code: "source_shape_mismatch", message: `GPEXE sent "${spec.sourceLabel}" (it fills ${spec.label}) in another shape or unit than its field has. Switch that mapping off for this team to import the other values, or ask a platform administrator to check that GPEXE field.` };
+  };
   if (!mapping || mapping.block) {
     blocked = block(mapping?.block ?? "mapping_not_usable");
   } else {
@@ -452,7 +459,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
 
   if (!blocked) {
     const classified = classifyMappedPlan(plan, { importableIds: importable.map((p) => p.gpexeAthleteId), activationCount: mapping.rows.length });
-    if (classified.block) blocked = block(classified.block);
+    if (classified.block) blocked = classified.block === "source_shape_mismatch" ? shapeBlock(specs, classified.activationId) : block(classified.block);
   }
 
   let outcomes = new Map();

@@ -27409,6 +27409,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
 /* G1b-2: the comparison with the GPEXE screen - two athletes, each with the number to compare. */
 .source-fields-observe {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 8px 0;
 }
@@ -27429,6 +27430,7 @@ body:not(.athlete-mode):not(.login-mode) .imports-help .gpexe-button:focus-visib
   height: 20px;
   min-height: 0;
   margin: 0;
+  padding: 0;
 }
 .source-fields-inventory-thresholds {
   margin-top: 12px;

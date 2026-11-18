@@ -28,7 +28,7 @@ import { lockListedBindings } from "./sourceMetricActivationSteps.js";
 import { bindingClubHolds } from "./sourceMetricAccess.js";
 import { GPEXE_SOURCE_SYSTEM, gpexeSessionValuesKeyed } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
-import { canonicalDecimal, genericObservationExtract } from "./sourceMetricExtractors.js";
+import { canonicalDecimal, genericObservationExtract, isGenericDetailsKey } from "./sourceMetricExtractors.js";
 import { DISPLAY_REGISTRY_VERSION, displayEntryForRule, displayValue, rankPairs } from "./sourceMetricBoard.js";
 import { readUnitWordRows } from "./sourceUnitWords.js";
 import { removeExpiredBatch } from "./sourceMetricConfirmationRemoval.js";
@@ -41,7 +41,13 @@ const API_FAMILY = "rest_v1";
 const SOURCE_CONNECTION_PATH = "source_connection";
 // The board's bounds (J18): the largest stored bundle read, how far back the default session looks.
 export const OBSERVATION_MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
-export const OBSERVATION_DEFAULT_SESSIONS = 10;
+export const OBSERVATION_DEFAULT_SESSIONS = 5;
+// The time the default's attempts may take in all (one attempt is always made), well inside the read's own bound (the
+// board's rule): each attempt reads one stored bundle and builds its plan.
+export const OBSERVATION_DEFAULT_BUDGET_MS = 4_000;
+let defaultBudgetMs = OBSERVATION_DEFAULT_BUDGET_MS;
+// Test seam: another budget (the default with no argument).
+export function setObservationDefaultBudgetForTests(ms = OBSERVATION_DEFAULT_BUDGET_MS) { defaultBudgetMs = ms; }
 export const OBSERVATIONS_PAGE = 50;
 const HASH = /^[0-9a-f]{64}$/;
 const POSITION = /^(0|[1-9][0-9]{0,3})$/;
@@ -52,6 +58,7 @@ export const OBSERVATION_TEXT = Object.freeze({
   not_attested: "Tick only after comparing both athletes with the GPEXE screen (attested: true).",
   field_has_parameters: "This field has parameters (a zone or an event threshold); confirm its unit with a document.",
   unit_already_verified: "This field's unit is already confirmed.",
+  field_has_evidence: "This field already carries other evidence; confirm its unit with a document (Confirm the unit).",
   revision_not_active: "This revision is not the field's active one.",
   unit_not_stated: "GPEXE does not state a unit OptiMove can read for this field in this session.",
   no_unit_word: "GPEXE sends no unit with this value. A platform administrator confirms it with a document (Confirm the unit).",
@@ -67,6 +74,7 @@ export const OBSERVATION_TEXT = Object.freeze({
   not_enough_athletes: "OptiMove needs two athletes it can name, with different values of this field. Link the team's athletes in Imports (Link athletes).",
   pair_out_of_range: "No other pair of named athletes has different values of this field.",
   pair_not_comparable: "These two athletes cannot be compared for this field (not both named, or not two different values).",
+  // Under the locks the session, a name or the field changed since the plain read.
 });
 // Why a session's word cannot be confirmed (current.reason of unit_not_stated; the screen owns the sentences).
 export const UNIT_NOT_STATED_REASONS = Object.freeze(["no_unit_word", "words_disagree", "word_unknown", "expected_unit_differs", "not_generic"]);
@@ -115,15 +123,26 @@ async function readField(client, fieldId) {
   )).rows[0] ?? null;
 }
 
+// A revision whose unit or meaning is proven is unit_already_verified; one that carries other evidence (documented or
+// observed, nothing confirmed) is field_has_evidence - the database takes an observed act only on an unproven revision.
+function evidenceRefusal(r) {
+  if (r.unit_verified_at !== null || r.meaning_verified_at !== null || r.evidence_status === "verified" || r.evidence_status === "source_stated") {
+    return refusal(409, "unit_already_verified", OBSERVATION_TEXT.unit_already_verified, { current: { evidenceStatus: r.evidence_status } });
+  }
+  if (r.evidence_status !== "unproven") return refusal(409, "field_has_evidence", OBSERVATION_TEXT.field_has_evidence, { current: { evidenceStatus: r.evidence_status } });
+  return null;
+}
+
 // The field-level refusals, in route O's order: parameters, a proven unit, a field the comparison cannot read, an
 // athlete-row value (GPEXE sends no word with it).
 function fieldRefusal(field) {
   if (field.parameter_kind !== "none") return refusal(409, "field_has_parameters", OBSERVATION_TEXT.field_has_parameters);
-  if (field.unit_verified_at !== null || field.meaning_verified_at !== null || field.evidence_status !== "unproven") {
-    return refusal(409, "unit_already_verified", OBSERVATION_TEXT.unit_already_verified, { current: { evidenceStatus: field.evidence_status, sourceUnit: field.source_unit } });
-  }
+  const proof = evidenceRefusal(field);
+  if (proof) return proof;
   if (!genericObservationExtract(field.source_metric_key)) return notStated("not_generic");
   if (field.source_metric_key.startsWith("athlete_session.")) return notStated("no_unit_word");
+  // Only a created details field (never a seeded key, which has its own entry): the words are read only for it.
+  if (!isGenericDetailsKey({ sourceSystem: field.source_system, apiFamily: field.api_family, sourceMetricKey: field.source_metric_key })) return notStated("not_generic");
   return null;
 }
 
@@ -222,13 +241,16 @@ function choose(ranked, { pair, pairs }) {
 // The word both athletes' answers carry, its seeded unit token and display rule (section 8.10), or the reason it
 // cannot be confirmed. Carry-over 5: a word whose token is not the unit the field was created with (another GPEXE
 // account may send the same name with another word) is not confirmed either.
+// A word is echoed only when it is one of the seeded words (never raw source text of any length; security review LOW-1).
 function wordVerdict(field, a, b, words) {
-  if (a.word !== b.word) return { reason: "words_disagree", words: [a.word, b.word] };
-  const row = a.word === null ? null : words.get(a.word) ?? null;
-  if (!row) return { reason: "word_unknown", words: [a.word, b.word] };
-  if (field.expected_source_unit !== null && field.expected_source_unit !== row.sourceUnit) return { reason: "expected_unit_differs", words: [a.word, b.word] };
+  const echo = [a.word, b.word].map((w) => (typeof w === "string" && words.has(w) ? w : null));
+  if (a.word === null && b.word === null) return { reason: "no_unit_word", words: echo };
+  if (a.word !== b.word) return { reason: "words_disagree", words: echo };
+  const row = words.get(a.word) ?? null;
+  if (!row) return { reason: "word_unknown", words: echo };
+  if (field.expected_source_unit !== null && field.expected_source_unit !== row.sourceUnit) return { reason: "expected_unit_differs", words: echo };
   const entry = displayEntryForRule(row.displayRule, row.sourceUnit);
-  if (!entry) return { reason: "word_unknown", words: [a.word, b.word] };
+  if (!entry) return { reason: "word_unknown", words: echo };
   return { reason: null, word: a.word, unit: row.sourceUnit, rule: row.displayRule, displayUnit: entry.units[0], entry };
 }
 
@@ -256,6 +278,8 @@ function comparisonOf({ field, team, candidate, names, words, teamTimezone }, se
   });
   return {
     pair: { index: chosen.index, count: seen.ranked.length, positions, labels },
+    // The two athletes' internal keys, for route O's check under the locks only: never in an answer, a row or a log.
+    keys: [chosen.a.key, chosen.b.key],
     verdict,
     values: { a: { raw: chosen.a.raw, shown: show(chosen.a.raw) }, b: { raw: chosen.b.raw, shown: show(chosen.b.raw) } },
     placementHash,
@@ -299,7 +323,11 @@ async function loadComparison(client, { fieldId, teamId = null, candidateId = nu
     [team.id, SOURCE_CONNECTION_PATH, team.binding_id],
   )).rows;
   if (listed.length === 0) throw refusal(409, "no_stored_session", OBSERVATION_TEXT.no_stored_session);
+  const startedAt = Date.now();
+  let tried = 0;
   for (const row of listed) {
+    if (tried > 0 && Date.now() - startedAt >= defaultBudgetMs) break;
+    tried += 1;
     const read = await readCandidate(client, row.id);
     if (!read || sessionRefusal(read, team)) continue;
     try {
@@ -309,7 +337,7 @@ async function loadComparison(client, { fieldId, teamId = null, candidateId = nu
       if (!(error instanceof SourceMetricMappingError) || error.status !== 409) throw error;
     }
   }
-  throw refusal(409, "no_comparable_session", OBSERVATION_TEXT.no_comparable_session, { current: { tried: listed.length } });
+  throw refusal(409, "no_comparable_session", OBSERVATION_TEXT.no_comparable_session, { current: { tried } });
 }
 
 function comparisonOut(world) {
@@ -317,6 +345,8 @@ function comparisonOut(world) {
   return {
     observation: {
       fieldId: field.id, revisionId: field.revision_id, key: field.source_metric_key, label: field.source_label,
+      // The name GPEXE gives the value (its meaning, decision (a)), so the admin finds it on the GPEXE screen.
+      gpexeName: field.source_metric_key.slice(field.source_metric_key.lastIndexOf(".") + 1),
       expectedUnit: field.expected_source_unit ?? null,
       team: { id: team.id, name: team.name, clubId: team.club_id, clubName: team.club_name ?? null },
       session: { candidateId: candidate.id, label: candidate.session_label ?? null, startedAt: candidate.session_started_at },
@@ -429,15 +459,29 @@ export async function confirmObserved({ ctx, fieldId: rawField, revisionId: rawR
       // The states, on what is locked now.
       if (rev.state !== "active") throw refusal(409, "revision_not_active", OBSERVATION_TEXT.revision_not_active);
       if (rev.parameter_kind !== "none") throw refusal(409, "field_has_parameters", OBSERVATION_TEXT.field_has_parameters);
-      if (rev.unit_verified_at !== null || rev.meaning_verified_at !== null || rev.evidence_status !== "unproven") {
-        throw refusal(409, "unit_already_verified", OBSERVATION_TEXT.unit_already_verified, { current: { evidenceStatus: rev.evidence_status } });
-      }
+      const proof = evidenceRefusal(rev);
+      if (proof) throw proof;
       if (locked.get(seen.team.binding_id)?.state !== "active") throw refusal(409, "binding_not_active", OBSERVATION_TEXT.binding_not_active);
-      const world = await loadComparison(client, { fieldId, candidateId, selector: { pairs } });
-      if (world.team.binding_id !== seen.team.binding_id || world.field.revision_id !== revisionId) throw boardChanged();
-      judge(world, placementHash);
+      // What the comparison stands on, read again without the bundle (the DB review's MEDIUM-1: no second parse while the
+      // locks are held): the same stored content, last seen by the same check through the same binding, still kept, and
+      // the two athletes still named as compared. The words are seed-only; the revision is locked above.
+      const now = (await client.query(
+        `select c.status, c.bundle_hash, c.last_seen_check_id, c.raw_purged_at is null and c.raw_expires_at > now() as kept,
+                c.import_undone_at is null as live, k.status as check_status, k.source_path, k.source_binding_id
+           from training_load.gpexe_import_candidates c
+           left join training_load.gpexe_import_checks k on k.id = c.last_seen_check_id and k.owner_team_id = c.owner_team_id
+          where c.id = $1 and c.owner_team_id = $2`,
+        [candidateId, seen.team.id],
+      )).rows[0];
+      if (!now || now.status === "superseded" || !now.live || !now.kept || now.bundle_hash !== seen.candidate.bundle_hash
+          || now.last_seen_check_id !== seen.candidate.last_seen_check_id || now.check_status !== "succeeded"
+          || now.source_path !== SOURCE_CONNECTION_PATH || now.source_binding_id !== seen.team.binding_id) throw boardChanged();
+      const names = await readNames(client, seen.team);
+      const labels = seen.comparison.keys.map((k) => names.get(k));
+      if (labels[0] !== seen.comparison.pair.labels[0] || labels[1] !== seen.comparison.pair.labels[1]) throw boardChanged();
       await hold(client, "before_writes");
 
+      const world = seen;
       const { team, candidate, comparison } = world;
       const actor = [ctx.userId, "platform_admin"];
       // T9: OptiMove's comparison of one revision (system scope, no club); the database sets the expiry of its values.
@@ -518,11 +562,13 @@ export async function listObservations({ ctx, fieldId: rawField }) {
          left join public.users u on u.id = c.confirmed_by_user_id
         where c.kind = 'field_observation'
         order by c.confirmed_at desc, c.id
-        limit ${OBSERVATIONS_PAGE}`,
+        limit ${OBSERVATIONS_PAGE + 1}`,
       [fieldId],
     )).rows;
     return {
-      observations: rows.map((r) => ({
+      // The newest 50; truncated says there are more (DB review LOW-3).
+      truncated: rows.length > OBSERVATIONS_PAGE,
+      observations: rows.slice(0, OBSERVATIONS_PAGE).map((r) => ({
         id: r.id, revisionId: r.source_metric_version_id, revisionNumber: r.revision_number, confirmedAt: r.confirmed_at, confirmedBy: r.confirmed_by ?? null,
         team: { id: r.team_id, name: r.team_name ?? null, clubName: r.club_name ?? null },
         sessionStartedAt: r.session_started_at ?? null,

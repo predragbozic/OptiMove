@@ -79,7 +79,7 @@ const observation = (over = {}) => ({
   team: { id: T1, name: "First team", clubId: CLUB, clubName: "FK Borac" },
   session: { candidateId: C1, label: "Training", startedAt: "2026-11-10T17:00:00Z" },
   pair: { index: 0, count: 3, positions: [0, 2], labels: ["Ana Petrovic", "Marko Ilic"] },
-  confirmable: true, reason: null, word: "energy", unit: "J/kg", displayRule: "as_sent", displayUnit: "J/kg",
+  gpexeName: "metabolic_energy", confirmable: true, reason: null, word: "energy", unit: "J/kg", displayRule: "as_sent", displayUnit: "J/kg",
   values: { a: { raw: "412.5", shown: "412.5" }, b: { raw: "455.25", shown: "455.25" } },
   placementHash: HASH, ...over,
 });
@@ -157,6 +157,7 @@ test("2. the comparison: the team, then two named athletes and the number to com
   assert.ok(gets().includes(TEAMS));
   assert.ok(gets().includes(`${FB}/${F}/observation?teamId=${T1}&pair=0`), JSON.stringify(gets()));
   assert.match(text(), /GPEXE sends the unit word "energy" with this value; OptiMove reads it as J\/kg\./);
+  assert.match(text(), /Open this session in GPEXE and find the value metabolic_energy for these two athletes:/);
   const lines = [...content.querySelectorAll(".source-fields-observe-athletes li")].map((li) => li.textContent.replace(/\s+/g, " ").trim());
   assert.deepEqual(lines, [
     "Ana Petrovic: GPEXE may show this rounded or in another unit. Compare the number: 412.5 J/kg.",
@@ -168,7 +169,7 @@ test("2. the comparison: the team, then two named athletes and the number to com
   await click('[data-action="source-fields-observe-other"]');
   assert.ok(gets().includes(`${FB}/${F}/observation?candidateId=${C1}&pair=1`), JSON.stringify(gets()));
   assert.match(text(), /Ivo Ivic: /);
-  assert.match(text(), /Other athletes \(2 of 3\)/);
+  assert.match(text(), /Other athletes \(pair 2 of 3\)/);
 });
 
 test("3. the word's own rule: a duration shows minutes:seconds and the hours note; a speed shows km/h", async () => {
@@ -185,7 +186,7 @@ test("3. the word's own rule: a duration shows minutes:seconds and the hours not
 test("4. no tick when the server says the unit cannot be confirmed (the words disagree, an unknown word, another unit than expected): the reason in plain words, no box, no save button", async () => {
   for (const [reason, words, pattern] of [
     ["words_disagree", ["energy", "power"], /different unit words \("energy" and "power"\)/],
-    ["word_unknown", ["furlongs", "furlongs"], /a unit word OptiMove does not know \("furlongs"\)/],
+    ["word_unknown", [null, null], /GPEXE sends a unit word OptiMove does not know\. Only a document/],
     ["expected_unit_differs", ["power", "power"], /not the unit the field was created with \(J\/kg\)/],
   ]) {
     resetSourceFields();
@@ -211,7 +212,7 @@ test("5. the tick: refused until the box is ticked; the last question names the 
   confirmAnswer = false;
   await submit();
   assert.equal(posts().length, 0, "the last question was declined");
-  assert.match(confirmQuestions.at(-1), /Save the unit of Metabolic energy as J\/kg \(GPEXE's word "energy"\) and its meaning as GPEXE's own label/);
+  assert.match(confirmQuestions.at(-1), /Save the unit of Metabolic energy as J\/kg \(GPEXE's word "energy"\) and its meaning as GPEXE's own name "metabolic_energy"/);
   confirmAnswer = true;
   post = () => {
     theField = field({ revisions: [revision({ evidenceStatus: "source_stated", sourceUnit: "J/kg", unitVerifiedAt: "2026-11-17T00:00:00Z", meaningVerifiedAt: "2026-11-17T00:00:00Z" })] });
@@ -227,8 +228,8 @@ test("5. the tick: refused until the box is ticked; the last question names the 
   assert.equal(sourceFieldsState().form, null);
   assert.match(text(), /The unit \(J\/kg, stated by GPEXE\) and the meaning \(GPEXE's own label\) were saved from the comparison\./);
   assert.match(text(), /J\/kg Unit stated by GPEXE, checked on the board/);
-  assert.match(text(), /Compared on the board .*First team \(FK Borac\) · GPEXE's word energy read as J\/kg/);
-  assert.match(text(), /Numbers compared: 412\.5 and 455\.25 J\/kg/);
+  assert.match(text(), /Comparisons with GPEXE .*First team \(FK Borac\) · GPEXE's word energy read as J\/kg/);
+  assert.match(text(), /Values GPEXE sent: 412\.5 and 455\.25 J\/kg/);
 });
 
 test("6. a coded refusal: board_changed reads the comparison again and the tick starts over with a new key; unit_already_verified closes the form and reads the field again", async () => {
@@ -265,12 +266,16 @@ test("7. a lost answer: Result not confirmed; Check result sends the very same r
   assert.equal(sourceFieldsState().form, null);
 });
 
-test("8. another team drops the comparison on the screen (and its tick) until it is read for that team", async () => {
+test("8. another team drops the comparison on the screen (and its tick) until it is read for that team - also when the browser sends input before change (UX review MEDIUM-1)", async () => {
   await openComparison();
   tick("attested", true);
   const select = $('[data-sf-field="teamId"]');
   select.insertAdjacentHTML("beforeend", `<option value="7e7e7e7e-0000-4000-8000-000000000002">Other</option>`);
-  choose("teamId", "7e7e7e7e-0000-4000-8000-000000000002");
+  select.value = "7e7e7e7e-0000-4000-8000-000000000002";
+  select.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(sourceFieldsState().form.draft.teamId, T1, "the input call alone (no render) changes nothing");
+  select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(sourceFieldsState().form.draft.teamId, "7e7e7e7e-0000-4000-8000-000000000002");
   assert.equal($(".source-fields-observe"), null, "no comparison of the other team on the screen");
   assert.equal($('[data-sf-field="attested"]'), null);
 });

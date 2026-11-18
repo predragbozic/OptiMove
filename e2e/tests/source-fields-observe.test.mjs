@@ -92,6 +92,7 @@ for (const [label, width, name] of [["1280 px", WIDTHS.desktop, "e2e_metabolic_e
       assert.ok(shown.sizes.every((h) => h >= 44), `choices and buttons are 44 px (${shown.sizes})`);
       assert.equal(shown.lines.length, 2);
       for (const line of shown.lines) assert.match(line, /^.+: GPEXE may show this rounded or in another unit\. Compare the number: [0-9.]+ J\/kg\.$/);
+      assert.match(shown.text, new RegExp(`find the value ${name} for these two athletes`));
       assert.match(shown.text, new RegExp(`GPEXE sends the unit word "${name === "e2e_metabolic_energy" ? "energy" : "energy_std"}" with this value; OptiMove reads it as J/kg\\.`));
       assert.doesNotMatch(shown.text, /\b10[1-3]\b|candidate|athlete id/i, "no GPEXE athlete id or internal word on the screen");
       // No save before the tick.
@@ -105,11 +106,11 @@ for (const [label, width, name] of [["1280 px", WIDTHS.desktop, "e2e_metabolic_e
       assert.equal(ticks[0].attested, true);
       assert.equal(ticks[0].session.pairs.length, 2);
       await page.waitForSelector(".source-fields-revision", { timeout: 20_000 });
-      await page.waitForFunction(() => /Compared on the board/.test(document.querySelector(".source-fields")?.textContent || ""), null, { timeout: 20_000 });
+      await page.waitForFunction(() => /Comparisons with GPEXE/.test(document.querySelector(".source-fields")?.textContent || ""), null, { timeout: 20_000 });
       const detail = (await page.locator(".source-fields").textContent()).replace(/\s+/g, " ");
       assert.match(detail, /Unit stated by GPEXE, checked on the board/, detail.slice(0, 800));
-      assert.match(detail, /Compared on the board/);
-      assert.match(detail, /Numbers compared: [0-9.]+ and [0-9.]+ J\/kg/);
+      assert.match(detail, /Comparisons with GPEXE/);
+      assert.match(detail, /Values GPEXE sent: [0-9.]+ and [0-9.]+ J\/kg/);
       assert.equal(await page.locator('[data-action="source-fields-observe-open"]').count(), 0, "no second comparison");
       const after = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       assert.ok(after <= 0, `the detail stays within the screen (${after})`);
@@ -124,7 +125,7 @@ test("G1b-2 a club's admin is never offered the comparison, and its routes answe
   try {
     await openField(page, fields.e2e_metabolic_energy.id);
     assert.equal(await page.locator('[data-action="source-fields-observe-open"]').count(), 0);
-    assert.doesNotMatch(await page.locator(".source-fields").innerText(), /Compared on the board|Numbers compared/);
+    assert.doesNotMatch(await page.locator(".source-fields").innerText(), /Comparisons with GPEXE|Values GPEXE sent/);
   } finally {
     await context.close();
   }

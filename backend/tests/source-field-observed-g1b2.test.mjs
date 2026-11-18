@@ -209,6 +209,7 @@ test("2. route 8: two named athletes' raw values and what GPEXE shows (energy: a
   const f = await created("g1b2_read", { expected: "J/kg" });
   const cand = await candidate(W.tA, energyOf(f.name));
   const { observation: o } = ok(await observationOf(W.pa, f, { candidateId: cand.id }));
+  assert.equal(o.gpexeName, f.name, "GPEXE's own name of the value, to find it on the GPEXE screen");
   assert.deepEqual([o.fieldId, o.revisionId, o.key, o.confirmable, o.reason, o.word, o.unit, o.displayRule, o.displayUnit],
     [f.fieldId, f.revisionId, `details.players.${f.name}`, true, null, "energy", "J/kg", "as_sent", "J/kg"]);
   assert.equal(o.session.candidateId, cand.id);
@@ -303,17 +304,29 @@ test("4. route O's refusals, nothing written: not attested, a bad body, a field 
   for (const [label, word, expected, reason] of [
     ["disagree", (id) => (id === ATHLETE(1) ? "power" : "energy"), "J/kg", "words_disagree"],
     ["not seeded", "furlongs", null, "word_unknown"],
-    ["no word", null, null, "word_unknown"],
+    ["no word", null, null, "no_unit_word"],
     ["another unit (two connections)", "power", "J/kg", "expected_unit_differs"],
   ]) {
     const g = await created(`g1b2_${label.replace(/[^a-z]/g, "")}_${uid()}`, { expected });
     const c = await candidate(W.tA, energyOf(g.name, word));
     const read = ok(await observationOf(W.pa, g, { candidateId: c.id, ...(label === "disagree" ? { pairs: "0,1" } : {}) })).observation;
     assert.deepEqual([read.confirmable, read.reason], [false, reason], label);
+    // A word is echoed only when it is a seeded one (security review LOW-1).
+    assert.ok((read.words || []).every((w) => w === null || ["energy", "power"].includes(w)), `${label}: ${JSON.stringify(read.words)}`);
+    if (label === "not seeded") assert.deepEqual(read.words, [null, null]);
     const t = refused(await tick(W.pa, g, tickBody(read)), 409, "unit_not_stated");
     assert.deepEqual(t.current, { reason }, label);
     assert.deepEqual(await before(g), [0, "unproven"], label);
   }
+
+  // A field that carries other evidence (observed, nothing confirmed): field_has_evidence, never "already confirmed".
+  const observed = await created(`g1b2_observed_${uid()}`, { expected: "J/kg" });
+  await k.query("begin");
+  await k.query("set local session_replication_role = replica");
+  await k.query(`update training_load.source_metric_definition_versions set evidence_status = 'observed', evidence_ref = 'docs/ai/test-evidence.md#observed' where id = $1`, [observed.revisionId]);
+  await k.query("commit");
+  const evid = refused(await observationOf(W.pa, observed, { candidateId: cand.id }), 409, "field_has_evidence");
+  assert.deepEqual(evid.current, { evidenceStatus: "observed" });
 
   // A session whose last check failed is not read.
   const g = await created("g1b2_failed", { expected: "J/kg" });
@@ -331,7 +344,9 @@ test("5. route 10: the field's stored comparisons for a platform admin - the wor
   const cand = await candidate(W.tA, energyOf(f.name));
   const o = ok(await observationOf(W.pa, f, { candidateId: cand.id })).observation;
   ok(await tick(W.pa, f, tickBody(o)), 201);
-  const listed = ok(await get(`/fields/${f.fieldId}/observations`, W.pa)).observations;
+  const listedAnswer = ok(await get(`/fields/${f.fieldId}/observations`, W.pa));
+  assert.equal(listedAnswer.truncated, false);
+  const listed = listedAnswer.observations;
   assert.equal(listed.length, 1);
   assert.deepEqual([listed[0].word, listed[0].unit, listed[0].displayRule, listed[0].team.id, listed[0].values], ["energy", "J/kg", "as_sent", W.tA.teamId, { a: o.values.a.raw, b: o.values.b.raw }]);
   noAthleteId(JSON.stringify(listed), "route 10");
@@ -494,4 +509,46 @@ test("10. the log and the answers carry no athlete id; no value is logged", asyn
   noAthleteId(responses.join("\n"), "every answer");
   noAthleteId(logLines.join("\n"), "every log line");
   for (const v of ["412.5", "455.25"]) assert.ok(!logLines.join("\n").includes(v), `${v} not logged`);
+});
+
+test("11. the club board after a tick (the Rukovodilac's addition): before route O a created field is not readable on the club's board (G2's guard: no value leaves the server); after it, the same column is a normal proven column - its values read and placeable", async () => {
+  const f = await created("g1b2_board", { expected: "J/kg" });
+  // The board chooses its pair over every column that can be placed: the session carries a value of every created
+  // details field (the earlier tests proved some of them).
+  const names = (await rows(`select substring(source_metric_key from 'details\\.players\\.(.*)') as n from training_load.source_metric_definitions where source_metric_key like 'details.players.g1b2%'`)).map((r) => r.n);
+  const own = { [ATHLETE(1)]: 7412.5, [ATHLETE(2)]: 7455.25, [ATHLETE(3)]: 7300 };
+  const cand = await candidate(W.tA, (id) => Object.assign({}, ...names.map((n) => energyOf(n)(id)), { [f.name]: { unit: "energy", value: own[id] ?? 7000 } }));
+  const board = async () => {
+    const res = await get(`/board?${qs({ teamId: W.tA.teamId, candidateId: cand.id })}`, W.caA);
+    const b = ok(res).board;
+    return { col: b.columns.find((c) => c.fieldId === f.fieldId), text: res.text };
+  };
+  const before = await board();
+  assert.ok(before.col, "the column is listed");
+  assert.deepEqual([before.col.rawA, before.col.rawB, before.col.placeable, before.col.reason], [null, null, false, "field_not_confirmed"]);
+  for (const v of ["7412.5", "7455.25", "7300"]) assert.ok(!before.text.includes(v), `${v} does not leave the server before the tick`);
+  const o = ok(await observationOf(W.pa, f, { candidateId: cand.id })).observation;
+  ok(await tick(W.pa, f, tickBody(o)), 201);
+  const after = await board();
+  assert.deepEqual([after.col.unitProven, after.col.unit, after.col.displayRule, after.col.reason, after.col.placeable], [true, "J/kg", "as_sent", null, true], JSON.stringify(after.col));
+  assert.ok(after.col.rawA !== null && after.col.rawB !== null, "its values are read");
+});
+
+test("12. what the comparison stands on is read again under the locks: a stored session changed, or an athlete renamed, between the comparison and the tick answers board_changed and writes nothing", async () => {
+  const cases = [
+    ["bundle", async (cand) => k.query(`begin; set local session_replication_role = replica; update training_load.gpexe_import_candidates set bundle_hash = encode(sha256(convert_to(bundle_hash, 'UTF8')), 'hex') where id = $1; commit;`.replace(/\$1/, `'${cand.id}'`))],
+    ["name", async () => k.query(`update public.athletes a set display_name = display_name || ' (renamed)' from training_load.gpexe_athlete_links l where l.athlete_id = a.id and l.owner_team_id = $1 and l.gpexe_athlete_id = $2`, [W.tA.teamId, ATHLETE(1)])],
+  ];
+  for (const [label, change] of cases) {
+    const f = await created(`g1b2_recheck_${label}`, { expected: "J/kg" });
+    const cand = await candidate(W.tA, energyOf(f.name));
+    const o = ok(await observationOf(W.pa, f, { candidateId: cand.id })).observation;
+    observation.setObservedHoldForTests(async (_c, step) => { if (step === "before_locks") await change(cand); });
+    let answer;
+    try { answer = await tick(W.pa, f, tickBody(o)); } finally { observation.setObservedHoldForTests(null); }
+    refused(answer, 409, "board_changed");
+    const rev = await one(`select evidence_status, unit_observation_id from training_load.source_metric_definition_versions where id = $1`, [f.revisionId]);
+    assert.deepEqual([rev.evidence_status, rev.unit_observation_id], ["unproven", null], label);
+    if (label === "name") await k.query(`update public.athletes a set display_name = replace(display_name, ' (renamed)', '') from training_load.gpexe_athlete_links l where l.athlete_id = a.id and l.owner_team_id = $1 and l.gpexe_athlete_id = $2`, [W.tA.teamId, ATHLETE(1)]);
+  }
 });

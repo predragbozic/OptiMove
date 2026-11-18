@@ -2919,6 +2919,9 @@ test("52. G1b-2, rules (b) and (c) through the import: a created details field p
     assert.equal(blocked.status, "succeeded", JSON.stringify(blocked.error));
     const [b] = await q(`select status, preview from training_load.gpexe_import_candidates where owner_team_id = $1 and status <> 'superseded'`, [o.teamId]);
     assert.deepEqual([b.status, b.preview?.blocked?.code], ["blocked", "source_shape_mismatch"], JSON.stringify(b.preview?.blocked));
+    // The Independent's LOW-1: the administrator's sentence names the field and its variable, so that one mapping can be
+    // switched off for the team.
+    assert.match(b.preview.blocked.message, new RegExp(`^GPEXE sent "G2 details\\.players\\.g1b_energy" \\(it fills ${energy.label}\\) in another shape or unit than its field has\\.`), b.preview.blocked.message);
     // Every athlete's word is energy (energy_std would do too): imported, in kJ/kg, T6 keeping the raw J/kg value.
     src.state.bundle = structuredClone(original);
     src.state.bundle.teamSession.updated_on = "2026-09-14T23:10:00";
@@ -2955,10 +2958,8 @@ test("52. G1b-2, rules (b) and (c) through the import: a created details field p
   }
 });
 
-test("53. G1b-2, the energy field end to end through the real routes: a check observes GPEXE's name with its word energy; route C creates the field (expected J/kg); the next check keeps it; route 8 shows two named athletes' raw values and route O ticks them - the revision is source_stated in J/kg; an OptiMove (system) mapping onto a kJ/kg variable is activated and switched on; the next check's import writes each value converted to kJ/kg, T6 keeping the raw J/kg value", async () => {
+test("53. G1b-2, the energy field end to end through the real routes: a check observes GPEXE's name with its word energy; route C creates the field (expected J/kg); the next check keeps it; route 8 shows two named athletes' raw values and route O ticks them - the revision is source_stated in J/kg; the platform board places the proven column onto an OptiMove kJ/kg variable for the team (the system mapping, its version and the activation); the next check's import writes each value converted to kJ/kg, T6 keeping the raw J/kg value", async () => {
   const variablesSvc = await import("../src/canonicalVariableAdminService.js");
-  const mappingsSvc = await import("../src/sourceMetricMappingService.js");
-  const activationsSvc = await import("../src/sourceMetricActivationService.js");
   const conversionsSvc = await import("../src/unitConversionService.js");
   const { t6Rows } = await import("./support/mapped-world.mjs");
   const name = "g1b2_metabolic_energy";
@@ -3009,13 +3010,31 @@ test("53. G1b-2, the energy field end to end through the real routes: a check ob
     });
     assert.equal(ticked.status, 201, JSON.stringify(ticked.body));
     assert.deepEqual([ticked.body.revision.evidenceStatus, ticked.body.revision.sourceUnit], ["source_stated", "J/kg"]);
-    // 5. An OptiMove mapping onto a kJ/kg variable, activated (v52's gate takes source_stated) and switched on.
+    // 5. The platform board (the Rukovodilac's addition): the proven column placed onto an OptiMove kJ/kg variable for the
+    // team - the save writes the system mapping, its version (v52's gate takes source_stated) and the team's activation.
     const variable = (await variablesSvc.createVariable({ ctx, body: { requestKey: rk(), label: `Metabolic energy ${uid()}`, unit: "kJ/kg", levels: ["session", "drill"], dailyAggregationMethod: "sum" } })).variable;
-    const mapping = (await mappingsSvc.createMapping({ ctx, body: { requestKey: rk(), sourceMetricId: fieldId, metricDefinitionId: variable.id } })).mapping;
-    const version = (await mappingsSvc.createVersion({ ctx, mappingId: mapping.id, body: { requestKey: rk(), sourceRevisionId: revisionId, appliesToSession: true, appliesToDrill: false, conversionNote: "Converted by the active unit conversion." } })).version;
-    await mappingsSvc.submitVersion({ ctx, mappingId: mapping.id, versionId: version.id, body: { requestKey: rk() } });
-    await mappingsSvc.activateVersion({ ctx, mappingId: mapping.id, versionId: version.id, body: { requestKey: rk(), expectedActiveVersionId: null } });
-    await activationsSvc.startActivations({ ctx, body: { requestKey: rk(), mappingId: mapping.id, versionId: version.id, bindings: [{ bindingId: binding.bindingId, requirement: "required" }], reason: "G1b-2 end to end." } });
+    const boardRes = await api(`${M}/board?teamId=${o.teamId}`, { cookie: o.padmin.cookie });
+    assert.equal(boardRes.status, 200, JSON.stringify(boardRes.body));
+    const board = boardRes.body.board;
+    assert.equal(board.owner, "system");
+    const column = board.columns.find((c) => c.fieldId === fieldId);
+    assert.deepEqual([column?.unitProven, column?.unit, column?.displayRule, column?.reason], [true, "J/kg", "as_sent", null], JSON.stringify(column));
+    const placed = await api(`${M}/board/placement?teamId=${o.teamId}&candidateId=${board.session.candidateId}&pair=${board.pair.index}&fieldId=${fieldId}&targetId=${variable.id}`, { cookie: o.padmin.cookie });
+    assert.equal(placed.status, 200, JSON.stringify(placed.body));
+    const p = placed.body.placement;
+    assert.deepEqual([p.placeable, p.kind, p.sourceUnit, p.targetUnit, p.conversion.kind], [true, "new", "J/kg", "kJ/kg", "converted"], JSON.stringify(p));
+    const saved = await api(`${M}/confirmations`, {
+      method: "POST", cookie: o.padmin.cookie,
+      body: { requestKey: rk(), teamId: o.teamId, candidateId: board.session.candidateId, pair: board.pair.index, rows: [{
+        kind: "new", fieldId, targetId: variable.id, expectedTargetVersionId: p.expectedTargetVersionId, displayUnit: "J/kg",
+        placementHash: p.placementHashes["J/kg"], requirement: "required", replaces: [], checked: true,
+      }] },
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const [mapped] = await q(`select m.owner_scope, v.status, v.source_unit, v.target_unit from training_load.source_metric_mapping_activations a
+                               join training_load.source_metric_mappings m on m.id = a.mapping_id join training_load.source_metric_mapping_versions v on v.id = a.mapping_version_id
+                              where a.source_team_binding_id = $1 and a.metric_definition_id = $2 and a.ended_at is null`, [binding.bindingId, variable.id]);
+    assert.deepEqual(mapped, { owner_scope: "system", status: "active", source_unit: "J/kg", target_unit: "kJ/kg" });
     // 6. The next check previews the mapped values; the approval imports them.
     await check();
     const [cand] = await q(`select id, status, preview, preview_hash from training_load.gpexe_import_candidates where owner_team_id = $1 and status <> 'superseded' order by first_seen_at desc limit 1`, [o.teamId]);

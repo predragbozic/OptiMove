@@ -623,7 +623,10 @@ export function classifyMappedPlan(plan, { importableIds, activationCount }) {
   const admitted = importable.size > 0 ? importable : new Set(plan.participants.map((p) => p.gpexeAthleteId));
   const records = plan.leftOut.filter((record) => admitted.has(record.gpexeAthleteId));
   if (records.some((record) => record.category === "threshold_contract")) return { block: "source_threshold_contract_mismatch" };
-  if (records.some((record) => record.category === "shape")) return { block: "source_shape_mismatch" };
+  // G1b-2 (the Independent's LOW-1): the first mapped value refused for its shape names its activation, so the preview
+  // can name the field for an administrator (a coach reads the plain sentence).
+  const shape = records.find((record) => record.category === "shape");
+  if (shape) return { block: "source_shape_mismatch", activationId: shape.activationId ?? null };
   const values = plan.participants
     .filter((p) => admitted.has(p.gpexeAthleteId))
     .reduce((n, p) => n + p.results.reduce((m, result) => m + result.values.length, 0), 0);

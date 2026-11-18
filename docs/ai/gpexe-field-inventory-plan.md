@@ -827,8 +827,8 @@ word rule through the import, and the energy field end to end through the real r
 and `e2e/tests/source-fields-observe.test.mjs`.
 
 - **Route 8** (`GET /fields/:fieldId/observation`) takes `teamId` or `candidateId`, and `pair` (the pair's rank, as the
-  board's) or `pairs=i,j` (two positions); with a team only, the team's newest saved session (of the last ten) that has a
-  pair to compare. A position is the athlete's place in the import plan's list of the session (the import's own gates),
+  board's) or `pairs=i,j` (two positions); with a team only, the team's newest saved session (of the last five, within a
+  4 s budget, one always tried) that has a pair to compare. A position is the athlete's place in the import plan's list of the session (the import's own gates),
   never an id. The pairs are the board's rule (C117): two athletes OptiMove can name, two different non-zero values. The
   answer carries the word, its unit token and display rule, each athlete's raw value and the number GPEXE should show, and
   the comparison's hash (`g1.observation.v1`, over the bundle, the pair, the two names, the revision, the word, the rule
@@ -836,16 +836,25 @@ and `e2e/tests/source-fields-observe.test.mjs`.
   `expected_unit_differs`) where the tick would be refused, so the screen never offers it. A per-athlete field answers
   `409 unit_not_stated` (`no_unit_word`, the 8.2 sentence) before any session is read; a field with parameters
   `field_has_parameters`; a proven one `unit_already_verified`.
-- **Route O** recomputes the comparison twice - on plain reads, then after every lock - and compares its hash (else
-  `board_changed`). Its locks: the per-user lock and the request record (runWrite), the revision FOR UPDATE (as an M2b
+- **Route O** builds the comparison once, on plain reads, and compares its hash (else `board_changed`). After every lock it
+  reads again only what the comparison stands on, without the bundle (the DB review's MEDIUM-1): the candidate's content
+  hash, last check, binding and state, and the two athletes' names (else `board_changed`). Its locks: the per-user lock and the request record (runWrite), the revision FOR UPDATE (as an M2b
   act takes it, so the two serialize and the second answers `unit_already_verified`), the session's binding and team FOR
   SHARE, the rights users first, the team's club FOR SHARE; then T9, T9s, T9i (under the value statement bound), the T2b
   update and the two T8 rows, the keyed `source_metric_unit_observed` first. The recorded statement order is test 7.
   T9s's `pair_index` is the pair's rank. The answer is the revision and the comparison's id; a replay is the same.
   Refusals of the database (v65's candidate texts) read as `board_changed`; a lost right is the identical 404.
+- **Other refusals:** a revision that carries other evidence (`documented`, `observed`) is `field_has_evidence`, never
+  "already confirmed"; both athletes without a word is `no_unit_word`; a word is echoed in a refusal only when it is a
+  seeded one.
+- **The answer names GPEXE's value** (`gpexeName`, the key's last part), so the admin finds it on the GPEXE screen; the
+  last question names it as the meaning.
+- **A wrong word in an import names the field** (the Independent's LOW-1): the first value refused for its shape names
+  its activation, and the preview's administrator sentence says which GPEXE field and which variable, so that one mapping
+  can be switched off for the team; a coach reads the plain sentence.
 - **Carry-over 5:** a word whose unit token is not the revision's expected unit is `unit_not_stated`
   (`expected_unit_differs`): two GPEXE accounts may send one name with different words.
-- **Route 10** lists a field's comparisons (at most 50, newest first) with the team, the club, who, when, the word, the
+- **Route 10** lists a field's comparisons (at most 50, newest first, `truncated` when there are more) with the team, the club, who, when, the word, the
   unit, and the two raw values only while they are kept (not removed, not past their date - also when the removal before
   the read fails). A club's admin gets the identical 404 and reads only the status words of 8.9b.
 - **Rule (b):** the generic details extractor reads a value only when its word is one of the seeded words whose unit
@@ -860,10 +869,16 @@ and `e2e/tests/source-fields-observe.test.mjs`.
 - **The architecture guards** (`gpexe-import-mapped-architecture-9b` test 3): the mapper's one spec now passes the unit
   context; the board's extracts pass their column's context; and the comparison service is the one other reader of the
   keyed values, with exactly one extract, the registry's own `genericObservationExtract` of the field.
-- **Carry-over 3:** a `source_stated` revision is activated through M2 (v52's gate; route test 6, resolver test 53).
+- **Carry-over 3:** a `source_stated` revision is activated through M2 (v52's gate; route test 6) and through the platform
+  board's save (resolver test 53, the Rukovodilac's addition: the energy field's last leg places the proven column onto an
+  OptiMove kJ/kg variable for the team).
+- **The club board after a tick** (the Rukovodilac's addition; route test 11): before route O a created field's column
+  carries no value on the club's board; after it, the column is a normal proven column, its values read and placeable.
 - **Carry-over 6, recorded (the *Rukovodilac*'s choice (ii)):** limiting `as_sent` to `parameter_kind 'none'` in the
   database twin belongs in the T9i insert guard's mapping branch, md5-gated; it is done by the next migration that touches
   that guard. The application already offers `as_sent` only for a field without parameters.
+- **Recorded, not changed:** routes 8 and 10 run the removal of expired values before the read (a write in a GET, as the
+  board does); the club check under the locks uses the team read before them (teams do not change club, D43).
 - **Mutations:** 14 of the new guards; 13 killed. One is equivalent: without the state check after the revision lock,
   the comparison read again after the locks refuses the proven field with the same code.
 - **Not run:** PostgreSQL 17; 360 and 375 px; a physical device.

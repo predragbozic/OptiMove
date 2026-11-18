@@ -73,6 +73,7 @@ export async function loadSourceField(id, render) {
         const listed = await fetchObservations(id);
         if (sourceFieldsState().generation !== generation || s.detail.id !== id) return;
         s.detail.observations = Array.isArray(listed?.observations) ? listed.observations : [];
+        s.detail.observationsTruncated = listed?.truncated === true;
         s.detail.observationsError = null;
       } catch {
         if (sourceFieldsState().generation !== generation || s.detail.id !== id) return;
@@ -469,6 +470,9 @@ export function handleSourceFieldsInput(target, { render = null } = {}) {
   }
   // G1b-2: another team drops the comparison on the screen (it was of the other team); the admin asks for the new one.
   if (form.act === "observe" && name === "teamId") {
+    // Only the "change" call (which renders) takes the choice: a browser sends "input" first, without a render, and the
+    // old comparison must never stay on the screen under the new team (UX review MEDIUM-1).
+    if (!render) return true;
     if (form.draft.teamId === field.value) return true;
     form.draft.teamId = field.value;
     form.observation = null;

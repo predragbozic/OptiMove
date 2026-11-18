@@ -1559,7 +1559,8 @@ pinned set, plan section 9.1). Only a field with an active revision is kept.
   count, and so on). Any other word, or a word OptiMove does not know, blocks the session as `source_shape_mismatch` -
   never a silent skip. The value is stored in the field's unit and converted by the mapping version, as every value is.
   - *A session of a team is blocked as `source_shape_mismatch` on a created field.* GPEXE sent that field with another
-    word for at least one athlete (another account may send the same name differently). Remedy: retire the field's
+    word for at least one athlete (another account may send the same name differently). The administrator's sentence in
+    the session's review names the GPEXE field and the variable it fills; a coach reads the plain sentence. Remedy: retire the field's
     active revision (L5, as above), or end the field's activation on that team; a new field (or a new revision) is
     confirmed for the other word.
   - The interim refusal of G1b-1 (`409 unit_not_importable`) is gone.

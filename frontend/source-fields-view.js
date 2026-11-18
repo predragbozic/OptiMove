@@ -332,16 +332,17 @@ function renderDetailHtml(s, ctx) {
 // G1b-2: the field's comparisons on the board (route 10), for a platform admin: the team, when, the word and the unit,
 // and the two numbers compared while they are kept. Never an athlete's name or id.
 function observationsHtml(d) {
-  if (d.observationsError) return `<h3>Compared on the board</h3><p class="muted">${escapeHtml(d.observationsError)}</p>`;
+  if (d.observationsError) return `<h3>Comparisons with GPEXE</h3><p class="muted">${escapeHtml(d.observationsError)}</p>`;
   const list = d.observations || [];
   if (!list.length) return "";
   return `
-    <h3>Compared on the board</h3>
+    <h3>Comparisons with GPEXE</h3>
     <ul class="metric-variables-versions source-fields-history">${list.map((o) => `
       <li class="metric-variables-version">
         <span>${escapeHtml(fmtDate(o.confirmedAt))} · ${escapeHtml(o.team?.name || "A team")}${o.team?.clubName ? ` (${escapeHtml(o.team.clubName)})` : ""} · GPEXE's word ${code(o.word || "")} read as ${code(o.unit || "")}</span>
-        <span class="muted">${o.values ? `Numbers compared: ${escapeHtml(o.values.a)} and ${escapeHtml(o.values.b)} ${escapeHtml(o.unit || "")} (kept until ${escapeHtml(fmtDate(o.valuesExpireAt))})` : "The compared numbers are no longer kept."}${o.confirmedBy ? ` · ${escapeHtml(o.confirmedBy)}` : ""}</span>
-      </li>`).join("")}</ul>`;
+        <span class="muted">${o.values ? `Values GPEXE sent: ${escapeHtml(o.values.a)} and ${escapeHtml(o.values.b)} ${escapeHtml(o.unit || "")} (kept until ${escapeHtml(fmtDate(o.valuesExpireAt))})` : "The compared values are no longer kept."}${o.confirmedBy ? ` · ${escapeHtml(o.confirmedBy)}` : ""}</span>
+      </li>`).join("")}</ul>
+    ${d.observationsTruncated ? `<p class="muted">Only the newest comparisons are listed.</p>` : ""}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,26 +451,26 @@ function renderObserveFormHtml(s) {
       <label class="search-field"><span>Team</span>
         <select data-sf-field="teamId" ${locked || form.observationLoading ? "disabled" : ""}${form.errors.teamId ? ` aria-invalid="true" aria-describedby="sf-err-teamId"` : ""}>
           <option value="" ${form.draft.teamId ? "" : "selected"}>Choose a team...</option>
-          ${teams.items.map((t) => `<option value="${escapeAttr(t.teamId)}" ${form.draft.teamId === t.teamId ? "selected" : ""}>${escapeHtml(t.clubName)} · ${escapeHtml(t.teamName)}</option>`).join("")}
+          ${teams.items.map((t) => `<option value="${escapeAttr(t.teamId)}" ${form.draft.teamId === t.teamId ? "selected" : ""}>${escapeHtml(t.teamName)} · ${escapeHtml(t.clubName)}</option>`).join("")}
         </select>
         <span class="muted">OptiMove reads the team's newest saved session with two athletes it can name.</span>
         ${teamError}
       </label>
       ${teams.truncated ? `<p class="muted">Only the first teams are listed.</p>` : ""}
       <div class="data-sources-form-actions">
-        <button class="plain-button" type="button" data-action="source-fields-observe-load" ${locked || form.observationLoading ? "disabled" : ""}>${form.observationLoading ? "Reading..." : "Show the comparison"}</button>
+        <button class="plain-button${form.observation ? "" : " data-sources-primary"}" type="button" data-action="source-fields-observe-load" ${locked || form.observationLoading ? "disabled" : ""}>${form.observationLoading ? "Reading..." : "Show the comparison"}</button>
       </div>`;
   const lines = observationLines(o);
   const comparison = !o ? (form.observationError ? `<p class="error" role="alert">${escapeHtml(form.observationError)}</p>` : "") : `
       <div class="source-fields-observe" aria-live="polite">
         <p><strong>${escapeHtml(o.session?.label || "Saved session")}</strong> <span class="muted">${escapeHtml(fmtDate(o.session?.startedAt))} · ${escapeHtml(o.team?.name || "")}</span></p>
         ${o.word ? `<p class="metric-variables-field-note">${escapeHtml(observationWordText(o))}</p>` : ""}
-        <p>Open this session in GPEXE and find these two athletes:</p>
+        <p>Open this session in GPEXE and find the value ${code(o.gpexeName || "")} for these two athletes:</p>
         <ul class="source-fields-observe-athletes">
           ${lines.map((l) => `<li><strong>${escapeHtml(l.name)}</strong>: ${escapeHtml(l.text)}</li>`).join("")}
         </ul>
         ${o.displayRule === "duration_mmss" ? `<p class="muted">${escapeHtml(DURATION_HOURS_NOTE)}</p>` : ""}
-        ${o.pair?.count > 1 ? `<button class="plain-button ghost" type="button" data-action="source-fields-observe-other" ${locked || form.observationLoading ? "disabled" : ""}>Other athletes (${escapeHtml(String(o.pair.index + 1))} of ${escapeHtml(String(o.pair.count))})</button>` : ""}
+        ${o.pair?.count > 1 ? `<button class="plain-button ghost" type="button" data-action="source-fields-observe-other" ${locked || form.observationLoading ? "disabled" : ""}>Other athletes (pair ${escapeHtml(String(o.pair.index + 1))} of ${escapeHtml(String(o.pair.count))})</button>` : ""}
         ${o.confirmable ? `
         <label class="source-fields-choice source-fields-attest">
           <input type="checkbox" data-sf-field="attested" ${form.draft.attested ? "checked" : ""} ${locked ? "disabled" : ""}${form.errors.attested ? ` aria-invalid="true" aria-describedby="sf-err-attested"` : ""}>
@@ -487,7 +488,7 @@ function renderObserveFormHtml(s) {
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? unconfirmedHtml(form) : `
       <div class="data-sources-form-actions">
-        ${o?.confirmable ? `<button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Saving..." : `Save: unit ${escapeHtml(o.unit)}`}</button>` : ""}
+        ${o?.confirmable ? `<button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Saving..." : "Save unit and meaning"}</button>` : ""}
         <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
       </div>`}
       <details class="data-sources-tech"><summary>Technical details</summary><dl>
