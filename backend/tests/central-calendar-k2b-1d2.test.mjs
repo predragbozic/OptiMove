@@ -259,11 +259,12 @@ test("2d. the platform's read takes the same number of statements with 2 or 12 t
 test("3a. the reader's event view of the platform workspace names no team at all (no route reaches it: the test seam)", async () => {
   const { roles, teams, clubs } = m;
   const { reducedEventViewForTests } = await import("../src/calendarEventService.js");
-  const { resolveCalendarContext } = await import("../src/calendarAccess.js");
+  const { calendarContextOf } = await import("../src/routes/calendarRouteErrors.js");
   const { loadAuthorizationContext } = await import("../src/authz.js");
+  // The route's own context (calendarContextOf: the workspace, the activity scope and the authz).
   const ctxOf = async (role) => {
     const user = (await q(`select * from public.users where id = $1`, [role.id]))[0];
-    return resolveCalendarContext({ user, authz: await loadAuthorizationContext(user) });
+    return calendarContextOf({ user, authz: await loadAuthorizationContext(user) });
   };
   const type = (await catalog(roles.clubAdmin.cookie)).types.find((t) => t.key === "training");
   const created = await createEvent(roles.clubAdmin.cookie, {
@@ -277,10 +278,44 @@ test("3a. the reader's event view of the platform workspace names no team at all
   assert.equal(coachView.canManage, false);
   assert.deepEqual(coachView.targets.filter((t) => t.kind === "team").map((t) => String(t.id)), [String(teams.t1)], "a reader's own team is named");
 
+  // A club workspace (K2b-1d3, LOW-4): the club's own team is named; another club's workspace names none of it.
+  const clubCtx = await ctxOf(roles.clubAdmin);
+  assert.equal(clubCtx.workspace.type, "club");
+  const clubView = await reducedEventViewForTests(clubCtx, id);
+  assert.deepEqual(clubView.targets.filter((t) => t.kind === "team").map((t) => String(t.id)), [String(teams.t1)], "the club's own team is named");
+  assert.deepEqual(clubView.targets.filter((t) => t.kind === "club").map((t) => String(t.id)), [String(clubs.c1)], "and the club");
+  const strangerView = await reducedEventViewForTests(await ctxOf(roles.stranger), id);
+  assert.equal(JSON.stringify(strangerView.targets).includes(String(teams.t1)), false, "another club's workspace: not our team");
+
   // The platform workspace: loadWorkspaceTeams would name every club's teams there, so the branch gives none.
   const platformCtx = await ctxOf(roles.platformAdmin);
   assert.equal(platformCtx.workspace.type, "platform");
   const view = await reducedEventViewForTests(platformCtx, id);
   assert.deepEqual(view.targets.filter((t) => t.kind === "team"), [], "no team target for the platform's reader view");
   assert.equal(JSON.stringify(view).includes(String(teams.t1)), false, "no team id anywhere in the view");
+});
+
+test("3b. the test seam reducedEventViewForTests is referenced by no file under backend/src but its own definition", async () => {
+  const { readdirSync, readFileSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const root = new URL("../src/", import.meta.url).pathname;
+  const files = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (/\.(m?js|cjs)$/.test(name)) files.push(path);
+    }
+  };
+  walk(root);
+  assert.ok(files.length > 50, `backend/src read (${files.length} files)`);
+  const hits = files.flatMap((path) => {
+    const text = readFileSync(path, "utf8");
+    const count = (text.match(/reducedEventViewForTests/g) || []).length;
+    return count ? [{ path: path.slice(root.length), count, text }] : [];
+  });
+  assert.deepEqual(hits.map((h) => h.path), ["calendarEventService.js"], "only the definition's file names it");
+  const own = hits[0].text;
+  assert.equal((own.match(/reducedEventViewForTests/g) || []).length, 1, "its definition only");
+  assert.match(own, /export async function reducedEventViewForTests\(/);
 });

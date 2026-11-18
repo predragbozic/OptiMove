@@ -133,11 +133,14 @@ export function athleteHomeWallTimeInstant(day, time, timeZone) {
   const zone = athleteHomeEventZone(timeZone);
   if (!zone) return new Date(y, mo - 1, da, h, mi).getTime();
   const wall = Date.UTC(y, mo - 1, da, h, mi);
-  let instant = wall - zoneOffsetMs(zone, wall);
-  // Once more at the instant found: the offset may differ there (a change of summer time between the two).
-  const again = zoneOffsetMs(zone, instant);
-  if (wall - again !== instant) instant = wall - again;
-  return instant;
+  // Two candidates: the offset at the wall time read as UTC, and the offset at the instant that gives. A candidate is
+  // right when the zone's offset at it is the one it was made with. A time that falls back twice (both right) and one
+  // that does not exist in a spring-forward gap (neither right) both take the LATER instant, as PostgreSQL reads them.
+  const first = wall - zoneOffsetMs(zone, wall);
+  const second = wall - zoneOffsetMs(zone, first);
+  const candidates = [...new Set([first, second])];
+  const right = candidates.filter((instant) => wall - zoneOffsetMs(zone, instant) === instant);
+  return Math.max(...(right.length ? right : candidates));
 }
 
 // Whether the event has ended at `now` (ms): with an end time, at its last day's end time in the event's own zone (at
@@ -160,30 +163,37 @@ export function setAthleteHomeEventsClock(fn) {
 }
 export const athleteHomeEventsNow = () => clock();
 
-// The minute's tick: while Home is open, the list is drawn again when an event has ended since the last tick. Nothing
-// is read. It stops by itself once Home is left (the next entry into Home starts it again).
+// The minute's tick: while Home is open, Upcoming events is drawn again when an event has ended since the last tick.
+// Only its own section is replaced (the view registers the painter, athlete-home-events-view.js), never the whole of
+// Home: an open RPE form keeps its focus, caret and keyboard. Nothing is read. When the section is not on the page the
+// tick changes nothing and a later tick tries again. It stops by itself once Home is left (the next entry into Home
+// starts it again), and on a reset.
 let tickTimer = null;
 let tickSignature = "";
+let sectionPainter = null;
+export function registerAthleteHomeEventsSectionPainter(paint) {
+  sectionPainter = typeof paint === "function" ? paint : null;
+}
 const signatureOf = () => (g()?.status === "ready" ? athleteHomeVisibleEventRows(g().rows, clock()).map((row) => row.eventId).join(",") : "");
 export function stopAthleteHomeEventsTick() {
   if (tickTimer !== null) globalThis.clearInterval(tickTimer);
   tickTimer = null;
 }
-export function startAthleteHomeEventsTick({ render } = {}) {
+export function startAthleteHomeEventsTick() {
   stopAthleteHomeEventsTick();
   tickSignature = signatureOf();
-  tickTimer = globalThis.setInterval(() => athleteHomeEventsTick({ render }), ATHLETE_HOME_EVENTS_TICK_MS);
+  tickTimer = globalThis.setInterval(athleteHomeEventsTick, ATHLETE_HOME_EVENTS_TICK_MS);
   tickTimer?.unref?.();
 }
-export function athleteHomeEventsTick({ render } = {}) {
+export function athleteHomeEventsTick() {
   if (state.activeTab !== "athlete-home") {
     stopAthleteHomeEventsTick();
     return false;
   }
   const next = signatureOf();
   if (next === tickSignature) return false;
+  if (sectionPainter?.() !== true) return false;
   tickSignature = next;
-  render?.();
   return true;
 }
 
@@ -221,7 +231,7 @@ export async function loadAthleteHomeEvents({ render, forceRefresh = false, toda
       if (!current()) return;
       Object.assign(g(), { status: "ready", rows: athleteHomeEventRows(data), today, contextKey, error: "", canRetry: true });
       render?.();
-      startAthleteHomeEventsTick({ render });
+      startAthleteHomeEventsTick();
     },
     applyError: (error) => {
       if (!current()) return;

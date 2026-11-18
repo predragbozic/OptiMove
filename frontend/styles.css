@@ -22463,6 +22463,14 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   color: var(--cc-type-color);
 }
 
+/* K2b-1d3: a cancelled event's icon is muted, as its title (and as Athlete Home's cancelled row): the type's tint
+   gives way on the card, the month's mini card and the panel. */
+.is-cancelled .cc-card-icon.has-type-color,
+.is-cancelled .cc-mini-icon.has-type-color,
+.cc-panel-kind.is-cancelled .cc-panel-icon.has-type-color {
+  color: var(--muted);
+}
+
 .cc-panel-place-text {
   display: grid;
   gap: 2px;

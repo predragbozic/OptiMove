@@ -2,11 +2,14 @@
 // strings over state.athleteHomeEvents (athlete-home-events-data.js). A row shows the event's title, its type word, its
 // day(s) and time, and its place with *Open in maps* (the K2b-1d panel's place, reused); a cancelled event is marked and
 // shows no place. Nothing here talks to the server.
-import { ATHLETE_HOME_EVENTS_DAYS, ATHLETE_HOME_EVENTS_LIMIT, athleteHomeEventsNow, athleteHomeVisibleEventRows } from "./athlete-home-events-data.js";
+import {
+  ATHLETE_HOME_EVENTS_DAYS, ATHLETE_HOME_EVENTS_LIMIT, athleteHomeEventsNow, athleteHomeVisibleEventRows, registerAthleteHomeEventsSectionPainter,
+} from "./athlete-home-events-data.js";
 import { renderCentralCalendarEventPlaceHtml } from "./central-calendar-event-details.js";
 import { CENTRAL_CALENDAR_EVENT_KIND_LABELS, centralCalendarItemColorIndex, centralCalendarItemIconKey } from "./central-calendar-view.js";
 import { renderIconSvg } from "./icon-render.js";
-import { addDaysIso, escapeAttr, escapeHtml } from "./utils.js";
+import { state } from "./state.js";
+import { addDaysIso, escapeAttr, escapeHtml, localDateIso } from "./utils.js";
 
 const LIST_ID = "athleteHomeEventsList";
 const TITLE_ID = "athleteHomeEventsTitle";
@@ -81,7 +84,10 @@ function bodyHtml(slice) {
     ? `<button type="button" class="plain-button compact-button athlete-home-events-button" data-action="athlete-home-events-toggle" aria-expanded="${slice.expanded ? "true" : "false"}" aria-controls="${LIST_ID}">${slice.expanded ? "Show fewer" : `Show ${more} more`}</button>`
     : "";
   // role="list": Safari drops a list's semantics under list-style: none.
-  return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, slice.today)).join("")}</ul>${toggle}`;
+  // K2b-1d3: "Today" / "Tomorrow" from the device's date at this paint, not the date the list was read (a paint after
+  // midnight never calls today "Tomorrow").
+  const today = localDateIso(new Date(athleteHomeEventsNow()));
+  return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, today)).join("")}</ul>${toggle}`;
 }
 
 export function renderAthleteHomeEventsHtml(slice) {
@@ -97,3 +103,21 @@ export function renderAthleteHomeEventsHtml(slice) {
     </section>
   `;
 }
+
+// K2b-1d3: the minute's tick replaces only this section, in place (athlete-home-events-data.js). A control of the
+// section that had the focus (Show N more / Show fewer) has it again after the swap. Without the section on the page it
+// changes nothing and answers false.
+export function repaintAthleteHomeEventsSection(doc = globalThis.document) {
+  const section = doc?.querySelector?.("section.athlete-home-events");
+  if (!section) return false;
+  const active = doc.activeElement;
+  const focusAction = active && active !== section && section.contains(active) ? active.getAttribute("data-action") : null;
+  const template = doc.createElement("template");
+  template.innerHTML = renderAthleteHomeEventsHtml(state.athleteHomeEvents).trim();
+  const next = template.content.firstElementChild;
+  if (next) section.replaceWith(next);
+  else section.remove();
+  if (next && focusAction) next.querySelector(`[data-action="${focusAction}"]`)?.focus?.();
+  return true;
+}
+registerAthleteHomeEventsSectionPainter(() => repaintAthleteHomeEventsSection());

@@ -2382,3 +2382,57 @@ is touched.
   that ended in Belgrade and one that ended in Tokyo, the cancelled row stays muted; no horizontal scroll, no target
   under 44 px; no JS error (one pre-existing 403 of `POST /api/tests/athlete/timezone` for a coach). No catalog read
   before the form; one when it opens. The tick (clock moved four hours on) dropped the ended match with no request.
+
+**The review round on `6eaa3288` (2026-11-18; code, security, mobile and the independent review; no BLOCKER or HIGH).**
+
+- **MEDIUM-A, the tick repaints only *Upcoming events*.** The tick no longer calls Home's `render` (which rebuilds the
+  whole of Home, an open RPE form included). The view registers a section painter
+  (`repaintAthleteHomeEventsSection`, `registerAthleteHomeEventsSectionPainter`): it renders the section's HTML and
+  swaps it in place, and the control of the section that had the focus (*Show N more* / *Show fewer*) has it again.
+  Without the section on the page the tick changes nothing and keeps its last list, so a later tick tries again; the
+  timer never falls back to a whole-Home paint. Test E19 (an RPE note focused with its text: the same node keeps the
+  focus and its text while the ended row leaves; *Show N more* keeps the focus; no section → nothing, then the next
+  tick swaps it in); E18 now counts section swaps.
+- **MEDIUM-B, a cancelled event's icon is muted.** One rule after the tint (`styles.css`): `.is-cancelled
+  .cc-card-icon.has-type-color`, `.is-cancelled .cc-mini-icon.has-type-color` and `.cc-panel-kind.is-cancelled
+  .cc-panel-icon.has-type-color` take `var(--muted)`; the panel's kind line carries `is-cancelled` for a cancelled
+  event (`central-calendar-view.js`). Test E22 (static: each muting rule exists, comes after the tint and
+  out-specifies it, for the calendar and for Athlete Home's cancelled row, which closes LOW-6 of the first round) and
+  D18d (the classes around the tinted icon on the card, the mini card and the panel).
+- **LOW-1:** a wall time is resolved from two candidates (the offset at the wall time read as UTC, and the offset at
+  that instant); the right ones are those whose zone offset is the one they were made with; a time that comes twice
+  and a time in a spring-forward gap both take the later instant, as PostgreSQL reads them. E16c: New York 02:30 on
+  8 Mar 2026 → 07:30Z; Belgrade 01:30 on 29 Mar → 00:30Z; Sydney 01:30 on 4 Oct → 15:30Z the day before, 02:30 → 16:30Z;
+  Belgrade 02:30 on 25 Oct (twice) → 01:30Z.
+- **LOW-2:** E20 — after a reset a timer tick past an end swaps nothing; two loads in a row (a cache hit, then a
+  refresh) give one swap for one change, and after a reset no interval of the first load is left.
+- **LOW-3:** E2 pins the row's keys to a literal list, and the module's constant to the same list.
+- **LOW-4:** `central-calendar-k2b-1d2` 3a gains a club-workspace control (the club's own team and club named;
+  another club's workspace names neither) and takes its contexts from the route's `calendarContextOf`; D18 checks the
+  month view's mini card tint.
+- **LOW-5:** "Today" / "Tomorrow" come from the device's date at the paint, not the date the list was read (E21).
+  **Known limit:** the window starts at the device's date, so an event of day D in a zone behind the device's is not
+  read on the device's day D+1 even when its end has not passed there.
+- **LOW-6 (the seam):** `central-calendar-k2b-1d2` 3b — no file under `backend/src` but its definition's names
+  `reducedEventViewForTests`.
+- **LOW-7, recorded, no code:** `timezone` on the card is the event's zone, set at creation from the creating coach's
+  device; an edit never sends it (`central-calendar-event-form.js`, the edit branch). Accepted under D21 as the
+  event's clock.
+- **Mutations, each killed:** the tick repainting the whole of Home; the tick moving on without a section; the focus
+  not restored; the muting rule keeping the tint; the panel line not marked cancelled; Home's cancelled icon rule gone;
+  the earlier instant taken; the first pass only; the second pass only shifting earlier; a reset not stopping the
+  tick; a start not stopping the previous interval; the day words from the read date; the row-key constant gaining a
+  key; backend: the platform branch removed (3a), a second file naming the seam (3b). The first round's tick, `>=`,
+  zone and fallback mutations were run again on the new code: killed.
+- **Runs:** the seven calendar suites 136/136; the four frontend files 144/144; `--preset frontend-fast` on the head
+  257 files, 3563/3584, and on a clean `origin/main` `2d4e6d7e` 256 files, 3544/3565 — the same three failing files
+  with the same counts (`exercise-editor-thumbnail` 11/4, `exercise-media-thumbnail` 2/8, `training-load.actions`
+  115/2); `--preset backend-fast` 591/676 on both, failing only `gpexe-client` (17/2) and
+  `gpexe-rest-v1-adapter-reads` (14/83). Build green; `git diff --check` clean.
+- **Browser** (`npm run e2e:demo`, invented data, Chromium, 390 and 1280 px): with a textarea placed in Home as a stand-in
+  for the RPE form (the demo has no rated session), typed into and its caret at 4, the clock moved past the match's
+  end: the match left the list, the same textarea kept the focus, its text and its caret, and no calendar request was
+  sent; with *Show 2 more* focused, the next ended event left and the button (now *Show 1 more*) kept the focus. The
+  cancelled card's icon and the cancelled panel's icon are the muted colour of the title (a planned card's stays
+  tinted); at 1280 the month view's cancelled mini card is muted too (the phone's month view draws no mini cards). No
+  horizontal scroll, no JS error.

@@ -21,6 +21,7 @@ const { renderIconSvg } = await import("../icon-render.js");
 const {
   ATHLETE_HOME_EVENT_ROW_KEYS, ATHLETE_HOME_EVENTS_LIMIT, athleteHomeEventRows, loadAthleteHomeEvents, resetAthleteHomeEvents,
   setAthleteHomeEventsClock, athleteHomeEventEnded, athleteHomeEventsTick, stopAthleteHomeEventsTick, ATHLETE_HOME_EVENTS_TICK_MS,
+  athleteHomeWallTimeInstant,
 } = data;
 
 // A Wednesday: Thursday 19 Nov is Tomorrow.
@@ -114,7 +115,10 @@ test("E2. the explicit pick: notes, details, athletes, a type id, canManage, a v
   await load();
   const rows = state.athleteHomeEvents.rows;
   assert.equal(rows.length, 1);
-  assert.deepEqual(Object.keys(rows[0]), ATHLETE_HOME_EVENT_ROW_KEYS);
+  // A literal list (K2b-1d3, LOW-3): the module's constant cannot vouch for itself.
+  const literalKeys = ["eventId", "title", "eventKind", "eventTypeLabel", "eventTypeIconKey", "eventTypeColorKey", "day", "from", "to", "startTime", "endTime", "timezone", "place", "cancelled"];
+  assert.deepEqual(Object.keys(rows[0]), literalKeys);
+  assert.deepEqual([...ATHLETE_HOME_EVENT_ROW_KEYS], literalKeys);
   assert.deepEqual(Object.keys(rows[0].place), ["source", "name", "address", "note"]);
   const html = dom.window.document.body.innerHTML;
   for (const word of ["Internal coach note", "Teammate Tina", "a-2", "type-uuid-1", "secret-value-42", "loc-uuid-9", "hidden-place-thing", "e1", "team-1", "rpe"]) {
@@ -614,7 +618,7 @@ test("E17. drawn: an ended event is not in the list, a cancelled one too; Show N
   assert.match($(".athlete-home-events-state").textContent, /No events in the next 14 days\./);
 });
 
-test("E18. the minute's tick: an event that ends while Home is open leaves the list with no request; nothing is drawn while nothing changed; off Home the tick stops", async (t) => {
+test("E18. the minute's tick: an event that ends while Home is open leaves the list with no request; nothing is swapped while nothing changed; off Home the tick stops", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   try {
     state.activeTab = "athlete-home";
@@ -626,25 +630,175 @@ test("E18. the minute's tick: an event that ends while Home is open leaves the l
     ]) }));
     await load();
     const paints = renders;
+    const section = () => $("section.athlete-home-events");
+    const first = section();
     assert.equal(rowTexts().length, 2);
     now += 60_000;
     t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
-    assert.equal(renders, paints, "nothing ended: no paint");
+    assert.equal(section(), first, "nothing ended: the section is not swapped");
     now = new Date(2026, 10, 18, 18, 30).getTime();
     t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
-    assert.equal(renders, paints + 1, "one paint when an event ends");
+    assert.notEqual(section(), first, "the section is swapped when an event ends");
+    assert.equal(renders, paints, "the tick never paints the whole of Home");
     assert.deepEqual(rowTexts().map((x) => x.split(" ")[0]), ["Late"]);
     assert.equal(calls.length, 1, "no new request");
+    const second = section();
     state.activeTab = "athlete-calendar";
     now = new Date(2026, 10, 18, 21, 0).getTime();
     t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
-    assert.equal(renders, paints + 1, "off Home: nothing drawn");
+    assert.equal(section(), second, "off Home: nothing swapped");
     state.activeTab = "athlete-home";
     t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
-    assert.equal(renders, paints + 1, "the tick stopped when Home was left");
-    assert.equal(athleteHomeEventsTick({ render }), true, "a direct tick still sees the change");
+    assert.equal(section(), second, "the tick stopped when Home was left");
+    assert.equal(athleteHomeEventsTick(), true, "a direct tick still sees the change");
   } finally {
     stopAthleteHomeEventsTick();
     state.activeTab = undefined;
+  }
+});
+
+// --- K2b-1d3, the review round ------------------------------------------------------------------------------------------
+
+test("E19 (MEDIUM-A). the tick replaces only Upcoming events: an open RPE note keeps its focus while an event ends; Show N more keeps it too", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  // The whole of Home as app.js paints it: an RPE form (as athlete-home.js's overlays) beside the section.
+  const wholeHome = () => {
+    renders += 1;
+    dom.window.document.body.innerHTML = `<div class="rpe-overlay"><textarea id="rpeNote"></textarea></div>${renderAthleteHomeEventsHtml(state.athleteHomeEvents)}`;
+  };
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 18, 0).getTime();
+    setAthleteHomeEventsClock(() => now);
+    calendarServer(() => ({ status: 200, body: answer([
+      card({ id: "a", date: TODAY, title: "Evening session", eventKind: "training", eventTypeLabel: "Training", startTime: "17:00:00", endTime: "18:30:00" }),
+      ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => card({ id: `later${n}`, date: addDays(TODAY, n), title: `Later ${n}`, eventKind: "training", eventTypeLabel: "Training", startTime: "10:00:00", endTime: "11:00:00" })),
+    ]) }));
+    await loadAthleteHomeEvents({ render: wholeHome, today: TODAY });
+    const note = $("#rpeNote");
+    note.focus();
+    note.value = "Felt heavy";
+    assert.equal(dom.window.document.activeElement, note);
+    const paints = renders;
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(renders, paints, "Home is not painted again");
+    assert.equal(dom.window.document.activeElement, note, "the same textarea keeps the focus");
+    assert.equal($("#rpeNote"), note, "the same node");
+    assert.equal(note.value, "Felt heavy");
+    assert.equal(rowTexts().some((x) => x.startsWith("Evening")), false, "the ended row is gone");
+    // Show N more had the focus: the same control has it after the swap.
+    const toggle = () => $('[data-action="athlete-home-events-toggle"]');
+    toggle().focus();
+    now = new Date(2026, 10, 19, 11, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(rowTexts().some((x) => x.startsWith("Later 1")), false, "Later 1 ended");
+    assert.equal(dom.window.document.activeElement, toggle(), "Show N more keeps the focus");
+    // Without the section on the page: nothing changes, and a later tick tries again.
+    dom.window.document.body.innerHTML = `<textarea id="other"></textarea>`;
+    now = new Date(2026, 10, 20, 11, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(renders, paints, "never a whole-Home paint from the timer");
+    assert.equal($("section.athlete-home-events"), null);
+    dom.window.document.body.innerHTML = renderAthleteHomeEventsHtml({ ...state.athleteHomeEvents, rows: [] });
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.deepEqual(rowTexts().map((x) => x.split(" ").slice(0, 2).join(" ")), ["Later 3", "Later 4", "Later 5", "Later 6", "Later 7"], "the next tick swapped the section in");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
+});
+
+test("E16c (LOW-1). an end time in a spring-forward gap is read forward, as PostgreSQL: the later instant; east of UTC too", () => {
+  // New York, 8 Mar 2026: 02:30 does not exist; read with the offset before the change (EST): 07:30Z.
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-03-08", "02:30", "America/New_York")).toISOString(), "2026-03-08T07:30:00.000Z");
+  const gap = row({ from: "2026-03-08", to: "2026-03-08", startTime: "01:00", endTime: "02:30", timezone: "America/New_York" });
+  assert.equal(athleteHomeEventEnded(gap, at("2026-03-08T07:29:00Z")), false);
+  assert.equal(athleteHomeEventEnded(gap, at("2026-03-08T07:30:00Z")), true);
+  // Belgrade, 29 Mar 2026 (02:00 CET -> 03:00 CEST): 01:30 CET is 00:30Z.
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-03-29", "01:30", "Europe/Belgrade")).toISOString(), "2026-03-29T00:30:00.000Z");
+  // Sydney, 4 Oct 2026 (02:00 AEST -> 03:00 AEDT): 01:30 AEST is 15:30Z the day before; 02:30 does not exist (16:30Z).
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-04", "01:30", "Australia/Sydney")).toISOString(), "2026-10-03T15:30:00.000Z");
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-04", "02:30", "Australia/Sydney")).toISOString(), "2026-10-03T16:30:00.000Z");
+  // A time that comes twice (Belgrade, 25 Oct 2026, 03:00 CEST -> 02:00 CET): 02:30 is read as the later, CET (01:30Z).
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-25", "02:30", "Europe/Belgrade")).toISOString(), "2026-10-25T01:30:00.000Z");
+});
+
+test("E20 (LOW-2). the tick's lifecycle: a reset stops it; two loads in a row (a cache hit, then a refresh) keep one interval: one swap per change", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 18, 0).getTime();
+    setAthleteHomeEventsClock(() => now);
+    const body = answer([
+      card({ id: "a", date: TODAY, title: "Evening session", eventKind: "training", eventTypeLabel: "Training", startTime: "17:00:00", endTime: "18:30:00" }),
+      card({ id: "b", date: TODAY, title: "Late meeting", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "20:00:00", endTime: "21:00:00" }),
+    ]);
+    calendarServer(() => ({ status: 200, body }));
+    // A reset stops the tick: a timer tick past an end swaps nothing.
+    await load();
+    const before = $("section.athlete-home-events");
+    resetAthleteHomeEvents();
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal($("section.athlete-home-events"), before, "after a reset nothing is swapped");
+
+    // Two loads: applyData runs twice (the cache, then the refresh); the first interval is stopped.
+    now = new Date(2026, 10, 18, 18, 0).getTime();
+    await load();
+    await load({ forceRefresh: true });
+    const swaps = [];
+    const observer = new dom.window.MutationObserver((records) => swaps.push(...records.filter((r) => r.addedNodes.length)));
+    observer.observe(dom.window.document.body, { childList: true });
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    await new Promise((resolve) => setImmediate(resolve));
+    observer.disconnect();
+    assert.equal(swaps.length, 1, "one swap for one change");
+    // The first load's interval was stopped by the second: after a reset no interval is left to swap anything.
+    resetAthleteHomeEvents();
+    const afterReset = $("section.athlete-home-events");
+    now = new Date(2026, 10, 18, 21, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal($("section.athlete-home-events"), afterReset, "no interval left behind by the first load");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
+});
+
+test("E21 (LOW-5). Today and Tomorrow come from the device's date at the paint, not the date the list was read", async () => {
+  calendarServer(() => ({ status: 200, body: answer([
+    card({ id: "tmr", date: addDays(TODAY, 1), title: "Morning run", eventKind: "training", eventTypeLabel: "Training", startTime: "09:00:00", endTime: "10:00:00" }),
+  ]) }));
+  await load();
+  assert.match(rowTexts()[0], /Tomorrow · 09:00/);
+  // Past midnight, the list read yesterday is drawn again (the tick): the event is today's now.
+  setAthleteHomeEventsClock(() => new Date(2026, 10, 19, 0, 5).getTime());
+  render();
+  assert.match(rowTexts()[0], /Today · 09:00/);
+});
+
+test("E22 (MEDIUM-B / LOW-6). a cancelled row's icon is muted over the type's tint on Home and on the calendar's card, mini card and panel", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const ruleOf = (selector) => {
+    const at = css.indexOf(`${selector}`);
+    assert.ok(at >= 0, `a rule names ${selector}`);
+    return { at, block: css.slice(css.indexOf("{", at), css.indexOf("}", at) + 1) };
+  };
+  const specificity = (selector) => (selector.match(/\.[a-z0-9-]+/gi) || []).length;
+  // Home.
+  const homeTint = ruleOf(".athlete-home-event-icon.has-type-color {");
+  const homeMuted = ruleOf(".athlete-home-event.is-cancelled .athlete-home-event-icon {");
+  assert.match(homeMuted.block, /color: var\(--muted\)/);
+  assert.ok(specificity(".athlete-home-event.is-cancelled .athlete-home-event-icon") > specificity(".athlete-home-event-icon.has-type-color"));
+  assert.ok(homeTint.at > 0);
+  // The calendar.
+  const tint = ruleOf(".cc-card-icon.has-type-color,");
+  for (const selector of [".is-cancelled .cc-card-icon.has-type-color", ".is-cancelled .cc-mini-icon.has-type-color", ".cc-panel-kind.is-cancelled .cc-panel-icon.has-type-color"]) {
+    const muted = ruleOf(selector);
+    assert.ok(muted.at > tint.at, `${selector} comes after the tint`);
+    assert.match(muted.block, /color: var\(--muted\)/);
+    assert.ok(specificity(selector) > specificity(".cc-card-icon.has-type-color"), `${selector} out-specifies the tint`);
   }
 });

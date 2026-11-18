@@ -676,15 +676,46 @@ test("D18. every card wears its type's icon and colour from the card itself (K2b
   assert.equal(view.centralCalendarItemIconKey(eventItem(E_MATCH, DAY(1))), "football", "a manager's card: the type's icon");
   assert.equal(view.centralCalendarItemIconKey(reader), "flag", "a reader's card: the type's icon");
   assert.equal(view.centralCalendarItemIconKey(athleteCard), "trophy", "the athlete's card: the type's icon");
+  // The month view's mini card wears it too (K2b-1d3, LOW-4).
+  await act({ action: "central-calendar-view", view: "month" });
+  await tick();
+  assert.equal(state.centralCalendar.view, "month");
+  const mini = dom().querySelector(`.cc-mini[data-key="event:${E_MATCH}:${DAY(1)}"] svg.cc-mini-icon`);
+  assert.ok(mini, "the month view draws the manager's card as a mini card");
+  assert.ok(mini.classList.contains("has-type-color"));
+  assert.equal(mini.closest(".cc-type-tint").getAttribute("style"), "--cc-type-color: var(--cc-team-2)");
+  await act({ action: "central-calendar-view", view: "week" });
+  await tick();
   // The panel wears the same look.
   await act({ action: "central-calendar-open-item", key: reader.key, date: DAY(2) });
   const panelIcon = dom().querySelector(".cc-panel .cc-type-tint");
   assert.ok(panelIcon, "the panel's icon is tinted too");
   assert.equal(panelIcon.getAttribute("style"), "--cc-type-color: var(--cc-team-0)");
+  assert.equal(panelIcon.closest(".cc-panel-kind").classList.contains("is-cancelled"), false, "a planned event's panel line is not marked cancelled");
   // The new event form reads the catalog, once.
   await act({ action: "central-calendar-new-event" });
   await tick();
   assert.equal(typesReads(calls).length, 1, "the form reads the catalog when it opens");
+});
+
+test("D18d (MEDIUM-B). a cancelled event: its card, mini card and panel carry is-cancelled around the tinted icon (the stylesheet mutes it)", async () => {
+  const cancelled = eventItem(E_MATCH, DAY(1), { status: "cancelled", cancelled: true });
+  installFetchMock(server({ items: [cancelled] }));
+  await loadCentralCalendar({ render });
+  await tick();
+  const card = dom().querySelector(`.cc-card[data-key="${cancelled.key}"]`);
+  assert.ok(card.classList.contains("is-cancelled"));
+  assert.ok(card.querySelector("svg.cc-card-icon.has-type-color"), "the icon under is-cancelled");
+  await act({ action: "central-calendar-open-item", key: cancelled.key, date: DAY(1) });
+  const kind = dom().querySelector(".cc-panel .cc-panel-kind");
+  assert.ok(kind.classList.contains("is-cancelled"), "the panel's kind line says cancelled");
+  assert.ok(kind.querySelector("svg.cc-panel-icon.has-type-color"));
+  await act({ action: "central-calendar-close-panel" });
+  await act({ action: "central-calendar-view", view: "month" });
+  await tick();
+  const mini = dom().querySelector(`.cc-mini[data-key="${cancelled.key}"]`);
+  assert.ok(mini.classList.contains("is-cancelled"));
+  assert.ok(mini.querySelector("svg.cc-mini-icon.has-type-color"));
 });
 
 test("D18b. a moved team's event (D41, null keys) shows its kind's icon untinted; a key outside the library or the palette is ignored", () => {
