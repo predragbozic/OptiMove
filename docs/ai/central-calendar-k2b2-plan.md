@@ -264,3 +264,23 @@ tamo neko zakazivanje vec postoji".
   1. K2b-2a-1, the backend of both the per-event questions and this option, in one calendar migration;
   2. the coach's screens, the Tests form's option first;
   3. the athlete's prompt.
+
+## 9. K2b-2a-1 — the owner's order and the manager's GO (2026-11-18)
+
+- **The owner's order** (in the calendar manager's session, 2026-11-18): „Odobravam pisanje migracije
+  migrations_v2/202611191000_calendar_v81_athlete_questions.sql". The prefix `202611191000` is unique on `main`
+  `9351bcc0`, and the mapping line confirmed it plans no file with it.
+- **Two phases:**
+  1. The executor writes **9.1, the technical contract** of K2b-2a-1 in this section: the migration's objects, its
+     explicit dependencies, the lock order, the commands and reads with their codes, the Tests change, the
+     notifications, the preflight / post-check / rollback, and the test plan. The manager reviews it and gives a GO.
+  2. Only then the code: the migration, its runbook, the backend and the tests, as one draft pull request (★★).
+- **Rules agreed with the mapping line** for two lines that write migrations in parallel:
+  - **No position assumed:** the preflight, post-check and rollback name the migrations this one depends on, and never
+    assume it is the last by name. v75 and v78–v80 may or may not be recorded when it is applied.
+  - **A narrow rollback guard:** the rollback refuses on a later migration only if that migration touches `calendar.*`
+    or `tests.*`.
+  - **The Tests function:** the package names the md5 of the Tests function body this migration replaces, so the
+    OptiMove manager can read it read-only on production before the owner's merge order.
+  - **The ★★ path:** the OptiMove manager's gate and the independent review on the frozen head, then the owner's order
+    naming the file, then the preflight the same day, then the merge.
