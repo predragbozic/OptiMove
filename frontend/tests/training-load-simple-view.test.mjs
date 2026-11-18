@@ -323,3 +323,19 @@ test("an Advanced preview keeps the draft and Back available", () => {
   assert.doesNotMatch(control(html, "back"), /disabled/);
   assert.match(control(html, "save"), /disabled/);
 });
+
+test("existing widget keeps its supported display and explains how to get another type", () => {
+  const input = model({ step: 3, widgetId: "existing-widget" });
+  input.draft.view.type = "table";
+  const html = renderSimpleEditorHtml(input);
+  assert.doesNotMatch(html, /value="line_chart"|value="bar_chart"|value="kpi"/);
+  assert.match(html, /add a new widget/);
+});
+
+test("twenty-athlete limit names the choice and offers it directly", () => {
+  const html = renderSimpleEditorHtml(model({ step: 3, preview: { status: "requiresChoice", issues: [
+    { code: "requiresChoice", path: "$.athleteSelection", reason: "maxChartAthletes" },
+  ] } }));
+  assert.match(html, /Choose up to 20 athletes for this chart/);
+  assert.match(html, /data-action="training-load-simple-choose-athletes"/);
+});
