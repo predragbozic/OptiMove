@@ -236,6 +236,10 @@ link.
 - **The soft prompt: decided** (3.4). The strict variant is not built.
 - **Q7, who turns it on: decided.** A platform admin, per club, recorded with a reason, as for the import switch. It
   stays off everywhere until then.
+- **The legal basis: stated by the owner (2026-11-18).** Asked whether the legal basis for asking athletes, minors
+  included, blocks switching it on, the owner answered „Slobodno bez problema sa tim" and, asked what that referred to,
+  „Na to". This is the owner's own assessment, not a legal confirmation, as with O10 of the import line. The club's
+  switch stays off until a platform admin turns it on for a club with a reason, after the screens are built.
 
 ## 8. Daily WELLNESS that skips days off: an option of the Tests schedule (K2b-2c; the owner, 2026-11-18)
 
