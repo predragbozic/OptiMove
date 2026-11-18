@@ -12,6 +12,9 @@ import { state } from "./state.js";
 import { addDaysIso, escapeAttr, escapeHtml, localDateIso } from "./utils.js";
 
 const LIST_ID = "athleteHomeEventsList";
+// The event ids of the rows the last paint drew, in their order (never in the page): the tick's swap finds a focused
+// row's control again by its event, not by an id on screen.
+let paintedRowIds = [];
 const TITLE_ID = "athleteHomeEventsTitle";
 
 // "Today", "Tomorrow", else the weekday and the date ("Thu 19 Nov").
@@ -87,6 +90,7 @@ function bodyHtml(slice) {
   // K2b-1d3: "Today" / "Tomorrow" from the device's date at this paint, not the date the list was read (a paint after
   // midnight never calls today "Tomorrow").
   const today = localDateIso(new Date(athleteHomeEventsNow()));
+  paintedRowIds = shown.map((row) => row.eventId);
   return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, today)).join("")}</ul>${toggle}`;
 }
 
@@ -104,20 +108,40 @@ export function renderAthleteHomeEventsHtml(slice) {
   `;
 }
 
-// K2b-1d3: the minute's tick replaces only this section, in place (athlete-home-events-data.js). A control of the
-// section that had the focus (Show N more / Show fewer) has it again after the swap. Without the section on the page it
-// changes nothing and answers false.
+// K2b-1d3: the minute's tick replaces only this section, in place (athlete-home-events-data.js). The control of the
+// section that had the focus has it again after the swap: a button by its data-action (Show N more / Show fewer), a
+// control of a row (Open in maps) by its row's event and its place in that row, the title by its id; when its row has
+// gone, the section's title takes the focus. Without the section on the page it changes nothing and answers false.
+const FOCUSABLE = "a[href], button, [tabindex]";
 export function repaintAthleteHomeEventsSection(doc = globalThis.document) {
   const section = doc?.querySelector?.("section.athlete-home-events");
   if (!section) return false;
   const active = doc.activeElement;
-  const focusAction = active && active !== section && section.contains(active) ? active.getAttribute("data-action") : null;
+  const inside = Boolean(active && active !== section && section.contains(active));
+  const focusAction = inside ? active.getAttribute("data-action") : null;
+  let focusRow = null;
+  let focusId = null;
+  if (inside && !focusAction) {
+    const li = active.closest("li.athlete-home-event");
+    if (li) {
+      const index = [...section.querySelectorAll("li.athlete-home-event")].indexOf(li);
+      focusRow = { eventId: paintedRowIds[index] ?? null, position: [...li.querySelectorAll(FOCUSABLE)].indexOf(active) };
+    } else if (active.id) focusId = active.id;
+  }
   const template = doc.createElement("template");
   template.innerHTML = renderAthleteHomeEventsHtml(state.athleteHomeEvents).trim();
   const next = template.content.firstElementChild;
   if (next) section.replaceWith(next);
   else section.remove();
-  if (next && focusAction) next.querySelector(`[data-action="${focusAction}"]`)?.focus?.();
+  if (!next || !inside) return true;
+  const title = () => next.querySelector(`#${TITLE_ID}`);
+  if (focusAction) (next.querySelector(`[data-action="${focusAction}"]`) || title())?.focus?.();
+  else if (focusRow) {
+    const index = focusRow.eventId ? paintedRowIds.indexOf(focusRow.eventId) : -1;
+    const li = index >= 0 ? next.querySelectorAll("li.athlete-home-event")[index] : null;
+    const control = li ? li.querySelectorAll(FOCUSABLE)[focusRow.position] : null;
+    (control || title())?.focus?.();
+  } else if (focusId) (next.querySelector(`#${focusId}`) || title())?.focus?.();
   return true;
 }
 registerAthleteHomeEventsSectionPainter(() => repaintAthleteHomeEventsSection());

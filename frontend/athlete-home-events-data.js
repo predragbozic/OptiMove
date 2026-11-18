@@ -133,12 +133,19 @@ export function athleteHomeWallTimeInstant(day, time, timeZone) {
   const zone = athleteHomeEventZone(timeZone);
   if (!zone) return new Date(y, mo - 1, da, h, mi).getTime();
   const wall = Date.UTC(y, mo - 1, da, h, mi);
-  // Two candidates: the offset at the wall time read as UTC, and the offset at the instant that gives. A candidate is
-  // right when the zone's offset at it is the one it was made with. A time that falls back twice (both right) and one
-  // that does not exist in a spring-forward gap (neither right) both take the LATER instant, as PostgreSQL reads them.
+  // Candidates from the zone's offsets near the wall time: at the wall time read as UTC, at the instant that gives, and
+  // a day before and a day after (so both sides of a change are tried, whichever side the wall time read as UTC falls
+  // on). A candidate is right when the zone's offset at it is the one it was made with. A time that comes twice (two
+  // right) and one in a spring-forward gap (none right) both take the LATER instant, as PostgreSQL reads them - west
+  // and east of UTC alike.
+  const DAY_MS = 86_400_000;
   const first = wall - zoneOffsetMs(zone, wall);
-  const second = wall - zoneOffsetMs(zone, first);
-  const candidates = [...new Set([first, second])];
+  const candidates = [...new Set([
+    first,
+    wall - zoneOffsetMs(zone, first),
+    wall - zoneOffsetMs(zone, wall - DAY_MS),
+    wall - zoneOffsetMs(zone, wall + DAY_MS),
+  ])];
   const right = candidates.filter((instant) => wall - zoneOffsetMs(zone, instant) === instant);
   return Math.max(...(right.length ? right : candidates));
 }
@@ -174,7 +181,10 @@ let sectionPainter = null;
 export function registerAthleteHomeEventsSectionPainter(paint) {
   sectionPainter = typeof paint === "function" ? paint : null;
 }
-const signatureOf = () => (g()?.status === "ready" ? athleteHomeVisibleEventRows(g().rows, clock()).map((row) => row.eventId).join(",") : "");
+// The rows still to come and the device's date (the day words change at midnight even when no event ends).
+const signatureOf = () => (g()?.status === "ready"
+  ? `${localDateIso(new Date(clock()))}|${athleteHomeVisibleEventRows(g().rows, clock()).map((row) => row.eventId).join(",")}`
+  : "");
 export function stopAthleteHomeEventsTick() {
   if (tickTimer !== null) globalThis.clearInterval(tickTimer);
   tickTimer = null;

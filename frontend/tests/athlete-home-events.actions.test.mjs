@@ -722,6 +722,11 @@ test("E16c (LOW-1). an end time in a spring-forward gap is read forward, as Post
   assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-04", "02:30", "Australia/Sydney")).toISOString(), "2026-10-03T16:30:00.000Z");
   // A time that comes twice (Belgrade, 25 Oct 2026, 03:00 CEST -> 02:00 CET): 02:30 is read as the later, CET (01:30Z).
   assert.equal(new Date(athleteHomeWallTimeInstant("2026-10-25", "02:30", "Europe/Belgrade")).toISOString(), "2026-10-25T01:30:00.000Z");
+  // West of UTC (LOW-A): New York, 1 Nov 2026, 02:00 EDT -> 01:00 EST: 01:30 comes twice and is read as EST (06:30Z).
+  assert.equal(new Date(athleteHomeWallTimeInstant("2026-11-01", "01:30", "America/New_York")).toISOString(), "2026-11-01T06:30:00.000Z");
+  const twice = row({ from: "2026-11-01", to: "2026-11-01", startTime: "00:30", endTime: "01:30", timezone: "America/New_York" });
+  assert.equal(athleteHomeEventEnded(twice, at("2026-11-01T06:00:00Z")), false, "01:00 EST: not ended");
+  assert.equal(athleteHomeEventEnded(twice, at("2026-11-01T06:30:00Z")), true);
 });
 
 test("E20 (LOW-2). the tick's lifecycle: a reset stops it; two loads in a row (a cache hit, then a refresh) keep one interval: one swap per change", async (t) => {
@@ -800,5 +805,57 @@ test("E22 (MEDIUM-B / LOW-6). a cancelled row's icon is muted over the type's ti
     assert.ok(muted.at > tint.at, `${selector} comes after the tint`);
     assert.match(muted.block, /color: var\(--muted\)/);
     assert.ok(specificity(selector) > specificity(".cc-card-icon.has-type-color"), `${selector} out-specifies the tint`);
+  }
+});
+
+test("E21b (LOW-B). at midnight the tick swaps the section when only the date changed: Tomorrow becomes Today", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 23, 59).getTime();
+    setAthleteHomeEventsClock(() => now);
+    calendarServer(() => ({ status: 200, body: answer([
+      card({ id: "tmr", date: addDays(TODAY, 1), title: "Morning run", eventKind: "training", eventTypeLabel: "Training", startTime: "09:00:00", endTime: "10:00:00" }),
+    ]) }));
+    await load();
+    assert.match(rowTexts()[0], /Tomorrow · 09:00/);
+    now = new Date(2026, 10, 19, 0, 1).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.match(rowTexts()[0], /Today · 09:00/, "the tick drew the new day's words");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
+  }
+});
+
+test("E19b (LOW-C). a focused Open in maps of a row that stays keeps the focus when another row ends; when its own row ends, the section's title takes it", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    state.activeTab = "athlete-home";
+    let now = new Date(2026, 10, 18, 18, 0).getTime();
+    setAthleteHomeEventsClock(() => now);
+    const place = (name) => ({ source: "library", locationId: `loc-${name}`, name, address: `${name} street 1`, note: null });
+    calendarServer(() => ({ status: 200, body: answer([
+      card({ id: "a", date: TODAY, title: "Evening session", eventKind: "training", eventTypeLabel: "Training", startTime: "17:00:00", endTime: "18:30:00", place: place("Hall") }),
+      card({ id: "b", date: TODAY, title: "Long meeting", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "20:00:00", endTime: "22:00:00", place: place("Board room") }),
+      card({ id: "c", date: TODAY, title: "Late meeting", eventKind: "meeting", eventTypeLabel: "Meeting", startTime: "20:30:00", endTime: "21:00:00", place: place("Club house") }),
+    ]) }));
+    await load();
+    const linkOf = (title) => $$(".athlete-home-event").find((li) => li.textContent.includes(title))?.querySelector("a.cc-maps");
+    linkOf("Late meeting").focus();
+    assert.equal(dom.window.document.activeElement, linkOf("Late meeting"));
+    now = new Date(2026, 10, 18, 18, 30).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(rowTexts().some((x) => x.startsWith("Evening")), false, "the other row ended");
+    const active = dom.window.document.activeElement;
+    assert.equal(active, linkOf("Late meeting"), "the same row's Open in maps has the focus (its row moved from the third place to the second)");
+    assert.ok(active.closest("section.athlete-home-events"));
+    // Its own row ends: the section's title takes the focus, never the page.
+    now = new Date(2026, 10, 18, 21, 0).getTime();
+    t.mock.timers.tick(ATHLETE_HOME_EVENTS_TICK_MS);
+    assert.equal(dom.window.document.activeElement?.id, "athleteHomeEventsTitle");
+  } finally {
+    stopAthleteHomeEventsTick();
+    state.activeTab = undefined;
   }
 });

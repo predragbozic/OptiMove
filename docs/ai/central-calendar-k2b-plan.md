@@ -2388,7 +2388,9 @@ is touched.
 - **MEDIUM-A, the tick repaints only *Upcoming events*.** The tick no longer calls Home's `render` (which rebuilds the
   whole of Home, an open RPE form included). The view registers a section painter
   (`repaintAthleteHomeEventsSection`, `registerAthleteHomeEventsSectionPainter`): it renders the section's HTML and
-  swaps it in place, and the control of the section that had the focus (*Show N more* / *Show fewer*) has it again.
+  swaps it in place, and the control of the section that had the focus has it again (after the last round, below: a
+  button by its `data-action`, a row's control such as *Open in maps* by its row's event, the title by its id; the
+  title when the focused row has ended).
   Without the section on the page the tick changes nothing and keeps its last list, so a later tick tries again; the
   timer never falls back to a whole-Home paint. Test E19 (an RPE note focused with its text: the same node keeps the
   focus and its text while the ended row leaves; *Show N more* keeps the focus; no section → nothing, then the next
@@ -2399,8 +2401,8 @@ is touched.
   event (`central-calendar-view.js`). Test E22 (static: each muting rule exists, comes after the tint and
   out-specifies it, for the calendar and for Athlete Home's cancelled row, which closes LOW-6 of the first round) and
   D18d (the classes around the tinted icon on the card, the mini card and the panel).
-- **LOW-1:** a wall time is resolved from two candidates (the offset at the wall time read as UTC, and the offset at
-  that instant); the right ones are those whose zone offset is the one they were made with; a time that comes twice
+- **LOW-1:** a wall time is resolved from candidates made with the zone's offsets near it (as amended by the last
+  round, below); the right ones are those whose zone offset is the one they were made with; a time that comes twice
   and a time in a spring-forward gap both take the later instant, as PostgreSQL reads them. E16c: New York 02:30 on
   8 Mar 2026 → 07:30Z; Belgrade 01:30 on 29 Mar → 00:30Z; Sydney 01:30 on 4 Oct → 15:30Z the day before, 02:30 → 16:30Z;
   Belgrade 02:30 on 25 Oct (twice) → 01:30Z.
@@ -2410,7 +2412,8 @@ is touched.
 - **LOW-4:** `central-calendar-k2b-1d2` 3a gains a club-workspace control (the club's own team and club named;
   another club's workspace names neither) and takes its contexts from the route's `calendarContextOf`; D18 checks the
   month view's mini card tint.
-- **LOW-5:** "Today" / "Tomorrow" come from the device's date at the paint, not the date the list was read (E21).
+- **LOW-5:** "Today" / "Tomorrow" come from the device's date at the paint, not the date the list was read (E21); since
+  the last round the tick also swaps the section when only the date changed (below).
   **Known limit:** the window starts at the device's date, so an event of day D in a zone behind the device's is not
   read on the device's day D+1 even when its end has not passed there.
 - **LOW-6 (the seam):** `central-calendar-k2b-1d2` 3b — no file under `backend/src` but its definition's names
@@ -2436,3 +2439,28 @@ is touched.
   cancelled card's icon and the cancelled panel's icon are the muted colour of the title (a planned card's stays
   tinted); at 1280 the month view's cancelled mini card is muted too (the phone's month view draws no mini cards). No
   horizontal scroll, no JS error.
+
+**The last round on `0b70848b` (the narrow re-reviews: code-reviewer and mobile-qa READY WITH NON-BLOCKING NOTES; three
+LOWs).**
+
+- **LOW-A, a repeated hour west of UTC.** The candidates are now made with the zone's offset at the wall time read as
+  UTC, at the instant that gives, and a day before and a day after it, so both sides of a change are always tried; the
+  self-consistent ones are kept and the latest is taken (the latest of all when none is, a spring-forward gap). New
+  York 01:30 on 1 Nov 2026 (it comes twice) is 06:30Z, EST, as PostgreSQL reads it; before, it was 05:30Z. E16c adds it,
+  and an event of 00:30–01:30 that day is not ended at 06:00Z.
+- **LOW-B, the day words at midnight.** The tick's list signature holds the device's date with the rows' ids, so the
+  section is swapped at midnight even when no event ends: a row of the 19th reads "Tomorrow" at 23:59 on the 18th and
+  "Today" after the 00:01 tick (E21b, with mocked timers).
+- **LOW-C, the focus on a control without `data-action`.** The view keeps, in memory only, the event ids of the rows
+  its last paint drew; the swap finds a focused row control (*Open in maps*) again by its row's event and its place in
+  the row, the title by its id, and focuses the section's title when the focused row has gone (no id of an event is
+  put in the page). E19b: *Open in maps* of a row that moves from the third place to the second keeps the focus when
+  another row ends; when its own row ends, the title has it. A `data-action` control whose button has gone (*Show N
+  more* when the list becomes short) also gives the focus to the title.
+- **Mutations, each killed:** the day-before and day-after candidates dropped (LOW-A); the signature without the date
+  (LOW-B); the row control not focused again, always the title, the row found by its first place instead of its event,
+  the row's event not remembered (LOW-C); and again on the changed code: the earlier instant taken, the tick swapping
+  every minute, *Show N more*'s focus not restored.
+- **Runs:** see the report of this head (the four frontend files, `--preset frontend-fast` against `origin/main`
+  `9351bcc0`, the build, `git diff --check`). The swap's markup did not change, so the browser check of the round
+  before stands.
