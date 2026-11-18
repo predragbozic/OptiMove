@@ -325,8 +325,8 @@ test("4. the body: 1 or 11 inputs, a repeated input, a non-id, another kind or k
     assert.deepEqual(res.body.variable.currentVersion.condition, condition);
     assert.equal(res.body.variable.currentVersion.calculation.inputs.length, 2);
   }
-  refused(await calculated(W.pa, [W.z3, W.z4], { condition: { kind: "zone", operator: "between", lower: "25.2", upper: "19.8", unit: "km/h" } }), 400, "invalid_body");
-  refused(await calculated(W.pa, [W.z3, W.z4], { condition: { kind: "zone", operator: ">=", value: "19.8", unit: "km h" } }), 400, "invalid_unit");
+  refused(await calculated(W.pa, [W.z3, W.z4], { condition: { kind: "zone", operator: "between", lower: "25.2", upper: "19.8", unit: "km/h" } }), 400, "invalid_condition");
+  refused(await calculated(W.pa, [W.z3, W.z4], { condition: { kind: "zone", operator: ">=", value: "19.8", unit: "km h" } }), 400, "invalid_condition");
 });
 
 test("5. every input is checked under its lock: unknown, another club's (read exactly like unknown), archived, calculated, another unit, a missing level; a system variable never takes a club input; nothing written", async () => {
