@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract is written (section 2.1) and waits for the manager's GO; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract (2.3) is next; K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -750,6 +750,63 @@ scroll, no target under 44 px, no input under 16 px, no JS error. Q1's backend m
 7. **An edit draft with unsaved changes to the session's name or slot.** Recommend the sentence "Apply your changes
    first, then make the event." (no guess, no link to a session the coach is still changing).
 8. **K2c-1's open LOW F5 (the plan owner on `sessionLinks`)** is not needed here and stays a follow-up.
+
+### 2.2 The manager's GO (2026-11-18)
+
+GO on 2.1 at `adb22ce4`, with these decisions. Where they differ from 2.1, they win.
+
+1. **`sessions` on create: yes, as its own ★★ backend pull request, K2c-2-B, before the frontend.**
+   - K2a plan 2.1 (b′) planned it; `validateCreateBody` never built it.
+   - K2c-2-B is stacked on PR #614 (`claude/central-calendar-k2b2a-1`, K2b-2a-1, migration v81, not merged), which
+     changes `createEvent` for `questions`; the two must agree on RPE's one channel. The branch
+     `claude/central-calendar-k2c-2-backend` is made from #614's frozen head, and this docs branch is merged into it
+     (`git merge --no-edit`, no rebase).
+   - **Before any code**, its technical contract is written as section 2.3 and gets its own GO. It fixes:
+     - the canonical body: `sessions: { logicalSessionIds, alignSessions, confirmDisableWithResults? }`, in the
+       canonical body only when sent (today's hashes unchanged), validated by the attach route's own validators;
+     - the lock order under `.claude/rules/migrations.md`: every lock before the first write, proven by a
+       recorded-SQL-order test. So the attach's plan and session locks come **before** the event INSERT. The exact
+       order: users-first rights → the writer lock → the type `FOR SHARE` → the attach's locks → #614's questions'
+       locks (Training Load, Tests, the day key) → the first write, and how it merges with #614's create order;
+     - atomicity: a refusal of any attach step rolls back the whole create, nothing written;
+     - the codes: the attach's, unchanged;
+     - idempotency: the same key replays the saved answer; the same key with other `sessions` is
+       `request_key_reused`;
+     - the interplay with #614's questions: `sessions` that carry RPE and no `questions` sent → the type's RPE default
+       is skipped, named in `questionsSkipped`, and the create succeeds; `sessions` plus explicit `questions` with RPE
+       → `rpe_from_sessions`, the whole create rolled back;
+     - the tests: every basis and the identical 404; replay and a lost COMMIT; atomicity through a refusal on each
+       attach step; the hash of a body without `sessions` unchanged; the interplay; races of the attach's locks
+       against a concurrent attach or detach; the recorded SQL order; mutations on each guard;
+     - the reviewers: `code-reviewer` and `db-reviewer`, then the independent review and the OptiMove manager's gate.
+   - **Follow-up, not in K2c-2-B:** the create route does not refuse unknown keys.
+2. **Naming the session through the calendar day read (2.1.3): yes, no backend change.** More than one matching card
+   (the same plan, slot and name) → one sentence, nothing made, never a guess. The server's attach checks stay the
+   guard.
+3. **No persistent "In calendar" badge** (2.1.8): a follow-up.
+4. **Targets: the group's athletes one by one** for K2c-2. **Follow-up:** target the team when the plan's assignment
+   is a team.
+5. **RPE: no checkbox.** This replaces the RPE row of 2.1.4, the `alignSessions` and `has_existing_results` parts of
+   2.1.5, the `has_existing_results` row of 2.1.6, and test 6 of 2.1.12 (and the "`alignSessions: true` when the
+   checkbox is unchanged" mutation):
+   - the event's `expects` follows the training: `rpe` when the group asks for it (`P.rpe` not null), not otherwise;
+     the type's other defaults stay as they are;
+   - `alignSessions: false` always;
+   - a coach changes RPE in the Builder session, where it lives. One question per screen, and `has_existing_results`
+     never comes up from this button.
+6. **The type:** the first `training`-kind type in catalog order, a select only when there are several; none → one
+   sentence pointing to Settings → Calendar. As 2.1.4.
+7. **An edit draft with unapplied changes to the session's name or slot:** "Apply your changes first, then make the
+   event." As 2.1.3.
+8. **K2c-1's LOW F5** stays a follow-up.
+
+**The order of the stream's pull requests:** #614 → K2b-2a-2a (the Tests option) → **K2c-2-B** (backend) → K2b-2a-2b
+(the coach screens; it also touches `central-calendar-actions.js`) → **K2c-2-F** (the Builder frontend, on
+`claude/central-calendar-k2c-2`, merged with K2c-2-B's head). The frontend's two exports in
+`central-calendar-actions.js` stay small, so the merge with K2b-2a-2b is trivial.
+
+**Next:** section 2.3 on `claude/central-calendar-k2c-2-backend` once #614's frozen head is known; no code before its
+GO.
 
 ## 3. K3 — "New training" from an event (named only)
 
