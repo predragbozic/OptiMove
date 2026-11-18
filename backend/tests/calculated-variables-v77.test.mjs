@@ -53,7 +53,8 @@ async function applyV77(url) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V77), "v77 is a test migration");
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V77, "v77 is the last test migration");
+  // v78 (PR 2a) follows it: the behaviour database carries both, so tests 7 and 16-18 meet v78's guards too.
+  assert.deepEqual(GPEXE_TEST_MIGRATIONS.slice(GPEXE_TEST_MIGRATIONS.indexOf(V77)), [V77, "202611181100_training_load_v78_calculated_variables_additive.sql"], "only v78 follows v77");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v77rb", migrations: UP_TO_PREV }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc77" }),
@@ -777,4 +778,22 @@ test("18. the raw-write guards the review asked to pin by behaviour (LOW-1): (a)
     await a.end();
     await b.end();
   }
+});
+
+test("19. a calculated variable is restored only while every input is active (v78's twin in the API): the archived input is named; once it is restored, so is the calculated variable", async () => {
+  const p1 = await variable(W.pa, { label: `Restore in 1 ${uid()}` });
+  const p2 = await variable(W.pa, { label: `Restore in 2 ${uid()}` });
+  const c = (await calculated(W.pa, [p1, p2])).body.variable;
+  const archive = (id) => post(`/variables/${id}/archive`, W.pa, { requestKey: key(), reason: "Not used any more" });
+  const restore = (id) => post(`/variables/${id}/restore`, W.pa, { requestKey: key() });
+  assert.equal((await archive(c.id)).status, 200);
+  assert.equal((await archive(p2.id)).status, 200);
+  const before = await counts();
+  const res = await restore(c.id);
+  refused(res, 409, "calculation_input_not_active");
+  assert.equal(res.body.message, `${p2.label} is archived; restore it first, then this calculated variable.`);
+  assert.deepEqual(await counts(), before, "nothing written");
+  assert.equal((await restore(p2.id)).status, 200);
+  const back = await restore(c.id);
+  assert.equal(back.status, 200, back.text);
 });

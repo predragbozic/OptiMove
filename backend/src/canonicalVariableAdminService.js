@@ -75,6 +75,14 @@ const ONE_SIDED = new Set([">=", ">", "<=", "<"]);
 const PIN_GUARD = "metric_definitions: an active mapping version pins the current version; disable it first";
 // v77's version guard, exactly: a new version of an input of a calculated variable that changes its unit or type.
 const CALCULATION_INPUT_GUARD = "metric_definition_versions: a calculated variable uses this variable; its unit and type stay as they are";
+// v78's backstops (the API refuses each first, naming the variable; these answer a writer the API did not see in time).
+const CALCULATION_GUARD_CODES = new Map([
+  ["metric_definition_versions: a calculated variable adds up this variable; its day rule stays Sum", "calculation_input_day_rule_in_use"],
+  ["metric_definition_versions: every input is added up by Sum", "calculation_input_not_additive"],
+  ["metric_definition_versions: a calculated version's day rule is Sum", "calculated_day_rule_fixed"],
+  ["metric_definitions: an active calculated variable adds up this variable; it stays active", "calculation_input_archive_in_use"],
+  ["metric_definitions: a calculated variable is active only while every input is active", "calculation_input_not_active"],
+]);
 const KEY_CONSTRAINT = "metric_definitions_owner_scope_owner_user_id_owner_club_id__key";
 const RETRY_CONSTRAINTS = new Set(["metric_variable_requests_one_per_key", "metric_definition_versions_metric_definition_id_version_num_key"]);
 
@@ -114,6 +122,10 @@ const TEXT = {
   variable_used_by_calculation: "A calculated variable adds up this variable; its unit stays as it is.",
   // PR 2 (the owner's rule of 2026-11-18): a sum adds only what can be added.
   calculated_day_rule_fixed: "A calculated variable adds its inputs up, so a day's values are added up too (Sum).",
+  calculation_input_day_rule_in_use: "A calculated variable adds up this variable, so a day's values stay added up (Sum).",
+  calculation_input_not_additive: "An input is not an amount; only amounts (combined by Sum) can be added up.",
+  calculation_input_archive_in_use: "A calculated variable adds up this variable; it cannot be archived while it is used.",
+  calculation_input_not_active: "An input of this calculated variable is archived; restore it first.",
 };
 // The sentence of an input whose day rule is not Sum: it names the variable and why it cannot be added up.
 const NOT_AN_AMOUNT = { avg: "is an average", max: "is a highest value", last: "is a latest value", none: "keeps each value separately" };
@@ -763,6 +775,10 @@ export function classifyVariableError(error) {
   if (code === "23514" && !error.constraint && error.message === PIN_GUARD) return refusal(409, "variable_pinned", TEXT.variable_pinned);
   // v77's guard, the backstop of the checks made under the same locks.
   if (code === "23514" && !error.constraint && error.message === CALCULATION_INPUT_GUARD) return refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+  if (code === "23514" && !error.constraint && CALCULATION_GUARD_CODES.has(error.message)) {
+    const mapped = CALCULATION_GUARD_CODES.get(error.message);
+    return refusal(409, mapped, TEXT[mapped]);
+  }
   return null;
 }
 
@@ -1212,10 +1228,19 @@ export async function restoreVariable({ ctx, variableId, body }) {
   const requestHash = hashOf({ contract: CONTRACT, operation: "variable_restore", variableId: id, body: { reason } });
   return runChange({
     ctx, variableId: id, operation: "variable_restore", requestKey, requestHash, reason,
-    check: (row) => {
+    check: async (row, client) => {
       if (row.state === "active") throw refusal(409, "variable_active", TEXT.variable_active);
       if (ctx.basis === "team_coach" && !coachArchived(row)) throw refusal(409, "restore_by_admin", TEXT.restore_by_admin);
       if (row.pinned) throw refusal(409, "variable_pinned", TEXT.archive_pinned);
+      // A calculated variable is active only while every input is (v78); the first archived input is named.
+      const archived = (await client.query(
+        `select i.label from training_load.metric_definitions d
+           join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
+           join lateral jsonb_array_elements_text(to_jsonb(v.*) -> 'calculation' -> 'inputs') with ordinality as x(id, ord) on true
+           join training_load.metric_definitions i on i.id = x.id::uuid
+          where d.id = $1 and i.state <> 'active' order by x.ord limit 1`, [id],
+      )).rows[0];
+      if (archived) throw refusal(409, "calculation_input_not_active", `${archived.label} is archived; restore it first, then this calculated variable.`);
     },
     texts: () => [],
     update: () => ({ sql: "state = 'active'", values: [] }),

@@ -4462,8 +4462,13 @@ suite reaches v77.
   basis); once the calculated variable is archived its inputs may be;
 - a manual measurement or correction naming a calculated variable is `409 calculated_variable_not_entered` ("OptiMove
   calculates this variable from other variables, so its value cannot be entered by hand."), never a 500.
-Not yet in the database: these four rules are the API's; their database twins are a later migration (v78, the
-*Rukovodilac* decides whether it joins PR 2a). Overlap of two inputs (e.g. zone 3 and "above 25 W/kg") is not checked:
+- a calculated variable is restored only while every input is active (`409 calculation_input_not_active`, naming the
+  archived input).
+The database twins are migration v78 (`migrations_v2/202611181100_training_load_v78_calculated_variables_additive.sql`, in
+PR 2a by the *Rukovodilac*'s decision A; runbook `docs/runbooks/calculated-variables-v78.md`): v77's version guard replaced
+(md5 precondition) with the three day-rule checks, and a `BEFORE UPDATE OF state` guard on `metric_definitions` for the
+archive and the restore; the API maps their messages to the same codes. Migration numbers after it: v79 ratio and difference,
+v80 zone match (the *Rukovodilac*, 2026-11-18). Overlap of two inputs (e.g. zone 3 and "above 25 W/kg") is not checked:
 PR 3's screen says so before Save, and zone match refuses overlapping conditioned inputs once ranges are stored.
 
 **Next:** PR 2b, the import writer and the preview (C142-C146, C148), then PR 3, the screen (C141, C150).
