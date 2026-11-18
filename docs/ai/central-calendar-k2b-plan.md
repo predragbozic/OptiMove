@@ -1780,3 +1780,25 @@ and the head the same):
   - the explicit order dropped, expected equivalent (`distinct` sorts).
 - **Not run in this session** (no database): the two suites, the mutations and the measurement; the manager runs them.
   `backend-fast` here: 674/676, the two known files.
+
+**The review round on `4c9e5286`** (static; neither reviewer can run a database suite):
+- **`db-reviewer`: READY WITH NON-BLOCKING NOTES.**
+  - The semantics are the same, and no index or migration is needed.
+  - Its LOW and NIT notes are added to the test world, with no change of code:
+    - a membership archived before the range and then restored: two periods of one team, with a gap;
+    - a period of zero length: archived before it started, so it covers its one day;
+    - team lists with a NULL element, and no list at all;
+    - a "long ago" date counted from today instead of a fixed date.
+- **`code-reviewer`: BLOCKED by its contract**, because the new suite and the mutations have not run. It found no code
+  finding:
+  - the set, the order, NULL, empty and duplicate lists, and the aliases are the same;
+  - the frozen old text equals the removed code.
+
+  Its one **MEDIUM** concerned the test world, which could not kill BM16 or BM17. It is fixed with two athletes:
+  - one whose first period is in another club, then a team of club A from TODAY+3 (BM17);
+  - one who joins club A and a team on TODAY+2 and leaves on TODAY+4, with no earlier period in the club (BM16).
+
+  Each has anchors in test 2, and test 1 compares both against the old form. Its static verdict once the suites pass:
+  READY.
+- **Still to run (the manager):** on the head that carries these tests, the team-ids suite, BM13–BM20 (BM16 and BM17
+  killed; BM19 and BM20 equivalent), the neighbouring calendar suites, and the measurement before and after.

@@ -66,7 +66,8 @@ before(async () => {
   ({ athleteTeamIdsSql } = await import("../src/calendarQuery.js"));
   ({ membershipOnDaySql } = await import("../src/calendarAccess.js"));
   const fx = env.fx;
-  const LONG_AGO = "2026-01-01T00:00:00Z";
+  // Clock-independent (db review).
+  const LONG_AGO = `${addDays(TODAY, -300)}T00:00:00Z`;
   w.clubA = await fx.makeClub("Ids club A");
   w.clubB = await fx.makeClub("Ids club B");
   w.A1 = await fx.makeTeam(w.clubA, "Ids A1");
@@ -121,7 +122,27 @@ before(async () => {
   w.otherClub = await athlete("Ids other club");
   await membership({ athleteId: w.otherClub, clubId: w.clubB, startsAt: LONG_AGO });
   await membership({ athleteId: w.otherClub, clubId: w.clubB, teamId: w.B1, startsAt: LONG_AGO });
-  w.athletes = [w.mover, w.archivedOnly, w.late, w.lateWithClub, w.twoTeams, w.paused, w.teamArchived, w.boundary, w.movedMember, w.otherClub];
+  // Archived before the range, then restored (v25 opens a second period of the same membership at now()): two
+  // periods of one team, a gap between them (db review).
+  w.restored = await athlete("Ids restored");
+  await membership({ athleteId: w.restored, clubId: w.clubA, startsAt: LONG_AGO });
+  const restoredA1 = await membership({ athleteId: w.restored, clubId: w.clubA, teamId: w.A1, startsAt: LONG_AGO, archivedAt: `${addDays(D0, -3)}T12:00:00Z` });
+  await q(`update public.athlete_memberships set status = 'active', archived_at = null, updated_at = now() where id = $1`, [restoredA1]);
+  // Archived before it started: a period of zero length on its one day (db review).
+  w.zeroLength = await athlete("Ids zero length");
+  await membership({ athleteId: w.zeroLength, clubId: w.clubA, startsAt: LONG_AGO });
+  await membership({ athleteId: w.zeroLength, clubId: w.clubA, teamId: w.A2, startsAt: `${addDays(TODAY, 2)}T10:00:00Z`, archivedAt: `${addDays(TODAY, 2)}T09:00:00Z` });
+  // The first period in ANOTHER club does not stop the fallback in this one: club B long ago, team A2 (club A) from
+  // TODAY+3 with no earlier period in club A (pins the fallback's club condition, db review).
+  w.crossClub = await athlete("Ids cross club");
+  await membership({ athleteId: w.crossClub, clubId: w.clubB, startsAt: LONG_AGO });
+  await membership({ athleteId: w.crossClub, clubId: w.clubA, teamId: w.A2, startsAt: `${addDays(TODAY, 3)}T08:00:00Z` });
+  // A closed period with no earlier period in its club: joins TODAY+2, leaves TODAY+4. The fallback is for an OPEN
+  // period only, so before TODAY+2 the athlete is in no team (kills BM16, code review).
+  w.leftLater = await athlete("Ids left later");
+  await membership({ athleteId: w.leftLater, clubId: w.clubA, startsAt: `${addDays(TODAY, 2)}T08:00:00Z`, archivedAt: `${addDays(TODAY, 4)}T08:00:00Z` });
+  await membership({ athleteId: w.leftLater, clubId: w.clubA, teamId: w.A1, startsAt: `${addDays(TODAY, 2)}T08:00:00Z`, archivedAt: `${addDays(TODAY, 4)}T08:00:00Z` });
+  w.athletes = [w.mover, w.archivedOnly, w.late, w.lateWithClub, w.twoTeams, w.paused, w.teamArchived, w.boundary, w.movedMember, w.otherClub, w.restored, w.zeroLength, w.crossClub, w.leftLater];
 });
 
 after(async () => {
@@ -136,6 +157,8 @@ async function teamLists() {
   return {
     platform, clubA: await clubOf(w.clubA), clubB: await clubOf(w.clubB), clubABeforeArchive: [w.A1, w.A2, w.A3],
     A1: [w.A1], A2: [w.A2], A3: [w.A3], B1: [w.B1], E: [w.E], all: [w.A1, w.A2, w.A3, w.B1, w.E], none: [],
+    // A NULL element in the list, and no list at all (db review).
+    withNull: [w.A1, null, w.A2], nullList: null,
   };
 }
 const parseIds = (text) => (text === "{}" ? [] : text.slice(1, -1).split(","));
@@ -192,6 +215,20 @@ test("2. anchors: the cases the rule is about give what the rule says (with ever
   // D43: the moved team, from its joining day (an earlier club period: no fallback).
   assert.deepEqual(await idsOn(w.movedMember, addDays(MID, -1)), []);
   assert.deepEqual(await idsOn(w.movedMember, MID), sorted(w.E));
+  // Restored: through the first period's last day, none in the gap, the team again from the restore (today).
+  assert.deepEqual(await idsOn(w.restored, addDays(D0, -3)), sorted(w.A1));
+  assert.deepEqual(await idsOn(w.restored, addDays(TODAY, -1)), []);
+  assert.deepEqual(await idsOn(w.restored, TODAY), sorted(w.A1));
+  // A period of zero length covers its one day.
+  assert.deepEqual(await idsOn(w.zeroLength, addDays(TODAY, 1)), []);
+  assert.deepEqual(await idsOn(w.zeroLength, addDays(TODAY, 2)), sorted(w.A2));
+  assert.deepEqual(await idsOn(w.zeroLength, addDays(TODAY, 3)), []);
+  // The fallback looks at the period's own club only: an earlier period in club B does not stop it in club A (BM17).
+  assert.deepEqual(await idsOn(w.crossClub, TODAY), sorted(w.A2));
+  // A closed period never takes the fallback (BM16): none before joining, the team while a member, none after.
+  assert.deepEqual(await idsOn(w.leftLater, TODAY), []);
+  assert.deepEqual(await idsOn(w.leftLater, addDays(TODAY, 3)), sorted(w.A1));
+  assert.deepEqual(await idsOn(w.leftLater, addDays(TODAY, 5)), []);
 });
 
 test("3. THE membership rule after the refactor equals its earlier text, for every athlete, team and club, single days and windows; and a window is the union of its days", async () => {
