@@ -149,8 +149,21 @@ async function fetchOccasionContexts(occasionIds, queryRunner) {
 async function fetchVersionInfo(versionIds, queryRunner) {
   const uniq = [...new Set(versionIds)];
   if (!uniq.length) return {};
-  const r = await queryRunner(`select id, daily_aggregation_method, value_type from training_load.metric_definition_versions where id = any($1::uuid[])`, [uniq]);
-  return Object.fromEntries(r.rows.map((row) => [row.id, { dailyAggregationMethod: row.daily_aggregation_method, valueType: row.value_type }]));
+  // J21: v77's calculation is read through the whole row, so a database before v77 reads every version as not calculated.
+  const r = await queryRunner(
+    `select id, daily_aggregation_method, value_type,
+            coalesce(to_jsonb(v.*) -> 'calculation', 'null'::jsonb) <> 'null'::jsonb as calculated
+       from training_load.metric_definition_versions v where id = any($1::uuid[])`,
+    [uniq],
+  );
+  return Object.fromEntries(r.rows.map((row) => [row.id, { dailyAggregationMethod: row.daily_aggregation_method, valueType: row.value_type, calculated: row.calculated === true }]));
+}
+
+// J21 (C141-C148): a calculated variable's own value - OptiMove's sum of its inputs, written beside them as a derived_rollup
+// (v3 binds a formula reference to that role) - is the variable's only value, so a series of it reads it under every
+// aggregation-role policy. Any other derived_rollup value keeps the policy's rule.
+function isCalculatedValue(isDerived, aggregationRole, ver) {
+  return isDerived === true && aggregationRole === "derived_rollup" && ver?.calculated === true;
 }
 
 // One query for EVERY session_count/last_session_date built-in request in
@@ -224,6 +237,7 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
       unit: row.unit_at_capture,
       aggregationRole: row.aggregation_role, coverage: row.coverage,
       entryMethod: row.entry_method, isDerived: row.is_derived,
+      calculated: isCalculatedValue(row.is_derived, row.aggregation_role, ver),
       sourceConnectionId: row.source_connection_id ?? null,
       value: row.value_numeric ?? row.value_text ?? row.value_boolean,
     };
@@ -297,6 +311,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
       unit: d.unitAtCapture,
       aggregationRole: d.aggregationRole, coverage: d.coverage,
       entryMethod: occ.entryMethod ?? null, isDerived: d.isDerived,
+      calculated: isCalculatedValue(d.isDerived, d.aggregationRole, ver),
       sourceConnectionId: occ.sourceConnectionId ?? null,
       value: d.valueNumeric ?? d.valueText ?? d.valueBoolean,
     });
@@ -362,7 +377,7 @@ function resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRole
 
   let candidates = facts.filter((f) => f.grain === dataScopeLevel);
   if (athleteIds) candidates = candidates.filter((f) => athleteIds.includes(f.athleteId));
-  candidates = candidates.filter((f) => allowedRoles.includes(f.aggregationRole) && allowedCoverage.includes(f.coverage));
+  candidates = candidates.filter((f) => (allowedRoles.includes(f.aggregationRole) || f.calculated === true) && allowedCoverage.includes(f.coverage));
   // 6b-D (phase 5b contract, section 5): an estimate (entry_method 'estimate') is left out under every policy - all sources
   // and calculated values included - and shown only under the policy 'estimate', which shows estimates alone.
   const estimatesOnly = effectiveSourcePolicy === "estimate";

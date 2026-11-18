@@ -317,3 +317,45 @@ test("3. a coach's correction of an imported occasion carries its inputs only: t
   assert.equal(derived[0].computed_by_ref.inputValueIds.length, 3);
   assert.equal(after.filter((v) => !v.is_derived).length, inputs.length, "the inputs as corrected, nothing added");
 });
+
+test("4. a dashboard series of HMLD reads its calculated values under every aggregation-role policy, equal to the sum of its inputs' series per athlete and day; an input's series is unchanged (its session values stay out of standalone_only)", async () => {
+  const team = await setupTeam();
+  await importSession(team, 9831);
+  const { runDashboardBatchQuery } = await import("../src/trainingLoadDashboardQuery.js");
+  const run = async (metricDefinitionId, aggregationRolePolicy) => {
+    const [result] = await runDashboardBatchQuery(
+      { dataWorkspaceType: "team", dataWorkspaceScopeId: team.teamId, dateFrom: D1, dateTo: D1 },
+      [{ widgetId: "w", seriesId: "s", metricDefinitionId: String(metricDefinitionId), dataScopeLevel: "session", aggregationRolePolicy,
+        coveragePolicy: "complete_and_partial", sourcePolicy: "all_with_conflicts", groupBy: "day", analyticalAggregation: "sum" }],
+      { queryRunner: (sql, params) => admin.query(sql, params) },
+    );
+    assert.equal(result.status, "ok", JSON.stringify(result));
+    return Object.fromEntries(result.data.current.map((r) => [r.athleteId, r.value]));
+  };
+  const inputs = await Promise.all(ZONES.map((z) => run(world[z].variableId, "standalone_and_source_rollup")));
+  const expected = {};
+  for (const byAthlete of inputs) for (const [athleteId, value] of Object.entries(byAthlete)) expected[athleteId] = (expected[athleteId] ?? 0) + Number(value);
+  assert.equal(Object.keys(expected).length, 2, "both athletes have inputs");
+  for (const policy of ["standalone_only", "standalone_and_source_rollup", "all_including_derived"]) {
+    const got = await run(hmld.id, policy);
+    assert.deepEqual(Object.fromEntries(Object.entries(got).map(([a, v]) => [a, Number(v)])), expected, `HMLD under ${policy}`);
+  }
+  // An input's session values are source_rollup: standalone_only leaves them out, exactly as before calculated variables.
+  assert.deepEqual(await run(world[ZONES[0]].variableId, "standalone_only"), {});
+  // Any other derived_rollup value keeps the policy's rule: only all_including_derived reads it.
+  const variables = await import("../src/canonicalVariableAdminService.js");
+  const plain = (await variables.createVariable({
+    ctx: { userId: String(team.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } },
+    body: { requestKey: key(), label: `Other derived total ${key().slice(0, 8)}`, unit: "m", levels: ["session"], dailyAggregationMethod: "sum" },
+  })).variable;
+  const occasion = (await admin.query(
+    `select o.id from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+       join training_load.metric_events e on e.id = p.event_id
+      where e.owner_team_id = $1 and o.segment_id is null and o.superseded_by_occasion_id is null limit 1`, [team.teamId])).rows[0].id;
+  await admin.query(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, is_derived, aggregation_role, coverage, computed_by_ref)
+     values ($1,$2,$3,7,'m',true,'derived_rollup','complete','{"rollup":"an older derived total"}')`, [occasion, plain.id, plain.currentVersion.id]);
+  assert.deepEqual(await run(plain.id, "standalone_only"), {});
+  assert.deepEqual(await run(plain.id, "standalone_and_source_rollup"), {});
+  assert.equal(Object.values(await run(plain.id, "all_including_derived")).map(Number).join(), "7");
+});
