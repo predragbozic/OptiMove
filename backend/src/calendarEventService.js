@@ -721,8 +721,15 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
         throw error;
       }
       if (eventId) {
-        row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for update of e`, [eventId])).rows[0];
+        // FOR NO KEY UPDATE (review round 1, H1): every event command still
+        // serializes on the row (NO KEY UPDATE conflicts with itself), while a
+        // foreign key check from another transaction (FOR KEY SHARE — a
+        // Tests materialization writing its skip row) is not blocked, so it
+        // can never wait here while it holds the day key this command wants.
+        // The key (id) of an event never changes and an event is never deleted.
+        row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for no key update of e`, [eventId])).rows[0];
         if (!row) throw notFound();
+        if (testHooks.afterEventLock) await testHooks.afterEventLock({ client, operation, eventId });
         // The right is decided again on the locked row (an owner never changes,
         // but the team's or the club's activity may have), and the owner is
         // taken from it: lock_event_writer holds a team owner's team FOR SHARE,
@@ -766,10 +773,12 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
     // K2b-2a-1: the realtime event of the in-app notifications, only after the
     // COMMIT (9.1.6).
     afterCommit(out) {
-      for (const userId of out.notifyUserIds || []) emitRealtimeEvent(userId, "notifications_changed", { type: "calendar_question" });
+      const emit = testHooks.emitRealtime ?? emitRealtimeEvent;
+      for (const userId of out.notifyUserIds || []) emit(userId, "notifications_changed", { type: "calendar_question" });
     },
     mapError(error) {
       if (error?.code === "23514" && error.constraint === "event_questions_switch") return Q.questionsOff();
+      if (error?.code === "23514" && error.constraint === "events_rpe_question_link") return rpeFromQuestion();
       if (error?.code === "23505" && error.constraint === "event_questions_one_live_per_kind") return questionAlreadyAsked();
       // The time zone is checked by events_before_write alone (one scan of
       // pg_timezone_names per write, the invariant where it holds).
@@ -953,6 +962,10 @@ export async function updateEvent(ctx, eventId, body) {
     const daysMoved = next.day !== dateStr(row.day) || String(next.endDay ?? "") !== String(dateStr(row.end_day) ?? "");
     const moved = daysMoved || targetsMoved || String(next.startTime ?? "") !== String(timeStr(row.start_time) ?? "")
       || String(next.endTime ?? "") !== String(timeStr(row.end_time) ?? "") || next.timezone !== row.timezone;
+    // H2 (review round 1): while an RPE question is live, the event's RPE
+    // schedule changes only through that question.
+    const liveRpe = state.live.find((q) => q.kind === "rpe");
+    if (liveRpe && "externalScheduleId" in f && String(f.externalScheduleId ?? "") !== String(liveRpe.external_schedule_id)) throw rpeFromQuestion();
     if (state.installed) {
       if ("questions" in f && !state.enabled) throw Q.questionsOff();
       qplan = await planQuestions(client, {
@@ -1235,6 +1248,7 @@ export async function cancelEvent(ctx, eventId, body) {
     // K2b-2a-1 (plan 3.5): the live questions end with the event, their
     // schedules cancelled; the answers stay. Locked before the first write.
     const qstate = await lockQuestionState(client, { eventId: row.id, clubId: ownerClubOf(owner) });
+    await Q.lockWellnessDays(client, ownerClubOf(owner), qstate.live.filter((q) => q.kind === "wellness").map((q) => Q.dateOnly(q.window_date)));
     for (const q of qstate.live) await Q.endQuestion(client, q, ctx.userId, "event_cancelled");
     // A cancelled event is final and takes no link command, so its live
     // links end with it, in the same transaction (K2a-1b): the slots and the
@@ -1752,6 +1766,7 @@ function questionEventOf(owner, ev, targets) {
 }
 
 const questionAlreadyAsked = () => conflict("question_already_asked", "This event already asks this question.");
+const rpeFromQuestion = () => conflict("rpe_from_question", "This event already asks athletes for RPE. Remove that question first.");
 const rpeFromSessions = () => conflict("rpe_from_sessions", "RPE comes from the linked sessions.");
 const rpeAlreadyLinked = () => conflict("rpe_already_linked", "This event already collects RPE through another schedule.");
 const questionsAnswered = () => conflict("questions_answered", "Athletes have already answered this event's questions.");
@@ -1821,7 +1836,13 @@ async function planQuestions(client, { state, ev, desired, explicit, moved, even
     }
     plan.ask.push({ kind: want.kind, win, replaces: null, explicit });
   }
-  plan.wellnessDays = plan.ask.filter((a) => a.kind === "wellness").map((a) => a.win.date);
+  // The club's day keys: every WELLNESS asked AND every WELLNESS ended
+  // (review round 1, db M1: a removal races a materialization that already
+  // chose covered_by_event otherwise).
+  plan.wellnessDays = [
+    ...plan.ask.filter((a) => a.kind === "wellness").map((a) => a.win.date),
+    ...plan.end.filter((e) => e.q.kind === "wellness").map((e) => Q.dateOnly(e.q.window_date)),
+  ];
   return plan;
 }
 
@@ -1836,7 +1857,12 @@ async function applyRpeBeforeEventWrite(client, ctx, plan, qev, extIdNow) {
     if (["removed", "moved", "replaced_by_sessions"].includes(reason) && extId === String(q.external_schedule_id)) extId = null;
   }
   for (const ask of plan.ask.filter((a) => a.kind === "rpe")) {
-    ask.schedule = await Q.writeQuestionSchedule(client, qev, "rpe", ask.win, ctx.userId);
+    try {
+      ask.schedule = await Q.writeQuestionSchedule(client, qev, "rpe", ask.win, ctx.userId);
+    } catch (error) {
+      if (error?.code === "no_athletes" && ask.explicit === false) { ask.skip = true; plan.skipped.push("rpe"); continue; }
+      throw error;
+    }
     extId = ask.schedule.externalScheduleId;
   }
   return extId;
@@ -1852,12 +1878,18 @@ async function applyQuestionsAfterEventWrite(client, ctx, plan, qev, eventId, cl
   const asked = [];
   const notify = new Set();
   for (const ask of plan.ask) {
+    if (ask.skip) continue;
     if (ask.kind === "wellness") {
       if (await Q.wellnessAlreadyScheduled(client, { eventId, clubId, day: ask.win.date })) {
         if (ask.explicit === false) { plan.skipped.push("wellness"); continue; }
         throw wellnessAlreadyScheduled();
       }
-      ask.schedule = await Q.writeQuestionSchedule(client, qev, "wellness", ask.win, ctx.userId);
+      try {
+        ask.schedule = await Q.writeQuestionSchedule(client, qev, "wellness", ask.win, ctx.userId);
+      } catch (error) {
+        if (error?.code === "no_athletes" && ask.explicit === false) { plan.skipped.push("wellness"); continue; }
+        throw error;
+      }
     }
     const row = await Q.insertQuestionRow(client, { eventId, kind: ask.kind, schedule: ask.schedule, win: ask.win, userId: ctx.userId, replacesQuestionId: ask.replaces });
     asked.push(row);
@@ -1929,11 +1961,13 @@ export function validateMoveBody(body, questionId) {
   };
 }
 
-async function questionCommand(ctx, eventId, { requestKey, canonical }, decide) {
+async function questionCommand(ctx, eventId, { requestKey, canonical }, decide, { whileOff = false } = {}) {
   return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, owner, row }) => {
     const clubId = ownerClubOf(owner);
     const state = await lockQuestionState(client, { eventId: row.id, clubId });
-    if (!state.installed || !state.enabled) throw notFound();
+    // Ask and move are the 404 while the switch is off; remove keeps working
+    // for what exists (review round 1, the manager's decision).
+    if (!state.installed || (!state.enabled && !whileOff)) throw notFound();
     await requireOpenAndCurrent(client, ctx, row, canonical.expectedRevision);
     const ev = eventShapeOfRow(row);
     const desired = decide(state.live);
@@ -1968,7 +2002,7 @@ export async function removeQuestion(ctx, eventId, questionId, body) {
   return questionCommand(ctx, eventId, parsed, (live) => {
     if (!live.some((q) => String(q.id) === parsed.canonical.questionId)) throw notFound();
     return live.filter((q) => String(q.id) !== parsed.canonical.questionId).map((q) => ({ kind: q.kind, window: Q.windowOfRow(q) }));
-  });
+  }, { whileOff: true });
 }
 
 export async function moveQuestion(ctx, eventId, questionId, body) {

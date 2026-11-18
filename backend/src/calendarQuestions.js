@@ -161,7 +161,10 @@ export async function lockSwitch(client, clubId) {
 export async function lockLiveQuestions(client, eventId) {
   if (!eventId) return [];
   return (await client.query(
-    `select * from calendar.event_questions where event_id = $1 and ended_at is null order by id for update`, [eventId],
+    // FOR NO KEY UPDATE (review round 1, H1): a skip row's foreign key check
+    // (FOR KEY SHARE, from a materialization holding the day key) is not
+    // blocked; a question's id never changes and a question is never deleted.
+    `select * from calendar.event_questions where event_id = $1 and ended_at is null order by id for no key update`, [eventId],
   )).rows;
 }
 
@@ -225,7 +228,7 @@ export async function lockDayOffCandidates(client, clubId, from, to) {
       where s.skip_days_off
         and calendar.owner_club_id(s.owner_scope, s.owner_club_id, s.owner_team_id) = $1
         and a.local_scheduled_date between $2::date and $3::date
-        and a.status in ('pending', 'open')
+        and a.status in ('pending', 'open') and a.closes_at > now()
         and not exists (select 1 from tests.test_assessments x where x.assignment_id = a.id)
       order by a.id for update of a`,
     [clubId, from, to],
@@ -238,7 +241,7 @@ export async function cancelReachedByDayOff(client, eventId, candidateIds) {
   if (!candidateIds.length) return 0;
   const rows = (await client.query(
     `update tests.test_assignments a set status = 'cancelled', updated_at = now()
-      where a.id = any($2::uuid[]) and a.status in ('pending', 'open')
+      where a.id = any($2::uuid[]) and a.status in ('pending', 'open') and a.closes_at > now()
         and not exists (select 1 from tests.test_assessments x where x.assignment_id = a.id)
         and calendar.athlete_reached_on_day($1, a.athlete_id, a.local_scheduled_date)
       returning a.id, a.athlete_id`,
@@ -320,7 +323,26 @@ export async function wellnessAlreadyScheduled(client, { eventId, clubId, day })
 // ---------------------------------------------------------------------------
 // ev: { title, timezone, ownerScope, ownerUserId, ownerClubId, ownerTeamId,
 //       targets: [{ kind, id }] }; win: computeWindow's answer.
+// Review round 1 (security M1): an athlete target is written only while she is
+// a member of the event's owner on the window's day; team and club targets as
+// they are. Nobody left: 409 no_athletes.
+async function askableTargets(client, ev, day) {
+  const athletes = ev.targets.filter((t) => t.kind === "athlete").map((t) => String(t.id));
+  let kept = new Set();
+  if (athletes.length) {
+    kept = new Set((await client.query(
+      `select a::text as id from unnest($1::uuid[]) as a
+        where calendar.athlete_member_of_owner_on_day($2, $3, $4, a, $5::date)`,
+      [athletes, ev.ownerScope, ev.ownerClubId, ev.ownerTeamId, day],
+    )).rows.map((r) => r.id));
+  }
+  const out = ev.targets.filter((t) => t.kind !== "athlete" || kept.has(String(t.id)));
+  if (!out.length) throw conflict("no_athletes", "Nobody on this event can be asked on that day.");
+  return out;
+}
+
 export async function writeQuestionSchedule(client, ev, kind, win, userId) {
+  const targets = await askableTargets(client, ev, win.date);
   const owner = { ownerScope: ev.ownerScope, ownerUserId: ev.ownerUserId ?? null, ownerClubId: ev.ownerClubId ?? null, ownerTeamId: ev.ownerTeamId ?? null };
   if (kind === "rpe") {
     const schedule = await insertExternalSchedule(client, {
@@ -328,7 +350,7 @@ export async function writeQuestionSchedule(client, ev, kind, win, userId) {
       scheduleKind: "one_time", timezone: ev.timezone, startDate: win.date, endDate: null, recurrenceRule: null,
       opensTime: win.opens, dueTime: null, closesTime: win.closes, eventName: ev.title, eventType: null, eventNote: null, userId, owner,
     });
-    await insertExternalTargets(client, schedule.id, ev.targets);
+    await insertExternalTargets(client, schedule.id, targets);
     await insertNotificationRules(client, schedule.id, CALENDAR_EXTERNAL_RULES);
     return { externalScheduleId: schedule.id, testScheduleId: null };
   }
@@ -336,7 +358,7 @@ export async function writeQuestionSchedule(client, ev, kind, win, userId) {
     scheduleKind: "one_time", timezone: ev.timezone, startDate: win.date, endDate: win.date,
     opensTime: win.opens, dueTime: null, closesTime: win.closes, userId, owner,
   });
-  await insertScheduleTargets(client, schedule.id, ev.targets);
+  await insertScheduleTargets(client, schedule.id, targets);
   return { externalScheduleId: null, testScheduleId: schedule.id };
 }
 
@@ -357,7 +379,7 @@ export async function endQuestion(client, q, userId, reason) {
     [q.id, userId, reason],
   );
   if (q.kind === "rpe") await cancelExternalSchedule(client, q.external_schedule_id);
-  else await cancelTestSchedule(client, q.test_schedule_id);
+  else await cancelTestSchedule(client, q.test_schedule_id, userId);
 }
 
 // ---------------------------------------------------------------------------

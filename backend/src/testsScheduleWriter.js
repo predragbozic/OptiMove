@@ -63,11 +63,17 @@ export async function insertScheduleTargets(client, scheduleId, targets) {
   }
 }
 
-// The schedule's own cancel (the status DELETE /schedules/:id sets for a
-// schedule with occurrences): its occurrences and assignments stay as history.
-export async function cancelTestSchedule(client, scheduleId) {
-  return (await client.query(
+// The schedule's own cancel, as DELETE /schedules/:id does for a schedule with
+// occurrences: the status, and its active check-in links revoked by the actor
+// (review round 1, M3). Its occurrences and assignments stay as history.
+export async function cancelTestSchedule(client, scheduleId, userId) {
+  const cancelled = (await client.query(
     `update tests.test_schedules set status = 'cancelled', updated_at = now() where id = $1 and status <> 'cancelled' returning id`,
     [scheduleId],
   )).rowCount;
+  await client.query(
+    `update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where schedule_id = $1 and status = 'active'`,
+    [scheduleId, userId],
+  );
+  return cancelled;
 }

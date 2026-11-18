@@ -36,7 +36,25 @@ set local lock_timeout = '5s';
 do $$
 declare
   v_md5 text;
+  v_missing text;
 begin
+  -- The migrations v81 depends on, recorded by name and the repository's
+  -- checksum (review round 1, db L1); never v81's position in the list.
+  select string_agg(d.name, ', ' order by d.name) into v_missing
+    from (values
+      ('migrations_v2/202608240900_tests_v42_phase1_scheduling_execution.sql', '1f244c812e54a0cdfb4a6dbb79403044e10a604ec41beaaad86e152edb49ab48'),
+      ('migrations_v2/202608260900_tests_v42_occurrence_generation_lock_fix.sql', 'cb360a58bb00ea3a8e2f0f989e7b97bc77d00d8855dcc9268c1eea26ab93b46d'),
+      ('migrations_v2/202608300900_tests_v42_phase4_assignment_timezone_window.sql', 'b5902d3d27b9aed3d9b418afb6cfc45a2a4dc3b16288cc744c3e24ea227da39f'),
+      ('migrations_v2/202609011000_training_load_v4_external_scheduling.sql', '14af0f717ed069f2170275e6c91a70a2c8cf3638ad5f1c93520f7c9d26499392'),
+      ('migrations_v2/202609011100_training_load_v5_unified_result_source.sql', '367d5c6b3e2d2eedb02ffc760e392e2410770beff1f2a35afa2a733a812e8270'),
+      ('migrations_v2/202609020900_training_load_v7_external_schedule_notification_rules.sql', '829022d6cb180838689bc42df98c5dcca5175d5105f8cbd42795c7ecdf5c44b8'),
+      ('migrations_v2/202610311000_calendar_v49_events.sql', 'ed1afda69b8ee364a53816965c8561699133637f66fdbd7a37c7dceb683d6539'),
+      ('migrations_v2/202611011900_calendar_v51_settings.sql', 'b727cb0f74bb8bc41ee816c33995f1ab3df721ebac7bf77b861fd9e9b9f38cff')
+    ) as d(name, checksum)
+   where not exists (select 1 from public.schema_migrations m where m.migration_name = d.name and m.checksum = d.checksum);
+  if v_missing is not null then
+    raise exception 'calendar v81: a dependency is not recorded with its checksum: %', v_missing;
+  end if;
   select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'tests' and p.proname = 'materialize_test_assignments_for_occurrence';
   if v_md5 is distinct from '2d961f5acd6c6309baa51de868773ba4' then
@@ -79,6 +97,25 @@ create function calendar.event_club_id(p_event_id uuid) returns uuid
     select calendar.owner_club_id(e.owner_scope, e.owner_club_id, e.owner_team_id) from calendar.events e where e.id = p_event_id
   $$;
 
+-- Review round 1 (security M1): an athlete TARGET of an event counts for a
+-- question or a Day off only while she is a member of the event's owner on
+-- that day — the owner team for a team event, the owner club (any of its
+-- memberships) for a club event — by the same membership-on-the-day rule.
+create function calendar.athlete_member_of_owner_on_day(p_scope varchar, p_club_id uuid, p_team_id uuid, p_athlete_id uuid, p_day date)
+returns boolean language sql stable as $$
+  select p_scope in ('club', 'team') and exists (
+    select 1 from public.athlete_membership_periods mp
+     where mp.athlete_id = p_athlete_id
+       and ((p_scope = 'team' and mp.membership_type = 'team' and mp.team_id = p_team_id)
+         or (p_scope = 'club' and mp.club_id = p_club_id))
+       and (((mp.valid_from at time zone 'UTC')::date <= p_day
+             and p_day <= coalesce((mp.valid_to at time zone 'UTC')::date, 'infinity'::date))
+            or (mp.valid_to is null
+                and not exists (select 1 from public.athlete_membership_periods mp0
+                                 where mp0.athlete_id = p_athlete_id and mp0.club_id = mp.club_id
+                                   and (mp0.valid_from at time zone 'UTC')::date <= p_day))))
+$$;
+
 -- The calendar's audience rule (backend/src/calendarAccess.js
 -- membershipOnDaySql, written once in SQL): the athlete is a target of the
 -- event, or a member of a target team / club on the day — a period covers the
@@ -89,7 +126,10 @@ create function calendar.athlete_reached_on_day(p_event_id uuid, p_athlete_id uu
     select exists (
       select 1 from calendar.event_targets tg
        where tg.event_id = p_event_id
-         and ((tg.target_kind = 'athlete' and tg.target_athlete_id = p_athlete_id)
+         and ((tg.target_kind = 'athlete' and tg.target_athlete_id = p_athlete_id
+               and exists (select 1 from calendar.events e
+                            where e.id = p_event_id
+                              and calendar.athlete_member_of_owner_on_day(e.owner_scope, e.owner_club_id, e.owner_team_id, p_athlete_id, p_day)))
            or (tg.target_kind in ('team', 'club') and exists (
                  select 1 from public.athlete_membership_periods mp
                   where mp.athlete_id = p_athlete_id
@@ -392,6 +432,23 @@ create constraint trigger event_questions_need_parent
   after insert or update on calendar.event_questions
   deferrable initially deferred
   for each row execute function calendar.event_questions_need_parent();
+
+-- Review round 1 (H2): while an RPE question is live, the event names exactly
+-- its schedule (one RPE channel, plan 2.1). The commands end the question
+-- before they change the link.
+create function calendar.events_rpe_question_link() returns trigger language plpgsql as $$
+begin
+  if new.external_schedule_id is distinct from old.external_schedule_id
+     and exists (select 1 from calendar.event_questions q
+                  where q.event_id = new.id and q.kind = 'rpe' and q.ended_at is null
+                    and q.external_schedule_id is distinct from new.external_schedule_id) then
+    raise exception 'calendar.events: a live RPE question keeps the event''s RPE schedule' using errcode = '23514', constraint = 'events_rpe_question_link';
+  end if;
+  return new;
+end $$;
+create trigger events_rpe_question_link
+  before update on calendar.events
+  for each row execute function calendar.events_rpe_question_link();
 
 -- ---------------------------------------------------------------------------
 -- 5. The athlete's *Later* (plan 3.4). The row is its own request record.

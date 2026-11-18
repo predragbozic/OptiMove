@@ -43,7 +43,7 @@ begin
   end if;
 end $$;
 
-lock table calendar.events, calendar.event_types, calendar.event_requests, calendar.event_changes,
+lock table calendar.events, calendar.event_types, calendar.event_targets, calendar.event_requests, calendar.event_changes,
            calendar.settings_requests, calendar.settings_changes, calendar.club_question_settings,
            calendar.event_questions, calendar.question_postponements, calendar.question_assignment_skips,
            tests.test_schedules, tests.test_assignments in access exclusive mode;
@@ -54,9 +54,15 @@ declare
   v_rows integer;
   v_md5 text;
 begin
-  select count(*) into v_later from public.schema_migrations
-   where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611191000_calendar_v81_athlete_questions.sql'
-     and (migration_name like '%calendar%' or migration_name like '%tests%');
+  -- Later by name OR applied after v81 (review round 1, db L3: the runner
+  -- records applied_at, and a lower-numbered file can be applied later).
+  select count(*) into v_later from public.schema_migrations m
+   where m.migration_name like 'migrations_v2/%'
+     and m.migration_name <> 'migrations_v2/202611191000_calendar_v81_athlete_questions.sql'
+     and (m.migration_name > 'migrations_v2/202611191000_calendar_v81_athlete_questions.sql'
+          or m.applied_at > (select v.applied_at from public.schema_migrations v
+                              where v.migration_name = 'migrations_v2/202611191000_calendar_v81_athlete_questions.sql'))
+     and (m.migration_name like '%calendar%' or m.migration_name like '%tests%');
   if v_later > 0 then
     raise exception 'v81 rollback refused: % later calendar / tests migration(s) recorded', v_later;
   end if;
@@ -69,6 +75,11 @@ begin
    where n.nspname = 'calendar' and p.proname = 'settings_changes_before_insert';
   if v_md5 is distinct from 'b4189ddb507e607263ee6cb89760a891' then
     raise exception 'v81 rollback refused: calendar.settings_changes_before_insert is not v81''s body (md5 %)', v_md5;
+  end if;
+  select md5(p.prosrc) into v_md5 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'calendar' and p.proname = 'lock_event_writer';
+  if v_md5 is distinct from '7ebf1bcf39cbb930fb913d89f25fd406' then
+    raise exception 'v81 rollback refused: calendar.lock_event_writer is not the body v81 was written against (md5 %)', v_md5;
   end if;
   select (select count(*) from calendar.club_question_settings) + (select count(*) from calendar.event_questions)
        + (select count(*) from calendar.question_postponements) + (select count(*) from calendar.question_assignment_skips)
@@ -199,6 +210,8 @@ begin
 end $$;
 
 
+drop trigger events_rpe_question_link on calendar.events;
+drop function calendar.events_rpe_question_link();
 drop table calendar.question_assignment_skips;
 drop table calendar.question_postponements;
 drop table calendar.event_questions;
@@ -249,6 +262,7 @@ alter table calendar.event_changes add constraint event_changes_kind_check check
 
 drop function calendar.event_audience_on_day(uuid, date);
 drop function calendar.athlete_reached_on_day(uuid, uuid, date);
+drop function calendar.athlete_member_of_owner_on_day(varchar, uuid, uuid, uuid, date);
 drop function calendar.wellness_day_key(uuid, date);
 drop function calendar.is_wellness_version(uuid);
 drop function calendar.event_club_id(uuid);
