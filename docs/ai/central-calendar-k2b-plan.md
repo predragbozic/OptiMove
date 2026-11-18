@@ -1746,3 +1746,61 @@ done).
 All 25 mutations (`k2b1e-mutations.mjs` in the session's scratchpad: the 18 of the first round, M19–M21 for the code
 review and M22–M25 for the UX review) are killed; M16 first survived and was killed after E3 gained an event on the next
 morning.
+
+### 22.10 Tests and the browser check (on `2e570ee5`; Windows, Node 24.12.0)
+
+- **The new suite** `frontend/tests/athlete-home-events.actions.test.mjs`: 12 of 12 (E1–E11 and E7b), through the real
+  loader, handlers and templates with a fake fetch in the athlete card's shape.
+- **Mutations:** 25 of 25 killed (22.9).
+- **The Frontend PR gate:** the whole `--preset frontend-fast` on the head and on a clean detached `origin/main`
+  `94aab138` worktree, on the same machine:
+
+  | | Files | pass | known-fail | fail | Tests passed |
+  |---|---|---|---|---|---|
+  | head `2e570ee5` | 255 | 232 | 4 | 19 | 3474 of 3521 |
+  | clean `94aab138` | 254 | 231 | 4 | 19 | 3462 of 3509 |
+
+  - No file fails on the head that passes on `main`. The one file more is the new suite, 12/0.
+  - The same 19 files fail on both with identical per-file counts: `athlete-program-navigation-icons`, `gpexe-period-p4`,
+    `status-dot` and sixteen `om-*` suites.
+  - Three were read: their regexes expect `\n` where this Windows checkout (`core.autocrlf=true`) has `\r\n`. The
+    others' causes are not read.
+- **The build** passed; `git diff --check origin/main..HEAD` is clean.
+- **The backend:** no backend file changed. The manager runs `central-calendar-k2b-settings` on the branch (22.7, Q6).
+- **The browser check, on a static harness, not the real server** (22.7, T):
+  - **What ran:** the branch's real `athlete-home.js` and the three new modules, in the athlete shell's layout with the
+    app's `styles.css`. `/api/athlete-home` and `/api/calendar` were faked in the page with invented data.
+  - **The cases:**
+    - two events today, one of them without a time;
+    - a library place with an address and a note;
+    - a library place without an address;
+    - two one-off places;
+    - a travel event that began yesterday and ends tomorrow;
+    - a three-day camp;
+    - a cancelled match with a library place;
+    - a 70-character unbroken title and one-off text;
+    - an event whose type has no label;
+    - a *Day off*;
+    - nine events in all.
+  - **At 1280, 390, 375 and 360 px:**
+    - the section sits after *This week* and before the quick actions;
+    - 5 rows and "Show 4 more", then 9 and "Show fewer", with the focus on that button;
+    - one calendar request in all;
+    - no element outside the section and no horizontal scroll;
+    - *Open in maps*, *Show N more*, *Show fewer* and *Try again* all at least 44 px high;
+    - the links' `href` is the encoded address, with `target="_blank"` and `rel="noopener noreferrer"`;
+    - the long words wrap inside the row;
+    - the Cancelled pill is `#4b5565` on `#eceff3` at 13 px, with the title struck through and no place.
+
+    The section is 616 px tall folded at 390 px, and 634 px at 360 px.
+  - **The states at 375 px:**
+    - "Loading events…" (`role="status"`);
+    - "No events in the next 14 days." with no button;
+    - "Events could not be loaded." (`role="alert"`) with *Try again* (86 × 44). A real click sent one request and
+      listed the rows, and the focus was on the section's heading;
+    - a 401: "Sign in again to see your events." with no button;
+    - a 403: no section, with Home's other cards in place.
+- **Not checked:**
+  - a physical phone (the owner reviews on one);
+  - the real server and database (no `DATABASE_URL` in this session, 22.7 T);
+  - VoiceOver and TalkBack.
