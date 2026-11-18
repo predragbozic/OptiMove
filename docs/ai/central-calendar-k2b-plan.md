@@ -1472,3 +1472,129 @@ clean `1cfaf64`. The manager ordered one small round with no new internal review
 
 All 8 mutations of the round were killed (scratchpad `k2b1d-mutations-r3.mjs`). The earlier known limit — a refresh
 from elsewhere did not read an open panel's details again — is closed by the first row.
+
+## 23. K2b-1d2 — the type's icon and colour on every card; the platform's teams with their clubs (the plan; waiting for the manager's GO)
+
+The backend step of 21.9 (Q1 (b) and Q2). Branch `claude/central-calendar-k2b-1d2` from `origin/main` `94aab138`. Section
+22 (K2b-1e) is in PR #603, not on `main` yet, so this file ends at 21 here. Whichever of the two pull requests merges
+second takes a trivial merge of this file, since both add a section at its end. **No migration:** every column needed
+already exists. A calendar migration would be v77 or later and only on the owner's order naming it.
+
+### 23.1 The type's icon and colour on every event card (Q1 (b))
+
+- **What exists** (checked in the code):
+  - the type's `icon_key` (v49 `:118`) and `color_key` (v51 `:85`) are columns of `calendar.event_types`;
+  - `readEventRows` (`backend/src/calendarQuery.js:451-483`) already reads the type's label and id under D41
+    (`eventShowsTypeSql`, `backend/src/calendarEventAccess.js`: a `system` type always, a club's type only on an event of
+    that club now);
+  - `publicCard` (`:1264-1322`) gives a manager `eventTypeId`, and nobody gets the icon or the colour. Since K2b-1d the
+    frontend therefore takes them from the catalog (`GET /events/types`), and only for a manager's card.
+- **The change:**
+  - `readEventRows` selects `case when <D41> then et.icon_key end as event_type_icon_key` and the same for `color_key`;
+  - `publicCard` adds `eventTypeIconKey` and `eventTypeColorKey` (or `null`) to **every** event card: a manager's, a
+    reader's and the athlete's.
+  - A moved team's event (D41) carries `null` for both, as it does for the label, so nothing of the old club's catalog
+    leaves.
+  - One statement, the same as today; no new read.
+- **The athlete's allowlist** gains the two keys. They name a type's icon and colour, never a person, a value or a
+  count. `central-calendar-k2a-events.test.mjs` (~878-882) and `central-calendar-k2b-event-details.test.mjs:480` are
+  extended key by key.
+- **The views of `GET /events/:id`** (a manager's and a reader's) are not changed: the panel reads the card.
+
+### 23.2 The platform workspace's teams with their club (Q2)
+
+- **What exists:**
+  - `loadWorkspaceTeams` (`backend/src/calendarAccess.js:254-270`) answers `[]` for the platform workspace, so its
+    calendar names no team;
+  - its scope is everyone (`calendarAccess.js:108`, `:150`, `:200`);
+  - the function has two callers: `readCalendar` (`calendarQuery.js:795`: `teams[]`, the teams a card names, and the
+    athletes' team ids) and `reducedViewOf` (`calendarEventService.js:469`). The platform admin manages every event
+    (`eventWriteBasis`: platform workspace → `platform_admin`), so that view is never the platform's; the second caller
+    is unaffected in practice.
+- **The change:** for the platform workspace, every **active team of an active club**, ordered by the club's name, then
+  the team's name, then its id. Each team carries what a club's teams carry (`teamId`, `name`, `athleteCount`,
+  `colorKey`) plus `clubId` and `clubName`, and only the platform's teams get the two club keys. One statement:
+  `public.teams` joined to `public.clubs` and `calendar.team_settings`, with the existing per-team member count.
+- **Who reads it:** only a platform admin in the platform workspace (`resolveActiveWorkspace`). The same admin already
+  reads every club and team in Settings, so nothing new is disclosed. It is still a read across clubs, so it takes the
+  security review and the owner's external review (trigger 2).
+- **How many teams:** the code sets no bound. A club's admin adds teams one by one, and archived teams and clubs are left
+  out. The record names one pilot club in production; I estimate tens of teams at most, but **I did not read
+  production**.
+- **The cost, and the one real risk:**
+  - The teams' statement is O(teams). The bigger cost is downstream: `athleteTeamIdsSql` (`calendarQuery.js:58-60`)
+    unnests the whole team list for **every athlete row** of the window and runs `membershipOnDaySql` for each pair. So
+    the platform's read grows with rows × teams, where a club's grows with rows × the club's teams.
+  - **Plan:** measure before and after on a disposable database with a seeded platform world (for example 3 clubs × 10
+    teams, 300 athletes, a month of planned sessions and events).
+  - If the platform's month read grows past a bound the manager sets, rewrite `athleteTeamIdsSql` to go from the
+    athlete's memberships to the teams (`team_id = any($teams)` under the same `membershipOnDaySql` rule) instead of
+    from every team. That would be a separate, tested change.
+- **The colours:** a team keeps the colour its club chose (K2b-1c's P2 rule). Two clubs may choose the same colour, so in
+  the platform's view two teams can share one; their labels then tell them apart. Q3 of 23.4.
+
+### 23.3 The frontend: what goes with this step and what follows
+
+The two parts reach the screen differently:
+- **23.1 changes nothing on screen.** The frontend does not read the new keys yet.
+- **23.2 changes the platform's screen as soon as it is deployed.** The Groups chips, the team dots and pills on the
+  cards and in the panel, and the legend start to name teams, and two clubs' "U19" would read alike. The edit form also
+  offers the answer's `teams[]` as targets (`central-calendar-event-form.js:411`), so the platform's support edit would
+  list every club's teams (the server refuses another club's team, but the screen would offer it).
+
+**Recommended split:**
+- **K2b-1d2 (this step):** 23.1 and 23.2 in the backend, with two small frontend guards so that the platform's screen is
+  right the day it ships:
+  - **the team label:** one helper names a team "U19 · Borac" when it carries `clubName`. It is used by `teamName`,
+    the Groups chips, the legend and the form's names. A club's or a team's workspace is unchanged;
+  - **the edit form's team targets:** never from the platform's list (as today, when that list is empty). Offering the
+    event's own club's teams there is a later product question.
+
+  Reviewers: `code-reviewer` and `security-reviewer`, then the independent review and the owner's external review
+  (trigger 2). `mobile-qa` only for the longer chip labels, if the manager wants it.
+- **K2b-1d3 (the next small frontend step, after PR #603 merges):**
+  - every event card wears its type's icon and colour from the card (`eventTypeIconKey` / `eventTypeColorKey`), a
+    reader's included. The catalog read that K2b-1d makes for a manager's cards then falls away; the catalog stays for
+    the form;
+  - the athlete's *Upcoming events* list (PR #603) takes the type's icon from `eventTypeIconKey`, else the kind's.
+
+  It cannot go here without touching PR #603's files.
+
+### 23.4 Open questions for the manager
+
+- **Q1 — the split:** the two frontend guards of 23.3 in this pull request (recommended, so the platform's screen never
+  shows ambiguous team names), or a backend-only pull request and the guards in K2b-1d3.
+- **Q2 — the platform's team list:** active teams of active clubs (recommended; an archived club's teams named nowhere,
+  as a club's archived team today), or every team.
+- **Q3 — colours in the platform's view:** each club's chosen colour, sharing one across clubs being possible
+  (recommended), or only the automatic colours in the platform.
+- **Q4 — the cost bound:** what growth of the platform's month read is acceptable before the `athleteTeamIdsSql` rewrite
+  of 23.2 becomes part of this step.
+- **T — the database for the tests:** reading the main checkout's `backend/.env` for `DATABASE_URL` was refused by this
+  session's permission check (22.7 T in PR #603). I will not try it again on a session's instruction, since that is the
+  user's permission to give. Without a disposable database the backend suites of 23.5 cannot run here. So either:
+  - the owner allows that read for this session, or provides `DATABASE_URL` another way; or
+  - the manager runs the database suites on the branch.
+
+### 23.5 Tests and checks
+
+- **Backend** (disposable databases through the real runner, `npm --prefix backend ci` in this worktree first):
+  - `central-calendar-k1a`, `-k2a-events`, `-k2a-1b`, `-k2b-settings`, `-k2b-event-details`, and `--preset backend-fast`;
+  - **new cases:**
+    - the two keys on the cards of a manager, a reader and the athlete, for a system type and a club's type;
+    - `null` on a moved team's event (D41);
+    - the athlete's allowlist key by key;
+    - the platform's `teams[]` with `clubId` and `clubName`, active teams of active clubs only, in its order, with
+      cards naming them;
+    - a club's and a team's workspace answering exactly as before (no club keys);
+    - the identical answers for everyone who is not a platform admin;
+    - the statement count unchanged;
+  - mutations on the D41 predicate, the platform branch, the active filters and the club keys;
+  - the cost measurement of 23.2.
+- **Frontend** (only with Q1 as recommended):
+  - the team label with and without `clubName`, and the form's targets never from the platform's list, through the real
+    view and form;
+  - `frontend-fast` on the head and on a clean `origin/main`, compared;
+  - the build.
+- **Reviews:** `code-reviewer` and `security-reviewer` on the frozen head; then the independent review and the owner's
+  external review. No merge, deploy or persistent database; one draft pull request.
