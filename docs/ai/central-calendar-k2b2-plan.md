@@ -802,3 +802,9 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   athlete targets, a joiner and a leaver; Training Load with the switch on and off, the WELLNESS schedule with the switch
   off, since with it on a live event WELLNESS question of the day covers it by design) both make identical rows. Mutation
   I2 (the test's v81 copy changed) fails it.
+- **Test 33 (the manager's addition to INFO-2), the switch ON, in a club of its own:** (1) with no event question
+  covering the day, the old and v81 Tests rows are identical and none is `cancelled` (the switch alone cancels nothing);
+  (2) with a team event's WELLNESS question covering the day, exactly the athletes that event reaches on the day (the two
+  team members and the joiner) are `cancelled` with a `covered_by_event` skip naming that question, nothing else in their
+  rows changes, and the club-only athlete and the schedule's own athlete target stay identical to the old body. Mutation
+  I3 (the test's v81 copy ignores the event's audience in the covered check) fails it.

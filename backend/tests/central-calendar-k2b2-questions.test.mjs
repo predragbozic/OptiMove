@@ -1463,3 +1463,106 @@ test("32. INFO-2: on ordinary schedules v81's two materializations make exactly 
     await client.end();
   }
 });
+
+test("33. INFO-2 with the club's switch ON: nothing covering the day → v81's WELLNESS rows are identical to the old body's, none cancelled; a covering event WELLNESS question cancels exactly the athletes its event reaches that day (covered_by_event), the rest identical", async () => {
+  const OLD_T = "tests.materialize_pre_v81_copy_b";
+  const NEW_T = "tests.materialize_v81_copy_b";
+  const oldT = bodyFrom("migrations_v2/202608300900_tests_v42_phase4_assignment_timezone_window.sql", "create or replace function tests.materialize_test_assignments_for_occurrence(p_occurrence_id uuid)", OLD_T);
+  const newT = bodyFrom("migrations_v2/202611191000_calendar_v81_athlete_questions.sql", "create or replace function tests.materialize_test_assignments_for_occurrence(p_occurrence_id uuid)", NEW_T);
+  assert.equal(md5(oldT.prosrc), "2d961f5acd6c6309baa51de868773ba4");
+  assert.equal(md5(newT.prosrc), "ef7e1093ca427ba0bf2f2bab120ba14f");
+
+  // A club of its own, its switch on, and no event question in it yet.
+  const club = await fx.makeClub("q info2b club");
+  const team = await fx.makeTeam(club, "q info2b team");
+  const coach = await fx.coachOf(team, "q info2b coach");
+  const admin = await fx.clubAdminOf(club, "q info2b admin");
+  const platform = await fx.platformAdmin("q info2b platform", { clubId: club });
+  const on = await api("/api/calendar/settings/questions", { method: "PUT", cookie: platform.cookie, body: { requestKey: newKey(), enabled: true, reason: "Pilot of the athlete questions." } });
+  assert.equal(on.status, 200, on.text);
+  assert.equal((await q(`select calendar.questions_enabled($1) as on`, [club]))[0].on, true);
+  const teamA = await fx.makeAthlete("q info2b team one", { clubId: club, teamId: team });
+  const teamB = await fx.makeAthlete("q info2b team two", { clubId: club, teamId: team });
+  const clubOnly = await fx.makeAthlete("q info2b club only", { clubId: club });
+  const solo = await fx.makeAthlete("q info2b athlete target", { clubId: club });
+  const joiner = await fx.makeAthlete("q info2b joiner");
+  await fx.addMembership({ athleteId: joiner.athleteId, clubId: club, teamId: team, startsAt: `${TODAY}T00:00:00Z` });
+  const everyone = [teamA, teamB, clubOnly, solo, joiner];
+  const sched = await api("/api/tests/schedules", {
+    method: "POST", cookie: admin.cookie,
+    body: { testVersionId: WELLNESS, scheduleKind: "daily", timezone: "UTC", startDate: TODAY, endDate: addDays(TODAY, 3), opensTime: "06:00", closesTime: "21:00",
+      targets: [{ kind: "club", id: club }, { kind: "team", id: team }, { kind: "athlete", id: solo.athleteId }] },
+  });
+  assert.equal(sched.status, 201, sched.text);
+  const scheduleId = sched.body.schedule.id;
+  assert.equal((await q(`select skip_days_off from tests.test_schedules where id = $1`, [scheduleId]))[0].skip_days_off, false);
+
+  const client = new pg.Client({ connectionString: env.db.url });
+  await client.connect();
+  const strip = (rows) => rows.map(({ id, created_at, updated_at, ...rest }) => rest);
+  const byAthlete = (rows) => Object.fromEntries(rows.map((r) => [String(r.athlete_id), r]));
+  const run = async () => {
+    await client.query("begin");
+    await client.query(`delete from tests.test_assignments where occurrence_id in (select id from tests.test_schedule_occurrences where schedule_id = $1)`, [scheduleId]);
+    await client.query(`delete from tests.test_occurrence_target_snapshot where occurrence_id in (select id from tests.test_schedule_occurrences where schedule_id = $1)`, [scheduleId]);
+    await client.query(`update tests.test_schedule_occurrences set assignments_materialized_at = null where schedule_id = $1`, [scheduleId]);
+    const occ = (await client.query(`select tests.generate_test_schedule_occurrence($1, $2) as id`, [scheduleId, TODAY])).rows[0].id;
+    const read = async () => ({
+      assignments: strip((await client.query(`select * from tests.test_assignments where occurrence_id = $1 order by athlete_id`, [occ])).rows),
+      snapshot: strip((await client.query(`select * from tests.test_occurrence_target_snapshot where occurrence_id = $1 order by athlete_id`, [occ])).rows),
+    });
+    await client.query("savepoint world");
+    await client.query(`select ${OLD_T}($1)`, [occ]);
+    const a = await read();
+    await client.query("rollback to savepoint world");
+    await client.query(`select ${NEW_T}($1)`, [occ]);
+    const b = await read();
+    const skips = (await client.query(
+      `select k.athlete_id::text as athlete, k.reason, k.question_id::text as question
+         from calendar.question_assignment_skips k join tests.test_assignments x on x.id = k.assignment_id
+        where x.occurrence_id = $1 order by 1`, [occ])).rows;
+    await client.query("rollback");
+    return { a, b, skips };
+  };
+  try {
+    for (const body of [oldT.sql, V81_COPY_EDIT(newT.sql)]) await client.query(body);
+    // 1. The switch on, nothing covering the day: identical, nothing cancelled.
+    assert.equal((await q(`select count(*)::int as n from calendar.event_questions q join calendar.events e on e.id = q.event_id
+                            where calendar.event_club_id(e.id) = $1 and q.kind = 'wellness' and q.ended_at is null and q.window_date = $2`, [club, TODAY]))[0].n, 0);
+    const r1 = await run();
+    assert.deepEqual(r1.a.assignments.map((x) => String(x.athlete_id)).sort(), everyone.map((x) => String(x.athleteId)).sort(), "all five asked by the old body");
+    assert.deepEqual(r1.b, r1.a, "the switch on, nothing covering: the same rows, column by column");
+    assert.equal(r1.b.assignments.filter((x) => x.status === "cancelled").length, 0, "nothing cancelled by the switch alone");
+    assert.deepEqual(r1.skips, []);
+
+    // 2. A team event's WELLNESS question covers the day for the team only.
+    const ev = await createTeamEvent({ clubId: club, title: "q info2b cover", targets: [{ kind: "team", id: team }], questions: [{ kind: "wellness", window: ALL_DAY }] }, coach.cookie);
+    assert.equal(ev.status, 201, ev.text);
+    const [cover] = (await liveQuestions(ev.body.event.id)).filter((x) => x.kind === "wellness");
+    const reached = [teamA, teamB, joiner];
+    for (const who of everyone) {
+      const r = (await q(`select calendar.athlete_reached_on_day($1, $2, $3) as r`, [ev.body.event.id, who.athleteId, TODAY]))[0].r;
+      assert.equal(r, reached.includes(who), `${who.name}: reached by the covering event on the day = ${reached.includes(who)}`);
+    }
+    const r2 = await run();
+    assert.deepEqual(r2.b.snapshot, r2.a.snapshot, "the snapshot is the same");
+    const oldRows = byAthlete(r2.a.assignments);
+    const newRows = byAthlete(r2.b.assignments);
+    assert.deepEqual(Object.keys(newRows).sort(), Object.keys(oldRows).sort());
+    for (const who of everyone) {
+      const id = String(who.athleteId);
+      if (reached.includes(who)) {
+        assert.equal(oldRows[id].status, "pending", `${who.name}: pending under the old body`);
+        assert.deepEqual(newRows[id], { ...oldRows[id], status: "cancelled" }, `${who.name}: cancelled, nothing else changed`);
+      } else {
+        assert.deepEqual(newRows[id], oldRows[id], `${who.name}: not reached by the event, identical to the old body`);
+      }
+    }
+    assert.deepEqual(r2.skips, reached.map((who) => ({ athlete: String(who.athleteId), reason: "covered_by_event", question: String(cover.id) }))
+      .sort((x, y) => x.athlete.localeCompare(y.athlete)), "the skip rows name the covering question, for exactly the athletes it reaches");
+  } finally {
+    await client.query("rollback").catch(() => {});
+    for (const fn of [OLD_T, NEW_T]) await client.query(`drop function if exists ${fn}(uuid)`).catch(() => {});
+    await client.end();
+  }
+});
