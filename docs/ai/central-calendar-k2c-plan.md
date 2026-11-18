@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 has the manager's GO (2026-11-18)**; K2c-2 is planned; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built (section 1.2), waiting for its reviews**; K2c-2 is planned; K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -252,6 +252,81 @@ a cancelled event; leave *Edit* enabled in flight; send only the first `linkId` 
 Then the whole `--preset frontend-fast` on the head and on a clean `origin/main` worktree, the build,
 `git diff --check`, and the browser check of the brief (Chromium at 360, 375, 390 and 1280 px through `npm run
 e2e:demo`, invented data, a link and an unlink that really change the calendar).
+
+#### 1.1.10 The manager's GO (2026-11-18)
+
+GO on 1.1 at `faf8eab3`, everything in 1.1 standing, with:
+
+- **(a)** the manager view (`GET /api/calendar/events/:id`) is read for every manageable planned event's **open panel
+  only** (never per card in a list), once per open and again when the revision moves; a test pins one GET per open and
+  none for a reader's or an athlete's panel.
+- **(b)** `frontend/central-calendar-links.js` holds the pure rule and the sentences, exported for the tests; the view,
+  actions and data keep the module pattern.
+- **(c)** a link sends `alignSessions: false` and Align is its own visible button. After a confirmed link that leaves
+  `alignment.pending > 0`, the notice says so in one sentence and points at the button: "Linked “<training>”. These
+  trainings do not ask for RPE yet: use Ask RPE in the linked trainings." (or the "Stop asking" form).
+- **The two unpredictable refusals** (`session_not_available`, a session linked to an event the coach cannot see —
+  `session_already_attached`; and their activity twins `activity_not_available`, `activity_already_attached`) leave the
+  suggestion list consistent after the re-read: the refused pair (the event and the planned card's sessions, or the
+  activity) is remembered in memory for this calendar slice (dropped with it on a workspace switch) and shows as a quiet
+  row "Can't be linked to this event." with no *Link*, so no stale *Link* refuses again. A test group pins it.
+
+### 1.2 K2c-1 as built (2026-11-18)
+
+Frontend only; no backend file, no migration, no new route. Built on 1.1 with the manager's GO (1.1.10).
+
+- **`frontend/central-calendar-links.js`** (new, pure): the suggestion rule (`centralCalendarLinkSuggestions`,
+  `centralCalendarEventsForPlanned`), the refused-pair key, the grouping of the manager view's session links
+  (`centralCalendarSessionLinkGroups`: by day, slot and current name; the orphaned links apart, counted by training),
+  the request bodies (`centralCalendarLinkRequest`) and every sentence (Align line, notices, refusals, the
+  `has_existing_results` question), the codes that re-read, that are remembered, and that settle a Check result.
+- **`central-calendar-view.js`**: the event panel's "Trainings and activities" section before *Edit* / *Cancel event*,
+  and a planned card's "Link to an event" section before *Open in Training Load*. *Edit* / *Cancel event* are disabled
+  while a link command is in flight or not confirmed. The uncertain-writes line names a link as "Check linking for
+  “<event>”".
+- **`central-calendar-actions.js`**: one action, `central-calendar-link` (`data-act`: `link-session`, `link-to-event`,
+  `unlink-sessions`, `align`, `link-activity`, `unlink-activity`), and `central-calendar-link-check`. The command is
+  built from the open panel and the calendar answer (ids are never read from the button's text). Every press makes a
+  new key; a lost answer goes into the existing uncertain-writes memory (mode `link`) and Check result resends the same
+  path, body and key; the Edit / Cancel handlers refuse while a link is locked; `beforeunload` and the final leave
+  question count a link in flight. The panel's manager-view read (`syncPanelEvent`) now runs for every manageable
+  planned event's open panel (`panelEventWanted`), the GO's (a).
+- **`central-calendar-data.js`**: `sendCentralCalendarLinkWrite` (the 90 s bounded write), and `resultCount` kept on an
+  error's info for the alignment's question. **`state.js`**: `linkWrite`, `linkMessage`, `linkRefused` on the
+  calendar slice (dropped with it on a workspace switch). **`styles.css`**: the link rows; at ≤ 390 px the buttons go
+  full width.
+
+**Deviations from 1.1, both wording:**
+
+- The Align line counts **sessions**, not trainings: `alignment.pending` counts the linked Builder sessions (one per
+  athlete), and the browser check showed "4 linked trainings do not ask for RPE yet" for one training of four athletes.
+  It now reads "4 linked sessions do not ask for RPE yet." and the align notice reads "RPE is now asked in 4 linked
+  sessions."; the buttons keep "Ask RPE in the linked trainings" / "Stop asking RPE in the linked trainings".
+- The orphaned row counts trainings (distinct slot and name at link), not links: "1 linked training was deleted in the
+  Builder." for one batch of several athletes.
+
+**Changed tests of earlier suites (the GO's (a), intended):** D10 and D27 of `central-calendar-event-details` and 4b
+and 7a of `central-calendar-events` expected no manager-view read for a manager's event without details; they now
+expect one read for a manageable planned event's open panel (7a: one for the panel, one fresh for the Edit form), and
+D10 pins none for a cancelled one.
+
+**Tests:** `frontend/tests/central-calendar-links.actions.test.mjs`, 15 tests in the 11 groups of 1.1.9 and 1.1.10
+(including one GET per open and none for a reader's, a cancelled event's or a planned card's panel). Ten mutations,
+all killed: the eight of 1.1.9, plus dropping the refused-pair memory and not locking while unconfirmed.
+
+**Browser check** (Chromium through `npm run e2e:demo`, a disposable database with invented data: four club-owned
+weekly plans with one Morning session, a manual activity with one participant, a club event created through the app's
+API) at 360, 375, 390 and 1280 px. At each width:
+- linked from the event, from the planned card (the event's panel opened with the notice), Align, an activity link and
+  unlink;
+- the planned and activity cards left and came back on the calendar;
+- no horizontal scroll, every button of the sections at least 44 px, no JS error.
+
+The one console line is a 403 of `/api/tests/athlete/timezone` on load for a club admin, which this change does not
+touch.
+
+**Not done here:** the reviews of section 1 (`code-reviewer`, `ux-design-reviewer`, `mobile-qa`, the independent
+review) wait for the manager's order; no physical-device check.
 
 ## 2. K2c-2 — "Make an event" from the Builder (planned)
 

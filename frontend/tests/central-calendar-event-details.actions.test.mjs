@@ -461,12 +461,18 @@ test("D10. a manager's event with details: one read on open, each value in words
     "Weather=Snow", "Our score (required)=Not filled in", "Old note=Not filled in",
   ]);
   assert.ok(doc.querySelector(`[data-action="central-calendar-enter-details"][data-key="event:${E_MATCH}:${DAY(1)}"]`));
-  // A manager's event without chosen details: no read.
+  // A manager's planned event without chosen details: since K2c-1 the panel
+  // reads it once for its links (the manager's GO (a)), and shows no details.
   clearAllViewCache();
   resetCentralCalendarForWorkspaceChange();
   const plain = await openPanel({ items: [eventItem(E_MATCH, DAY(1), { details: { selected: 0, filled: 0, required: 0, filledRequired: 0 } })] });
-  assert.equal(eventReads(plain).length, 0);
+  assert.equal(eventReads(plain).length, 1);
   assert.equal(dom().querySelector(".cc-panel-details"), null);
+  // A manager's cancelled event without details: nothing to link, no read.
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  const cancelled = await openPanel({ items: [eventItem(E_MATCH, DAY(1), { cancelled: true, status: "cancelled", details: { selected: 0, filled: 0, required: 0, filledRequired: 0 } })] });
+  assert.equal(eventReads(cancelled).length, 0);
 });
 
 test("D11. the panel's read fails: a sentence and Try again, which reads once more", async () => {
@@ -907,7 +913,8 @@ test("D27. a panel opened before its card had details reads them on the next cal
   await loadCentralCalendar({ render });
   await tick();
   await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
-  assert.equal(eventReads(calls).length, 0, "no details: no read");
+  // K2c-1: the open panel of a manager's planned event reads it once for its links.
+  assert.equal(eventReads(calls).length, 1, "no details: one read for the links");
   // Details are chosen elsewhere meanwhile; the coach reads the calendar again.
   current = eventView({ revision: 3, fields: F6.map((id, i) => textField(id, `Detail ${i + 1}`, i < 4 ? `v${i + 1}` : null)) });
   item = eventItem(E_MATCH, DAY(1), { revision: 3, details: { selected: 6, filled: 4, required: 0, filledRequired: 0 } });
