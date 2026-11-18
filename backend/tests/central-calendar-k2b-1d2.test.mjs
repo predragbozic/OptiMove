@@ -138,6 +138,17 @@ test("2a. the platform workspace names the active teams of active clubs, ordered
   // The colour its club chose (Q3): set on T1, read back by the platform.
   const colour = await api(`/api/calendar/settings/teams/${teams.t1}`, { method: "PUT", cookie: roles.clubAdmin.cookie, body: { requestKey: newKey(), expectedRevision: 0, colorKey: "rust" } });
   assert.equal(colour.status, 200, colour.text);
+  // A T1 member whose team membership is archived (the statement Settings runs, organization.js) is not counted: the
+  // platform's athleteCount counts active team memberships only (the independent review).
+  const leaver = await env.fx.makeAthlete(`k2b1d2 leaver ${uid()}`, { clubId: clubs.c1, teamId: teams.t1 });
+  await q(
+    `update public.athlete_memberships set status = 'archived', archived_at = now(), updated_at = now()
+      where athlete_id = $1 and team_id = $2 and membership_type = 'team'`,
+    [leaver.athleteId, teams.t1],
+  );
+  const archivedRows = await q(`select count(*)::int as n from public.athlete_memberships where team_id = $1 and membership_type = 'team' and status <> 'active'`, [teams.t1]);
+  assert.ok(archivedRows[0].n >= 1, "T1 holds an archived team membership");
+  const activeCount = (await q(`select count(*)::int as n from public.athlete_memberships where team_id = $1 and membership_type = 'team' and status = 'active'`, [teams.t1]))[0].n;
   // The order is by club first: a club whose name sorts first holds a team whose name sorts last (code review).
   const clubAaa = await env.fx.makeClub(`Aaa order ${uid()}`);
   const clubBbb = await env.fx.makeClub(`Bbb order ${uid()}`);
@@ -163,6 +174,7 @@ test("2a. the platform workspace names the active teams of active clubs, ordered
   }
   const t1 = ours.find((t) => String(t.teamId) === String(teams.t1));
   const clubT1 = (await calendarOf(roles.clubAdmin.cookie)).body.teams.find((t) => String(t.teamId) === String(teams.t1));
+  assert.equal(t1.athleteCount, activeCount, "active team memberships only: the archived one is not counted");
   assert.equal(t1.athleteCount, clubT1.athleteCount, "the same member count as the club's own answer");
   assert.equal(t1.colorKey, "rust", "the colour its club chose (Q3)");
   assert.equal(clubT1.colorKey, "rust");

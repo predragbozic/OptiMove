@@ -1646,6 +1646,9 @@ GO for K2b-1d2 as section 23 plans it.
 - **The frontend:** `centralCalendarTeamLabel` (`central-calendar-data.js`) is used by `teamName` (cards, dots, pills,
   panel, day lists), the Groups chips, the legend and the form's labels. The form's `teams` is `[]` in the platform
   workspace.
+- **The form's names (23.6, Q1) are dead code in practice, and harmless:** the platform's form gets no teams, and a
+  club's or a team's teams carry no `clubName`. So the form's team label always reads as before. It is kept so the label
+  stays the one helper everywhere (the independent review's NIT).
 - **The measurement:** `backend/scripts/calendar-platform-read-cost.mjs` (Q4, disposable database only, `--root` for the
   before run). It fails when the seeding does not reach the read.
 
@@ -1661,6 +1664,18 @@ GO for K2b-1d2 as section 23 plans it.
     2d's statement count.
   - A6 and A7 rest on the frontend evidence; no frontend file changed.
   - Its one LOW was this record, out of date in that head ("not run", "10 tests"); it is corrected here.
+- **The independent review** (on `7e35024d`): READY WITH NON-BLOCKING NOTES, with no BLOCKER, HIGH or MEDIUM. Its 11
+  backend and 4 frontend scenarios pass. It repeated 131/131 and `backend-fast` 674/676, with both failures the same on
+  `94aab138`. Its mutations were all killed except B12b (below) and three equivalent ones. Its notes are answered in the
+  last round, which changed tests, one comment and documents, with no change of behaviour:
+
+  | Finding | Severity | Correction | Test | Status |
+  |---|---|---|---|---|
+  | B12b — the platform's member count without `am.status = 'active'` survived | LOW | test 2a archives a T1 member's team membership (Settings' own statement) and compares the platform's `athleteCount` with a direct `status = 'active'` count | 2a (BM12) | Written; it needs the database |
+  | Escaping of a team's club name was pinned only by the review's own test (its mutation "the team name in the panel unescaped") | LOW | P2b: a club named `<i id=pwn>…</i>` makes no element in the chips, a card's pill, the legend, the panel and its athlete rows | P2b (FM7–FM9) | Fixed; P2b passes, FM7–FM9 killed |
+  | The Q4 range: the review measured 1.24× and 1.30× | LOW | the range 1.17–1.30× and the trigger to measure again at about 40 active teams, recorded above | — | Recorded |
+  | The comment on `athleteTeamIdsSql` named only a club and a team workspace | NIT | "'{}' outside a club / team / platform workspace" | — | Fixed |
+  | The form's names of 23.6 are dead code in practice | NIT | recorded above (harmless) | — | Recorded |
 
 | Finding | Reviewer, severity | Correction | Test | Status |
 |---|---|---|---|---|
@@ -1701,6 +1716,12 @@ and the head the same):
 
   The ratio is 1.17× and the read takes 0.79 s, under the bound (1.5× / 1 s). So the `athleteTeamIdsSql` rewrite is
   **not** part of this step; the numbers are recorded here.
+- **The measured range, with the independent review's runs:** on the same machine, the independent review measured
+  676 ms before and 839 ms and 881 ms after, so 1.24× and 1.30×. With the executor's and the manager's 1.17×, **the
+  range is 1.17–1.30×**, at most 0.88 s, still under 1.5× / 1 s.
+- **When to measure again:** the cost grows with the number of teams. When the platform passes about **40 active teams**
+  (the world measured had 30), Q4 is run again with the script. If the read is then over the bound, the
+  `athleteTeamIdsSql` rewrite of 23.2 follows.
 
 **Run in this session:**
 - `backend-fast` (on `60c7697f`): 674 of 676. The same two files fail with the same counts on a clean `main`:

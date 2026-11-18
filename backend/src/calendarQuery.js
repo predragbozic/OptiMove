@@ -54,7 +54,8 @@ const athleteNameSql = (alias) => `coalesce(${alias}.display_name, ${alias}.full
 // The athlete's team memberships among the workspace's teams
 // ($<teamsParam>::uuid[]) ON THE DAY `dayExpr`, by the calendar's one
 // membership rule (calendarAccess.js membershipOnDaySql), as an array; '{}'
-// outside a club / team workspace.
+// outside a club / team / platform workspace (since K2b-1d2 the platform's
+// list holds every active team of an active club, so it gets team ids too).
 const athleteTeamIdsSql = (alias, teamsParam, dayExpr) =>
   `(select coalesce(array_agg(distinct wt.id), '{}') from unnest($${teamsParam}::uuid[]) as wt(id)
      where ${membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = wt.id)`, dayExpr)})`;

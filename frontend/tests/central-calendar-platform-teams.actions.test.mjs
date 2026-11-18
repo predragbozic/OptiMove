@@ -84,6 +84,30 @@ test("P2. the platform's two U19 teams read apart everywhere the calendar names 
   assert.ok(legend.some((t) => t.startsWith("U19 · Club Beta · ")), legend.join(" | "));
 });
 
+test("P2b. a club's name with markup is text everywhere a team is named: chips, a card's pill, the legend, the panel and its athlete rows (the independent review)", () => {
+  const C_U21 = "44444444-4444-4444-8444-44444444444c";
+  const markup = "<i id=pwn>Club Gamma</i>";
+  const teams = [...PLATFORM_TEAMS, { teamId: C_U21, name: "U21", athleteCount: 1, colorKey: null, clubId: "cccccccc-0000-4000-8000-00000000000c", clubName: markup }];
+  const items = [
+    card({ key: "planned:c", teamIds: [C_U21], athleteCount: 1 }),
+    card({ key: "planned:a", teamIds: [A_U19], athleteCount: 20, startTime: "11:00" }),
+  ];
+  const doc = render("platform", teams, items, {
+    view: "day",
+    panel: { open: true, key: "planned:c", date: TODAY, athletes: [{ athleteId: "aaaaaaaa-0000-4000-8000-0000000000c1", name: "Test Athlete", teamIds: [C_U21], rpe: "submitted" }], loading: false, error: "" },
+  });
+  assert.equal(doc.querySelector("#pwn"), null, "no element is made from a club's name");
+  assert.equal(doc.querySelector("i"), null);
+  const label = "U21 · <i id=pwn>Club Gamma</i>";
+  const chips = [...doc.querySelectorAll("[data-action='central-calendar-toggle-team']")].map((el) => el.textContent);
+  assert.ok(chips.some((t) => t.includes(label)), "the chip shows it as text");
+  const pills = [...doc.querySelectorAll(".cc-team-pill-name")].map((el) => el.textContent);
+  assert.ok(pills.some((t) => t === label), "a card's pill shows it as text");
+  assert.ok(pills.some((t) => t.startsWith(`${label} · `)), "the legend shows it as text");
+  assert.ok([...doc.querySelectorAll(".cc-panel-team")].some((el) => el.textContent.includes(label)), "the panel's teams show it as text");
+  assert.ok([...doc.querySelectorAll(".cc-athlete-teams")].some((el) => el.textContent === label), "an athlete's row shows it as text");
+});
+
 test("P3. a club's workspace reads exactly as before: its teams' plain names, no club in them", () => {
   const items = [card({ key: "planned:a", teamIds: [A_U19], athleteCount: 20 })];
   const doc = render("club", CLUB_TEAMS, items);
