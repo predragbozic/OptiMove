@@ -1566,3 +1566,74 @@ test("33. INFO-2 with the club's switch ON: nothing covering the day → v81's W
     await client.end();
   }
 });
+
+test("34. B1: GET /events/types carries questions.enabled for the workspace's own club, and each type's defaultQuestions (what a create without questions asks) only while the switch is on", async () => {
+  const typesOf = async (cookie) => {
+    const res = await api("/api/calendar/events/types", { cookie });
+    assert.equal(res.status, 200, res.text);
+    return res.body;
+  };
+  const ownClub = [role("teamCoach"), role("clubAdmin"), role("platformInClub")];
+  const hasNoDefaults = (body) => body.types.every((t) => !("defaultQuestions" in t));
+  await switchOn(m.clubs.c1, false);
+  let offAnswer;
+  try {
+    for (const who of ownClub) {
+      const body = await typesOf(who.cookie);
+      assert.deepEqual(body.questions, { enabled: false }, "off: enabled false");
+      assert.ok(hasNoDefaults(body), "off: no defaultQuestions key on any type");
+      if (who === role("teamCoach")) offAnswer = body;
+    }
+  } finally {
+    await switchOn(m.clubs.c1, true);
+  }
+  // On: what a create without `questions` asks, for Training and Day off.
+  const asked = async (kind, day) => {
+    const ev = await createTeamEvent({ kind, title: `B1 ${kind}`, day, targets: [{ kind: "team", id: m.teams.t1 }] });
+    assert.equal(ev.status, 201, ev.text);
+    return (await liveQuestions(ev.body.event.id)).map((x) => x.kind).sort();
+  };
+  const trainingAsks = await asked("training", addDays(TODAY, 41));
+  const dayOffAsks = await asked("day_off", addDays(TODAY, 43));
+  assert.deepEqual(trainingAsks, ["rpe"], "a Training asks RPE");
+  assert.deepEqual(dayOffAsks, [], "a Day off asks nothing");
+  for (const who of ownClub) {
+    const body = await typesOf(who.cookie);
+    assert.deepEqual(body.questions, { enabled: true }, "on: enabled true, and nothing else of the switch");
+    assert.ok(body.types.every((t) => Array.isArray(t.defaultQuestions)), "on: every type carries defaultQuestions");
+    const training = body.types.find((t) => t.id === offAnswer.types.find((x) => x.kind === "training").id);
+    const dayOff = body.types.find((t) => t.kind === "day_off");
+    assert.deepEqual(training.defaultQuestions, trainingAsks);
+    assert.deepEqual(dayOff.defaultQuestions, dayOffAsks);
+    if (who === role("teamCoach")) {
+      // The rest of the answer is exactly the answer with the switch off.
+      const { questions: _on, ...restOn } = body;
+      const { questions: _off, ...restOff } = offAnswer;
+      assert.deepEqual({ ...restOn, types: restOn.types.map(({ defaultQuestions, ...t }) => t) }, restOff, "everything else unchanged");
+      assert.deepEqual(Object.keys(body).sort(), Object.keys(offAnswer).sort());
+    }
+  }
+  // Club B's coach sees B's state (off) while club A (c1) is on.
+  const clubB = await fx.makeClub("q b1 club B");
+  const teamB = await fx.makeTeam(clubB, "q b1 team B");
+  const coachB = await fx.coachOf(teamB, "q b1 coach B");
+  const b = await typesOf(coachB.cookie);
+  assert.deepEqual(b.questions, { enabled: false });
+  assert.ok(hasNoDefaults(b));
+  assert.ok(b.types.every((t) => !offAnswer.types.some((x) => x.id === t.id)), "club B's own types");
+  // A private coach: no club, off.
+  const pc = await typesOf(role("privateCoach").cookie);
+  assert.deepEqual(pc.questions, { enabled: false });
+  assert.ok(hasNoDefaults(pc));
+  // The Settings read keeps its own shape (the switch with its revision and
+  // time, for the club's admin), and its types' defaultQuestions agree with
+  // the form's: one helper, one answer.
+  const settings = await api("/api/calendar/settings", { cookie: role("clubAdmin").cookie });
+  assert.equal(settings.status, 200, settings.text);
+  assert.deepEqual(Object.keys(settings.body.questions).sort(), ["enabled", "revision", "updatedAt"]);
+  const form = await typesOf(role("clubAdmin").cookie);
+  for (const t of form.types) {
+    const st = settings.body.types.find((x) => x.id === t.id);
+    assert.deepEqual(t.defaultQuestions, st.defaultQuestions, `${t.kind}: the form and Settings agree`);
+  }
+});

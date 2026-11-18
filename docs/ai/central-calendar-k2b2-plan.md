@@ -660,6 +660,12 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   the advisory key is `calendar.wellness_day:<club>:<day>` (`calendar.wellness_day_key`).
 - **One more helper function** than 9.1 named: `calendar.event_audience_on_day(event, day)` (the recipients of A2, the
   WELLNESS check).
+- **B1 (the manager's decision, after the ★★ GO; no migration):** `GET /api/calendar/events/types` (`eventFormOptions`)
+  adds `questions: { enabled }`, the switch of the club it already resolves (the owner club, or the team's club; false
+  for a private coach, the platform or without v81; nothing else of the switch), and on each type `defaultQuestions`
+  (`typeQuestions`, the value a create without `questions` asks) only while it is on. `listEventTypes` is unchanged.
+  Test 34; mutations C1 (another club's switch), C2 (`defaultQuestions` while off), C3 (on without a club). The pinned
+  key list of `central-calendar-k2b-settings` test 0c gains `questions` (asserted off there, with no type defaults).
 
 #### 9.1.15 Review round 1 (2026-11-18, on `d638b478`): every item and what was done
 
