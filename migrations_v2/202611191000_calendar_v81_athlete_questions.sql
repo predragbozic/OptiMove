@@ -383,7 +383,7 @@ begin
   if new.ended_at is not null then
     raise exception 'calendar.event_questions: a new question is live' using errcode = '23514';
   end if;
-  select e.status, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id into v_event
+  select e.status, e.owner_scope, e.owner_user_id, e.owner_club_id, e.owner_team_id, e.external_schedule_id into v_event
     from calendar.events e where e.id = new.event_id;
   if not found or v_event.status <> 'planned' then
     raise exception 'calendar.event_questions: only a planned event is asked' using errcode = '23514';
@@ -393,6 +393,11 @@ begin
     raise exception 'calendar.event_questions: questions are not turned on for the event''s club' using errcode = '23514', constraint = 'event_questions_switch';
   end if;
   if new.kind = 'rpe' then
+    -- Round 1b (the RPE twin's insert side): a live RPE question is the event's
+    -- own RPE schedule, so the event never carries two RPE channels.
+    if new.external_schedule_id is distinct from v_event.external_schedule_id then
+      raise exception 'calendar.event_questions: an RPE question asks through the event''s own RPE schedule' using errcode = '23514', constraint = 'event_questions_rpe_link';
+    end if;
     select s.owner_scope, s.owner_user_id, s.owner_club_id, s.owner_team_id, s.schedule_kind, s.start_date, s.end_date,
            s.opens_time, s.closes_time, s.status
       into v_ext from training_load.external_schedules s where s.id = new.external_schedule_id;

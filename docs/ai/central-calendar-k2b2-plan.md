@@ -167,7 +167,7 @@ The migration, in the `calendar` schema:
 
 - **Ask / remove / move:**
   - one calendar command per change, with a `requestKey`, through the calendar's one runner (`calendarCommandRunner.js`:
-    the writer lock, the event row `FOR UPDATE`, the right decided again on the locked row, the request and change
+    the writer lock, the event row `FOR NO KEY UPDATE` (round 1; it was `FOR UPDATE`), the right decided again on the locked row, the request and change
     rows, the bounded COMMIT);
   - in that transaction: the external or Tests schedule rows (targets = the event's targets, owner = the event's
     owner), the link, and the in-app notifications;
@@ -785,4 +785,13 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
 - **Recorded, no change:** the insert-side twin of `events_rpe_question_link` (db LOW-1: no command can insert an event
   with an RPE question already live); the *Later* replay before the ownership re-check (security LOW: the replayed
   answer is her own immutable record).
-- R1 and R2 (the deadlock mutations) were run again on the changed functions: both still fail test 15 (R1 also 21).
+- **LOW (the RPE twin's insert side; the independent re-check and the db-reviewer).** `events_rpe_question_link` guarded
+  only an UPDATE of `calendar.events`; a raw sequence in one transaction (end the RPE question → point the event at X →
+  insert a live RPE question on Y) still left two channels. `event_questions_guard` now requires, for an RPE insert,
+  `new.external_schedule_id` = the event's `external_schedule_id` (`23514`, constraint `event_questions_rpe_link`); the
+  ask and create paths write the link before the question. Test 22 runs the raw sequence; mutation B8 fails it.
+- **LOW (test 21's gate).** The gate sat right after the event-row lock, before the live-question lock, so reverting
+  the questions to `FOR UPDATE` failed only test 15 (the SQL text). The gate now wraps the command's first day-key
+  query, after both locks: R2 (questions back to `FOR UPDATE`) now fails tests 15 and 21, as R1 does.
+- **NIT.** The comment at the top of `calendarEventService.js` and plan section 2 (around line 170) now say the event
+  row is locked `FOR NO KEY UPDATE`.

@@ -1,7 +1,7 @@
 # Runbook — migration v81: Ask athletes and "Skip days off" (K2b-2a-1)
 
 File: `migrations_v2/202611191000_calendar_v81_athlete_questions.sql` (sha256 at the time of writing
-`1b39835adaaaf8d12d5f4d8599e82908dcc3b00a78328ad62b4d8d9a6d0cef17`; the pull request names the final one). Plan: `docs/ai/central-calendar-k2b2-plan.md`, section 9.1 and
+`dbd78ba57656c97f8c00e5b2e6e26430facceab7d2b30e15f628735e0cfa6a5a`; the pull request names the final one). Plan: `docs/ai/central-calendar-k2b2-plan.md`, section 9.1 and
 the manager's GO 9.1.13. Scripts beside this file: `calendar-questions-v81-preflight.sql`,
 `calendar-questions-v81-postcheck.sql`, `calendar-questions-v81-rollback.sql`.
 

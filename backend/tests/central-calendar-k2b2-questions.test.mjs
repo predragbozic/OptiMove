@@ -812,10 +812,22 @@ async function gatedRace({ label, operation, startCommand, scheduleId, expectRea
   const gate = new Promise((r) => { release = r; });
   let reached;
   const atGate = new Promise((r) => { reached = r; });
+  // Round 1b: the gate sits right before the command's first day-key lock,
+  // so the event row AND the live questions are already held (both halves of
+  // the H1 fix are exercised; the hook itself only installs the wrapper).
   eventHooks.afterEventLock = async (info) => {
     if (info.operation !== operation) return;
-    reached();
-    await gate;
+    const original = info.client.query.bind(info.client);
+    let gated = false;
+    info.client.query = async (...args) => {
+      const text = typeof args[0] === "string" ? args[0] : args[0]?.text || "";
+      if (!gated && /wellness_day_key/.test(text)) {
+        gated = true;
+        reached();
+        await gate;
+      }
+      return original(...args);
+    };
   };
   const holder = new pg.Client({ connectionString: env.db.url });
   await holder.connect();
@@ -931,6 +943,24 @@ test("22. H2 (test 8b): while an RPE question is live, the event's RPE link chan
     q(`update calendar.events set external_schedule_id = $2, revision = revision + 1 where id = $1`, [ev.id, other.body.schedules[0].id]),
     /live RPE question keeps the event's RPE schedule/,
   );
+  // Round 1b, the insert side: in one transaction, end the RPE question, point
+  // the event at another schedule, then insert a live RPE question on the old
+  // one. The guard refuses the insert: two channels never coexist.
+  const [row] = await q(`select * from calendar.event_questions where id = $1`, [rpe.id]);
+  await q("begin");
+  try {
+    await q(`update calendar.event_questions set ended_at = now(), ended_by_user_id = created_by_user_id, end_reason = 'removed' where id = $1`, [rpe.id]);
+    await q(`update calendar.events set external_schedule_id = $2, revision = revision + 1 where id = $1`, [ev.id, other.body.schedules[0].id]);
+    await assert.rejects(
+      q(`insert into calendar.event_questions (event_id, kind, external_schedule_id, window_kind, window_date, opens_time, closes_time, created_by_user_id)
+         values ($1, 'rpe', $2, $3, $4, $5, $6, $7)`,
+        [ev.id, row.external_schedule_id, row.window_kind, row.window_date, row.opens_time, row.closes_time, row.created_by_user_id]),
+      (e) => e.code === "23514" && e.constraint === "event_questions_rpe_link",
+    );
+  } finally {
+    await q("rollback");
+  }
+  assert.equal((await liveQuestions(ev.id)).length, 1, "nothing of the raw sequence stayed");
 });
 
 test("23. M1: an athlete target who left the club before the window's day gets no schedule target, no notification, and is not in the panel; nobody left is 409 no_athletes", async () => {

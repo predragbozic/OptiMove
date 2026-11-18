@@ -7,7 +7,7 @@
 //
 // Every command is ONE transaction with this lock order (plan 4.3):
 //   1. calendar.lock_event_writer(user, owner, basis)   the role rows FOR SHARE; 42501 → the 404 / 403
-//   2. the event row FOR UPDATE (every command but create) lock_timeout 15 s → 409 try_again
+//   2. the event row FOR NO KEY UPDATE (every command but create) lock_timeout 15 s → 409 try_again
 //   3. the requestKey replay — the hash covers the canonical body AND the
 //      event (edit, cancel) or the owner (create), so a key reused on another
 //      event or in another workspace is 409 request_key_reused, never another
