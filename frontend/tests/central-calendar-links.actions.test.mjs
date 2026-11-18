@@ -235,6 +235,8 @@ const openPlanned = (key = "planned:p1") => act({ action: "central-calendar-open
 const section = () => dom().querySelector(".cc-panel-links");
 const linkButton = (selector) => dom().querySelector(`.cc-panel-links [data-action="central-calendar-link"]${selector}`);
 const press = (button) => act({ ...button.dataset });
+// The words of a link command's result in the open panel (review M4).
+const said = () => state.centralCalendar.linkMessage?.text ?? null;
 
 async function start(options) {
   const fake = server(options);
@@ -278,7 +280,11 @@ test("1a. the rule: every athlete in the event is offered, a partial overlap is 
   const forPlanned = links.centralCalendarEventsForPlanned(data, P1());
   assert.deepEqual(forPlanned.events.map((x) => x.item.eventId), [E1]);
   assert.equal(links.centralCalendarEventsForPlanned(data, P_PART()).events.length, 0);
-  assert.equal(links.centralCalendarEventsForPlanned(data, P_PART()).manageable, 1);
+  assert.deepEqual(links.centralCalendarEventsForPlanned(data, P_PART()).partial.map((e) => e.eventId), [E1]);
+  // Review M2: a linked athlete who is no target any more does not count when the card carries its athletes.
+  const withAthletes = { ...event, athletes: [{ athleteId: A1, targeted: true }, { athleteId: A2, targeted: false }, { athleteId: A3, targeted: true }] };
+  assert.deepEqual(links.centralCalendarLinkSuggestions(data, withAthletes).trainings.map((x) => x.item.key), [], "A2 is no target: P1 is not covered");
+  assert.equal(links.centralCalendarLinkSuggestions({ days: [{ date: D, items: [withAthletes, ACT()] }] }, withAthletes).activities.length, 0, "the activity's only athlete is A2");
 });
 
 test("1b. the section: the event's panel lists the day's training and activity, the partial line; a reader's, a cancelled event's and the athlete's panels have none", async () => {
@@ -330,8 +336,11 @@ test("2. Link from the event: one POST with the exact body; the calendar read ag
   assert.match(s.textContent, /Linked trainings/);
   assert.match(s.querySelector(".cc-link-row").textContent, /Morning session/);
   assert.match(s.querySelector(".cc-link-row").textContent, /AM · Training · 2 athletes/);
-  assert.equal(state.centralCalendar.notice, "Linked “Morning session”. These trainings do not ask for RPE yet: use Ask RPE in the linked trainings.");
-  assert.equal(dom().querySelector('[data-act="align"]').textContent, "Ask RPE in the linked trainings");
+  assert.equal(said(), "Linked “Morning session”. These trainings do not ask for RPE yet: use Ask for RPE in the linked trainings.");
+  assert.equal(dom().querySelector('.cc-panel-links .cc-link-message[role="status"]').textContent, said(), "in the panel's own line (review M4)");
+  assert.equal(state.centralCalendar.notice, "", "not behind the sheet");
+  assert.equal(dom().querySelector('[data-act="align"]').textContent, "Ask for RPE in the linked trainings");
+  assert.match(section().textContent, /A linked training shows inside this event on the calendar\. Unlink undoes it\./);
 });
 
 // --- 3. Link from a planned card --------------------------------------------------------------
@@ -340,14 +349,14 @@ test("3a. a planned card with one covering event: the primary Link to “title�
   const { calls } = await start();
   await openPlanned();
   const button = linkButton(`[data-event-key="event:${E1}:${D}"]`);
-  assert.ok(button.classList.contains("primary-button"));
+  assert.ok(button.classList.contains("cc-primary"));
   assert.equal(button.textContent, "Link to “Team training”");
   assert.equal(eventReads(calls).length, 0, "a planned card's panel reads no event");
   await press(button);
   await tick();
   assert.equal(writesOf(calls)[0].url, `/api/calendar/events/${E1}/sessions`);
   assert.equal(state.centralCalendar.panel.key, `event:${E1}:${D}`, "the event's panel opened");
-  assert.match(state.centralCalendar.notice, /^Linked to “Team training”\. These trainings do not ask for RPE yet/);
+  assert.match(said(), /^Linked to “Team training”\. These trainings do not ask for RPE yet/);
 });
 
 test("3b. two covering events: two rows with Link; none covering: the quiet line; no manageable event: no section", async () => {
@@ -356,9 +365,10 @@ test("3b. two covering events: two rows with Link; none covering: the quiet line
   await openPlanned();
   const buttons = dom().querySelectorAll('.cc-panel-links [data-act="link-to-event"]');
   assert.equal(buttons.length, 2);
-  assert.ok([...buttons].every((b) => b.textContent === "Link" && !b.classList.contains("primary-button")));
+  assert.ok([...buttons].every((b) => b.textContent === "Link" && !b.classList.contains("cc-primary")));
   await openPlanned("planned:p2");
-  assert.equal(section().textContent.includes("No event on this day includes all of these athletes."), true);
+  assert.match(section().textContent, /“Team training” does not include all of these athletes\. Add them to the event, then link\./);
+  assert.match(section().textContent, /“Extra” does not include all of these athletes\./);
   clearAllViewCache();
   resetCentralCalendarForWorkspaceChange();
   await start({ items: [P1()] });
@@ -381,7 +391,7 @@ test("4. Unlink a group sends all its link ids; an orphaned row; an activity lin
   assert.deepEqual(detach.body.linkIds, linkIds, "every link of the group");
   assert.equal(detach.body.expectedRevision, 2);
   assert.ok(linkButton('[data-planned-key="planned:p1"]'), "offered again");
-  assert.equal(state.centralCalendar.notice, "Unlinked “Morning session”.");
+  assert.equal(said(), "Unlinked “Morning session”.");
   // An orphaned link: one row, one Unlink.
   await press(linkButton('[data-planned-key="planned:p1"]'));
   await tick();
@@ -392,6 +402,7 @@ test("4. Unlink a group sends all its link ids; an orphaned row; an activity lin
   await act({ action: "central-calendar-retry" });
   await tick();
   assert.match(section().textContent, /1 linked training was deleted in the Builder\./, "one training (two athletes' sessions)");
+  assert.match(section().textContent, /Unlink to clear it; nothing else changes\./);
   await press(linkButton('[data-group="orphaned"]'));
   await tick();
   assert.deepEqual(writesOf(calls).at(-1).body.linkIds.length, 2);
@@ -399,58 +410,109 @@ test("4. Unlink a group sends all its link ids; an orphaned row; an activity lin
   await press(linkButton(`[data-activity-key="activity:${ACT1}"]`));
   await tick();
   assert.deepEqual(writesOf(calls).at(-1).body, { ...writesOf(calls).at(-1).body, activityId: ACT1 });
-  assert.equal(state.centralCalendar.notice, "Linked “GPS session”.");
+  assert.equal(said(), "Linked “GPS session”.");
   assert.match(section().textContent, /Linked activities/);
   await press(linkButton(`[data-act="unlink-activity"][data-activity-id="${ACT1}"]`));
   await tick();
   assert.equal(writesOf(calls).at(-1).url, `/api/calendar/events/${E1}/activities/detach`);
-  assert.equal(state.centralCalendar.notice, "Unlinked the activity.");
+  assert.equal(said(), "Unlinked the activity.");
 });
 
 // --- 5. Align -------------------------------------------------------------------------------------
 
-test("5a. Align only with alignment.pending; its words by expects; the answer's counts in the notice", async () => {
+test("5a. Align: one line without a number; the first press shows the step and sends nothing; Not now; the second press sends; the notice without a count", async () => {
   const items = defaultItems();
   items[0] = { ...items[0], alignment: { pending: 2 } };
   const { calls } = await start({ items });
   await openEvent();
-  assert.equal(dom().querySelector('[data-act="align"]').textContent, "Ask RPE in the linked trainings");
-  assert.match(section().textContent, /2 linked sessions do not ask for RPE yet\./);
+  assert.equal(dom().querySelector('[data-act="align"]').textContent, "Ask for RPE in the linked trainings");
+  assert.match(section().textContent, /The linked trainings do not ask for RPE yet\./);
+  assert.doesNotMatch(section().querySelector(".cc-link-align").textContent, /\d/, "no number");
   await press(linkButton('[data-act="align"]'));
+  assert.equal(writesOf(calls).length, 0, "the first press only shows the step");
+  assert.match(section().querySelector(".cc-link-align").textContent, /Athletes of the linked trainings will be asked for RPE after each training\./);
+  await act({ action: "central-calendar-align-cancel" });
+  assert.equal(dom().querySelector('[data-act="align-confirm"]'), null, "Not now folds it");
+  assert.equal(writesOf(calls).length, 0);
+  await press(linkButton('[data-act="align"]'));
+  const confirm = linkButton('[data-act="align-confirm"]');
+  assert.equal(confirm.textContent, "Ask for RPE");
+  assert.ok(dom().querySelector('[data-action="central-calendar-align-cancel"]'), "Not now");
+  await press(confirm);
   await tick();
   assert.equal(writesOf(calls)[0].url, `/api/calendar/events/${E1}/sessions/align`);
   assert.deepEqual({ ...writesOf(calls)[0].body, requestKey: "k" }, { requestKey: "k", expectedRevision: 1, confirmDisableWithResults: false });
-  assert.equal(state.centralCalendar.notice, "RPE is now asked in 2 linked sessions.");
+  assert.equal(said(), "The linked trainings now ask for RPE.");
   assert.equal(dom().querySelector('[data-act="align"]'), null, "gone once aligned");
   const off = links.centralCalendarAlignLine({ expects: [], alignment: { pending: 1 } });
-  assert.equal(off.button, "Stop asking RPE in the linked trainings");
-  assert.equal(off.text, "1 linked session still asks for RPE, which this event does not collect.");
+  assert.equal(off.button, "Stop asking for RPE in the linked trainings");
+  assert.equal(off.text, "The linked trainings still ask for RPE, which this event does not collect.");
+  assert.equal(off.step, "Athletes of the linked trainings will no longer be asked for RPE.");
+  assert.equal(off.confirm, "Stop asking");
   assert.equal(links.centralCalendarAlignLine({ expects: ["rpe"], alignment: { pending: 0 } }), null);
   assert.equal(links.centralCalendarLinkDoneText("align", { data: { alignment: { direction: "rpe_off", changed: 1, notAllowed: 2, switchOff: 1 } } }),
-    "RPE is no longer asked in 1 linked session. 2 belong to another coach's plans and were left as they are. RPE requests are switched off in Training Load, so athletes will not be asked until they are switched on.");
+    "The linked trainings no longer ask for RPE. Some linked trainings can't be changed from here. RPE requests are switched off in Training Load, so athletes will not be asked until they are switched on.");
 });
 
-test("5b. has_existing_results: the question; No sends nothing more; Yes sends a new key with confirmDisableWithResults", async () => {
+test("5b. has_existing_results: the question in the Align row; Not now sends nothing more; Stop asking sends a new key with confirmDisableWithResults", async () => {
   const items = defaultItems();
   items[0] = { ...items[0], expects: [], alignment: { pending: 1 } };
-  let refuseOnce = true;
-  const refuse = (call) => (call.url.endsWith("/align") && !call.body.confirmDisableWithResults && refuseOnce
+  const refuse = (call) => (call.url.endsWith("/align") && !call.body.confirmDisableWithResults
     ? { status: 409, body: { error: "has_existing_results", message: "x", resultCount: 3 } } : null);
   const { calls } = await start({ items, refuse });
   await openEvent();
-  confirmAnswer = false;
   await press(linkButton('[data-act="align"]'));
+  await press(linkButton('[data-act="align-confirm"]'));
   await tick();
-  assert.equal(questions[0], "3 RPE answers were already given in these trainings. Stop asking for RPE anyway? The answers are kept.");
-  assert.equal(writesOf(calls).length, 1, "No: nothing more");
-  confirmAnswer = true;
+  assert.equal(questions.length, 0, "no confirm()");
+  assert.match(section().querySelector(".cc-link-align").textContent, /Stop asking for RPE in the linked trainings\? 3 RPE answers were already given; they are kept\./);
+  await act({ action: "central-calendar-align-cancel" });
+  assert.equal(writesOf(calls).length, 1, "Not now: nothing more");
   await press(linkButton('[data-act="align"]'));
+  await press(linkButton('[data-act="align-confirm"]'));
+  await tick();
+  const results = linkButton('[data-act="align-results"]');
+  assert.equal(results.textContent, "Stop asking");
+  await press(results);
   await tick();
   const [, second, third] = writesOf(calls);
   assert.equal(second.body.confirmDisableWithResults, false);
   assert.equal(third.body.confirmDisableWithResults, true);
   assert.notEqual(third.body.requestKey, second.body.requestKey, "a new key");
-  assert.equal(state.centralCalendar.notice, "RPE is no longer asked in 1 linked session.");
+  assert.equal(said(), "The linked trainings no longer ask for RPE.");
+});
+
+test("5c. Align that changes nothing here (changed 0, notAllowed > 0): the sentence, and no Align until the event's revision moves; the row stays drawn but off during another write", async () => {
+  const items = defaultItems();
+  items[0] = { ...items[0], alignment: { pending: 1 } };
+  const fake = server({ items });
+  const calls = installFetchMock((call) => {
+    if (call.url.endsWith("/align")) {
+      fake.live[0].revision += 1;
+      return { status: 200, body: { alignment: { direction: "rpe_on", changed: 0, unchanged: 0, notAllowed: 1, switchOff: 0 } } };
+    }
+    return fake(call);
+  });
+  await loadCentralCalendar({ render });
+  await tick();
+  await openEvent();
+  // During another write the Align row is drawn, its button off (review M3).
+  state.centralCalendar.linkWrite = { act: "link-session", plannedKey: "planned:p1" };
+  render();
+  assert.ok(linkButton('[data-act="align"]').disabled, "drawn, off");
+  state.centralCalendar.linkWrite = null;
+  render();
+  await press(linkButton('[data-act="align"]'));
+  await press(linkButton('[data-act="align-confirm"]'));
+  await tick();
+  assert.equal(said(), "Some linked trainings can't be changed from here.");
+  assert.equal(linkButton('[data-act="align"]'), null, "not offered again");
+  assert.match(section().textContent, /Some linked trainings can't be changed from here\./);
+  fake.live[0].revision += 1;
+  await act({ action: "central-calendar-retry" });
+  await tick();
+  assert.ok(linkButton('[data-act="align"]'), "offered again once the event moved");
+  assert.equal(writesOf(calls).length, 1);
 });
 
 // --- 6. Refusals -----------------------------------------------------------------------------------
@@ -458,7 +520,7 @@ test("5b. has_existing_results: the question; No sends nothing more; Yes sends a
 test("6. every refusal code reads as one sentence with no code or id; nothing changes; the next press sends a new key", async () => {
   const cases = [
     ["event_changed", 409, "This event was changed meanwhile. The calendar was read again: try again."],
-    ["athlete_not_targeted", 409, "Some athletes of this training are not part of this event. Add them to the event first, or link another training."],
+    ["session_outside_event", 409, "This training is not on the event's day. Nothing was saved."],
     ["session_outside_event", 409, "This training is not on the event's day. Nothing was saved."],
     ["try_again", 409, "The calendar is busy. Nothing was saved; try again in a moment."],
     ["internal_error", 500, "Nothing was saved. Try again."],
@@ -483,7 +545,10 @@ test("6. every refusal code reads as one sentence with no code or id; nothing ch
     const [first, second] = writesOf(calls);
     assert.notEqual(second.body.requestKey, first.body.requestKey, `${code}: a new key`);
   }
-  for (const code of ["link_not_available", "nothing_to_align", "activity_superseded", "activity_outside_event", "activity_not_targeted", "request_key_reused"]) {
+  assert.equal(links.centralCalendarLinkRefusalText({ status: 409, code: "session_already_attached" }), "This training is already linked to another event you can't open here. Ask that event's organiser to unlink it. Nothing was saved.");
+  assert.equal(links.centralCalendarLinkRefusalText({ status: 409, code: "activity_already_attached" }), "This activity is already linked to another event you can't open here. Ask that event's organiser to unlink it. Nothing was saved.");
+  assert.equal(links.centralCalendarLinkRefusalText({ status: 400, code: "session_not_available" }), "This training can't be linked to this event: it may have changed in the Builder, or its plan belongs to another club or team. Nothing was saved.");
+  for (const code of ["link_not_available", "nothing_to_align", "activity_superseded", "activity_outside_event", "activity_not_targeted", "request_key_reused", "athlete_not_targeted"]) {
     assert.doesNotMatch(links.centralCalendarLinkRefusalText({ status: 409, code }), CODES);
   }
   assert.equal(links.centralCalendarLinkRefusalText({ status: 401, code: "x" }), "Please sign in again. Nothing was saved.");
@@ -520,7 +585,7 @@ test("7. a lost answer: Result not confirmed · Check result sends the same path
   assert.equal(again.url, first.url);
   assert.deepEqual(again.body, first.body, "the same body and key");
   assert.equal(centralCalendarUncertainWrites().length, 0, "settled by the replay");
-  assert.match(state.centralCalendar.notice, /^Linked “Morning session”\./);
+  assert.match(said(), /^Linked “Morning session”\./);
 });
 
 test("7b. a check answered try_again stays not confirmed; a settling code ends it with its sentence; the line's button checks too", async () => {
@@ -546,7 +611,7 @@ test("7b. a check answered try_again stays not confirmed; a settling code ends i
   await tick();
   assert.equal(centralCalendarUncertainWrites().length, 0);
   assert.equal(new Set(writesOf(calls).map((c) => c.body.requestKey)).size, 1, "every check with the first key");
-  assert.equal(section().querySelector(".cc-link-message").textContent, "This training is already linked to another event. Unlink it there first.");
+  assert.equal(section().querySelector(".cc-link-message").textContent, links.centralCalendarLinkRefusalText({ status: 409, code: "session_already_attached" }));
 });
 
 // --- 8. One control at a time ------------------------------------------------------------------------
@@ -571,6 +636,12 @@ test("8. a double click sends one request; Edit and Cancel event are off while i
   assert.equal(linkButton('[data-planned-key="planned:p1"]').textContent, "Linking…");
   assert.ok(dom().querySelector('[data-action="central-calendar-edit-event"]').disabled);
   assert.equal(section().getAttribute("aria-busy"), "true");
+  // Review M1: the page's own leave and the final leave cover a link in flight.
+  assert.equal(handleCentralCalendarBeforeUnload({ isTrusted: true, preventDefault() {}, returnValue: "" }), true, "beforeunload");
+  confirmAnswer = false;
+  assert.equal(centralCalendarMayBeLeft({ final: "sign-out" }), false, "the final leave asks");
+  assert.match(questions.at(-1), /^A link is still being saved\. Sign out anyway\?/);
+  confirmAnswer = true;
   release();
   await Promise.all([one, two]);
   await tick();
@@ -586,7 +657,7 @@ test("9. the manager view loading and failing: its sentence and Try again; the s
   await openEvent();
   await tick();
   let s = section();
-  assert.match(s.textContent, /Linked trainings could not be loaded\./);
+  assert.match(s.textContent, /Linked trainings and activities could not be loaded\./);
   assert.ok(linkButton('[data-planned-key="planned:p1"]'), "Link still offered");
   assert.equal(linkButton('[data-planned-key="planned:p1"]').disabled, false);
   fail = false;
@@ -624,11 +695,19 @@ test("10. no id or code in the section's text; the empty line", async () => {
 
 // --- 11. The refusals the read cannot predict (the manager's GO) ----------------------------------------
 
-test("11. session_not_available / session_already_attached / activity twins: after the re-read the row stays without its Link; the other side too", async () => {
-  for (const [code, kind] of [["session_not_available", "planned"], ["session_already_attached", "planned"], ["activity_not_available", "activity"], ["activity_already_attached", "activity"]]) {
+test("11. the refusals the read cannot predict (and the two 'not targeted' ones, review M2): refused once, then the row keeps a short reason and no Link, on both sides", async () => {
+  const cases = [
+    ["session_not_available", "planned", 400, "Can't be linked here."],
+    ["session_already_attached", "planned", 409, "Already linked to another event."],
+    ["athlete_not_targeted", "planned", 409, "Can't be linked here."],
+    ["activity_not_available", "activity", 400, "Can't be linked here."],
+    ["activity_already_attached", "activity", 409, "Already linked to another event."],
+    ["activity_not_targeted", "activity", 409, "Can't be linked here."],
+  ];
+  for (const [code, kind, status, reason] of cases) {
     clearAllViewCache();
     resetCentralCalendarForWorkspaceChange();
-    const refuse = (call) => ((kind === "planned" ? call.url.endsWith("/sessions") : call.url.endsWith("/activities")) ? { status: code.endsWith("available") ? 400 : 409, body: { error: code, message: "x" } } : null);
+    const refuse = (call) => ((kind === "planned" ? call.url.endsWith("/sessions") : call.url.endsWith("/activities")) ? { status, body: { error: code, message: "x" } } : null);
     const { calls } = await start({ refuse });
     await openEvent();
     const selector = kind === "planned" ? '[data-planned-key="planned:p1"]' : `[data-activity-key="activity:${ACT1}"]`;
@@ -637,13 +716,165 @@ test("11. session_not_available / session_already_attached / activity twins: aft
     await tick();
     assert.ok(calls.filter((c) => c.url.startsWith("/api/calendar?")).length > reads, `${code}: read again`);
     assert.equal(linkButton(selector), null, `${code}: no stale Link`);
-    assert.match(section().textContent, /Can't be linked to this event\./, code);
-    assert.equal(section().querySelector(".cc-link-message").textContent, links.centralCalendarLinkRefusalText({ status: 409, code }));
+    assert.equal(section().querySelector(".cc-link-refused").textContent, reason, code);
+    assert.equal(section().querySelector(".cc-link-message").textContent, links.centralCalendarLinkRefusalText({ status, code }));
     if (kind === "planned") {
       await openPlanned();
       assert.equal(dom().querySelector('.cc-panel-links [data-act="link-to-event"]'), null, `${code}: not from the planned card either`);
-      assert.match(section().textContent, /Can't be linked to this event\./);
+      assert.equal(section().querySelector(".cc-link-refused").textContent, reason);
     }
-    assert.equal(writesOf(calls).length, 1);
+    assert.equal(writesOf(calls).length, 1, `${code}: refused once, never sent again`);
   }
+});
+
+test("11b. two activities, one refused: the other keeps its Link", async () => {
+  const ACT2 = "a0000000-0000-4000-8000-000000000002";
+  const items = [...defaultItems(), baseItem({ key: `activity:${ACT2}`, kind: "activity", title: "Second GPS", origin: "api_import", athleteIds: [A1], athleteCount: 1, links: { activityIds: [ACT2] } })];
+  const refuse = (call) => (call.url.endsWith("/activities") && call.body.activityId === ACT1 ? { status: 409, body: { error: "activity_already_attached", message: "x" } } : null);
+  await start({ items, refuse });
+  await openEvent();
+  await press(linkButton(`[data-activity-key="activity:${ACT1}"]`));
+  await tick();
+  assert.equal(linkButton(`[data-activity-key="activity:${ACT1}"]`), null);
+  assert.ok(linkButton(`[data-activity-key="activity:${ACT2}"]`), "the other keeps Link");
+});
+
+// --- Review round (K2c-1 1.2): M1, M4, M5, LOWs --------------------------------------------------------
+
+function gated(fake, { lose = false } = {}) {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const calls = installFetchMock(async (call) => {
+    if (call.method === "POST") {
+      await gate;
+      if (lose) return { throwNetworkError: true };
+    }
+    return fake(call);
+  });
+  return { calls, release: () => release() };
+}
+
+test("7c. a workspace switch while a link is in flight: asked, kept to check with the same key (mode link), still there after a lost answer; a confirmed answer on the replaced slice ends the wait", async () => {
+  for (const lose of [true, false]) {
+    clearAllViewCache();
+    resetCentralCalendarForWorkspaceChange();
+    clearCentralCalendarUncertainWrites();
+    questions.length = 0;
+    const fake = server();
+    const { calls, release } = gated(fake, { lose });
+    await loadCentralCalendar({ render });
+    await tick();
+    await openEvent();
+    await tick();
+    const sending = press(linkButton('[data-planned-key="planned:p1"]'));
+    await tick();
+    confirmAnswer = false;
+    assert.equal(centralCalendarMayBeLeft(), false, "No keeps the user here");
+    assert.equal(questions.at(-1), "A link is still being saved. Leave anyway? You can check it later under the event.");
+    assert.equal(centralCalendarUncertainWrites().length, 0, "nothing kept on No");
+    confirmAnswer = true;
+    assert.equal(centralCalendarMayBeLeft(), true);
+    const kept = centralCalendarUncertainWrites();
+    assert.equal(kept.length, 1);
+    assert.equal(kept[0].mode, "link");
+    assert.equal(kept[0].requestKey, writesOf(calls)[0].body.requestKey, "the same key");
+    // The workspace switch replaces the slice before the answer comes.
+    resetCentralCalendarForWorkspaceChange();
+    release();
+    await sending;
+    await tick();
+    assert.equal(centralCalendarUncertainWrites().length, lose ? 1 : 0, lose ? "a lost answer: still to check" : "confirmed: the wait ended");
+  }
+});
+
+test("7d. Check linking… from the calendar line opens that write's panel first and shows its result there; the planned card's Link to the same event is off meanwhile", async () => {
+  const { calls } = await start({ lose: 1 });
+  await openPlanned();
+  await press(linkButton(`[data-event-key="event:${E1}:${D}"]`));
+  await tick();
+  // The planned card's own panel is locked by its unconfirmed link (review LOW).
+  assert.ok(linkButton(`[data-event-key="event:${E1}:${D}"]`).disabled, "own panel locked");
+  // Another planned card of the day offers the same event, off while the event's link waits (8b).
+  await act({ action: "central-calendar-close-panel" });
+  assert.equal(state.centralCalendar.panel.open, false);
+  const line = dom().querySelector('.cc-uncertain-line [data-action="central-calendar-event-pending"]');
+  assert.match(line.textContent, /Check linking for “Team training”/);
+  await act({ ...line.dataset });
+  await tick();
+  assert.equal(state.centralCalendar.panel.open, true, "the panel opened (review M5)");
+  assert.equal(writesOf(calls).length, 2);
+  assert.deepEqual(writesOf(calls)[1].body, writesOf(calls)[0].body);
+  assert.match(said(), /^Linked to “Team training”\./);
+  assert.equal(state.centralCalendar.notice, "");
+});
+
+test("8b. a planned card's Link to “X” is off while a link of event X waits to be checked", async () => {
+  const items = [...defaultItems(), plannedItem("planned:p5", "Evening", [A3], ["10000000-0000-4000-8000-000000000005"], [PLAN2], { slot: { amPm: "PM", bta: "A", order: 1 } })];
+  await start({ items, lose: 1 });
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  assert.equal(centralCalendarUncertainWrites().length, 1);
+  await openPlanned("planned:p5");
+  assert.ok(linkButton(`[data-event-key="event:${E1}:${D}"]`).disabled, "off while event X waits");
+});
+
+test("M4. sentences whose section disappears go to the screen's line: event_cancelled, and a 404 that closes the panel", async () => {
+  for (const [status, code, after] of [[409, "event_cancelled", (fake) => Object.assign(fake.live[0], { cancelled: true, status: "cancelled" })], [404, "notFound", (fake) => fake.live.splice(0, 1)]]) {
+    clearAllViewCache();
+    resetCentralCalendarForWorkspaceChange();
+    let fakeRef = null;
+    const refuse = (call) => (call.url.endsWith("/sessions") ? (after(fakeRef), { status, body: { error: code, message: "x" } }) : null);
+    const fake = server({ refuse });
+    fakeRef = fake;
+    installFetchMock(fake);
+    await loadCentralCalendar({ render });
+    await tick();
+    await openEvent();
+    await press(linkButton('[data-planned-key="planned:p1"]'));
+    await tick();
+    assert.equal(section()?.querySelector(".cc-link-message") ?? null, null, `${code}: not in a panel that is gone`);
+    assert.equal(state.centralCalendar.notice, links.centralCalendarLinkRefusalText({ status, code }), code);
+  }
+});
+
+test("MC/MD/ME. the D panel lists and unlinks only D's links; the manager view's newer revision goes in the body", async () => {
+  const D1 = DAY(2);
+  const mk = (id, day, athleteId) => ({ id, planId: PLAN1, day, amPm: "AM", bta: "T", order: 1, state: "linked", sessionName: "Morning session", sessionNameAtLink: "Morning session", logicalSessionId: L1, athleteId, asksRpe: false, aligned: true });
+  const linkD = ["f0000000-0000-4000-8000-0000000000d1", "f0000000-0000-4000-8000-0000000000d2"];
+  const linkNext = "f0000000-0000-4000-8000-0000000000e1";
+  const items = defaultItems();
+  items[0] = { ...items[0], span: { from: D, to: D1 } };
+  const managerView = { id: E1, title: "Team training", revision: 5, expects: ["rpe"], canManage: true, status: "planned", fields: [],
+    sessionLinks: [mk(linkD[1], D, A2), mk(linkD[0], D, A1), mk(linkNext, D1, A1)], activityLinks: [], alignment: { pending: 0 } };
+  const refuse = (call) => (call.url.endsWith("/sessions/detach") ? { status: 200, body: { detached: 2 } } : null);
+  const { calls } = await start({ items, refuse, eventStatus: () => ({ status: 200, body: { event: managerView } }) });
+  await openEvent();
+  await tick();
+  const rows = [...section().querySelectorAll('[data-act="unlink-sessions"]')];
+  assert.equal(rows.length, 1, "one row: D's");
+  assert.match(section().textContent, /2 athletes/, "D's two links only");
+  await press(rows[0]);
+  await tick();
+  const detach = writesOf(calls).find((c) => c.url.endsWith("/sessions/detach"));
+  assert.deepEqual(detach.body.linkIds, [...linkD].sort(), "only D's links");
+  assert.equal(detach.body.expectedRevision, 5, "the manager view's newer revision (ME)");
+});
+
+test("F5 (as built). two same-named trainings in one slot with different orders stay two rows", () => {
+  const view = { sessionLinks: [
+    { id: "1", day: D, amPm: "AM", bta: "T", order: 1, state: "linked", sessionName: "Run", athleteId: A1 },
+    { id: "2", day: D, amPm: "AM", bta: "T", order: 2, state: "linked", sessionName: "Run", athleteId: A2 },
+  ] };
+  assert.equal(links.centralCalendarSessionLinkGroups(view, D).groups.length, 2);
+});
+
+test("7e. a planned card's own unconfirmed link locks its whole panel: Link to another event of the day is off too", async () => {
+  const items = [...defaultItems(), eventItem(E2, { title: "Extra", athleteIds: [A1, A2], athleteCount: 2 })];
+  await start({ items, lose: 1 });
+  await openPlanned();
+  await press(linkButton(`[data-event-key="event:${E1}:${D}"]`));
+  await tick();
+  assert.ok(linkButton(`[data-event-key="event:${E2}:${D}"]`).disabled, "the other event's Link is off");
+  assert.ok(section().querySelector('[data-action="central-calendar-link-check"]'), "Check result in this panel");
 });

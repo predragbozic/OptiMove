@@ -22273,10 +22273,24 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   color: var(--muted, #5b6472);
 }
 
+/* A refused pair's short reason sits under its meta line (review LOW). */
 .cc-link-refused {
-  flex: 0 1 auto;
-  max-width: 50%;
-  text-align: right;
+  font-style: italic;
+}
+
+/* Long button words wrap inside the sheet (the Align and Check result
+   buttons; review LOW). */
+.cc-link-wrap {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.cc-link-align-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .cc-link-button {
@@ -22306,14 +22320,10 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     align-items: stretch;
   }
 
-  .cc-link-refused {
-    max-width: none;
-    text-align: left;
-  }
-
   .cc-link-row .cc-link-button,
   .cc-link-one .cc-link-button,
-  .cc-link-align .cc-link-button {
+  .cc-link-align .cc-link-button,
+  .cc-link-unconfirmed .cc-panel-button {
     width: 100%;
     justify-self: stretch;
   }

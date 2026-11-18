@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built (section 1.2), waiting for its reviews**; K2c-2 is planned; K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review round fixed (section 1.2.1)**; K2c-2 is planned; K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -327,6 +327,42 @@ touch.
 
 **Not done here:** the reviews of section 1 (`code-reviewer`, `ux-design-reviewer`, `mobile-qa`, the independent
 review) wait for the manager's order; no physical-device check.
+
+#### 1.2.1 The review round on `ec9011f7` (2026-11-18)
+
+`code-reviewer`, `ux-design-reviewer`, `mobile-qa` and the independent review all gave READY WITH NON-BLOCKING NOTES,
+with no BLOCKER or HIGH. The manager ordered one fix round. As built:
+
+| Finding | Fix | Test (mutation killed) |
+|---|---|---|
+| M1 a link in flight lost on a workspace switch | a non-final leave asks "A link is still being saved. Leave anyway? You can check it later under the event." and on a yes keeps it (mode `link`, the same key) before the slice is replaced; an answer on a replaced slice that is confirmed or settles ends the wait; the final leave and `beforeunload` count it | 7c, 8 (MK, ML, ML2, MF, MS) |
+| M2 a refused Link offered again (`targeted: false` athletes) | the rule counts only `targeted !== false` where the card carries its athletes; `athlete_not_targeted` / `activity_not_targeted` re-read and are remembered | 1a, 11 (MT, MN) |
+| M3 Align disappears during other writes | always drawn, off while another write is busy or waits | 5c (MA) |
+| M4 the done text behind the sheet | in the panel's `role="status"` line while the links section is shown; the screen's line only when it is not (the panel closed, `event_cancelled`, a 404) | 2, M4 (MM) |
+| M5 a check from the calendar line ends silently | "Check linking for …" opens that write's panel (its own, else the event's) and then sends | 7d (MO) |
+| M6 Align: no number, an inline step | the line and buttons of the manager's words; the first press shows the step with [Ask for RPE] / [Stop asking] and [Not now]; only the second sends; `has_existing_results` asks in the same row with [Stop asking] / [Not now] (no `confirm()`); `changed: 0` and `notAllowed > 0` say "Some linked trainings can't be changed from here." and hide Align until the event's revision moves; the notices have no count | 5a, 5b, 5c (MP, MB) |
+| M7 the refusal sentences | the manager's three sentences | 6 |
+| LOW: a planned card's Link to “X” while a link of X waits; its own unconfirmed link | off; the panel's own lock covers every event it offers | 7d, 7e, 8b (MW, MR) |
+| LOW F5: two trainings of different owners in one slot | **deviation:** the manager view names no plan owner, and `planId` is per athlete (one plan per athlete), so a key with it would split every Builder batch into one row per athlete. The key now adds the slot's `order`, which separates two trainings in one slot with different orders; two same-named trainings of two owners in the same slot and order stay one row. Separating them needs the owner on `sessionLinks` (a small backend addition, not in K2c-1) | F5 (MG) |
+| LOW the hint, the planned line, the refused reason, the load error, the orphaned meta | as worded; the refused reason ("Already linked to another event." / "Can't be linked here.") sits under the row's meta at every width (the simplest form of "stacks under the meta at ≤ 430 px") | 2, 3b, 4, 9, 11 |
+| LOW CSS | `white-space: normal; text-align: left` on the Align and Check result buttons | browser |
+| LOW the surviving mutations | MC (only the panel's day), ME (the manager view's newer revision), MX (one activity refused, the other keeps Link) | MC/MD/ME, 11b |
+| Found in the browser: the "primary" Link to “X” and the step's button looked plain | the app has no base `.primary-button` rule; both now use the calendar's own `plain-button cc-primary` | 3a |
+
+The section order is unchanged: the links, then *Edit* / *Cancel event*.
+
+**Tests after the round:** `central-calendar-links` 24/24; the other four calendar suites 33, 52, 5 and 41, all passing.
+28 mutations (the first round's 10 and 18 new), all killed. `--preset frontend-fast` failed in the same files with the
+same counts as a clean `origin/main` (`8288b38f`). The build passes and `git diff --check` is clean. Browser check
+(Chromium, `npm run e2e:demo`, invented data plus a private coach's plan of a club athlete as the refused pair) at 360,
+390 and 1280 px:
+- the refused pair's reason and sentence in the panel, with no Link after it;
+- the link's text in the panel (the screen's line empty) with the hint;
+- the Align step, *Not now* and the confirm;
+- no horizontal scroll, no target under 44 px, no JS error.
+
+The console showed a 403 of `/api/tests/athlete/timezone` on load (not this change) and the deliberate 400 of the
+refused link.
 
 ## 2. K2c-2 — "Make an event" from the Builder (planned)
 

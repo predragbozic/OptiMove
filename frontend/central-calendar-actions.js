@@ -52,7 +52,6 @@ import {
   centralCalendarLinkRefusalText,
   centralCalendarLinkRequest,
   centralCalendarRefusedPairKey,
-  centralCalendarResultsQuestion,
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
 import { centralCalendarDisplayedDays, centralCalendarTitle } from "./central-calendar-view.js";
@@ -319,6 +318,17 @@ export function centralCalendarMayBeLeft({ final = false } = {}) {
   const later = words ? words.later : "You can check it later under New event or the event.";
   const verb = words ? words.verb : "Leave";
   const waiting = () => Boolean(words) && (anyUncertainWrite() || Boolean(cal?.linkWrite));
+  // A link command in flight (K2c-1, review M1): asked about, and on a yes
+  // kept to check under the event before the slice is replaced.
+  if (cal?.linkWrite && !cal.linkWrite.check && !words) {
+    if (!ask("A link is still being saved. Leave anyway? You can check it later under the event.")) return false;
+    rememberLinkWrite(cal.linkWrite);
+  }
+  if (cal?.linkWrite && words && !form) {
+    const leave = ask(`A link is still being saved. ${verb} anyway? ${later}`);
+    if (leave) rememberLinkWrite(cal.linkWrite);
+    return leave;
+  }
   if (!form) return waiting() ? ask(`The result of an event's save is not confirmed. ${later} ${verb} anyway?`) : true;
   let leave = true;
   if (form.busy) leave = ask(`An event is still being saved. ${verb} anyway? Its result will not be shown here. ${later}`);
@@ -1082,11 +1092,13 @@ function linkSpecOf(cal, dataset) {
       const link = (view?.activityLinks || []).find((entry) => String(entry.activityId) === String(dataset.activityId));
       if (!link) return null;
       fields.activityId = String(link.activityId);
-    } else if (act !== "align") return null;
+    } else if (act !== "align-confirm" && act !== "align-results") return null;
   }
-  const wire = act === "link-to-event" ? "link-session" : act;
+  const wire = wireOf(act);
   const requestKey = newCentralCalendarRequestKey();
-  const request = centralCalendarLinkRequest(wire, { eventId: event.eventId, requestKey, expectedRevision: eventRevisionOf(cal, event), ...fields });
+  const request = centralCalendarLinkRequest(wire, {
+    eventId: event.eventId, requestKey, expectedRevision: eventRevisionOf(cal, event), ...fields, confirmDisableWithResults: act === "align-results",
+  });
   return {
     act, wire, requestKey, path: request.path, body: request.body, name, pairKey,
     eventId: event.eventId, eventKey: event.key, eventTitle: centralCalendarTitle(event), date: event.date,
@@ -1095,8 +1107,40 @@ function linkSpecOf(cal, dataset) {
   };
 }
 
+// The route a pressed act sends to ("align-confirm" / "align-results" are the
+// Align row's second step, review M6).
+function wireOf(act) {
+  if (act === "link-to-event") return "link-session";
+  if (act === "align-confirm" || act === "align-results") return "align";
+  return act;
+}
+
+// The words a link command's result is shown in (review M4): in the open
+// panel's own line when its links section is there, else the screen's notice
+// line (the panel closed, the event was cancelled, a 404 closed it).
+function showLinkText(cal, text, { alert = false } = {}) {
+  const item = cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
+  const sectionShown = item && (centralCalendarEventLinkable(item) || item.kind === "planned");
+  if (sectionShown) {
+    cal.linkMessage = { panelKey: item.key, text, alert };
+    cal.notice = "";
+  } else {
+    cal.linkMessage = null;
+    cal.notice = text;
+  }
+}
+
 async function startLinkWrite(cal, dataset, render) {
   if (cal.form || linkLockedFor(cal, findItemOnDay(cal, cal.panel.key, cal.panel.date))) return;
+  // The Align row's first press only shows its step (review M6).
+  if (dataset.act === "align") {
+    const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
+    if (!centralCalendarEventLinkable(item)) return;
+    cal.alignStep = { eventKey: item.key, stage: "confirm", resultCount: null };
+    cal.linkMessage = null;
+    render?.();
+    return;
+  }
   const spec = linkSpecOf(cal, dataset);
   if (!spec) return;
   await sendLinkWrite(cal, spec, render);
@@ -1113,7 +1157,12 @@ async function sendLinkWrite(cal, spec, render, { check = false } = {}) {
   } catch (failure) {
     info = centralCalendarErrorInfo(failure);
   }
-  if (state.centralCalendar !== cal) return;
+  if (state.centralCalendar !== cal) {
+    // The workspace changed while it was in flight (review M1): the leave
+    // question kept it to check; a settled answer ends that wait.
+    if (!info || (!centralCalendarOutcomeUnknown(info) && (!check || centralCalendarLinkCheckSettles(info)))) forgetUncertainWrite(spec.requestKey);
+    return;
+  }
   cal.linkWrite = null;
   if (!info) {
     forgetUncertainWrite(spec.requestKey);
@@ -1122,12 +1171,13 @@ async function sendLinkWrite(cal, spec, render, { check = false } = {}) {
   }
   if (centralCalendarOutcomeUnknown(info)) {
     rememberLinkWrite(spec);
-    cal.linkMessage = check ? { panelKey: spec.panelKey, text: "No answer again. The result is still not confirmed.", alert: false } : null;
+    if (check) showLinkText(cal, "No answer again. The result is still not confirmed.");
+    else cal.linkMessage = null;
     render?.();
     return;
   }
   if (check && !centralCalendarLinkCheckSettles(info)) {
-    cal.linkMessage = { panelKey: spec.panelKey, text: linkCheckNoteText(info), alert: false };
+    showLinkText(cal, linkCheckNoteText(info));
     render?.();
     return;
   }
@@ -1143,10 +1193,24 @@ function linkCheckNoteText(info) {
   return "The check could not be done. The result is still not confirmed; Check result again in a moment.";
 }
 
-async function checkLinkWrite(cal, entry, render) {
+// `openPanel`: the check starts from the calendar's line (review M5), so the
+// panel of that write opens first - its own panel, else the event's - and its
+// result is shown there.
+async function checkLinkWrite(cal, entry, render, { openPanel = false } = {}) {
   if (cal.linkWrite || cal.form) return;
+  if (openPanel) {
+    const target = findItemOnDay(cal, entry.panelKey, entry.date) ? entry.panelKey : findItemOnDay(cal, entry.eventKey, entry.date) ? entry.eventKey : "";
+    if (target && !(cal.panel.open && cal.panel.key === target)) {
+      cal.panel = { open: true, key: target, date: entry.date, athletes: null, loading: false, error: "" };
+      cal.panelEvent = null;
+      cal.linkMessage = null;
+      cal.alignStep = null;
+      render?.();
+      void syncPanelEvent(cal, render);
+    }
+  }
   const spec = {
-    act: entry.act, wire: entry.act === "link-to-event" ? "link-session" : entry.act, requestKey: entry.requestKey,
+    act: entry.act, wire: wireOf(entry.act), requestKey: entry.requestKey,
     path: entry.path, body: entry.sentBody, name: entry.name, pairKey: entry.pairKey, eventId: entry.eventId,
     eventKey: entry.eventKey, eventTitle: entry.eventTitle, date: entry.date, panelKey: entry.panelKey,
   };
@@ -1177,29 +1241,35 @@ async function linkSettled(cal, spec, data, render) {
   const event = findItemOnDay(cal, spec.eventKey, spec.date);
   const text = centralCalendarLinkDoneText(spec.wire, { name: spec.name, data, event });
   const done = fromPlanned ? `Linked to “${spec.eventTitle}”.${text.replace(/^Linked “[^”]*”\./, "")}` : text;
-  cal.notice = readFailed(cal) ? `${done}${READ_FAILED_TAIL}` : done;
+  if (spec.wire === "align") {
+    cal.alignStep = null;
+    const alignment = data?.alignment || {};
+    // Nothing could change from here: not offered again until the event moves.
+    cal.alignBlocked = (Number(alignment.changed) || 0) === 0 && (Number(alignment.notAllowed) || 0) > 0 && event
+      ? { eventId: spec.eventId, revision: event.revision } : null;
+  }
+  showLinkText(cal, readFailed(cal) ? `${done}${READ_FAILED_TAIL}` : done);
   render?.();
   if (stayed) focusPanelStart(cal);
 }
 
 async function linkRefused(cal, spec, info, render) {
   if (info.code === "has_existing_results" && spec.wire === "align") {
-    if (!ask(centralCalendarResultsQuestion(info.resultCount))) {
-      render?.();
-      return;
-    }
-    const requestKey = newCentralCalendarRequestKey();
-    const request = centralCalendarLinkRequest("align", { eventId: spec.eventId, requestKey, expectedRevision: spec.body.expectedRevision, confirmDisableWithResults: true });
-    await sendLinkWrite(cal, { ...spec, requestKey, path: request.path, body: request.body }, render);
+    // The server's own gate asks in the Align row: [Stop asking] sends a new
+    // key with confirmDisableWithResults, [Not now] nothing (review M6).
+    cal.alignStep = { eventKey: spec.eventKey, stage: "results", resultCount: info.resultCount };
+    cal.linkMessage = null;
+    render?.();
     return;
   }
-  if (centralCalendarLinkRefusalRemembered(info) && spec.pairKey) cal.linkRefused.add(spec.pairKey);
-  const message = { panelKey: spec.panelKey, text: centralCalendarLinkRefusalText(info), alert: true };
+  cal.alignStep = null;
+  if (centralCalendarLinkRefusalRemembered(info) && spec.pairKey) cal.linkRefused.set(spec.pairKey, info.code);
+  const text = centralCalendarLinkRefusalText(info);
   if (centralCalendarLinkRefusalRereads(info)) {
     const stayed = cal.panel.open && cal.panel.key === spec.panelKey;
     if (!(await rereadForLinks(cal, render, stayed ? { panelKey: spec.panelKey, panelDate: cal.panel.date } : {}))) return;
   }
-  cal.linkMessage = message;
+  showLinkText(cal, text, { alert: true });
   render?.();
 }
 
@@ -1346,6 +1416,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     cal.panel = { open: true, key, date, athletes: null, loading: true, error: "" };
     cal.panelEvent = null;
     cal.linkMessage = null;
+    cal.alignStep = null;
     render?.();
     // The sheet is modal below 1024 px: the focus moves to its Close.
     globalThis.document?.querySelector?.(".cc-sheet .cc-panel-close")?.focus?.();
@@ -1423,6 +1494,11 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     await startLinkWrite(cal, action.dataset || {}, render);
     return true;
   }
+  if (type === "central-calendar-align-cancel") {
+    if (!cal.linkWrite) cal.alignStep = null;
+    render?.();
+    return true;
+  }
   if (type === "central-calendar-link-check") {
     const entry = centralCalendarUncertainWrites().find((other) => other.mode === "link" && other.requestKey === action.dataset.requestKey);
     if (entry) await checkLinkWrite(cal, entry, render);
@@ -1471,7 +1547,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   // The screen's line of writes left unconfirmed: one opens its pending check.
   if (type === "central-calendar-event-pending") {
     const entry = centralCalendarUncertainWrites().find((other) => other.requestKey === action.dataset.requestKey);
-    if (entry?.mode === "link") await checkLinkWrite(cal, entry, render);
+    if (entry?.mode === "link") await checkLinkWrite(cal, entry, render, { openPanel: true });
     else if (entry && !cal.form) openPendingCheck(cal, entry, render);
     return true;
   }
