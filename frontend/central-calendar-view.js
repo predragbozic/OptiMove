@@ -1,5 +1,5 @@
 import { calendarColorIndex, calendarTeamColorIndexes } from "./calendar-colors.js";
-import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS } from "./central-calendar-data.js";
+import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS, centralCalendarTeamLabel } from "./central-calendar-data.js";
 import {
   centralCalendarCatalogOf,
   renderCentralCalendarEventDetailsHtml,
@@ -191,7 +191,7 @@ function teamColorStyle(teamId, teams) {
 }
 
 function teamName(teamId, teams) {
-  return (teams || []).find((team) => team.teamId === teamId)?.name || "Team";
+  return centralCalendarTeamLabel((teams || []).find((team) => team.teamId === teamId));
 }
 
 function eventTypeLabel(eventType) {
@@ -496,7 +496,7 @@ function renderFiltersHtml(cal, counts, teams) {
         <span class="cc-chip-row-label">Groups</span>
         ${renderChipHtml({ action: "central-calendar-all-groups", label: "All groups", count: counts.total, active: !filters.teamIds.length })}
         ${teams.map((team) => renderChipHtml({
-          action: "central-calendar-toggle-team", dataAttr: "data-team-id", value: team.teamId, label: team.name || "Team",
+          action: "central-calendar-toggle-team", dataAttr: "data-team-id", value: team.teamId, label: centralCalendarTeamLabel(team),
           count: counts.teams.get(team.teamId) || 0, active: filters.teamIds.includes(team.teamId), style: teamColorStyle(team.teamId, teams), dot: true,
         })).join("")}
       </div>`
@@ -712,7 +712,7 @@ function renderDayTeamsHtml(items, cal, teams) {
   return `<ul class="cc-day-teams" role="list" aria-label="Per group on this day">
       ${shown.map((team) => {
         const count = items.filter((item) => (item.teamIds || []).includes(team.teamId)).length;
-        return `<li class="cc-team-pill${count ? "" : " is-empty"}"${teamColorStyle(team.teamId, teams)}><span class="cc-team-dot" aria-hidden="true"></span><span class="cc-team-pill-name">${escapeHtml(`${team.name || "Team"} · ${count} item${count === 1 ? "" : "s"}`)}</span></li>`;
+        return `<li class="cc-team-pill${count ? "" : " is-empty"}"${teamColorStyle(team.teamId, teams)}><span class="cc-team-dot" aria-hidden="true"></span><span class="cc-team-pill-name">${escapeHtml(`${centralCalendarTeamLabel(team)} · ${count} item${count === 1 ? "" : "s"}`)}</span></li>`;
       }).join("")}
     </ul>`;
 }
@@ -956,7 +956,10 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   // or while the event form is open.
   const panelOpen = Boolean(cal.form) || Boolean(panelItemOf(cal));
   cardTypes = new Map((cal.eventTypes || []).map((type) => [String(type.id), type]));
-  const formCtx = { types: cal.eventTypes || [], teams, roster: eventRoster, catalog: centralCalendarCatalogOf(cal) };
+  // K2b-1d2 (the manager's Q1): the form never takes the platform's teams - they are every club's; the platform's
+  // support edit keeps the event's own targets read-only, and the platform creates no event.
+  const formTeams = cal.data?.workspace?.type === "platform" ? [] : teams;
+  const formCtx = { types: cal.eventTypes || [], teams: formTeams, roster: eventRoster, catalog: centralCalendarCatalogOf(cal) };
   return `<section class="central-calendar cc-layout-${escapeAttr(layout)} cc-view-${escapeAttr(cal.view)}${panelOpen ? " cc-panel-open" : ""}" aria-label="Calendar">
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
       ${renderFiltersHtml(cal, counts, teams)}

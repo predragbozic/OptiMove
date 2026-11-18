@@ -90,11 +90,19 @@ export function periodCoversSql(mp, fromExpr, toExpr = fromExpr) {
 export function membershipOnDaySql(athleteIdExpr, cond, fromExpr, toExpr = fromExpr) {
   return `exists (select 1 from public.athlete_membership_periods mp
            where mp.athlete_id = ${athleteIdExpr} and ${cond("mp")}
-             and (${periodCoversSql("mp", fromExpr, toExpr)}
-                  or (mp.valid_to is null
-                      and not exists (select 1 from public.athlete_membership_periods mp0
-                                       where mp0.athlete_id = ${athleteIdExpr} and mp0.club_id = mp.club_id
-                                         and ${periodDaySql("mp0.valid_from")} <= (${fromExpr})::date))))`;
+             and ${membershipPeriodOnDaySql("mp", athleteIdExpr, fromExpr, toExpr)})`;
+}
+
+// The day condition of THE rule above, for one period `mp` of the athlete `athleteIdExpr`: it covers the day(s), or it
+// is open and the day lies before the athlete's first period in the period's club. Shared by membershipOnDaySql and by
+// the athletes' team ids of calendarQuery.js (K2b-1d2: from the athlete's periods to the teams), so the rule exists
+// once. `firstAlias` names the inner alias of the first-period check.
+export function membershipPeriodOnDaySql(mp, athleteIdExpr, fromExpr, toExpr = fromExpr, firstAlias = `${mp}0`) {
+  return `(${periodCoversSql(mp, fromExpr, toExpr)}
+                  or (${mp}.valid_to is null
+                      and not exists (select 1 from public.athlete_membership_periods ${firstAlias}
+                                       where ${firstAlias}.athlete_id = ${athleteIdExpr} and ${firstAlias}.club_id = ${mp}.club_id
+                                         and ${periodDaySql(`${firstAlias}.valid_from`)} <= (${fromExpr})::date)))`;
 }
 
 // `alias` is a public.athletes alias of the calling query; `fromExpr` /
@@ -248,12 +256,31 @@ export function calendarActivityFilterSql(alias, filters, params) {
 }
 
 // The teams the answer may name: the active club's active teams, or the one
-// team of a team workspace; [] for a private coach, a platform admin and an
-// athlete (section 1 of the plan). athleteCount is today's active team
-// membership count.
+// team of a team workspace; [] for a private coach and an athlete (section 1
+// of the plan). athleteCount is today's active team membership count.
+// K2b-1d2 (plan section 23, the manager's Q2 and Q3): the platform workspace
+// (a platform admin only, who reads every club already) names every active
+// team of an active club, ordered by club, then team, each with its club's id
+// and name - the club keys only here, where teams of several clubs meet - and
+// the colour its own club chose.
 export async function loadWorkspaceTeams(ctx) {
   if (ctx.type !== "coach") return [];
   const workspace = ctx.workspace;
+  if (workspace.type === "platform") {
+    const result = await query(
+      `select t.id, t.name, ts.color_key, c.id as club_id, c.name as club_name,
+              (select count(*)::int from public.athlete_memberships am where am.team_id = t.id and am.membership_type = 'team' and am.status = 'active') as athlete_count
+         from public.teams t
+         join public.clubs c on c.id = t.club_id
+         left join calendar.team_settings ts on ts.team_id = t.id
+        where coalesce(t.is_active, true) and coalesce(c.is_active, true)
+        order by c.name, c.id, t.name, t.id`,
+    );
+    return result.rows.map((row) => ({
+      teamId: row.id, name: row.name, athleteCount: Number(row.athlete_count), colorKey: row.color_key ?? null,
+      clubId: row.club_id, clubName: row.club_name,
+    }));
+  }
   if (workspace.type !== "club" && workspace.type !== "team") return [];
   const where = workspace.type === "club" ? "t.club_id = $1 and coalesce(t.is_active, true)" : "t.id = $1";
   const result = await query(
