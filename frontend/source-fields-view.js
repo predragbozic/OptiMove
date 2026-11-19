@@ -16,7 +16,7 @@ import {
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { fieldTileHtml } from "./data-config-tiles.js";
-import { zoneRange, numberedZoneOf } from "./zone-ranges.js";
+import { eventSettingText, zoneRange, numberedZoneOf } from "./zone-ranges.js";
 
 const fmtDate = (iso) => {
   if (!iso) return "";
@@ -526,12 +526,17 @@ function createRangeHtml(form) {
   const limits = sourceFieldsState().inventory?.zoneThresholds;
   const range = zoneRange(numberedZoneOf(form.name), limits);
   const day = fmtDate(limits?.asOf);
-  return range ? `<p class="muted">Range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you add it, check it once with Compare with GPEXE.</p>` : "";
+  if (range) return `<p class="muted">Range of this zone: ${escapeHtml(range)} (the team's zone limits${day ? ` in the newest saved session, ${escapeHtml(day)}` : ""}). After you add it, check it once with Compare with GPEXE.</p>`;
+  // v80 step A: an event value's team setting, the same way.
+  const setting = eventSettingText(form.name, limits);
+  return setting ? `<p class="muted">The team's setting for these events: ${escapeHtml(setting.replace(/^Events /, ""))}${day ? ` (newest saved session, ${escapeHtml(day)})` : ""}. After you add it, check it once with Compare with GPEXE.</p>` : "";
 }
 // The compared session's own team limits: the range to look for in GPEXE (the Rukovodilac's order of 2026-11-18).
 function observeRangeHtml(o) {
   const range = zoneRange(numberedZoneOf(o?.gpexeName), o?.zoneThresholds);
-  return range ? `<p class="metric-variables-field-note">Range of this zone: ${escapeHtml(range)} (this session's team zone limits). Check that GPEXE shows the same range for it.</p>` : "";
+  if (range) return `<p class="metric-variables-field-note">Range of this zone: ${escapeHtml(range)} (this session's team zone limits). Check that GPEXE shows the same range for it.</p>`;
+  const setting = eventSettingText(o?.gpexeName, o?.zoneThresholds);
+  return setting ? `<p class="metric-variables-field-note">This session's team setting for these events: ${escapeHtml(setting.replace(/^Events /, ""))}. Check that GPEXE shows the same setting.</p>` : "";
 }
 
 // G1b-2: the comparison of a generic field with the GPEXE screen (plan sections 8.2 and 8.10). The team, then the server's

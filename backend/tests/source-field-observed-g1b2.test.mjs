@@ -797,13 +797,17 @@ test("22. the inventory's zone thresholds come from the newest stored session of
   const t = await gpexeTeam(W.clubA);
   await candidate(t, () => ({}), { startedAt: "2026-10-01T18:00:00Z" });
   await candidate(W.tA, () => ({}), { startedAt: "2026-10-01T18:00:00Z" });
-  assert.deepEqual(await zone(W.pa), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] }, asOf: "2026-10-01T18:00:00.000Z" }, "the day of the newest session the limits come from");
+  assert.deepEqual(await zone(W.pa), { power: { values: [20, 25, 60, 75] }, speed: { values: [5.5, 7] }, acceleration: { value: 2.5, duration: 0.3 }, deceleration: { value: -2.5, duration: 0.3 }, asOf: "2026-10-01T18:00:00.000Z" }, "the day of the newest session the limits come from");
   // The newer session of one team carries another power set.
   const newer = await candidate(t, () => ({}), { startedAt: "2026-10-02T18:00:00Z" });
   const stored = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [newer.id])).raw_bundle;
   stored.teamThresholds.power_thresholds = [20, 25, 60, 80];
   await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [newer.id, stored]);
-  assert.deepEqual(await zone(W.pa), { power: { differ: true }, speed: { values: [5.5, 7] }, asOf: "2026-10-02T18:00:00.000Z" });
+  assert.deepEqual(await zone(W.pa), { power: { differ: true }, speed: { values: [5.5, 7] }, acceleration: { value: 2.5, duration: 0.3 }, deceleration: { value: -2.5, duration: 0.3 }, asOf: "2026-10-02T18:00:00.000Z" });
+  // v80 step A: an event setting that differs (0.5 s against 0.3 s) is only said to differ, as a zone set is.
+  stored.teamThresholds.acceleration_events_duration = 0.5;
+  await k.query(`update training_load.gpexe_import_candidates set raw_bundle = $2 where id = $1`, [newer.id, stored]);
+  assert.deepEqual(await zone(W.pa), { power: { differ: true }, speed: { values: [5.5, 7] }, acceleration: { differ: true }, deceleration: { value: -2.5, duration: 0.3 }, asOf: "2026-10-02T18:00:00.000Z" });
   assert.equal(await zone(W.caA), undefined, "a club never gets the team thresholds (P1)");
 });
 
@@ -826,5 +830,11 @@ test("24 (the Rukovodilac, 2026-11-18): route 8 carries the compared session's o
   const cand = await candidate(W.tA, energyOf(f.name));
   const stored = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [cand.id])).raw_bundle;
   const body = (await observationOf(W.pa, f, { candidateId: cand.id })).body;
-  assert.deepEqual(body.observation.zoneThresholds, { power: stored.teamThresholds.power_thresholds, speed: stored.teamThresholds.speed_thresholds });
+  const t = stored.teamThresholds;
+  assert.deepEqual(body.observation.zoneThresholds, {
+    power: t.power_thresholds, speed: t.speed_thresholds,
+    // v80 step A: the team's event settings of the same set.
+    acceleration: { value: t.acceleration_events_threshold, duration: t.acceleration_events_duration },
+    deceleration: { value: t.deceleration_events_threshold, duration: t.deceleration_events_duration },
+  });
 });

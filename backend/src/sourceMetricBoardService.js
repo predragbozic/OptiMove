@@ -255,7 +255,8 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
     `select d.id, d.owner_scope, d.key, d.label, v.id as version_id, v.value_type, v.unit,
             coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
             trim_scale(v.min_value)::text as min_value, trim_scale(v.max_value)::text as max_value,
-            v.condition_description is not null as has_condition, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
+            v.condition_description is not null as has_condition, v.condition_description as condition_raw,
+            ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
             (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes,
             exists (select 1 from training_load.metric_definition_club_hides h
                      where h.club_id = $1::uuid and h.metric_definition_id = d.id and h.shown_at is null) as hidden
@@ -371,6 +372,25 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
 // world; the athlete keys stay inside this function's result and never reach
 // an answer.
 // ---------------------------------------------------------------------------
+// A variable's condition as the board says it: the three stored shapes (v42), numbers as their shortest decimal; any other
+// shape is { kind: "unsupported" } (never the stored JSON).
+const conditionNumber = (v) => (typeof v === "number" && Number.isFinite(v) ? String(v) : null);
+export function boardCondition(cd) {
+  if (!cd || typeof cd !== "object" || Array.isArray(cd) || typeof cd.unit !== "string" || typeof cd.operator !== "string") return { kind: "unsupported" };
+  const keys = Object.keys(cd).sort().join(",");
+  if (cd.operator === "between" && keys === "max,min,operator,unit" && conditionNumber(cd.min) !== null && conditionNumber(cd.max) !== null) {
+    return { kind: "zone", operator: "between", lower: conditionNumber(cd.min), upper: conditionNumber(cd.max), unit: cd.unit };
+  }
+  if ([">=", ">", "<=", "<"].includes(cd.operator) && keys === "operator,unit,value" && conditionNumber(cd.value) !== null) {
+    return { kind: "zone", operator: cd.operator, value: conditionNumber(cd.value), unit: cd.unit };
+  }
+  if ([">=", ">", "<=", "<"].includes(cd.operator) && keys === "duration_seconds,operator,unit,value"
+      && conditionNumber(cd.value) !== null && conditionNumber(cd.duration_seconds) !== null) {
+    return { kind: "event_threshold", operator: cd.operator, value: conditionNumber(cd.value), durationSeconds: conditionNumber(cd.duration_seconds), unit: cd.unit };
+  }
+  return { kind: "unsupported" };
+}
+
 function columnsOf(world) {
   return world.fields.map((f) => {
     const extractor = extractorFor({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key });
@@ -584,8 +604,11 @@ function boardOf(world, pairIndex) {
         // A club variable takes a column; an OptiMove variable only where its system mapping of a column fills it (C61) -
         // except on the platform board, where OptiMove's variables are the owner's own and take a column (S).
         // v77 (J21): a calculated variable takes no column; its value is its calculation.
-        placeable: v.calculated !== true
+        // v80 step A: a variable with a condition takes no column of this board (the save refuses condition_mismatch); it
+        // is never shown as a free target, and says its condition instead (until v80 matches a column's team setting).
+        placeable: v.calculated !== true && v.has_condition !== true
           && (v.owner_scope === "club" || world.systemBoard ? v.value_type === "numeric" && v.unit_is_token === true : fedBySystem.has(v.id)),
+        condition: v.has_condition === true ? boardCondition(v.condition_raw) : null,
         filledByFieldIds: v.owner_scope === "system" ? fedBySystem.get(v.id) ?? [] : [],
       })),
       on: world.open.map((o) => ({
