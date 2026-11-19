@@ -68,7 +68,9 @@ export function renderBuilderCalendarEventPanel({ session, block, panel, types }
 function renderBody({ block, panel, types, busy }) {
   if (panel.phase === "reading") return `<p class="cc-builder-event-line" role="status">Reading the calendar…</p>`;
   if (panel.phase === "read_error") {
-    return `<p class="cc-builder-event-line" role="alert">The calendar could not be read.</p>
+    // A refusal whose re-read failed keeps its sentence (code review LOW).
+    const refused = panel.message ? `<p class="cc-builder-event-line" role="alert">${escapeHtml(panel.message)}</p>` : "";
+    return `${refused}<p class="cc-builder-event-line" role="alert">The calendar could not be read.</p>
       <div class="cc-builder-event-actions"><button class="plain-button cc-builder-event-primary" type="button" data-action="builder-calendar-event-retry">Try again</button></div>`;
   }
   if (panel.phase === "done") {

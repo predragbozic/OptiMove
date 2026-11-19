@@ -56,7 +56,11 @@ export const linkedSentence = (title) => `This training is in the calendar as â€
 // this session is the one of its live plan, slot (AM / PM, B / T / A) and
 // trimmed, case-insensitive name (D16b's key). A session already linked is
 // folded under its event and is no planned card: an event card of that day
-// holding the live plan is then the session's event.
+// holding the live plan is then the session's event - but the event card
+// names no slot or name per folded session, so it counts as this session's
+// only when the session is its day's one session in the Builder, or the
+// event's title is the session's name (code review MEDIUM: another session
+// of the same plan and day linked to an event is not this one).
 //   { kind: "planned", card } | { kind: "linked", event } | { kind: "linked_many" }
 //   | { kind: "ambiguous" } | { kind: "none", reason: "apply" | "absent" }
 export function builderCalendarMatch({ draft, block, session, answer }) {
@@ -70,7 +74,9 @@ export function builderCalendarMatch({ draft, block, session, answer }) {
     && norm(item.title) === norm(session?.name));
   if (planned.length > 1) return { kind: "ambiguous" };
   if (planned.length === 1) return { kind: "planned", card: planned[0] };
-  const events = items.filter((item) => item.kind === "event" && !item.cancelled && holdsPlan(item));
+  const onlySession = (block?.sessions || []).length <= 1;
+  const events = items.filter((item) => item.kind === "event" && !item.cancelled && holdsPlan(item)
+    && (onlySession || norm(item.title) === norm(session?.name)));
   if (events.length === 1) return { kind: "linked", event: events[0] };
   if (events.length > 1) return { kind: "linked_many" };
   return { kind: "none", reason: draft?.plan?.isEditDraft ? "apply" : "absent" };

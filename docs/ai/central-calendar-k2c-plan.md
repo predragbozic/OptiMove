@@ -1167,8 +1167,10 @@ Frontend only; no backend file, no migration. Built on 2.1 with the GO of 2.2, o
 - **`central-calendar-actions.js`**: the two exports of 2.1.11 only (`rememberCentralCalendarCreate`,
   `openCentralCalendarAt`), in one block after `clearCentralCalendarUncertainWrites`.
 - **`builder-structure.js` / `builder-view.js`**: the button and the panel through the Builder's view context.
-- **`app.js`**: the action handler, the input mirror and *Open in calendar* (`openCentralCalendarAt`, then the rail's
-  calendar). No guard line of `app.js` changed.
+- **`app.js`**: the action handler, the input mirror, *Open in calendar* (`openCentralCalendarAt`, then the rail's
+  calendar; if the leave guard keeps the coach where they are, the calendar's day, selection and panel go back as they
+  were), and `resetBuilderCalendarEventForWorkspaceChange()` in `onWorkspaceChanged` (the panel and the badges are the
+  old workspace's; a create not confirmed stays in the calendar's memory under it). No guard line of `app.js` changed.
 - **`state.js`**: `calendarEvent` and `calendarEventsMade` on the Builder slice only. **`styles.css`**:
   `.cc-builder-event*` only, at the end of the file.
 
@@ -1182,14 +1184,23 @@ Frontend only; no backend file, no migration. Built on 2.1 with the GO of 2.2, o
   suites (`app-update` 8, `central-calendar-events` 11g and 11l, `training-load-dashboards-h4`); the Frontend PR gate
   caught it, and this form needs no change to them.
 - **No training type (2.1.4):** one sentence for everyone; no *Open Settings → Calendar* button for a club admin.
+- **The way back (2.1.8).** The event card names no slot or name per folded session, so an event holding the live plan
+  counts as this session's only when the session is its Builder day's one session, or the event's title is the
+  session's name. Otherwise the panel says the training isn't on the calendar yet (the `apply` / `absent` sentence)
+  with *Open in calendar*. The exact match (a slot and a name per session link on the event card) is a follow-up,
+  beside F5.
+- **Not built (2.1.2, 2.1.4):** the button is not turned off while a Builder save is pending (the match reads the live
+  plan, so a pending autosave of the edit draft cannot link the wrong session), and Escape does not close the panel
+  (Close and Cancel do). Both are follow-ups.
 
-**Tests:** `frontend/tests/builder-calendar-event.actions.test.mjs`, 16 tests through the real handlers, data module
+**Tests:** `frontend/tests/builder-calendar-event.actions.test.mjs`, 19 tests through the real handlers, data module
 and templates with a fake fetch that keeps the create route's contract (replay, `request_key_reused`, the fold): who
 sees the button, the match (one card, another plan / slot / name, a saved plan absent, two cards, linked), the read's
 failure and the generation, the exact body, the local checks and `expects`, success with *Open in calendar* and the
 badge, every refusal's sentence with no id or code, a lost answer and Check result, a check that stays not confirmed
-or settles, one control at a time, leaving, `openCentralCalendarAt`. 15 mutations of 2.1.12 (the RPE one left out by
-decision 5) and of the new guards; 14 killed. F9 (no generation check on the read) survives and is equivalent: each
+or settles, one control at a time, leaving, `openCentralCalendarAt`, an event of another session of the same plan and
+day (2d), a refusal whose re-read fails (6c), a workspace switch (11). 19 mutations of 2.1.12 (the RPE one left out by
+decision 5) and of the new guards; 18 killed. F9 (no generation check on the read) survives and is equivalent: each
 press gets its own record object, so an older answer can only write into a record that is no longer on screen.
 
 **Browser check** (Chromium through the e2e world, a disposable database with invented people; the club's event types
@@ -1199,6 +1210,20 @@ the event, the notice, the event on the calendar with the training under *Linked
 event's panel, and the same session again answering "This training is in the calendar as “Morning session”." At
 every width: the button and every control 44 px, every input 16 px, no horizontal scroll, no page error; the console
 showed only two 403s of `/api/tests/athlete/timezone`, as before this change.
+
+**Reviews** (on `87209b6a`; the fixes in the next two commits):
+
+| Finding | Fix | Test |
+|---|---|---|
+| ux MEDIUM-1, -2: "Apply your changes first" could be a false step; "not on the calendar" had no next step | One sentence naming both causes with their steps, and *Open in calendar* on every sentence without a form | 2b |
+| ux MEDIUM-3: the unconfirmed state put its explanation first, in engineer words; another session's button was off without a reason | "We couldn't confirm the event was made." · *Check result* · "Checking never makes a second event."; "Finish the event being made first." beside the off button | 7, 8 |
+| ux LOWs: the End input overflowed at 1280 px; focus outline on click; the heading; two Close buttons; "For N athletes"; the RPE line | One-column times; `:focus-visible`; "In the calendar" when made or found; no header Close while the form shows; the wording | 2, 2b, 4b; browser |
+| mobile LOWs: the 390 px breakpoint; `aria-controls` and focus after a read | One column at every width, full-width actions to 430 px; `aria-controls` while open; focus to the message, else the heading | 8; browser |
+| code MEDIUM: an event matched on the plan id alone | The way back above | 2d |
+| code LOW: a refusal's sentence lost when its re-read failed | Drawn above the read error | 6c |
+| code LOW: the panel and the badges survived a workspace switch | `resetBuilderCalendarEventForWorkspaceChange`; a late answer adds no badge | 11 |
+| code LOW: *Open in calendar* moved the calendar before the leave guard | The calendar goes back if the tab does not change | code read (`app.js` is not loaded by the suites) |
+| code LOW: the pending-save and Escape points of 2.1 | Recorded above as not built | — |
 
 ## 3. K3 — "New training" from an event (named only)
 

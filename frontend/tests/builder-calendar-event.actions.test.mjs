@@ -535,6 +535,74 @@ test("9b. a write whose answer lands after the Builder was left still settles th
   }
 });
 
+// --- 2d, 6c, 11: the code review's fixes ---------------------------------------------------
+test("2d. an event holding another session of the same plan and day is not this session's event; the day's only session, or an event of its name, is", async () => {
+  // Two sessions that day; the AM one is folded under its event, the PM one
+  // (renamed in the draft, not applied) has no card.
+  const draft = draftWith();
+  draft.blocks[0].sessions.push({ id: "s2", amPm: "PM", bta: "T", time: "", name: "Gym", nodes: [] });
+  installFetchMock(server({ items: () => [eventCard(E_OLD, "Morning session", [PLAN_LIVE])] }));
+  state.builder.draft = draft;
+  await press("open", { sessionId: "s2" });
+  assert.equal(state.builder.calendarEvent.match.kind, "none");
+  assert.equal(state.builder.calendarEvent.match.reason, "apply");
+  // The AM session: the event carries its name, so it is this one's.
+  await press("close");
+  await press("open");
+  assert.equal(state.builder.calendarEvent.match.kind, "linked");
+  // The day's only session: an event of another title still holds it.
+  state.builder = emptyBuilderState();
+  installFetchMock(server({ items: () => [eventCard(E_OLD, "Team training", [PLAN_LIVE])] }));
+  state.builder.draft = draftWith();
+  await press("open");
+  assert.equal(state.builder.calendarEvent.match.kind, "linked");
+});
+
+test("6c. a refusal whose re-read of the day fails keeps its sentence above the read error", async () => {
+  const fake = server({ refuse: () => ({ status: 400, body: { error: "session_not_available", message: "x" } }) });
+  let posted = false;
+  installFetchMock((call) => {
+    if (call.method === "POST") posted = true;
+    else if (posted && call.url.startsWith("/api/calendar?")) return { status: 500, body: { error: "internal_error" } };
+    return fake(call);
+  });
+  state.builder.draft = draftWith();
+  await press("open");
+  await press("send");
+  assert.equal(state.builder.calendarEvent.phase, "read_error");
+  const html = panelHtml();
+  assert.ok(html.includes(escapeHtml("This training can't be added to an event from this workspace. Nothing was saved.")), html);
+  assert.match(html, /The calendar could not be read\./);
+  noIdsOrCodes(html);
+});
+
+test("11. a workspace switch drops the panel and the badges; a create not confirmed stays in the calendar's memory; a late answer brings no badge back", async () => {
+  await open({ lose: ["saved"] });
+  await press("send");
+  assert.equal(state.builder.calendarEvent.phase, "unconfirmed");
+  state.builder.calendarEventsMade = ["x"];
+  actions.resetBuilderCalendarEventForWorkspaceChange();
+  assert.equal(state.builder.calendarEvent, null);
+  assert.deepEqual(state.builder.calendarEventsMade, []);
+  assert.equal(centralCalendarUncertainWrites().length, 1, "kept to check in the calendar");
+  // A create in flight at the switch settles without a badge in the new workspace.
+  clearCentralCalendarUncertainWrites();
+  state.builder = emptyBuilderState();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const fake = server();
+  installFetchMock(async (call) => { if (call.method === "POST") await gate; return fake(call); });
+  state.builder.draft = draftWith();
+  await press("open");
+  const sending = press("send");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  actions.resetBuilderCalendarEventForWorkspaceChange();
+  release();
+  await sending;
+  assert.deepEqual(state.builder.calendarEventsMade, []);
+  assert.equal(centralCalendarUncertainWrites().length, 0);
+});
+
 // --- 10. Open in calendar -----------------------------------------------------------------
 test("10. openCentralCalendarAt sets the calendar's day and opens the event's panel, never over an open form", () => {
   openCentralCalendarAt({ date: D, key: `event:${E_NEW}:${D}` });

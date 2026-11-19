@@ -199,7 +199,8 @@ async function deliver(rec, render, { check }) {
   rec.doneText = builderCalendarEventDoneText(rec.sentBody.title, rec.sentBody.day);
   rec.doneNotes = builderCalendarEventDoneNotes(answer?.alignment);
   invalidateCentralCalendarCache();
-  if (rec.madeKey && !state.builder.calendarEventsMade?.includes(rec.madeKey)) {
+  // The badge only in the Builder this create belongs to (not after a switch).
+  if (current(rec) && rec.madeKey && !state.builder.calendarEventsMade?.includes(rec.madeKey)) {
     state.builder.calendarEventsMade = [...(state.builder.calendarEventsMade || []), rec.madeKey];
   }
   if (current(rec)) {
@@ -262,6 +263,16 @@ export async function handleBuilderCalendarEventAction(action, { renderBuilder, 
     return true;
   }
   return true;
+}
+
+// A workspace switch (app.js onWorkspaceChanged): the panel and the "In
+// calendar" badges are the old workspace's (code review LOW). A create not
+// confirmed is not lost: it is kept in the calendar's memory under that
+// workspace since its send.
+export function resetBuilderCalendarEventForWorkspaceChange() {
+  readGeneration += 1;
+  state.builder.calendarEvent = null;
+  state.builder.calendarEventsMade = [];
 }
 
 // Tests start over from here.
