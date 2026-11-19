@@ -1637,3 +1637,72 @@ test("34. B1: GET /events/types carries questions.enabled for the workspace's ow
     assert.deepEqual(t.defaultQuestions, st.defaultQuestions, `${t.kind}: the form and Settings agree`);
   }
 });
+
+test("35. the Tests full edit decides skip_days_off from the RESULTING kind (found by the 2a-2a code review): daily→one_time resets it; dates only keep it; one_time→daily with skipDaysOff is allowed only with the switch on; one_time with skipDaysOff is refused, nothing written", async () => {
+  const t = await freshTeam("fulledit", 1);
+  const day = addDays(TODAY, 20);
+  const make = async (kind, skipDaysOff) => {
+    const res = await api("/api/tests/schedules", {
+      method: "POST", cookie: t.coach.cookie,
+      body: { testVersionId: WELLNESS, scheduleKind: kind, timezone: "UTC", startDate: day, endDate: kind === "daily" ? addDays(day, 3) : day,
+        opensTime: "06:00", closesTime: "21:00", targets: [{ kind: "team", id: t.team }], ...(skipDaysOff ? { skipDaysOff: true } : {}) },
+    });
+    assert.equal(res.status, 201, res.text);
+    return res.body.schedule.id;
+  };
+  const row = async (id) => (await q(`select schedule_kind, skip_days_off, start_date::text as start, end_date::text as "end", recurrence_rule from tests.test_schedules where id = $1`, [id]))[0];
+  const patch = (id, body) => api(`/api/tests/schedules/${id}`, { method: "PATCH", cookie: t.coach.cookie, body });
+  const toOneTime = { scheduleKind: "one_time", startDate: addDays(day, 1), endDate: addDays(day, 1) };
+
+  // (a) daily + true → one_time without skipDaysOff: 200, reset to false, the edit applied; switch on and off.
+  for (const on of [true, false]) {
+    const id = await make("daily", true);
+    assert.equal((await row(id)).skip_days_off, true);
+    if (!on) await switchOn(m.clubs.c1, false);
+    try {
+      const res = await patch(id, toOneTime);
+      assert.equal(res.status, 200, `(a) switch ${on ? "on" : "off"}: ${res.text}`);
+      const r = await row(id);
+      assert.deepEqual([r.schedule_kind, r.skip_days_off, r.start, r.recurrence_rule], ["one_time", false, addDays(day, 1), null], `(a) switch ${on ? "on" : "off"}`);
+    } finally {
+      if (!on) await switchOn(m.clubs.c1, true);
+    }
+  }
+  // (b) daily + true, dates only (still daily), no skipDaysOff: 200, stays true.
+  const b = await make("daily", true);
+  const resB = await patch(b, { startDate: addDays(day, 2), endDate: addDays(day, 5) });
+  assert.equal(resB.status, 200, resB.text);
+  assert.deepEqual([(await row(b)).skip_days_off, (await row(b)).start], [true, addDays(day, 2)]);
+  // (c) one_time → daily with skipDaysOff true: 200 and true with the switch on; 400, nothing written, with it off.
+  const toDaily = { scheduleKind: "daily", startDate: day, endDate: addDays(day, 3), skipDaysOff: true };
+  const cOn = await make("one_time", false);
+  const resCOn = await patch(cOn, toDaily);
+  assert.equal(resCOn.status, 200, resCOn.text);
+  assert.deepEqual([(await row(cOn)).schedule_kind, (await row(cOn)).skip_days_off], ["recurring", true]);
+  const cOff = await make("one_time", false);
+  const beforeCOff = await row(cOff);
+  await switchOn(m.clubs.c1, false);
+  try {
+    const resCOff = await patch(cOff, toDaily);
+    assert.equal(resCOff.status, 400, resCOff.text);
+    assert.equal(resCOff.body.error, "skip_days_off_unavailable");
+    assert.deepEqual(await row(cOff), beforeCOff, "(c) off: the row unchanged");
+  } finally {
+    await switchOn(m.clubs.c1, true);
+  }
+  // (d) daily → one_time with skipDaysOff true: 400, nothing written.
+  const d = await make("daily", false);
+  const beforeD = await row(d);
+  const resD = await patch(d, { ...toOneTime, skipDaysOff: true });
+  assert.equal(resD.status, 400, resD.text);
+  assert.equal(resD.body.error, "skip_days_off_unavailable");
+  assert.deepEqual(await row(d), beforeD, "(d) the row unchanged");
+  // (e) the toggle-only PATCH as before: on a daily schedule, true then false.
+  const e = await make("daily", false);
+  for (const value of [true, false]) {
+    const res = await patch(e, { skipDaysOff: value });
+    assert.equal(res.status, 200, res.text);
+    assert.deepEqual(res.body, { ok: true, skipDaysOff: value });
+    assert.equal((await row(e)).skip_days_off, value);
+  }
+});
