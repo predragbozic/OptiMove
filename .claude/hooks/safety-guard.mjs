@@ -148,7 +148,7 @@ function extractGitSubcommandArgs(segment, subcommand) {
     // <key>=<value>` (a one-off config override) are two different git global options
     // that only differ by case — a case-insensitive match here would capture -c's
     // config-override value as if it were a `cwd` override for every later git call in
-    // this function (getCurrentBranch/isValidGitRevision), silently corrupting branch
+    // this function (getCurrentBranchRef/isValidGitRevision), silently corrupting branch
     // detection and defeating the push/commit-to-main ASK checks. `-c` is handled
     // correctly, without touching `dir`, by the GIT_GLOBAL_FLAGS_WITH_SEPARATE_VALUE
     // branch below.
@@ -167,20 +167,33 @@ function extractGitSubcommandArgs(segment, subcommand) {
   return { dir, rest: tokens.slice(i + 1).join(" ") };
 }
 
-function getCurrentBranch(dir) {
+// The current branch as its FULL ref (`refs/heads/main`), or null when it cannot be known.
+// `git symbolic-ref -q HEAD` and not `git rev-parse --abbrev-ref HEAD`: the abbreviated name
+// is ambiguous — with a branch `main` and also a tag (or refs/remotes/) `main`, rev-parse
+// prints `heads/main`, which no "=== main" check recognises, and a tag can arrive with an
+// ordinary `git fetch`. A detached HEAD, git missing, not a repository, a timeout: all null.
+// "ako hook bezbedno može utvrditi aktivnu granu" — when it can't, callers must treat null
+// as "unknown", never as "not main".
+function getCurrentBranchRef(dir) {
   try {
-    const out = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    const out = execFileSync("git", ["symbolic-ref", "-q", "HEAD"], {
       cwd: dir,
-      timeout: 2000,
+      timeout: GIT_READ_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return out.toString().trim();
+    const ref = out.toString().trim();
+    return ref.startsWith("refs/heads/") ? ref : null;
   } catch {
-    // Not a git repo, git not on PATH, timed out, detached HEAD in a weird state, etc.
-    // "ako hook bezbedno može utvrditi aktivnu granu" — it can't here, so callers must
-    // treat null as "unknown", never as "not main".
     return null;
   }
+}
+
+// Case-insensitive on purpose: on a case-insensitive file system (Windows, macOS) `Main`
+// and `main` are the same branch.
+function isRefOneOf(ref, names) {
+  if (typeof ref !== "string") return false;
+  const lower = ref.toLowerCase();
+  return names.some((name) => lower === `refs/heads/${name}`);
 }
 
 // True only if `token` resolves to an existing commit in `dir` — used to tell a real
@@ -190,11 +203,15 @@ function getCurrentBranch(dir) {
 // "not a repo" / git missing / timeout / not a valid revision are all indistinguishable
 // here and all return false, so the caller treats the ambiguous case as a discard risk
 // rather than assuming it's a safe branch name the way earlier code did.
+// Generous: a cold disk cache on Windows can make the first git call of a session slow, and a
+// timeout here only ever leads to a question, never to silence.
+const GIT_READ_TIMEOUT_MS = 5000;
+
 function isValidGitRevision(token, dir) {
   try {
     execFileSync("git", ["rev-parse", "--verify", "--quiet", `${token}^{commit}`], {
       cwd: dir,
-      timeout: 2000,
+      timeout: GIT_READ_TIMEOUT_MS,
       stdio: ["ignore", "ignore", "ignore"],
     });
     return true;
@@ -439,23 +456,23 @@ export function isHarmlessBeforeMerge(segment) {
   }
   if (sub === "branch") return rest.length === 1 && rest[0] === "--show-current";
   if (!READ_ONLY_GIT_SUBCOMMANDS.has(sub)) return false;
-  // A read command that writes a file is not a read (`git diff --output ...`).
-  return !rest.some((t) => /^--output/i.test(t) || t === "-o");
+  // A read command that writes a file is not a read (`git diff --output ...`), and one that
+  // runs a configured external program (`--ext-diff`, `--textconv`) could do anything,
+  // including change the branch after the hook has checked it.
+  return !rest.some((t) => /^--output/i.test(t) || t === "-o" || /^--(ext-diff|textconv)\b/i.test(t));
 }
 
-// `git rev-parse --abbrev-ref HEAD` answers "HEAD" for a detached HEAD: that is "unknown",
-// never "not main".
-function isKnownWorkingBranch(branch) {
-  if (typeof branch !== "string") return false;
-  const name = branch.trim();
-  if (!name || name === "HEAD") return false;
-  return !PROTECTED_BRANCHES.has(name.toLowerCase());
+// Fail-closed: only a FULL ref that is known and is not refs/heads/main or refs/heads/master
+// passes. null (detached HEAD, error, not a repository) is "unknown", never "not main".
+function isKnownWorkingBranch(ref) {
+  if (typeof ref !== "string" || !ref.startsWith("refs/heads/") || ref === "refs/heads/") return false;
+  return !isRefOneOf(ref, ["main", "master"]);
 }
 
-export function isMergeOfRemoteDefaultIntoWorkingBranch(segment, earlierSegments, cwd, currentBranchOf = getCurrentBranch) {
+export function isMergeOfRemoteDefaultIntoWorkingBranch(segment, earlierSegments, cwd, currentBranchRefOf = getCurrentBranchRef) {
   if (!isPlainMergeOfRemoteDefault(segment)) return false;
   if (!earlierSegments.every(isHarmlessBeforeMerge)) return false;
-  return isKnownWorkingBranch(currentBranchOf(cwd));
+  return isKnownWorkingBranch(currentBranchRefOf(cwd));
 }
 
 export function isGhPrMerge(segment) {
@@ -482,8 +499,7 @@ export function isPushToMain(segment, cwd) {
   // Bare `git push` or `git push origin` (no explicit branch/refspec) pushes whatever
   // the current branch's upstream is — only knowable by actually asking git.
   if (nonFlag.length <= 1) {
-    const branch = getCurrentBranch(parsed.dir || cwd);
-    return branch === "main";
+    return isRefOneOf(getCurrentBranchRef(parsed.dir || cwd), ["main"]);
   }
   return false;
 }
@@ -491,8 +507,7 @@ export function isPushToMain(segment, cwd) {
 export function isCommitOnMain(segment, cwd) {
   const parsed = extractGitSubcommandArgs(segment, "commit");
   if (!parsed) return false;
-  const branch = getCurrentBranch(parsed.dir || cwd);
-  return branch === "main";
+  return isRefOneOf(getCurrentBranchRef(parsed.dir || cwd), ["main"]);
 }
 
 const DEPLOY_PATTERNS = [

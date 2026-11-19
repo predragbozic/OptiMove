@@ -922,14 +922,83 @@ test("merge exemption: forms the guard did not see before are still not seen, an
 
 test("merge exemption: the branch check fails closed whatever the branch reader answers", () => {
   const merge = "git merge --no-edit origin/main";
-  const withBranch = (answer) => isMergeOfRemoteDefaultIntoWorkingBranch(merge, [], "/nowhere", () => answer);
-  assert.equal(withBranch("feature/x"), true);
-  assert.equal(withBranch("fix/main"), true);
-  assert.equal(withBranch("mainline"), true);
-  for (const unknownOrProtected of [null, undefined, "", "   ", "HEAD", "main", "master", "Main", "MASTER", " main\n", 42, {}, []]) {
-    assert.equal(withBranch(unknownOrProtected), false, `must not pass for branch answer ${JSON.stringify(unknownOrProtected)}`);
+  const withRef = (answer) => isMergeOfRemoteDefaultIntoWorkingBranch(merge, [], "/nowhere", () => answer);
+  assert.equal(withRef("refs/heads/feature/x"), true);
+  assert.equal(withRef("refs/heads/fix/main"), true);
+  assert.equal(withRef("refs/heads/mainline"), true);
+  assert.equal(withRef("refs/heads/heads/main"), true, "a branch really named heads/main is a working branch");
+  for (const bad of [null, undefined, "", "   ", "HEAD", "main", "master", "heads/main", "feature/x", "refs/heads/", "refs/heads/main", "refs/heads/master",
+    "refs/heads/Main", "REFS/HEADS/MASTER", "refs/tags/feature", "refs/remotes/origin/feature", " refs/heads/main\n", 42, {}, []]) {
+    assert.equal(withRef(bad), false, `must not pass for branch answer ${JSON.stringify(bad)}`);
   }
   assert.throws(() => isMergeOfRemoteDefaultIntoWorkingBranch(merge, [], "/nowhere", () => { throw new Error("git is gone"); }));
+});
+
+// HIGH-1 of the review of #640: a ref named main or master besides the branch makes
+// `git rev-parse --abbrev-ref HEAD` print `heads/main`. The branch is read as a full ref now.
+function makeAmbiguousRepo(prefix, branch, extraRef) {
+  const dir = makeRepo(prefix, branch);
+  execFileSync("git", ["update-ref", extraRef, "HEAD"], { cwd: dir });
+  return dir;
+}
+const AMBIGUOUS = [];
+before(() => {
+  AMBIGUOUS.push(["main + tag main", makeAmbiguousRepo("sg-amb-1-", "main", "refs/tags/main")]);
+  AMBIGUOUS.push(["main + refs/remotes/main", makeAmbiguousRepo("sg-amb-2-", "main", "refs/remotes/main")]);
+  AMBIGUOUS.push(["master + tag master", makeAmbiguousRepo("sg-amb-3-", "master", "refs/tags/master")]);
+  AMBIGUOUS.push(["main + tag main + refs/remotes/main", makeAmbiguousRepo("sg-amb-4-", "main", "refs/tags/main")]);
+  execFileSync("git", ["update-ref", "refs/remotes/main", "HEAD"], { cwd: AMBIGUOUS[3][1] });
+});
+after(() => { for (const [, dir] of AMBIGUOUS) rmSync(dir, { recursive: true, force: true }); });
+
+test("ambiguous refs: the repositories really are ambiguous (rev-parse --abbrev-ref says heads/...)", () => {
+  for (const [name, dir] of AMBIGUOUS) {
+    const abbrev = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: dir }).toString().trim();
+    assert.match(abbrev, /^heads\/(main|master)$/, `${name}: ${abbrev}`);
+  }
+});
+
+test("ambiguous refs: on main or master with a tag or remote ref of the same name, every merge still asks", () => {
+  for (const [name, dir] of AMBIGUOUS) {
+    for (const command of ALLOWED_MERGES) {
+      assert.equal(verdict(command, dir), ASK, `${name}: ${command}`);
+    }
+  }
+});
+
+test("ambiguous refs: commit and a bare push on main still ask with a tag or remote ref named main (P1)", () => {
+  for (const [name, dir] of AMBIGUOUS.filter(([n]) => n.startsWith("main"))) {
+    for (const command of ["git commit -m x", "git push", "git push origin", "git commit --amend --no-edit"]) {
+      assert.equal(verdict(command, dir), ASK, `${name}: ${command}`);
+    }
+  }
+});
+
+test("ambiguous refs: a branch really named heads/main is a working branch", () => {
+  const dir = makeRepo("sg-heads-main-", "heads/main");
+  try {
+    execFileSync("git", ["update-ref", "refs/tags/main", "HEAD"], { cwd: dir });
+    assert.equal(verdict("git merge --no-edit origin/main", dir), ALLOW);
+    assert.equal(verdict("git commit -m x", dir), ALLOW);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("main in another letter case is main (case-insensitive file systems)", () => {
+  const dir = makeRepo("sg-Main-", "Main");
+  try {
+    assert.equal(verdict("git merge --no-edit origin/main", dir), ASK);
+    assert.equal(verdict("git commit -m x", dir), ASK);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("before the merge: diff/log/show with an external program (--ext-diff, --textconv) take the exemption away (LOW-1)", () => {
+  for (const command of [
+    "git diff --ext-diff && git merge origin/main", "git log -p --ext-diff -1 && git merge origin/main", "git show --textconv HEAD && git merge origin/main",
+    "git diff --textconv --stat && git merge origin/main", "git diff --EXT-DIFF && git merge origin/main",
+  ]) {
+    assert.equal(verdict(command, featureRepo), ASK, command);
+  }
+  assert.equal(verdict("git diff --no-ext-diff --stat && git merge origin/main", featureRepo), ALLOW);
 });
 
 test("merge exemption: a branch reader that throws ends in a question, never in silence", () => {
