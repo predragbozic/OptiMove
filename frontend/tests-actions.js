@@ -8,8 +8,9 @@ import { fetchTestsQuestionsEnabled, loadOrgPickerData, loadPendingCount, loadSc
 
 // ------------------------------------------------------------
 // K2b-2a-2a: "Skip days off" (docs/ai/central-calendar-k2b2a2-ui-contract.md
-// section 1). The option exists only for a daily WELLNESS schedule while the
-// club's Ask athletes switch is on (testsSkipDaysOffShown, tests-view.js). The
+// section 1). The option exists only for a daily schedule of the WELLNESS
+// test while the club's Ask athletes switch is on (testsSkipDaysOffShown,
+// tests-view.js). The
 // switch is read once per opened form (and again after a refusal); only the
 // newest read writes, and an answer for a closed form is dropped.
 // ------------------------------------------------------------

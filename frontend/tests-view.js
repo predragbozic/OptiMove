@@ -1585,8 +1585,9 @@ export function handleTestsLibraryInput(target) {
 }
 
 // K2b-2a-2a: "Skip days off" (docs/ai/central-calendar-k2b2a2-ui-contract.md
-// section 1) - only for a daily WELLNESS schedule while the club's Ask athletes
-// switch is on (scheduleForm.questionsEnabled === true); otherwise nothing.
+// section 1) - only for a daily schedule of the WELLNESS test while the club's
+// Ask athletes switch is on (scheduleForm.questionsEnabled === true);
+// otherwise nothing.
 // The test is known by its library name: the client has no other key for
 // WELLNESS, and the server refuses skipDaysOff for any other test.
 const SKIP_DAYS_OFF_TEST_NAME = "WELLNESS";
