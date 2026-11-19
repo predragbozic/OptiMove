@@ -12,7 +12,7 @@ export function renderCalculationFormula(metric) {
   const names = (calculation.inputs ?? []).map(input => (safe(input.name) || safe(input.shortName)) ? (safe(input.name) || safe(input.shortName)) + (safe(input.unit) ? ' (' + safe(input.unit) + ')' : '') : 'an input you cannot see');
   const separator = calculation.kind === 'sum' ? ' + ' : calculation.kind === 'difference' ? ' − ' : ' ÷ ';
   const formula = names.join(separator) + (calculation.kind === 'ratio' && calculation.scale === 100 ? ' × 100' : '');
-  return `<span class="tl-calculated-badge">Calculated</span>${formula ? `<details><summary>How it is calculated</summary><p>${escapeHtml(formula)}</p></details>` : ''}`;
+  return `<span class="tl-calculated-badge">Calculated</span>${formula ? `<details><summary>How it is calculated</summary><p>Current formula: ${escapeHtml(formula)}</p><p>Earlier sessions keep their saved calculation.</p></details>` : ''}`;
 }
 export function renderRatioCoverage(series, scope) {
   if (series.calculation?.kind !== 'ratio' || !series.coverage) return '';

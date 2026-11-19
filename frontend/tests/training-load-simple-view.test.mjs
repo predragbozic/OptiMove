@@ -345,5 +345,5 @@ test('ratio choices use the server contract and formula names never leak redacte
   const html=renderSimpleEditorHtml(model({step:3,selectedMetric:metric,draft:{title:'Ratio',metricRef:{kind:'metric',metricDefinitionId:metricId},view:{type:'table',groupBy:'day',dataScopeLevel:'session',analyticalAggregation:'ratio'},athleteSelection:{mode:'inherit'}}}));
   const options=html.match(/data-action="training-load-simple-aggregation"[\s\S]*?<\/select>/)[0];
   for(const value of ['ratio','max','last','none'])assert.ok(options.includes('value="'+value+'"'));
-  assert.doesNotMatch(options,/value="sum"|value="avg"/);assert.match(html,/Calculated/);assert.match(html,/Distance ÷ an input you cannot see/);assert.doesNotMatch(html,/secret-id/);
+  assert.doesNotMatch(options,/value="sum"|value="avg"/);assert.match(html,/Calculated/);assert.match(html,/Distance ÷ an input you cannot see/);assert.doesNotMatch(html,/secret-id/);assert.match(html,/Current formula:/);assert.match(html,/Earlier sessions keep their saved calculation/);
 });
