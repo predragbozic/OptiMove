@@ -823,7 +823,8 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   // or test schedule's day card folds under its event, so those kinds are
   // read too whenever an event of the window refers to one — a folded thing
   // is never emitted alone (the D16 rule), and event cards are emitted only
-  // when `event` is requested.
+  // when `event` is requested. Without `event` in `kinds` nothing folds, so
+  // the schedule's card stays its own (BE-FOLLOWUPS).
   const eventRows = await readEventRows(ctx, { from, to });
   const refersExternal = eventRows.some((r) => r.external_schedule_id);
   const refersTest = eventRows.some((r) => r.test_schedule_id);
@@ -1231,7 +1232,10 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     // reaches wider than the event stays its own card beside it, and the
     // event card says so (`scheduleFold`: separate) instead of taking the
     // schedule's numbers.
-    const folds = row.status === "planned" && ctx.type !== "athlete";
+    // An event card folds a schedule card only when the event card itself is
+    // emitted (D16: a folded card never disappears into a card the request's
+    // `kinds` leaves out; BE-FOLLOWUPS, the guard Q-FOLD's own fold uses).
+    const folds = row.status === "planned" && ctx.type !== "athlete" && kinds.has("event");
     const listed = new Set(card.athletes.map((a) => String(a.athleteId)));
     const covers = (other) => other.athletes.every((a) => listed.has(String(a.athleteId)));
     if (folds && row.external_schedule_id) {

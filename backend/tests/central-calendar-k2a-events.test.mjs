@@ -910,7 +910,7 @@ test("9. GET /api/calendar: event cards per workspace with canManage, kinds, inc
   assert.equal(eventCards(platformRes, teamEvent.id).length, 1);
 });
 
-test("10. the fold: a referenced external schedule's day card disappears into the event (rpe x/y, per-athlete states, links), whatever kinds asks; a test schedule the same; one planned event per schedule; another club's schedule is not available", async () => {
+test("10. the fold: a referenced external schedule's day card disappears into the event (rpe x/y, per-athlete states, links) whenever kinds carries event, and stays its own card when kinds leaves event out (BE-FOLLOWUPS, D16); a test schedule the same; one planned event per schedule; another club's schedule is not available", async () => {
   const c = await clubFixture("fold");
   const other = await clubFixture("fold-other");
   const match = await typeOf(c.coach1.cookie, "match");
@@ -944,11 +944,17 @@ test("10. the fold: a referenced external schedule's day card disappears into th
   const states = Object.fromEntries(card.athletes.map((a) => [a.athleteId, a.rpe]));
   assert.equal(states[c.a1.athleteId], "submitted");
   assert.equal(states[c.a2.athleteId], "missing");
-  // kinds=event alone still folds (the schedule is read because the event refers to it); kinds=external alone never shows the folded card.
+  // kinds=event alone still folds (the schedule is read because the event refers to it); so does external with event.
   const eventsOnly = await calendar(c.coach1.cookie, { extra: "&kinds=event" });
   assert.deepEqual(eventCards(eventsOnly, ev.id)[0].rpe, { asked: 2, submitted: 1, missed: 0 });
+  const both = await calendar(c.coach1.cookie, { extra: "&kinds=external,event" });
+  assert.equal(allItems(both).some((i) => i.key === `external:${schedule}:${PAST}`), false, "external with event: folded as before");
+  assert.deepEqual(eventCards(both, ev.id)[0].scheduleFold, { external: "folded", test: null });
+  // BE-FOLLOWUPS (D16): kinds=external alone emits no event card, so nothing folds and the RPE card stays, with its own counts.
   const externalOnly = await calendar(c.coach1.cookie, { extra: "&kinds=external" });
-  assert.equal(allItems(externalOnly).some((i) => i.key === `external:${schedule}:${PAST}`), false);
+  const kept = allItems(externalOnly).find((i) => i.key === `external:${schedule}:${PAST}`);
+  assert.ok(kept, "kinds=external keeps the RPE card the event would fold");
+  assert.deepEqual(kept.rpe, { asked: 2, submitted: 1, missed: 0 });
   assert.equal(ofKind(allItems(externalOnly), "event").length, 0);
   // The athlete's view of the same event: planned / cancelled only, no counts.
   const athleteRes = await calendar(c.a2.cookie);
@@ -984,6 +990,15 @@ test("10. the fold: a referenced external schedule's day card disappears into th
   assert.deepEqual(testCard.results, { expected: 2, completed: 2, missed: 0 });
   assert.equal(testCard.status, "done");
   assert.equal(testCard.links.testOccurrenceId, testOcc);
+  // BE-FOLLOWUPS (D16): kinds=test alone keeps the test schedule's card; test with event folds it as before.
+  const testOnly = await calendar(c.coach1.cookie, { extra: "&kinds=test" });
+  const keptTest = allItems(testOnly).find((i) => i.key === `test:${testSchedule}:${PAST}`);
+  assert.ok(keptTest, "kinds=test keeps the test-event schedule card");
+  assert.deepEqual(keptTest.results, { expected: 2, completed: 2, missed: 0 });
+  assert.equal(ofKind(allItems(testOnly), "event").length, 0);
+  const testAndEvent = await calendar(c.coach1.cookie, { extra: "&kinds=test,event" });
+  assert.equal(allItems(testAndEvent).some((i) => i.key === `test:${testSchedule}:${PAST}`), false, "test with event: folded as before");
+  assert.equal(eventCards(testAndEvent, testEvent.body.event.id)[0].scheduleFold.test, "folded");
   // Clearing the reference brings the schedule's own card back.
   const cleared = await patchEvent(c.coach1.cookie, testEvent.body.event.id, { expectedRevision: 1, testScheduleId: null });
   assert.equal(cleared.status, 200, cleared.text);

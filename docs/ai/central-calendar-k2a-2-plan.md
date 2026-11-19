@@ -18,6 +18,7 @@ the type icons as data (K2b), the athlete's *Upcoming events* list (K2b).
   event is **not** shown on that day — the fold is the server's (K2a plan 1.4) and the chips only hide whole cards
   (K1b decision A). The screen never sends `kinds`, so this concerns API callers only; on the screen the folded
   schedule's facts are on the event card.
+  Superseded 2026-11-19 by `central-calendar-k2b2-plan.md` 9.4 (BE-FOLLOWUPS): without `event` in `kinds` nothing folds, so the schedule's card stays its own. The screen still filters chips in the browser over the folded answer.
 
 ## 2. The filters panel (the owner's design request)
 
