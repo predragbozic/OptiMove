@@ -501,3 +501,61 @@ test("35. a holder of a non-basic role passes can() on the club- and team-scope 
   assert.equal((await srv.api(coachCookie, `/api/organization/clubs`, { method: "POST", body: { name: "No" } })).status, 403);
   assert.ok(rankedId(1));
 });
+
+// 29a with the real routes: the login switch-off of an admin Z of two clubs K1 < K2, while an admin A of K2
+// assigns a role to (P9), or revokes an assignment of (P10), T, an admin of K1. Peers holding A's and T's users
+// rows choreograph the arrival; the ids in both orders, both orders of arrival. No 40P01.
+async function holdUser(userId) {
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  await c.query("begin");
+  await c.query(`select 1 from public.users where id = $1 for update`, [userId]);
+  return c;
+}
+const releasePeer = async (c) => { await c.query("commit").catch(() => {}); await c.end().catch(() => {}); };
+for (const op of ["P9", "P10"]) {
+  for (const actorBelow of [true, false]) {
+    for (const rolesFirst of [true, false]) {
+      test(`29a. the login switch-off of an admin of K1 and K2 against ${op} by an admin of K2 on an admin of K1 (actor ${actorBelow ? "below" : "above"} target, ${rolesFirst ? op : "switch-off"} first): no 40P01`, async () => {
+        logLines.length = 0;
+        const pa = { id: await F.user("pa29") }; await F.grantPlatform(pa.id); pa.cookie = await srv.cookieFor(pa.id);
+        const K1 = await F.club("K1"); const K2 = await F.club("K2");
+        const A = await F.user("a-k2", { rank: actorBelow ? 0x30 : 0x50 });
+        const T = await F.user("t-k1", { rank: actorBelow ? 0x50 : 0x30 });
+        const Z = await F.user("z-k1-k2", { rank: 0x70 });
+        await F.grantClub(Z, K1); await F.grantClub(Z, K2); await F.grantClub(T, K1); await F.grantClub(A, K2);
+        // T is also a holder at K2 so that A may act on T there.
+        const aWho = { cookie: await srv.cookieFor(A) };
+        const role = ok(await createRole(aWho, { clubId: K2, scopeTypes: ["club"] })).role;
+        let assignment = null;
+        if (op === "P10") assignment = ok(await grant(aWho, { userId: T, roleId: role.id, scopeType: "club", scopeId: K2 })).assignment;
+        const [low, high] = [A, T].sort();
+        const p1 = await holdUser(low);
+        const p2 = await holdUser(high);
+        const roleCall = () => (op === "P9" ? grant(aWho, { userId: T, roleId: role.id, scopeType: "club", scopeId: K2 }) : revoke(aWho, assignment.id, { userId: T, roleId: role.id }));
+        const offCall = () => srv.api(pa.cookie, `/api/organization/users/${Z}/login-status`, { method: "PUT", body: { active: false } });
+        let r, o;
+        if (rolesFirst) { r = roleCall(); await waiting(1); o = offCall(); await waiting(2); } else { o = offCall(); await waiting(1); r = roleCall(); await waiting(2); }
+        await releasePeer(p1); await new Promise((x) => setTimeout(x, 300));
+        await releasePeer(p2);
+        const [rr, oo] = await Promise.all([r, o]);
+        assert.equal(rr.status, 200, rr.text);
+        assert.equal(oo.status, 200, oo.text);
+        noDeadlock();
+      });
+    }
+  }
+}
+
+test("25 (API). a new grant of the same (user, role, scope) first stamps the lapsed row expired (D4) and inserts; a revoke of a lapsed row is assignment_already_revoked", async () => {
+  const w = await world();
+  const role = ok(await createRole(w.adminA, { clubId: w.A })).role;
+  const first = ok(await grant(w.adminA, { userId: w.target.id, roleId: role.id, scopeType: "club", scopeId: w.A, expiresAt: new Date(Date.now() + 1200).toISOString() })).assignment;
+  code(await grant(w.adminAB, { userId: w.target.id, roleId: role.id, scopeType: "club", scopeId: w.A }), 409, "assignment_exists");
+  await new Promise((r) => setTimeout(r, 1500));
+  code(await revoke(w.adminA, first.id, { userId: w.target.id, roleId: role.id }), 409, "assignment_already_revoked");
+  const second = ok(await grant(w.adminA, { userId: w.target.id, roleId: role.id, scopeType: "club", scopeId: w.A })).assignment;
+  assert.notEqual(second.id, first.id);
+  assert.equal((await one(`select revoke_kind, revoked_by_user_id from public.user_role_assignments where id = $1`, [first.id])).revoke_kind, "expired");
+  code(await grant(w.adminA, { userId: w.target.id, roleId: role.id, scopeType: "club", scopeId: w.A, expiresAt: "2020-01-01T00:00:00Z" }), 400, "invalid_request");
+});
