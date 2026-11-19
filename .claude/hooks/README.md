@@ -113,11 +113,18 @@ the opposite of what a safety layer should do.
 
 ### ASK (Bash + PowerShell)
 
-- `git merge` / `git rebase`.
+- `git merge` / `git rebase` — except a plain `git merge [--no-edit|--no-ff|--no-commit|-q] origin/main`
+  (or `origin/master`) while the current branch is known and is not `main`/`master` (read as a full
+  ref, see below), alone or after read-only commands (`git status/fetch/rev-parse/log/diff/show/
+  merge-base` without `--output`, `--ext-diff` or `--textconv`, `wc/head/tail`) in the same line;
+  every other segment of that line is still judged and the strictest verdict wins.
 - `gh pr merge`.
 - A push that targets `main` explicitly, or a bare `git push`/`git push origin` while the
-  hook can determine (via a fast, read-only `git rev-parse --abbrev-ref HEAD` in the
-  command's own `cwd`) that the current branch *is* `main`.
+  hook can determine (via a fast, read-only `git symbolic-ref -q HEAD` in the command's own
+  `cwd`, compared as the FULL ref `refs/heads/main`, case-insensitively) that the current
+  branch *is* `main`. Not `git rev-parse --abbrev-ref HEAD`: with a tag or a `refs/remotes/`
+  ref also named `main` (a tag can arrive with an ordinary `git fetch`) it prints `heads/main`
+  and no check on the short name recognises the branch.
 - A `git commit` while the current branch is `main` (same branch-detection mechanism).
 - A Render/Vercel/Cloudflare(Wrangler)/Supabase deploy-shaped command.
 - Something that runs this repo's migration runner (`backend/src/migrate.js`, directly or
@@ -269,6 +276,32 @@ govern at all (`Read`, `Write`, `Grep`, ...).
   directly through them with no hook involvement whatsoever. This hook raises the bar
   for the specific commands it lists; it cannot, by itself, prevent a session from
   disabling or editing itself.
+
+- **The merge exemption trusts git's configuration of the repository.** The hook checks the
+  branch once, before the whole command line runs. Git itself can run configured programs
+  during the read-only commands allowed before the merge (`core.fsmonitor`, a pager, hooks of
+  other tools), and such a program could change the branch before the merge runs. The options
+  that ask git for an external program explicitly (`--ext-diff`, `--textconv`, `--output`)
+  take the exemption away; the repository's own configuration is outside what this hook can
+  see. Built-in git commands cannot be aliased, so `git status` is always git's own.
+- **The branch is checked in the `cwd` the hook receives.** That is the `cwd` field of the
+  hook's input JSON. A `cd` earlier in the SAME command line is handled (it takes the merge
+  exemption away). Whether `cwd` follows a `cd` that persisted from an EARLIER Bash call is
+  set out below in "Which directory the hook sees".
+
+## Which directory the hook sees
+
+Every branch check runs `git` in the `cwd` field of the hook's input JSON (or in the
+directory of a `git -C <dir>`), never in the hook process's own directory. The `cwd` field
+falls back to `process.cwd()` only when the input has none.
+
+What the Claude Code hooks reference (https://code.claude.com/docs/en/hooks.md) says, as
+read on 2026-11-19: `cwd` is the "Current working directory when the hook is invoked", and
+"`cwd` follows Claude: the `cwd` field in the hook's input JSON is the worktree root after
+Claude enters a worktree, and the new directory after Claude runs `cd`." So a `cd` that
+persisted from an earlier Bash call should be what the hook checks. This is **documented but
+not verified in a live session** here. If it ever turns out not to hold, a merge would be
+checked against the branch of the directory the session started in.
 
 ## Extending this hook
 

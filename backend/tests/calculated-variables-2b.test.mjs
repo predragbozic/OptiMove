@@ -175,7 +175,7 @@ test("3. a missing input is no value (C142): a team without the 75+ zone gets no
     assert.ok(imported.length > 0, "the preview imports results to describe");
     for (const r of imported) {
       assert.deepEqual(r.calculated, [{ metricDefinitionId: hmld.id, label: hmld.label, value: null, unit: null,
-        missingInputs: [{ metricDefinitionId: world.gpexe_power_zone_75_plus_distance.variableId, label: label75 }] }], r.externalId);
+        missingInputs: [{ metricDefinitionId: world.gpexe_power_zone_75_plus_distance.variableId, label: label75 }], reason: null }], r.externalId);
     }
   } finally {
     await client.end();
@@ -194,7 +194,7 @@ test("4. the preview of a team with every input lists each result's HMLD value; 
     const { preview } = await buildCandidatePreview(client, { bundle: bundleOf(org), ownerTeamId: org.teamId, performedByUserId: org.userId,
       importPath: { path: "source_connection", bindingId: org.bindingId } });
     const session = preview.athletes.find((a) => a.gpexeAthleteId === "101").results.find((r) => r.level === "full");
-    assert.deepEqual(session.calculated, [{ metricDefinitionId: hmld.id, label: hmld.label, value: "400", unit: "m", missingInputs: [] }]);
+    assert.deepEqual(session.calculated, [{ metricDefinitionId: hmld.id, label: hmld.label, value: "400", unit: "m", missingInputs: [], reason: null }]);
     // A club's own calculated variable applies to its team; another club's never does (two raw club variables over the
     // same system inputs: 25-60 + 60-75).
     const clubCalc = async (clubId, label) => {
