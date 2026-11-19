@@ -97,10 +97,11 @@ function dbRefused(res, pattern) {
 }
 
 before(async () => {
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V78, "v78 is the last test migration");
+  // The behaviour database stops at v78 (v79's kinds have their own suite, calculated-variables-v79.test.mjs).
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V78), "v78 is a test migration");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v78rb", migrations: UP_TO_PREV }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc78" }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc78", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V78) + 1) }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

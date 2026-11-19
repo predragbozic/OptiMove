@@ -50,10 +50,15 @@ async function assertOwnsWidget(dashboardId, widgetId) {
 // message must never reach the client). A metric must also be ACTIVE —
 // same "may only be NEWLY bound to an active metric" rule the trigger
 // itself enforces.
+// v79: a ratio is combined over a period as the sum of its numerators over the sum of its denominators - never totalled or
+// averaged. Until the dashboards compute that (the dashboard contract, docs/ai/calculated-variables-v79-plan.md section 6),
+// a ratio is refused on a dashboard rather than shown wrong. A difference is an amount and stays allowed.
+export const RATIO_NOT_AVAILABLE = "Dashboards cannot show a ratio yet. Use the variables it divides for now.";
 async function assertMetricReferenceOk(dashboardRow, metricDefinitionId) {
   if (!metricDefinitionId) return;
   const { visible, def } = await isMetricVisibleToDashboard(dashboardRow, metricDefinitionId);
   if (!visible || !def || def.state !== "active") throw httpError(404, "Metric not found.");
+  if (def.calculation_kind === "ratio") throw httpError(409, RATIO_NOT_AVAILABLE, "ratio_not_available");
 }
 async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionId) {
   if (!sourceConnectionId) return;
@@ -111,6 +116,8 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
      from training_load.metric_definitions d
      join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
      where d.key = any($1::text[]) and d.state = 'active'
+       -- v79: a ratio is not on a dashboard yet (RATIO_NOT_AVAILABLE): a hint that names one stays unresolved.
+       and coalesce(to_jsonb(mdv.*) -> 'calculation' ->> 'kind', '') <> 'ratio'
        and ($2 <> 'athlete' or not ${calculatedDefinitionSql("d")})
        and (
          d.owner_scope = 'system'

@@ -82,6 +82,13 @@ const CALCULATION_GUARD_CODES = new Map([
   ["metric_definition_versions: a calculated version's day rule is Sum", "calculated_day_rule_fixed"],
   ["metric_definitions: an active calculated variable adds up this variable; it stays active", "calculation_input_archive_in_use"],
   ["metric_definitions: a calculated variable is active only while every input is active", "calculation_input_not_active"],
+  // v79's.
+  ["metric_definition_versions: a calculated variable keeps its kind", "calculation_kind_fixed"],
+  ["metric_definition_versions: a calculated ratio's day rule is Ratio", "calculated_day_rule_fixed"],
+  ["metric_definition_versions: an input is not calculated itself, or is a sum used by a ratio or a difference", "calculation_input_calculated"],
+  ["metric_definition_versions: every input is numeric with the calculated variable's unit", "calculation_unit_mismatch"],
+  ["metric_definition_versions: a percentage divides two variables of one unit, and its unit is %", "calculation_unit_mismatch"],
+  ["metric_definition_versions: a ratio's unit is its numerator's unit / its denominator's unit", "calculation_unit_mismatch"],
 ]);
 const KEY_CONSTRAINT = "metric_definitions_owner_scope_owner_user_id_owner_club_id__key";
 const RETRY_CONSTRAINTS = new Set(["metric_variable_requests_one_per_key", "metric_definition_versions_metric_definition_id_version_num_key"]);
@@ -116,15 +123,19 @@ const TEXT = {
   // v77 (J21): calculated variables.
   calculation_input_unavailable: "An input is not an active variable of this workspace or an OptiMove variable.",
   calculation_input_calculated: "An input is calculated itself; a calculation adds up ordinary variables only.",
+  // v79: a ratio or a difference may use a sum, never another ratio or difference (one level, O1).
+  calculation_input_nested: "A ratio or a difference uses ordinary variables or added-up ones, never another ratio or difference.",
+  calculation_ratio_unit: "A ratio's unit is made of its two variables' units.",
+  calculation_percentage_unit: "Both variables of a percentage must have the same unit, and its unit is %.",
   calculation_unit_mismatch: "Every input must have the calculated variable's unit.",
   calculation_level_mismatch: "Every input must have every level of the calculated variable.",
-  calculation_kind_fixed: "A variable is calculated from its first version or never.",
-  variable_used_by_calculation: "A calculated variable adds up this variable; its unit stays as it is.",
+  calculation_kind_fixed: "A variable is calculated from its first version or never, and keeps its kind (add up, divide or subtract).",
+  variable_used_by_calculation: "A calculated variable uses this variable; its unit stays as it is.",
   // PR 2 (the owner's rule of 2026-11-18): a sum adds only what can be added.
   calculated_day_rule_fixed: "A calculated variable adds its inputs up, so a day's values are added up too (Sum).",
-  calculation_input_day_rule_in_use: "A calculated variable adds up this variable, so a day's values stay added up (Sum).",
+  calculation_input_day_rule_in_use: "A calculated variable uses this variable, so a day's values stay added up (Sum).",
   calculation_input_not_additive: "An input is not an amount; only amounts (combined by Sum) can be added up.",
-  calculation_input_archive_in_use: "A calculated variable adds up this variable; it cannot be archived while it is used.",
+  calculation_input_archive_in_use: "A calculated variable uses this variable; it cannot be archived while it is used.",
   calculation_input_not_active: "An input of this calculated variable is archived; restore it first.",
 };
 // The sentence of an input whose day rule is not Sum: it names the variable and why it cannot be added up.
@@ -132,8 +143,8 @@ const NOT_AN_AMOUNT = { avg: "is an average", max: "is a highest value", last: "
 const notAdditiveText = (label, method) => (method === "none"
   ? `${label} keeps each value separately, not as an amount; it cannot be added up.`
   : `${label} ${NOT_AN_AMOUNT[method] ?? "is not an amount"}, not an amount; it cannot be added up.`);
-const dayRuleInUseText = (label) => `${label} adds up this variable, so a day's values stay added up (Sum).`;
-const archiveInUseText = (label) => `${label} adds up this variable; it cannot be archived while ${label} uses it.`;
+const dayRuleInUseText = (label) => `${label} uses this variable, so a day's values stay added up (Sum).`;
+const archiveInUseText = (label) => `${label} uses this variable; it cannot be archived while ${label} does.`;
 // A rename's precondition: the server's SHA-256 of the stored label, short
 // label, description and state (hex).
 const LABELS_TOKEN = /^[0-9a-f]{64}$/;
@@ -242,6 +253,12 @@ function levelsInput(raw) {
   }
   return ["session", "drill"].filter((level) => set.has(level));
 }
+// A calculated variable's request may name its own day rule; anything else is answered by the day-rule refusal.
+function aggregationOrRatio(raw) {
+  if (raw === "ratio") return raw;
+  return aggregationInput(raw);
+}
+const RATIO_DAY_RULE_TEXT = "A ratio divides the day's totals, so its day rule is Ratio.";
 function aggregationInput(raw) {
   if (!AGGREGATIONS.has(raw)) throw invalidBody("dailyAggregationMethod is one of sum, avg, max, last, none.");
   return raw;
@@ -253,8 +270,10 @@ function semanticsInput(body) {
   // A calculated variable's day rule is Sum (PR 2): it may be left out, and anything else is refused.
   // Only a plain object counts as a calculation here; any other shape is the calculation's own 400 below.
   const calculated = body.calculation !== null && typeof body.calculation === "object" && !Array.isArray(body.calculation);
-  const dailyAggregationMethod = calculated && body.dailyAggregationMethod === undefined ? "sum" : aggregationInput(body.dailyAggregationMethod);
-  if (calculated && dailyAggregationMethod !== "sum") throw refusal(409, "calculated_day_rule_fixed", TEXT.calculated_day_rule_fixed);
+  // A calculated variable's day rule follows its kind (calculationInput settles it once the shape is known); null for none sent.
+  const dailyAggregationMethod = calculated
+    ? (body.dailyAggregationMethod === undefined ? null : aggregationOrRatio(body.dailyAggregationMethod))
+    : aggregationInput(body.dailyAggregationMethod);
   const minValue = decimalField(body.minValue, "minValue");
   const maxValue = decimalField(body.maxValue, "maxValue");
   if (minValue !== null && maxValue !== null && decCmp(dec(minValue), dec(maxValue)) > 0) throw invalidBody("minValue is not above maxValue.");
@@ -267,13 +286,21 @@ function semanticsInput(body) {
 // import); a condition is allowed as stated data, not checked against the
 // inputs in step 1 (the Rukovodilac, 2026-11-18).
 export const CALCULATION_INPUTS = Object.freeze({ min: 2, max: 10 });
+// v79: the roles of a ratio's and a difference's inputs are their places (numerator, denominator; a, b).
+const CALCULATION_SHAPES = Object.freeze({
+  sum: { keys: "inputs,kind", min: CALCULATION_INPUTS.min, max: CALCULATION_INPUTS.max },
+  ratio: { keys: "inputs,kind,scale", min: 2, max: 2 },
+  difference: { keys: "inputs,kind", min: 2, max: 2 },
+});
 function calculationInput(raw, semantics) {
   if (raw === undefined || raw === null) return null;
-  const shape = "calculation is { kind: \"sum\", inputs: [2-10 distinct variable ids] }.";
+  const shape = "calculation is { kind: \"sum\", inputs: [2-10 distinct variable ids] }, { kind: \"ratio\", inputs: [numerator, denominator], scale: 1 or 100 } or { kind: \"difference\", inputs: [a, b] }.";
   if (typeof raw !== "object" || Array.isArray(raw)) throw invalidBody(shape);
   const keys = Object.keys(raw).sort().join(",");
-  if (keys !== "inputs,kind" || raw.kind !== "sum" || !Array.isArray(raw.inputs)) throw invalidBody(shape);
-  if (raw.inputs.length < CALCULATION_INPUTS.min || raw.inputs.length > CALCULATION_INPUTS.max) throw invalidBody(shape);
+  const rule = typeof raw.kind === "string" && Object.hasOwn(CALCULATION_SHAPES, raw.kind) ? CALCULATION_SHAPES[raw.kind] : null;
+  if (!rule || keys !== rule.keys || !Array.isArray(raw.inputs)) throw invalidBody(shape);
+  if (raw.kind === "ratio" && raw.scale !== 1 && raw.scale !== 100) throw invalidBody(shape);
+  if (raw.inputs.length < rule.min || raw.inputs.length > rule.max) throw invalidBody(shape);
   const inputs = raw.inputs.map((id) => {
     if (typeof id !== "string" || !UUID.test(id)) throw invalidBody(shape);
     return id.toLowerCase();
@@ -282,7 +309,14 @@ function calculationInput(raw, semantics) {
   if (semantics.minValue !== null || semantics.maxValue !== null) {
     throw invalidBody("A calculated variable has no minValue or maxValue.");
   }
-  return { kind: "sum", inputs };
+  // v79: a ratio's day rule is Ratio (its day is the day's numerators over the day's denominators), a sum's and a
+  // difference's Sum (PR 2). It may be left out; anything else is refused.
+  const fixedDayRule = raw.kind === "ratio" ? "ratio" : "sum";
+  if (semantics.dailyAggregationMethod === null) semantics.dailyAggregationMethod = fixedDayRule;
+  if (semantics.dailyAggregationMethod !== fixedDayRule) {
+    throw refusal(409, "calculated_day_rule_fixed", fixedDayRule === "ratio" ? RATIO_DAY_RULE_TEXT : TEXT.calculated_day_rule_fixed);
+  }
+  return raw.kind === "ratio" ? { kind: "ratio", inputs, scale: raw.scale } : { kind: raw.kind, inputs };
 }
 const calculationParam = (calculation) => (calculation === null ? null : JSON.stringify(calculation));
 // The inputs of a calculation, locked FOR SHARE in id order (the version
@@ -309,6 +343,7 @@ async function checkCalculationInputs(client, ctx, calculation, { unit, levels }
   await client.query(`select d.id from training_load.metric_definitions d where d.id = any ($1::uuid[]) and ${readable} order by d.id for share of d`, params);
   const rows = (await client.query(
     `select d.id::text as id, d.label, d.state, v.value_type, v.unit, v.daily_aggregation_method, ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
+            to_jsonb(v.*) -> 'calculation' ->> 'kind' as kind,
             (select array_agg(c.scope_level::text) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
        from training_load.metric_definitions d
        join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
@@ -319,7 +354,9 @@ async function checkCalculationInputs(client, ctx, calculation, { unit, levels }
   if (rows.length !== calculation.inputs.length || rows.some((r) => r.state !== "active")) {
     throw refusal(409, "calculation_input_unavailable", TEXT.calculation_input_unavailable);
   }
-  if (rows.some((r) => r.calculated)) throw refusal(409, "calculation_input_calculated", TEXT.calculation_input_calculated);
+  // One level (v79, O1): a sum adds up ordinary variables; a ratio or a difference uses ordinary variables or sums.
+  if (calculation.kind === "sum" && rows.some((r) => r.calculated)) throw refusal(409, "calculation_input_calculated", TEXT.calculation_input_calculated);
+  if (calculation.kind !== "sum" && rows.some((r) => r.calculated && r.kind !== "sum")) throw refusal(409, "calculation_input_nested", TEXT.calculation_input_nested);
   // A sum adds only amounts (the owner, 2026-11-18): an input's day rule is Sum. The first other one in the formula's order is named.
   const byId = new Map(rows.map((r) => [r.id, r]));
   const notAdditive = calculation.inputs.map((id) => byId.get(id)).find((r) => r.daily_aggregation_method !== "sum");
@@ -327,10 +364,30 @@ async function checkCalculationInputs(client, ctx, calculation, { unit, levels }
     throw refusal(409, "calculation_input_not_additive", notAdditiveText(notAdditive.label, notAdditive.daily_aggregation_method),
       { current: { variableId: notAdditive.id, dailyAggregationMethod: notAdditive.daily_aggregation_method } });
   }
-  if (rows.some((r) => r.value_type !== "numeric" || r.unit !== unit)) throw refusal(409, "calculation_unit_mismatch", TEXT.calculation_unit_mismatch);
+  if (rows.some((r) => r.value_type !== "numeric")) throw refusal(409, "calculation_unit_mismatch", TEXT.calculation_unit_mismatch);
+  if (calculation.kind === "ratio") {
+    // v79: no conversion inside a formula (O3) - a ratio's unit is its inputs' units as they are stored.
+    const expected = calculationUnit(calculation, calculation.inputs.map((id) => byId.get(id).unit));
+    if (expected === null) throw refusal(409, "calculation_percentage_unit", TEXT.calculation_percentage_unit);
+    if (expected !== unit) {
+      throw refusal(409, calculation.scale === 100 ? "calculation_percentage_unit" : "calculation_ratio_unit",
+        calculation.scale === 100 ? TEXT.calculation_percentage_unit : `A ratio's unit is made of its two variables' units: ${expected}.`,
+        { current: { unit: expected } });
+    }
+  } else if (rows.some((r) => r.unit !== unit)) {
+    throw refusal(409, "calculation_unit_mismatch", TEXT.calculation_unit_mismatch);
+  }
   if (rows.some((r) => levels.some((level) => !(r.scopes ?? []).includes(LEVELS[level])))) {
     throw refusal(409, "calculation_level_mismatch", TEXT.calculation_level_mismatch);
   }
+}
+
+// v79: a ratio's unit from its inputs' units in place - '<numerator>/<denominator>', or '%' over two of one unit (null when
+// the two differ). Exported for the screen's sentence and the tests.
+export function calculationUnit(calculation, units) {
+  if (calculation.kind !== "ratio") return units[0] ?? null;
+  if (calculation.scale === 100) return units[0] === units[1] ? "%" : null;
+  return `${units[0]}/${units[1]}`;
 }
 
 // One deterministic text of a version's semantics (C83: no JSON key order is
@@ -340,7 +397,7 @@ function semanticsKey(s) {
   const conditionPart = c === null ? null
     : c.kind === "unsupported" ? ["unsupported"]
       : [c.kind, c.operator, c.lower ?? c.value ?? null, c.upper ?? null, c.durationSeconds ?? null, c.unit];
-  const calculationPart = s.calculation ? [s.calculation.kind, ...s.calculation.inputs] : null;
+  const calculationPart = s.calculation ? [s.calculation.kind, s.calculation.scale ?? null, ...s.calculation.inputs] : null;
   return JSON.stringify([s.unit, s.valueType, s.dailyAggregationMethod, s.minValue, s.maxValue, conditionPart, calculationPart]);
 }
 
@@ -352,7 +409,8 @@ function semanticsKey(s) {
 // variable reads as ordinary), as the suites that pin an earlier schema do; a calculation is written only once v77 exists.
 const CALCULATION_COLUMNS = `(select jsonb_agg(jsonb_build_object('id', i.id, 'key', di.key, 'label', di.label) order by i.ord)
        from jsonb_array_elements_text(to_jsonb(v.*) -> 'calculation' -> 'inputs') with ordinality as i(id, ord)
-       left join training_load.metric_definitions di on di.id = i.id::uuid) as calculation_inputs`;
+       left join training_load.metric_definitions di on di.id = i.id::uuid) as calculation_inputs,
+  to_jsonb(v.*) -> 'calculation' ->> 'kind' as calculation_kind, (to_jsonb(v.*) -> 'calculation' ->> 'scale')::int as calculation_scale`;
 const VARIABLE_COLUMNS = `d.id, d.key, d.label, d.short_label, d.description, d.icon_url, d.owner_scope, d.owner_club_id, d.state, d.created_at, d.updated_at,
   ${CANONICAL_VERSION_COLUMNS}, v.daily_aggregation_method, trim_scale(v.min_value)::text as min_text, trim_scale(v.max_value)::text as max_text,
   v.created_at as version_created_at, ${CALCULATION_COLUMNS},
@@ -391,7 +449,8 @@ function calculationOut(row) {
     cut = cut || key.cut || label.cut;
     return { id: input.id, key: key.text, label: label.text };
   });
-  return { value: { kind: "sum", inputs }, cut };
+  const kind = row.calculation_kind ?? "sum";
+  return { value: kind === "ratio" ? { kind, inputs, scale: row.calculation_scale } : { kind, inputs }, cut };
 }
 function versionOut(row, { current }) {
   const unit = boundedOut(row.unit, TEXT_LIMITS.unit);
@@ -570,7 +629,10 @@ function storedSemantics(row) {
     unit: row.unit, valueType: row.value_type, dailyAggregationMethod: row.daily_aggregation_method,
     minValue: row.min_text === null ? null : canonicalDecimal(row.min_text), maxValue: row.max_text === null ? null : canonicalDecimal(row.max_text),
     condition: conditionOut(row),
-    calculation: Array.isArray(row.calculation_inputs) ? { kind: "sum", inputs: row.calculation_inputs.map((i) => String(i.id)) } : null,
+    calculation: Array.isArray(row.calculation_inputs)
+      ? { kind: row.calculation_kind ?? "sum", inputs: row.calculation_inputs.map((i) => String(i.id)),
+          ...(row.calculation_kind === "ratio" ? { scale: row.calculation_scale } : {}) }
+      : null,
   };
 }
 
@@ -976,7 +1038,10 @@ export async function createVariableVersion({ ctx, variableId, body }) {
       // checked and locked before the rights; an input of a calculated
       // variable keeps its unit.
       const stored = storedSemantics(current);
-      if ((stored.calculation === null) !== (semantics.calculation === null)) throw refusal(409, "calculation_kind_fixed", TEXT.calculation_kind_fixed);
+      if ((stored.calculation === null) !== (semantics.calculation === null)
+          || (stored.calculation && stored.calculation.kind !== semantics.calculation.kind)) {
+        throw refusal(409, "calculation_kind_fixed", TEXT.calculation_kind_fixed);
+      }
       if (semanticsKey(stored) === semanticsKey(semantics)) throw refusal(409, "version_unchanged", TEXT.version_unchanged);
       if (semantics.calculation) {
         const scopes = (await client.query(
@@ -984,6 +1049,10 @@ export async function createVariableVersion({ ctx, variableId, body }) {
         )).rows.map((r) => r.level);
         const levels = ["session", "drill"].filter((level) => scopes.includes(LEVELS[level]));
         await checkCalculationInputs(client, ctx, semantics.calculation, { unit: semantics.unit, levels });
+        // v79: a sum a ratio or a difference uses keeps its unit, as an ordinary input does.
+        if (semantics.unit !== stored.unit && (await usedByCalculation(client, id)) !== null) {
+          throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+        }
       } else if (semantics.unit !== stored.unit || semantics.dailyAggregationMethod !== "sum") {
         const user = await usedByCalculation(client, id);
         if (user !== null && semantics.unit !== stored.unit) throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
