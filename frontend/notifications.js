@@ -43,6 +43,7 @@ export function renderNotifications() {
 // failed request loses nothing. Opening a conversation only opens the Messages
 // panel over the current screen, so it is not listed.
 const NAVIGATING_NOTIFICATION_ACTIONS = new Set([
+  "notification-open-calendar-question",
   "notification-open-program-requests",
   "notification-open-test-assignment",
   "notification-open-training-load-assignment",
@@ -120,6 +121,17 @@ export async function handleNotificationAction(action, handlers = {}) {
     state.notifications.open = false;
     renderNotifications();
     if (assignmentId) await handlers.openTrainingLoadAssignment?.(assignmentId);
+    return true;
+  }
+  // K2b-2a-3: a calendar question (calendar_question_asked / _moved, athlete side) - Home, then the question's own
+  // form when it is open, or one sentence when it is not (athlete-questions-actions.js openCalendarQuestion).
+  if (type === "notification-open-calendar-question") {
+    const id = action.dataset.notificationId;
+    const questionId = action.dataset.questionId;
+    await markReadBeforeLeaving(id, handlers);
+    state.notifications.open = false;
+    renderNotifications();
+    if (questionId) await handlers.openCalendarQuestion?.(questionId);
     return true;
   }
   // Final digest (training_load_external_final_digest, coach side) - opens
@@ -255,6 +267,11 @@ function renderNotificationRow(row) {
   // notifyPlanAssignments) - athlete side, one of the two plan_type kinds.
   const isWeeklyPlanAssigned = row.type === "weekly_plan_assigned" && row.entity_type === "plan" && row.entity_id;
   const isSpecificProgramAssigned = row.type === "specific_program_assigned" && row.entity_type === "plan" && row.entity_id;
+  // K2b-2a-3: a calendar question asked of her (or moved), backend/src/calendarQuestions.js notifyQuestion.
+  const calendarQuestionId = (row.type === "calendar_question_asked" || row.type === "calendar_question_moved") && row.entity_type === "calendar_event"
+    ? String(row.metadata?.questionId || "")
+    : "";
+  const isCalendarQuestion = Boolean(calendarQuestionId);
   const rowAction = isProgramAccessRequest
     ? "notification-open-program-requests"
     : isConversationNotification
@@ -273,10 +290,12 @@ function renderNotificationRow(row) {
                   ? "notification-open-weekly-plan"
                   : isSpecificProgramAssigned
                     ? "notification-open-specific-program"
-                    : "notification-read";
+                    : isCalendarQuestion
+                      ? "notification-open-calendar-question"
+                      : "notification-read";
   return `
     <article class="notification-row${unreadClass}">
-      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" data-assignment-id="${escapeAttr(isTestAssignmentNotification ? row.entity_id : isTrainingLoadAssignmentNotification ? row.entity_id : "")}" data-schedule-id="${escapeAttr(isFinalDigestNotification ? row.metadata?.scheduleId || "" : "")}" data-scheduled-date="${escapeAttr(isTrainingLoadFinalDigestNotification ? row.metadata?.scheduledDate || "" : "")}" data-week-start="${escapeAttr(isWeeklyPlanAssigned ? row.metadata?.weekStart || "" : "")}" data-plan-id="${escapeAttr(isSpecificProgramAssigned ? row.entity_id : "")}" type="button">
+      <button class="notification-row-hit" data-action="${rowAction}" data-notification-id="${escapeAttr(row.id)}" data-conversation-id="${escapeAttr(isConversationNotification ? row.entity_id : "")}" data-assignment-id="${escapeAttr(isTestAssignmentNotification ? row.entity_id : isTrainingLoadAssignmentNotification ? row.entity_id : "")}" data-schedule-id="${escapeAttr(isFinalDigestNotification ? row.metadata?.scheduleId || "" : "")}" data-scheduled-date="${escapeAttr(isTrainingLoadFinalDigestNotification ? row.metadata?.scheduledDate || "" : "")}" data-week-start="${escapeAttr(isWeeklyPlanAssigned ? row.metadata?.weekStart || "" : "")}" data-plan-id="${escapeAttr(isSpecificProgramAssigned ? row.entity_id : "")}" data-question-id="${escapeAttr(calendarQuestionId)}" type="button">
         <span>
           <strong>${escapeHtml(row.title || "Notification")}</strong>
           ${row.body ? `<small>${escapeHtml(row.body)}</small>` : ""}
@@ -289,6 +308,7 @@ function renderNotificationRow(row) {
           ${isTrainingLoadFinalDigestNotification ? `<small class="notification-hint">Open Athletes</small>` : ""}
           ${isWeeklyPlanAssigned ? `<small class="notification-hint">Open weekly plan</small>` : ""}
           ${isSpecificProgramAssigned ? `<small class="notification-hint">Open program</small>` : ""}
+          ${isCalendarQuestion ? `<small class="notification-hint">Answer</small>` : ""}
         </span>
         <time>${escapeHtml(date)}</time>
       </button>

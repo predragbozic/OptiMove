@@ -1882,6 +1882,104 @@ test("36b. RPE-1, the order of the checks (code review LOWs): create answers ses
   assert.ok(sql.length > 0 && !wrote(sql) && !planLock(sql) && !sessionLock(sql), "align: no write, no plan or session lock before the refusal");
 });
 
+test("37. Q-FOLD (plan 9.3): a WELLNESS question's Tests schedule folds into its event on the question's day for a manager, a reader and the athlete — live, removed, closed early and with the event cancelled; next morning keeps its card; RPE, a test event's own schedule and a plain schedule unchanged; no new key, the athlete's allowlist unchanged", async () => {
+  const t = await freshTeam("qfold", 1);
+  const athlete = t.athletes[0];
+  const manager = role("clubAdmin");
+  const reader = t.coach;
+  const cal = (cookie, day, extra = "") => api(`/api/calendar?from=${day}&to=${day}${extra}`, { cookie });
+  const itemsOn = (res, day) => (res.body.days?.find((d) => d.date === day) || { items: [] }).items;
+  const clubEvent = async (title, questions, day = TODAY, extra = {}) => {
+    const res = await createTeamEvent({ title, day, targets: [{ kind: "team", id: t.team }], questions, ...extra }, manager.cookie);
+    assert.equal(res.status, 201, res.text);
+    return res.body.event;
+  };
+  const wellnessOf = async (ev) => (await liveQuestions(ev.id)).find((x) => x.kind === "wellness");
+  const viewers = [["manager", manager], ["reader", reader], ["athlete", athlete]];
+
+  // Live, today (All day): one card, the event; the test card is there with kinds=test alone (D16).
+  const live = await clubEvent("QF live", [{ kind: "wellness", window: ALL_DAY }]);
+  const wLive = await wellnessOf(live);
+  await api("/api/calendar/questions/mine", { cookie: athlete.cookie });
+  for (const [name, who] of viewers) {
+    const res = await cal(who.cookie, TODAY);
+    assert.equal(res.status, 200, `${name}: ${res.text}`);
+    const mine = itemsOn(res, TODAY).filter((i) => i.eventId === String(live.id) || i.links?.eventId === String(live.id) || i.links?.testScheduleId === String(wLive.test_schedule_id));
+    assert.deepEqual(mine.map((i) => i.kind), ["event"], `${name}: one card, the event`);
+    assert.ok(!("results" in mine[0]) || mine[0].results === null || mine[0].results === undefined, `${name}: no WELLNESS count on the event card`);
+    if (mine[0].scheduleFold) assert.equal(mine[0].scheduleFold.test, null, `${name}: scheduleFold.test stays the test event's own`);
+    const testsOnly = itemsOn(await cal(who.cookie, TODAY, "&kinds=test"), TODAY).filter((i) => i.links?.testScheduleId === String(wLive.test_schedule_id));
+    assert.equal(testsOnly.length, 1, `${name}: with kinds=test (no event card) the test card stays`);
+  }
+  // No new key: the event card with a folded question has the same keys as one without a question; the athlete's allowlist (D21).
+  const plain = await clubEvent("QF plain", []);
+  const D21 = ["cancelled", "date", "endTime", "eventKind", "eventTypeColorKey", "eventTypeIconKey", "eventTypeLabel", "key", "kind", "links", "location", "place", "span", "startTime", "status", "teamIds", "timezone", "title"];
+  for (const [name, who] of viewers) {
+    const items = itemsOn(await cal(who.cookie, TODAY), TODAY);
+    const a = items.find((i) => i.kind === "event" && (i.eventId === String(live.id) || i.links?.eventId === String(live.id)));
+    const b = items.find((i) => i.kind === "event" && (i.eventId === String(plain.id) || i.links?.eventId === String(plain.id)));
+    assert.deepEqual(Object.keys(a).sort(), Object.keys(b).sort(), `${name}: the folded event card gains no key`);
+    assert.deepEqual(Object.keys(a.links).sort(), Object.keys(b.links).sort(), `${name}: no new link key`);
+    if (name === "athlete") {
+      assert.deepEqual(Object.keys(a).sort(), D21, "the athlete's card allowlist (D21) unchanged");
+      assert.deepEqual(Object.keys(a.links), ["eventId"]);
+    }
+  }
+
+  // Ended: removed (its assignment made, so the cancelled card would show), closed early, the event cancelled. Each on a
+  // team of its own (WELLNESS is never asked twice on a day for the same athlete).
+  const ended = [];
+  for (const label of ["removed", "closed", "cancelled"]) {
+    const team = await freshTeam(`qfold ${label}`, 1);
+    const res = await createTeamEvent({ title: `QF ${label}`, day: TODAY, targets: [{ kind: "team", id: team.team }], questions: [{ kind: "wellness", window: ALL_DAY }] }, manager.cookie);
+    assert.equal(res.status, 201, res.text);
+    const ev = res.body.event;
+    const w = await wellnessOf(ev);
+    await materialize(w.test_schedule_id);
+    ended.push({ label, team, ev, w });
+  }
+  await q(`update tests.test_assignments set status = 'completed', completed_at = now()
+            where athlete_id = $1 and occurrence_id in (select id from tests.test_schedule_occurrences where schedule_id = $2)`,
+    [ended[1].team.athletes[0].athleteId, ended[1].w.test_schedule_id]);
+  for (const { ev, w } of ended.slice(0, 2)) {
+    const res = await api(`/api/calendar/events/${ev.id}/questions/${w.id}/remove`, { method: "POST", cookie: manager.cookie, body: { requestKey: newKey(), expectedRevision: (await eventRow(ev.id)).revision } });
+    assert.equal(res.status, 200, res.text);
+  }
+  const cancel = await api(`/api/calendar/events/${ended[2].ev.id}/cancel`, { method: "POST", cookie: manager.cookie, body: { requestKey: newKey(), expectedRevision: (await eventRow(ended[2].ev.id)).revision } });
+  assert.equal(cancel.status, 200, cancel.text);
+  assert.deepEqual((await q(`select end_reason from calendar.event_questions where id = any($1::uuid[]) order by created_at`, [ended.map(({ w }) => w.id)])).map((r) => r.end_reason), ["removed", "closed_early", "event_cancelled"]);
+  for (const { label, team, ev, w } of ended) {
+    for (const [name, who] of [["manager", manager], ["reader", team.coach], ["athlete", team.athletes[0]]]) {
+      const items = itemsOn(await cal(who.cookie, TODAY), TODAY);
+      const mine = items.filter((i) => i.eventId === String(ev.id) || i.links?.eventId === String(ev.id) || i.links?.testScheduleId === String(w.test_schedule_id));
+      assert.deepEqual(mine.map((i) => i.kind), ["event"], `${label} / ${name}: one card`);
+      const testOnly = itemsOn(await cal(who.cookie, TODAY, "&kinds=test"), TODAY);
+      assert.ok(testOnly.some((i) => i.links?.testScheduleId === String(w.test_schedule_id) && i.cancelled === true), `${label} / ${name}: its cancelled card exists without the event card`);
+    }
+  }
+
+  // Next morning: the window's day has no event card, so the test card stays there.
+  const day = addDays(TODAY, 6);
+  const nm = await clubEvent("QF next morning", [{ kind: "wellness", window: { kind: "next_morning" } }], day);
+  const wNm = await wellnessOf(nm);
+  const next = addDays(day, 1);
+  for (const [name, who] of [["manager", manager], ["reader", reader]]) {
+    // The window holds the event's own day too, so the event is read and its card emitted on `day`.
+    const res = await api(`/api/calendar?from=${day}&to=${next}`, { cookie: who.cookie });
+    assert.ok(itemsOn(res, day).some((i) => i.kind === "event" && (i.eventId === String(nm.id) || i.links?.eventId === String(nm.id))), `${name}: the event's card on its day`);
+    assert.ok(itemsOn(res, next).some((i) => i.kind === "test" && i.links?.testScheduleId === String(wNm.test_schedule_id)), `${name}: next morning keeps its card`);
+  }
+
+  // Unchanged: RPE folds as before; a plain Tests schedule keeps its card.
+  const rpeEv = await clubEvent("QF rpe", [{ kind: "rpe", window: ALL_DAY }]);
+  const [rpeQ] = await liveQuestions(rpeEv.id);
+  const mItems = itemsOn(await cal(manager.cookie, TODAY), TODAY);
+  assert.ok(!mItems.some((i) => i.kind === "external" && i.links?.externalScheduleId === String(rpeQ.external_schedule_id)), "the RPE question folds as before");
+  const plainSchedule = await teamDaily(t, { startDate: TODAY });
+  const pItems = itemsOn(await cal(manager.cookie, TODAY), TODAY);
+  assert.ok(pItems.some((i) => i.kind === "test" && i.links?.testScheduleId === String(plainSchedule)), "a schedule no question names keeps its card");
+});
+
 // ---------------------------------------------------------------------------
 // BE-FOLLOWUPS (plan 9.4)
 // ---------------------------------------------------------------------------
