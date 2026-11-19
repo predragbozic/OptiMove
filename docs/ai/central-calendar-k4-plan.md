@@ -20,6 +20,7 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O10** | „ako iz buildera krenemo mi mozemo na primer da imamo dugme kreiranje dogadjaj i da nas odmah odvede u kalendar i da kreiramo dogadjaj kao sto se i sada kreira i da se odmah iz tog dogajdaja ili back dugmetom ako necemo da ga kreiramo vratimo u bulder" · „pa da dole onda biramo dogajdaj za tu sesiju" · „ili taj dan" | From the Builder, **Create event** opens the calendar's own event form. After *Save*, or after Back with nothing made, the coach is back in the Builder, and the session (or the whole day) chooses its event below. There is one event form in the app. Section 5.2. |
 | **O11** | „ali nemoguce je da izaberemo drugi dan za dogjadjaj u suprotnom danu, datomi miraoju da budu isti, zar ne i satnice moraju da se poklapaju ako u sesiji hocemo satnicu da podesimo" | A session joins only an event of its own day. The time has one source, the event (section 5.2, point 10). |
 | **O12** | „ako ne mi mozemo da stavimo pre posle tokom treinga kao da sada i da se to nadje u dogadjaju koji je planiran" · „mislim da je to najlakse za nas" | A session keeps today's slot (Before / Training / After) and needs no time of its own; it is placed in the planned event, and the event gives the time. |
+| **O13** | „i da nam za to ne treba neka velika promena trenutnog stanja" | The Builder ↔ event work reuses what exists: the calendar's event form, the link and unlink routes, the slots, and Back. No migration, and the smallest change that does the job. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
@@ -267,7 +268,7 @@ After training · Recovery                Event: [ No event     ▾]
    - The server's existing refusals read as the sentences of #643.
 8. **Nothing chosen = as today.** A session with *No event* is a training in the plan and its own card in the
    calendar, exactly as now.
-10. **Day and time (O11).**
+9. **Day and time (O11).**
     - **The day.** A session joins only an event of its own day. The selector lists only that day's events, and the
       server already refuses another day (`session_outside_event`). An event of several days (a camp) covers each of
       its days.
@@ -280,12 +281,15 @@ After training · Recovery                Event: [ No event     ▾]
       it is linked.
     - **Where the Weekly plan and the athlete's Calendar read the time.** The recommendation is to read it from the
       event for a linked session, never a copy that could go stale. The K3 / K2c-3 contract decides it.
-11. **The two directions are the same pattern.** K3 goes from the calendar into the Builder with a band and *Back to
+10. **The two directions are the same pattern.** K3 goes from the calendar into the Builder with a band and *Back to
    calendar*. K2c-3 goes from the Builder into the calendar's form with a band and *Back to the Builder*. Back (K4-0)
    carries both.
 
 **For the athlete (K4a):** the event is one card with its time and place, and *Open training* opens that day in the
 Weekly plan, where Before, Training and After stand in their order.
+
+**Small by design (O13).** Both are frontend over existing routes, with no migration. K3 may need one small read for
+"which plan opens" (5.1, point 4), and its discovery says so.
 
 **Contract and reviews.** K3 and K2c-3 share the band and return pattern, and each gets a UI contract and the manager's GO before code. The reviews are `code-reviewer`,
 `ux-design-reviewer` and `mobile-qa`. The browser checks run at 390 and 1280 px, and the Frontend PR gate applies.
