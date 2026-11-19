@@ -6,7 +6,7 @@ import {
   renderCentralCalendarEventPlaceHtml,
 } from "./central-calendar-event-details.js";
 import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
-import { renderK3PanelHtml, renderK3SheetHtml } from "./central-calendar-k3-view.js";
+import { renderK2c3FormBandHtml, renderK3PanelHtml, renderK3SheetHtml } from "./central-calendar-k3-view.js";
 import {
   CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED,
   CENTRAL_CALENDAR_LINK_EMPTY,
@@ -1084,7 +1084,8 @@ function panelHost(body, layout) {
 function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = []) {
   // The event form takes the panel's place (K2a-2); the item's panel comes
   // back when the form closes.
-  if (cal.form) return panelHost(renderCentralCalendarEventFormHtml(cal.form, { ...formCtx, longDate: centralCalendarLongDate, today }), layout);
+  // K2c-3: below 1024 px the form is a sheet, so the Builder's band rides in it.
+  if (cal.form) return panelHost(`${layout === "wide" ? "" : renderK2c3FormBandHtml(cal.form)}${renderCentralCalendarEventFormHtml(cal.form, { ...formCtx, longDate: centralCalendarLongDate, today })}`, layout);
   const panel = cal.panel;
   const item = panelItemOf(cal);
   if (!item) return "";
@@ -1191,6 +1192,7 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   const formTeams = cal.data?.workspace?.type === "platform" ? [] : teams;
   const formCtx = { types: cal.eventTypes || [], teams: formTeams, roster: eventRoster, catalog: centralCalendarCatalogOf(cal) };
   return `<section class="central-calendar cc-layout-${escapeAttr(layout)} cc-view-${escapeAttr(cal.view)}${panelOpen ? " cc-panel-open" : ""}" aria-label="Calendar">
+      ${layout === "wide" ? renderK2c3FormBandHtml(cal.form) : ""}
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
       ${renderFiltersHtml(cal, counts, teams)}
       ${cal.refreshError ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.refreshError)} <button type="button" class="plain-button cc-inline-button" data-action="central-calendar-retry">Try again</button></p>` : ""}

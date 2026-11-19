@@ -234,7 +234,8 @@ async function restoreK3({ key, entry }, draft) {
   const generation = ++restoreGeneration;
   let view = null;
   try {
-    view = await api(`/api/calendar/events/${encodeURIComponent(entry.eventId)}`);
+    const data = await api(`/api/calendar/events/${encodeURIComponent(entry.eventId)}`);
+    view = data?.event || null;
   } catch (error) {
     // A 404 (gone, or not this coach's): the memory is dropped silently.
     if (error?.status === 404 || error?.status === 403) {

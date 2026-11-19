@@ -17,8 +17,8 @@ import { autosizeTextareas } from "./textarea-autosize.js";
 import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
-import { builderCalendarEventWorkspaceType } from "./builder-calendar-event-actions.js";
-import { renderBuilderCalendarEventButton, renderBuilderCalendarEventPanel } from "./builder-calendar-event-view.js";
+import { ensureBuilderEvents } from "./builder-events-row.js";
+import { renderBuilderEventsAskHtml, renderBuilderEventsRowHtml, renderBuilderSessionEventHtml, renderBuilderSessionEventNoteHtml } from "./builder-events-row-view.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
   ICON_CHECK,
@@ -95,14 +95,10 @@ function builderStructureContext() {
     builderNodePresets: state.builder.nodePresets || [],
     blockAddOpen: state.builder.blockAddOpen,
     sessionQuickAdd: state.builder.sessionQuickAdd,
-    // K2c-2-F: "Make an event" on a weekly session's row and its panel.
-    renderCalendarEventButton: (block, session) => renderBuilderCalendarEventButton({
-      draft: state.builder.draft, block, session, workspaceType: builderCalendarEventWorkspaceType(),
-      panel: state.builder.calendarEvent, made: state.builder.calendarEventsMade,
-    }),
-    renderCalendarEventPanel: (block, session) => renderBuilderCalendarEventPanel({
-      session, block, panel: state.builder.calendarEvent, types: state.builder.calendarEvent?.types || [],
-    }),
+    // K2c-3: the day's events row, each session's Event: [▾] and its note.
+    eventsRow: (block) => renderBuilderEventsRowHtml(block),
+    sessionEvent: (block, session) => renderBuilderSessionEventHtml(block, session),
+    sessionEventNote: (block, session) => renderBuilderSessionEventNoteHtml(block, session),
     // K3: the event's day, each session's In / Not in this event, its note.
     k3InEvent: (block) => k3BlockInEvent(state.builder.k3, block),
     k3DayMark: (block) => (state.builder.k3 ? renderK3DayMarkHtml(state.builder.k3, block) : ""),
@@ -533,6 +529,8 @@ export function renderBuilderAddFeedback() {
 function renderBuilderInner() {
   const draft = state.builder.draft;
   const k3 = state.builder.k3 || null;
+  // K2c-3: the week's events are read once per plan, week and athletes.
+  ensureBuilderEvents();
   // K3: after Save and link the draft is gone; the band and the outcome stay.
   if (k3?.saved) {
     els.content.innerHTML = renderK3SavedHtml(k3);
@@ -660,6 +658,7 @@ function renderBuilderInner() {
         </section>
       </div>
       ${k3 ? renderK3SaveBarHtml(k3, draft) : ""}
+      ${renderBuilderEventsAskHtml()}
       ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode, structureContext) : ""}
       ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(state, selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
