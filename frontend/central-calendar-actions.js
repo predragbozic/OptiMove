@@ -230,7 +230,7 @@ async function typesChanged(cal, before, render) {
   if (after !== before && cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) cal.panel = closedPanel();
   render?.();
   if (after && after !== before) {
-    await loadCentralCalendarKinds({ render });
+    await loadCentralCalendarKinds({ render, closeMissing: false });
     if (cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
       cal.panel = closedPanel();
       render?.();

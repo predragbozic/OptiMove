@@ -198,7 +198,9 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {})
 }
 
 // FE-D16: the read of the chosen kinds for the range on screen (after the unfiltered one), under its own key.
-export async function loadCentralCalendarKinds({ render, forceRefresh = false } = {}) {
+// `closeMissing`: a refresh closes a panel whose item is gone, with its notice; a change of the types does not (its
+// caller closes the panel of a card the types hide, quietly).
+export async function loadCentralCalendarKinds({ render, forceRefresh = false, closeMissing = true } = {}, { retried = false } = {}) {
   const cal = state.centralCalendar;
   const kinds = centralCalendarServerKinds(cal.filters);
   if (!kinds || !cal.data) return null;
@@ -207,7 +209,7 @@ export async function loadCentralCalendarKinds({ render, forceRefresh = false } 
   const generation = ++kindsGeneration;
   const contextKey = centralCalendarContextKey(range.from, range.to, today, kinds);
   const current = () => generation === kindsGeneration && state.centralCalendar === cal;
-  return loadCachedView({
+  const result = await loadCachedView({
     namespace: CENTRAL_CALENDAR_NAMESPACE,
     contextKey,
     forceRefresh,
@@ -215,7 +217,7 @@ export async function loadCentralCalendarKinds({ render, forceRefresh = false } 
     applyData: (data) => {
       if (!current()) return;
       cal.kindsAnswer = { kinds, data };
-      closePanelMissingFrom(cal, data);
+      if (closeMissing) closePanelMissingFrom(cal, data);
       render?.();
     },
     applyError: (error) => {
@@ -232,6 +234,15 @@ export async function loadCentralCalendarKinds({ render, forceRefresh = false } 
       return centralCalendarContextKey(nowRange.from, nowRange.to, localDateIso(), nowKinds);
     },
   });
+  if (!current()) return result;
+  // The range read's outcomes, the same way: an answer made void by an invalidation is read once more; a failed
+  // refresh over cards on screen says so.
+  if (result?.outcome === "invalidated-stale" && !retried) return loadCentralCalendarKinds({ render, forceRefresh, closeMissing }, { retried: true });
+  if (result?.outcome === "background-refresh-failed") {
+    cal.refreshError = "Could not refresh. Showing the last loaded calendar.";
+    render?.();
+  }
+  return result;
 }
 
 async function loadCentralCalendarRange({ render, forceRefresh = false } = {}, { retried = false } = {}) {

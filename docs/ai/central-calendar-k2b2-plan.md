@@ -1181,7 +1181,13 @@ Branch `claude/central-calendar-backend-followups` from `origin/main` `b08cfb7f`
      read stays (the teams, the workspace, the events of the link suggestions, the chips' counts; a chosen kind
      counts what it shows). The panel's athletes are read with the same `kinds`. Choosing *Events* or an event type,
      or *All types*, goes back to the unfiltered answer without a request; a panel whose card the new answer does not
-     hold closes. Tests: `central-calendar.actions` FE-D16 and FE-D16b; e2e `central-calendar-kinds-fold.test.mjs`
-     (1280 and 390 px).
+     hold closes quietly (a refresh keeps its "no longer on this day" note); a failed refresh of the kinds read over
+     cards on screen says so. Tests: `central-calendar.actions` FE-D16, FE-D16b, FE-D16c and FE-D16d; e2e
+     `central-calendar-kinds-fold.test.mjs` (1280 and 390 px). Known limits (`code-reviewer`'s LOWs, recorded):
+     - kinds mode shows a panel only for a card it shows: an event created while only *RPE requests* is chosen gets
+       its "created" line, but no open panel (its card is filtered out);
+     - with an event type chosen next to *RPE requests* the read stays unfiltered, so a request folded into an event
+       of another type shows nowhere. A fix is a `kinds=external,event` read with the type filter in the browser, or a
+       server-side event-type filter; not part of FE-D16.
 
 Mutations: one per item, each killed (the executor's report has the details).

@@ -1108,3 +1108,35 @@ test("FE-D16b. another range with RPE requests chosen reads both answers, each o
   assert.deepEqual(next.map((call) => params(call).get("kinds")), [null, "planned,external"]);
   assert.ok(next.every((call) => params(call).get("from") === addDaysIso(MONDAY, 7)));
 });
+
+test("FE-D16c. a filter change closes an open panel whose card it hides quietly, the first time and from the cache", async () => {
+  installFetchMock(foldingResponder());
+  await loadCentralCalendar({ render });
+  for (const round of ["read", "cached"]) {
+    await act({ action: "central-calendar-open-item", key: "event:ev-1:d2", date: DAY(2) });
+    assert.equal(state.centralCalendar.panel.open, true, round);
+    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+    assert.equal(state.centralCalendar.panel.open, false, round);
+    assert.equal(state.centralCalendar.notice, "", `${round}: a filter change is not "no longer on this day"`);
+    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  }
+});
+
+test("FE-D16d. a refresh whose kinds read fails over cards on screen says so", async () => {
+  let kindsCalls = 0;
+  const folding = foldingResponder();
+  installFetchMock((call) => {
+    if (call.url.startsWith("/api/calendar?") && params(call).get("kinds")) {
+      kindsCalls += 1;
+      if (kindsCalls > 1) return { status: 503, body: { error: "database_busy" } };
+    }
+    return folding(call);
+  });
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  assert.equal(state.centralCalendar.refreshError, "");
+  await loadCentralCalendar({ render, forceRefresh: true });
+  assert.equal(kindsCalls, 2);
+  assert.match(state.centralCalendar.refreshError, /Could not refresh/);
+  assert.ok(dom().querySelector('[data-key="external:sch-fold:d2"]'), "the last kinds answer stays on screen");
+});
