@@ -22,7 +22,7 @@ const WEEKDAYS = Object.freeze(["Monday", "Tuesday", "Wednesday", "Thursday", "F
 const MONTHS = Object.freeze(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]);
 
 export function emptyAthleteCalendarState() {
-  return { weekStart: "", selectedDate: "", status: "idle", data: null, error: "", canRetry: true, notice: "" };
+  return { weekStart: "", selectedDate: "", status: "idle", data: null, error: "", canRetry: true, notice: "", pendingScrollY: null };
 }
 
 let slice = emptyAthleteCalendarState();
@@ -36,6 +36,39 @@ export function athleteCalendarState() {
 export function resetAthleteCalendar() {
   generation += 1;
   slice = emptyAthleteCalendarState();
+  returnMarker = null;
+}
+
+// K4a (contract 2.4): the Calendar's place for a history step - its week, the selected day and the page's scroll - so
+// Back (the phone's, the browser's or Back to calendar) returns there, never to defaults.
+export function athleteCalendarPlace(scrollY = Number(globalThis.scrollY) || 0) {
+  return { weekStart: slice.weekStart, selectedDate: slice.selectedDate, scrollY: Math.max(0, Math.round(scrollY)) };
+}
+
+// Back to a remembered place: the week and the day now; the scroll once the week is drawn (athlete-calendar-actions.js).
+export function restoreAthleteCalendarPlace(place) {
+  if (!place || !/^\d{4}-\d{2}-\d{2}$/.test(place.weekStart || "")) return;
+  const week = athleteCalendarWeek(place.weekStart);
+  slice.weekStart = week.from;
+  slice.selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(place.selectedDate || "") && place.selectedDate >= week.from && place.selectedDate <= week.to ? place.selectedDate : "";
+  slice.notice = "";
+  slice.pendingScrollY = Number.isFinite(place.scrollY) ? place.scrollY : null;
+}
+
+// Back to calendar on the Weekly plan (contract 2.3): shown only on the very history step Open training pushed - the
+// step's own entry (app-history.js), claimed by the next push after Open training, so another step with the same depth
+// (the rail, after a Back) never shows it. The day and the card's title name it.
+let returnMarker = null;
+export function setAthleteCalendarReturn({ date, title }) {
+  returnMarker = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? { date, title: String(title || ""), entry: null } : null;
+}
+// pushAppHistory hands every new entry here: the first one after Open training is its step.
+export function claimAthleteCalendarReturn(entry) {
+  if (returnMarker && !returnMarker.entry && entry) returnMarker.entry = entry;
+}
+export function athleteCalendarReturnFor(topEntry) {
+  return returnMarker && returnMarker.entry && returnMarker.entry === topEntry
+    ? { date: returnMarker.date, title: returnMarker.title, label: athleteCalendarDayLabel(returnMarker.date) } : null;
 }
 
 export function invalidateAthleteCalendarCache() {

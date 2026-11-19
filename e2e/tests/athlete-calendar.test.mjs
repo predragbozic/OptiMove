@@ -186,6 +186,48 @@ for (const width of [1280, 390, 375, 360]) {
       assert.equal((await a.page.textContent(".ac-empty p")).trim(), "Nothing planned this week.");
       await a.page.click('.ac-empty [data-action="athlete-calendar-today"]');
       await a.page.locator(".ac-card").first().waitFor({ timeout: 10_000 });
+
+      // Open training -> her Weekly plan on that day with Back to calendar; the button and the phone's Back both return
+      // to the same week, day and scroll (contract 2.3, 2.4).
+      const openTraining = '.ac-card[data-key^="event:ev-1"] [data-ac-action="open-training"]';
+      const place = async () => a.page.evaluate(() => ({
+        title: document.querySelector("#screenTitle")?.textContent.trim(),
+        period: document.querySelector(".ac-period")?.textContent.trim() || "",
+        selected: document.querySelector('.ac-strip-day[aria-pressed="true"]')?.dataset.date || "",
+        y: Math.round(window.scrollY),
+      }));
+      const toTraining = async () => {
+        await a.page.locator(openTraining).scrollIntoViewIfNeeded();
+        await a.page.evaluate(() => window.scrollBy(0, 40));
+        const before = await place();
+        await a.page.click(openTraining);
+        await a.page.locator(".ac-backbar").waitFor({ timeout: 20_000 });
+        await a.page.locator(".calendar-day, .calendar-week-empty").first().waitFor({ timeout: 20_000 });
+        return before;
+      };
+      const backAt = async (before, how) => {
+        if (how === "button") await a.page.click('[data-action="athlete-calendar-back"]');
+        else await a.page.goBack().catch(() => {});
+        await a.page.locator(".athlete-calendar .ac-card").first().waitFor({ timeout: 20_000 });
+        await a.page.waitForTimeout(600);
+        const after = await place();
+        assert.equal(after.title, "Calendar", `${how}: the Calendar again`);
+        assert.equal(after.period, before.period, `${how}: the same week`);
+        if (a.phone) assert.equal(after.selected, before.selected, `${how}: the same day`);
+        assert.ok(Math.abs(after.y - before.y) <= 2, `${how}: the same scroll (${before.y} -> ${after.y})`);
+      };
+      const before1 = await toTraining();
+      const bar = (await a.page.textContent(".ac-backbar")).replace(/\s+/g, " ").trim();
+      assert.match(bar, /Back to calendar .* · Team training$/, bar);
+      assert.equal((await a.page.textContent("#screenTitle")).trim() !== "Calendar", true, "the Weekly plan");
+      await backAt(before1, "button");
+      const before2 = await toTraining();
+      await backAt(before2, "browser Back");
+      // The Weekly plan opened from the rail has no Back to calendar.
+      if (a.phone) await a.page.locator("#mobileNavToggle").click();
+      await a.page.locator('.sidebar [data-athlete-tab="calendar"]').first().click();
+      await a.page.locator(".calendar-day, .calendar-week-empty").first().waitFor({ timeout: 20_000 });
+      assert.equal(await a.page.locator(".ac-backbar").count(), 0, "no Back to calendar from the rail");
       assert.deepEqual(a.pageErrors, []);
     } finally {
       await a.context.close();

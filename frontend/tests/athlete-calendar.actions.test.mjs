@@ -387,3 +387,77 @@ test("K18. Rate RPE on a question that has just closed: the question's own sente
   assert.equal(dom().querySelector(".ac-notice").textContent.trim(), "This question has closed.");
   state.athleteQuestions.notice = "";
 });
+
+test("K19. a history step holds the Calendar's place (week, day, scroll); Back restores it, and the week is drawn before the scroll", async () => {
+  const history = await import("../app-history.js");
+  cards = [eventCard({})];
+  server();
+  await enterAthleteCalendar({ render, loadQuestions });
+  data.athleteCalendarState().selectedDate = DAY(3);
+  const place = data.athleteCalendarPlace(420);
+  assert.deepEqual(place, { weekStart: MONDAY, selectedDate: DAY(3), scrollY: 420 });
+  // The entry carries it only for the Calendar's own tab.
+  assert.deepEqual(history.appHistoryEntryOf({ activeTab: "athlete-calendar" }, { athleteCalendar: place }).athleteCalendar, place);
+  assert.equal(history.appHistoryEntryOf({ activeTab: "weekly" }, { athleteCalendar: place }).athleteCalendar, null);
+  // She moves to another week, then Back brings the remembered one back with its day and scroll.
+  await handleAthleteCalendarAction(fakeAction({ action: "athlete-calendar-week", delta: "1" }), { render });
+  data.restoreAthleteCalendarPlace(place);
+  const scrolls = [];
+  const savedRaf = globalThis.requestAnimationFrame;
+  const savedScroll = globalThis.scrollTo;
+  globalThis.requestAnimationFrame = (fn) => fn();
+  globalThis.scrollTo = (x, y) => scrolls.push(y);
+  try {
+    await enterAthleteCalendar({ render, loadQuestions });
+  } finally {
+    globalThis.requestAnimationFrame = savedRaf;
+    globalThis.scrollTo = savedScroll;
+  }
+  assert.equal(data.athleteCalendarState().weekStart, MONDAY);
+  assert.equal(data.athleteCalendarState().selectedDate, DAY(3));
+  assert.deepEqual(scrolls, [420], "the scroll it had, once");
+  assert.equal(data.athleteCalendarState().pendingScrollY, null);
+  // A broken place restores nothing.
+  data.restoreAthleteCalendarPlace({ weekStart: "nonsense" });
+  assert.equal(data.athleteCalendarState().weekStart, MONDAY);
+});
+
+test("K20. Back to calendar shows only on the step Open training pushed - its own entry, never another step at the same depth; a reset drops it", async () => {
+  const history = await import("../app-history.js");
+  data.setAthleteCalendarReturn({ date: DAY(1), title: "Team training" });
+  assert.equal(data.athleteCalendarReturnFor(null), null, "nothing claimed yet");
+  const step = { tab: "athlete-calendar", calendar: null, athleteCalendar: null };
+  data.claimAthleteCalendarReturn(step);
+  history.pushAppHistoryEntry(step);
+  const marker = data.athleteCalendarReturnFor(history.appHistoryTopEntry());
+  assert.deepEqual(marker, { date: DAY(1), title: "Team training", label: data.athleteCalendarDayLabel(DAY(1)) });
+  // Back pops the step; the rail then pushes another entry at the same depth: no Back to calendar on it.
+  history.popAppHistoryEntry();
+  const rail = { tab: "athlete-calendar", calendar: null, athleteCalendar: null };
+  data.claimAthleteCalendarReturn(rail);
+  history.pushAppHistoryEntry(rail);
+  assert.equal(data.athleteCalendarReturnFor(history.appHistoryTopEntry()), null);
+  const { renderAthleteCalendarBackBarHtml } = await import("../athlete-calendar-view.js");
+  const bar = new JSDOM(`<!doctype html><body>${renderAthleteCalendarBackBarHtml(marker)}</body>`).window.document;
+  assert.match(bar.querySelector('[data-action="athlete-calendar-back"]').textContent, /Back to calendar/);
+  assert.equal(bar.querySelector(".ac-backbar-where").textContent, `${data.athleteCalendarDayLabel(DAY(1))} · Team training`);
+  assert.equal(renderAthleteCalendarBackBarHtml(null), "");
+  data.setAthleteCalendarReturn({ date: DAY(1), title: "x" });
+  data.claimAthleteCalendarReturn(step);
+  data.resetAthleteCalendar();
+  assert.equal(data.athleteCalendarReturnFor(step), null);
+  history.clearAppHistoryEntries();
+});
+
+test("K21. Open training hands its handler the session, the day and the card's title; Back to calendar calls back", async () => {
+  cards = [plannedCard({})];
+  server();
+  await enterAthleteCalendar({ render, loadQuestions });
+  const button = dom().querySelector('[data-ac-action="open-training"]');
+  assert.equal(button.dataset.title, "Gym · upper body");
+  const seen = [];
+  const handlers = { render, openTraining: async (t) => seen.push(["openTraining", t]), back: async () => seen.push(["back"]) };
+  await handleAthleteCalendarAction(fakeAction({ ...button.dataset }), handlers);
+  await handleAthleteCalendarAction(fakeAction({ action: "athlete-calendar-back" }), handlers);
+  assert.deepEqual(seen, [["openTraining", { sessionId: "ps-9", date: TODAY, title: "Gym · upper body" }], ["back"]]);
+});

@@ -17,6 +17,12 @@ export async function enterAthleteCalendar({ render, weekStart = "", loadQuestio
     loadQuestions?.(),
   ]);
   render?.();
+  // Back to a remembered place: the scroll it had, once its week is drawn (contract 2.4).
+  const y = athleteCalendarState().pendingScrollY;
+  if (y !== null && y !== undefined) {
+    athleteCalendarState().pendingScrollY = null;
+    globalThis.requestAnimationFrame?.(() => globalThis.scrollTo?.(0, y));
+  }
 }
 
 // A phone's strip: the list scrolls to the day (a day with nothing has no section: the list stays).
@@ -57,6 +63,11 @@ export async function handleAthleteCalendarAction(action, handlers = {}) {
     scrollAthleteCalendarToDay(date);
     return true;
   }
+  // The Weekly plan's Back to calendar: the same step back as the phone's Back (app.js's history).
+  if (type === "athlete-calendar-back") {
+    await handlers.back?.();
+    return true;
+  }
   if (type === "athlete-calendar-retry") {
     await Promise.all([loadAthleteCalendar({ render, forceRefresh: true }), handlers.loadQuestions?.()]);
     render?.();
@@ -76,7 +87,7 @@ export async function handleAthleteCalendarAction(action, handlers = {}) {
     else if (what === "rate-session" && action.dataset.sessionId) await handlers.rateSession?.(action.dataset.sessionId, action.dataset.date || "");
     else if (what === "rate-assignment" && action.dataset.assignmentId) await handlers.rateAssignment?.(action.dataset.assignmentId, action.dataset.date || "");
     else if (what === "open-test" && action.dataset.assignmentId) await handlers.openTest?.(action.dataset.assignmentId);
-    else if (what === "open-training" && action.dataset.sessionId) await handlers.openTraining?.({ sessionId: action.dataset.sessionId, date: action.dataset.date || "" });
+    else if (what === "open-training" && action.dataset.sessionId) await handlers.openTraining?.({ sessionId: action.dataset.sessionId, date: action.dataset.date || "", title: action.dataset.title || "" });
     return true;
   }
   return false;

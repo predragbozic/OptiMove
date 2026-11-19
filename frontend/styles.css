@@ -29066,6 +29066,8 @@ body.athlete-questions-prompt-open {
 .ac-state { display: grid; gap: 8px; justify-items: start; padding: 16px; border: 1px dashed var(--line); border-radius: var(--radius); }
 .ac-state p { margin: 0; }
 .ac-notice { margin: 0; padding: 8px 12px; border-radius: var(--radius); background: var(--surface-soft); font-size: 14px; }
+.ac-backbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.ac-backbar-where { font-size: 14px; overflow-wrap: anywhere; }
 .ac-notice.is-saved { background: #e4f3e6; color: #1f5a28; font-weight: 800; }
 
 @media (max-width: 760px) {

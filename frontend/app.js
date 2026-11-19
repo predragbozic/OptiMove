@@ -84,7 +84,7 @@ import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { closeBuilderCalendarEventPanel, handleBuilderCalendarEventAction, handleBuilderCalendarEventInput, resetBuilderCalendarEventForWorkspaceChange } from "./builder-calendar-event-actions.js";
-import { appHistoryEntryOf, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
+import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, restoreCentralCalendarPlace, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
@@ -97,9 +97,9 @@ import { renderMyTrainingHtml } from "./my-training-view.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
 import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
-import { athleteCalendarState, resetAthleteCalendar } from "./athlete-calendar-data.js";
+import { athleteCalendarPlace, athleteCalendarReturnFor, athleteCalendarState, claimAthleteCalendarReturn, resetAthleteCalendar, restoreAthleteCalendarPlace, setAthleteCalendarReturn } from "./athlete-calendar-data.js";
 import { athleteCalendarAnswered, enterAthleteCalendar, handleAthleteCalendarAction } from "./athlete-calendar-actions.js";
-import { renderAthleteCalendarHtml } from "./athlete-calendar-view.js";
+import { renderAthleteCalendarBackBarHtml, renderAthleteCalendarHtml } from "./athlete-calendar-view.js";
 import { loadAthleteQuestions, resetAthleteQuestions } from "./athlete-questions-data.js";
 import { answerAthleteQuestion, athleteQuestionsBack, beginAthleteHomeLoad, closeAthleteQuestionsPrompt, setAthleteQuestionsPromptHandlers, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
@@ -2162,7 +2162,10 @@ function pushAppHistory() {
   window.history.pushState({ optimove: true }, "", window.location.href);
   state.appHistoryDepth += 1;
   // Where the user was, for Back (app-history.js): one entry per history state.
-  pushAppHistoryEntry(appHistoryEntryOf(state));
+  const entry = appHistoryEntryOf(state, { athleteCalendar: state.activeTab === "athlete-calendar" ? athleteCalendarPlace() : null });
+  pushAppHistoryEntry(entry);
+  // K4a: the step Open training pushes is the one that shows Back to calendar.
+  claimAthleteCalendarReturn(entry);
 }
 
 function ensureBackGuard() {
@@ -2241,6 +2244,8 @@ function restoreAppPlace(place) {
   state.weekSelectorOpen = false;
   state.openWeekCalendarOnLoad = false;
   if (place.calendar) restoreCentralCalendarPlace(place.calendar);
+  // K4a: the athlete's Calendar as it was left (its week, day and scroll), never its defaults.
+  if (place.athleteCalendar) restoreAthleteCalendarPlace(place.athleteCalendar);
   renderAthleteListState();
   renderTabs();
   renderLibraryNav();
@@ -2692,7 +2697,8 @@ function renderAthleteCalendar() {
 
 // The Calendar's buttons (contract 2.3). A planned session's or an RPE request's RPE opens the Training Load form over
 // the Calendar (the form Home opens, Q4); an event question opens its form as Home's list does; a test opens Tests.
-// Open training waits for K4-0 and K4a-B (the manager's order): until then it opens nothing.
+// Open training opens her Weekly plan on the card's day (one history step that holds the Calendar's place); the plan
+// shows Back to calendar on that step.
 function athleteCalendarHandlers() {
   const opened = () => {
     if (state.trainingLoad.rpeForm) athleteCalendarOpenedForms.add(state.trainingLoad.rpeForm);
@@ -2715,6 +2721,16 @@ function athleteCalendarHandlers() {
     openTest: async (assignmentId) => {
       pushAppHistory();
       await openTestAssignment(assignmentId);
+    },
+    openTraining: async ({ date, title }) => {
+      // openWeeklyPlanOnDate pushes the one step (its entry holds the Calendar's place).
+      setAthleteCalendarReturn({ date, title });
+      await openWeeklyPlanOnDate(date);
+    },
+    // Back to calendar: the same step back as the phone's Back.
+    back: () => {
+      if (state.appHistoryDepth > 0) window.history.back();
+      else handleAppBack();
     },
   };
 }
@@ -3878,7 +3894,9 @@ function renderWeeklyRoot(data) {
   const activeWeek = matchedIndex >= 0 ? weeks[matchedIndex] : buildBlankWeek(viewedStart);
   const weekSelectorMarkup = state.weekSelectorOpen ? renderWeekCalendarPicker(weeks, activeWeek) : "";
 
-  els.content.innerHTML = renderWeeklyRootHtml({
+  // K4a: Back to calendar, only on the step Open training pushed (athlete-calendar-data.js).
+  const calendarBack = isAthleteMode() ? renderAthleteCalendarBackBarHtml(athleteCalendarReturnFor(appHistoryTopEntry())) : "";
+  els.content.innerHTML = calendarBack + renderWeeklyRootHtml({
     activeWeek,
     copyPlanModal: renderCopyPlanModal(state),
     makeNode,

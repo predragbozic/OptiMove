@@ -27,6 +27,7 @@ function sessionsHtml(card) {
 function buttonHtml(button, card) {
   const data = [
     `data-action="athlete-calendar-card"`, `data-ac-action="${escapeAttr(button.action)}"`, `data-key="${escapeAttr(card.key)}"`, `data-date="${escapeAttr(card.date)}"`,
+    `data-title="${escapeAttr(card.title || "")}"`,
     button.questionId ? `data-question-id="${escapeAttr(button.questionId)}"` : "",
     button.sessionId ? `data-session-id="${escapeAttr(button.sessionId)}"` : "",
     button.assignmentId ? `data-assignment-id="${escapeAttr(button.assignmentId)}"` : "",
@@ -112,4 +113,15 @@ export function renderAthleteCalendarHtml(slice, { questions = [], today = local
         : `<p class="ac-notice" role="status">${escapeHtml(slice.notice)}</p>`) : ""}
       ${bodyHtml(slice, days, today)}
     </section>`;
+}
+
+// The Weekly plan opened by Open training (contract 2.3, mockup 04 step 2): Back to calendar, beside the day and the
+// training's title.
+export function renderAthleteCalendarBackBarHtml(marker) {
+  if (!marker) return "";
+  const where = [marker.label, marker.title].filter(Boolean).join(" · ");
+  return `<div class="ac-backbar">
+      <button type="button" class="plain-button ac-button" data-action="athlete-calendar-back"><span aria-hidden="true">‹</span> Back to calendar</button>
+      ${where ? `<span class="ac-muted ac-backbar-where">${escapeHtml(where)}</span>` : ""}
+    </div>`;
 }
