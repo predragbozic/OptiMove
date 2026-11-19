@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K2c-3 · The calendar's form, from the Builder</title>
+<!-- A STATIC DESIGN MOCKUP, not the app. Invented data only. See README.md. -->
+<link rel="stylesheet" href="../../../frontend/styles.css">
+<link rel="stylesheet" href="./mockup.css">
+</head>
+<body class="k4-doc">
+<p class="k4-step">1 · Create event → opens the calendar's own form<small>prefilled: day, Training, title, time, the plan's athletes</small></p>
+<div class="k4-shell">
+  <nav class="k4-rail" aria-label="Main"><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></svg></span><span class="on"><svg class="" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.2.2 3.8 1.8 4.5 4.8"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span></nav>
+  <main class="k4-main central-calendar">
+    <header class="k4-topbar"><span class="k4-menu"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span><div><p class="eyebrow">Central calendar</p><h1>Calendar</h1></div></header>
+    <section class="k4-band k4-band-form k4-callout" data-callout="NEW · band" style="--k4-c:#b07a0a" role="region" aria-label="Creating an event for the Builder">
+  <span class="k4-band-bar"></span>
+  <div><p class="k4-band-title"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Creating an event for the Builder <span class="k4-band-meta">· Monday 12.10</span></p><p class="k4-band-line">After Create event you go back to the Builder, with this event chosen for Main session.</p></div>
+  <button class="plain-button k4-btn k4-band-back"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> Back to the Builder</button>
+</section><aside class="cc-panel" style="max-width:640px">
+  <header class="cc-panel-head"><h3 class="cc-panel-title">New event</h3><button class="plain-button icon-button cc-panel-close" aria-label="Close">×</button></header>
+  <form class="cc-event-form" onsubmit="return false">
+   <fieldset class="cc-form-fields" style="border:0;padding:0;margin:0;display:grid;gap:12px">
+    <label class="cc-field"><span class="cc-field-label">Type</span><select><option>Training</option></select></label>
+    <label class="cc-field"><span class="cc-field-label">Title</span><input type="text" value="Main session"></label>
+    <div class="cc-form-grid"><label class="cc-field"><span class="cc-field-label">Day</span><input type="date" value="2026-10-12"></label><label class="cc-field"><span class="cc-field-label">Last day</span><input type="date" value=""><span class="cc-field-optional">For a camp, a trip or days off.</span></label><label class="cc-field"><span class="cc-field-label">Starts</span><input type="time" value="10:00"></label><label class="cc-field"><span class="cc-field-label">Ends</span><input type="time" value="11:30"></label></div>
+    <fieldset style="border:0;padding:0;margin:0"><legend class="cc-field-label" style="font-weight:800">Who is it for?</legend>
+      <p class="k4-row" style="margin:6px 0 0"><span class="cc-panel-team"><span class="cc-team-dot" style="background:#1f6f68"></span>U19 · 18 athletes</span><span class="k4-note">from the plan</span></p></fieldset>
+    <label class="cc-field"><span class="cc-field-label">Place</span><select><option>North field</option></select></label>
+    <p class="k4-note">Collected after it: <b>RPE</b> · Notes and details as usual.</p>
+   </fieldset>
+   <div class="cc-form-actions k4-row" style="margin-top:14px"><button class="plain-button cc-primary k4-btn">Create event</button><button class="plain-button k4-btn">Close</button></div>
+  </form>
+</aside>
+  </main>
+</div>
+<p class="k4-step">2 · After Create event<small>back in the Builder, the new event already chosen for that session</small></p>
+<div class="k4-shell">
+  <nav class="k4-rail" aria-label="Main"><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.2.2 3.8 1.8 4.5 4.8"/></svg></span><span class="on"><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span></nav>
+  <main class="k4-main central-calendar">
+    <header class="k4-topbar"><span class="k4-menu"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span><div><p class="eyebrow">Builder · weekly plan</p><h1>Week 12 – 18 Oct · U19</h1></div></header>
+
+  <p class="k4-ok"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg> The event Main session · 10:00–11:30 is in the calendar, with this session in it.</p>
+  <div class="k4-day" style="margin-top:12px">
+    <div class="k4-day-head"><span class="k4-day-name">Monday 12.10.2026</span></div>
+    <div class="k4-events-row"><span class="k4-events-label">Events:</span><button class="k4-chip" style="--k4-c:#1f6f68"><span class="k4-chip-bar"></span><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="14" cy="4.5" r="1.8"/><path d="M6 20l4-5 3 2 2-5-4-2-3 3"/><path d="M15 12l3 2 2-1"/></svg></span>Main session <span class="k4-chip-meta">10:00–11:30 · North field</span></button><span class="k4-spacer"></span><button class="plain-button k4-btn k4-create"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg> Create event <svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>
+    <div class="k4-session"><div class="k4-session-top"><span class="k4-slot k4-ampm">AM</span><span class="k4-slot">Training</span><span class="k4-session-name">Main session</span><span class="k4-session-time">10:00 · from the event</span><span class="k4-spacer"></span><span class="k4-select-wrap"><label>Event:</label><select class="k4-select is-linked" style="--k4-c:#1f6f68"><option>Main session 10:00</option></select></span></div></div>
+  </div>
+  </main>
+</div>
+</body>
+</html>
