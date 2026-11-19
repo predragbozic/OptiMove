@@ -8730,6 +8730,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-batch-sync { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 13px; font-weight: 800; white-space: nowrap; }
 .builder-batch-sync input { width: 16px; height: 16px; margin: 0; accent-color: #287e77; }
 .builder-batch-mode small { color: #667085; font-size: 12px; }
+.builder-batch-hidden { display: block; color: #667085; font-size: 12px; overflow-wrap: anywhere; }
+.builder-batch-hidden-alone { margin: 0; padding: 8px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; }
 .builder-batch-buttons { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .builder-batch-pills { display: flex; gap: 6px; max-width: min(420px, 42vw); overflow-x: auto; padding: 2px; }
 .builder-batch-pill { flex: 0 0 76px; width: 76px; height: 74px; display: grid; justify-items: center; align-content: center; gap: 5px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: #344054; font-weight: 800; cursor: pointer; }
