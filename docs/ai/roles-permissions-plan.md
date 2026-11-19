@@ -1,9 +1,12 @@
 # Roles and permissions plan (R0)
 
-Status: **Accepted by the owner (2026-11-18)** as the direction, with the open items of section 9
-taken as recommended until the owner says otherwise. Documents only; nothing is built. The internal
-database and security reviews of the same day are folded into sections 2.1 and 5. Every code step touches external-review trigger 2 (auth, roles) and R2 also
-triggers 1 and 4.
+Status: **Accepted by the owner as the direction** (2026-11-18: "plan usvojen", with the order to
+review it and start work on a GO). Documents only; nothing is built. The owner's own decisions are
+D1, D2, D6a, D6b, D6c and D6d of section 9. Everything else in this document - the rules of
+sections 2.1 and 5, the catalog's rows, the proposed roles' ticks, D3, D4, D5, D7-D9 - is a
+recommendation that the owner may change, and each is marked so in section 9. The internal database
+and security reviews and the independent review of 2026-11-19 are folded in. Every code step
+touches external-review trigger 2 (auth, roles); R2, R6 and R6a also triggers 1 and 4.
 
 Origin: the owner's future task recorded in `docs/ai/j19-u5-undo-contract.md` section 9 ("a roles and
 delegated permissions system ... only up to the level the granting admin holds"), and the owner's
@@ -11,7 +14,7 @@ direction of 2026-11-18: club directors and similar people who watch more than t
 names the owner and admins define themselves, with abilities ticked within the limits of their own;
 the Builder's abilities among them.
 
-## 1. What exists today (checked on `8288b38`)
+## 1. What exists today (checked on `8288b38`; the independent review re-checked it on `cd25b11`; each code step re-runs its part at its own base)
 
 **Roles.** Five, one per scope, each a fixed word:
 
@@ -23,8 +26,8 @@ the Builder's abilities among them.
 | Athlete | `public.athletes.user_id` | the account's own profile |
 | Coach of an athlete | `public.user_athletes` | `relationship_type` `coach` |
 
-One account may hold several at once (`backend/src/authz.js`, `loadAuthorizationContext`). Each role
-row records who granted and who revoked it.
+One account may hold several at once (`backend/src/authz.js`, `loadAuthorizationContext`). The three
+role tables record who granted and who revoked each row.
 
 **Who assigns.** `organization.js`: global roles by a platform admin; `club_admin` by a platform admin
 or that club's admin (`canAssignClubRole`); `team_coach` by a platform admin or the admin of the
@@ -36,9 +39,8 @@ account, exercise block access (`library.exercise_collection_users`), test acces
 library access of athletes.
 
 **Checks are written into the code.** `isPlatformAdministrator` is used in 22 backend files;
-`canManageClub` in 7, `canManageTeamById` in 10. About 15 migrations carry SQL functions that check
-`platform_admin` or `club_admin` inside the database (the actor guards of v35, v38, v41, v54, v56,
-v57 and others).
+`canManageClub` in 7, `canManageTeamById` in 10. 15 migrations of `migrations_v2` read the role tables directly and 33 name a role word (the actor
+guards of v35, v38, v54, v56, v57 and others); R6 and R6a inventory the guard bodies they replace.
 
 **Facts a first non-admin role runs into:**
 
@@ -60,10 +62,9 @@ Three things, kept apart:
 
 1. **Permission** - a fixed word the code and the database know (section 3). Closed list. Only
    development adds one, because each needs its check.
-2. **Role** - a name plus a set of ticked permissions. Data, not code. The five roles of today
+2. **Role** - a name plus a set of ticked permissions. Data, not code. The four staff roles of today
    become basic roles that start with exactly today's abilities; new roles are made in Settings.
-3. **Assignment** - a role given to a user for a scope (a club or a team; global for the two global
-   roles), by someone, with a reason, an optional end date and a revocation. History is append-only.
+3. **Assignment** - a role given to a user for a scope (a club, a team or a coach's private workspace; global only for Platform admin), by someone, with a reason, an optional end date and a revocation. History is append-only.
 
 **Who makes roles (the owner, 2026-11-18, D1).** A platform admin makes system roles, offered to
 every club. A club's admin makes roles for its own club, so a role nobody foresaw is added by the
@@ -102,7 +103,7 @@ athletes and programs.
    new role has nothing in a module that has not moved: fail closed by construction.
 2. **The old tables keep their one word each.** The inventory (2026-11-18, `8288b38`: every line of
    `backend/src` that reads `clubRoles`, `teamRoles`, `user_club_roles` or `user_team_roles` without
-   naming the role word) found well over a hundred such reads in sixteen files: `access.js`,
+   naming the role word) found well over a hundred such reads in seventeen files: `access.js`, `dashboardSimple/saveService.js`,
    `inviteContext.js`, `programAccessPolicy.js`, `appErrorTracking.js`,
    `trainingLoadDashboardAccess.js`, `sourceMetricAccess.js`, `sourceConnectionService.js`,
    `canonicalVariableAdminService.js`, `gpexeImportAccess.js` and the routes `organization.js`,
@@ -111,8 +112,9 @@ athletes and programs.
    themselves are pinned: only `club_admin` can be a row of `user_club_roles` and only `team_coach`
    of `user_team_roles`. The routes already refuse any other word; R1 adds a test that no code path
    writes another one, and R2 adds the CHECK constraints (its preflight counts rows with another
-   word, expected 0). With rule 1 this makes every one of those reads correct as it stands. It is a
-   precondition of R3.
+   word, expected 0). With rule 1 this makes every one of those reads correct as it stands, provided production holds
+   no other word today: a read-only count of such rows (expected 0) is asked of the owner or the
+   *Rukovodilac* before R1's merge claim. It is a precondition of R3.
 3. **Dominance.** To edit, archive or assign a role, a person must hold **every** permission that
    role contains, not only the ones being changed. To revoke or replace someone's assignment, that
    role's permissions must be a subset of the person's own (a platform admin and the club's admin
@@ -120,8 +122,11 @@ athletes and programs.
    section 5. Nobody assigns themselves a role they do not already hold.
 4. **Effective permission** = the union of the person's roles for the resource's scope, minus the
    modules closed for that club or coach. In `can()` and in the SQL twin, not only in the editor.
+   Recommended, open for the owner: a platform admin is exempt from a club's module switch (support
+   must be able to look), with the basis on the audit row; "nobody there has it" of section 3.3
+   then means nobody of the club.
 5. **Three permissions are not delegable:** `staff.assign`, `accounts.manage` and `roles.manage`
-   exist only in system roles; the database refuses them in a club's role. (This settles D5.)
+   exist only in system roles; the database refuses them in a club's role. (The recommendation for D5.)
 6. **Account actions have a target rule.** An e-mail change, a password reset or a login switch on
    another account is allowed only when the target holds no global role, holds roles only in the
    actor's scope, and holds nothing there the actor does not; otherwise the identical 404. Without
@@ -132,8 +137,9 @@ athletes and programs.
    lose its last active holder of `staff.assign`.
 8. **A club's copy of a system role is a snapshot.** A later change of the system role does not
    change the copy; the club's admin sees a notice.
-9. **Global permissions** (`platform.*`) exist only in the Platform admin role; no second
-   platform-level role can be made.
+9. **Global permissions** (`platform.*`, `exercises.blocks.manage`, `tests.library.manage`) are
+   platform-only: they exist only in the Platform admin role, and no second platform-level role
+   can be made.
 10. **`can(authz, permission, resourceScope)`** answers only "who may" (ADR-002's `owner_scope`
     question). The `data_workspace` re-check of the query paths stays a separate, additional check.
 11. **404 before 403.** A route first resolves the resource inside the caller's scopes (missing or
@@ -164,7 +170,7 @@ an optimization, not the guard (`testing-evidence.md`).
 **No per-user ticks in the first version.** A special case gets a role of its own. Who holds what is
 then always "user - role - scope", readable in one list.
 
-## 3. The permission catalog (proposed, 50 permissions)
+## 3. The permission catalog (proposed, 51 permissions)
 
 Names are working names. "Scope" says where a role carrying it may be assigned.
 
@@ -215,6 +221,7 @@ Names are working names. "Scope" says where a role carrying it may be assigned.
 | | `tests.library.manage` | Define tests and batteries (no screen today; the library is read-only) | global |
 | Messages | `messages.send` | Write to athletes and staff | club, team |
 | Data configuration | `variables.view` | The Variables view (the club's and OptiMove's variables), read-only | club, team |
+| | `variables.rename_archive` | Rename, archive and restore a club variable (what a team coach may do today, C99) | club, team |
 | | `variables.manage` | Create a club variable, a new version, calculated variables; rename, icon, archive, restore; domains and categories; use, copy or hide an OptiMove variable | club |
 | | `mappings.manage` | Map source fields to variables (the board and Mappings): save, activate, replace, disable, switch on for teams | club |
 | | `sources.connect` | The club's source connection: Connect, Test, bind and unbind teams, session time zone | club |
@@ -223,15 +230,15 @@ Names are working names. "Scope" says where a role carrying it may be assigned.
 
 Not a permission: the athlete's own workspace (it follows the profile).
 
-**Tags and presets today** (`routes/taxonomy.js`, Settings > Tags & Presets; R1 verifies it): three
+**Tags and presets today** (`routes/taxonomy.js`, Settings > Tags & Presets; R5 verifies it): three
 kinds of lists, each with an owner (system, club, team or one's own): the Builder's presets
 (domain, category, section, with a colour and an icon), program tags, and the Exercise Library's
 classification entries. A system entry is changed only by a platform admin; a club's, a team's and
 one's own by whoever manages that owner; the read lists a club's entries to anyone holding a role
 in that club. System entries stay the platform's (`platform.admin`). The split lets a club decide
-who shapes the lists everyone picks from, apart from who only picks. One finding for R1: the
-club and team branches of that read admit any role word (the same shape as the dashboard list of
-section 1, fact 4), so it is settled before the first non-admin club role exists.
+who shapes the lists everyone picks from, apart from who only picks. One finding: the read and the manage check (`canManagePreset`) both admit any role word (the
+same shape as the dashboard list of section 1, fact 4); section 2.1 rules 1 and 2 make that
+harmless, and the module's own step (R5) names the permission.
 
 **Exercises today** (`routes/exercises.js`, `routes/exerciseCollections.js`, the media routes; R5
 verifies it route by route): every coach reads the library and may add, copy, change, archive and
@@ -250,13 +257,13 @@ profile and is not a permission. The split lets a club give someone results with
 (K2b-2 of the Calendar stream) go through this module, so R7 for tests is agreed with that
 stream's manager.
 
-**Variables today** (as `CURRENT_STATE.md` records it; R1 verifies it route by route): OptiMove's
+**Variables today** (as `CURRENT_STATE.md` records it; R6a verifies it route by route): OptiMove's
 system variables, source fields and their confirmations are a platform admin's; a club's variables,
 mappings, activations and its source connection are the club admin's (and a platform admin's); a
 team coach has the reduced Variables view and may rename, archive and restore a club variable (C99).
 The four permissions above split that single "club admin" right, so a club can, for example, let an
 analyst map and create variables without making that person a club admin. The coach's C99 abilities
-become `variables.view` plus a narrower basic set, kept exactly as today. The database actor
+become `variables.view` and `variables.rename_archive`, kept exactly as today. The database actor
 guards of these writes (v35, v38, v41, v52, v53 and later) check `club_admin` by name, so this area
 moves only with a migration and with the *Rukovodilac* of OptiMove (step R6a).
 
@@ -268,13 +275,13 @@ in Messages, an athlete's own answers. The pass read route names, not each route
 each later step replace it with a route-by-route table (route, today's check, permission) that the
 old-vs-new tests are generated from.
 
-**Keeping 50 ticks usable.** The role editor works with the groups and levels of section 3.0 and the
+**Keeping 51 ticks usable.** The role editor works with the groups and levels of section 3.0 and the
 "what this role sees" preview; most roles are made by copying one and changing a level or two. If the owner finds an area too fine (D7), two rows merge before R2 fixes the list in the
 database; merging later is a migration, splitting later is too.
 
 ### 3.0 Groups first, fine-tuning second (the owner, 2026-11-18)
 
-The 50 permissions are what the code checks; a person making a role works with **groups**. A group
+The 51 permissions are what the code checks; a person making a role works with **groups**. A group
 is one area of the app, given at one of a few levels; each level is a fixed set of the area's
 permissions. Fine-tuning opens a group and ticks single permissions.
 
@@ -384,7 +391,7 @@ state `on` / `off`, shown as `hidden` / `locked`, who changed it and when, appen
 for a role, one "show as locked" flag per module in the role. Modules are a closed list beside the
 permission catalog; every permission belongs to exactly one module.
 
-## 4. Built-in roles and the first new ones
+## 4. Basic roles and the first new ones
 
 **Basic roles (the owner, 2026-11-18).** The basic roles are system roles. They start with exactly
 today's abilities (section 4.1), so nobody gains or loses anything on the first day. From then on:
@@ -405,9 +412,9 @@ as "not adjustable yet": there the old check still decides, so an adjustment wou
 | Role | Scope | Permissions |
 |---|---|---|
 | Platform admin (basic, not editable) | global | everything |
-| Club admin (basic) | club | everything with scope "club" or "club, team" |
-| Team coach (basic) | team | everything with scope "club, team"; `import.approve` is not in it: approval stays a per-person grant per team, mapped to a dedicated role in R6 |
-| Independent coach (basic) | private | everything with scope "club, team", in the coach's own private workspace; unchanged from today |
+| Club admin (basic) | club | per section 4.1, and always what rule 7 of section 2.1 requires |
+| Team coach (basic) | team | per section 4.1; the exact set is derived in each module's step |
+| Independent coach (basic) | private | per section 4.1; the exact set is derived in each module's step |
 | **Director** (proposed) | club | `org.view`, `calendar.view`, `load.view.team`, `dashboards.view`; `athletes.view`, `load.view.athlete`, `programs.view`, `tests.view`, `tests.results.view` for the club's admin to tick or not |
 | **Assistant coach** (proposed) | team | `athletes.view`, `programs.view`, `programs.edit`, `exercises.use`, `calendar.view`, `calendar.events.manage`, `load.view.team`, `load.view.athlete`, `load.roster.decide`, `dashboards.view`, `tests.view`, `tests.results.view`, `tests.schedule.manage`, `messages.send` |
 | **Analyst** (proposed) | club or team | `athletes.view`, `load.view.team`, `load.view.athlete`, `dashboards.view`, `dashboards.manage`, `import.check`, `tests.view`, `tests.results.view` |
@@ -420,7 +427,8 @@ and recorded.
 **Restricting someone who is a coach today.** A club cannot change a basic role, so it narrows a
 coach (for example: no adding of exercises, no Tests) by assigning its own copy of Team coach with
 those permissions unticked in place of the basic one. The change of role is one act in Users
-and is recorded.
+and is recorded. **Available only from R4 on**, and per module only once that module has moved:
+until then a person without the basic row has no team workspace and nothing in an unmoved module.
 
 A role carries a free display title per assignment (Director, Sports director, President), so one
 role serves several functions.
@@ -443,8 +451,8 @@ role serves several functions.
 | Data configuration | Full, and system variables and source fields | Full (club's) | View; rename, archive and restore a club variable (Custom) | to verify |
 
 This table is the intent, read from the code's helpers and `CURRENT_STATE.md`. The exact starting
-sets are derived in R1, route by route, and proven by tests that compare the old and the new answer
-for every role on every route; where the two differ, the code of today wins and this table is
+sets are derived per module, in the step that moves it (organization in R1), and proven there by
+tests that compare the old and the new answer for every role on that module's routes; where the two differ, the code of today wins and this table is
 corrected. "To verify" marks cells the first pass did not establish.
 
 ## 5. Schema sketch (R2; one migration, ★★)
@@ -514,7 +522,7 @@ they are settled.
   in force, or the archive refused while any exists).
 
 Each migration of this plan (R2, R6, R6a) gets its own number, agreed with the *Rukovodilac* of
-OptiMove when it is written (v78 is in an open pull request today), with the unique-prefix check of
+OptiMove when it is written (on 2026-11-19 v78 is merged and the open pull request #614 carries v81), with the unique-prefix check of
 `.claude/rules/migrations.md` on the merge tree, a runbook, a preflight, a post-check and a
 rollback. Until R2, `can()` reads the basic sets from a code constant (R1); R2 moves it to the
 database with an old-vs-new test.
@@ -540,14 +548,25 @@ database with an old-vs-new test.
 | Step | What | Files | Review |
 |---|---|---|---|
 | **R0** | This plan and the owner's decisions | docs only | the owner, the *Rukovodilac* |
-| **R1** | `can()` with the basic roles' starting sets as a code constant; the test of section 2.1 rule 2; Settings / organization routes moved to `can()`; no behaviour change, proven by old-vs-new tests | `authz.js`, a new permissions module, `routes/organization.js`, tests | code, security; external (trigger 2) |
+| **R1** | A new permissions module (catalog, groups, the basic roles' starting sets for the organization routes as a code constant) and `can(authz, permission, resourceScope)`; the JS role predicates of `routes/organization.js` (`isPlatformAdministrator`, `canManageClub`, `canManageTeamById`, `canAssign*`) replaced by `can()`; the test of section 2.1 rule 2. No behaviour change, proven by old-vs-new tests | a new module, `routes/organization.js`, tests (`authz.js` only if `can()` lives there) | code, security; independent / external (trigger 2) |
 | **R2** | The migration of section 5, the SQL twin, the Roles API | migration, new service and route | db, security, code; ★★ |
-| **R3** | Settings > Roles, assignment in Users, "My team" | `organization-*` and new frontend files | code, ux, mobile |
+| **R3** | Settings > Roles, assignment in Users, "My team" | `organization-*` and new frontend files | code, ux, mobile; external (trigger 2) |
 | **R4** | Read / manage split and the first real role, **Director**: a club workspace in read mode, the fixes of section 1 facts 1-4 | `authz.js`, `workspace.js`, then module by module | security; external |
-| **R5** | Builder and exercises on permissions; Assistant coach | `routes/builder.js`, `plans.js`, `templates.js`, `exercises.js` | code, security |
+| **R5** | Builder and exercises on permissions; Assistant coach | `routes/builder.js`, `plans.js`, `templates.js`, `exercises.js`, `taxonomy.js` | code, security; external (trigger 2) |
 | **R6** | Imports: `import.approve` and `import.undo` replace the approver grant and the platform-only undo | GPEXE files, a migration for the guards | ★★, with the *Rukovodilac* |
 | **R6a** | Data configuration: `variables.*`, `mappings.manage`, `sources.connect` in the services and their actor guards | Metrics Core files, a migration | ★★, with the *Rukovodilac* |
-| **R7** | Calendar, Training Load, dashboards, tests, messages | their own files | with each stream's manager |
+| **R7** | Calendar, Training Load, dashboards, tests, messages | their own files | with each stream's manager; external (trigger 2) |
+
+**What R1 must not do** (the independent review, 2026-11-19): change the shape of
+`loadAuthorizationContext`, `computeCapabilities`, `loadAvailableWorkspaces` or `/me`; change any
+status code or the order of checks (rule 11 of section 2.1 is NOT applied in R1: `organization.js`
+answers 403 before resolving an out-of-scope club or team in several places today, and aligning
+that to ADR-006 is a separate, later change with its own tests); touch the role filters written in
+SQL inside the list queries (they stay, covered by rule 2); read the active workspace inside
+`can()`; add a migration or a role; touch `taxonomy.js`, calendar or Metrics Core files.
+`test:backend:shared` (`agent-efficiency.md` section 6) is owed before R1's merge; it writes to the
+local development database and needs the owner's approval for that session, so where it cannot
+run it is reported as not run.
 
 R1 to R3 stay inside Settings and organization. R5 touches the Builder, which no session works on
 today. R4, R6 and R7 change files of the Metrics Core and Calendar streams and are scheduled with
@@ -588,14 +607,14 @@ access there (fail closed).
 |---|---|---|
 | D1 | Who may create roles? | **Decided (2026-11-18): a platform admin (system roles) and a club's admin (its own club's roles), under the ceiling rule.** |
 | D2 | Director: named athlete data (`load.view.athlete`, `athletes.view`, `tests.results.view`) or team totals only? | **Decided (2026-11-18): the club's admin decides.** The system role Director starts narrow (team totals only); a club's admin widens or narrows it for its club by its own copy of the role. |
-| D3 | May a Director write messages? | **Decided (2026-11-18): as D2.** Off in the system role; a club's admin may tick it in its club's copy. |
+| D3 | May a Director write messages? | Recommended, following D2: off in the system role; a club's admin may tick it in its club's copy. |
 | D4 | Does an assignment have an optional end date? | Yes, optional. |
-| D5 | May a club's admin hand on `staff.assign` (someone else assigns roles)? | **Settled by the security review: no.** `staff.assign`, `accounts.manage` and `roles.manage` exist only in system roles (section 2.1, rule 5). The owner may reopen it with its own contract. |
+| D5 | May a club's admin hand on `staff.assign` (someone else assigns roles)? | **Recommended by the security review, awaits the owner: no.** `staff.assign`, `accounts.manage` and `roles.manage` exist only in system roles (section 2.1, rule 5). The owner may reopen it with its own contract. |
 | D6 | Athlete-side roles (parent, guardian)? | Not in this plan. |
 | D6a | Levels of an independent coach by subscription | **Decided (2026-11-18): an option kept open (section 3.1); the platform admin designs the levels later.** |
 | D6b | A whole section closed for a club, a coach or a role, shown invisible or locked (blurred) | **Decided (2026-11-18): both ways exist (section 3.3).** The platform admin chooses it for a club or a coach, and a club's admin for a role of its club, each at its own level. Open: the default (recommended: invisible). |
 | D6c | Groups with levels as the way a role is made, fine-tuning behind it; basic roles first | **Decided (2026-11-18), section 3.0.** Open: the group list and the ladders of that table. |
-| D6d | Basic roles: start as today; a platform admin adjusts them and adds new ones; a club's admin does the same in its club up to its own level | **Decided (2026-11-18), section 4.** Platform admin stays not editable. |
+| D6d | Basic roles: start as today; a platform admin adjusts them and adds new ones; a club's admin does the same in its club up to its own level | **Decided (2026-11-18), section 4.** Recommended on top of it: Platform admin stays not editable. |
 | D7 | The catalog of section 3: anything missing, or too fine? | - |
 | D8 | The three proposed roles of section 4: the ticks for each. | As in the table. |
 | D9 | Order after R3: Director first (R4) or Builder first (R5)? | Director first. |
