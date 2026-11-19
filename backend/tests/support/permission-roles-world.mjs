@@ -88,7 +88,7 @@ export function fixtures(k) {
     grantIndependent: (userId) => k.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'independent_coach',true)`, [userId]),
     grantClub: (userId, clubId, active = true) => k.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',$3)`, [userId, clubId, active]),
     grantTeam: (userId, teamId, active = true) => k.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',$3)`, [userId, teamId, active]),
-    makeAthlete: (userId) => k.query(`insert into public.athletes (user_id, first_name, last_name, full_name) values ($1, 'Ath', 'Lete', 'Ath Lete')`, [userId]),
+    makeAthlete: (userId) => k.query(`insert into public.athletes (athlete_id, user_id, first_name, last_name, full_name) values ($1, $2, 'Ath', 'Lete', 'Ath Lete')`, [`R2-${hex(5)}`, userId]),
   };
 }
 

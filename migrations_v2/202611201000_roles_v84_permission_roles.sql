@@ -613,12 +613,17 @@ create trigger permission_scope_types_fixed_truncate before truncate on public.p
 -- At COMMIT: every word has a scope row, and platform_only = (its only scope type is 'global').
 create function public.permission_catalog_complete() returns trigger as $$
 declare
-  word text := case when tg_table_name = 'permissions' then new.word else new.permission_word end;
+  v_word text;
   types text[];
   only_platform boolean;
 begin
-  select array_agg(scope_type order by scope_type) into types from public.permission_scope_types where permission_word = word;
-  select platform_only into only_platform from public.permissions p where p.word = word;
+  if tg_table_name = 'permissions' then
+    v_word := new.word;
+  else
+    v_word := new.permission_word;
+  end if;
+  select array_agg(scope_type order by scope_type) into types from public.permission_scope_types where permission_word = v_word;
+  select platform_only into only_platform from public.permissions p where p.word = v_word;
   if types is null or only_platform is null or only_platform is distinct from (types = array['global']) then
     raise exception 'permissions: the catalog is fixed' using errcode = '23514';
   end if;
@@ -677,7 +682,8 @@ begin
     end if;
   else
     actor := public.permission_context_actor();
-    if (new.archived_by_user_id is distinct from old.archived_by_user_id and new.archived_by_user_id is distinct from actor)
+    if (new.archived_by_user_id is not null and new.archived_by_user_id is distinct from old.archived_by_user_id
+        and new.archived_by_user_id is distinct from actor)
        or not public.permission_role_actor_may(actor, old.owner_scope, old.owner_club_id) then
       raise exception 'permission role: the acting user may not write this role' using errcode = '42501';
     end if;
