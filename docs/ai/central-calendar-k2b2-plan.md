@@ -670,6 +670,12 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   (`typeQuestions`, the value a create without `questions` asks) only while it is on. `listEventTypes` is unchanged.
   Test 34; mutations C1 (another club's switch), C2 (`defaultQuestions` while off), C3 (on without a club). The pinned
   key list of `central-calendar-k2b-settings` test 0c gains `questions` (asserted off there, with no type defaults).
+- **Tests full edit decides skip_days_off from the resulting kind; found by the 2a-2a code review** (HIGH: a daily
+  schedule with `skip_days_off` edited to *Specific dates* broke v81's CHECK, a 500; MEDIUM: one_time → daily with
+  `skipDaysOff: true` was judged on the stored kind, always 400). A toggle-only PATCH is unchanged; a full edit sets
+  `skip_days_off` in its own UPDATE with `schedule_kind` (true only for a daily result with the switch on, else
+  `400 skip_days_off_unavailable` with nothing written; not sent: kept for a daily result, else false). Test 35;
+  mutations D1 (the reset dropped), D2 (judged on the stored kind), D3 (a separate statement before the UPDATE).
 
 #### 9.1.15 Review round 1 (2026-11-18, on `d638b478`): every item and what was done
 
