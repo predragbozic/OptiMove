@@ -149,6 +149,10 @@ test("1. GET /api/organization still correctly links invite status AND join-link
     assert.ok(Object.prototype.hasOwnProperty.call(org.body, key), `response must still include "${key}"`);
   }
 
+  // D44: restoring an archived team is the club's decision, so a private
+  // coach's workspace is never offered one.
+  assert.deepEqual(org.body.archivedTeams, [], "a private coach's workspace lists no archived team");
+
   const athleteRow = org.body.athletes.find((a) => a.id === athlete);
   assert.ok(athleteRow, "the coach's own athlete must still be in the athletes list");
   assert.equal(athleteRow.inviteStatus, "pending", "loadAthleteInviteStatuses must still resolve and attach correctly after running in parallel with loadJoinLinksForWorkspace");
@@ -174,6 +178,9 @@ test("2. GET /api/organization's top-level response shape is unchanged (same key
     "scope", "isPlatformAdmin", "canCreateClub", "canCreateTeam", "canCreateAthlete", "canCreateUser",
     "manageableClubIds", "manageableTeamIds", "clubs", "teams", "athletes", "users", "accessRequests",
     "joinLinks", "joinApplications", "activeWorkspace",
+    // D44 (team archive / restore): always present; archivedTeamsForWorkspace()
+    // fills it only in the platform workspace and a club workspace.
+    "archivedTeams",
   ].sort();
   assert.deepEqual(Object.keys(org.body).sort(), expectedKeys);
 });
