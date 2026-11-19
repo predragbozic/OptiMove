@@ -186,7 +186,7 @@ test("2b. the text rule is a byte-for-byte copy of v40's; the honoured list of t
   assert.deepEqual(honoured, [...HONOURED_PERMISSIONS].sort());
 });
 
-test("2c. no v84 function body, CHECK or default holds a literal the legacy-schema tool refuses (a schema-only dump of a database with v84 must stay generatable; the seed's literal ids are data, not schema)", async () => {
+test("2c. no v84 function body, CHECK, default, trigger definition or comment holds a literal the legacy-schema tool refuses (a schema-only dump of a database with v84 must stay generatable; the seed's literal ids are data, not schema)", async () => {
   const { scanText } = await import("../../tools/legacy-schema/scan.mjs");
   const defs = (await k.query(`
     select pg_get_functiondef(p.oid) as def from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -197,7 +197,13 @@ test("2c. no v84 function body, CHECK or default holds a literal the legacy-sche
      where c.conrelid::regclass::text like 'permission%' or c.conrelid::regclass::text in ('user_role_assignments', 'user_club_roles', 'user_team_roles')
     union all
     select pg_get_expr(d.adbin, d.adrelid) from pg_attrdef d
-     where d.adrelid::regclass::text like 'permission%' or d.adrelid::regclass::text = 'user_role_assignments'`)).rows;
+     where d.adrelid::regclass::text like 'permission%' or d.adrelid::regclass::text = 'user_role_assignments'
+    union all
+    select pg_get_triggerdef(g.oid) from pg_trigger g
+     where not g.tgisinternal and (g.tgrelid::regclass::text like 'permission%' or g.tgrelid::regclass::text = 'user_role_assignments')
+    union all
+    select d.description from pg_description d join pg_class c on c.oid = d.objoid
+     where c.relname like 'permission%' or c.relname = 'user_role_assignments'`)).rows;
   assert.ok(defs.length > 40, `definitions read: ${defs.length}`);
   const findings = defs.flatMap(({ def }) => scanText(def).map((f) => `${f.rule}: ${def.split("\n")[f.line - 1]?.trim()}`));
   assert.deepEqual(findings, []);
