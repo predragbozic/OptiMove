@@ -57,8 +57,6 @@
       "Bash(git fetch:*)",
       "Bash(git rev-parse:*)",
       "Bash(git merge-base:*)",
-      "Bash(git merge origin/main)",
-      "Bash(git merge --no-edit origin/main)",
       "mcp__claude-code-remote__send_message",
       "Bash(git branch --show-current)",
       "Bash(git worktree list:*)",

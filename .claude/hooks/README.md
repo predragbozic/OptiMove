@@ -113,20 +113,7 @@ the opposite of what a safety layer should do.
 
 ### ASK (Bash + PowerShell)
 
-- `git merge` / `git rebase`. **One exception**, by the owner's standing permission of
-  2026-11-19: exactly `git merge origin/main` or `git merge --no-edit origin/main`, with
-  no other flag and no other ref, while the current branch is known and is not
-  `main`/`master` (`isMergeOriginMainIntoWorkBranch`). That merge gets no decision from
-  the hook, and `.claude/settings.json` allows those two exact commands. Every other merge,
-  every rebase, the same merge on `main`, a detached HEAD, and an unknown branch still
-  ask, as does any environment prefix or git global option other than `--no-pager` and
-  `-C <dir>`. A dangerous command chained after the merge is still caught on its own.
-  **Residual risk, accepted:** the two `settings.json` allow rules cannot see the branch,
-  so on `main` this hook is the only layer that asks. If the hook could not run at all,
-  a local `git merge origin/main` on `main` would go through unprompted. A push to
-  `main` is still denied. Only `main`, `master` and a detached `HEAD` count as protected.
-  A local branch literally named `origin/main` would shadow the remote ref; don't create
-  one.
+- `git merge` / `git rebase`, and a merge/rebase hidden in a subshell, `$( )` or backticks — except, by the owner's standing permission of 2026-11-19, `git [--no-pager] merge [--no-edit|--no-ff|--no-commit|-q] origin/main` (or `origin/master`) with no other flag, ref, environment prefix or global option, while the current branch is known and is not `main`/`master`/a detached `HEAD` (`isMergeOriginMainIntoWorkBranch`; every other segment of the command is still judged on its own).
 - `gh pr merge`.
 - A push that targets `main` explicitly, or a bare `git push`/`git push origin` while the
   hook can determine (via a fast, read-only `git rev-parse --abbrev-ref HEAD` in the

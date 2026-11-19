@@ -320,61 +320,90 @@ test("git commit on a feature branch is allowed", () => {
 });
 
 // ------------------------------------------------------------------
-// The owner's standing permission (2026-11-19): `git merge [--no-edit] origin/main`
-// into a work branch needs no confirmation. Everything around it still asks or denies.
+// The owner's standing permission (2026-11-19): `git [--no-pager] merge` of exactly
+// origin/main (or origin/master), with only --no-edit/--no-ff/--no-commit/-q, into a work
+// branch needs no confirmation. Everything around it still asks or denies, and every
+// segment of a command is judged on its own (the strictest verdict wins).
 // ------------------------------------------------------------------
 
-test("git merge [--no-edit] origin/main on a work branch is allowed (no decision)", () => {
+const EXEMPT_MERGES = [
+  "git merge origin/main",
+  "git merge --no-edit origin/main",
+  "git merge --no-ff origin/main",
+  "git merge --no-commit origin/main",
+  "git merge -q --no-edit origin/main",
+  "git merge origin/master",
+  "git --no-pager merge --no-edit origin/main",
+  "git merge --no-edit 'origin/main'",
+  "git fetch origin main && git merge --no-edit origin/main",
+  "git fetch origin main; git merge --no-edit origin/main; git status",
+];
+
+const STILL_ASK_ON_WORK_BRANCH = [
+  "git merge feature/y",
+  "git merge origin/feature/y",
+  "git merge main",
+  "git merge -X theirs origin/main",
+  "git merge --squash origin/main",
+  "git merge --abort",
+  "git merge origin/main feature/y",
+  "git rebase origin/main",
+  "git rebase -i origin/main",
+  // Nothing may point the merge elsewhere than the branch the hook checked.
+  "git -C /tmp/other merge origin/main",
+  "git -c core.hooksPath=/tmp/x merge origin/main",
+  "git --git-dir=/tmp/other merge origin/main",
+  "git --work-tree=/tmp/other merge origin/main",
+  "GIT_DIR=/tmp/other git merge origin/main",
+  // A merge/rebase hidden in a subshell, $( ) or backticks is never the exempt form.
+  "(git merge origin/main)",
+  "(git merge feature/y)",
+  "echo $(git merge origin/main)",
+  "echo `git merge origin/main`",
+  "(cd /tmp && git rebase main)",
+  // The strictest verdict of any segment wins.
+  "git merge origin/main && git rebase main",
+  "git merge --no-edit origin/main && git push origin main",
+];
+
+const STILL_DENY_ON_WORK_BRANCH = [
+  "git merge origin/main; git push -f",
+  "git merge --no-edit origin/main && git push --force origin claude/work-x",
+  "git merge --no-edit origin/main && git reset --hard",
+  "git merge origin/main || git clean -fd",
+  "git merge origin/main; git stash drop",
+  "git merge origin/main && git checkout -- .",
+];
+
+test("the exempt origin/main merges on a work branch get no decision", () => {
   execFileSync("git", ["checkout", "-q", "-B", "claude/work-x"], { cwd: repoDir });
   try {
-    for (const cmd of [
-      "git merge origin/main",
-      "git merge --no-edit origin/main",
-      "git fetch origin main && git merge --no-edit origin/main",
-      "git --no-pager merge --no-edit origin/main",
-      "git merge --no-edit 'origin/main'",
-    ]) {
+    for (const cmd of EXEMPT_MERGES) {
       assert.equal(classifyToolCall(bash(cmd, repoDir)), null, cmd);
     }
-    // -C <dir> points the branch check at the repo even from another cwd.
-    assert.equal(classifyToolCall(bash(`git -C ${repoDir} merge --no-edit origin/main`, tmpdir())), null);
   } finally {
     execFileSync("git", ["checkout", "-q", "main"], { cwd: repoDir });
   }
 });
 
-test("every other merge or rebase on a work branch still asks", () => {
+test("every other merge or rebase on a work branch still asks; a dangerous segment still denies", () => {
   execFileSync("git", ["checkout", "-q", "-B", "claude/work-x"], { cwd: repoDir });
   try {
-    for (const cmd of [
-      "git merge feature/y",
-      "git merge origin/feature/y",
-      "git merge main",
-      "git merge -X theirs origin/main",
-      "git merge --squash origin/main",
-      "git merge --no-ff origin/main",
-      "git merge --abort",
-      "git merge origin/main feature/y",
-      "git rebase origin/main",
-      // Only --no-pager and -C <dir> may precede `merge`; anything that could point the
-      // merge somewhere else than the branch the hook checked still asks.
-      "git -c core.hooksPath=/tmp/x merge origin/main",
-      "git --git-dir=/tmp/other merge origin/main",
-      "git --work-tree=/tmp/other merge origin/main",
-      "GIT_DIR=/tmp/other git merge origin/main",
-    ]) {
+    for (const cmd of STILL_ASK_ON_WORK_BRANCH) {
       assert.equal(classifyToolCall(bash(cmd, repoDir))?.decision, "ask", cmd);
     }
-    // The exemption never shields a dangerous command chained after it.
-    assert.equal(classifyToolCall(bash("git merge --no-edit origin/main && git reset --hard", repoDir))?.decision, "deny");
-    assert.equal(classifyToolCall(bash("git merge --no-edit origin/main && git push origin main", repoDir))?.decision, "ask");
+    for (const cmd of STILL_DENY_ON_WORK_BRANCH) {
+      assert.equal(classifyToolCall(bash(cmd, repoDir))?.decision, "deny", cmd);
+    }
   } finally {
     execFileSync("git", ["checkout", "-q", "main"], { cwd: repoDir });
   }
 });
 
-test("git merge origin/main still asks on main, on a detached HEAD, and outside any repo", () => {
-  assert.equal(classifyToolCall(bash("git merge --no-edit origin/main", repoDir))?.decision, "ask");
+test("the exempt merges still ask on main, on a detached HEAD, and outside any repo (fail closed)", () => {
+  for (const cmd of EXEMPT_MERGES.filter((c) => c.includes("merge"))) {
+    assert.equal(classifyToolCall(bash(cmd, repoDir))?.decision, "ask", `on main: ${cmd}`);
+  }
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoDir }).toString().trim();
   execFileSync("git", ["checkout", "-q", "--detach", head], { cwd: repoDir });
   try {
@@ -390,16 +419,14 @@ test("git merge origin/main still asks on main, on a detached HEAD, and outside 
   }
 });
 
-test("settings.json allows exactly the two origin/main merges and send_message, and keeps every deny", () => {
+test("settings.json adds only send_message to allow (no merge or rebase rule) and keeps every deny", () => {
   const settingsPath = fileURLToPath(new URL("./settings.json", new URL("../", import.meta.url)));
   const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
   const allow = settings.permissions.allow;
   const deny = settings.permissions.deny;
-  for (const rule of ["Bash(git merge origin/main)", "Bash(git merge --no-edit origin/main)", "mcp__claude-code-remote__send_message"]) {
-    assert.ok(allow.includes(rule), `allow must include ${rule}`);
-  }
-  assert.ok(!allow.some((r) => /^Bash\(git (merge|rebase)[\s:)]/.test(r) &&!["Bash(git merge origin/main)", "Bash(git merge --no-edit origin/main)"].includes(r)),
-    "no other merge or rebase rule may be allowed");
+  assert.ok(allow.includes("mcp__claude-code-remote__send_message"), "allow must include send_message");
+  assert.ok(!allow.some((r) => /^Bash\(git (merge|rebase|pull)[\s:)]/.test(r)), "no merge, rebase or pull rule may be allowed");
+  assert.ok(!allow.some((r) => /^mcp__claude-code-remote__(?!send_message$)/.test(r)), "no other claude-code-remote tool may be allowed");
   for (const rule of ["Bash(git push origin main:*)", "Bash(git push -u origin main:*)", "Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git reset --hard:*)", "Bash(git clean:*)", "Bash(gh pr merge:*)"]) {
     assert.ok(deny.includes(rule), `deny must still include ${rule}`);
   }

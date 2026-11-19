@@ -27,12 +27,7 @@ git diff --staged   # if there are staged changes
 - `git add .` or any equivalent that stages everything — stage explicitly, file by file,
   so unrelated dirty/untracked files never get swept in.
 - `git clean`, `git reset --hard`, anything that discards uncommitted work.
-- `git merge`, `git rebase` over existing history, `git push --force`. One standing
-  exception (the owner, 2026-11-19): `git merge origin/main` or `git merge --no-edit
-  origin/main` into a work branch other than `main` needs no confirmation. It is the
-  routine step before a freeze, and it is enforced narrowly in
-  `.claude/hooks/safety-guard.mjs` (`isMergeOriginMainIntoWorkBranch`). Any other merge or
-  rebase still needs the user's permission.
+- `git merge`, `git rebase` over existing history, `git push --force` (one standing exception, the owner's of 2026-11-19: `git merge [--no-edit|--no-ff|--no-commit|-q] origin/main` into a work branch other than `main` needs no confirmation, enforced narrowly by `.claude/hooks/safety-guard.mjs`).
 - Commit and push without the user's explicit confirmation for that specific set of
   changes — even when the work is done, stop and ask before committing/pushing, never
   assume standing consent.

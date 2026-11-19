@@ -372,20 +372,27 @@ export function isGitMergeOrRebase(segment) {
   return extractGitSubcommandArgs(segment, "merge|rebase") !== null;
 }
 
+// A git merge/rebase hidden in a subshell `( … )`, a command substitution `$( … )` or
+// backticks is not at the segment's start, so the check above cannot see it. Ask for it
+// rather than let it through unseen (it is never the exempt form below).
+export function isNestedGitMergeOrRebase(segment) {
+  if (!/[`(]/.test(segment)) return false;
+  return /(?:^|[`(]|\$\()\s*git\b[^`)]*?\s(?:merge|rebase)\b/i.test(segment.trim());
+}
+
 // The owner's standing permission (2026-11-19): bringing `origin/main` into a work
 // branch is routine (every stacked or long-lived branch does it before a freeze), so it
-// needs no confirmation. Deliberately narrow: exactly `git merge origin/main` or
-// `git merge --no-edit origin/main` — no other flag (no strategy option, no --abort,
-// no --squash), no other ref, and only while the current branch is KNOWN and is not
-// main/master (an unknown or detached HEAD fails closed to the ASK below). Every other
-// merge, every rebase, and this same merge on main still ask.
-const MERGE_ORIGIN_MAIN_ALLOWED_FLAGS = new Set(["--no-edit"]);
+// needs no confirmation. Deliberately narrow: `git [--no-pager] merge` with only the
+// flags below and exactly one ref, `origin/main` (or `origin/master`), and only while the
+// current branch is KNOWN and is not main/master (an unknown or detached HEAD fails
+// closed to the ASK). No environment prefix and no other git global option (`-C`, `-c`,
+// `--git-dir`, `--work-tree` all keep asking). Every other merge, every rebase, and this
+// same merge on main still ask; the hook never emits "allow", and every other segment of
+// the command is judged on its own (the strictest verdict wins).
+const MERGE_ORIGIN_MAIN_ALLOWED_FLAGS = new Set(["--no-edit", "--no-ff", "--no-commit", "-q"]);
+const MERGE_ORIGIN_MAIN_REFS = new Set(["origin/main", "origin/master"]);
 const PROTECTED_BRANCHES = new Set(["main", "master", "HEAD"]);
-
-// Only these leading shapes qualify: no environment prefix (GIT_DIR=…), and no git
-// global option except `--no-pager` and `-C <dir>` (no `-c key=val`, no `--git-dir`,
-// no `--work-tree`, which could point the merge elsewhere than the branch we check).
-const MERGE_ORIGIN_MAIN_PREFIX = /^git\s+(?:--no-pager\s+)?(?:-C\s+\S+\s+)?(?:--no-pager\s+)?merge\s/;
+const MERGE_ORIGIN_MAIN_PREFIX = /^git\s+(?:--no-pager\s+)?merge\s/;
 
 export function isMergeOriginMainIntoWorkBranch(segment, cwd) {
   if (!MERGE_ORIGIN_MAIN_PREFIX.test(segment.trim())) return false;
@@ -395,8 +402,8 @@ export function isMergeOriginMainIntoWorkBranch(segment, cwd) {
   const flags = tokens.filter((t) => t.startsWith("-"));
   const refs = tokens.filter((t) => !t.startsWith("-"));
   if (!flags.every((f) => MERGE_ORIGIN_MAIN_ALLOWED_FLAGS.has(f))) return false;
-  if (refs.length !== 1 || refs[0] !== "origin/main") return false;
-  const branch = getCurrentBranch(parsed.dir || cwd);
+  if (refs.length !== 1 || !MERGE_ORIGIN_MAIN_REFS.has(refs[0])) return false;
+  const branch = getCurrentBranch(cwd);
   return Boolean(branch) && !PROTECTED_BRANCHES.has(branch);
 }
 
@@ -567,6 +574,7 @@ export function classifyShellCommand(cmd, cwd) {
     if (isGitMergeOrRebase(segment) && !isMergeOriginMainIntoWorkBranch(segment, cwd)) {
       return { decision: "ask", reason: ASK_REASONS.mergeRebase };
     }
+    if (isNestedGitMergeOrRebase(segment)) return { decision: "ask", reason: ASK_REASONS.mergeRebase };
     if (isGhPrMerge(segment)) return { decision: "ask", reason: ASK_REASONS.ghPrMerge };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };
     if (isCommitOnMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };
