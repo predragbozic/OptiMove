@@ -75,7 +75,7 @@ screen for it is step C.
   orders (S1 and A1: LO-1; the board save: section 4.4 of its contract); the match reads the newest stored session of the
   team inside the transaction after the binding and its team are locked. The candidate is never locked: a stored bundle is
   immutable, and a session stored later with another setting is blocked by the importer.
-* **Rollback** (`condition-match-v80-rollback.sql`; rehearsed apply -> rollback -> the catalog before v80 exactly -> re-apply,
+* **Rollback** (`condition-match-v80-rollback.sql`; it locks the three tables `ACCESS EXCLUSIVE` before its row checks; rehearsed apply -> rollback -> the catalog before v80 exactly -> re-apply,
   on a migrated database and on one built from the legacy schema snapshot): refuses while the migrator runs, without v80, and
   once a version carries a rule, an activation records a match or a confirmation exists. It drops what v80 added and the v80
   record; it changes no row of another table. It does not refuse because a later migration is recorded (v81, the calendar's,

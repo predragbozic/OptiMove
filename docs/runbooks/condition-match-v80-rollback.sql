@@ -31,6 +31,15 @@ begin
   if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201100_training_load_v80_condition_match.sql') then
     raise exception 'v80 rollback refused: v80 is not recorded';
   end if;
+end $$;
+
+-- The three tables before the checks below (the migration's order, then the confirmations), so no rule, match or
+-- confirmation can be written between the checks and the drops (the Independent's LOW-2 on PR #659).
+lock table training_load.source_metric_mapping_versions, training_load.source_metric_mapping_activations,
+           training_load.source_metric_event_setting_confirmations in access exclusive mode;
+
+do $$
+begin
   if exists (select 1 from training_load.source_metric_mapping_versions where condition_rule is not null) then
     raise exception 'v80 rollback refused: a mapping version carries a condition rule';
   end if;
