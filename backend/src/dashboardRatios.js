@@ -13,12 +13,12 @@ export function assertDashboardAggregation(calculation, aggregation, rolePolicy)
 
 // Seeds are server-resolved canonical occasions, already scoped by workspace, activity,
 // component, athlete, source and coverage. No caller-supplied occasion ids reach this query.
-export async function queryRatioBuckets(queryRunner, seeds, definitionId, aggregation) {
+export async function queryRatioBuckets(queryRunner, seeds, definitionId, aggregation, expectedVersionId) {
   const { rows } = await queryRunner(`select (
     with seeds as (select * from jsonb_to_recordset($1::jsonb)
       as s("occasionId" uuid, "athleteId" uuid, "bucketKey" text, instant timestamptz)),
     current_formula as (
-      select to_jsonb(v.*)->'calculation' as calculation from training_load.metric_definitions d
+      select v.id, to_jsonb(v.*)->'calculation' as calculation from training_load.metric_definitions d
       join training_load.metric_definition_versions v on v.id=d.current_version_id where d.id=$2),
     occasions as (
       select s.*, r.id as ratio_id, r.value_numeric as stored_value, r.unit_at_capture as unit,
@@ -55,6 +55,7 @@ export async function queryRatioBuckets(queryRunner, seeds, definitionId, aggreg
       from occasions group by "bucketKey","athleteId"
     )
     select jsonb_build_object(
+      'catalogChanged', (select id from current_formula) is distinct from $4::uuid,
       'invalid', exists(select 1 from included where stored_value is null or numerator is null or denominator is null or denominator<=0
         or numerator<0 or calculation->>'kind' is distinct from 'ratio'
         or (computed_by_ref->>'formulaVersionId')::uuid is distinct from metric_definition_version_id),
@@ -68,8 +69,9 @@ export async function queryRatioBuckets(queryRunner, seeds, definitionId, aggreg
         'includedOccasions',g."includedOccasions",'leftOutOccasions',case when $3='none' then 0 else c.left_out end)
         order by g."bucketKey",g."athleteId",g.occasion)
         from grouped g join counts c on c."bucketKey"=g."bucketKey" and c."athleteId" is not distinct from g."athleteId"),'[]'::jsonb))
-  ) as result`, [JSON.stringify(seeds), definitionId, aggregation]);
+  ) as result`, [JSON.stringify(seeds), definitionId, aggregation, expectedVersionId]);
   const result = rows[0].result;
+  if (result.catalogChanged) throw new Error('Ratio definition changed during query');
   if (result.invalid) throw new Error('Invalid stored ratio provenance');
   if (result.changed) throw Object.assign(new Error('The calculation changed during this period. Choose a shorter period.'), { code: 'calculation_changed_in_period' });
   return result;

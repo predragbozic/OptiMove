@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import pg from 'pg';
+import { queryRatioBuckets } from '../src/dashboardRatios.js';
 import { createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS } from './_gpexe-disposable-db.mjs';
 import { platformAdmin, ensureMappedSystem, bindTeam, activateOn } from './support/mapped-world.mjs';
 import { makeBundle, standardAthletes } from './_gpexe-fixtures.mjs';
@@ -130,6 +131,7 @@ test('identical ratio widgets share a bounded database query and one bad series 
 });
 
 test('athlete and source filters narrow both values and counts; missing activity cannot widen scope',async()=>{
+  await assert.rejects(queryRatioBuckets((sql,params)=>client.query(sql,params), [], ratio.id, 'ratio', crypto.randomUUID()), /Ratio definition changed during query/);
   const one=await query('ratio','cohort',{athleteIds:[org.athleteIds[0]]});assert.equal(one.status,'ok',JSON.stringify(one));assert.equal(one.data.current[0].value,10);assert.deepEqual(one.coverage,{includedOccasions:1,leftOutOccasions:0});
   for(const extra of [{sourcePolicy:'manual'},{activityId:crypto.randomUUID()},{componentId:crypto.randomUUID()},{sourcePolicy:'source_connection',sourceConnectionId:crypto.randomUUID()}]){
     const empty=await query('ratio','day',extra);assert.equal(empty.status,'ok',JSON.stringify(empty));assert.deepEqual(empty.data.current,[]);assert.deepEqual(empty.coverage,{includedOccasions:0,leftOutOccasions:0});

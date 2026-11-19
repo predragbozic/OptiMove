@@ -771,7 +771,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
           seeds.set(f.occasionId, { occasionId: f.occasionId, athleteId: groupBy === 'athlete' || analyticalAggregation === 'none' ? f.athleteId : null, bucketKey, instant: f.occasionStart ?? f.startedAt });
         }
         const ratioKey = JSON.stringify([rDateFrom,rDateTo,filterKeyFor(spec.athleteIds,spec.activityId,spec.componentId),spec.metricDefinitionId,spec.dataScopeLevel,analyticalAggregation,groupBy,spec.sourcePolicy,spec.sourceConnectionId,spec.coveragePolicy]);
-        if (!ratioCache.has(ratioKey)) ratioCache.set(ratioKey, queryRatioBuckets(queryRunner, [...seeds.values()], spec.metricDefinitionId, analyticalAggregation));
+        if (!ratioCache.has(ratioKey)) ratioCache.set(ratioKey, queryRatioBuckets(queryRunner, [...seeds.values()], spec.metricDefinitionId, analyticalAggregation, definition.id));
         const result = await ratioCache.get(ratioKey);
         return { ratio: true, calculationKey: result.calculationKey, current: result.rows, coverage: result.coverage,
           calculation: result.calculation ?? { kind: 'ratio', scale: calculation.scale, unit: definition.unit } };
