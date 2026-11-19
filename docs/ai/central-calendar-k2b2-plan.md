@@ -1007,5 +1007,10 @@ Branch `claude/central-calendar-backend-followups` from `origin/main` `b08cfb7f`
    - Test 10 of `central-calendar-k2a-events.test.mjs` pinned the old behaviour and is updated. `kinds=external` keeps
      the RPE card with its own counts, and `kinds=test` keeps the test-event schedule card. With `event` in `kinds`
      (`event`, `external,event`, `test,event` and the default), the folds behave as before.
+   - The K2a plans' entries (`central-calendar-k2a-plan.md` sections 7 and K2a-2's row,
+     `central-calendar-k2a-2-plan.md`) are marked superseded by this section (`code-reviewer`'s LOW).
+   - The screen still filters its chips in the browser over the folded answer (`frontend/central-calendar-view.js`),
+     so with only *RPE requests* on, a folded RPE card is not shown there. That would be a small frontend task of its
+     own; it is not part of this one.
 
 Mutations: one per item, each killed (the executor's report has the details).
