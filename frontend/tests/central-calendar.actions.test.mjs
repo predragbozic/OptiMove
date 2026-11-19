@@ -29,6 +29,7 @@ const {
   centralCalendarRosterIndex,
   closeCentralCalendarPanel,
   handleCentralCalendarAction,
+  restoreCentralCalendarPlace,
   restoreCentralCalendarView,
 } = await import("../central-calendar-actions.js");
 const {
@@ -1031,4 +1032,17 @@ test("10b. a coach who loses Settings access falls back to Home; the athlete she
   state.activeTab = "builder";
   renderLibraryNav();
   assert.equal(state.activeTab, "weekly", "the athlete shell's Builder fallback is unchanged");
+});
+
+test("Back to a calendar place (app-history.js): the remembered panel re-opens when its item is still there, and is not left open when it is gone", async () => {
+  installFetchMock(okResponder());
+  restoreCentralCalendarPlace({ view: "week", anchor: DAY(0), selectedDate: DAY(1), panelKey: "external:sch-1:d1", panelDate: DAY(1) });
+  await loadCentralCalendar({ render });
+  assert.deepEqual([state.centralCalendar.panel.open, state.centralCalendar.panel.key], [true, "external:sch-1:d1"]);
+  assert.equal(state.centralCalendar.selectedDate, DAY(1));
+  restoreCentralCalendarPlace({ view: "week", anchor: DAY(0), selectedDate: DAY(1), panelKey: "event:gone", panelDate: DAY(1) });
+  await loadCentralCalendar({ render });
+  assert.equal(state.centralCalendar.panel.open, false);
+  assert.match(state.centralCalendar.notice, /no longer on this day/);
+  assert.equal(dom().querySelector('[data-action="central-calendar-close-panel"]'), null, "no empty panel drawn");
 });
