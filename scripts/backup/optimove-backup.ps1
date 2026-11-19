@@ -34,6 +34,9 @@ $startedAt = Get-Date
 $logPath = ''
 $dumpPath = ''
 $dumpName = '-'
+$lock = $null
+$toolError = ''
+$hide = @()
 $step = 'reading the config file'
 
 function Write-RunLog {
@@ -55,6 +58,16 @@ try {
   $folder = (Resolve-Path -LiteralPath $folder).ProviderPath
   if (Test-OmInsideGitRepo -Path $folder) { throw 'refusing: the backup folder is inside a git repository; a backup is never kept in a checkout' }
   $logPath = Join-Path $folder 'optimove-backup.log'
+
+  # One backup at a time. A second run stops here, before it could touch any file of the first one.
+  $lock = Enter-OmBackupLock -Folder $folder
+  if ($null -eq $lock) {
+    $busy = 'Another backup is already running; this one stops.'
+    Write-Host $busy
+    Write-RunLog -Outcome 'SKIPPED' -Note $busy
+    exit 2
+  }
+  $hide = @($config['host'], $config['user'], $config['database'], $folder, $ConfigPath, $env:USERNAME, $env:USERPROFILE)
 
   $hostName = $config['host']
   $port = $config['port']
@@ -107,6 +120,7 @@ try {
     $retry = Invoke-OmPgTool -Exe $tools.Psql -Arguments $versionArgs @connection
     if ($retry.ExitCode -ne 0) {
       Write-Host $retry.StdErr
+      $toolError = $retry.StdErr
       throw 'the database could not be reached (wrong password, host, port or user, or no network)'
     }
     $run = $retry
@@ -121,23 +135,23 @@ try {
   $step = 'checking the schemas'
   $schemaQuery = "select nspname from pg_namespace where nspname !~ '^pg_' and nspname <> 'information_schema' order by 1"
   $run = Invoke-OmPgTool -Exe $tools.Psql -Arguments (@('--no-psqlrc', '--tuples-only', '--no-align', '--set', 'ON_ERROR_STOP=1', '--command', $schemaQuery) + $connectionArgs) @connection
-  if ($run.ExitCode -ne 0) { Write-Host $run.StdErr; throw 'the list of schemas could not be read' }
+  if ($run.ExitCode -ne 0) { Write-Host $run.StdErr; $toolError = $run.StdErr; throw 'the list of schemas could not be read' }
   $serverSchemas = @($run.StdOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
   Test-OmSchemaList -ServerSchemas $serverSchemas -SkipSchemas $config['skip_schemas']
 
   $step = 'pg_dump'
-  $dumpName = New-OmDumpFileName -Now $startedAt
-  $dumpPath = Join-Path $folder $dumpName
-  if (Test-Path -LiteralPath $dumpPath) { throw "refusing: $dumpName already exists; wait a minute and run again" }
-  if (Test-Path -LiteralPath "$dumpPath.failed") { throw "refusing: $dumpName.failed already exists; wait a minute and run again" }
+  # The name is reserved first, and only a file this run created is ever renamed or removed by it.
+  $reserved = New-OmDumpFile -Folder $folder -Now $startedAt
+  $dumpPath = $reserved
+  $dumpName = [System.IO.Path]::GetFileName($dumpPath)
   Write-Host "Dumping to $dumpName ..."
   $run = Invoke-OmPgTool -Exe $tools.PgDump -Arguments (Get-OmPgDumpArgs -HostName $hostName -Port $port -User $user -Database $database -DumpPath $dumpPath) @connection
-  if ($run.ExitCode -ne 0) { Write-Host $run.StdErr; throw "pg_dump ended with exit code $($run.ExitCode)" }
+  if ($run.ExitCode -ne 0) { Write-Host $run.StdErr; $toolError = $run.StdErr; throw "pg_dump ended with exit code $($run.ExitCode)" }
   if (-not (Test-Path -LiteralPath $dumpPath -PathType Leaf)) { throw 'pg_dump wrote no file' }
 
   $step = 'pg_restore --list'
   $run = Invoke-OmPgTool -Exe $tools.PgRestore -Arguments @('--list', $dumpPath)
-  if ($run.ExitCode -ne 0) { Write-Host $run.StdErr; throw "the new file cannot be read back (pg_restore --list ended with exit code $($run.ExitCode))" }
+  if ($run.ExitCode -ne 0) { Write-Host $run.StdErr; $toolError = $run.StdErr; throw "the new file cannot be read back (pg_restore --list ended with exit code $($run.ExitCode))" }
   $tableCount = Get-OmTableCountFromList -ListText $run.StdOut
   if ($tableCount -lt 1) { throw 'the new file lists no tables' }
 
@@ -158,6 +172,7 @@ try {
 
   Write-Host "OK: $dumpName, $size bytes, $tableCount tables"
   Write-Host "    sha256 $hash"
+  Exit-OmBackupLock -Lock $lock
   exit 0
 }
 catch {
@@ -169,8 +184,19 @@ catch {
       Write-Host "The file was renamed to $dumpName.failed. It is NOT a backup."
     } catch { Write-Host "The unfinished file $dumpName could not be renamed. It is NOT a backup: delete it." }
   }
-  try { Write-RunLog -Outcome 'FAILED' -Note "while $step" } catch { }
+  # Under Task Scheduler the window is gone, so the log line carries the reason: the tool's own first error
+  # line when a tool failed, else this script's message, with host, user, folder and the like removed.
+  $detail = ''
+  try {
+    $source = $reason
+    if ($toolError -and $toolError.Trim() -ne '') { $source = $toolError }
+    $detail = Get-OmSafeReason -Text $source -Hide $hide
+  } catch { $detail = '' }
+  $note = "while $step"
+  if ($detail) { $note = "while ${step}: $detail" }
+  try { Write-RunLog -Outcome 'FAILED' -Note $note } catch { }
   Write-Host "FAILED while ${step}: $reason"
   Write-Host 'No old backup was deleted. See "When a run says FAILED" in docs/runbooks/production-manual-backup.md'
+  Exit-OmBackupLock -Lock $lock
   exit 1
 }
