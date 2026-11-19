@@ -21,6 +21,7 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O11** | „ali nemoguce je da izaberemo drugi dan za dogjadjaj u suprotnom danu, datomi miraoju da budu isti, zar ne i satnice moraju da se poklapaju ako u sesiji hocemo satnicu da podesimo" | A session joins only an event of its own day. The time has one source, the event (section 5.2, point 10). |
 | **O12** | „ako ne mi mozemo da stavimo pre posle tokom treinga kao da sada i da se to nadje u dogadjaju koji je planiran" · „mislim da je to najlakse za nas" | A session keeps today's slot (Before / Training / After) and needs no time of its own; it is placed in the planned event, and the event gives the time. |
 | **O13** | „i da nam za to ne treba neka velika promena trenutnog stanja" | The Builder ↔ event work reuses what exists: the calendar's event form, the link and unlink routes, the slots, and Back. No migration, and the smallest change that does the job. |
+| **O14** | „vreme sesijama opt takodje mozemo birati ako hocemo ali se ne moze razilaziti sa vremenom dogadjaja na primer" | Amends O12. A linked session may have its own time, as an option, but only inside the event's time. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
@@ -272,15 +273,21 @@ After training · Recovery                Event: [ No event     ▾]
     - **The day.** A session joins only an event of its own day. The selector lists only that day's events, and the
       server already refuses another day (`session_outside_event`). An event of several days (a camp) covers each of
       its days.
-    - **No time of its own (O12, "the easiest for us").** A session keeps today's slot (Before training / Training /
-      After training), and that is all it needs. It is placed in the planned event, and the event gives the time
-      ("10:00 · from the event"), so the two can never disagree. Before and After stand around the training in that
-      order.
-    - **Changing the time.** It is changed on the event, and the event opens in the calendar in one click; Back
-      returns. A session that had its own time before it was linked shows "The event's time 10:00 is used" once, when
-      it is linked.
-    - **Where the Weekly plan and the athlete's Calendar read the time.** The recommendation is to read it from the
-      event for a linked session, never a copy that could go stale. The K3 / K2c-3 contract decides it.
+    - **The slot is enough (O12, "the easiest for us").** A session keeps today's slot (Before training / Training /
+      After training), and with no time of its own it shows the event's ("10:00 · from the event"). Before and After
+      stand around the training in that order.
+    - **Its own time is optional, but only inside the event's time (O14).**
+      - The coach may still set a session's time, for example a 10:30 Training inside a 10:00–11:30 event.
+      - The Builder refuses a time outside the event's start–end (the start alone when the event has no end), with one
+        sentence: "Choose a time within the event, 10:00–11:30, or change the event's time."
+      - A session with a time outside the event can't join it; it asks to change the time first.
+    - **The event's time changes later.** If a linked session's time no longer fits, the session shows "Outside the
+      event's time (10:00–11:30)" in the Builder and in the event's panel, with *Use the event's time* (clears the
+      session's own time). It is never changed silently.
+    - **Changing the event's time.** It is changed on the event, and the event opens in the calendar in one click;
+      Back returns.
+    - **Where the Weekly plan and the athlete's Calendar read the time.** A linked session's own time when it has one,
+      otherwise the event's; never a stale copy. The K3 / K2c-3 contract decides it.
 10. **The two directions are the same pattern.** K3 goes from the calendar into the Builder with a band and *Back to
    calendar*. K2c-3 goes from the Builder into the calendar's form with a band and *Back to the Builder*. Back (K4-0)
    carries both.
