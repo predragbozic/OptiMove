@@ -8,7 +8,8 @@ import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./vie
 // Central calendar (K1b) - the reads of GET /api/calendar, the K1a read API
 // (docs/ai/central-calendar-k1-plan.md). One request per visible range,
 // never a filter parameter (the chips filter the answer in memory, plan
-// decision A), and one extra read of a single day with include=athletes
+// decision A) - except `kinds` while only non-event kinds are chosen (FE-D16,
+// a second read, below) - and one extra read of a single day with include=athletes
 // when the item panel needs names. Both go through view-cache.js'
 // loadCachedView with a context key of account + workspace + range + the
 // browser's date (the server derives every status from `today`, so a tab
@@ -41,6 +42,7 @@ export function centralCalendarTeamLabel(team) {
 }
 
 let rangeGeneration = 0;
+let kindsGeneration = 0;
 let dayGeneration = 0;
 
 // The days one request covers: a month is its grid of whole weeks (35 or 42
@@ -57,18 +59,40 @@ export function centralCalendarRange(view, anchor) {
   return { from: monday, to: addDaysIso(monday, 6) };
 }
 
-export function centralCalendarContextKey(from, to, today) {
-  return buildContextKey([...currentUserWorkspaceContextParts(), from, to, today]);
+// FE-D16 (central-calendar-k2b2-plan.md 9.4): a read with `kinds` has its own key; the unfiltered read keeps its key.
+export function centralCalendarContextKey(from, to, today, kinds = "") {
+  return buildContextKey([...currentUserWorkspaceContextParts(), from, to, today, ...(kinds ? ["kinds", kinds] : [])]);
 }
 
-function dayContextKey(date, today) {
-  return buildContextKey([...currentUserWorkspaceContextParts(), date, today]);
+function dayContextKey(date, today, kinds = "") {
+  return buildContextKey([...currentUserWorkspaceContextParts(), date, today, ...(kinds ? ["kinds", kinds] : [])]);
 }
 
-export function centralCalendarUrl(from, to, today, { includeAthletes = false } = {}) {
+export function centralCalendarUrl(from, to, today, { includeAthletes = false, kinds = "" } = {}) {
   const params = new URLSearchParams({ from, to, today });
+  if (kinds) params.set("kinds", kinds);
   if (includeAthletes) params.set("include", "athletes");
   return `/api/calendar?${params.toString()}`;
+}
+
+// FE-D16 (central-calendar-k2b2-plan.md 9.4): without `event` in `kinds` the server folds nothing into an event,
+// so while the chosen types are only kinds other than Events (no event type either), the cards come from a read of
+// exactly those kinds: with "RPE requests" alone an RPE request an event folds is its own card again. "" otherwise:
+// the cards are the unfiltered answer's, filtered in the browser (decision A). The kinds go in the chips' order.
+export function centralCalendarServerKinds(filters) {
+  const kinds = filters?.kinds || [];
+  if (!kinds.length || kinds.includes("event") || (filters?.eventKinds || []).length) return "";
+  return CENTRAL_CALENDAR_KINDS.filter((kind) => kinds.includes(kind)).join(",");
+}
+
+// The answer the cards and the open panel are drawn from: the kinds read while it is the one asked for and covers
+// the range on screen, else the unfiltered answer (which also carries the teams, the workspace, the events of the
+// link suggestions and the chips' counts).
+export function centralCalendarShownData(cal) {
+  const kinds = centralCalendarServerKinds(cal?.filters);
+  const answer = cal?.kindsAnswer;
+  if (kinds && answer && cal.data && answer.kinds === kinds && answer.data?.from === cal.data.from && answer.data?.to === cal.data.to) return answer.data;
+  return cal?.data || null;
 }
 
 // A plan saved or deleted in the Builder changes the planned cards of its
@@ -107,6 +131,7 @@ export function setCentralCalendarAppliedHook(hook) {
 export function resetCentralCalendarForWorkspaceChange() {
   state.centralCalendar = emptyCentralCalendarState();
   rangeGeneration += 1;
+  kindsGeneration += 1;
   dayGeneration += 1;
 }
 
@@ -155,7 +180,72 @@ function currentRangeContextKey() {
 // under this range's label; paints through `render` at every change of the
 // visible state (loading, data, error), the convention of
 // loadTrainingLoadCalendarWeek.
-export async function loadCentralCalendar({ render, forceRefresh = false } = {}, { retried = false } = {}) {
+// The open item is no longer on its day in the answer the cards come from (a plan deleted elsewhere, a session
+// superseded or moved): the panel closes with one quiet line instead of vanishing behind an empty panel column. The
+// same lookup the view makes (the panel's day), so the two agree.
+function closePanelMissingFrom(cal, data) {
+  if (cal.panel.open && !(data.days || []).find((day) => day.date === cal.panel.date)?.items?.some((item) => item.key === cal.panel.key)) {
+    cal.panel = { open: false, key: "", date: "", athletes: null, loading: false, error: "" };
+    cal.notice = "The item you had open is no longer on this day; the calendar is up to date.";
+  }
+}
+
+export async function loadCentralCalendar({ render, forceRefresh = false } = {}) {
+  const result = await loadCentralCalendarRange({ render, forceRefresh });
+  const cal = state.centralCalendar;
+  if (cal?.data && centralCalendarServerKinds(cal.filters)) await loadCentralCalendarKinds({ render, forceRefresh });
+  return result;
+}
+
+// FE-D16: the read of the chosen kinds for the range on screen (after the unfiltered one), under its own key.
+// `closeMissing`: a refresh closes a panel whose item is gone, with its notice; a change of the types does not (its
+// caller closes the panel of a card the types hide, quietly).
+export async function loadCentralCalendarKinds({ render, forceRefresh = false, closeMissing = true } = {}, { retried = false } = {}) {
+  const cal = state.centralCalendar;
+  const kinds = centralCalendarServerKinds(cal.filters);
+  if (!kinds || !cal.data) return null;
+  const today = localDateIso();
+  const range = centralCalendarRange(cal.view, cal.anchor);
+  const generation = ++kindsGeneration;
+  const contextKey = centralCalendarContextKey(range.from, range.to, today, kinds);
+  const current = () => generation === kindsGeneration && state.centralCalendar === cal;
+  const result = await loadCachedView({
+    namespace: CENTRAL_CALENDAR_NAMESPACE,
+    contextKey,
+    forceRefresh,
+    fetcher: () => api(centralCalendarUrl(range.from, range.to, today, { kinds })),
+    applyData: (data) => {
+      if (!current()) return;
+      cal.kindsAnswer = { kinds, data };
+      if (closeMissing) closePanelMissingFrom(cal, data);
+      render?.();
+    },
+    applyError: (error) => {
+      if (!current()) return;
+      // The cards stay the unfiltered answer's, filtered in the browser.
+      cal.refreshError = `${describeCentralCalendarError(error).message} Showing the last loaded calendar.`;
+      render?.();
+    },
+    getCurrentContextKey: () => {
+      const now = state.centralCalendar;
+      const nowKinds = centralCalendarServerKinds(now.filters);
+      if (!nowKinds) return "";
+      const nowRange = centralCalendarRange(now.view, now.anchor);
+      return centralCalendarContextKey(nowRange.from, nowRange.to, localDateIso(), nowKinds);
+    },
+  });
+  if (!current()) return result;
+  // The range read's outcomes, the same way: an answer made void by an invalidation is read once more; a failed
+  // refresh over cards on screen says so.
+  if (result?.outcome === "invalidated-stale" && !retried) return loadCentralCalendarKinds({ render, forceRefresh, closeMissing }, { retried: true });
+  if (result?.outcome === "background-refresh-failed") {
+    cal.refreshError = "Could not refresh. Showing the last loaded calendar.";
+    render?.();
+  }
+  return result;
+}
+
+async function loadCentralCalendarRange({ render, forceRefresh = false } = {}, { retried = false } = {}) {
   const cal = state.centralCalendar;
   const today = localDateIso();
   if (!cal.anchor) cal.anchor = today;
@@ -186,14 +276,8 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {},
       if (!current()) return;
       cal.data = data;
       cal.loading = false;
-      // The open item is no longer on its day in the answer (a plan deleted
-      // elsewhere, a session superseded or moved): the panel closes with one
-      // quiet line instead of vanishing behind an empty panel column. The
-      // same lookup the view makes (the panel's day), so the two agree.
-      if (cal.panel.open && !(data.days || []).find((day) => day.date === cal.panel.date)?.items?.some((item) => item.key === cal.panel.key)) {
-        cal.panel = { open: false, key: "", date: "", athletes: null, loading: false, error: "" };
-        cal.notice = "The item you had open is no longer on this day; the calendar is up to date.";
-      }
+      // While the cards come from the kinds read, that read decides (an RPE request it shows may be folded here).
+      if (!centralCalendarServerKinds(cal.filters)) closePanelMissingFrom(cal, data);
       render?.();
       // K2b-1d3: the cards wear their type's look from the card itself; the
       // catalog is read only when the event form opens (the actions' ensureEventTypes).
@@ -221,11 +305,11 @@ export async function loadCentralCalendar({ render, forceRefresh = false } = {},
   if (!current()) return result;
   // This exact range was invalidated while the answer was in flight (a plan
   // saved in the Builder meanwhile); nothing else reads it again, so once.
-  if (result?.outcome === "invalidated-stale" && !retried) return loadCentralCalendar({ render, forceRefresh }, { retried: true });
+  if (result?.outcome === "invalidated-stale" && !retried) return loadCentralCalendarRange({ render, forceRefresh }, { retried: true });
   // The same generation and a context key that moved on: only the browser's
   // date rolled over while the answer was in flight. Read once more with the
   // new `today` instead of leaving "Loading calendar…" on screen.
-  if (result?.outcome === "stale-ignored" && !retried) return loadCentralCalendar({ render, forceRefresh }, { retried: true });
+  if (result?.outcome === "stale-ignored" && !retried) return loadCentralCalendarRange({ render, forceRefresh }, { retried: true });
   if (result?.outcome === "background-refresh-failed") {
     cal.refreshError = "Could not refresh. Showing the last loaded calendar.";
     render?.();
@@ -388,6 +472,8 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
   if (!panel.open || !panel.key || !panel.date) return;
   const { key, date } = panel;
   const today = localDateIso();
+  // The day is read the way its cards were (FE-D16): a card only the kinds read shows is found there.
+  const kinds = centralCalendarShownData(cal) === cal.data ? "" : centralCalendarServerKinds(cal.filters);
   const generation = ++dayGeneration;
   panel.loading = true;
   panel.error = "";
@@ -396,9 +482,9 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
   const current = () => generation === dayGeneration && state.centralCalendar === cal && cal.panel.open && cal.panel.key === key;
   await loadCachedView({
     namespace: CENTRAL_CALENDAR_DAY_NAMESPACE,
-    contextKey: dayContextKey(date, today),
+    contextKey: dayContextKey(date, today, kinds),
     forceRefresh,
-    fetcher: () => api(centralCalendarUrl(date, date, today, { includeAthletes: true })),
+    fetcher: () => api(centralCalendarUrl(date, date, today, { includeAthletes: true, kinds })),
     applyData: (data) => {
       if (!current()) return;
       const item = findCentralCalendarItem(data, key);
@@ -419,7 +505,7 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
     },
     getCurrentContextKey: () => {
       const open = state.centralCalendar.panel;
-      return open.open ? dayContextKey(open.date, localDateIso()) : "";
+      return open.open ? dayContextKey(open.date, localDateIso(), kinds) : "";
     },
   });
 }

@@ -1979,3 +1979,40 @@ test("37. Q-FOLD (plan 9.3): a WELLNESS question's Tests schedule folds into its
   const pItems = itemsOn(await cal(manager.cookie, TODAY), TODAY);
   assert.ok(pItems.some((i) => i.kind === "test" && i.links?.testScheduleId === String(plainSchedule)), "a schedule no question names keeps its card");
 });
+
+// ---------------------------------------------------------------------------
+// BE-FOLLOWUPS (plan 9.4)
+// ---------------------------------------------------------------------------
+test("38. BE-FOLLOWUPS #614 LOW-1: a full edit daily→one_time with skipDaysOff true on a daily schedule that has an occurrence answers 409 recurring_has_occurrence (not 400), nothing written", async () => {
+  const t = await freshTeam("order", 1);
+  const day = addDays(TODAY, 40);
+  const id = await teamDaily(t, { skipDaysOff: false, startDate: day });
+  await materialize(id, day);
+  const row = async () => (await q(`select schedule_kind, skip_days_off, start_date::text as start, end_date::text as "end", recurrence_rule, updated_at from tests.test_schedules where id = $1`, [id]))[0];
+  const before = await row();
+  const res = await api(`/api/tests/schedules/${id}`, {
+    method: "PATCH", cookie: t.coach.cookie,
+    body: { scheduleKind: "one_time", startDate: addDays(day, 1), endDate: addDays(day, 1), skipDaysOff: true },
+  });
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.reason, "recurring_has_occurrence");
+  assert.deepEqual(await row(), before, "the row unchanged");
+});
+
+test("39. BE-FOLLOWUPS #614 LOW-2: the toggle on a recurring row whose stored rule is not daily (a raw write) answers 400 skip_days_off_unavailable, never v81's CHECK as a 500; a daily row still toggles", async () => {
+  await switchOn();
+  const t = await freshTeam("weekly", 1);
+  const day = addDays(TODAY, 45);
+  const id = await teamDaily(t, { skipDaysOff: false, startDate: day });
+  await q(`update tests.test_schedules set recurrence_rule = '{"version":1,"freq":"weekly"}'::jsonb where id = $1`, [id]);
+  const res = await api(`/api/tests/schedules/${id}`, { method: "PATCH", cookie: t.coach.cookie, body: { skipDaysOff: true } });
+  assert.equal(res.status, 400, res.text);
+  assert.equal(res.body.error, "skip_days_off_unavailable");
+  assert.equal((await q(`select skip_days_off from tests.test_schedules where id = $1`, [id]))[0].skip_days_off, false);
+  const off = await api(`/api/tests/schedules/${id}`, { method: "PATCH", cookie: t.coach.cookie, body: { skipDaysOff: false } });
+  assert.equal(off.status, 200, off.text);
+  const daily = await teamDaily(t, { skipDaysOff: false, startDate: addDays(day, 10) });
+  const on = await api(`/api/tests/schedules/${daily}`, { method: "PATCH", cookie: t.coach.cookie, body: { skipDaysOff: true } });
+  assert.equal(on.status, 200, on.text);
+  assert.equal((await q(`select skip_days_off from tests.test_schedules where id = $1`, [daily]))[0].skip_days_off, true);
+});

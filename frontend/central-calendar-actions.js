@@ -31,8 +31,11 @@ import {
   fetchCentralCalendarEvent,
   fetchCentralCalendarEventQuestions,
   invalidateCentralCalendarCache,
+  centralCalendarServerKinds,
+  centralCalendarShownData,
   loadCentralCalendar,
   loadCentralCalendarDay,
+  loadCentralCalendarKinds,
   newCentralCalendarRequestKey,
   readCentralCalendarCatalog,
   sendCentralCalendarLinkWrite,
@@ -220,6 +223,21 @@ export function closeCentralCalendarPanel(render) {
   return true;
 }
 
+// FE-D16: a change of the types that changes what the server is asked for. The cards change answer: an open panel
+// whose card the new answer does not hold closes; the chosen kinds are read (the unfiltered answer needs no read).
+async function typesChanged(cal, before, render) {
+  const after = centralCalendarServerKinds(cal.filters);
+  if (after !== before && cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) cal.panel = closedPanel();
+  render?.();
+  if (after && after !== before) {
+    await loadCentralCalendarKinds({ render, closeMissing: false });
+    if (cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
+      cal.panel = closedPanel();
+      render?.();
+    }
+  }
+}
+
 function toggleValue(list, value) {
   const index = list.indexOf(value);
   if (index >= 0) list.splice(index, 1);
@@ -348,6 +366,29 @@ export function openCentralCalendarAt({ date, key = "" } = {}) {
     // The same reset as an ordinary open: nothing of an earlier panel stays.
     resetPanelReads(cal);
     cal.panel = { ...closedPanel(), open: true, key, date };
+  }
+  invalidateCentralCalendarCache();
+}
+
+// Back (app-history.js): the calendar as it was left - its view, week, day
+// and open panel. The panel opens the openCentralCalendarAt way (never over a
+// form); the day's load closes it when its item is no longer in the answer.
+export function restoreCentralCalendarPlace(place) {
+  const cal = state.centralCalendar;
+  if (!cal || !place) return;
+  if (CENTRAL_CALENDAR_VIEWS.includes(place.view)) cal.view = place.view;
+  cal.anchor = place.anchor || "";
+  cal.selectedDate = place.selectedDate || "";
+  if (!cal.form) {
+    if (place.panelKey && place.panelDate) {
+      if (!(cal.panel.open && cal.panel.key === place.panelKey)) {
+        resetPanelReads(cal);
+        cal.panel = { ...closedPanel(), open: true, key: place.panelKey, date: place.panelDate };
+      }
+    } else if (cal.panel.open) {
+      resetPanelReads(cal);
+      cal.panel = closedPanel();
+    }
   }
   invalidateCentralCalendarCache();
 }
@@ -1198,7 +1239,7 @@ async function saved(form, data, render, { check = false } = {}) {
 
 function findItemOnDay(cal, key, date) {
   if (!key || !isIsoDate(date)) return null;
-  return (cal.data?.days || []).find((day) => day.date === date)?.items?.find((item) => item.key === key) || null;
+  return (centralCalendarShownData(cal)?.days || []).find((day) => day.date === date)?.items?.find((item) => item.key === key) || null;
 }
 
 // The form's fields (app.js routes "input" and "change" here): the value goes
@@ -1859,23 +1900,25 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-toggle-kind") {
     const kind = action.dataset.kind || "";
+    const before = centralCalendarServerKinds(cal.filters);
     if (CENTRAL_CALENDAR_KINDS.includes(kind)) {
       toggleValue(cal.filters.kinds, kind);
       // Events chosen: every event passes, so the event types are cleared.
       if (kind === "event" && cal.filters.kinds.includes("event")) cal.filters.eventKinds = [];
     }
-    render?.();
+    await typesChanged(cal, before, render);
     return true;
   }
   if (type === "central-calendar-toggle-event-kind") {
     const eventKind = action.dataset.eventKind || "";
+    const before = centralCalendarServerKinds(cal.filters);
     if (CENTRAL_CALENDAR_EVENT_KINDS.includes(eventKind)) {
       toggleValue(cal.filters.eventKinds, eventKind);
       // Narrowing to some event types turns Events off, so every pressed chip
       // changes the list (Events would let every event through anyway).
       if (cal.filters.eventKinds.length) cal.filters.kinds = cal.filters.kinds.filter((kind) => kind !== "event");
     }
-    render?.();
+    await typesChanged(cal, before, render);
     return true;
   }
   if (type === "central-calendar-all-groups") {
@@ -1884,9 +1927,10 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === "central-calendar-all-types") {
+    const before = centralCalendarServerKinds(cal.filters);
     cal.filters.kinds = [];
     cal.filters.eventKinds = [];
-    render?.();
+    await typesChanged(cal, before, render);
     return true;
   }
   if (type === "central-calendar-toggle-filters") {

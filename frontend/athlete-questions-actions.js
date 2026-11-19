@@ -125,7 +125,8 @@ function laterFromPrompt(handlers) {
 }
 
 // Answer now / Answer (the prompt or the card): the existing form of the question, by its form's id.
-// handlers: { openRpe(externalAssignmentId), openWellness(assignmentId), rpeFormOpenFor(externalAssignmentId), render }
+// handlers: { openRpe(externalAssignmentId), openWellness(assignmentId), rpeFormOpenFor(externalAssignmentId),
+//   wellnessFormOpenFor(assignmentId), render, reload }
 export async function answerAthleteQuestion(questionId, handlers = {}) {
   closeAthleteQuestionsPrompt({ focus: "none" });
   const row = findAthleteQuestion(questionId);
@@ -135,12 +136,12 @@ export async function answerAthleteQuestion(questionId, handlers = {}) {
     return false;
   }
   setAthleteQuestionsNotice("");
-  if (row.formKind === "wellness") {
-    await handlers.openWellness?.(row.formId);
-    return true;
-  }
-  await handlers.openRpe?.(row.formId);
-  if (handlers.rpeFormOpenFor && !handlers.rpeFormOpenFor(row.formId)) {
+  // The question's form, by its kind; a form that did not open is told the same way for both (#633's LOW (b)).
+  const wellness = row.formKind === "wellness";
+  if (wellness) await handlers.openWellness?.(row.formId);
+  else await handlers.openRpe?.(row.formId);
+  const formOpenFor = wellness ? handlers.wellnessFormOpenFor : handlers.rpeFormOpenFor;
+  if (formOpenFor && !formOpenFor(row.formId)) {
     await handlers.reload?.();
     // "Closed" only from a read that succeeded (the re-review: a failed read must never claim it).
     const notice = !athleteQuestionsReady() ? ATHLETE_QUESTION_UNREACHABLE

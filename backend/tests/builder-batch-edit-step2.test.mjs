@@ -384,11 +384,15 @@ test("8. an archived athlete and a plan the coach may no longer change are skipp
   assert.ok(!JSON.stringify(saved).includes(s.athletes[2].name), "the hidden member's name is nowhere in the answer");
   assert.ok(!JSON.stringify(saved).includes("not_editable") || saved.batchEdit.notChanged.named.every((m) => !m.reasons.includes("not_editable")), "and its reason is not tied to a name");
   assert.equal(await digestOf([b, c]), beforeBC, "neither was written");
-  // With every name visible (today's switcher), the no-rights member is named.
+  // Without the seam: the switcher itself (#664) leaves out the member this coach may not open, so the batch
+  // edit counts it without a name too, while the archived athlete the coach may open is named.
   const draft2 = await reopen(s.coach2.cookie, a);
+  assert.equal(draft2.batch.hiddenCount, 1, "the switcher hides C from this coach");
   ok(await api(`/api/builder/blocks/${draft2.blocks[2].id}/sessions`, { method: "POST", cookie: s.coach2.cookie, body: { bta: "T", name: "Added 2" } }), 201);
-  const saved2 = ok(await save(s.coach2.cookie, draft2.plan.id, { batchScope: "all" }));
-  assert.deepEqual(saved2.batchEdit.notChanged.named.map((m) => [m.name, m.reasons]).sort(), [[s.athletes[1].name, ["archived"]], [s.athletes[2].name, ["not_editable"]]].sort());
+  const saved2 = await save(s.coach2.cookie, draft2.plan.id, { batchScope: "all" });
+  assert.equal(saved2.status, 200, saved2.text);
+  assert.deepEqual(saved2.body.batchEdit.notChanged, { named: [{ name: s.athletes[1].name, reasons: ["archived"] }], unnamedCount: 1 });
+  assert.ok(!saved2.text.includes(s.athletes[2].name), "the hidden member's name is nowhere in the answer");
 });
 
 test("9. the choiceToken: a new result, a new event link, another coach's edit draft, an archive, or a new reason of an asked member between the 409 and the resend answers the 409 again and writes nothing (condition 10.2.2)", async () => {

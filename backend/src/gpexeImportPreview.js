@@ -171,6 +171,8 @@ export async function readTrackChoices(client, ownerTeamId, gpexeTeamSessionId) 
 export const BLOCK_MESSAGES = Object.freeze({
   mapping_not_usable: "This session can't be imported through the team's mappings and GPEXE binding as they stand.",
   source_threshold_contract_mismatch: "GPEXE's team thresholds or zones for this session are not the ones a mapping is defined for.",
+  // v80: the session's team setting in GPEXE is not the one a column was matched with for this team.
+  team_setting_changed: "The team's setting in GPEXE for this session is not the one a column was matched with for this team, so nothing of this session is imported. Set it back in GPEXE, or switch that column off for this team.",
   source_unit_mismatch: "A mapping's source unit is not the proven unit of its GPEXE field.",
   source_shape_mismatch: "GPEXE sent a mapped value in another shape than its field has.",
   no_mapped_values: "No value of this session can be imported: either no mapping switched on for this team gives a value for this session, or every mapped value was left out (see Left out under each athlete).",

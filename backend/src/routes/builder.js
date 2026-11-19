@@ -254,11 +254,141 @@ router.get("/drafts", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// K3 (docs/ai/central-calendar-k3-plan.md section 3.1): which of an event's
+// athletes already have a weekly plan of a week, so "Plan the training" can
+// tell its cases (none / one shared batch / mixed) apart before anything is
+// created. Read only.
+//
+// - The query string is checked before any query: `weekStart` a real date
+//   (any day; the week's Monday is used), `athleteIds` 1 to 200 UUIDs
+//   (`public.athletes.id`, the calendar's ids), comma-separated.
+// - The workspace rule is the create's own (resolveWeeklyPlanOwnerScope and
+//   isAthleteInWorkspaceScope, in one statement here): an athlete outside the
+//   active workspace, archived or unknown answers `{ athleteId, plannable:
+//   false }` and nothing else, whether or not a plan exists.
+// - A plannable athlete's plan is the one ensureWeeklySlot (POST /plans)
+//   would refuse on: the oldest active, non-edit-draft weekly plan of that
+//   week, whoever made it, leaving out the caller's own empty Builder plan
+//   (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
+//   rule) is `{ editable: false }` only: no id, name, author or status.
+export const WEEKLY_PLANS_READ_MAX = 200;
+const ATHLETE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidGregorianDate(iso) {
+  const date = new Date(`${iso}T12:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === iso;
+}
+
+function weeklyPlansReadQuery(rawQuery) {
+  const weekRaw = typeof rawQuery?.weekStart === "string" ? rawQuery.weekStart.trim() : "";
+  const weekStart = /^\d{4}-\d{2}-\d{2}$/.test(weekRaw) && isValidGregorianDate(weekRaw) ? normalizedWeekStart(weekRaw) : null;
+  if (!weekStart) return { error: { code: "invalid_week_start", message: "weekStart must be a valid YYYY-MM-DD date." } };
+  const raw = typeof rawQuery?.athleteIds === "string" ? rawQuery.athleteIds : "";
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length || parts.length > WEEKLY_PLANS_READ_MAX) {
+    return { error: { code: "invalid_athletes", message: `athleteIds must list 1 to ${WEEKLY_PLANS_READ_MAX} athlete ids.` } };
+  }
+  if (parts.some((part) => !ATHLETE_UUID.test(part))) return { error: { code: "invalid_athletes", message: "athleteIds must be UUIDs." } };
+  return { weekStart, athleteIds: [...new Set(parts.map((part) => part.toLowerCase()))] };
+}
+
+// The create's workspace rule (isAthleteInWorkspaceScope), for one athlete
+// alias, with its parameters appended to `params`.
+function athleteInWeeklyScopeSql(scope, alias, params) {
+  if (scope.type === "platform") return "true";
+  if (scope.type === "club") {
+    params.push(scope.clubId);
+    return `exists (select 1 from public.athlete_memberships m where m.athlete_id = ${alias}.id and m.membership_type = 'club' and m.status = 'active' and m.club_id = $${params.length})`;
+  }
+  if (scope.type === "team") {
+    params.push(scope.teamId);
+    return `exists (select 1 from public.athlete_memberships m where m.athlete_id = ${alias}.id and m.membership_type = 'team' and m.status = 'active' and m.team_id = $${params.length})`;
+  }
+  if (scope.type === "private_coach") {
+    params.push(scope.userId);
+    return `exists (select 1 from public.user_athletes ua where ua.athlete_id = ${alias}.id and ua.user_id = $${params.length} and ua.is_active = true)`;
+  }
+  return "false";
+}
+
+// One athlete's answer of GET /weekly-plans from its row (exported for its
+// test). Outside the workspace: plannable false and nothing else. A plan the
+// caller may not open: `{ editable: false }` only (with today's rules an
+// athlete inside the workspace is always one the caller may open, so this is
+// a fail-closed branch).
+export function weeklyPlansReadAnswer(row) {
+  if (row.plannable !== true) return { athleteId: row.athlete_id, plannable: false };
+  if (!row.plan_id) return { athleteId: row.athlete_id, plannable: true, plan: null };
+  if (row.editable !== true) return { athleteId: row.athlete_id, plannable: true, plan: { editable: false } };
+  return {
+    athleteId: row.athlete_id,
+    plannable: true,
+    plan: {
+      planId: row.plan_id,
+      status: row.status === "draft" ? "draft" : "active",
+      batchId: row.builder_batch_id || null,
+      mine: row.mine === true,
+      editable: true,
+      openDraftId: row.open_draft_id || null,
+    },
+  };
+}
+
+router.get("/weekly-plans", async (req, res, next) => {
+  try {
+    const parsed = weeklyPlansReadQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error.code, message: parsed.error.message });
+    const scope = await resolveWeeklyPlanOwnerScope(req, res);
+    if (!scope) return;
+    const params = [parsed.athleteIds, parsed.weekStart, req.user.id, canAccessAllAthletes(req)];
+    const inScope = athleteInWeeklyScopeSql(scope, "a", params);
+    const result = await query(
+      `select k.athlete_id::text as athlete_id,
+              (a.id is not null and coalesce(a.is_active, true) and ${inScope}) as plannable,
+              p.id as plan_id, p.status, p.builder_batch_id,
+              (p.created_by_user_id = $3) as mine,
+              (p.id is not null and (p.created_by_user_id = $3 or $4::boolean or ${athleteAccessPredicate("a", "$3")})) as editable,
+              (select d.id from plans.plans d
+                where d.edit_source_plan_id = p.id and d.is_edit_draft = true and d.created_by_user_id = $3
+                order by d.updated_at desc limit 1) as open_draft_id
+         from unnest($1::uuid[]) with ordinality as k(athlete_id, n)
+         left join public.athletes a on a.id = k.athlete_id
+         left join lateral (
+           select p.id, p.status, p.builder_batch_id, p.created_by_user_id
+             from plans.plans p
+            where p.plan_type = 'weekly' and p.athlete_id = a.id and p.week_start = $2::date
+              and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)
+              -- ensureWeeklySlot's skip: the caller's own EMPTY Builder plan
+              -- is removed by POST /plans, so it is not reported either
+              -- (planHasWeeklyTrainingContentWithClient's content rule).
+              and not (
+                p.source_type = 'builder' and p.created_by_user_id = $3
+                and not exists (select 1 from plans.plan_items pi
+                                  join plans.plan_sessions ps on ps.id = pi.plan_session_id
+                                  join plans.plan_days pd on pd.id = ps.plan_day_id
+                                 where pd.plan_id = p.id)
+                and not exists (select 1 from plans.plan_nodes pn
+                                  join plans.plan_sessions ps on ps.id = pn.plan_session_id
+                                  join plans.plan_days pd on pd.id = ps.plan_day_id
+                                 where pd.plan_id = p.id and nullif(trim(coalesce(pn.name, '')), '') is not null)
+              )
+            order by p.created_at
+            limit 1
+         ) p on true
+        order by k.n`,
+      params,
+    );
+    const athletes = result.rows.map(weeklyPlansReadAnswer);
+    res.set("Cache-Control", "no-store");
+    res.json({ weekStart: parsed.weekStart, athletes });
+  } catch (error) { next(error); }
+});
+
 router.get("/plans/:planId", async (req, res, next) => {
   try {
     const plan = await getEditablePlan(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Draft program not found" });
-    res.json(await buildDraft(plan));
+    res.json(await buildDraft(plan, req));
   } catch (error) { next(error); }
 });
 
@@ -417,7 +547,7 @@ router.post("/plans/:planId/sync-batch", withBatchReuseGuard(async (req, res, ne
     if (!plan) return;
     if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req.user, req.exerciseReuseGuard);
     const freshPlan = await getEditablePlan(req, plan.id);
-    res.json(await buildDraft(freshPlan || plan));
+    res.json(await buildDraft(freshPlan || plan, req));
   } catch (error) { next(error); }
 }));
 
@@ -490,7 +620,7 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    res.status(201).json(await buildDraft(await getEditablePlan(req, createdIds[0])));
+    res.status(201).json(await buildDraft(await getEditablePlan(req, createdIds[0]), req));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -755,7 +885,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         client.release();
         client = null;
         res.status(201);
-        return timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, replay.planId)))), assignments: replay.assignments });
+        return timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, replay.planId), req))), assignments: replay.assignments });
       }
       if (!claimed) {
         await client.query("rollback");
@@ -848,7 +978,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     client = null;
     emitPlanAssignedRealtime(notifiedUserIds);
     res.status(201);
-    timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, createdIds[0])))), assignments });
+    timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, createdIds[0]), req))), assignments });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -864,9 +994,9 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
   try {
     const plan = await timing.measure("access", () => getEditablePlan(req, req.params.planId));
     if (!plan) return res.status(404).json({ error: "Program not found or not editable." });
-    if (plan.is_edit_draft) return timing.json(await timing.measure("response", () => buildDraft(plan)));
+    if (plan.is_edit_draft) return timing.json(await timing.measure("response", () => buildDraft(plan, req)));
     if (plan.status === "draft" && plan.source_type === "builder" && !plan.edit_source_plan_id) {
-      return timing.json(await timing.measure("response", () => buildDraft(plan)));
+      return timing.json(await timing.measure("response", () => buildDraft(plan, req)));
     }
 
     const existingDraft = await timing.measure("lookup", () => query(
@@ -880,7 +1010,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
       [plan.id, req.user.id],
     ));
     if (existingDraft.rows[0]) {
-      return timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, existingDraft.rows[0].id))));
+      return timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, existingDraft.rows[0].id), req)));
     }
 
     client = await timing.measure("pool", () => pool.connect());
@@ -946,7 +1076,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
     await client.query("commit");
     client.release();
     client = null;
-    timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, created.rows[0].id))));
+    timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, created.rows[0].id), req)));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -1795,7 +1925,7 @@ router.delete("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
 
 async function buildSubmitResponse(req, plan) {
   // Save exits Builder; Assign and older clients still need the complete tree.
-  if (req.body?.responseMode !== "summary") return buildDraft(plan);
+  if (req.body?.responseMode !== "summary") return buildDraft(plan, req);
   return {
     saved: true,
     plan: {
@@ -1811,7 +1941,7 @@ async function buildSubmitResponse(req, plan) {
   };
 }
 
-async function buildDraft(plan) {
+async function buildDraft(plan, req) {
   const result = await query(
     `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
             ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order, ps.name as session_name, ps.rpe_enabled, ps.training_load_enabled,
@@ -1868,7 +1998,7 @@ async function buildDraft(plan) {
       requestRpeDefault: Boolean(plan.request_rpe_default),
     },
     blocks: [...blocks.values()],
-    batch: await loadBuilderBatch(plan),
+    batch: await loadBuilderBatch(plan, req),
   };
 }
 
@@ -1892,7 +2022,7 @@ async function respondWithDraft(req, res, user, plan, options = {}) {
     await syncBatchFromPlan(targetPlan, user, req.exerciseReuseGuard);
     freshPlan = await getEditablePlan(req, targetPlan.id);
   }
-  const draft = await buildDraft(freshPlan || targetPlan);
+  const draft = await buildDraft(freshPlan || targetPlan, req);
   if (options.status) return res.status(options.status).json(draft);
   return res.json(draft);
 }
@@ -2157,15 +2287,19 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
   const before = await loadWeeklyTree(client, source.id);
   const after = await loadWeeklyTree(client, freshDraft.id);
   // Condition 10.2.1: a member's athlete is named only when the coach already
-  // sees that name in the batch switcher (loadBuilderBatch's list).
+  // sees that name in the batch switcher - loadBuilderBatch's list, which is
+  // filtered by the same predicate (editablePlanAccessSql, #664).
   const switcher = await client.query(
-    `select p.id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name
+    `select p.id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name,
+            ${editablePlanAccessSql("p", "$2", "$3")} as visible
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.builder_batch_id = $1 and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)`,
-    [source.builder_batch_id],
+    [source.builder_batch_id, req.user.id, canAccessAllAthletes(req)],
   );
   const names = new Map(switcher.rows.map((row) => [String(row.id), row.athlete_name || null]));
-  const visible = batchEditTestHooks.visibleMemberIds ? new Set(batchEditTestHooks.visibleMemberIds.map(String)) : new Set(names.keys());
+  const visible = batchEditTestHooks.visibleMemberIds
+    ? new Set(batchEditTestHooks.visibleMemberIds.map(String))
+    : new Set(switcher.rows.filter((row) => row.visible === true).map((row) => String(row.id)));
   const nameOf = (planId) => (visible.has(String(planId)) ? names.get(String(planId)) || null : null);
   const members = [];
   for (const row of [...siblingRows].sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1))) {
@@ -2937,19 +3071,28 @@ async function getEditablePlan(req, planId, runQuery = query) {
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.id = $1
-       and p.plan_type in ('program', 'weekly')
-       and (
-         p.created_by_user_id = $2
-         or $3::boolean
-         or exists (
-           select 1
-           from public.athletes managed_athlete
-           where managed_athlete.id = p.athlete_id
-             and ${athleteAccessPredicate("managed_athlete", "$2")}
-         )
-       )`, [planId, req.user.id, canAccessAllAthletes(req)],
+       and ${editablePlanAccessSql("p", "$2", "$3")}`, [planId, req.user.id, canAccessAllAthletes(req)],
   );
   return result.rows[0] || null;
+}
+
+// Who may open a Builder plan: the one source of truth for getEditablePlan
+// and for the batch switcher's members (loadBuilderBatch). `userParam` is the
+// viewer's user id, `allParam` canAccessAllAthletes(req).
+function editablePlanAccessSql(alias, userParam, allParam) {
+  return `(
+         ${alias}.plan_type in ('program', 'weekly')
+         and (
+           ${alias}.created_by_user_id = ${userParam}
+           or ${allParam}::boolean
+           or exists (
+             select 1
+             from public.athletes managed_athlete
+             where managed_athlete.id = ${alias}.athlete_id
+               and ${athleteAccessPredicate("managed_athlete", userParam)}
+           )
+         )
+       )`;
 }
 
 // Copy paths must lock the target plan before child FK/row locks (same order as DELETE).
@@ -3238,23 +3381,32 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
   return "";
 }
 
-async function loadBuilderBatch(plan) {
+// The batch switcher's members: only the plans this viewer may open, by the
+// very predicate getEditablePlan uses (editablePlanAccessSql); the rest only
+// as a count, with no id, name, week or status (security review of the
+// Builder batch edit, HIGH: a coach who could open one member saw every
+// member's athlete and plan).
+async function loadBuilderBatch(plan, req) {
   if (!plan.builder_batch_id) return null;
+  if (!req?.user?.id) throw new Error("loadBuilderBatch needs the viewer's request.");
   const result = await query(
     `select p.id, p.name, p.plan_type, p.week_start, p.status,
             a.athlete_id, a.source_external_id as athlete_source_external_id,
-            coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name
+            coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name,
+            ${editablePlanAccessSql("p", "$2", "$3")} as visible
      from plans.plans p
      left join public.athletes a on a.id = p.athlete_id
      where p.builder_batch_id = $1
        and coalesce(p.is_active, true)
        and not coalesce(p.is_edit_draft, false)
      order by coalesce(a.athlete_id::text, a.source_external_id, p.name), p.created_at`,
-    [plan.builder_batch_id],
+    [plan.builder_batch_id, req.user.id, canAccessAllAthletes(req)],
   );
+  const visible = result.rows.filter((row) => row.visible === true);
   return {
     id: plan.builder_batch_id,
-    plans: result.rows.map((row) => ({
+    hiddenCount: result.rows.length - visible.length,
+    plans: visible.map((row) => ({
       id: row.id,
       name: row.name || "",
       planType: row.plan_type,

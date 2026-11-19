@@ -1721,10 +1721,12 @@ test("H2 (owner review): every main sidebar/rail navigation and browser Back in 
   before(slice('action.dataset.action === "brand-home"'), 'if (!confirmLeaveTrainingLoad("coach-home")) return;', "pushAppHistory();", "brand home");
   before(slice('els.athleteList.querySelectorAll(".athlete-button").forEach((button) => {'), 'if (!confirmLeaveTrainingLoad("weekly")) return;', 'state.activeTab = "weekly";', "rail athlete list");
 
-  const appBack = slice("function handleAppBack() {", 4000);
+  const appBack = slice("function handleAppBack() {", 6000);
   before(appBack, "if (!confirmLeaveTrainingLoad(rootTab)) return BACK_STAYED;", "state.activeTab = rootTab;", "browser Back");
-  const browserBack = slice("function handleBrowserBack() {", 900);
-  assert.match(browserBack, /state\.appHistoryDepth -= 1;\s*if \(handleAppBack\(\) === BACK_STAYED\) \{[\s\S]*?window\.history\.pushState\(\{ optimove: true \}, "", window\.location\.href\);\s*state\.appHistoryDepth \+= 1;/, "a declined Back re-arms the entry it consumed");
+  // Back to a remembered place (app-history.js) asks the same, before it restores anything.
+  before(appBack, "if (!confirmLeaveTrainingLoad(backTo.tab)) return BACK_STAYED;", "restoreAppPlace(backTo);", "browser Back to a place");
+  const browserBack = slice("function handleBrowserBack() {", 2000);
+  assert.match(browserBack, /state\.appHistoryDepth -= 1;[\s\S]*?result = handleAppBack\(\);[\s\S]*?if \(result === BACK_STAYED \|\| unused\) \{[\s\S]*?window\.history\.pushState\(\{ optimove: true \}, "", window\.location\.href\);\s*state\.appHistoryDepth \+= 1;\s*pushAppHistoryEntry\(entry\);/, "a declined Back re-arms the entry it consumed, and the place with it");
   assert.match(browserBack, /if \(handleAppBack\(\)\) \{\s*window\.history\.pushState\(\{ optimoveGuard: true \}/, "at the history root, a declined Back (truthy BACK_STAYED) re-arms the guard entry");
 });
 

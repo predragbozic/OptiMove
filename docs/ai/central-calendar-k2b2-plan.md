@@ -1129,6 +1129,7 @@ that the athlete's card allowlist (D21) is unchanged. Review: `code-reviewer` on
   loop without that guard. A request with `kinds=external` (no `event`) therefore omits an RPE schedule that a planned
   event folds, while a linked session stays (`foldsLinks` requires `event`). This predates Q-FOLD and is recorded for
   the manager.
+  Closed by 9.4 (BE-FOLLOWUPS, item 3).
 - **Test 37:**
   - one card for a manager (the club's admin), a reader (the team's coach) and the athlete, for a live question, and
     for removed, closed-early and cancelled-event questions, each on a team of its own (WELLNESS is never asked twice
@@ -1138,3 +1139,55 @@ that the athlete's card allowlist (D21) is unchanged. Review: `code-reviewer` on
   - no new key on the event card, and the athlete's D21 allowlist exactly as before;
   - RPE and a plain schedule unchanged. The `test`-event fold stays covered by `central-calendar-k2a-events`.
 - **Mutations:** F1–F5 of 9.3.6 and F6 (the `kinds` guard), all killed.
+
+### 9.4 Backend follow-ups (2026-11-19)
+
+Backend only, no migration, `code-reviewer` only. The manager decided all three items, so there was no contract round.
+Branch `claude/central-calendar-backend-followups` from `origin/main` `b08cfb7f`.
+
+1. **#614 LOW-1, the refusal order in the Tests full edit** (`backend/src/routes/tests.js`).
+   - Before: a full edit from daily to `one_time` that sent `skipDaysOff: true`, on a daily schedule that already had an
+     occurrence, answered `400 skip_days_off_unavailable` before the more fundamental `409 recurring_has_occurrence`.
+   - Now: the skip decision runs after the `recurring_has_occurrence` block. Both are reads or locks, and nothing is
+     written before either.
+   - Test 38 of `central-calendar-k2b2-questions.test.mjs`: that body answers 409 `recurring_has_occurrence`, and the
+     row is unchanged.
+2. **#614 LOW-2, the toggle path checks the stored rule** (`skipDaysOffRefusal`).
+   - The toggle path now passes the stored `recurrence_rule`. A `recurring` row whose `freq` is not `daily` answers
+     `400 skip_days_off_unavailable`, where before it reached v81's CHECK `test_schedules_skip_days_off_daily` as a 500.
+     Only a raw write can make such a row.
+   - A create and a full edit write the daily rule themselves, so they do not pass it.
+   - Test 39: a raw-written weekly row refuses `{skipDaysOff: true}` with a 400, and `skip_days_off` stays false. Turning
+     it off still answers 200, and a daily row still toggles on.
+3. **Q-FOLD's recorded gap, the `kinds` guard of the existing folds** (`backend/src/calendarQuery.js`).
+   - Before: the RPE (`external_schedule_id`) and test-event (`test_schedule_id`) folds ran without checking `kinds`. A
+     `kinds=external` request therefore dropped an RPE schedule card that a planned event folds, although no event
+     card was emitted (against D16).
+   - Now: `folds` also requires `kinds.has("event")`, the guard Q-FOLD's own fold uses.
+   - **This reverses a recorded "by design" behaviour.** The K2a plan's LOW 1 (the owner's external review of PR #298)
+     and the K2a-2 plan's note said that with `kinds=external` alone the folded card is not shown. The screen never
+     sends `kinds` (K2a-2 plan), so only API callers see the change.
+   - Test 10 of `central-calendar-k2a-events.test.mjs` pinned the old behaviour and is updated. `kinds=external` keeps
+     the RPE card with its own counts, and `kinds=test` keeps the test-event schedule card. With `event` in `kinds`
+     (`event`, `external,event`, `test,event` and the default), the folds behave as before.
+   - The K2a plans' entries (`central-calendar-k2a-plan.md` sections 7 and K2a-2's row,
+     `central-calendar-k2a-2-plan.md`) are marked superseded by this section (`code-reviewer`'s LOW).
+   - The screen still filters its chips in the browser over the folded answer (`frontend/central-calendar-view.js`),
+     so with only *RPE requests* on, a folded RPE card is not shown there. That would be a small frontend task of its
+     own; it is not part of this one.
+   - **FE-D16, as built (branch `claude/central-calendar-fe-d16`, frontend only):** while the chosen types are only
+     kinds other than *Events* (no event type either), the screen also reads the range with `kinds=<chosen>` (in the
+     chips' order) under its own cache key, and draws the cards and the open panel from that answer; the unfiltered
+     read stays (the teams, the workspace, the events of the link suggestions, the chips' counts; a chosen kind
+     counts what it shows). The panel's athletes are read with the same `kinds`. Choosing *Events* or an event type,
+     or *All types*, goes back to the unfiltered answer without a request; a panel whose card the new answer does not
+     hold closes quietly (a refresh keeps its "no longer on this day" note); a failed refresh of the kinds read over
+     cards on screen says so. Tests: `central-calendar.actions` FE-D16, FE-D16b, FE-D16c and FE-D16d; e2e
+     `central-calendar-kinds-fold.test.mjs` (1280 and 390 px). Known limits (`code-reviewer`'s LOWs, recorded):
+     - kinds mode shows a panel only for a card it shows: an event created while only *RPE requests* is chosen gets
+       its "created" line, but no open panel (its card is filtered out);
+     - with an event type chosen next to *RPE requests* the read stays unfiltered, so a request folded into an event
+       of another type shows nowhere. A fix is a `kinds=external,event` read with the type filter in the browser, or a
+       server-side event-type filter; not part of FE-D16.
+
+Mutations: one per item, each killed (the executor's report has the details).

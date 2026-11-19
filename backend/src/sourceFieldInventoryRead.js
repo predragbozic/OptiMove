@@ -172,7 +172,13 @@ export function zoneOf(name) {
 // One row per binding is chosen first (the newest stored session, by its id), and only that row's bundle is opened (the
 // code review's MEDIUM: never every stored bundle).
 export const THRESHOLDS_SQL = `
-  select t.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power, t.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed, t.session_started_at
+  select t.raw_bundle -> 'teamThresholds' -> 'power_thresholds' as power, t.raw_bundle -> 'teamThresholds' -> 'speed_thresholds' as speed,
+         -- v80 step A: the event settings of the same set, each as the subset of the set's own keys.
+         jsonb_build_object('acceleration_events_threshold', t.raw_bundle -> 'teamThresholds' -> 'acceleration_events_threshold',
+                            'acceleration_events_duration', t.raw_bundle -> 'teamThresholds' -> 'acceleration_events_duration') as acceleration,
+         jsonb_build_object('deceleration_events_threshold', t.raw_bundle -> 'teamThresholds' -> 'deceleration_events_threshold',
+                            'deceleration_events_duration', t.raw_bundle -> 'teamThresholds' -> 'deceleration_events_duration') as deceleration,
+         t.session_started_at
     from training_load.source_team_bindings b
     join training_load.source_credential_connections k on k.id = b.connection_id and k.source_system = 'gpexe'
     cross join lateral (

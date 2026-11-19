@@ -1,0 +1,237 @@
+/* Calendar K3 / K2c-3 / K4 design mockups — NOT app code.
+   Loaded after ../../../frontend/styles.css, so the app's own tokens and
+   classes (cc-card, cc-panel, cc-badge, plain-button, cc-primary,
+   athlete-home-event, cc-event-form) draw what already exists. Everything
+   new is under the k4- prefix and is a proposal for the code.
+   Invented data only. */
+
+body.k4-doc {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ---- The page frame: the step labels between screens. ---- */
+.k4-step {
+  margin: 0;
+  padding: 10px 16px;
+  background: #20242a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: .02em;
+}
+.k4-step small { font-weight: 500; opacity: .8; margin-left: 6px; }
+
+/* ---- A trimmed copy of the app shell. ---- */
+.k4-shell { display: grid; grid-template-columns: 72px minmax(0, 1fr); min-height: 640px; }
+.k4-rail { background: #101820; display: grid; align-content: start; gap: 8px; padding: 12px 10px; }
+.k4-rail span { display: grid; place-items: center; width: 52px; height: 44px; border-radius: var(--radius); color: #c9d1dc; }
+.k4-rail span.on { background: var(--accent); color: #fff; }
+.k4-rail svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.k4-main { min-width: 0; padding: 20px 28px 32px; }
+.k4-topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.k4-topbar .eyebrow { margin: 0; color: var(--muted); font-size: 12px; font-weight: 750; text-transform: uppercase; }
+.k4-topbar h1 { margin: 0; font-size: 24px; }
+.k4-menu { display: none; }
+
+/* ---- Generic small pieces. ---- */
+.k4-icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.k4-tint { color: var(--k4-c, var(--accent)); }
+.k4-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.k4-spacer { flex: 1; }
+.k4-btn { white-space: nowrap; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.k4-muted { color: var(--muted); }
+.k4-note { margin: 0; color: var(--muted); font-size: 14px; }
+.k4-strong { font-weight: 800; }
+.k4-callout { position: relative; outline: 3px dashed #e0605f; outline-offset: 3px; border-radius: var(--radius); }
+.k4-callout::after { content: attr(data-callout); position: absolute; right: -6px; top: -14px; padding: 1px 8px; border-radius: 999px; background: #e0605f; color: #fff; font-size: 11px; font-weight: 800; white-space: nowrap; }
+
+/* ---- The coach's calendar (week + panel). ---- */
+.k4-cal { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 14px; align-items: start; }
+.k4-cal .cc-week { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.k4-cal .cc-panel { position: static; }
+.k4-cal .cc-week .cc-card-title { overflow-wrap: normal; word-break: normal; hyphens: auto; font-size: 14px; }
+.k4-cal .cc-week .cc-day-column { padding: 6px; }
+.k4-cal .cc-week { gap: 6px; }
+.k4-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.k4-nav .k4-period { font-weight: 800; font-size: 17px; margin-right: 8px; }
+
+/* ---- The band (K3 and K2c-3: where the coach came from, and one way back). ---- */
+.k4-band {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 14px;
+  padding: 10px 12px 10px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgba(22, 34, 45, .06);
+}
+.k4-band-bar { align-self: stretch; border-radius: var(--radius) 0 0 var(--radius); background: var(--k4-c, var(--accent)); }
+.k4-band-title { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 800; }
+.k4-band-meta { color: var(--muted); font-weight: 600; }
+.k4-band-line { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.k4-band.k4-band-form { background: #fbf6e9; border-color: #ecdcae; }
+
+/* ---- The Builder (approximation of builder-structure.js; the code keeps its own markup). ---- */
+.k4-plan-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.k4-plan-head h2 { margin: 0; font-size: 20px; }
+.k4-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px; border-radius: 999px; background: var(--surface-soft); border: 1px solid var(--line); font-size: 13px; font-weight: 700; }
+.k4-day { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); margin-bottom: 12px; }
+.k4-day.is-event { border-color: var(--k4-c); box-shadow: inset 4px 0 0 var(--k4-c); }
+.k4-day-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.k4-day-name { font-weight: 800; letter-spacing: .03em; text-transform: uppercase; font-size: 14px; }
+.k4-day-tag { padding: 2px 8px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 12px; font-weight: 800; }
+.k4-day-dim { opacity: .55; }
+.k4-events-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+.k4-events-label { font-size: 13px; font-weight: 800; color: var(--muted); }
+.k4-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 0; overflow: hidden;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 700; text-align: left;
+}
+.k4-chip-bar { align-self: stretch; width: 5px; background: var(--k4-c, var(--accent)); }
+.k4-chip .k4-chip-meta { color: var(--muted); font-weight: 600; }
+.k4-chip.is-locked { background: var(--surface-soft); border-style: dashed; }
+.k4-wholeday { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.k4-wholeday label { font-size: 14px; font-weight: 800; }
+
+.k4-session { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.k4-session:last-child { border-bottom: 0; }
+.k4-session-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.k4-slot { padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 800; white-space: nowrap; }
+.k4-slot.k4-ampm { background: var(--surface-soft); color: var(--muted); }
+.k4-session-name { font-weight: 800; }
+.k4-session-time { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.k4-session-body { color: var(--muted); font-size: 14px; }
+
+/* The "In this event" toggle (K3). */
+.k4-in {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--k4-c); background: color-mix(in srgb, var(--k4-c) 10%, white); color: var(--text); font: inherit; font-size: 14px; font-weight: 800;
+}
+.k4-in .k4-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--k4-c); }
+.k4-in.is-out { border-color: var(--line-strong); background: var(--surface-soft); color: var(--muted); }
+.k4-in.is-out .k4-dot { background: transparent; border: 2px solid var(--muted); width: 8px; height: 8px; }
+.k4-link { background: none; border: 0; padding: 0 4px; min-height: 44px; color: var(--accent); font: inherit; font-weight: 800; text-decoration: underline; }
+
+/* The Event selector (K2c-3). */
+.k4-select-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.k4-select-wrap label { font-size: 14px; font-weight: 800; }
+.k4-select {
+  min-height: 44px; min-width: 200px; padding: 0 36px 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 9l6 6 6-6' fill='none' stroke='%23667085' stroke-width='2'/%3E%3C/svg%3E") no-repeat right 10px center / 18px;
+  font: inherit; font-size: 16px; color: var(--text); appearance: none;
+}
+.k4-select.is-linked { border-color: var(--k4-c); box-shadow: inset 4px 0 0 var(--k4-c); }
+
+/* The open list, drawn for the review (a native select on the device). */
+.k4-list { margin: 0; padding: 6px; list-style: none; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); max-width: 420px; }
+.k4-list li { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 10px; border-radius: 6px; font-weight: 700; }
+.k4-list li.is-on { background: var(--accent-soft); }
+.k4-list li.is-off { color: var(--muted); }
+.k4-list li small { display: block; font-weight: 500; color: var(--muted); }
+
+/* A state line: glyph + words + colour, never colour alone. */
+.k4-warn { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; padding: 8px 10px; border-radius: var(--radius); background: #fbefd9; color: #6d4103; font-size: 14px; font-weight: 700; }
+.k4-ok { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; padding: 10px 12px; border-radius: var(--radius); background: #e4f3e6; color: #1f5a28; font-size: 15px; font-weight: 700; }
+
+/* The Builder's bottom bar. */
+.k4-savebar { position: static; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 -6px 16px rgba(22, 34, 45, .06); }
+
+/* Sheets and dialogs (the calendar's sheet pattern). */
+.k4-sheet { max-width: 520px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); display: grid; gap: 12px; }
+.k4-sheet h3 { margin: 0; font-size: 18px; }
+.k4-sheet p { margin: 0; }
+.k4-backdrop { padding: 24px; background: rgba(16, 24, 32, .45); border-radius: var(--radius); display: grid; place-items: center; }
+
+/* ---- The athlete's Calendar (K4a). ---- */
+.k4-ath-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.k4-ath-tabs span { min-height: 40px; display: inline-flex; align-items: center; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-weight: 800; font-size: 14px; }
+.k4-ath-tabs span.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.k4-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: 12px; }
+.k4-strip button { min-height: 56px; display: grid; place-items: center; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font: inherit; padding: 4px 0; }
+.k4-strip button small { font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase; }
+.k4-strip button b { font-size: 17px; }
+.k4-strip button i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.k4-strip button.is-today { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+.k4-strip button.is-on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.k4-strip button.is-on small { color: #dff; }
+.k4-strip button.is-on i { background: #fff; }
+.k4-days { display: grid; gap: 14px; }
+.k4-day-label { margin: 0 0 6px; font-size: 13px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.k4-day-label b { color: var(--text); }
+.k4-acard { display: grid; grid-template-columns: 5px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.k4-acard + .k4-acard { margin-top: 8px; }
+.k4-acard-bar { background: var(--k4-c, var(--accent)); }
+.k4-acard-body { display: grid; gap: 6px; padding: 12px 14px; min-width: 0; }
+.k4-acard-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; color: var(--muted); }
+.k4-acard-top .k4-when { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+.k4-acard-title { margin: 0; font-weight: 800; font-size: 16px; overflow-wrap: anywhere; }
+.k4-acard-place { margin: 0; color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.k4-acard-place a { color: var(--accent); font-weight: 800; }
+.k4-acard-sessions { margin: 2px 0 0; padding: 8px 10px; list-style: none; border-radius: var(--radius); background: var(--surface-soft); display: grid; gap: 4px; font-size: 14px; }
+.k4-acard-sessions li { display: flex; gap: 8px; align-items: baseline; }
+.k4-acard-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.k4-acard.is-cancelled .k4-acard-title { color: var(--muted); text-decoration: line-through; }
+.k4-acard.is-cancelled .k4-acard-bar { background: var(--line-strong); }
+.k4-rpe-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; padding: 8px 10px; border-radius: var(--radius); background: #e4f3e6; color: #1f5a28; font-weight: 800; font-size: 14px; }
+.k4-rpe-line.is-closed { background: var(--surface-soft); color: var(--muted); }
+.k4-backbar { flex-wrap: wrap; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+
+/* The RPE form. */
+.k4-rpe-scale { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 4px; }
+.k4-rpe-scale button { min-height: 48px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); font: inherit; font-weight: 800; font-size: 16px; }
+.k4-rpe-scale button.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.k4-rpe-word { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; font-weight: 700; }
+.k4-field { display: grid; gap: 6px; }
+.k4-field span { font-weight: 800; font-size: 14px; }
+.k4-field input, .k4-field textarea { min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); font: inherit; font-size: 16px; }
+.k4-field input[readonly] { background: var(--surface-soft); color: var(--muted); }
+
+/* ---- The coach's event panel: answers (package 5). ---- */
+.k4-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.k4-sum div { padding: 10px; border-radius: var(--radius); background: var(--surface-soft); }
+.k4-sum b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.k4-sum small { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+.k4-answers { margin: 0; padding: 0; list-style: none; display: grid; }
+.k4-answers li { display: grid; grid-template-columns: minmax(0, 1fr) 54px 64px; gap: 8px; align-items: center; min-height: 44px; padding: 6px 4px; border-top: 1px solid var(--line); font-size: 14px; }
+.k4-answers li.k4-answers-head { min-height: 0; padding: 4px; border-top: 0; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.k4-answers .k4-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; }
+.k4-answers .k4-who { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.k4-answers .k4-who a { color: var(--text); font-weight: 700; text-decoration: none; }
+.k4-changed { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 10px; background: var(--cc-awaiting-soft, #fbefd9); color: var(--cc-awaiting, #9a5b05); font-size: 11px; font-weight: 800; }
+.k4-waiting { color: var(--muted); }
+.k4-history { margin: 0; padding: 8px 10px; border-left: 3px solid #e0b25a; background: #fffaf0; font-size: 13px; color: var(--muted); }
+
+/* ---- Phone (≤ 760 px, as the app). ---- */
+@media (max-width: 760px) {
+  .k4-shell { grid-template-columns: 1fr; }
+  .k4-rail { display: none; }
+  .k4-main { padding: 12px 16px 24px; }
+  .k4-topbar h1 { font-size: 20px; }
+  .k4-menu { display: inline-grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .k4-cal { grid-template-columns: 1fr; }
+  .k4-cal .cc-week { display: none; }
+  .k4-cal-list { display: grid !important; gap: 10px; }
+  .k4-band { grid-template-columns: 6px minmax(0, 1fr); position: sticky; top: 0; z-index: 5; }
+  .k4-band > .k4-band-back { grid-column: 2; justify-self: stretch; width: 100%; }
+  .k4-session-top .k4-spacer { display: none; }
+  .k4-select-wrap { width: 100%; display: grid; gap: 4px; }
+  .k4-select { width: 100%; min-width: 0; }
+  .k4-events-row .k4-create { width: 100%; }
+  .k4-savebar .plain-button { flex: 1 1 100%; }
+  .k4-sheet { max-width: none; border-radius: 16px 16px 0 0; }
+  .k4-backdrop { padding: 60px 0 0; place-items: end stretch; }
+  .k4-answers li { grid-template-columns: minmax(0, 1fr) 44px 56px; }
+  .k4-rpe-scale { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .k4-hide-phone { display: none !important; }
+}
+@media (min-width: 761px) {
+  .k4-cal-list { display: none !important; }
+  .k4-hide-desk { display: none !important; }
+}
