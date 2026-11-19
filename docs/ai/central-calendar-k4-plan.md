@@ -17,6 +17,7 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O7** | „make event treba da bude na vrhu sesije odmah pored sesije i da bude vidljivo da se moze kreirati. Osim toga dve sesije mogu biti unutar jednog eventa, npr aktivnosti pre tokom i posle trneinga. zar ne" · „sada ne znam kako to sada srediti" | *Make an event* moves to the session's top line, beside its name, and is clearly visible. One event can hold several sessions of its day (Before, Training, After). The owner leaves the shape to the stream; section 5 is the package. |
 | **O8** | „mozda ga skroz izdvojiti kreriati evnets pa onda birati unutar sesije da li prpada kome. daj neko userfrientdly resenje" | The events stand on their own in the Builder's day. Each session chooses the event it belongs to. Section 5 is that design, and it replaces the per-session *Make an event* button. |
 | **O9** | „ostali predlozi su dobri i slazem se" · „samo ovo treba na neki bolji nacin resiti" · „na primer iz glavnog kalendara je lako kada ulazimo iz dogadjaa u builder pa kreiramo aktivnosti unutar tog dogadjaja" | The owner agrees with the rest of the plan. The main way is **from the calendar**: open an event, go into the Builder, and create its sessions inside that event (K3, now the main path, section 5.1). The Builder's own events row (5.2) is the way back for a coach who starts in the Builder. |
+| **O10** | „ako iz buildera krenemo mi mozemo na primer da imamo dugme kreiranje dogadjaj i da nas odmah odvede u kalendar i da kreiramo dogadjaj kao sto se i sada kreira i da se odmah iz tog dogajdaja ili back dugmetom ako necemo da ga kreiramo vratimo u bulder" · „pa da dole onda biramo dogajdaj za tu sesiju" | From the Builder, **Create event** opens the calendar's own event form. After *Save*, or after Back with nothing made, the coach is back in the Builder, and the session chooses its event below. There is one event form in the app. Section 5.2. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
@@ -216,41 +217,45 @@ MONDAY 12.10   + Before training   + Training   + After training
 
    The Builder's week model and the return context get their own contract (the K2c plan, section 3).
 
-### 5.2 K2c-3: events in the Builder's day, for a coach who starts in the Builder (O8)
+### 5.2 K2c-3: from the Builder, for a coach who starts there (O8, O10)
 
-It replaces the per-session button of K2c-2.
+It replaces K2c-2's inline *Make an event* panel. The app keeps **one** event form, the calendar's.
 
 ```
-MONDAY 12.10.2026                 MD-1
-Events:  [● Training 10:00 · Stadium]  [+ Event]
-────────────────────────────────────────────────
+Builder · MONDAY 12.10.2026                                   MD-1
+Events:  [● Training 10:00 · Stadium]          [Create event →]
+──────────────────────────────────────────────────────────────
 Before training · Mobility & stability   Event: [Training 10:00 ▾]
 Training · Main session                  Event: [Training 10:00 ▾]
-After training · Recovery                Event: [Training 10:00 ▾]
+After training · Recovery                Event: [ No event     ▾]
 ```
 
 1. **The day's events row.**
    - It sits right under each day's label: that day's events for this plan's athletes, as chips (the type's colour
-     and icon, the time, the place), and **+ Event**.
+     and icon, the time, the place).
    - The Builder reads the week once when it opens a weekly plan, through `GET /api/calendar` with this plan's
      athletes and `kinds=event`.
-   - Pressing a chip opens that event in the calendar, and Back returns to the Builder (K4-0).
-2. **+ Event** opens a small form under the row:
-   - the type (Training, Match, …), the title, the start, the end (optional) and the place (optional);
-   - **"Sessions in this event:"** with the day's sessions, those of the same half of the day ticked;
-   - *Make the event* sends one create with the ticked sessions and the plan's athletes as the targets.
-3. **Each session's line** carries **Event: [ … ▾]**.
-   - It lists the day's events the coach manages, and *No event*.
-   - Choosing an event links the session (`POST /api/calendar/events/:eventId/sessions`).
-   - Choosing *No event* ends the link (the calendar's existing *Unlink*).
-   - The chosen event's colour shows on the session's line, so it is visible at a glance which session belongs where.
-4. **Several sessions in one event (O7).** Before, Training and After simply choose the same event, or are ticked
-   together in + Event.
+   - Pressing a chip opens that event in the calendar, and Back returns to the Builder.
+2. **Create event →** takes the coach to the calendar's own event form, already filled in:
+   - the day, the type (Training), the title (the session's name) and the time (the session's time, if it has one);
+   - the plan's athletes as the targets.
+
+   A band says "Creating an event for the Builder · Monday 12.10 · [Back to the Builder]". Then:
+   - **Save** makes the event the usual way, places and questions included, and returns to the Builder.
+   - **Back**, or *Back to the Builder*, makes nothing and returns to the Builder.
+   - On return, the new event is already chosen for the session the coach started from, if they started from a
+     session. The coach can change that.
+3. **Each session's line** carries **Event: [ … ▾ ]** (O10, "dole onda biramo događaj za tu sesiju"):
+   - it lists the day's events the coach manages, and *No event*;
+   - choosing an event links the session (`POST /api/calendar/events/:eventId/sessions`);
+   - choosing *No event* ends the link (the calendar's existing *Unlink*);
+   - the chosen event's colour shows on the session's line.
+4. **Several sessions in one event (O7).** Before, Training and After simply choose the same event.
 5. **No dead end before Save.**
-   - If the plan is not saved, + Event and the selector ask once: "This plan isn't saved yet. Save it (the athlete
-     will see it) and continue?", with [Save and continue] and [Cancel].
+   - If the plan is not saved, *Create event →* and the selector ask once: "This plan isn't saved yet. Save it (the
+     athlete will see it) and continue?", with [Save and continue] and [Cancel].
    - The save is the Builder's own *Save and finish*. Its outcome is waited for, and a failed or unconfirmed save
-     changes nothing else.
+     goes nowhere.
 6. **An event the coach does not manage** (for example the club's match) shows as a chip with a lock. In the selector
    it is listed but cannot be chosen, with one sentence: "Linked by the club's admin from the calendar."
 7. **One RPE channel per event.**
@@ -258,11 +263,14 @@ After training · Recovery                Event: [Training 10:00 ▾]
    - The server's existing refusals read as the sentences of #643.
 8. **Nothing chosen = as today.** A session with *No event* is a training in the plan and its own card in the
    calendar, exactly as now.
+9. **The two directions are the same pattern.** K3 goes from the calendar into the Builder with a band and *Back to
+   calendar*. K2c-3 goes from the Builder into the calendar's form with a band and *Back to the Builder*. Back (K4-0)
+   carries both.
 
 **For the athlete (K4a):** the event is one card with its time and place, and *Open training* opens that day in the
 Weekly plan, where Before, Training and After stand in their order.
 
-**Contract and reviews.** K3 and K2c-3 each get a UI contract and the manager's GO before code. The reviews are `code-reviewer`,
+**Contract and reviews.** K3 and K2c-3 share the band and return pattern, and each gets a UI contract and the manager's GO before code. The reviews are `code-reviewer`,
 `ux-design-reviewer` and `mobile-qa`. The browser checks run at 390 and 1280 px, and the Frontend PR gate applies.
 
 **Later, still options:**
@@ -276,7 +284,7 @@ Weekly plan, where Before, Training and After stand in their order.
    drop-downs once reproduced.
 3. **The Builder and the event:**
    - **K3** (5.1): discovery and contract first;
-   - **K2c-3** (5.2), with it or right after it.
+   - **K2c-3** (5.2), with it or right after it. It reuses K3's band and the calendar's form.
 4. **K4a**: the athlete's Calendar.
 5. The event panel package (no migration): each athlete's RPE and duration in the coach's event panel, the summary
    ("Answered 12/15 · average RPE 6.8"), and a clearer athlete click.
