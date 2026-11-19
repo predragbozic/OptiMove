@@ -22,6 +22,7 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O12** | „ako ne mi mozemo da stavimo pre posle tokom treinga kao da sada i da se to nadje u dogadjaju koji je planiran" · „mislim da je to najlakse za nas" | A session keeps today's slot (Before / Training / After) and needs no time of its own; it is placed in the planned event, and the event gives the time. |
 | **O13** | „i da nam za to ne treba neka velika promena trenutnog stanja" | The Builder ↔ event work reuses what exists: the calendar's event form, the link and unlink routes, the slots, and Back. No migration, and the smallest change that does the job. |
 | **O14** | „vreme sesijama opt takodje mozemo birati ako hocemo ali se ne moze razilaziti sa vremenom dogadjaja na primer" | Amends O12. A linked session may have its own time, as an option, but only inside the event's time. |
+| **O15** | „mora uci u granice tog vremena ili mozemo kao do sada da biramo odrednice pre posole, tokom am pm takodje mora se ograniciti s obzirom da neki dogadjaji traju samo pre podne posle podne i sl" | Both stay: a session keeps Before / Training / After and AM / PM, as today. Both its own time and its AM / PM must fit the event. A morning event takes only AM sessions, an afternoon event only PM ones. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
@@ -281,7 +282,14 @@ After training · Recovery                Event: [ No event     ▾]
       - The Builder refuses a time outside the event's start–end (the start alone when the event has no end), with one
         sentence: "Choose a time within the event, 10:00–11:30, or change the event's time."
       - A session with a time outside the event can't join it; it asks to change the time first.
-    - **The event's time changes later.** If a linked session's time no longer fits, the session shows "Outside the
+    - **AM / PM must fit too (O15).**
+      - An event with a time covers its half of the day: a start before 12:00 is the morning (AM), from 12:00 the
+        afternoon (PM), and an event that runs across 12:00 covers both.
+      - A session's AM / PM must be one the event covers. A morning training takes only AM sessions.
+      - The `Event: [▾]` selector and *Whole day* offer a session only the events of its own half.
+      - K3's Builder adds new sessions in the event's half.
+      - An event with no time sets no limit.
+    - **The event's time changes later.** If a linked session's time or AM / PM no longer fits, the session shows "Outside the
       event's time (10:00–11:30)" in the Builder and in the event's panel, with *Use the event's time* (clears the
       session's own time). It is never changed silently.
     - **Changing the event's time.** It is changed on the event, and the event opens in the calendar in one click;
