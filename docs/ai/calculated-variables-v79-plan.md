@@ -198,6 +198,40 @@ A Metrics Core variable whose current version has `calculation.kind = "ratio"`.
 A **difference** (`kind = "difference"`) is an ordinary amount for the dashboard: day rule `sum`, every aggregation as for a
 measured amount. Only the ratio needs this contract.
 
+### 6.1a What the definition answer says (built in v79 PR 1)
+
+`GET /api/training-load/metrics/definitions` (also with `purpose=dashboardSeries`) and `GET /api/training-load/metrics/definitions/:id`
+answer, in a staff workspace, rows in the existing shape: the table's own columns in snake_case, among them
+`current_version_id` and `daily_aggregation_method`, and the computed fields `ownerScope`, `hiddenInClub` and `calculated`
+as before. **What PR 3 carries today** for a calculated variable is only `calculated: true` (the list). **PR 1 adds, on
+every row** (list and GET):
+
+```json
+{
+  "id": "…", "label": "Metres per minute", "unit": "m/min", "value_type": "numeric",
+  "current_version_id": "…", "daily_aggregation_method": "ratio", "calculated": true,
+  "calculation": {
+    "kind": "ratio", "scale": 1,
+    "inputs": [
+      { "definitionId": "…", "name": "Total distance", "shortName": "TD", "unit": "m" },
+      { "definitionId": "…", "name": "Duration", "shortName": null, "unit": "min" }
+    ]
+  },
+  "allowedAggregations": ["ratio", "max", "last", "none"]
+}
+```
+
+- `calculation` is `null` for a measured variable. `kind` is `sum`, `ratio` or `difference`; `scale` (1 or 100) is present
+  only for a ratio. `inputs` are in the formula's order: a ratio's numerator first, a difference's minuend first.
+- `allowedAggregations`: a ratio `["ratio", "max", "last", "none"]`; any other number (a sum and a difference are amounts)
+  `["sum", "avg", "max", "last", "none"]`; text and yes/no `["last", "none"]` (the database's own rule, v16 and v79).
+- **An input the viewer may not read.** It is judged by the same visibility rule as the row itself. It keeps its place,
+  because the place is its role, and every field is `null`: `{ "definitionId": null, "name": null, "shortName": null,
+  "unit": null }`. No id, name or unit of something the viewer cannot see. Through the routes this does not happen today:
+  an input is the calculation's owner's or OptiMove's, which is visible wherever the calculated variable is. A screen shows
+  "an input you cannot see" and never charts the variable from such an answer.
+- An athlete's workspace never receives a calculated row (6.2).
+
 ### 6.2 Who sees it
 
 Staff workspaces only (platform, private coach, club, team). An athlete's workspace never lists, reads or charts a calculated
@@ -223,11 +257,20 @@ value      = round( Σ numerator(included) × scale / Σ denominator(included), 
 
 ### 6.4 Left out, and counted
 
-An occasion in the bucket is **left out** when the athlete has a value of either input there but no stored ratio. That
-happens when the other input is missing, the denominator is 0, or the session was imported before the variable existed
-(no backfill).
+An occasion in the bucket is **left out** when it has **no stored ratio** and the athlete has **a current value of at
+least one input of the variable's current version** there, at that level. An occasion with no stored ratio has no
+`formulaVersionId` of its own, so the current version decides. That happens when the other input is missing, the
+denominator is 0 or below, the numerator is below 0, or the session was imported before the variable existed (no
+backfill). "A current value" is the value the writer would use: the input's own current value on that occasion, in the
+input's current unit; for a sum input, the sum's own stored value.
 
-An occasion with neither input is not counted at all: nothing was measured.
+An occasion with no value of any current input is not counted at all: nothing was measured.
+
+**Where this rule is not exact:** after a calculation's inputs change, an older occasion that has a value only of a
+*former* input, and no stored ratio, counts as "nothing measured", not as left out. The period of such an occasion
+usually also holds stored ratios under the former calculation, and with any stored ratio of the current one it answers
+`calculation_changed_in_period` (6.5) anyway. Only a period that holds stored ratios of the former calculation alone
+shows a count of left-out occasions that may be too low.
 
 ### 6.5 The calculation changed inside the period
 
@@ -248,9 +291,9 @@ POST /api/training-load/dashboards/:dashboardId/widgets/:widgetId/series
 
 - A series of a ratio variable with `analyticalAggregation` `sum` or `avg` is refused when it is saved: `409
   aggregation_not_allowed`, nothing written.
-- The migration widens `dashboard_widget_series.analytical_aggregation` and
-  `dashboard_builtin_series.default_analytical_aggregation` to accept `ratio`. A non-ratio variable refuses `ratio` with the
-  same code and the sentence "Ratio is only for a calculated ratio. Choose another way to combine values."
+- v79 widens `dashboard_widget_series.analytical_aggregation` to accept `ratio` (not
+  `dashboard_builtin_series.default_analytical_aggregation`: no built-in series is a ratio). A non-ratio variable refuses
+  `ratio` with the same code and the sentence "Ratio is only for a calculated ratio. Choose another way to combine values."
 - A ratio series reads only derived values. Its `aggregationRolePolicy` must admit derived values (`all_including_derived`);
   another policy is refused as `aggregation_not_allowed` with the same sentence as `sum`/`avg`.
 
@@ -261,9 +304,12 @@ The same envelope as today. A ratio series' rows carry four extra fields:
 ```json
 POST /api/training-load/dashboards/:dashboardId/query   { "dateFrom": "2026-11-01", "dateTo": "2026-11-14" }
 {
+  "dashboardRevision": 7,
   "widgets": [{
     "widgetId": "…",
+    "presentation_config": { … },
     "series": [{
+      "widgetId": "…",
       "seriesId": "…",
       "status": "ok",
       "calculation": { "kind": "ratio", "scale": 1, "unit": "m/min" },
@@ -276,7 +322,7 @@ POST /api/training-load/dashboards/:dashboardId/query   { "dateFrom": "2026-11-0
         ],
         "comparison": []
       },
-      "coverage": { "includedOccasions": 3, "leftOutOccasions": 2 }
+      "coverage": { "includedOccasions": 3, "leftOutOccasions": 5 }
     }]
   }]
 }
@@ -284,8 +330,13 @@ POST /api/training-load/dashboards/:dashboardId/query   { "dateFrom": "2026-11-0
 
 - **`numerator` / `denominator`:** the bucket's two sums in the inputs' own units. They are present for `ratio` and `none`,
   and `null` for `max` / `last`.
-- **`includedOccasions` / `leftOutOccasions`:** per bucket, and summed for the whole series in `coverage`. The screen writes
+- **`includedOccasions` / `leftOutOccasions`:** per bucket, and for the whole series in `coverage`. The screen writes
   "2 sessions without a value" from `leftOutOccasions` (session level), or "2 drills without a value" at component level.
+- **`coverage` is computed independently of the rows.** `coverage.includedOccasions` and `coverage.leftOutOccasions` count
+  every occasion of the series' scope and period, including occasions in buckets that are omitted because they have no
+  included occasion. So `coverage` can be larger than the sum of the rows. Example, daily buckets: 03.11 has 1 included
+  and 0 left out; 05.11 has 2 included and 2 left out; 07.11 has 0 included and 3 left out, so it is omitted. The rows
+  sum to 3 included and 2 left out; `coverage` is `{ "includedOccasions": 3, "leftOutOccasions": 5 }`.
 - **No included occasion in a bucket:** the bucket is omitted, as an empty bucket is today. If the whole series has none, it
   answers `status: "ok"` with `current: []` and `coverage.includedOccasions: 0`. The screen writes "No sessions with a value."
 - **`calculation`:** present only on a calculated series. For a sum or a difference it is `{ "kind": "sum" | "difference",
@@ -298,6 +349,28 @@ POST /api/training-load/dashboards/:dashboardId/query   { "dateFrom": "2026-11-0
 | `aggregation_not_allowed` (409 on save; `status: "error"` on read if stored earlier) | `sum`/`avg`, or a policy without derived values, on a ratio; `ratio` on a non-ratio | "This metric cannot be totalled or averaged. Choose Ratio, Highest or Latest." / "Ratio is only for a calculated ratio. Choose another way to combine values." |
 | `calculation_changed_in_period` (`status: "error"`) | 6.5 | "The calculation changed during this period. Choose a shorter period." |
 | empty (`status: "ok"`, `coverage.includedOccasions: 0`) | no stored ratio in the period | "No sessions with a value." |
+
+The shapes are today's. On read, the failed series is one entry of its widget's `series`, and the other series answer as
+usual:
+
+```json
+{ "dashboardRevision": 7, "widgets": [{ "widgetId": "w1", "presentation_config": { … }, "series": [
+  { "widgetId": "w1", "seriesId": "s1", "status": "error", "error": "calculation_changed_in_period" },
+  { "widgetId": "w1", "seriesId": "s2", "status": "ok", "data": { "current": [ … ], "comparison": [] } }
+] }] }
+```
+
+On save, `HTTP 409` with today's body, nothing written:
+
+```json
+{ "error": "aggregation_not_allowed", "message": "This metric cannot be totalled or averaged. Choose Ratio, Highest or Latest." }
+```
+
+**Until the dashboard stream ships this section**, v79 PR 1 refuses every series of a ratio on save with
+`409 { "error": "ratio_not_available", "message": "Dashboards cannot show a ratio yet. Use the variables it divides for now." }`,
+the simple builder does not list one, and a read of such a series answers `{ "status": "error", "error": "seriesQueryFailed" }`.
+The stream's pull request removes that refusal and keeps the database's (v79 refuses `sum`/`avg` on a ratio and `ratio` on
+anything else).
 
 A series of a calculated variable also keeps PR 3's note on the widget: "<name>: Calculated for sessions imported after this
 variable was made. A session imported earlier gets it only if it is corrected or imported again with changed data."
