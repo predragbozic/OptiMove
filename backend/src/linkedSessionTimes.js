@@ -18,6 +18,11 @@
 // Every reader that calls this has already decided that the caller may read
 // these rows (canAccessAthlete / canAccessPlan); this adds the event's time
 // to them and nothing else (no event id, title or place).
+// Known limit (security review LOW-1, accepted by the OptiMove manager on
+// 2026-11-19): canAccessPlan also lets any signed-in user read a weekly plan
+// whose visibility is 'public', so such a reader sees a linked event's start
+// and end time too - only while the athlete is still a target of the event,
+// and never the event's id, title or place.
 //
 // One statement for any number of rows (and none when every row has its own
 // time or no slot); `rows` are rows of plans.v_weekly_plan_items (plan_id,
