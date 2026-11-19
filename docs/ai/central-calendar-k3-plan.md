@@ -1,8 +1,7 @@
 # Central calendar — K3 and K2c-3 plan: the Builder and the event, both ways
 
 Status: **Proposed** (2026-11-19, written against `main` `f406ee2d`; K2c-3 and section 7 added on the K4 plan at
-`ae82e2fb`, O14 (7.1) on `5231db4d`, O15 (7.2) on `dc360d09`; Q1, Q2, Q4–Q11 decided by the stream manager). Discovery and UI contract only: no code, no migration. It needs the manager's GO, and the owner's
-answer to Q3 and the stream manager's to Q12–Q14, before any code.
+`ae82e2fb`, O14 (7.1) on `5231db4d`, O15 (7.2) on `dc360d09`; Q1–Q14 decided by the stream manager). Discovery and UI contract only: no code, no migration. It needs the manager's GO before any code.
 
 The owner's goal (O9 of `docs/ai/central-calendar-k4-plan.md`, 2026-11-19): „iz glavnog kalendara je lako kada
 ulazimo iz dogadjaja u builder pa kreiramo aktivnosti unutar tog dogadjaja". The coach opens an event, presses
@@ -162,7 +161,7 @@ The press reads the event's athletes of that day (the card's `athleteIds`) and t
 | Case | What the coach sees | Buttons |
 |---|---|---|
 | **(b) none has a plan** | Nothing first: the Builder opens a new weekly plan for all of them (one batch), named after the event ("Training · Mon 12.10"). | — |
-| **(a) all share one batch (live)** | A short sheet: "18 athletes already have this week's plan. Changes you make go to the athlete on screen only; use *Next athlete* to change the others." | **Open the plan** · Cancel |
+| **(a) all share one batch (live)** | Q3 (decided): case (a) waits for the Builder fix (batch sync for edit drafts). Reached before that fix, a short sheet: "18 athletes already have this week's plan. This week's plan can be changed for one athlete at a time until a Builder fix lands." | **Open the plan** · Cancel |
 | **(a′) all share one draft batch (not saved)** | Nothing first: that draft opens. | — |
 | **(c) mixed** | A sheet: "12 athletes have no plan for this week. 6 already have one: Ana K., Ben D., … (and 2 more)." | **Plan for the 12** (primary) · **Open an existing plan** (a list of the 6, one opens) · Cancel |
 | **an athlete you can't plan for** (not on your roster, or outside this workspace) | One line under the counts: "2 athletes of this event aren't in your workspace; plan their training in their own workspace." | — |
@@ -298,16 +297,19 @@ batchId, mine, editable, openDraftId } }`.
   try/catch, ids and slot keys only, no names) so a reload into the same draft shows the band again after the event is
   read back (`GET /api/calendar/events/:id`); a 404 there drops it silently.
 
-## 4. Questions: decided by the stream manager (2026-11-19), and Q3 open for the owner
+## 4. Questions: all decided by the stream manager (2026-11-19)
 
-The stream manager decided Q1, Q2 and Q4–Q7 as recommended; the owner decides Q3 only. The text below keeps each
+The stream manager decided Q1–Q7 (Q1, Q2 and Q4–Q7 as recommended). The text below keeps each
 question with its options for the record.
 
 - **Decided:** Q1 the read route is added; Q2 training-kind events only; Q4 RPE is aligned on link; Q5 accepted, with
   the band line "This plan belongs to the club."; Q6 sessions are in the event by default; Q7 one button, *Save and
   link*.
-- **Open (the owner): Q3.** The fact is now proven by a run (1.1): an edit of a published batch reaches only the
-  athlete on screen, although the Builder shows the batch switcher and *Apply changes to all athletes*.
+- **Q3, decided:** the run (1.1) proves that an edit of a published batch reaches only the athlete on screen,
+  although the Builder shows the batch switcher and *Apply changes to all athletes*. The stream manager reported it to
+  the OptiMove manager as a Builder fix (batch sync for edit drafts). **K3 ships cases (b) and (c) first; case (a)
+  waits for that fix.** If case (a) is reached before the fix lands, its sheet says: "This week's plan can be changed
+  for one athlete at a time until a Builder fix lands." (2.2).
 
 - **Q1 — The read of 3.1.** Add the small read route (recommended), or open the Builder for case (b) only and send
   every other case to the existing Builder with a sentence. Recommend the route: cases (a) and (c) are the coach's
@@ -456,12 +458,15 @@ event's time 10:00 is used." · "Events could not be loaded."
 
 None. The create (with `sessions`), attach, detach and the two reads exist. **No migration.**
 
-### 6.9 Questions: Q8–Q11 decided by the stream manager (2026-11-19); Q12, Q13 open
+### 6.9 Questions: Q8–Q14 decided by the stream manager (2026-11-19)
 
 - **Decided:** **Q8** prefill a team target when the batch's athletes are exactly the team's current members,
   otherwise athlete targets; the coach can edit it in the form. **Q9** a move is two writes (detach, then attach),
   with the partial outcome shown. **Q10** yes, a Save that stays in the Builder. **Q11** K2c-2's per-session panel is
   retired (O10: one event form).
+- **Decided:** **Q12** with an event that has no end, a session's own time is "not before the start". **Q13** the
+  "Outside the event" mark is in the Builder only for now; the event panel package adds it to the calendar's panel
+  later. **Q14** (7.2) a multi-day event's half: its first day by its start, the other days as both halves.
 - The time rule of section 7 (read the event's time, the `linkedSessionTimes` helper, no copy) is accepted by the
   stream manager, with O14 (7.1) and O15 (7.2).
 - The record of each question with its options follows.
@@ -577,7 +582,7 @@ the same four places (the selector's list, *Whole day*, K3's default and *Save a
 multi-day event). The server does not check the half; the note shows a session stored otherwise. No migration.
 
 - **Q14 — A multi-day event's half.** The first day by its start, the middle days and the last day as both halves
-  (recommended), or every day by the start time only. The stream manager decides.
+  (recommended), or every day by the start time only. **Decided by the stream manager: as recommended.**
 
 ## 8. Reviews and order
 
