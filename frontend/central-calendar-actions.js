@@ -540,7 +540,9 @@ function syncPanelQuestions(cal, render, { force = false } = {}) {
   }
   if (current && current.key === item.key) {
     if (current.loading) return current.promise;
-    if (!force && (current.error || current.hidden)) return null;
+    // A failure waits for Try again; a 404 is read again only when the card's
+    // revision moves (the switch may have changed with it).
+    if (!force && current.error) return null;
     if (!force && !current.stale && current.revision === item.revision) return null;
   }
   return loadPanelQuestions(cal, item, render);

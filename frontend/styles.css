@@ -22450,8 +22450,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 
 @media (max-width: 390px) {
   .cc-question-actions,
-  .cc-question-asks,
-  .cc-panel-questions .cc-form-actions {
+  .cc-question-asks {
     flex-direction: column;
     align-items: stretch;
   }
