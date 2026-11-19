@@ -247,11 +247,21 @@ check it reads the **current** row (not `NEW`, which a later update in the same 
 requires a history row with `session_feedback_id = id`, `xact_id = pg_current_xact_id()` and `new_*` equal to the
 current values. Otherwise `23514` and the whole transaction rolls back.
 
-What it stops: a raw session that sets `optimove.rpe_change_tx` itself and updates the row without the history row is
-refused at COMMIT (or at `SET CONSTRAINTS … IMMEDIATE`). What it cannot stop (stated, as v35 states it): whoever holds
-the database credentials can also insert a well-formed history row, or disable a trigger. The guards prove that the
-row, the history and the window agree, not that the caller was entitled; the separate migration and runtime roles stay
-the later infrastructure task (`docs/ai/CURRENT_STATE.md`, Separate tasks).
+What it stops, and what it does not. The marker is not a secret: any session on the database can set
+`optimove.rpe_change_tx` for its own transaction (test 14 of the K4b suite does). What then still holds:
+
+- the deferred link refuses a changed answer that has no history row from the same top-level transaction (not a
+  savepoint);
+- the history insert guard (3.4) bounds the change: the row's actor is the athlete's own active user, the window is open
+  (schedule active, occurrence not cancelled, assignment completed, `clock_timestamp()` inside `opens_at`..`closes_at`,
+  read under share locks), the old values are the answer's current values, and the revision is the next one;
+- only `rpe`, `duration_minutes` and `athlete_note` of a `scheduled_external` answer can change.
+
+So a raw session holding the database credentials can make a change that the athlete could have made, with its history
+row, inside the open window. The guards prove that the row, the history and the window agree, not that the caller was
+entitled; they do not stop a credential holder, who can also disable a trigger. This is the v35 limit, stated the same
+way. The separate migration and runtime roles stay the later infrastructure task (`docs/ai/CURRENT_STATE.md`, Separate
+tasks).
 
 ### 3.6 The race: a change against the question closing
 
@@ -474,7 +484,7 @@ then both ★★ GOs (the OptiMove manager and the *Nezavisni revizor*).
 | Condition | Where |
 |---|---|
 | 1 Who and until when; checked by the database under the lock; the race both ways | 3.2 steps 2–7, 3.4, 3.6; T8–T11 |
-| 2 Append-only history in the same transaction; the marker; the deferred guard | 3.1, 3.2 steps 10–14, 3.5; T3, T13 |
+| 2 Append-only history in the same transaction; the marker; the deferred guard (what it does not stop: the v35 limit) | 3.1, 3.2 steps 10–14, 3.4, 3.5; T3, T13 |
 | 3 The coach is told; dashboards read the current value; every reader checked | 1.5, 4.3; T17, T18 |
 | 4 What may change; `requestKey`; same value no history row | 1.4, 2, 3.7; T4, T5, T12; Q1 |
 | 5 No existing row changed; rollback refuses with history; rehearsal; PG 17 NOT RUN | 3.1, 5; T1, T2 |
