@@ -15,6 +15,8 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O5** | (reported) „za sada svuda ne funkcioniše to vraćanje back" · drop-downs „brzo se zatvaraju (npr tokom izbora ko nije učestvovao u trening)" | These are bugs. Section 3 deals with them. |
 | **O6** | „ne znam jos uvek sta raditi kroz builder da li i tu nekako omoguciti kreiranje dogadjaja ili ne" · „ili da se izabere unutar kog dogadjaja idu vezbe" · „ako se ne izabere da radi kao do sada" · „daj kreativne predloge" | Open: the Builder's side. Section 5 proposes options, and the owner chooses. If nothing is chosen in the Builder, it works as today. |
 | **O7** | „make event treba da bude na vrhu sesije odmah pored sesije i da bude vidljivo da se moze kreirati. Osim toga dve sesije mogu biti unutar jednog eventa, npr aktivnosti pre tokom i posle trneinga. zar ne" · „sada ne znam kako to sada srediti" | *Make an event* moves to the session's top line, beside its name, and is clearly visible. One event can hold several sessions of its day (Before, Training, After). The owner leaves the shape to the stream; section 5 is the package. |
+| **O8** | „mozda ga skroz izdvojiti kreriati evnets pa onda birati unutar sesije da li prpada kome. daj neko userfrientdly resenje" | The events stand on their own in the Builder's day. Each session chooses the event it belongs to. Section 5 is that design, and it replaces the per-session *Make an event* button. |
+| **O9** | „ostali predlozi su dobri i slazem se" · „samo ovo treba na neki bolji nacin resiti" · „na primer iz glavnog kalendara je lako kada ulazimo iz dogadjaa u builder pa kreiramo aktivnosti unutar tog dogadjaja" | The owner agrees with the rest of the plan. The main way is **from the calendar**: open an event, go into the Builder, and create its sessions inside that event (K3, now the main path, section 5.1). The Builder's own events row (5.2) is the way back for a coach who starts in the Builder. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
@@ -170,7 +172,7 @@ conditions:
 **The screen:** on the event card in the athlete's Calendar and on Home, "Your RPE: 7 · Change". The form opens filled
 in, with *Save change* and "You can change it until 22:00".
 
-## 5. The Builder's side: K2c-3 (O6, O7; frontend only, no migration)
+## 5. The Builder and the event, both ways (O6–O9)
 
 **What exists today.**
 - The Builder's *Make an event* (K2c-2) always makes a **new** event for one session.
@@ -184,51 +186,98 @@ in, with *Save change* and "You can change it until 22:00".
 - An existing event takes more sessions through `POST /api/calendar/events/:eventId/sessions` (K2a-1b, the
   calendar's *Link*), only for an event the caller manages.
 
-**The package K2c-3:**
+### 5.1 K3: from an event into the Builder, the main path (O9)
 
-1. **The button on the session's top line.** *Make an event* stands beside the session's name, a clear button with
-   the calendar icon and its text, on a computer and on a phone. The "✓ In calendar" badge takes its place once the
-   session is in an event, and pressing it opens that event in the calendar.
-2. **No dead end before Save.**
-   - If the plan is not saved, the button asks once: "This plan isn't saved yet. Save it (the athlete will see it)
-     and make the event?", with [Save and continue] and [Cancel].
-   - The save is the Builder's own *Save and finish* (`builder-submit-plan`).
-   - Its outcome is waited for. A failed or unconfirmed save opens no panel.
-3. **Several sessions in one event (O7).**
-   - The panel lists the day's other sessions of the same half of the day (AM / PM) under "Also in this event:", each
-     with a checkbox, ticked by default.
-   - Example: "Before training · Mobility & stability" and "After training · Recovery" with "Training · Main session".
-   - A session already in another event is shown unticked with its event's name, and cannot be ticked.
-   - The pressed session is always in.
-4. **Into an existing event (P1).**
-   - **The choice.** Beside *Make a new event*, the panel offers **Add to an event on this day**: that day's events the
-     coach manages, not cancelled, each with its time and place. Choosing nothing keeps today's behaviour.
-   - **Not offered.** Events the coach does not manage are not offered. One sentence says the club admin can link them
-     from the calendar.
-5. **One suggestion, never automatic (P2).**
-   - When the day has exactly one training or match event in the session's half of the day, the panel shows it first:
-     "This day has ‘Training 10:00’. Put these sessions into it?", with [Add to it] and [Make a new event].
-6. **RPE stays one channel per event.** The panel says which session asks for RPE ("RPE: from Training · Main
-   session"). The server's existing refusals (`rpe_already_linked`, `rpe_from_question`) read as the sentences of #643.
+```
+Calendar › Mon 12.10 › ● Training 10:00 · Stadium  ›  [Plan the training]
+                                                        │
+Builder ────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│ Planning: ● Training 10:00 · Stadium · Mon 12.10 · 18 athletes │
+│ Sessions you add on this day go into this event. [Back to calendar] │
+└────────────────────────────────────────────────────────────────┘
+MONDAY 12.10   + Before training   + Training   + After training
+```
+
+1. **The button in the calendar.** The event's panel (the coach's calendar) offers **Plan the training** while no
+   session is linked. Once sessions are linked, it offers **Open the training**.
+2. **The Builder opens inside the event.**
+   - It opens on the event's day, for the event's athletes, with a band at the top: the event's colour, title, time,
+     place and number of athletes, and **Back to calendar**.
+   - Every session added on that day belongs to the event and wears its colour. Before, Training and After go in one
+     event (O7).
+   - A session can be taken out of the event with one tap ("Not in this event").
+3. **Save.** One press saves the plan and links its sessions to the event. A failed or unconfirmed save links nothing,
+   and says so. Back and *Back to calendar* return to the event (K4-0).
+4. **Which plan opens.** This is the hard part, and its discovery comes first:
+   - the event's athletes share a weekly plan of that week → that plan opens;
+   - none of them has one → a new weekly plan of that week for all of them (one Builder batch);
+   - mixed → the panel names who already has a plan and offers the choice.
+
+   The Builder's week model and the return context get their own contract (the K2c plan, section 3).
+
+### 5.2 K2c-3: events in the Builder's day, for a coach who starts in the Builder (O8)
+
+It replaces the per-session button of K2c-2.
+
+```
+MONDAY 12.10.2026                 MD-1
+Events:  [● Training 10:00 · Stadium]  [+ Event]
+────────────────────────────────────────────────
+Before training · Mobility & stability   Event: [Training 10:00 ▾]
+Training · Main session                  Event: [Training 10:00 ▾]
+After training · Recovery                Event: [Training 10:00 ▾]
+```
+
+1. **The day's events row.**
+   - It sits right under each day's label: that day's events for this plan's athletes, as chips (the type's colour
+     and icon, the time, the place), and **+ Event**.
+   - The Builder reads the week once when it opens a weekly plan, through `GET /api/calendar` with this plan's
+     athletes and `kinds=event`.
+   - Pressing a chip opens that event in the calendar, and Back returns to the Builder (K4-0).
+2. **+ Event** opens a small form under the row:
+   - the type (Training, Match, …), the title, the start, the end (optional) and the place (optional);
+   - **"Sessions in this event:"** with the day's sessions, those of the same half of the day ticked;
+   - *Make the event* sends one create with the ticked sessions and the plan's athletes as the targets.
+3. **Each session's line** carries **Event: [ … ▾]**.
+   - It lists the day's events the coach manages, and *No event*.
+   - Choosing an event links the session (`POST /api/calendar/events/:eventId/sessions`).
+   - Choosing *No event* ends the link (the calendar's existing *Unlink*).
+   - The chosen event's colour shows on the session's line, so it is visible at a glance which session belongs where.
+4. **Several sessions in one event (O7).** Before, Training and After simply choose the same event, or are ticked
+   together in + Event.
+5. **No dead end before Save.**
+   - If the plan is not saved, + Event and the selector ask once: "This plan isn't saved yet. Save it (the athlete
+     will see it) and continue?", with [Save and continue] and [Cancel].
+   - The save is the Builder's own *Save and finish*. Its outcome is waited for, and a failed or unconfirmed save
+     changes nothing else.
+6. **An event the coach does not manage** (for example the club's match) shows as a chip with a lock. In the selector
+   it is listed but cannot be chosen, with one sentence: "Linked by the club's admin from the calendar."
+7. **One RPE channel per event.**
+   - The event's chip says where its RPE comes from ("RPE: Training · Main session").
+   - The server's existing refusals read as the sentences of #643.
+8. **Nothing chosen = as today.** A session with *No event* is a training in the plan and its own card in the
+   calendar, exactly as now.
 
 **For the athlete (K4a):** the event is one card with its time and place, and *Open training* opens that day in the
 Weekly plan, where Before, Training and After stand in their order.
 
-**Contract and reviews.** K2c-3 gets a UI contract and the manager's GO before code. The reviews are `code-reviewer`,
+**Contract and reviews.** K3 and K2c-3 each get a UI contract and the manager's GO before code. The reviews are `code-reviewer`,
 `ux-design-reviewer` and `mobile-qa`. The browser checks run at 390 and 1280 px, and the Frontend PR gate applies.
 
 **Later, still options:**
-- **P3** is K3: *Write the training* from an event (the K2c plan, section 3).
-- **P4**, only if the owner wants it: the week's events above the Builder's days, read-only. Around a match, the day
-  label (the Builder already has one, "e.g. MD-1, Match day") is offered as MD-1 / MD+1 from the calendar's match.
+- **P4**, later: the events row makes it possible to offer the day label (the Builder already has one, "e.g. MD-1,
+  Match day") as MD-1 / MD+1 from the calendar's match. The owner decides.
 
-## 6. Order
+## 6. Order (the owner agreed, O9)
 
 1. The current queue: #638 → #643 → FE-D16.
-2. **K4-0**: Back and drop-downs, the calendar's part, from section 3's report.
-3. **K2c-3** (section 5): the button on the session's line, *Save and continue*, several sessions in one event, *Add to an event on this day* and the suggestion.
-4. The event panel package (no migration): each athlete's RPE and duration in the coach's event panel, the summary
-   ("Answered 12/15 · average RPE 6.8") and a clearer athlete click.
-5. **K4a**: the athlete's Calendar.
-6. **K3** (P3): *Write the training* from an event (the K2c plan, section 3).
-7. **K4b** runs in parallel. Its direction is approved (section 4), and its contract comes next.
+2. **K4-0**: Back (the app-wide fix, now being built; the OptiMove manager gates it) and the calendar's part of the
+   drop-downs once reproduced.
+3. **The Builder and the event:**
+   - **K3** (5.1): discovery and contract first;
+   - **K2c-3** (5.2), with it or right after it.
+4. **K4a**: the athlete's Calendar.
+5. The event panel package (no migration): each athlete's RPE and duration in the coach's event panel, the summary
+   ("Answered 12/15 · average RPE 6.8"), and a clearer athlete click.
+6. **K4b** runs in parallel. Its direction is approved (section 4), and its contract comes next.
