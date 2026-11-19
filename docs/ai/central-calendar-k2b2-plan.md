@@ -1175,5 +1175,13 @@ Branch `claude/central-calendar-backend-followups` from `origin/main` `b08cfb7f`
    - The screen still filters its chips in the browser over the folded answer (`frontend/central-calendar-view.js`),
      so with only *RPE requests* on, a folded RPE card is not shown there. That would be a small frontend task of its
      own; it is not part of this one.
+   - **FE-D16, as built (branch `claude/central-calendar-fe-d16`, frontend only):** while the chosen types are only
+     kinds other than *Events* (no event type either), the screen also reads the range with `kinds=<chosen>` (in the
+     chips' order) under its own cache key, and draws the cards and the open panel from that answer; the unfiltered
+     read stays (the teams, the workspace, the events of the link suggestions, the chips' counts; a chosen kind
+     counts what it shows). The panel's athletes are read with the same `kinds`. Choosing *Events* or an event type,
+     or *All types*, goes back to the unfiltered answer without a request; a panel whose card the new answer does not
+     hold closes. Tests: `central-calendar.actions` FE-D16 and FE-D16b; e2e `central-calendar-kinds-fold.test.mjs`
+     (1280 and 390 px).
 
 Mutations: one per item, each killed (the executor's report has the details).
