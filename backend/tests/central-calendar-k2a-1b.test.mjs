@@ -595,11 +595,18 @@ test("4. attach: a group folds under its event — RPE x/y, per-athlete states, 
   assert.equal(again.body.alreadyAttached, 3);
   assert.equal(await liveLinks(ev.id), 3);
 
-  // The athlete workspace folds nothing: own planned card and the event card.
+  // The athlete workspace (K4a-B, docs/ai/central-calendar-k4a-contract.md
+  // section 1, superseding "folds nothing"): her own linked session folds
+  // into the event card - one card - with only her own session, never the
+  // plans or the other athletes.
   const athleteRes = await calendar(s.x[1].cookie);
-  assert.equal(plannedOn(athleteRes, PAST).length, 1);
+  assert.equal(plannedOn(athleteRes, PAST).length, 0);
   assert.equal(eventCards(athleteRes, ev.id).length, 1);
-  assert.equal(JSON.stringify(eventCards(athleteRes, ev.id)[0]).includes("planIds"), false);
+  const athleteCard = eventCards(athleteRes, ev.id)[0];
+  assert.equal(JSON.stringify(athleteCard).includes("planIds"), false);
+  assert.equal(athleteCard.sessions.length, 1);
+  assert.deepEqual(athleteCard.links, { eventId: ev.id });
+  for (const other of [s.x[0], s.x[2]]) assert.equal(athleteRes.text.includes(other.athleteId), false);
 });
 
 test("5. attach refuses: a non-target athlete, a session outside the scope (byte-identical to a random id), another day, a session attached elsewhere, a cancelled event, a bad body; a stranger and an athlete get the one 404", async () => {

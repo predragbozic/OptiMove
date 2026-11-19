@@ -264,7 +264,7 @@ test("7. the device: six words of the closed lists chosen in the browser; the Us
 });
 
 test("8. a tab's load that nobody waits for reports with the fixed word open-tab", () => {
-  assert.equal((appJs.match(/detached\(loadActiveTab\(\), "open-tab"\);/g) || []).length, 7);
+  assert.equal((appJs.match(/detached\(loadActiveTab\(\), "open-tab"\);/g) || []).length, 8);
   assert.equal(/detached\(loadActiveTab\(\)\);/.test(appJs), false);
   assert.match(appJs, /detached\(openLibraryTab\(button\.dataset\), "open-tab"\);/);
   assert.match(appJs, /detached\(loadCoachHomeExtras\(\{ onChange: refreshCoachHomeSection, forceRefresh \}\), "open-tab"\);/);
