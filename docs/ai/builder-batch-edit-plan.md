@@ -1,6 +1,8 @@
 # Builder: applying an edit of a published batch to every athlete (plan)
 
-Status: **Proposed** (2026-11-19, written against `main` `f406ee2d`). A plan only: no code, no migration. ★★
+Status: **Accepted** (2026-11-19, written against `main` `f406ee2d`): the OptiMove manager's GO for the step 2 code,
+with the rulings and binding conditions of section 10 (relayed by the central calendar's stream manager). Where
+sections 1–9 differ from section 10, section 10 wins. ★★
 (external-review triggers 3 and 4: copy / materialization, transactions and lock order). The OptiMove manager
 reviews it before any code.
 
@@ -52,8 +54,8 @@ copied positionally). If a slot is not unique in a plan (two sessions with the s
 | added | its slot taken | **diverged** |
 | removed (logical id not in after) | equal to **before**, no results, no live link | removed |
 | removed | has results or a live calendar link | **blocked** (section 3) |
-| moved to another slot | equal to **before**, no live link on the old slot | moves with it, logical id kept |
-| moved | a live link on the old slot | **blocked** (a slot-keyed link would stay on an empty slot) |
+| moved to another slot | equal to **before**, no results, no live link on the old slot | moves with it, logical id kept |
+| moved | results, or a live link on the old slot | **blocked** (a slot-keyed link would stay on an empty slot; Q5 as ruled) |
 
 "Content" is the session's node and item tree (domains, sections, exercises, doses, instructions), compared by a
 canonical, id-free fingerprint computed in the same transaction (a new helper; nothing stored). "Results" means a row
@@ -239,3 +241,59 @@ must not leak), `mobile-qa`, `ux-design-reviewer` (a changed flow); external rev
 - **Q6** A lost Save answer: "already applied" + *Check result*, no migration (recommended), or a request record for
   an exact replay (a migration).
 - **Q7** Program batches stay "only this athlete" (recommended).
+
+## 10. The manager's rulings and binding conditions (2026-11-19)
+
+### 10.1 Rulings
+
+- **Q1 (c):** a diverged member is **asked about**; there is **no overwrite button**.
+- **Q2:** ask; a session with results and a slot with a live calendar link are **never written past**.
+- **Q3:** archived athletes and plans the coach may not change are **skipped and named** (but see 10.2 for the name).
+- **Q4:** fields **three-way** (1.2).
+- **Q5:** a session with results may change **content in place** for the others, as it does today for the athlete on
+  screen. A session with results is **never deleted or moved** (1.1 updated: a move is blocked by results as well as
+  by a link).
+- **Q6:** **no migration**; a retry after the draft is gone answers "already applied" and the screen offers
+  *Check result*.
+- **Q7:** program batches stay "this athlete only".
+
+### 10.2 Binding conditions
+
+1. **The "no rights" member.** Its athlete's name is shown **only** if the coach already sees it in the batch
+   switcher, i.e. the member is in `loadBuilderBatch`'s answer for this draft (`builder.js:3073`); otherwise the
+   member is **counted without a name** ("1 other athlete was not changed."). `security-reviewer` is mandatory, with a
+   test of both cases.
+   - Recorded fact: today `loadBuilderBatch` lists every active, non-edit-draft member of the batch with its name and
+     has no rights filter, so in practice every member is named. The count-only path is what applies the moment that
+     list is narrowed; its test builds that case through a seam rather than by changing the list's behaviour, which is
+     out of scope.
+2. **`choiceToken`.** A test that a change between the 409 and the resend — a new result, a new event link, another
+   coach's edit draft, an archive — answers the 409 again and writes nothing.
+3. **`POST /plans/:id/edit` with `FOR SHARE`.** A test of both orders against another coach's Save, and a **recorded
+   SQL order** (the PR #346 rule in `.claude/rules/migrations.md`) proving there is no inversion with
+   `lockBatchPlansForUpdate`: the edit route takes one live plan row `FOR SHARE` and nothing else before its copy;
+   the Save takes the draft row, then the live rows ascending.
+4. **The content fingerprint.** Two identical trees with different ids give the **same** fingerprint; a change of a
+   dose, an order or an instruction gives a **different** one. An ambiguous slot (two sessions with one slot key in a
+   plan) is **diverged**, never a guess.
+5. **Races:**
+   - two concurrent Saves on two members of the same batch;
+   - a Save racing an event attach;
+   - a Save racing an athlete's **RPE submit** on a session the edit removes: "blocked" must win in both orders, or
+     show as `has_results`. How: before it reads `session_feedback`, the Save takes the sibling session rows it would
+     remove or move `FOR UPDATE`, in ascending id, after the plan rows. The submit's insert into
+     `training_load.session_feedback` takes `FOR KEY SHARE` on its `plan_session_id` row (the foreign key,
+     `trainingLoad.js:462`). Submit first: the Save waits on that row and then reads the committed result, so the member
+     is `has_results`. Save first: the submit's foreign-key check waits for the Save; if the Save had to block the
+     member it removed nothing and the submit goes on; if the member was not blocked, the session was removed and the
+     submit's insert fails on the foreign key. That failure is mapped to the submit route's existing "Training session
+     not found." 404, never a 500. The submit never locks a plan row, so no cycle.
+6. **Step 1's sentence** ("Changes go to this athlete only.") disappears **only when step 2 is live**: the Save question
+   of section 4 replaces it in the same pull request as the server change, never earlier.
+
+### 10.3 Delivery
+
+Step 2 is built on `claude/builder-batch-edit-step2`, from `origin/main` after #653 (step 1) merges, or on top of
+#653 if it has not merged yet. It is one ★★ package: `db-reviewer`, `security-reviewer`, `code-reviewer` (plus
+`mobile-qa` and `ux-design-reviewer` for the Save question), the tests of section 7 and 10.2, and mutations. Its
+frozen head goes to the *Nezavisni revizor*, then to the manager's gate.
