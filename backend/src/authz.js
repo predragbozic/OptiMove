@@ -32,6 +32,8 @@ export async function loadAuthorizationContext(user, queryRunner = query) {
       isIndependentCoach: false,
       isAthlete: false,
       athleteId: null,
+      rolePermissions: Object.freeze([]),
+      roleAssignments: Object.freeze([]),
     };
   }
 
@@ -78,6 +80,8 @@ export async function loadAuthorizationContext(user, queryRunner = query) {
     managedTeamIds = teamsResult.rows.map((row) => row.id);
   }
 
+  const { rolePermissions, roleAssignments } = await loadRolePermissions(user.id, queryRunner);
+
   return {
     userId: user.id,
     roleHint,
@@ -88,7 +92,82 @@ export async function loadAuthorizationContext(user, queryRunner = query) {
     isIndependentCoach: globalRoles.has("independent_coach"),
     isAthlete: athleteResult.rows.length > 0,
     athleteId: athleteResult.rows[0]?.id || null,
+    // Roles R2 (v84). The old helpers below (holdsClubAdminRole, canManageClub,
+    // canManageTeamById, computeCapabilities, managedTeamIds, workspaces) never
+    // read these two fields; only can() (permissions.js) reads rolePermissions.
+    rolePermissions,
+    roleAssignments,
   };
+}
+
+// The role items the account holds, per scope, from both sources (roles R2
+// contract 4.1 step 6 and section 6): the basic roles its rows of the old
+// tables map to, and its active non-basic assignments. One statement.
+//   rolePermissions: [{ scopeType: "club" | "team" | "private", scopeId,
+//                      teamIds (a club's teams, archived ones included, as
+//                      managedTeamIds; empty for other scopes), words }]
+//   roleAssignments: [{ assignmentId, roleId, scopeType, scopeId, expiresAt }]
+// A role that is archived gives nothing. If the statement fails (a missing
+// table, a permission error, a timeout), rolePermissions is marked unavailable
+// ({ unavailable: true }): can() then still answers a platform admin and throws
+// PermissionsUnavailableError for anyone else. Never a fallback to a constant.
+export const ROLE_PERMISSIONS_SQL = `
+  with held as (
+    select 'club'::text as scope_type, r.club_id as scope_id, pr.id as role_id, null::uuid as assignment_id, null::timestamptz as expires_at
+      from public.user_club_roles r join public.permission_roles pr on pr.basic_key = 'club_admin'
+     where r.user_id = $1 and r.role = 'club_admin' and r.is_active = true
+    union all
+    select 'team', r.team_id, pr.id, null, null
+      from public.user_team_roles r join public.permission_roles pr on pr.basic_key = 'team_coach'
+     where r.user_id = $1 and r.role = 'team_coach' and r.is_active = true
+    union all
+    select 'private', $1, pr.id, null, null
+      from public.user_global_roles g join public.permission_roles pr on pr.basic_key = 'independent_coach'
+     where g.user_id = $1 and g.role = 'independent_coach' and g.is_active = true
+    union all
+    select a.scope_type, a.scope_id, a.role_id, a.id, a.expires_at
+      from public.user_role_assignments a
+     where a.user_id = $1 and a.revoked_at is null and (a.expires_at is null or a.expires_at > now())
+       and a.scope_type in ('club', 'team', 'private') and (a.scope_type <> 'private' or a.scope_id = $1)
+  )
+  select h.scope_type as "scopeType", h.scope_id as "scopeId", h.role_id as "roleId", h.assignment_id as "assignmentId",
+         h.expires_at as "expiresAt",
+         array(select i.permission_word from public.permission_role_items i where i.role_id = pr.id order by 1) as words,
+         case when h.scope_type = 'club' then array(select t.id from public.teams t where t.club_id = h.scope_id order by 1) else '{}'::uuid[] end as "teamIds"
+    from held h
+    join public.permission_roles pr on pr.id = h.role_id and pr.archived_at is null`;
+
+const loggedRolePermissionFailures = new Set();
+
+async function loadRolePermissions(userId, queryRunner) {
+  let rows;
+  try {
+    rows = (await queryRunner(ROLE_PERMISSIONS_SQL, [userId])).rows;
+    if (!Array.isArray(rows)) throw new Error("no rows");
+  } catch (error) {
+    // Logged once per error code per process, so a database without v84 (a
+    // test database built from a curated list) does not log on every request.
+    const code = String(error?.code || "error");
+    if (!loggedRolePermissionFailures.has(code)) {
+      loggedRolePermissionFailures.add(code);
+      console.error(`[authz] the role tables could not be read: ${code}`);
+    }
+    return { rolePermissions: Object.freeze({ unavailable: true }), roleAssignments: [] };
+  }
+  const rolePermissions = rows.map((row) => Object.freeze({
+    scopeType: row.scopeType,
+    scopeId: row.scopeId,
+    teamIds: Object.freeze([...(row.teamIds || [])]),
+    words: Object.freeze([...(row.words || [])]),
+  }));
+  const roleAssignments = rows.filter((row) => row.assignmentId).map((row) => Object.freeze({
+    assignmentId: row.assignmentId,
+    roleId: row.roleId,
+    scopeType: row.scopeType,
+    scopeId: row.scopeId,
+    expiresAt: row.expiresAt,
+  }));
+  return { rolePermissions: Object.freeze(rolePermissions), roleAssignments: Object.freeze(roleAssignments) };
 }
 
 export function computeCapabilities(authz) {

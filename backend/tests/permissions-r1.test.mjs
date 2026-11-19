@@ -37,13 +37,23 @@ const {
 } = await import("../src/authz.js");
 const {
   BASIC_ROLE_PERMISSIONS,
-  can,
+  can: canR2,
   clubScope,
   GLOBAL_SCOPE,
   PERMISSION_GROUPS,
   PERMISSIONS,
   teamScope,
 } = await import("../src/permissions.js");
+// Roles R2 (contract test 32): can() reads the role items the loader brings
+// from the database (authz.rolePermissions). The b-tests that call can() with
+// hand-built contexts holding no role items (b2, b2x, b2y, b2z, b3, b8) run
+// unchanged against R1's own function, kept as the oracle; b2r runs b2's
+// comparison again against R2's can() over the same contexts with the seeded
+// role items; b4, b6 and b7 test R2's can() with their changed expectations.
+// The comparison over contexts loaded from a seeded database is
+// permission-roles-v84-equivalence.test.mjs (tests 31 and 31a).
+const { canR1, withSeededRoleItems } = await import("./support/permissions-r1-oracle.mjs");
+const can = canR1;
 
 after(async () => {
   try {
@@ -293,6 +303,9 @@ const DEGENERATE_CONTEXTS = {
   }),
 };
 const isNoId = (id) => id === undefined || id === null || id === "";
+// Which teams each club of the matrix has, for the seeded contexts of R2.
+const TEAMS_OF_CLUB = { [CLUB_A]: [TEAM_T1], [CLUB_B]: [TEAM_T2] };
+const seeded = (authz) => withSeededRoleItems(authz, TEAMS_OF_CLUB);
 
 // The predicates of authz.js that the call sites of routes/organization.js used before R1.
 const OLD = {
@@ -512,6 +525,20 @@ test("b2. at every call site, can() equals the predicate that stood there, for e
   assert.equal(compared, (global * 1 + (CALL_SITES.length - global) * 7) * (Object.keys(CONTEXTS).length + Object.keys(DEGENERATE_CONTEXTS).length));
 });
 
+test("b2r. (R2) b2 again against R2's can() over the same contexts with the seeded role items: every call site, every context, every resource", () => {
+  let compared = 0;
+  for (const site of CALL_SITES) {
+    for (const [contextName, authz] of Object.entries({ ...CONTEXTS, ...DEGENERATE_CONTEXTS })) {
+      for (const [scopeName, scope] of SCOPES[site.scopeType]) {
+        assert.equal(canR2(seeded(authz), site.permission, scope), canR1(authz, site.permission, scope),
+          `${site.handler} #${site.index}: ${site.permission} on ${scopeName} for "${contextName}"`);
+        compared++;
+      }
+    }
+  }
+  assert.ok(compared > 0);
+});
+
 test("b2x. a scope without an id is no resource: nobody but a platform admin passes it, whatever rows the context holds", () => {
   const everyContext = { ...CONTEXTS, ...DEGENERATE_CONTEXTS };
   for (const [name, authz] of Object.entries(everyContext)) {
@@ -633,18 +660,25 @@ test("b3. the expected answers themselves, spelled out for the main cases", () =
   }
 });
 
-test("b4. a platform admin passes every permission in every scope; a permission no module has moved to passes for nobody else", () => {
+test("b4. (R2) a platform admin passes every permission in every scope; a permission no module has moved to passes for nobody else - apart from roles.manage, which the seed gives to a club's admin at its club and its club's teams", () => {
   const notUsed = ALL_WORDS.filter((w) => !USED_WORDS.includes(w));
   assert.equal(notUsed.length, 52 - USED_WORDS.length);
-  for (const [name, authz] of Object.entries(CONTEXTS)) {
+  assert.ok(notUsed.includes("roles.manage"), "no call site of organization.js names roles.manage");
+  const adminOf = (authz, id) => authz.clubRoles.some((r) => r.role === "club_admin" && r.clubId === id);
+  for (const [name, plain] of Object.entries(CONTEXTS)) {
+    const authz = seeded(plain);
     const platform = authz.platformRoles.length > 0;
     for (const type of ["global", "club", "team"]) {
       for (const [scopeName, scope] of SCOPES[type]) {
         for (const word of ALL_WORDS) {
-          if (platform) assert.equal(can(authz, word, scope), true, `${name}: ${word} on ${scopeName}`);
+          if (platform) assert.equal(canR2(authz, word, scope), true, `${name}: ${word} on ${scopeName}`);
         }
         for (const word of notUsed) {
-          if (!platform) assert.equal(can(authz, word, scope), false, `${name}: ${word} on ${scopeName} (fail closed)`);
+          if (platform) continue;
+          // The one changed expectation (O1 (b)): roles.manage for a club's admin, by convention 2 also at its teams.
+          const club = type === "club" ? scope.id : type === "team" ? Object.keys(TEAMS_OF_CLUB).find((c) => TEAMS_OF_CLUB[c].includes(scope.id)) : null;
+          const expected = word === "roles.manage" && club != null && adminOf(authz, club);
+          assert.equal(canR2(authz, word, scope), expected, `${name}: ${word} on ${scopeName}`);
         }
       }
     }
@@ -677,23 +711,27 @@ test("b5. the basic sets: platform admin everything; club admin and team coach h
   }
 });
 
-test("b6. an unknown permission or scope is a programming error: can() throws, also for a platform admin", () => {
-  for (const authz of [CONTEXTS["platform admin"], CONTEXTS["club admin of A"], CONTEXTS["no user"]]) {
+test("b6. (R2) an unknown permission or scope is a programming error: can() throws, also for a platform admin; the scope type private no longer throws (O9)", () => {
+  for (const authz of [CONTEXTS["platform admin"], CONTEXTS["club admin of A"], CONTEXTS["no user"]].map(seeded)) {
     for (const word of ["org.teams.managee", "", undefined, null, "toString", "constructor", "__proto__", "hasOwnProperty", "ORG.VIEW", "org.view "]) {
-      assert.throws(() => can(authz, word, clubScope(CLUB_A)), /Unknown permission/, `word ${String(word)}`);
+      assert.throws(() => canR2(authz, word, clubScope(CLUB_A)), /Unknown permission/, `word ${String(word)}`);
     }
-    for (const scope of [undefined, null, {}, { type: "private", id: CLUB_A }, { type: "platform" }, { id: CLUB_A }, "club", { type: "Club", id: CLUB_A }]) {
-      assert.throws(() => can(authz, "org.view", scope), /Unknown permission scope type/, `scope ${JSON.stringify(scope)}`);
+    for (const scope of [undefined, null, {}, { type: "platform" }, { id: CLUB_A }, "club", { type: "Club", id: CLUB_A }, { type: "Private", id: CLUB_A }]) {
+      assert.throws(() => canR2(authz, "org.view", scope), /Unknown permission scope type/, `scope ${JSON.stringify(scope)}`);
     }
+    // No word has a private scope row in R2 and the Independent coach role has no items:
+    // a private check passes for a platform admin only.
+    assert.equal(canR2(authz, "org.view", { type: "private", id: CLUB_A }), authz.platformRoles.length > 0);
   }
 });
 
-test("b7. can() reads only the roles of the authorization context: never a workspace, role_hint, or anything else", () => {
-  const ALLOWED = new Set(["platformRoles", "clubRoles", "teamRoles", "managedTeamIds"]);
-  for (const [name, authz] of Object.entries(CONTEXTS)) {
+test("b7. (R2) can() reads only the roles of the authorization context: never a workspace, role_hint, or anything else; R2 adds rolePermissions to the fields it may read", () => {
+  const ALLOWED = new Set(["platformRoles", "clubRoles", "teamRoles", "managedTeamIds", "rolePermissions"]);
+  for (const [name, plain] of Object.entries(CONTEXTS)) {
+    const authz = seeded(plain);
     const read = new Set();
     // No workspace field exists on this object at all; reading one (or any other field) throws.
-    const guarded = new Proxy({ platformRoles: authz.platformRoles, clubRoles: authz.clubRoles, teamRoles: authz.teamRoles, managedTeamIds: authz.managedTeamIds }, {
+    const guarded = new Proxy({ platformRoles: authz.platformRoles, clubRoles: authz.clubRoles, teamRoles: authz.teamRoles, managedTeamIds: authz.managedTeamIds, rolePermissions: authz.rolePermissions }, {
       get(target, property) {
         if (typeof property === "string" && !ALLOWED.has(property)) throw new Error(`can() read authz.${property}`);
         read.add(property);
@@ -705,18 +743,18 @@ test("b7. can() reads only the roles of the authorization context: never a works
     });
     for (const row of REPLACED) {
       for (const [scopeName, scope, id] of SCOPES[row.scopeType]) {
-        assert.equal(can(guarded, row.permission, scope), row.old(authz, id), `${row.permission} on ${scopeName} for "${name}"`);
+        assert.equal(canR2(guarded, row.permission, scope), row.old(authz, id), `${row.permission} on ${scopeName} for "${name}"`);
       }
     }
     assert.ok(read.has("platformRoles"));
   }
   // The same account answers the same whatever workspace fields a caller might attach.
   for (const workspace of [{ type: "club", scopeId: CLUB_B }, { type: "team", scopeId: TEAM_T2 }, { type: "platform", scopeId: null }, { type: "athlete" }]) {
-    const withWorkspace = { ...CONTEXTS["club admin of A"], activeWorkspace: workspace, workspace, activeWorkspaceType: workspace.type, activeWorkspaceScopeId: workspace.scopeId };
-    assert.equal(can(withWorkspace, "org.teams.manage", clubScope(CLUB_A)), true);
-    assert.equal(can(withWorkspace, "org.teams.manage", clubScope(CLUB_B)), false);
-    assert.equal(can(withWorkspace, "staff.assign", teamScope(TEAM_T2)), false);
-    assert.equal(can(withWorkspace, "platform.admin", GLOBAL_SCOPE), false);
+    const withWorkspace = { ...seeded(CONTEXTS["club admin of A"]), activeWorkspace: workspace, workspace, activeWorkspaceType: workspace.type, activeWorkspaceScopeId: workspace.scopeId };
+    assert.equal(canR2(withWorkspace, "org.teams.manage", clubScope(CLUB_A)), true);
+    assert.equal(canR2(withWorkspace, "org.teams.manage", clubScope(CLUB_B)), false);
+    assert.equal(canR2(withWorkspace, "staff.assign", teamScope(TEAM_T2)), false);
+    assert.equal(canR2(withWorkspace, "platform.admin", GLOBAL_SCOPE), false);
   }
 });
 
@@ -1056,4 +1094,18 @@ test("c3. the four :role routes of organization.js refuse any other word before 
     assert.equal(roleWriteProblem(writes[0]), null);
     assert.ok(writes[0].statement.includes(`'${word}'`), `${service} names '${word}'`);
   }
+});
+
+test("32a. (R2) no fallback to the constant: a club admin's hand-built context without rolePermissions passes nothing but what a platform admin passes; a context whose role tables could not be read throws for anyone but a platform admin", () => {
+  const bare = CONTEXTS["club admin of A"];
+  for (const word of ALL_WORDS) {
+    for (const type of ["club", "team"]) {
+      for (const [scopeName, scope] of SCOPES[type]) assert.equal(canR2(bare, word, scope), false, `${word} on ${scopeName}`);
+    }
+  }
+  const unavailable = { ...bare, rolePermissions: Object.freeze({ unavailable: true }) };
+  assert.throws(() => canR2(unavailable, "org.view", clubScope(CLUB_A)), (e) => e.status === 503 && e.code === "permissions_unavailable");
+  assert.throws(() => canR2(unavailable, "platform.admin", GLOBAL_SCOPE), (e) => e.code === "permissions_unavailable");
+  const platform = { ...CONTEXTS["platform admin"], rolePermissions: Object.freeze({ unavailable: true }) };
+  for (const word of ALL_WORDS) assert.equal(canR2(platform, word, clubScope(CLUB_A)), true, word);
 });
