@@ -10,6 +10,8 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -62,8 +64,8 @@ export function splitCommandSegments(cmd) {
     // A backslash before a newline joins the two lines (line continuation); any other
     // backslash outside quotes escapes the next character, which therefore never splits.
     if (ch === "\\") {
-      if (cmd[i + 1] === "\n") { current += " "; i++; continue; }
-      if (cmd[i + 1] === "\r" && cmd[i + 2] === "\n") { current += " "; i += 2; continue; }
+      if (cmd[i + 1] === "\n") { i++; continue; }
+      if (cmd[i + 1] === "\r" && cmd[i + 2] === "\n") { i += 2; continue; }
       if (i + 1 < cmd.length) { current += ch + cmd[i + 1]; i++; continue; }
     }
     if (ch === "&" && cmd[i + 1] === "&") { segments.push(current); current = ""; i++; continue; }
@@ -147,9 +149,10 @@ function tokenizeWords(str) {
 // `word1|word2` alternation; it is always wrapped in a non-capturing group. Anchored to
 // segment START (^) on purpose — see splitCommandSegments doc.
 function extractGitSubcommandArgs(segment, subcommand) {
-  const m = stripLeadingEnvAssignments(segment).match(/^git\b(.*)$/i);
+  const m = stripLeadingEnvAssignments(segment).match(/^git\b([\s\S]*)$/i);
   if (!m) return null;
-  const tokens = tokenizeWords(m[1]);
+  // The words as git receives them: `re""set`, `$'reset'`, `"--hard"` are reset and --hard.
+  const tokens = tokenizeWords(m[1]).map(shellWord);
   let dir = null;
   let i = 0;
   while (i < tokens.length) {
@@ -586,12 +589,18 @@ export function normalizeSegment(segment) {
   let current = typeof segment === "string" ? segment.trim() : "";
   for (let round = 0; round < 12; round++) {
     const before = current;
-    current = current.replace(/^[({]+\s*/, "").replace(/\s*[)}]+\s*;?\s*$/, "").trim();
+    // `(` `{` opening a group, `)` closing a subshell; a `}` closes a group only as a word of
+    // its own (`.en{v,}` is a brace expansion, not a group).
+    current = current.replace(/^[({]+\s*/, "").replace(/\s*\)+\s*;?\s*$/, "").replace(/(^|[\s;])\}+\s*;?\s*$/, "$1").trim();
+    // The body of a function definition runs when the function is called: read it as a command.
+    current = current.replace(/^(?:function\s+[\w.:-]+(?:\s*\(\s*\))?|[\w.:-]+\s*\(\s*\))\s*[{(]?\s*/, "").trim();
     current = stripLeadingEnvAssignments(current).trim();
     let tokens = tokenizeWords(current);
     if (tokens.length === 0) return "";
+    // The command word as the shell finds it: 'git', "git", g\it and $'git' are all git.
+    const unquotedFirst = shellWord(tokens[0]);
+    if (unquotedFirst && !/\s/.test(unquotedFirst)) tokens[0] = unquotedFirst;
     let first = tokens[0];
-    if (first.startsWith("\\") && first.length > 1) { tokens[0] = first.slice(1); first = tokens[0]; }
     if ((first.includes("/") || first.includes("\\")) && KNOWN_COMMANDS_BY_PATH.has(basenameOfCommand(first))) {
       tokens[0] = basenameOfCommand(first);
       first = tokens[0];
@@ -744,9 +753,379 @@ export function isUnreadableShellInput(segment, isPartOfLargerLine) {
 }
 
 // ---------------------------------------------------------------------------
-// Checks that keep the wider allow list honest: an allowed read command that could
-// write, delete or run something else asks.
+// The allow list's companion: for every command `.claude/settings.json` lets through
+// without a question, this hook stays silent ONLY when every option is on an explicit list
+// of options known to be safe for that command. An unknown option asks — and so does an
+// abbreviated long option (git and the GNU tools accept `--upload` for `--upload-pack`,
+// `--out` for `--output`, `--in-pl` for `--in-place`): it is simply not on the list.
+// Words are judged as the shell passes them (quotes and backslashes removed).
 // ---------------------------------------------------------------------------
+
+// The word the shell passes to the program: quotes removed, backslash escapes resolved,
+// $'...' (ANSI-C) decoded. `'git'`, `g\it`, `re""set`, `$'reset'` are all plain words.
+export function shellWord(raw) {
+  if (typeof raw !== "string") return "";
+  let out = "";
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === "'") {
+      const end = raw.indexOf("'", i + 1);
+      if (end < 0) { out += raw.slice(i + 1); break; }
+      out += raw.slice(i + 1, end);
+      i = end + 1;
+      continue;
+    }
+    if (ch === "$" && raw[i + 1] === "'") {
+      let j = i + 2;
+      while (j < raw.length && raw[j] !== "'") {
+        if (raw[j] === "\\" && j + 1 < raw.length) {
+          const e = raw[j + 1];
+          if (e === "x" && /^[0-9a-fA-F]{1,2}/.test(raw.slice(j + 2))) {
+            const hex = /^[0-9a-fA-F]{1,2}/.exec(raw.slice(j + 2))[0];
+            out += String.fromCharCode(parseInt(hex, 16));
+            j += 2 + hex.length;
+            continue;
+          }
+          if (/[0-7]/.test(e)) {
+            const oct = /^[0-7]{1,3}/.exec(raw.slice(j + 1))[0];
+            out += String.fromCharCode(parseInt(oct, 8));
+            j += 1 + oct.length;
+            continue;
+          }
+          out += { n: "\n", t: "\t", r: "\r", a: "\x07", e: "\x1b", "\\": "\\", "'": "'", '"': '"' }[e] ?? e;
+          j += 2;
+          continue;
+        }
+        out += raw[j];
+        j++;
+      }
+      i = j + 1;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < raw.length && raw[j] !== '"') {
+        if (raw[j] === "\\" && /["\\$`]/.test(raw[j + 1] ?? "")) { out += raw[j + 1]; j += 2; continue; }
+        out += raw[j];
+        j++;
+      }
+      i = j + 1;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < raw.length) { out += raw[i + 1]; i += 2; continue; }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+// The command's words as the program receives them, after the wrappers (env, sudo, ...).
+// Redirection words (`2>&1`, `> file`, `2>/dev/null`, `<<'EOF'`) are not arguments of the
+// program; output targets are judged on their own (outputRedirectTargets).
+function withoutRedirections(tokens) {
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    const m = /^(\d*|&)(>>?|>\||>&|<<<|<<-?|<&|<)(.*)$/.exec(t);
+    if (m && !/^[<>]\(/.test(t.slice(m[1].length))) {
+      if (m[3] === "" && i + 1 < tokens.length) i++; // the target is the next word
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
+export function commandWords(segment) {
+  return withoutRedirections(tokenizeWords(normalizeSegment(segment))).map(shellWord);
+}
+
+// Option lists. short: letters without a value; shortArg: letters that take a value (the
+// rest of the cluster or the next word); long: --names without a value; longArg: --names
+// that take a value (`--x=v` or `--x v`); longOpt: --names whose value is optional and only
+// given as `--x=v`. numeric: `-5` counts as a short option.
+function spec(s) {
+  return {
+    short: s.short ?? "",
+    shortArg: s.shortArg ?? "",
+    long: new Set(s.long ?? []),
+    longArg: new Set(s.longArg ?? []),
+    longOpt: new Set(s.longOpt ?? []),
+    numeric: Boolean(s.numeric),
+    operands: s.operands ?? null,
+    value: s.value ?? null, // (name, value) => boolean, for options whose value matters
+  };
+}
+
+// True when every option of `args` is on the list (and the operands pass, if checked).
+export function optionsAreKnown(args, sp) {
+  const operands = [];
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i];
+    if (w === "--") { operands.push(...args.slice(i + 1)); break; }
+    if (w === "-" || !w.startsWith("-")) { operands.push(w); continue; }
+    if (w.startsWith("--")) {
+      const eq = w.indexOf("=");
+      const name = eq < 0 ? w : w.slice(0, eq);
+      let value = eq < 0 ? null : w.slice(eq + 1);
+      if (sp.long.has(name) && eq < 0) continue;
+      if (sp.longOpt.has(name)) { if (sp.value && value !== null && !sp.value(name, value)) return false; continue; }
+      if (sp.longArg.has(name)) {
+        if (eq < 0) { if (i + 1 >= args.length) return false; value = args[++i]; }
+        if (sp.value && !sp.value(name, value)) return false;
+        continue;
+      }
+      return false;
+    }
+    if (sp.numeric && /^-\d+$/.test(w)) continue;
+    const letters = w.slice(1);
+    for (let k = 0; k < letters.length; k++) {
+      const c = letters[k];
+      if (sp.shortArg.includes(c)) {
+        let value = letters.slice(k + 1);
+        if (value === "") { if (i + 1 >= args.length) return false; value = args[++i]; }
+        if (sp.value && !sp.value(`-${c}`, value)) return false;
+        break;
+      }
+      if (sp.short.includes(c)) continue;
+      return false;
+    }
+  }
+  return sp.operands ? sp.operands(operands) : true;
+}
+
+const GREP = spec({
+  short: "EFGPiyvwxcLlmoqsbHhnTZzrRUaIs",
+  shortArg: "efABCmdD",
+  long: ["--extended-regexp", "--fixed-strings", "--basic-regexp", "--perl-regexp", "--ignore-case", "--no-ignore-case", "--invert-match",
+    "--word-regexp", "--line-regexp", "--count", "--files-with-matches", "--files-without-match", "--only-matching", "--quiet", "--silent",
+    "--no-messages", "--byte-offset", "--with-filename", "--no-filename", "--line-number", "--initial-tab", "--null", "--null-data",
+    "--recursive", "--dereference-recursive", "--text", "--line-buffered", "--binary"],
+  longArg: ["--regexp", "--file", "--max-count", "--after-context", "--before-context", "--context", "--include", "--exclude",
+    "--exclude-dir", "--exclude-from", "--label", "--binary-files", "--devices", "--directories"],
+  longOpt: ["--color", "--colour"],
+  numeric: true,
+});
+const RG = spec({
+  short: "inSswxFlcoUuvHIL0qNpPa",
+  shortArg: "ABCegtTmjMfrd",
+  long: ["--files", "--files-with-matches", "--files-without-match", "--count", "--count-matches", "--hidden", "--no-ignore", "--no-ignore-vcs",
+    "--json", "--line-number", "--no-line-number", "--no-heading", "--heading", "--fixed-strings", "--ignore-case", "--smart-case",
+    "--case-sensitive", "--word-regexp", "--line-regexp", "--multiline", "--multiline-dotall", "--vimgrep", "--follow", "--only-matching",
+    "--trim", "--stats", "--null", "--no-filename", "--with-filename", "--invert-match", "--unrestricted", "--type-list", "--quiet",
+    "--pcre2", "--no-messages", "--column", "--no-column", "--byte-offset", "--crlf", "--text", "--no-config", "--sort-files", "--debug"],
+  longArg: ["--glob", "--iglob", "--type", "--type-not", "--max-count", "--max-depth", "--context", "--after-context", "--before-context",
+    "--regexp", "--file", "--replace", "--threads", "--max-columns", "--sort", "--sortr", "--color", "--colors", "--encoding", "--max-filesize",
+    "--context-separator", "--field-match-separator", "--path-separator"],
+});
+const CAT = spec({ short: "nbsAETvet", long: ["--number", "--number-nonblank", "--squeeze-blank", "--show-all", "--show-ends", "--show-tabs", "--show-nonprinting"] });
+const HEAD_TAIL = spec({
+  short: "qvzfF",
+  shortArg: "ncs",
+  long: ["--quiet", "--silent", "--verbose", "--zero-terminated", "--follow", "--retry"],
+  longArg: ["--lines", "--bytes", "--sleep-interval", "--pid", "--max-unchanged-stats"],
+  numeric: true,
+});
+const LS = spec({
+  short: "laAhRtrSdF1iGogsCxmpLHcuUXvQNbqkn",
+  shortArg: "IwT",
+  long: ["--all", "--almost-all", "--human-readable", "--si", "--recursive", "--reverse", "--directory", "--classify", "--full-time",
+    "--group-directories-first", "--no-group", "--numeric-uid-gid", "--size", "--inode", "--dereference", "--literal", "--escape",
+    "--quote-name", "--author", "--file-type"],
+  longArg: ["--ignore", "--hide", "--width", "--tabsize", "--block-size"],
+  longOpt: ["--color", "--colour", "--time-style", "--sort", "--time", "--format", "--indicator-style", "--quoting-style", "--hyperlink"],
+});
+const WC = spec({ short: "lwcmL", long: ["--lines", "--words", "--bytes", "--chars", "--max-line-length"] });
+const CUT = spec({
+  short: "snz",
+  shortArg: "dfcb",
+  long: ["--complement", "--only-delimited", "--zero-terminated"],
+  longArg: ["--delimiter", "--fields", "--characters", "--bytes", "--output-delimiter"],
+});
+const DIFF = spec({
+  short: "uqrNwbBiayspdtTEZcnHe",
+  shortArg: "UCWxXIFS",
+  long: ["--brief", "--recursive", "--new-file", "--unidirectional-new-file", "--ignore-all-space", "--ignore-space-change",
+    "--ignore-blank-lines", "--ignore-case", "--ignore-tab-expansion", "--ignore-trailing-space", "--text", "--side-by-side",
+    "--report-identical-files", "--show-c-function", "--strip-trailing-cr", "--suppress-common-lines", "--left-column", "--minimal",
+    "--speed-large-files", "--no-dereference", "--normal", "--expand-tabs", "--initial-tab", "--suppress-blank-empty", "--ed", "--rcs"],
+  longArg: ["--unified", "--context", "--width", "--label", "--exclude", "--exclude-from", "--ignore-matching-lines", "--show-function-line",
+    "--starting-file", "--from-file", "--to-file", "--tabsize", "--horizon-lines"],
+  longOpt: ["--color"],
+});
+const SORT = spec({
+  short: "nrufbdghiMVRszcCm",
+  shortArg: "ktS",
+  long: ["--numeric-sort", "--reverse", "--unique", "--ignore-case", "--ignore-leading-blanks", "--dictionary-order", "--general-numeric-sort",
+    "--human-numeric-sort", "--ignore-nonprinting", "--month-sort", "--version-sort", "--random-sort", "--stable", "--zero-terminated",
+    "--check", "--merge"],
+  longArg: ["--key", "--field-separator", "--buffer-size", "--parallel"],
+  longOpt: ["--sort"],
+});
+const UNIQ = spec({
+  short: "cduiDz",
+  shortArg: "fsw",
+  long: ["--count", "--repeated", "--unique", "--ignore-case", "--zero-terminated"],
+  longArg: ["--skip-fields", "--skip-chars", "--check-chars"],
+  longOpt: ["--all-repeated", "--group"],
+  operands: (ops) => ops.length <= 1, // uniq INPUT OUTPUT writes OUTPUT
+});
+const SED_N = spec({
+  short: "nErsuz",
+  shortArg: "el",
+  long: ["--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered", "--null-data", "--sandbox", "--posix", "--debug"],
+  longArg: ["--expression", "--line-length"],
+});
+
+const FIND_NO_ARG = new Set(["-print", "-print0", "-prune", "-not", "-o", "-or", "-a", "-and", "-empty", "-true", "-false", "-readable",
+  "-writable", "-executable", "-depth", "-mount", "-xdev", "-noleaf", "-ignore_readdir_race", "-daystart", "-follow", "-ls", "-quit",
+  "-nouser", "-nogroup", "-L", "-P", "-H", "(", ")", "!", ","]);
+const FIND_WITH_ARG = new Set(["-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex", "-type", "-xtype",
+  "-maxdepth", "-mindepth", "-newer", "-anewer", "-cnewer", "-mtime", "-mmin", "-atime", "-amin", "-ctime", "-cmin", "-size", "-perm",
+  "-user", "-group", "-uid", "-gid", "-links", "-inum", "-samefile", "-lname", "-ilname", "-regextype", "-printf", "-used", "-fstype"]);
+
+function findIsKnown(args) {
+  for (let i = 0; i < args.length; i++) {
+    const w = args[i];
+    if (FIND_NO_ARG.has(w)) continue;
+    if (FIND_WITH_ARG.has(w)) { if (i + 1 >= args.length) return false; i++; continue; }
+    if (/^-(newer[aBcmt]{2})$/.test(w)) { i++; continue; }
+    if (/^-O[0-3]$/.test(w) || /^-D$/.test(w)) { if (w === "-D") i++; continue; }
+    if (w.startsWith("-")) return false; // -exec, -execdir, -ok, -okdir, -delete, -fprint*, -fls, -files0-from, anything else
+  }
+  return true;
+}
+
+// node --test: test files under backend/tests or frontend/tests (no "..", no absolute path),
+// and only these flags. --import/--require/--loader would load a module from anywhere.
+const NODE_TEST_FILE_RE = /^(?:\.\/)?(?:backend|frontend)\/tests\/[A-Za-z0-9_.*?/@{},-]*$/;
+const NODE_TEST = spec({
+  long: ["--test-only", "--test-force-exit", "--no-warnings", "--trace-warnings", "--enable-source-maps", "--experimental-test-coverage",
+    "--test-update-snapshots-never"],
+  longArg: ["--test-name-pattern", "--test-skip-pattern", "--test-concurrency", "--test-timeout", "--test-shard", "--experimental-test-isolation",
+    "--test-isolation", "--test-reporter", "--test-reporter-destination"],
+  value: (name, value) => {
+    if (name === "--test-reporter") return ["spec", "tap", "dot", "junit", "lcov"].includes(value);
+    if (name === "--test-reporter-destination") return value === "stdout" || value === "stderr";
+    if (name === "--experimental-test-isolation" || name === "--test-isolation") return value === "none" || value === "process";
+    return true;
+  },
+  operands: (ops) => ops.length > 0 && ops.every((p) => NODE_TEST_FILE_RE.test(p) && !/(^|\/)\.\.(\/|$)/.test(p)),
+});
+
+// git: the subcommands the allow list lets through, each with its own option list. Global
+// options before the subcommand: only -C <dir>, --no-pager/-P, --no-optional-locks,
+// --literal-pathspecs (a -c config override is judged separately: it asks).
+const GIT_LOG_FAMILY = {
+  short: "pusbwrtzaRWMCnBqLSGXDl", // -S/-G/-L/-n/-X take a value (shortArg below wins)
+  shortArg: "nSGLUMCBlXO",
+  long: ["--patch", "--no-patch", "--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--summary", "--raw", "--cached",
+    "--staged", "--check", "--no-color", "--ignore-all-space", "--ignore-space-change", "--ignore-blank-lines", "--ignore-space-at-eol",
+    "--ignore-cr-at-eol", "--pickaxe-all", "--all", "--graph", "--no-decorate", "--first-parent", "--merges", "--no-merges", "--reverse",
+    "--abbrev-commit", "--no-abbrev-commit", "--relative-date", "--follow", "--left-right", "--cherry-pick", "--cherry-mark", "--cherry",
+    "--boundary", "--topo-order", "--date-order", "--author-date-order", "--full-history", "--simplify-by-decoration", "--ancestry-path",
+    "--exit-code", "--quiet", "--merge-base", "--no-index", "--full-index", "--binary", "--no-prefix", "--no-renames", "--histogram",
+    "--patience", "--minimal", "--function-context", "--text", "--compact-summary", "--no-ext-diff", "--no-textconv", "--oneline",
+    "--no-walk", "--do-walk", "--log-size", "--source", "--use-mailmap", "--no-use-mailmap", "--remove-empty", "--show-pulls",
+    "--sparse", "--dense", "--children", "--parents", "--not", "--ignore-submodules", "--irreversible-delete", "--no-stat", "--keep-base",
+    "--root", "--no-merges", "--expand-tabs", "--no-expand-tabs", "--no-notes", "--regexp-ignore-case", "--extended-regexp",
+    "--fixed-strings", "--perl-regexp", "--basic-regexp", "--invert-grep", "--all-match", "--date-order", "--minimal", "--indent-heuristic",
+    "--no-indent-heuristic", "--default-prefix", "--stdin", "--diff-merges", "--combined-all-paths", "--cc", "--remerge-diff", "--no-diff-merges"],
+  longArg: ["--max-count", "--skip", "--since", "--after", "--until", "--before", "--author", "--committer", "--grep", "--diff-filter",
+    "--src-prefix", "--dst-prefix", "--anchored", "--diff-algorithm", "--stat-width", "--stat-name-width", "--stat-count", "--stat-graph-width",
+    "--inter-hunk-context", "--encoding", "--output-indicator-new", "--output-indicator-old", "--output-indicator-context", "--max-age",
+    "--min-age", "--min-parents", "--max-parents", "--exclude", "--word-diff-regex", "--color-moved-ws", "--submodule", "--find-object",
+    "--ws-error-highlight", "--abbrev"],
+  longOpt: ["--stat", "--dirstat", "--format", "--pretty", "--color", "--word-diff", "--color-words", "--find-renames", "--find-copies",
+    "--break-rewrites", "--relative", "--decorate", "--decorate-refs", "--decorate-refs-exclude", "--date", "--branches", "--tags",
+    "--remotes", "--glob", "--unified", "--color-moved", "--abbrev", "--ignore-submodules", "--submodule", "--notes", "--expand-tabs",
+    "--diff-merges", "--show-linear-break", "--no-walk", "--cc"],
+  numeric: true,
+};
+const GIT_SUBCOMMANDS = {
+  status: spec({
+    short: "sbvzu",
+    shortArg: "",
+    long: ["--short", "--branch", "--long", "--verbose", "--null", "--ahead-behind", "--no-ahead-behind", "--renames", "--no-renames",
+      "--show-stash", "--no-column"],
+    longOpt: ["--porcelain", "--untracked-files", "--ignored", "--ignore-submodules", "--find-renames", "--column"],
+  }),
+  diff: spec(GIT_LOG_FAMILY),
+  log: spec(GIT_LOG_FAMILY),
+  show: spec(GIT_LOG_FAMILY),
+  fetch: spec({
+    short: "qvpPnt",
+    shortArg: "j",
+    long: ["--quiet", "--verbose", "--prune", "--prune-tags", "--tags", "--no-tags", "--dry-run", "--unshallow", "--progress",
+      "--no-progress", "--porcelain", "--no-recurse-submodules", "--all", "--no-write-fetch-head", "--write-fetch-head", "--atomic"],
+    longArg: ["--depth", "--deepen", "--shallow-since", "--shallow-exclude", "--jobs"],
+    // a remote name or URL, and branch names; never a refspec with ":" (it writes local refs)
+    operands: (ops) => ops.every((o, idx) => (idx === 0 ? !/^-/.test(o) : /^[A-Za-z0-9_./@-]+$/.test(o) && !o.includes(":"))),
+  }),
+  "rev-parse": spec({
+    short: "q",
+    long: ["--verify", "--quiet", "--abbrev-ref", "--symbolic", "--symbolic-full-name", "--show-toplevel", "--git-dir", "--git-common-dir",
+      "--absolute-git-dir", "--is-inside-work-tree", "--is-inside-git-dir", "--is-bare-repository", "--is-shallow-repository",
+      "--show-prefix", "--show-cdup", "--all", "--sq", "--not", "--revs-only", "--no-revs", "--flags", "--no-flags", "--local-env-vars",
+      "--show-object-format", "--show-superproject-working-tree", "--sq-quote"],
+    longArg: ["--default", "--prefix"],
+    longOpt: ["--short", "--branches", "--tags", "--remotes", "--glob", "--abbrev-ref", "--disambiguate", "--path-format"],
+  }),
+  "merge-base": spec({ short: "a", long: ["--is-ancestor", "--all", "--octopus", "--independent", "--fork-point"] }),
+  "ls-remote": spec({
+    short: "htq",
+    long: ["--heads", "--tags", "--branches", "--refs", "--quiet", "--exit-code", "--symref", "--get-url"],
+    longArg: ["--sort"],
+  }),
+  "ls-tree": spec({
+    short: "rtdlz",
+    long: ["--long", "--name-only", "--name-status", "--object-only", "--full-name", "--full-tree"],
+    longArg: ["--format"],
+    longOpt: ["--abbrev"],
+  }),
+  "merge-tree": spec({
+    short: "z",
+    shortArg: "X",
+    long: ["--write-tree", "--name-only", "--no-messages", "--messages", "--allow-unrelated-histories", "--trivial-merge"],
+    longArg: ["--merge-base", "--strategy-option"],
+  }),
+};
+const GIT_WORKTREE_LIST = spec({ short: "vz", long: ["--porcelain", "--verbose"], longArg: ["--expire"] });
+
+// The commands the allow list lets through, with what this hook accepts for each.
+// Returns null when the command is not one of them (its question is Claude Code's).
+export function allowedCommandOptionsAreKnown(words) {
+  if (!words.length) return null;
+  const name = words[0];
+  const args = words.slice(1);
+  if (name === "grep") return optionsAreKnown(args, GREP);
+  if (name === "rg") return optionsAreKnown(args, RG);
+  if (name === "cat") return optionsAreKnown(args, CAT);
+  if (name === "head" || name === "tail") return optionsAreKnown(args, HEAD_TAIL);
+  if (name === "ls") return optionsAreKnown(args, LS);
+  if (name === "wc") return optionsAreKnown(args, WC);
+  if (name === "cut") return optionsAreKnown(args, CUT);
+  if (name === "diff") return optionsAreKnown(args, DIFF);
+  if (name === "sort") return optionsAreKnown(args, SORT);
+  if (name === "uniq") return optionsAreKnown(args, UNIQ);
+  if (name === "find") return findIsKnown(args);
+  if (name === "sed" && args[0] === "-n") return optionsAreKnown(args, SED_N); // the script: sedRawScriptsAreReadOnly
+  if (name === "node" && args[0] === "--test") return optionsAreKnown(args.slice(1), NODE_TEST);
+  if (name === "git") {
+    let i = 0;
+    while (i < args.length && args[i].startsWith("-")) {
+      if (args[i] === "-C") { i += 2; continue; }
+      if (["--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs"].includes(args[i])) { i += 1; continue; }
+      return Object.prototype.hasOwnProperty.call(GIT_SUBCOMMANDS, args.find((a) => !a.startsWith("-")) ?? "") ? false : null;
+    }
+    const sub = args[i];
+    if (sub === "worktree" && args[i + 1] === "list") return optionsAreKnown(args.slice(i + 2), GIT_WORKTREE_LIST);
+    if (!Object.prototype.hasOwnProperty.call(GIT_SUBCOMMANDS, sub)) return null;
+    return optionsAreKnown(args.slice(i + 1), GIT_SUBCOMMANDS[sub]);
+  }
+  return null;
+}
 
 const SED_SIMPLE_COMMANDS = new Set(["p", "P", "=", "q", "Q", "l", "n", "N", "d", "D", "g", "G", "h", "H", "x", "z", "{", "}"]);
 
@@ -800,69 +1179,154 @@ export function isReadOnlySedScript(script) {
   return true;
 }
 
-function readsAndWritesNothingElse(tokens) {
-  const name = basenameOfCommand(tokens[0] || "");
-  const rawRest = tokens.slice(1);
-  const rest = rawRest.map(stripQuotes);
-  if (name === "sed") {
-    // Only the form the allow list lets through without a question (`sed -n ...`): any other
-    // sed is not allowed there, so Claude Code itself asks or decides as it always has.
-    if (rest[0] !== "-n") return true;
-    if (rest.some((t) => /^--sandbox$/.test(t))) return !rest.some((t) => /^(-i|--in-place)/.test(t) || /^-[a-zA-Z]*i/.test(t) && !/^-[a-zA-Z]*[ef]$/.test(t));
-    const scripts = [];
-    let scriptFromArgs = true;
-    for (let k = 0; k < rest.length; k++) {
-      const t = rest[k];
-      if (/^(--in-place|-i)/.test(t) || (/^-[a-zA-Z]+$/.test(t) && t.includes("i"))) return false;
-      if (t === "-e" || t === "--expression") { scripts.push(rawRest[k + 1] ?? ""); k++; scriptFromArgs = false; continue; }
-      if (t.startsWith("--expression=")) { scripts.push(rawRest[k].slice(13)); scriptFromArgs = false; continue; }
-      if (t === "-f" || t.startsWith("--file")) return false; // a script file cannot be read here
-      if (t.startsWith("-")) continue;
-      if (scriptFromArgs) { scripts.push(rawRest[k]); scriptFromArgs = false; }
-    }
-    // Shell expansions inside a double-quoted or unquoted script are line numbers in
-    // practice ("$n,\$p", "$((n+20))p"): read each as the number 1 and an escaped \$ as $.
-    // A single-quoted script is literal ('1,$p': sed's own last-line address). A script
-    // that is nothing but a variable has no command left and is not read-only.
-    const expand = (raw) => raw.startsWith("'") ? stripQuotes(raw) : stripQuotes(raw)
-      .replace(/\\\$/g, "\u0000") // an escaped \$ is a literal $: keep it out of the variables
-      .replace(/\$\(\([^)]*\)\)/g, "1")
-      .replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*/g, "1")
-      .replace(/\u0000/g, "$");
-    return scripts.every((script) => isReadOnlySedScript(expand(script)));
+// The raw-text side of sed: inside a double-quoted or unquoted script the shell expands
+// $n and $((n+1)) before sed sees them; in practice these are line numbers. The words the
+// shell passes are judged above; here, a script whose RAW text holds such expansions is
+// read with each expansion as the number 1, so "$n,\$p" is the read-only "1,$p".
+export function sedRawScriptsAreReadOnly(segment) {
+  const tokens = tokenizeWords(normalizeSegment(segment));
+  if (shellWord(tokens[0] ?? "") !== "sed" || shellWord(tokens[1] ?? "") !== "-n") return true;
+  const expand = (raw) => raw.startsWith("'") ? shellWord(raw) : shellWord(raw
+    .replace(/\\\$/g, "\u0000")
+    .replace(/\$\(\([^)]*\)\)/g, "1")
+    .replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*/g, "1"))
+    .replace(/\u0000/g, "$");
+  const rest = tokens.slice(1);
+  if (rest.some((t) => shellWord(t) === "--sandbox")) return true; // sed itself refuses w, e and r then
+  const scripts = [];
+  let first = true;
+  for (let k = 0; k < rest.length; k++) {
+    const word = shellWord(rest[k]);
+    if (word === "-e" || word === "--expression") { scripts.push(rest[k + 1] ?? ""); k++; first = false; continue; }
+    if (word.startsWith("--expression=")) { scripts.push(rest[k].replace(/^--expression=/, "")); first = false; continue; }
+    if (word.startsWith("-")) continue;
+    if (first) { scripts.push(rest[k]); first = false; }
   }
-  if (name === "sort") return !rest.some((t) => /^--(output|compress-program)/.test(t) || /^-[a-zA-Z]*o/.test(t));
-  if (name === "uniq") {
-    const positional = [];
-    for (let k = 0; k < rest.length; k++) {
-      const t = rest[k];
-      if (/^-[fsw]$/.test(t)) { k++; continue; }
-      if (t.startsWith("-") && t !== "-") continue;
-      positional.push(t);
-    }
-    return positional.length < 2; // uniq INPUT OUTPUT writes OUTPUT
-  }
-  if (name === "rg") return !rest.some((t) => /^--pre(=|$)/.test(t));
-  if (name === "find") return !rest.some((t) => /^-(exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/.test(t));
-  if (name === "git") {
-    const sub = rest.find((t) => !t.startsWith("-"));
-    if (["diff", "log", "show", "format-patch", "ls-remote", "fetch", "merge-tree", "ls-tree", "status", "rev-parse", "merge-base"].includes(sub)) {
-      return !rest.some((t) => /^--(output|ext-diff|textconv|upload-pack|exec)(=|$)/.test(t));
-    }
-    return true;
-  }
-  if (name === "node" && rest[0] === "--test") {
-    if (rest.some((t) => /(^|[\\/])\.\.([\\/]|$)/.test(t))) return false;
-    if (rest.some((t) => /^(-e|--eval|-p|--print)(=|$)/.test(t))) return false;
-    return true;
-  }
-  return true;
+  return scripts.every((raw) => isReadOnlySedScript(expand(raw)));
 }
 
-export function isAllowedReadCommandWriting(segment) {
-  const tokens = tokenizeWords(normalizeSegment(segment));
-  if (tokens.length === 0) return false;
-  return !readsAndWritesNothingElse(tokens);
+// Environment variables that change what an allowed command runs or loads. Set in front
+// of a command (or with env, or exported anywhere in the line), they ask.
+const DANGEROUS_ENV_RE = /^(NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|BASH_ENV|ENV|PATH|PAGER|MANPAGER|LESSOPEN|LESSCLOSE|EDITOR|VISUAL|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|GIT_[A-Z_]+|RIPGREP_CONFIG_PATH|GREP_OPTIONS|IFS)$/;
+
+export function setsDangerousEnvironment(segment) {
+  let text = typeof segment === "string" ? segment.trim() : "";
+  const exported = /^(?:export|declare\s+-x|typeset\s+-x)\s+/.test(text);
+  text = text.replace(/^(?:export|declare\s+-x|typeset\s+-x)\s+/, "");
+  let tokens = tokenizeWords(text);
+  if (tokens[0] === "env") tokens = tokens.slice(1).filter((t) => !t.startsWith("-"));
+  for (const t of tokens) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(t);
+    if (!m) break;
+    if (DANGEROUS_ENV_RE.test(m[1])) return true;
+  }
+  return exported && tokens.some((t) => DANGEROUS_ENV_RE.test(t)); // `export PAGER` after PAGER=... earlier
+}
+
+// Output redirections of a raw segment: the targets of >, >>, >|, &>, &>>, N>, N>>.
+// Duplications (>&2, 2>&1, >&-) are not files.
+export function outputRedirectTargets(segment) {
+  const targets = [];
+  if (typeof segment !== "string") return targets;
+  let quote = null;
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (quote) {
+      if (quote === '"' && ch === "\\") { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "\\") { i++; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch !== ">") continue;
+    if (segment[i + 1] === "(") continue; // >( ) process substitution
+    let j = i + 1;
+    if (segment[j] === ">" || segment[j] === "|") j++;
+    if (segment[j] === "&") { // >&2, >&-  (a duplication), unless &> form handled below
+      continue;
+    }
+    while (segment[j] === " " || segment[j] === "\t") j++;
+    let k = j;
+    let q = null;
+    for (; k < segment.length; k++) {
+      const c = segment[k];
+      if (q) { if (c === q) q = null; continue; }
+      if (c === "'" || c === '"') { q = c; continue; }
+      if (c === "\\") { k++; continue; }
+      if (/[\s;&|<>()]/.test(c)) break;
+    }
+    targets.push(segment.slice(j, k));
+    i = k - 1;
+  }
+  return targets;
+}
+
+const DEVICE_TARGETS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"]);
+
+function realDirectoryUnderTemp(target) {
+  const tempRoots = new Set();
+  for (const t of [os.tmpdir(), "/tmp"]) {
+    try { tempRoots.add(fs.realpathSync(t)); } catch { /* missing on this system */ }
+  }
+  let probe = target;
+  for (let n = 0; n < 64; n++) {
+    let real = null;
+    try { real = fs.realpathSync(probe); } catch { real = null; }
+    if (real !== null) {
+      for (const root of tempRoots) {
+        if (real === root || real.startsWith(root + path.sep)) return true;
+      }
+      return false;
+    }
+    const parent = path.dirname(probe);
+    if (parent === probe) return false;
+    probe = parent;
+  }
+  return false;
+}
+
+// A redirect target is harmless when it is a device, or a plain absolute path that, with
+// every symlink followed, lies inside the system's temporary directory.
+export function isHarmlessRedirectTarget(rawTarget, variables = new Map()) {
+  let raw = rawTarget;
+  for (const [name, value] of variables) {
+    raw = raw.split("${" + name + "}").join(value).split("$" + name).join(value);
+  }
+  if (/[$`*?[\]{}~]/.test(raw)) return false; // cannot be read here
+  const target = shellWord(raw);
+  if (DEVICE_TARGETS.has(target) || /^\/dev\/fd\/\d+$/.test(target)) return true;
+  if (!path.isAbsolute(target)) return false;
+  if (target.split(/[\\/]/).includes("..")) return false;
+  return realDirectoryUnderTemp(target);
+}
+
+// Plain assignments in a command line (`S=/tmp/x`, `export S=/tmp/x`): their values are
+// known, so `> $S/out.txt` can be judged. A name assigned twice, or a value with an
+// expansion in it, is not used.
+export function plainAssignments(segments) {
+  const values = new Map();
+  const seen = new Set();
+  for (const segment of segments) {
+    const text = segment.trim().replace(/^export\s+/, "");
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(\S*)$/.exec(text);
+    if (!m) continue;
+    if (seen.has(m[1])) { values.delete(m[1]); continue; }
+    seen.add(m[1]);
+    const value = shellWord(m[2]);
+    if (!/[$`]/.test(m[2])) values.set(m[1], value);
+  }
+  return values;
+}
+
+// The judgement for one segment: an allowed command with an unknown option, or writing
+// to a file outside the temporary directory, asks.
+export function allowedCommandNeedsQuestion(segment, variables = new Map()) {
+  const words = commandWords(segment);
+  const known = allowedCommandOptionsAreKnown(words);
+  if (known === null) return false;
+  if (!known) return true;
+  if (!sedRawScriptsAreReadOnly(segment)) return true;
+  return outputRedirectTargets(segment).some((t) => !isHarmlessRedirectTarget(t, variables));
 }
 
 // A database URL (or PGHOST) set for this command that is not this machine. The test
@@ -872,15 +1336,18 @@ const DATABASE_VARIABLE_RE = /^((?:[A-Za-z0-9_]*_)?DATABASE_URL|PGHOST|PGHOSTADD
 const LOOPBACK_HOST_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)$/i;
 
 function isLoopbackDatabaseValue(name, rawValue) {
-  const value = stripQuotes(rawValue);
+  const value = shellWord(rawValue);
   if (value === "") return true;
-  if (/[$`]/.test(value)) return false; // cannot be read
+  if (/[$`]/.test(rawValue.replace(/^'[^']*'$/, ""))) return false; // cannot be read
   if (/^PGSERVICE/.test(name)) return false;
   if (/^PGHOST/.test(name)) return value.split(",").every((h) => LOOPBACK_HOST_RE.test(h.trim()) || h.trim().startsWith("/"));
-  const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(\[[^\]]+\]|[^:/?#,]*)/i.exec(value);
+  const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?([^/?#]*)/i.exec(value);
   if (!m) return false;
   if (/[?&](host|hostaddr|service)=/i.test(value)) return false;
-  return m[1] === "" || LOOPBACK_HOST_RE.test(m[1]);
+  const authority = m[1];
+  if (authority.includes(",")) return false; // several hosts (libpq): each would have to be checked
+  const host = authority.startsWith("[") ? authority.slice(0, authority.indexOf("]") + 1) : authority.replace(/:\d*$/, "");
+  return host === "" || LOOPBACK_HOST_RE.test(host);
 }
 
 export function setsNonLocalDatabase(segment) {
@@ -903,27 +1370,114 @@ export function setsNonLocalDatabase(segment) {
 // Files that hold secrets. Their examples (.env.example, .env.sample, .env.template) do not.
 const SECRET_PATH_PATTERNS = [
   /(^|[\\/])\.env(\.(local|production|prod|development|dev|staging|test)(\.local)?)?$/i,
-  /(^|[\\/])\.env[*?[]/,
   /(^|[\\/])\.?pgpass(\.conf)?$/i,
   /\.(pem|key|p12|pfx|jks|keystore)$/i,
   /(^|[\\/])id_(rsa|dsa|ecdsa|ed25519)$/,
   /(^|[\\/])\.(netrc|npmrc|git-credentials)$/i,
   /(^|[\\/])\.?credentials(\.json)?$/i,
 ];
+// Names a glob could reach: a glob whose literal part can match one of them asks.
+const SECRET_SAMPLE_NAMES = [".env", ".env.local", ".env.production", ".pgpass", "pgpass.conf", "server.pem", "server.key", "id_rsa",
+  "id_ed25519", ".netrc", ".npmrc", ".git-credentials", "credentials", ".credentials.json", "cert.p12"];
+
+function expandBraces(word, limit = 64) {
+  const m = /\{([^{}]*,[^{}]*)\}/.exec(word);
+  if (!m) return [word];
+  const out = [];
+  for (const part of m[1].split(",")) {
+    out.push(...expandBraces(word.slice(0, m.index) + part + word.slice(m.index + m[0].length), limit));
+    if (out.length > limit) break;
+  }
+  return out;
+}
+
+function globToRegex(glob) {
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") re += "[^/]*";
+    else if (c === "?") re += "[^/]";
+    else if (c === "[") {
+      const end = glob.indexOf("]", i + 1);
+      if (end < 0) { re += "\\["; continue; }
+      re += "[" + glob.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\") + "]";
+      i = end;
+    } else re += c.replace(/[.+^${}()|\\]/g, "\\$&");
+  }
+  return new RegExp(re + "$");
+}
+
+function isSecretPath(value) {
+  if (/\.(example|sample|template)$/i.test(value)) return false;
+  if (SECRET_PATH_PATTERNS.some((re) => re.test(value))) return true;
+  if (!/[*?[{]/.test(value)) return false;
+  for (const candidate of expandBraces(value)) {
+    if (SECRET_PATH_PATTERNS.some((re) => re.test(candidate)) && !/\.(example|sample|template)$/i.test(candidate)) return true;
+    const base = candidate.split(/[\\/]/).pop();
+    if (!/[*?[]/.test(base)) continue;
+    const literalPrefix = base.split(/[*?[]/)[0];
+    const pattern = globToRegex(base);
+    if (/^\*\.[A-Za-z0-9]+$/.test(base) && SECRET_PATH_PATTERNS.some((re) => re.test(base.slice(1)))) return true; // *.pem
+    if (literalPrefix === "") continue; // `*`, `*.mjs`: no literal part aimed at a secret
+    if (SECRET_SAMPLE_NAMES.some((name) => pattern.test(name))) return true;
+  }
+  return false;
+}
 
 export function mentionsSecretFile(segment) {
-  const tokens = tokenizeWords(typeof segment === "string" ? segment : "");
+  const tokens = tokenizeWords(normalizeSegment(typeof segment === "string" ? segment : ""));
   return tokens.slice(1).some((raw) => {
-    const t = stripQuotes(raw);
-    const value = t.includes("=") && t.startsWith("-") ? t.slice(t.indexOf("=") + 1) : t;
-    if (/\.(example|sample|template)$/i.test(value)) return false;
-    return SECRET_PATH_PATTERNS.some((re) => re.test(value));
+    for (const t of [stripQuotes(raw), shellWord(raw)]) {
+      const value = t.startsWith("-") && t.includes("=") ? t.slice(t.indexOf("=") + 1) : t;
+      if (isSecretPath(value)) return true;
+    }
+    return false;
   });
 }
 
 // ---------------------------------------------------------------------------
 // ASK checks added with the hardening: forms that lose work or history and were silent.
 // ---------------------------------------------------------------------------
+
+export function definesAlias(segment) {
+  const words = commandWords(segment);
+  return words[0] === "alias" && words.length > 1;
+}
+
+const SAFE_GIT_CONFIG_KEYS = new Set(["user.name", "user.email", "color.ui", "core.quotepath", "init.defaultbranch", "advice.detachedhead",
+  "commit.gpgsign", "tag.gpgsign", "gc.auto", "column.ui"]);
+
+export function isGitConfigOverride(segment) {
+  const words = commandWords(segment);
+  if (words[0] !== "git") return false;
+  for (let i = 1; i < words.length && words[i].startsWith("-"); i++) {
+    const w = words[i];
+    if (w === "-C" || w === "--git-dir" || w === "--work-tree" || w === "--namespace") { i++; continue; }
+    let pair = null;
+    if (w === "-c" || w === "--config-env") pair = words[++i] ?? "";
+    else if (w.startsWith("-c") && w.length > 2) pair = w.slice(2);
+    else if (w.startsWith("--config-env=")) pair = w.slice(13);
+    if (pair === null) continue;
+    const key = pair.split("=")[0].toLowerCase();
+    if (w.startsWith("--config-env") || !SAFE_GIT_CONFIG_KEYS.has(key)) return true;
+  }
+  return false;
+}
+
+export function isGitResetMergeOrKeep(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "reset");
+  return parsed !== null && /(^|\s)--(merge|keep)\b/.test(parsed.rest);
+}
+
+export function isForcedSwitch(segment) {
+  for (const sub of ["switch", "checkout"]) {
+    const parsed = extractGitSubcommandArgs(segment, sub);
+    if (!parsed) continue;
+    const tokens = parsed.rest.split(/\s+/).filter(Boolean);
+    if (tokens.some((t) => t === "--force" || t === "--discard-changes" || (/^-[a-zA-Z]+$/.test(t) && t.includes("f")))) return true;
+  }
+  return false;
+}
 
 export function isGitStashPop(segment) {
   const parsed = extractGitSubcommandArgs(segment, "stash");
@@ -999,7 +1553,11 @@ const ASK_REASONS = {
   pullRebase: "'git pull --rebase' rewrites your local commits on top of the remote — needs your explicit confirmation.",
   unreadable: "A shell here reads commands this guard cannot see (from a pipe, or from a variable) — needs your explicit confirmation.",
   readCommandWrites:
-    "This read command is used in a form that writes, deletes or runs something else (sed -i or a writing sed script, sort -o, uniq with an output file, rg --pre, find -exec/-delete, git --output/--ext-diff/--upload-pack, node --test outside the test folders) — needs your explicit confirmation.",
+    "This command is on the allow list, but here it has an option that is not on its list of known-safe options (or an abbreviated one), a writing sed script, a test file outside backend/tests or frontend/tests, or it writes to a file outside the temporary folder — needs your explicit confirmation.",
+  dangerousEnv: "This command sets an environment variable that changes what a program runs or loads (NODE_OPTIONS, PATH, PAGER, GIT_*, LD_PRELOAD, ...) — needs your explicit confirmation.",
+  gitConfigOverride: "'git -c' / '--config-env' overrides git configuration for this command (an alias, a pager, an external program) — needs your explicit confirmation.",
+  resetMergeKeep: "'git reset --merge' / '--keep' moves the branch and rewrites the working tree — needs your explicit confirmation.",
+  forcedSwitch: "A forced 'git switch' / 'git checkout' (-f, --force, --discard-changes) throws away local changes — needs your explicit confirmation.",
   nonLocalDatabase: "This command sets a database URL (or PGHOST) that is not this machine, or one that cannot be read — needs your explicit confirmation.",
   secretFile: "This command names a file that holds secrets (.env, pgpass, a key or credentials file) — needs your explicit confirmation.",
   sqlWrite:
@@ -1051,10 +1609,30 @@ function expandSegments(segments, depth = 0) {
   return expanded;
 }
 
+// Whether a command line starts a background job (a single `&` outside quotes that is not
+// part of `&&`, `|&`, `2>&1`, `&>`). A merge in such a line gets no exemption: it would run
+// alongside whatever follows, after the hook has checked the branch.
+export function hasBackgroundJob(text) {
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) { if (quote === '"' && ch === "\\") { i++; continue; } if (ch === quote) quote = null; continue; }
+    if (ch === "\\") { i++; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch !== "&") continue;
+    if (text[i + 1] === "&") { i++; continue; }
+    if (text[i - 1] === ">" || text[i - 1] === "<" || text[i - 1] === "|" || text[i + 1] === ">") continue;
+    return true;
+  }
+  return false;
+}
+
 export function classifyShellCommand(cmd, cwd) {
   const { text, shellBodies } = extractHeredocs(cmd);
   const topLevel = splitCommandSegments(text);
   const segments = expandSegments(topLevel);
+  const variables = plainAssignments(topLevel);
+  const background = hasBackgroundJob(text);
   for (const body of shellBodies) segments.push(...expandSegments(splitCommandSegments(body)));
 
   for (const segment of segments) {
@@ -1074,7 +1652,7 @@ export function classifyShellCommand(cmd, cwd) {
   // question; every other segment of the same command line is still checked.
   for (let index = 0; index < segments.length; index++) {
     const segment = segments[index];
-    if (isGitMergeOrRebase(segment) && !isMergeOfRemoteDefaultIntoWorkingBranch(segment, segments.slice(0, index), cwd)) {
+    if (isGitMergeOrRebase(segment) && (background || !isMergeOfRemoteDefaultIntoWorkingBranch(segment, segments.slice(0, index), cwd))) {
       return { decision: "ask", reason: ASK_REASONS.mergeRebase };
     }
     if (isGhPrMerge(segment)) return { decision: "ask", reason: ASK_REASONS.ghPrMerge };
@@ -1083,7 +1661,12 @@ export function classifyShellCommand(cmd, cwd) {
     if (isGitPushDelete(segment)) return { decision: "ask", reason: ASK_REASONS.pushDelete };
     if (isGitPullRebase(segment)) return { decision: "ask", reason: ASK_REASONS.pullRebase };
     if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
-    if (isAllowedReadCommandWriting(segment)) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (allowedCommandNeedsQuestion(segment, variables)) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (setsDangerousEnvironment(segment)) return { decision: "ask", reason: ASK_REASONS.dangerousEnv };
+    if (definesAlias(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
+    if (isGitConfigOverride(segment)) return { decision: "ask", reason: ASK_REASONS.gitConfigOverride };
+    if (isGitResetMergeOrKeep(segment)) return { decision: "ask", reason: ASK_REASONS.resetMergeKeep };
+    if (isForcedSwitch(segment)) return { decision: "ask", reason: ASK_REASONS.forcedSwitch };
     if (setsNonLocalDatabase(segment)) return { decision: "ask", reason: ASK_REASONS.nonLocalDatabase };
     if (mentionsSecretFile(segment)) return { decision: "ask", reason: ASK_REASONS.secretFile };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };

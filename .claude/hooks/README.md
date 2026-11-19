@@ -209,7 +209,11 @@ the hook also reads:
 - the body of a heredoc that a shell reads (`bash <<'E'`), and a here-string to a shell. The
   body of any other heredoc is data (a commit message, a file being written, a Python
   script) and is not read as shell; a heredoc without its closing word is read as commands;
-- a variable as the command word (`$GIT push -f`) is read as git.
+- a variable as the command word (`$GIT push -f`) is read as git;
+- every word as the program receives it: `'git'`, `"git"`, `g\it`, `re""set`, `$'reset'`,
+  `$'\x72eset'` are all plain words, and a backslash-newline inside a word joins it
+  (`--ha\⏎rd` is `--hard`);
+- a line with a background job (a single `&`) gets no merge exemption.
 What still cannot be seen: what a script file, a Python or Node program, or a git
 configuration runs; a command assembled at run time from several variables.
 
@@ -218,21 +222,54 @@ configuration runs; a command assembled at run time from several variables.
 Claude Code already runs its own read-only set (`ls`, `cat`, `head`, `tail`, `grep`, `find`,
 `wc`, `diff`, read-only git, ...) without a question; the entries below make that explicit and
 add `sed -n`, `rg`, `sort`, `uniq`, `cut`, three git read commands and the two test folders. An
-allow rule is a text pattern (`Bash(sort:*)` also matches `sort -o file`), and a compound
-command runs without a question only when every part is allowed. Redirection targets (`> file`)
-are checked by Claude Code itself against the working directories and the Edit rules. A hook
-"ask" still asks when an allow rule matches.
+allow rule is a text pattern (`Bash(sort:*)` also matches `sort --out=file`), and a compound
+command runs without a question only when every part is allowed. A hook "ask" still asks when an
+allow rule matches.
 
-| Entry | Why it cannot write, delete or reach production | What the hook adds on top |
+**The rule for every allowed command: the hook is silent only when every option is on that
+command's explicit list of known-safe options** (`spec(...)` tables in `safety-guard.mjs`). Any
+other option asks — including an abbreviated long option: git and the GNU tools accept
+`--upload` for `--upload-pack`, `--out` for `--output`, `--in-pl` for `--in-place`, and none of
+these abbreviations is on a list. Options are read as the program receives them (quotes and
+backslashes removed), redirection words are not options.
+
+| Entry | On its list (examples) | Never on it (asks) |
 |---|---|---|
-| `Bash(sed -n:*)` | prints selected lines | asks for `-i`, `--in-place`, a script with `w`/`W`/`e`/`r`/`R`, `s///w`, `s///e`, `-f file`, an unreadable script |
-| `Bash(grep:*)`, `Bash(rg:*)` | read and print | `rg --pre` (runs a program) asks; a named secret file asks |
-| `Bash(cat:*)`, `Bash(head:*)`, `Bash(tail:*)`, `Bash(wc:*)`, `Bash(cut:*)`, `Bash(diff:*)`, `Bash(ls)`, `Bash(ls:*)` | read and print | a named secret file asks |
-| `Bash(find:*)` | lists | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint*`, `-fls` ask (Claude Code itself also refuses to auto-allow them) |
-| `Bash(sort:*)` | prints | `-o`, `--output`, `--compress-program` ask |
-| `Bash(uniq:*)` | prints | a second file name (the output file) asks |
-| `Bash(git ls-remote:*)`, `Bash(git ls-tree:*)`, `Bash(git merge-tree:*)` | read; merge-tree may add objects to `.git`, never refs | `--upload-pack`/`--exec` (runs a program), `--output`, `--ext-diff`, `--textconv` ask — also for the git read commands allowed before (`diff`, `log`, `show`, `fetch`) |
-| `Bash(node --test backend/tests/*)`, `Bash(node --test frontend/tests/*)` | run the repository's own tests | a path with `..`, `-e`/`--eval`/`-p`/`--print` asks; a non-local database URL in front asks |
+| `Bash(sed -n:*)` | `-n -E -r -s -u -z -e --expression --sandbox` | `-i`, `--in-place`, `-f`; a script with `w`/`W`/`e`/`r`/`R`, `s///w`, `s///e`, or one that cannot be read (`$X`) |
+| `Bash(grep:*)` | the matching, context, include/exclude and output-format options | anything else |
+| `Bash(rg:*)` | the matching, glob/type, context, `--files`, `--json`, `--hidden`, `--no-ignore` options | `--pre`, `--pre-glob`, `-z`/`--search-zip` (run programs) |
+| `Bash(cat:*)`, `head`, `tail`, `wc`, `cut`, `ls`, `diff` | their reading and formatting options | `wc --files0-from`, `diff -l` (runs `pr`), anything else |
+| `Bash(find:*)` | `-name -iname -path -type -maxdepth -mindepth -newer -mtime -size -empty -print -prune` and the operators | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint*`, `-fls`, `-files0-from`, anything else |
+| `Bash(sort:*)` | the ordering, key and field options | `-o`, `--output`, `-T`, `--compress-program`, `--files0-from` |
+| `Bash(uniq:*)` | its counting and comparing options | a second file name (the output file) |
+| `git status/diff/log/show/fetch/rev-parse/merge-base/ls-remote/ls-tree/merge-tree`, `git worktree list` | per subcommand: the reading, formatting, revision-range and pickaxe options; `fetch` with a remote and branch names | `--output`, `--ext-diff`, `--textconv`, `--upload-pack`, `--exec`, `--show-signature` (runs gpg), a fetch refspec with `:` (it writes local refs); git global options other than `-C`, `--no-pager`, `--no-optional-locks`, `--literal-pathspecs` |
+| `Bash(node --test backend/tests/*)`, `…frontend/tests/*` | test files under the two folders (no `..`, no absolute path); `--test-name-pattern`, `--test-skip-pattern`, `--test-concurrency`, `--test-timeout`, `--test-only`, `--test-shard`, `--test-reporter=spec/tap/dot/junit/lcov`, `--test-reporter-destination=stdout/stderr`, `--experimental-test-isolation=none/process` | `--import`, `--require`, `-r`, `--loader`, `-e`, a reporter module or a destination file, anything else |
+
+**Writing to a file.** An allowed command with an output redirection (`>`, `>>`, `>|`, `&>`,
+`N>`) asks, unless the target is `/dev/null`, `/dev/stdout`, `/dev/stderr`, a descriptor
+(`2>&1`, `>&2`), or a plain absolute path that, with every symbolic link followed, lies inside
+the system's temporary directory (`os.tmpdir()`, `/tmp`). A target with `..`, `~`, a glob, or a
+variable whose value is not a plain assignment earlier in the same line (`S=/tmp/x; ... > $S/out`)
+asks. Commands that are not on the allow list (`echo x > file`) are left to Claude Code's own
+redirection check.
+
+**In front of an allowed command** (or exported anywhere in the line), an environment variable
+that changes what a program runs or loads asks: `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`,
+`PATH`, `PAGER`, `EDITOR`, `BASH_ENV`, `GIT_*`, `RIPGREP_CONFIG_PATH` and similar; so does a
+database URL or `PGHOST` that is not this machine, cannot be read, or names several hosts.
+
+**Also asks:** an `alias` definition (`alias g=git; g reset --hard`); `git -c` / `--config-env`
+with any key other than `user.name`, `user.email`, `color.ui`, `core.quotepath`,
+`init.defaultBranch` and a few display settings (`git -c alias.x='reset --hard' x`,
+`git -c core.pager=...`); `git reset --merge` / `--keep`; `git switch -f` / `--discard-changes`
+and `git checkout -f` (a `checkout` that discards files stays denied). A function definition's
+body is read as commands (`f(){ git reset --hard; }` is denied).
+
+**Measured** (all 1,252 Bash calls of one executor session, 2026-11, replayed through main's
+hook and settings and through these, with a model of Claude Code's own decision: its
+documented read-only set plus the allow rules as text patterns, redirections assumed allowed
+by Claude Code): without any question 62 → 380 calls; 321 calls stop asking; 3 start asking
+(all three write into repository files: `cat > docs/...`, `git diff > ../x.patch`).
 
 Not allowed: `rm`, `mv`, `cp`, `tee`, `awk`, `xargs`, `curl`, `wget`, `psql`/`pg_*`, a shell,
 `python`, git `add/commit/reset/clean/stash/rebase/checkout/restore/switch/pull/merge`, any MCP
@@ -245,9 +282,13 @@ as `cat`, `head`, `tail`, `sed`): `permissions.deny` has `Read(**/.pgpass)`,
 `Read(**/id_ed25519)`, `Read(**/.git-credentials)`, `Read(**/.credentials.json)`;
 `permissions.ask` has `Read(**/.env)`, `Read(**/.env.local)`, `Read(**/.env.production)`. The
 `**/` form is gitignore syntax but not shown in Claude Code's documentation: check it once
-with `/permissions` in a new session. These rules do not cover a program that reads files
-without naming them (`grep -r`, a Node script); `rg` skips files that `.gitignore` lists,
-`grep -r` does not.
+with `/permissions` in a new session. **What still reads a secret silently:** a command that
+reads files without naming them — `grep -r x .`, `rg -uu x` / `rg --no-ignore --hidden x`,
+`cat *` in a folder that holds a `.env`, a Node or Python script. `rg` without `-uu` skips files
+that `.gitignore` lists; `grep -r` does not. The hook asks only for a NAMED secret file,
+including through quotes (`backend/'.env'`, `.\env`) and globs or braces whose literal part can
+reach one (`.e*`, `.en{v,}`, `.[e]nv`, `pgpass*`, `id_*`, `*.pem`); a bare `*` is not treated
+as aimed at a secret.
 
 ## Safety contract
 

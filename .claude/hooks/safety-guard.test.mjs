@@ -1,8 +1,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,10 @@ import {
   isHarmlessBeforeMerge,
   isMergeOfRemoteDefaultIntoWorkingBranch,
   normalizeSegment,
+  shellWord,
+  optionsAreKnown,
+  outputRedirectTargets,
+  isHarmlessRedirectTarget,
   extractSubstitutions,
   extractHeredocs,
   isReadOnlySedScript,
@@ -917,9 +921,11 @@ test("hardening: the forms the guard did not see before are now read, on every b
   // A trailing newline is not a second command.
   assert.equal(verdict("git merge --no-edit origin/main\n", featureRepo), ALLOW);
   assert.equal(verdict("git merge --no-edit origin/main\n", mainRepo), ASK);
-  // A single & runs the part before it in the background: each side is judged on its own.
-  assert.equal(verdict("git merge origin/main & git push", featureRepo), ALLOW);
-  assert.equal(verdict("git merge origin/main &", featureRepo), ALLOW);
+  // A single & runs the part before it in the background: each side is judged on its own,
+  // and a merge in such a line gets no exemption (it runs alongside what follows).
+  assert.equal(verdict("git merge origin/main & git push", featureRepo), ASK);
+  assert.equal(verdict("git merge origin/main &", featureRepo), ASK);
+  assert.equal(verdict("git status & git log -1", featureRepo), ALLOW);
   assert.equal(verdict("git merge origin/main & git push -f", featureRepo), DENY);
   assert.equal(verdict("git merge origin/main &", mainRepo), ASK);
   assert.equal(verdict("git status 2>&1 | head -3", featureRepo), ALLOW, "2>&1 is not a separator");
@@ -1117,7 +1123,8 @@ test("hardening: heredocs read by a shell are commands; other heredocs are data"
   expectAll([
     ["bash <<'E'\ngit push -f\nE", DENY], ["sh -s <<E\ngit reset --hard\nE", DENY], ['bash <<"E"\ngit status\nE', ALLOW],
     ["git commit -F - <<'E'\nfix: never run git push -f\nE", ALLOW], ["python3 - <<'E'\nprint('git push -f')\nE", ALLOW],
-    ["cat <<E > notes.md\ngit reset --hard\nE\ngit status", ALLOW], ["cat <<-E\n\tgit push -f\n\tE", ALLOW],
+    ["cat <<E > notes.md\ngit reset --hard\nE\ngit status", ASK], // the heredoc is data; writing notes.md outside the temp folder asks
+    ["cat <<E > /tmp/notes.md\ngit reset --hard\nE\ngit status", ALLOW], ["cat <<-E\n\tgit push -f\n\tE", ALLOW],
     ["cat <<E > x\ngit push -f\nE\ngit push -f", DENY], // after the heredoc, a real command again
     ["cat <<E\ngit push -f", DENY], // no closing word: read as commands
     ["bash <<< 'git push -f'", DENY], ["cat <<< 'git push -f'", ALLOW],
@@ -1234,4 +1241,133 @@ test("settings.json: the wider allow list is exactly the read and test commands 
   const offending = allow.filter((entry) => forbidden.test(entry));
   assert.deepEqual(offending, []);
   assert.equal(allow.filter((e) => /^Bash\(git push/.test(e)).every((e) => /^Bash\(git push -u origin (design|feature|fix|docs)\/:\*\)$/.test(e)), true, "only the four branch-prefix pushes that were there before");
+});
+
+// ------------------------------------------------------------------
+// Review of #642: exact option lists (no abbreviations), words as the shell passes them,
+// node --test limited to its folders and flags, output redirection, multi-host URLs.
+// ------------------------------------------------------------------
+
+test("HIGH-1: an abbreviated --upload-pack/--exec never runs a program silently", () => {
+  expectAll([
+    ["git ls-remote --upload='touch x; git-upload-pack' file:///tmp/r", ASK], ["git ls-remote --up=x origin", ASK], ["git ls-remote --upload-pack=x origin", ASK],
+    ["git ls-remote --exec=x origin", ASK], ["git fetch --upload-p=x origin", ASK], ["git fetch --upload-pack=x origin", ASK], ["git fetch --up x origin", ASK],
+    ["git ls-remote origin", ALLOW], ["git ls-remote --heads origin main", ALLOW], ["git fetch -q origin main", ALLOW], ["git fetch --prune origin", ALLOW],
+  ]);
+});
+
+test("HIGH-2: an abbreviated --output/--in-place/--ext-diff never writes or runs silently", () => {
+  expectAll([
+    ["sort --out=F f", ASK], ["sort --outp=F f", ASK], ["sort --o=F f", ASK], ["sed -n --in-pl p f", ASK], ["sed -n --in p f", ASK],
+    ["git diff --outp=x", ASK], ["git diff --out=x HEAD", ASK], ["git log --ext-dif -1", ASK], ["git log --ext -1", ASK], ["git show --textc HEAD", ASK],
+    ["git show --text HEAD", ALLOW], ["git diff --no-ext-diff --stat", ALLOW], ["git diff --output-indicator-new=+ HEAD", ALLOW],
+  ]);
+});
+
+test("exact option lists: an option that is not on a command's list asks; what executors use is on it", () => {
+  expectAll([
+    ["grep --some-new-option x f", ASK], ["cat -Z f", ASK], ["head --bogus f", ASK], ["wc --files0-from=list", ASK], ["cut --bogus f", ASK],
+    ["diff -l a b", ASK], ["sort -T /tmp f", ASK], ["uniq --bogus f", ASK], ["rg -z x", ASK], ["rg --pre-glob '*.gz' x", ASK],
+    ["git status --bogus", ASK], ["git log --show-signature -1", ASK], ["git rev-parse --git-path x", ASK],
+    // everyday forms from the replay of real executor work
+    ["grep -n \"x\" -A3 -B2 src/a.js", ALLOW], ["grep -rn --include=*.mjs 'needle' backend", ALLOW], ["grep -c x f", ALLOW], ["grep -E 'a|b' f", ALLOW],
+    ["grep -o -i x f", ALLOW], ["grep -v '^#' f", ALLOW], ["grep -e -x f", ALLOW], ["grep --color=never x f", ALLOW], ["grep -m 3 x f", ALLOW],
+    ["head -40 f", ALLOW], ["head -n 5 f", ALLOW], ["tail -n +2 f", ALLOW], ["tail -3 f", ALLOW], ["tail -f log", ALLOW], ["head -c 100 f", ALLOW],
+    ["cut -c1-200 f", ALLOW], ["cut -d, -f2 f", ALLOW], ["cut -d ':' -f1,3 f", ALLOW], ["wc -l f", ALLOW], ["wc -lc a b", ALLOW],
+    ["sort -rn f", ALLOW], ["sort -t: -k2 -n f", ALLOW], ["sort -u f", ALLOW], ["uniq -c", ALLOW], ["uniq -c f", ALLOW],
+    ["ls -la --time-style=+%H:%M x", ALLOW], ["ls -1 dir", ALLOW], ["ls", ALLOW], ["ls -lh --color=auto", ALLOW],
+    ["cat -n f", ALLOW], ["diff -u a b", ALLOW], ["diff -rq a b", ALLOW], ["diff --unified=3 a b", ALLOW],
+    ["rg -n x src", ALLOW], ["rg --files -g '*.mjs'", ALLOW], ["rg -l --hidden x", ALLOW], ["find . -name '*.mjs' -type f", ALLOW],
+    ["find . -maxdepth 2 -newer x -print", ALLOW], ["find . \\( -name a -o -name b \\) -print", ALLOW],
+    ["sed -n 120,140p f", ALLOW], ["sed -n -E 's/a/b/p' f", ALLOW], ["sed -n -e 1p f", ALLOW],
+    ["git status --short", ALLOW], ["git status -sb", ALLOW], ["git status --porcelain=v1", ALLOW], ["git diff --stat origin/main HEAD", ALLOW],
+    ["git diff origin/main...HEAD -- a b", ALLOW], ["git diff --name-only --cached", ALLOW], ["git log --oneline -6 origin/main", ALLOW],
+    ["git log -1 --format='%h %cr'", ALLOW], ["git log --oneline -3 -- .claude", ALLOW], ["git log -p -S needle -- f", ALLOW], ["git show --stat HEAD", ALLOW],
+    ["git show origin/main:.claude/settings.json", ALLOW], ["git rev-parse HEAD", ALLOW], ["git rev-parse --abbrev-ref HEAD", ALLOW],
+    ["git rev-parse --short HEAD", ALLOW], ["git merge-base --is-ancestor a b", ALLOW], ["git ls-tree -r --name-only HEAD", ALLOW],
+    ["git merge-tree --write-tree a b", ALLOW], ["git worktree list", ALLOW], ["git worktree list --porcelain", ALLOW], ["git --no-pager log -1", ALLOW],
+    ["git -C /tmp/x status --short", ALLOW], ["git fetch -q origin", ALLOW],
+    ["grep -n -m8 -B2 -A12 x f", ALLOW], ["git log -n5 --oneline", ALLOW], ["git log -S\"started.catch(() => {})\" --format='%h' -- f", ALLOW],
+    ["git fetch origin main 2>&1", ALLOW], ["node --test backend/tests/a.mjs 2>&1", ALLOW], ["git diff --stat 2>/dev/null | tail -3", ALLOW],
+  ]);
+});
+
+test("MEDIUM-1: quotes, backslashes and $'...' do not hide a command or a file", () => {
+  expectAll([
+    ["g\\it reset --hard", DENY], ["'git' reset --hard", DENY], ["\"git\" add .", DENY], ["git $'reset' --hard", DENY], ["git re\"\"set --hard", DENY],
+    ["git reset --ha\\\nrd", DENY], ["git $'\\x72eset' --hard", DENY], ["git push origin \"-f\"", DENY], ["git 'push' --force", DENY],
+    ["find . -\\exec rm {} \;", ASK], ["find . -'delete'", ASK],
+    ["cat backend/'.env'", ASK], ["cat backend/\".env\"", ASK], ["cat .\\env", ASK], ["cat .e*", ASK], ["cat .en{v,}", ASK], ["cat .[e]nv", ASK],
+    ["cat backend/.env*", ASK], ["cat pgpass*", ASK], ["cat ~/.ssh/id_*", ASK], ["cat *.pem", ASK], ["cat ~/.ssh/id_*.pub", ALLOW],
+    ["cat *.mjs", ALLOW], ["ls *", ALLOW], ["cat .eslintrc*", ALLOW], ["cat 'README.md'", ALLOW],
+    ["alias g=git; g reset --hard", ASK], ["alias", ALLOW], ["f(){ git reset --hard; }; f", DENY], ["function f { git push -f; }", DENY],
+    ["f () { git clean -fd; }", DENY],
+    ["git -c alias.x='reset --hard' x", ASK], ["git -c core.pager=x log", ASK], ["git -c core.sshCommand=x fetch", ASK],
+    ["git --config-env=core.pager=X log", ASK], ["git -c user.name=x -c user.email=y commit -m z", ALLOW],
+    ["git reset --merge", ASK], ["git reset --keep HEAD~1", ASK], ["git reset --soft HEAD~1", ALLOW], ["git reset HEAD a.txt", ALLOW],
+    ["git switch -f main", ASK], ["git switch --discard-changes x", ASK], ["git checkout -f HEAD", ASK], ["git checkout --force HEAD", ASK], ["git checkout -f x", DENY], // x is no revision: the discard rule denies
+    ["git switch x", ALLOW], ["git switch -c x", ALLOW], ["git checkout -b x", ALLOW],
+  ]);
+});
+
+test("MEDIUM-2: node --test runs only test files of the two folders, with known flags", () => {
+  expectAll([
+    ["node --test backend/tests/x.mjs --import ./evil.mjs", ASK], ["node --test backend/tests/x.mjs --require ./e.js", ASK],
+    ["node --test backend/tests/x.mjs -r ./e.js", ASK], ["node --test --import=./e.mjs backend/tests/x.mjs", ASK],
+    ["node --test --test-reporter=./evil.mjs backend/tests/a.mjs", ASK], ["node --test --test-reporter-destination=out.txt backend/tests/a.mjs", ASK],
+    ["node --test /abs/backend/tests/a.mjs", ASK], ["node --test", ASK], ["node --test backend/tests/../src/x.mjs", ASK],
+    ["node --test backend/src/x.test.mjs", ASK], ["node --test --loader ./l.mjs backend/tests/a.mjs", ASK],
+    ["node --test backend/tests/a.mjs", ALLOW], ["node --test --test-name-pattern=foo backend/tests/a.mjs", ALLOW],
+    ["node --test --test-concurrency=1 backend/tests/a.mjs frontend/tests/b.mjs", ALLOW], ["node --test --test-reporter=spec backend/tests/a.mjs", ALLOW],
+    ["node --test --test-reporter=dot --test-reporter-destination=stdout frontend/tests/a.mjs", ALLOW], ["node --test 'backend/tests/*.test.mjs'", ALLOW],
+    ["node --test backend/tests/", ALLOW], ["node --test ./frontend/tests/a.mjs", ALLOW], ["NODE_OPTIONS=--import=./e.mjs node --test backend/tests/a.mjs", ASK],
+    ["export NODE_OPTIONS=--require=./e.js; node --test backend/tests/a.mjs", ASK], ["env NODE_OPTIONS=x node --test backend/tests/a.mjs", ASK],
+  ]);
+});
+
+test("MEDIUM-3: an allowed command writing to a file outside the temporary folder asks", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-redirect-"));
+  // a link inside the temporary folder that leads out of it (to /etc, or the home folder on Windows)
+  const link = path.join(tmp, "link-to-outside");
+  symlinkSync(process.platform === "win32" ? homedir() : "/etc", link);
+  mkdirSync(path.join(tmp, "sub"));
+  try {
+    expectAll([
+      ["cat x > tracked.js", ASK], ["head -1 f >> /etc/hosts", ASK], ["cut -c1 f > b", ASK], ["diff a b > c", ASK], ["wc -l f >| g", ASK],
+      ["grep x f 2> err.log", ASK], ["cat x &> out", ASK], ["cat x > ~/out", ASK], ["cat x > $UNKNOWN/out", ASK], ["cat x > /tmp/../etc/passwd", ASK],
+      [`cat x > ${link}/a.txt`, ASK], [`cat x > ${link}`, ASK], ["S=/tmp/a; S=/etc; cat x > $S/y", ASK], ["cat x > /tmp/*.txt", ASK],
+      [`cat x > ${tmp}/sub/../out.txt`, ASK], // ".." is refused outright, even when it stays inside
+      ["cat x > /dev/null", ALLOW], ["grep x f 2>/dev/null", ALLOW], ["grep x f 2>&1 | head", ALLOW], ["cat x >&2", ALLOW], ["cat x &>/dev/null", ALLOW],
+      [`cat x > ${tmp}/out.txt`, ALLOW], [`cat x > ${tmp}/sub/new.txt`, ALLOW], [`cat x > "${tmp}/out file.txt"`, ALLOW],
+      [`S=${tmp}; cat x > $S/out`, ALLOW], [`export S=${tmp} && grep -n y f > \${S}/o.txt`, ALLOW],
+      ["git log -1 > /tmp/x.txt", ALLOW], ["git diff > patch.diff", ASK], ["node --test backend/tests/a.mjs > run.log", ASK],
+      ["echo x > notes.txt", ALLOW], // echo is not on the allow list: Claude Code checks this redirect itself
+    ]);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("LOW-1: a database URL with several hosts asks", () => {
+  expectAll([
+    ["DATABASE_URL=postgres://u@localhost,evil.example.com/x node a.js", ASK], ["DATABASE_URL=postgres://u@localhost:5432,127.0.0.1:5433/x node a.js", ASK],
+    ["PGHOST=localhost,evil.example.com psql -l", ASK], ["DATABASE_URL=postgres://u@localhost:5432/x node a.js", ALLOW],
+  ]);
+});
+
+test("the unit pieces of the review fix: shellWord, optionsAreKnown, redirect targets", () => {
+  assert.equal(shellWord("'git'"), "git");
+  assert.equal(shellWord("g\\it"), "git");
+  assert.equal(shellWord('re""set'), "reset");
+  assert.equal(shellWord("$'reset'"), "reset");
+  assert.equal(shellWord("$'\\x72eset'"), "reset");
+  assert.equal(shellWord("$'\\162eset'"), "reset");
+  assert.equal(shellWord('"a\\"b"'), 'a"b');
+  assert.equal(shellWord("backend/'.env'"), "backend/.env");
+  const sp = { short: "ab", shortArg: "n", long: new Set(["--all"]), longArg: new Set(["--name"]), longOpt: new Set(["--color"]), numeric: true, operands: null, value: null };
+  assert.equal(optionsAreKnown(["-ab", "-n5", "-n", "3", "--all", "--name=x", "--name", "y", "--color", "--color=auto", "-7", "file", "--", "-z"], sp), true);
+  for (const bad of [["-c"], ["--al"], ["--all=1"], ["--nam=x"], ["-n"], ["--name"], ["--colo"], ["-abz"]]) assert.equal(optionsAreKnown(bad, sp), false, bad.join(" "));
+  assert.deepEqual(outputRedirectTargets("cat a > b 2>&1 >> 'c d' >| e &> f 2>/dev/null >(x) <in"), ["b", "'c d'", "e", "f", "/dev/null"]);
+  assert.deepEqual(outputRedirectTargets("echo '>' \"a > b\""), []);
+  assert.equal(isHarmlessRedirectTarget("/dev/null"), true);
+  assert.equal(isHarmlessRedirectTarget("relative.txt"), false);
+  assert.equal(isHarmlessRedirectTarget("/tmp/../etc/x"), false);
 });
