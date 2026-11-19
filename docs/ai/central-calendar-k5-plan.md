@@ -10,6 +10,7 @@ because Imports belongs to his mapping stream.
 |---|---|---|
 | **H1** | „Mi sada sa ovim u stvari hoćemo na neki način i da centralizujemo u kalendaru aktivnosti aplikacije. Sve što ima neki vid nedeljne kalendarske opcije npr testiranja, gps uvozi trebalo bi da budu deo nekog događaja ili ako nisu deo događaja da se nekako obeleže na kalendaru na neki prostor i jednostavan način da kroz klik možemo otići tamo gde treba....razmisli i o tome" | The central calendar becomes the hub. Everything with a date (trainings, tests, RPE requests, GPS imports) is part of an event. If it is not, it is marked on the calendar in a small, simple way, and one click takes you where its work is done. |
 | **H2** | „Npr gps uvoz mi bismo trebali i na glavnom kalendaru da vidimo neki gps ikonicu ili nesto preko čega bismo mogli ući dalje" | GPS is visible on the main calendar with a GPS icon, and a click goes on from there. |
+| **H3** | „U filteru moze da se izabere samo gps uvozi... zatim nesto drugo.... Da možemo lako naci" | The calendar's filter has a choice for each kind of activity: GPS imports, tests, RPE requests, trainings and events by type. Choosing one shows only that kind, so it is easy to find. |
 
 The rule of the K4 plan carries over (O13): there is no big change of the current state. Each part reuses existing
 routes and links.
@@ -61,6 +62,18 @@ The panel of each kind gets one clear button to where its work is done. Back ret
 - **Small marks.** A test, an RPE request or an activity that is in no event is a compact chip under its day, not a
   full card. Examples: "🧪 CMJ test", "📡 GPS 10:05", "RPE request". A click opens its panel, and from there *Go
   there*. The filters (FE-D16) keep working.
+
+- **Find it fast (H3).** The filter, which today has the kind chips Events, Planned training, Activities, RPE
+  requests and Scheduled tests, plus the event types, gains **GPS imports**.
+  - What GPS imports shows:
+    - activities whose origin is an import (the card's `origin` / `measuredSource`, already in the answer);
+    - events with a folded import;
+    - after K5-4, the "waiting for import" day marks.
+  - This filtering happens on the client over the answer the calendar already reads; no backend change.
+  - Each chip can be chosen alone, as *Only GPS imports* and then something else, so one kind can be found in one tap.
+    The designer decides how *only this* reads on a phone.
+  - It must work together with FE-D16: when only kinds other than events are chosen, the read asks for exactly those
+    kinds.
 
 ### K5-3 — "Add to the event?" (frontend over existing routes; to be verified in the contract)
 
