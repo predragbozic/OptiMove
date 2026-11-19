@@ -24,7 +24,7 @@ export function normalizeImportAudience(level) {
   return IMPORT_AUDIENCES.includes(level) ? level : "other";
 }
 
-// J17 section 6: the eight codes that block a whole candidate.
+// J17 section 6: the codes that block a whole candidate (v80 added team_setting_changed).
 export const BLOCKING_CODES = Object.freeze(new Set([
   "mapping_not_usable", "source_threshold_contract_mismatch", "team_setting_changed", "source_unit_mismatch", "source_shape_mismatch", "no_mapped_values",
   "source_instance_held", "source_instance_changed", "session_imported_under_another_instance",
