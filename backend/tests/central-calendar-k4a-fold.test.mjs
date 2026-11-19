@@ -305,3 +305,58 @@ test("10. as built (contract 1.1): her own recorded activity of a folded session
   assert.deepEqual(card.links, { eventId: ev.id });
   assert.equal(card.sessions[0].rpe, "submitted");
 });
+
+// The OptiMove manager's condition on the as-built activity rule (point 9):
+// (1) nothing of her folded activity reaches her calendar answer - not its id,
+// its values or its other participants; (2) it does not disappear from the
+// screens she already uses: My training (GET /api/training-activity/self, the
+// list and the activity) and the Training Load weekly read of her sessions,
+// before and after the link. Athlete Home lists the plan only, no activity.
+test("11. her folded activity: nothing of it in her calendar answer (id, values, other participants); still on My training and in Training Load before and after the link", async () => {
+  const s = await squad();
+  const anaPlan = await plan(s.ana.athleteId, s.coach.id, s.teamId);
+  const benPlan = await plan(s.ben.athleteId, s.coach.id, s.teamId);
+  const a = await session(anaPlan);
+  const b = await session(benPlan);
+  const rate = (athlete, sessionId, rpe, durationMinutes) => api(`/api/training-load/sessions/${sessionId}/rpe`, { method: "POST", cookie: athlete.cookie, body: { rpe, durationMinutes } });
+  assert.equal((await rate(s.ana, a.sessionId, 6, 73)).status, 201);
+  assert.equal((await rate(s.ben, b.sessionId, 8, 91)).status, 201);
+  const activities = await q(
+    `select distinct ap.activity_id from training.activity_participants ap where ap.athlete_id = $1`, [s.ana.athleteId],
+  );
+  assert.equal(activities.length, 1, "her RPE made one activity");
+  const activityId = activities[0].activity_id;
+  const others = await q(`select athlete_id from training.activity_participants where activity_id = $1 and athlete_id <> $2`, [activityId, s.ana.athleteId]);
+
+  // Her other screens, read the way the athlete shell reads them.
+  const weekStart = (() => { const d = new Date(`${PAST}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); })();
+  async function herScreens() {
+    const self = await api("/api/training-activity/self", { cookie: s.ana.cookie });
+    assert.equal(self.status, 200, self.text);
+    const list = await api(`/api/training-activity?dateFrom=${FROM}&dateTo=${TO}`, { cookie: s.ana.cookie });
+    assert.equal(list.status, 200, list.text);
+    const one = await api(`/api/training-activity/${activityId}`, { cookie: s.ana.cookie });
+    const weekly = await api(`/api/training-load/weekly?weekStart=${weekStart}`, { cookie: s.ana.cookie });
+    assert.equal(weekly.status, 200, weekly.text);
+    return {
+      hasRecorded: self.body.hasRecordedSessions,
+      listed: (list.body.rows || []).some((r) => String(r.id ?? r.activityId) === String(activityId)),
+      opened: one.status,
+      rated: weekly.text.includes(a.sessionId) && /"rpe":\s*6\b/.test(weekly.text),
+    };
+  }
+  const before = await herScreens();
+  // hasRecordedSessions counts measured sessions only (an RPE alone is not
+  // one): whatever it answers, the link must not change it.
+  assert.deepEqual({ ...before, hasRecorded: undefined }, { hasRecorded: undefined, listed: true, opened: 200, rated: true });
+
+  const ev = await attach(s, await event(s), [a.logicalSessionId, b.logicalSessionId]);
+  const res = await read(s.ana.cookie);
+  assert.equal(res.status, 200, res.text);
+  assert.equal(eventCard(res, ev.id).sessions[0].rpe, "submitted");
+  for (const secret of [activityId, "\"rpe\":6", "73", "durationMinutes", "srpe", ...others.map((o) => o.athlete_id), s.ben.athleteId, s.ben.name]) {
+    assert.ok(!res.text.includes(String(secret)), `her calendar answer carries ${secret}`);
+  }
+  const after = await herScreens();
+  assert.deepEqual(after, before, "the link changes nothing on her other screens");
+});
