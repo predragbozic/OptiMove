@@ -64,7 +64,9 @@ try {
   if ($null -eq $lock) {
     $busy = 'Another backup is already running; this one stops.'
     Write-Host $busy
-    Write-RunLog -Outcome 'SKIPPED' -Note $busy
+    # The running backup may be writing the log at this very moment: a failed write must not turn
+    # this stop into a FAILED run.
+    try { Write-RunLog -Outcome 'SKIPPED' -Note $busy } catch { Write-Host '(the log could not be written)' }
     exit 2
   }
   $hide = @($config['host'], $config['user'], $config['database'], $folder, $ConfigPath, $env:USERNAME, $env:USERPROFILE)
@@ -161,13 +163,22 @@ try {
   Set-Content -LiteralPath "$dumpPath.sha256" -Value "$hash  $dumpName" -Encoding ASCII
 
   Write-RunLog -Outcome 'OK' -SizeBytes $size -TableCount $tableCount -Note "sha256 $hash"
+  # From here on the new file is a verified backup: nothing below may rename or remove it.
+  $dumpPath = ''
 
-  # Old backups go only now, after a new one has been written and read back.
+  # Old backups go only now, after a new one has been written and read back. A file that cannot be
+  # deleted (antivirus, an open window, permissions) is a warning, not a failure of the backup.
   $step = 'deleting old backups'
   $expired = Get-OmExpiredBackupFiles -Folder $folder -RetentionDays $config['retention_days'] -Now $startedAt -KeepName $dumpName
   foreach ($file in $expired) {
-    Remove-Item -LiteralPath $file.FullName -Force
-    Write-Host "  deleted old backup file $($file.Name)"
+    try {
+      Remove-Item -LiteralPath $file.FullName -Force
+      Write-Host "  deleted old backup file $($file.Name)"
+    } catch {
+      $warning = "old backup file $($file.Name) could not be deleted: " + (Get-OmSafeReason -Text $_.Exception.Message -Hide $hide)
+      Write-Host "  WARNING: $warning"
+      try { Write-RunLog -Outcome 'WARNING' -Note $warning } catch { }
+    }
   }
 
   Write-Host "OK: $dumpName, $size bytes, $tableCount tables"

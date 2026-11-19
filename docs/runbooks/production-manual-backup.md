@@ -331,6 +331,7 @@ line of the log say where it stopped.
 | `a schema ... which this backup does not know` | the database has a new part the backup was not told about. **Stop and report the schema's name.** Nothing was dumped. Do not add `skip_schemas` on your own: that would leave data out of every backup from then on |
 | `has no schema ...` | the config file points at the wrong database |
 | `certificate verify failed` | step 4: the certificate file is wrong or the path is wrong. Do not remove the line; report it |
+| `WARNING: old backup file ... could not be deleted`, and then `OK` | not a failure: the new backup is good. An old file was open (in a window, or held by the antivirus) or protected. Close what holds it; the next night's run tries again. If the warning repeats every night, delete that file by hand |
 | a `NOTE` line about the read-only setting, and then `OK` | not a failure: see the note in step 6. Report it once |
 | `pg_dump ended with exit code ...` | the connection broke, the disk is full, or a migration was running. Run it again at a quiet moment |
 | `cannot be read back` or `lists no tables` | the file is damaged. It was renamed to `.failed`. Run again |

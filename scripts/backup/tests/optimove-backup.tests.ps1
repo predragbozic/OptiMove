@@ -341,7 +341,7 @@ try {
         'pg_dump: error: connection to server at <hidden> (<hidden>), port 5432 failed: FATAL: password authentication failed for user <hidden>'),
       @("`r`n`r`npg_dump: error: could not open output file `"C:\Users\Jane Doe\OptiMove backups\optimove-2026-11-19-122051.dump`": Permission denied`r`nsecond line with secret hunter2",
         'pg_dump: error: could not open output file <hidden>: Permission denied'),
-      @('pg_dump: error: could not open output file C:\Users\Jane Doe\OptiMove backups\x.dump: Permission denied', 'pg_dump: error: could not open output file <hidden> \x.dump: Permission denied'),
+      @('pg_dump: error: could not open output file C:\Users\Jane Doe\OptiMove backups\x.dump: Permission denied', 'pg_dump: error: could not open output file <hidden>: Permission denied'),
       @('psql: error: connection to server at aws-0-eu-west-1.pooler.supabase.com (2a05:d018:135e:16::1), port 5432 failed: timeout expired', 'psql: error: connection to server at <hidden> (<hidden>), port 5432 failed: timeout expired'),
       @('psql: error: could not translate host name db.other-project.supabase.co to address: Name or service not known', 'psql: error: could not translate host name <hidden> to address: Name or service not known'),
       @('error: invalid connection option host=evil.example.test password=hunter2 user=someone PGPASSWORD=hunter3', 'error: invalid connection option <hidden>'),
@@ -355,6 +355,31 @@ try {
       $got = Get-OmSafeReason -Text $case[0] -Hide $hide
       Assert-True ($got -notmatch 'hunter|supabase|abcdefgh|Jane|52\.209|2a05|\|') "leak in: $got"
     }
+    # Localized quote marks and letters, built from code points: the test file stays ASCII.
+    $lowDouble = [string][char]0x201E; $highDouble = [string][char]0x201C; $rightDouble = [string][char]0x201D
+    $leftGuillemet = [string][char]0x00AB; $rightGuillemet = [string][char]0x00BB
+    $lowSingle = [string][char]0x201A; $leftSingle = [string][char]0x2018; $rightSingle = [string][char]0x2019
+    $oe = [string][char]0x00F6; $ee = [string][char]0x00E9
+    $localized = @(
+      @("pg_dump: Fehler: konnte Ausgabedatei ${lowDouble}C:\Users\Jana Doe\Sicherung\x.dump${highDouble} nicht ${oe}ffnen: Zugriff verweigert", "pg_dump: Fehler: konnte Ausgabedatei <hidden> nicht ${oe}ffnen: Zugriff verweigert"),
+      @("pg_dump: erreur : n'a pas pu ouvrir ${leftGuillemet} C:\Users\Jean Dupont\x.dump ${rightGuillemet} : Permission refus${ee}e", "pg_dump: erreur: n'a pas pu ouvrir <hidden>: Permission refus${ee}e"),
+      @("pg_dump: error: user ${leftSingle}postgres.abcdefghijklmnopqrst${rightSingle} has no access", 'pg_dump: error: user <hidden> has no access'),
+      @("pg_dump: greska: datoteka ${lowSingle}tajna${rightSingle} ne postoji", 'pg_dump: greska: datoteka <hidden> ne postoji'),
+      @("pg_dump: error: ${highDouble}aws-0-eu-west-1.pooler.supabase.com${rightDouble} refused", 'pg_dump: error: <hidden> refused'),
+      @("pg_dump: error: a stray mark${rightSingle}s here", 'pg_dump: error: a stray mark s here'),
+      @('pg_dump: error: could not open output file C:\Users\Jane Doe\OptiMove backups\x.dump: Permission denied', 'pg_dump: error: could not open output file <hidden>: Permission denied'),
+      @('pg_restore: error: could not read D:\Backups\Old Ones\optimove-2026-11-19-0200.dump', 'pg_restore: error: could not read <hidden>'),
+      @('FATAL: Tenant or user not found: abcdefghijklmnopqrst', 'FATAL: Tenant or user not found: <hidden>'),
+      @('FATAL: project abcdefghijklmnopqrst is paused (ref abcdefghijklmnopqrst)', 'FATAL: project <hidden> is paused (ref <hidden>)')
+    )
+    foreach ($case in $localized) {
+      $got = Get-OmSafeReason -Text $case[0] -Hide @('postgres')
+      Assert-Equal $got $case[1]
+      Assert-True ($got -notmatch 'Jana|Jean|Jane|Doe|Dupont|abcdefghijklmnopqrst|supabase|tajna|Sicherung|Old Ones') "leak in: $got"
+      Assert-True ($got -notmatch ('[' + $lowDouble + $highDouble + $rightDouble + $leftGuillemet + $rightGuillemet + $lowSingle + $leftSingle + $rightSingle + ']')) "a quote mark is left in: $got"
+    }
+    # Twenty letters, not more and not fewer, on their own.
+    Assert-Equal (Get-OmSafeReason -Text 'error: abcdefghijklmnopqrs and abcdefghijklmnopqrstu') 'error: abcdefghijklmnopqrs and abcdefghijklmnopqrstu'
     $long = Get-OmSafeReason -Text ('pg_dump: error: ' + ('x' * 500))
     Assert-Equal $long.Length 160
     Assert-True ($long.EndsWith('...'))
@@ -726,6 +751,48 @@ try {
         Assert-True ($log[2] -match '\| OK \| optimove-') "log: $($log[2])"
         $after = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt')
         Assert-Equal $after.ExitCode 0 "the lock was not released: $($after.Output)"
+      }
+      Test-Case 'backup: an old backup that cannot be deleted is a WARNING; the new backup stays a verified OK backup' {
+        if ($env:OS -eq 'Windows_NT') { Write-Host '       (not run on Windows: it uses chattr)'; return }
+        Clear-Backups
+        $stuck = Join-Path $backups 'optimove-2020-01-01-020000.dump'
+        $gone = Join-Path $backups 'optimove-2020-01-02-020000.dump'
+        Set-Content -LiteralPath $stuck -Value 'old'
+        Set-Content -LiteralPath $gone -Value 'old'
+        & chattr +i $stuck
+        try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { & chattr -i $stuck }
+        Assert-Equal $run.ExitCode 0 "output: $($run.Output)"
+        Assert-True ($run.Output -match 'WARNING: old backup file optimove-2020-01-01-020000\.dump could not be deleted') "output: $($run.Output)"
+        Assert-True ($run.Output -match 'OK: optimove-')
+        Assert-True ($run.Output -notmatch 'FAILED|renamed') "output: $($run.Output)"
+        $files = Get-BackupFiles
+        Assert-True ($files -contains 'optimove-2020-01-01-020000.dump') 'the stuck file is gone after all'
+        Assert-True (-not ($files -contains 'optimove-2020-01-02-020000.dump')) 'retention stopped at the first stuck file'
+        $dump = @($files | Where-Object { $_ -match '^optimove-\d{4}-\d{2}-\d{2}-\d{6}\.dump$' -and $_ -ne 'optimove-2020-01-01-020000.dump' })
+        Assert-Equal $dump.Count 1 "files: $($files -join ', ')"
+        Assert-True ($files -contains "$($dump[0]).sha256") 'the new backup lost its .sha256'
+        Assert-Equal (@($files | Where-Object { $_ -match '\.failed$' }).Count) 0 "the new backup was renamed: $($files -join ', ')"
+        $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
+        Assert-Equal $log.Count 2 "log: $($log -join ' / ')"
+        Assert-True ($log[0] -match '\| OK \| optimove-')
+        Assert-True ($log[1] -match '\| WARNING \| optimove-\S+ \| 0 bytes \| 0 tables \| old backup file optimove-2020-01-01-020000\.dump could not be deleted: ') "log: $($log[1])"
+        Assert-True ($log[1] -notmatch [regex]::Escape($backups)) "the folder path is in the log: $($log[1])"
+        Remove-Item -LiteralPath $stuck -Force
+      }
+      Test-Case 'backup: a second run whose SKIPPED line cannot be written still stops with exit code 2' {
+        if ($env:OS -eq 'Windows_NT') { Write-Host '       (not run on Windows: it uses chattr)'; return }
+        Clear-Backups
+        $logFile = Join-Path $backups 'optimove-backup.log'
+        Set-Content -LiteralPath $logFile -Value 'earlier line'
+        $lockFile = Join-Path $backups 'optimove-backup.lock'
+        $held = [System.IO.File]::Open($lockFile, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        & chattr +i $logFile
+        try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') }
+        finally { & chattr -i $logFile; $held.Dispose() }
+        Assert-Equal $run.ExitCode 2 "output: $($run.Output)"
+        Assert-True ($run.Output -match 'Another backup is already running; this one stops\.')
+        Assert-True ($run.Output -notmatch 'FAILED') "output: $($run.Output)"
+        Assert-Equal ((Get-Content -LiteralPath $logFile) -join '|') 'earlier line'
       }
       Test-Case 'backup: a lock file left behind by a crash does not block the next run' {
         Clear-Backups

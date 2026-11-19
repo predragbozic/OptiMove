@@ -262,12 +262,22 @@ function Get-OmSafeReason {
   }
   $line = [regex]::Replace($line, '"[^"]*"', '<hidden>')
   $line = [regex]::Replace($line, "'[^']*'", '<hidden>')
+  # Localized messages (pg_dump on a Windows set to another language) quote with other marks:
+  # low and high double and single quotes and guillemets, in any pairing.
+  $quoteMarks = '\u201E\u201C\u201D\u00AB\u00BB\u201A\u2018\u2019\u2039\u203A'
+  $line = [regex]::Replace($line, ('[' + $quoteMarks + '][^' + $quoteMarks + ']*[' + $quoteMarks + ']'), '<hidden>')
+  $line = [regex]::Replace($line, ('[' + $quoteMarks + ']'), ' ')
   $line = [regex]::Replace($line, '(?i)\b[a-z][a-z0-9+.-]*://\S+', '<hidden>')
   $line = [regex]::Replace($line, '(?i)\b(pg)?(password|passwd|pwd|passfile|user|username|host|hostaddr|dbname|options|service)\s*=\s*\S+', '<hidden>')
   $line = [regex]::Replace($line, '(?i)\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|co|net|org|io|dev|app|cloud|internal|local|test|invalid)\b', '<hidden>')
   $line = [regex]::Replace($line, '\b\d{1,3}(\.\d{1,3}){3}\b', '<hidden>')
+  # A Supabase project reference on its own: 20 lower-case letters.
+  $line = [regex]::Replace($line, '\b[a-z]{20}\b', '<hidden>')
   $line = [regex]::Replace($line, '(?i)\b[0-9a-f]{0,4}(:[0-9a-f]{0,4}){3,7}\b', '<hidden>')
-  $line = [regex]::Replace($line, '(?i)\b[a-z]:\\[^\s,;]*', '<hidden>')
+  # A Windows path may hold spaces: it runs to the next colon (no path can hold one after the drive),
+  # comma, semicolon, quote, parenthesis or the end. So does the tail of a path whose start was hidden.
+  $line = [regex]::Replace($line, '(?i)\b[a-z]:\\[^:,;"()]*', '<hidden>')
+  $line = [regex]::Replace($line, '<hidden>\\[^:,;"()]*', '<hidden>')
   $line = [regex]::Replace($line, '(?<![\w<])/[^\s,;:]+/[^\s,;:]*', '<hidden>')
   $line = [regex]::Replace($line, '(<hidden>\s*)+', '<hidden> ')
   $line = [regex]::Replace($line, '[|\x00-\x1F\x7F]', ' ')
