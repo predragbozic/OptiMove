@@ -2,7 +2,7 @@
 
 Status: **Proposed** (2026-11-19, written against `main` `f406ee2d`). This plan contains no code. The first step is
 **K4-0**, which comes from the reproduction described in section 3; it needs the manager's GO before any code. K4a
-needs a UI contract and a GO. K4b needs the OptiMove manager's approval and a migration number (v83 or later).
+needs a UI contract and a GO. K4b has the OptiMove manager's approval of its direction, with migration v83 (`202611201200`) and his six conditions (section 4); its contract comes next.
 
 ## 0. The owner's decisions (2026-11-19, in the calendar stream's chat)
 
@@ -96,7 +96,7 @@ reproduced or not, the cause as file:line, and the smallest fix.
 The calendar stream fixes what is its own in **K4-0**, a small pull request before K4a. The rest (the Roster, Training
 Load, app-wide history in `app.js`) goes to the OptiMove manager with the cause and the proposed fix.
 
-## 4. K4b — changing an RPE answer while the question is open (★★, migration v83 or later)
+## 4. K4b — changing an RPE answer while the question is open (★★, migration v83, `202611201200`)
 
 **Rule (O4):**
 - The athlete may change their own RPE, duration and note **until the assignment's `closes_at`**, the window the
@@ -127,7 +127,44 @@ Load, app-wide history in `app.js`) goes to the OptiMove manager with the cause 
 - **Ownership:** this is Training Load data, so the plan goes to him for approval first.
 - **Migration:** it changes no existing row when it is applied, but it lets an existing kind of row change later, so
   it is announced to him in advance.
-- **Number:** v83 or later.
+- **Number:** v83, `202611201200` (given by him on 2026-11-19).
+
+**The OptiMove manager's approval (2026-11-19):**
+
+He agreed with option C. The migration is **v83, with the prefix `202611201200`**. The contract must meet his six
+conditions:
+
+1. **Who may change, and until when.** Only the athlete changes their own row, and only while the assignment is open
+   (`closes_at`).
+   - The database checks this under the lock, not only the service.
+   - The race between a change and the assignment's close has a defined outcome in both orders, with a test.
+2. **The history.**
+   - It is append-only: who, when, the old values and the basis.
+   - It is written in the same transaction as the change.
+   - The v2 trigger lets a change through only under the transaction-local marker the sanctioned function sets (the
+     v57 pattern).
+   - The marker never outlives its transaction. A raw session that sets it is refused by a deferred guard that checks
+     that the history row of the change was written in the same transaction (the v35 lesson).
+3. **The coach is told.**
+   - A read the coach already uses carries a mark that the answer changed: at least a boolean and the time of the
+     last change.
+   - Dashboards keep reading only the current value, with no duplicate rows.
+   - The contract checks every reader of `session_feedback` (weekly, calendar, analysis, the dashboard query,
+     `canonical_activity_results`) and confirms that none caches or sums the history.
+4. **What may change.**
+   - Only the RPE, and what the athlete entered in that answer themselves.
+   - Not the duration, and nothing that came from the coach or an import. Whether the external form's duration is the
+     athlete's own entry is settled in the contract.
+   - A `requestKey`. The same value writes no history row.
+5. **The migration.**
+   - It changes no existing row.
+   - The rollback refuses once a history row exists.
+   - It is a ★★ package, with apply → rollback → re-apply rehearsed, also on a database built from the production
+     schema snapshot.
+   - PostgreSQL 17 stays NOT RUN until the owner runs it locally.
+6. **Info-hiding.**
+   - Another athlete's row and a missing row give the same answer.
+   - A closed question gives a stable sentence.
 
 **The screen:** on the event card in the athlete's Calendar and on Home, "Your RPE: 7 · Change". The form opens filled
 in, with *Save change* and "You can change it until 22:00".
@@ -167,4 +204,4 @@ the calendar's *Link* uses), and it takes only an event the caller manages.
    ("Answered 12/15 · average RPE 6.8") and a clearer athlete click.
 5. **K4a**: the athlete's Calendar.
 6. **K3** (P3): *Write the training* from an event (the K2c plan, section 3).
-7. **K4b** runs in parallel once the OptiMove manager approves it.
+7. **K4b** runs in parallel. Its direction is approved (section 4), and its contract comes next.
