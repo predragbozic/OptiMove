@@ -184,6 +184,35 @@ test("19. losing the word mid-request: the admin's club role is revoked between 
   assert.equal((await one(`select count(*)::int as n from public.permission_roles where name = 'Mid request'`)).n, 0);
 });
 
+test("19b. losing roles.manage alone mid-request (staff.assign kept, so the lock's basis still holds): P4 and P7 re-check roles.manage under the locks, answer 404 and write nothing (a latent case: rule 7 keeps roles.manage on Club admin, so the item is removed past the guards and put back)", async () => {
+  const w = await world();
+  const hold = async (send) => {
+    const g = gate(); let entered = false;
+    svc.setRolesBeforeLocksHoldForTests(async () => { entered = true; await g.promise; });
+    const pending = send();
+    const start = Date.now();
+    while (!entered && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(entered);
+    await k.query(`set session_replication_role = replica`);
+    await k.query(`delete from public.permission_role_items where role_id = $1 and permission_word = 'roles.manage'`, [ROLE_IDS.club_admin]);
+    await k.query(`reset session_replication_role`);
+    g.open();
+    try {
+      return await pending;
+    } finally {
+      svc.setRolesBeforeLocksHoldForTests(null);
+      await k.query(`set session_replication_role = replica`);
+      await k.query(`insert into public.permission_role_items (role_id, permission_word) values ($1, 'roles.manage')`, [ROLE_IDS.club_admin]);
+      await k.query(`reset session_replication_role`);
+    }
+  };
+  const name = `Mid ${hex()}`;
+  code(await hold(() => createRole(w.adminA, { clubId: w.A, name })), 404, "notFound");
+  code(await hold(() => srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/copy`, { method: "POST", body: { requestKey: key(), clubId: w.A, name: `${name} c` } })), 404, "notFound");
+  assert.equal((await one(`select count(*)::int as n from public.permission_roles where name like $1`, [`${name}%`])).n, 0);
+  ok(await createRole(w.adminA, { clubId: w.A, name }));
+});
+
 test("20. self-assignment (a platform admin too); a basic role; a global scope; a role of club A at club B or a team of B; P6 role_has_assignments for a platform admin too", async () => {
   const w = await world();
   const role = ok(await createRole(w.adminA, { clubId: w.A })).role;
@@ -256,6 +285,56 @@ test("22. the actors x routes matrix: every cell not allowed is the identical 40
   assert.equal((await srv.api(null, `${R}?clubId=${w.A}`)).status, 401, "no session: requireAuth");
 });
 
+test("22b. ADR-006 order: for every route that takes a role or assignment id, another club's id and a random id answer the identical 404 before any body-level 409 (self-assignment, a stale revision, a mismatched expected pair)", async () => {
+  const w = await world();
+  const roleB = ok(await createRole(w.adminB, { clubId: w.B })).role;
+  const assignmentB = ok(await grant(w.adminB, { userId: w.nobody.id, roleId: roleB.id, scopeType: "club", scopeId: w.B })).assignment;
+  const roleA = ok(await createRole(w.adminA, { clubId: w.A })).role;
+  const cases = (roleId, assignmentId) => [
+    ["GET", `${R}/${roleId}?clubId=${w.A}`],
+    ["POST", `${R}/${roleId}/change`, { requestKey: key(), clubId: w.A, expectedRevision: 99, reason: "x", name: `N ${hex()}` }],
+    ["POST", `${R}/${roleId}/archive`, { requestKey: key(), clubId: w.A, expectedRevision: 99, reason: "x" }],
+    ["POST", `${R}/${roleId}/copy`, { requestKey: key(), clubId: w.A }],
+    // P9: self (409 self_assignment for a role of A), at the club and at a team of A.
+    ["POST", `${R}/assignments`, { requestKey: key(), userId: w.adminA.id, roleId, scopeType: "club", scopeId: w.A, reason: "x" }],
+    ["POST", `${R}/assignments`, { requestKey: key(), userId: w.adminA.id, roleId, scopeType: "team", scopeId: w.T1, reason: "x" }],
+    ["POST", `${R}/assignments`, { requestKey: key(), userId: w.target.id, roleId, scopeType: "club", scopeId: w.A, reason: "x" }],
+    // P10: an expected pair that does not match (409 assignment_mismatch for an assignment of A).
+    ["POST", `${R}/assignments/${assignmentId}/revoke`, { requestKey: key(), reason: "x", expected: { userId: w.target.id, roleId: roleA.id } }],
+  ];
+  const foreign = cases(roleB.id, assignmentB.id);
+  const random = cases(crypto.randomUUID(), crypto.randomUUID());
+  for (let i = 0; i < foreign.length; i += 1) {
+    const [method, p, body] = foreign[i];
+    const a = await srv.api(w.adminA.cookie, p, { method, body });
+    const [m2, p2, b2] = random[i];
+    const b = await srv.api(w.adminA.cookie, p2, { method: m2, body: b2 });
+    assert.deepEqual([a.status, a.body], [404, { error: "notFound" }], `another club's id: ${method} ${p}`);
+    assert.deepEqual([b.status, b.body], [404, { error: "notFound" }], `a random id: ${m2} ${p2}`);
+  }
+  // The same bodies with club A's own ids reach the 409s (so the 404s above hide them).
+  code(await grant(w.adminA, { userId: w.adminA.id, roleId: roleA.id, scopeType: "club", scopeId: w.A }), 409, "self_assignment");
+  code(await change(w.adminA, roleA.id, { expectedRevision: 99, name: `N ${hex()}` }), 409, "staleRevision");
+  // Nothing was written by the refused requests.
+  assert.equal(Number((await one(`select count(*)::int as n from public.user_role_assignments where user_id = $1`, [w.adminA.id])).n), 0);
+});
+
+test("22c. P7 without a name: \"<source name> (copy)\"; a second copy without a name and a copy named like a current system role are 409 role_name_taken (O7); a long source name is cut to fit 80 characters", async () => {
+  const w = await world();
+  const copy = (body) => srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/copy`, { method: "POST", body: { requestKey: key(), clubId: w.A, ...body } });
+  const first = ok(await copy({}));
+  assert.equal(first.role.name, "Team coach (copy)");
+  code(await copy({}), 409, "role_name_taken");
+  code(await copy({ name: "team coach" }), 409, "role_name_taken");
+  ok(await copy({ name: `Own ${hex()}` }));
+  const longName = `L${"x".repeat(78)}${hex().slice(0, 1)}`;
+  assert.equal(longName.length, 80);
+  const sys = ok(await createRole(w.pa, { name: longName, scopeTypes: ["club"], items: ["org.view"] })).role;
+  const long = ok(await srv.api(w.adminA.cookie, `${R}/${sys.id}/copy`, { method: "POST", body: { requestKey: key(), clubId: w.A } }));
+  assert.equal(long.role.name, `${longName.slice(0, 73)} (copy)`);
+  assert.equal([...long.role.name].length, 80);
+});
+
 test("23. P2, P3 and P8 never return a role, a holder or a count of another club; holderCount for a club caller counts that club only", async () => {
   const w = await world();
   const sys = ok(await createRole(w.pa, { scopeTypes: ["club", "team"], items: ["org.view"] })).role;
@@ -314,13 +393,16 @@ test("28. the recorded SQL order of every write route: every lock before the fir
     const locks = seen.map((t, i) => (LOCKING.test(t) ? i : -1)).filter((i) => i >= 0);
     const actorLock = seen.findIndex((t) => /lock_permission_actor/.test(t));
     assert.ok(actorLock >= 0 && actorLock < firstWrite, `${name}: lock_permission_actor before the first write\n${seen.join("\n")}`);
+    assert.ok(/pg_advisory_xact_lock\(hashtextextended\('permission_request:'/.test(seen[locks[0]]), `${name}: the request-key lock is the first lock\n${seen.join("\n")}`);
     assert.ok(locks.every((i) => i < firstWrite), `${name}: no lock after the first write\n${seen.join("\n")}`);
     const request = seen.findIndex((t) => /insert into public\.permission_requests/.test(t));
     assert.ok(request > firstWrite && seen.slice(request + 1).every((t) => !WRITE.test(t)), `${name}: the request record is the last write`);
     assert.ok(seen.slice(0, firstWrite).some((t) => /set_config\('optimove\.permission_actor'/.test(t)), `${name}: the acting user is set before the first write`);
     if (name === "P9" || name === "P10") {
       const pair = seen.findIndex((t) => /where u\.id in \(\$1, \$2\) order by u\.id for share$/.test(t));
-      assert.ok(pair >= 0 && pair < actorLock && pair === locks[0], `${name}: the pair statement is the first lock\n${seen.join("\n")}`);
+      // Only the request-key advisory lock (place 0, taken by every write route) comes before it.
+      assert.ok(/pg_advisory_xact_lock\(hashtextextended\('permission_request:'/.test(seen[locks[0]]), `${name}: the request-key lock first\n${seen.join("\n")}`);
+      assert.ok(pair >= 0 && pair < actorLock && pair === locks[1], `${name}: the pair statement is the first row lock\n${seen.join("\n")}`);
       assert.ok(!/is_active/.test(seen[pair]));
     }
   }
@@ -429,6 +511,39 @@ test("29. races, both orders, no 40P01: old club-admin revocation against that a
     assert.equal(a.status, 200, a.text); assert.equal(o.status, 200, o.text);
   }
   noDeadlock();
+});
+
+test("29b. two requests of one caller with one key, the first held after its checks and before its writes: the second waits on the request-key lock and replays the first's answer (200, replayed, the same id), for P9 and for P4; one row each", async () => {
+  const w = await world();
+  const role = ok(await createRole(w.adminA, { clubId: w.A })).role;
+  const sameKeyTwice = async (send) => {
+    const g = gate(); let entered = 0;
+    svc.setRolesWriteHoldForTests(async () => { entered += 1; if (entered === 1) await g.promise; });
+    try {
+      const first = send();
+      const start = Date.now();
+      while (entered < 1 && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 10));
+      assert.equal(entered, 1);
+      const second = send();
+      await waiting(1);
+      g.open();
+      return await Promise.all([first, second]);
+    } finally {
+      svc.setRolesWriteHoldForTests(null);
+    }
+  };
+  const grantBody = { requestKey: key(), reason: "Same key", userId: w.nobody.id, roleId: role.id, scopeType: "club", scopeId: w.A };
+  const [a, b] = await sameKeyTwice(() => srv.api(w.adminA.cookie, `${R}/assignments`, { method: "POST", body: grantBody }));
+  assert.deepEqual([a.status, b.status], [200, 200], `${a.text} ${b.text}`);
+  assert.equal(a.body.assignment.id, b.body.assignment.id);
+  assert.deepEqual([a.body.replayed, b.body.replayed], [false, true]);
+  assert.equal((await one(`select count(*)::int as n from public.user_role_assignments where user_id = $1 and role_id = $2`, [w.nobody.id, role.id])).n, 1);
+  const name = `Twice ${hex()}`;
+  const createBody = { requestKey: key(), clubId: w.A, name, scopeTypes: ["club"], items: ["org.view"] };
+  const [c, d] = await sameKeyTwice(() => srv.api(w.adminA.cookie, R, { method: "POST", body: createBody }));
+  assert.deepEqual([c.status, d.status], [200, 200], `${c.text} ${d.text}`);
+  assert.equal(c.body.role.id, d.body.role.id);
+  assert.equal((await one(`select count(*)::int as n from public.permission_roles where name = $1`, [name])).n, 1);
 });
 
 test("30. COMMIT outcomes: an error before the COMMIT writes nothing; a COMMIT that never answers is verified (verified_after_commit_error) or 503 outcome_unknown and the same key then writes once; a replay after the right was lost is 404; request_key_reused; try_again on a held lock", async () => {

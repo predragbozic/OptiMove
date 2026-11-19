@@ -55,3 +55,9 @@ select not exists (select 1 from pg_stat_activity where datname = current_databa
 -- 8. (In git, not SQL) the 12-digit prefix is unique on the merge tree (.claude/rules/migrations.md):
 --   git ls-tree --name-only $(git merge-tree --write-tree origin/main <head>) migrations_v2/ | sed 's#.*/##' | grep -E '^[0-9]{12}_' | cut -c1-12 | sort | uniq -d
 --   must print nothing.
+
+-- 1b. (Generated in the checkout, run read-only here) no checksum of a recorded migrations_v2 file differs from the
+--   repository's (contract 7.1, item 1). On the merge tree:
+--     node backend/scripts/permission-roles-v84-checksums.mjs > v84-checksums.sql
+--   then run that one statement in begin transaction read only; ... rollback;
+--   no_recorded_checksum_differs must be true; recorded_not_in_repo is for the reader (0 expected on the merge tree).

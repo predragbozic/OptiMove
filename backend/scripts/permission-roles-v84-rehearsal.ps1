@@ -25,7 +25,13 @@ if ($env:PGPASSWORD) {
   $plain = $env:PGPASSWORD
 } else {
   $secure = Read-Host -AsSecureString -Prompt "Password for $User@${DbHost}:$Port (hidden)"
-  $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+  try {
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+  } finally {
+    # The unmanaged copy of the password is zeroed and freed at once.
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+  }
 }
 $nodeArgs = @((Join-Path $here "permission-roles-v84-rehearsal.mjs"), "--host", $DbHost, "--port", $Port, "--user", $User)
 if ($PgBin) { $nodeArgs += @("--pg-bin", $PgBin) }

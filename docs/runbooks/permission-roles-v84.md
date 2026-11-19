@@ -49,7 +49,10 @@ Roles API (`/api/organization/roles`) exists. For every existing account every `
    migration, not a reason to edit the post-check's digest.
 2. **The preflight**, read-only, each block in `begin transaction read only; ... rollback;`, right before the merge:
    every `ok` column true; keep block 3a's row for post-check block 6a; block 7 read at the moment of the merge; block 8
-   (the unique 12-digit prefix on the merge tree) in git.
+   (the unique 12-digit prefix on the merge tree) in git; block 1b (no recorded checksum differs from the merge tree's
+   files): `node backend/scripts/permission-roles-v84-checksums.mjs > v84-checksums.sql` on the merge tree, then that one
+   statement read-only (`no_recorded_checksum_differs` true). After the deploy, post-check block 1 compares v84's recorded
+   checksum with the file's sha256 written in it (the runbook test keeps that literal equal to the file).
 
 ## Locks and the quiet moment
 

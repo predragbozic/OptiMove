@@ -236,3 +236,31 @@ test("34. role tables unreadable: a platform admin still passes the organization
   assert.ok(ok.status === 200 || ok.status === 201, ok.text);
   assert.equal(ROLE_IDS.club_admin.length, 36);
 });
+
+test("34b. role tables unreadable inside a caller's own transaction (dashboardSimple's preview runner): the read fails closed (unavailable) under a savepoint and the caller's transaction stays usable - never 25P02; outside a transaction the same runner still fails closed", async () => {
+  const user = (await k.query(`select * from public.users where id = $1`, [W.users["club admin of A"]])).rows[0];
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  const runner = (sql, params) => c.query(sql, params);
+  await k.query(`alter table public.permission_role_items rename to permission_role_items_hidden`);
+  try {
+    await c.query("begin");
+    const inside = await authz.loadAuthorizationContext(user, runner);
+    assert.equal(inside.rolePermissions.unavailable, true);
+    assert.equal((await c.query("select 1 as one")).rows[0].one, 1, "the caller's transaction is still usable");
+    await c.query("commit");
+    const outside = await authz.loadAuthorizationContext(user, runner);
+    assert.equal(outside.rolePermissions.unavailable, true);
+    assert.equal((await c.query("select 1 as one")).rows[0].one, 1);
+  } finally {
+    await c.query("rollback").catch(() => {});
+    await k.query(`alter table public.permission_role_items_hidden rename to permission_role_items`);
+  }
+  // Readable again, inside a transaction: the words, and the savepoint released.
+  await c.query("begin");
+  const again = await authz.loadAuthorizationContext(user, runner);
+  assert.ok(Array.isArray(again.rolePermissions) && again.rolePermissions.some((e) => e.scopeId === W.A && e.words.includes("roles.manage")));
+  assert.equal((await c.query("select 1 as one")).rows[0].one, 1);
+  await c.query("commit");
+  await c.end();
+});

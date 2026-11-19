@@ -44,6 +44,8 @@ test("G3. the wrappers refuse a non-loopback host before asking for a password, 
   assert.match(sh, /OPTIMOVE_REHEARSAL_PASSWORD="\$pw" PGPASSWORD="" node/);
   assert.match(ps, /\$env:OPTIMOVE_REHEARSAL_PASSWORD = \$plain/);
   assert.match(ps, /Remove-Item Env:OPTIMOVE_REHEARSAL_PASSWORD/);
+  // The unmanaged BSTR copy of the prompted password is zeroed and freed in a finally right after the read (static: no pwsh here).
+  assert.match(ps, /try \{\s+\$plain = \[Runtime\.InteropServices\.Marshal\]::PtrToStringBSTR\(\$bstr\)\s+\} finally \{[^}]*\[Runtime\.InteropServices\.Marshal\]::ZeroFreeBSTR\(\$bstr\)/);
   assert.ok(!/--password/.test(sh + ps), "no password argument");
   let failed = null;
   try {

@@ -86,11 +86,23 @@ test("7a. the preflight before v84: every block's ok columns true, block 3a's fi
   allTrue("3 again", await run(PRE["3"]));
 });
 
-test("7b. the post-check after v84: every block's ok columns true and block 6a equal to preflight block 3a; flips: a later migration (1), a privilege granted to PUBLIC (2), a disabled trigger (3), a changed seed (4), an assignment (5), a dropped CHECK (6)", async () => {
+test("7b. the post-check after v84: every block's ok columns true and block 6a equal to preflight block 3a; flips: a tampered v84 checksum (1, and preflight 1b), a later migration (1), a privilege granted to PUBLIC (2), a disabled trigger (3), a changed seed (4), an assignment (5), a dropped CHECK (6)", async () => {
   await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
   assert.deepEqual(Object.keys(POST).sort(), ["1", "2", "3", "4", "5", "6", "6a", "7"]);
   for (const [name, sql] of Object.entries(POST)) allTrue(name, await run(sql));
   assert.deepEqual(await run(POST["6a"]), fingerprintBefore, "v84 rewrote no row of the old role tables");
+  // 1: post-check block 1's literal is the file's sha256 (the runner's checksum); a tampered recorded checksum flips it.
+  const fileSum = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, "202611201000_roles_v84_permission_roles.sql"))).digest("hex");
+  assert.ok(POSTCHECK.includes(`checksum = '${fileSum}'`), "post-check block 1 names the file's sha256");
+  await c.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, ["migrations_v2/202611201000_roles_v84_permission_roles.sql", "0".repeat(64)]);
+  assert.equal((await run(POST["1"])).checksum_is_the_file, false);
+  // 1b of the preflight (generated in the checkout): the same tampered row is a differing recorded checksum.
+  const { checksumSql } = await import("../scripts/permission-roles-v84-checksums.mjs");
+  assert.equal((await run(checksumSql())).no_recorded_checksum_differs, false);
+  await c.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, ["migrations_v2/202611201000_roles_v84_permission_roles.sql", fileSum]);
+  const oneB = await run(checksumSql());
+  assert.equal(oneB.no_recorded_checksum_differs, true);
+  assert.equal(Number(oneB.recorded_not_in_repo), 0);
   // 1: a later migration.
   await c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912310000_later.sql', $1, 'test')`, ["f".repeat(64)]);
   assert.equal((await run(POST["1"])).is_last, false);

@@ -414,6 +414,7 @@ async function readRole(client, roleId, clubId, standing, { history = false } = 
 // ---------------------------------------------------------------------------
 // The write runner (contract 5.3)
 // ---------------------------------------------------------------------------
+const REQUEST_KEY_LOCK_SQL = `select pg_advisory_xact_lock(hashtextextended('permission_request:' || $1, 0))`;
 const ACTOR_SQL = `select set_config('optimove.permission_actor', $1 || ':' || pg_current_xact_id()::text, true)`;
 const PAIR_SQL = `select u.id from public.users u where u.id in ($1, $2) order by u.id for share`;
 const LOCK_ACTOR_SQL = `select public.lock_permission_actor($1, $2, $3, $4, $5, $6) as basis`;
@@ -448,6 +449,11 @@ async function runWrite(ctx, { operation, requestKey, requestHash, prepare, writ
     await client.query(`set local statement_timeout = '${STATEMENT_TIMEOUT_MS}ms'`);
     await client.query(`set local idle_in_transaction_session_timeout = '${IDLE_TIMEOUT_MS}ms'`);
     if (afterBeginHold) await afterBeginHold();
+    // 0. Two requests of one caller with one key wait for each other here, so the second
+    //    replays the first's committed answer instead of meeting its effect as a 409
+    //    (idempotency under concurrency). Always the first lock; only same-key requests of
+    //    the same caller share it, so it adds no lock-order edge between different requests.
+    await client.query(REQUEST_KEY_LOCK_SQL, [`${String(ctx.userId).toLowerCase()}:${requestKey}`]);
     // 1. Replay: a request record of this caller and key.
     const earlier = (await client.query(`select id, operation, request_hash, role_change_id, assignment_id, owner_club_id
         from public.permission_requests where requested_by_user_id = $1 and request_key = $2`, [ctx.userId, requestKey])).rows[0];
@@ -644,6 +650,8 @@ export async function createRole(ctx, body) {
     prepare: async (client) => {
       const basis = await lockActor(client, ctx, { scopeType: clubId ? "club" : "global", scopeId: clubId ?? NIL });
       if (clubId ? basis == null : basis !== "platform_admin") throw NOT_FOUND();
+      // The basis also counts staff.assign; a role write needs roles.manage itself (as P9 re-checks staff.assign).
+      if (!(await roleStanding(ctx)(client, clubId))) throw NOT_FOUND();
       if (clubId && !(await activeClub(clubId, client))) throw NOT_FOUND();
       if (scopeTypes.some((t) => t === "private" || t === "global")) throw refuse("role_not_assignable_here");
       const ruled = itemRuleRefusal(items, { basicKey: null, scopeTypes });
@@ -695,6 +703,7 @@ export async function changeRole(ctx, roleIdRaw, body) {
     prepare: async (client) => {
       const basis = await lockActor(client, ctx, { scopeType: ownerClubId ? "club" : "global", scopeId: ownerClubId ?? NIL, roleForUpdate: roleId });
       if (ownerClubId ? basis == null : basis !== "platform_admin") throw NOT_FOUND();
+      if (!(await roleStanding(ctx)(client, ownerClubId))) throw NOT_FOUND();
       if (ownerClubId && !(await activeClub(ownerClubId, client))) throw NOT_FOUND();
       const role = await lockedRole(client, roleId);
       if (role.basic_key === "platform_admin") throw refuse("role_not_editable");
@@ -777,6 +786,7 @@ export async function archiveRole(ctx, roleIdRaw, body) {
     prepare: async (client) => {
       const basis = await lockActor(client, ctx, { scopeType: ownerClubId ? "club" : "global", scopeId: ownerClubId ?? NIL, roleForUpdate: roleId });
       if (ownerClubId ? basis == null : basis !== "platform_admin") throw NOT_FOUND();
+      if (!(await roleStanding(ctx)(client, ownerClubId))) throw NOT_FOUND();
       if (ownerClubId && !(await activeClub(ownerClubId, client))) throw NOT_FOUND();
       const role = await lockedRole(client, roleId);
       if (role.is_basic) throw refuse("role_not_editable");
@@ -800,6 +810,7 @@ export async function archiveRole(ctx, roleIdRaw, body) {
 // ---------------------------------------------------------------------------
 // P7: copy
 // ---------------------------------------------------------------------------
+const COPY_SUFFIX = " (copy)";
 export async function copyRole(ctx, roleIdRaw, body) {
   if (!isUuid(roleIdRaw)) throw NOT_FOUND();
   const requestKey = requireUuid(body?.requestKey, "requestKey");
@@ -818,6 +829,7 @@ export async function copyRole(ctx, roleIdRaw, body) {
     prepare: async (client) => {
       const basis = await lockActor(client, ctx, { scopeType: "club", scopeId: clubId, roleForShare: sourceId });
       if (basis == null) throw NOT_FOUND();
+      if (!(await roleStanding(ctx)(client, clubId))) throw NOT_FOUND();
       if (!(await activeClub(clubId, client))) throw NOT_FOUND();
       const src = await lockedRole(client, sourceId);
       if (src.basic_key === "platform_admin") throw refuse("role_not_editable");
@@ -832,7 +844,9 @@ export async function copyRole(ctx, roleIdRaw, body) {
         else if (basis !== "platform_admin" && !(await holdsSql(client, ctx.userId, w, clubId))) dropped.push({ word: w, reason: "not_held" });
         else items.push(w);
       }
-      const name = nameIn ?? src.name;
+      // Without a name: "<source name> (copy)" (O7: a club role never takes a current system
+      // role's name); a long source name is cut so the whole fits 80 characters.
+      const name = nameIn ?? `${[...src.name].slice(0, 80 - COPY_SUFFIX.length).join("").trimEnd()}${COPY_SUFFIX}`;
       if (!textOk(name, 80)) throw bad("name is missing or not allowed.");
       const named = await nameRefusal(client, { ownerClubId: clubId, name });
       if (named) throw named;
@@ -904,10 +918,11 @@ export async function listAssignments(ctx, query) {
 // P9: assign, P10: revoke
 // ---------------------------------------------------------------------------
 async function assignmentView(client, assignmentId) {
-  const a = (await client.query(`select a.*, case when a.scope_type = 'club' then a.scope_id else t.club_id end as club_id
+  const a = (await client.query(`select a.*, case when a.scope_type = 'club' then a.scope_id else t.club_id end as club_id,
+        (a.expires_at is not null and a.expires_at <= now()) as lapsed
       from public.user_role_assignments a left join public.teams t on a.scope_type = 'team' and t.id = a.scope_id where a.id = $1`, [assignmentId])).rows[0];
   if (!a) return null;
-  const state = a.revoked_at ? a.revoke_kind : (a.expires_at && a.expires_at <= new Date() ? "expired" : "active");
+  const state = a.revoked_at ? a.revoke_kind : (a.lapsed ? "expired" : "active");
   return {
     id: a.id, userId: a.user_id, roleId: a.role_id, scopeType: a.scope_type, scopeId: a.scope_id, clubId: a.club_id,
     title: a.display_title, grantBasis: a.grant_basis, grantedBy: a.granted_by_user_id, reason: a.grant_reason, expiresAt: a.expires_at,
@@ -945,13 +960,15 @@ export async function assignRole(ctx, body) {
   if (clubId) await gateClub(ctx, clubId, { needs: "staff" });
   else if (!isPlatform(ctx)) throw NOT_FOUND();
   const role = (await pool.query(`select owner_scope, owner_club_id from public.permission_roles where id = $1`, [roleId])).rows[0];
+  // ADR-006: every 404 (the role, another club's role, the user) before any 409, so no
+  // body-level refusal tells another club's role id from a random one.
   if (!role) throw NOT_FOUND();
+  if (clubId && role.owner_scope === "club" && String(role.owner_club_id) !== String(clubId)) throw NOT_FOUND();
+  const target = (await pool.query(`select is_active from public.users where id = $1`, [userId])).rows[0];
+  if (!target) throw NOT_FOUND();
   if (userId === String(ctx.userId).toLowerCase()) throw refuse("self_assignment");
   // A global or private scope (a platform admin only gets here): never in R2 (O9).
   if (!clubId) throw refuse("role_not_assignable_here");
-  if (role.owner_scope === "club" && String(role.owner_club_id) !== String(clubId)) throw NOT_FOUND();
-  const target = (await pool.query(`select is_active from public.users where id = $1`, [userId])).rows[0];
-  if (!target) throw NOT_FOUND();
   const requestHash = requestHashOf("assignment_grant", { userId, roleId, scopeType, scopeId, displayTitle, expiresAt, reason });
   return runWrite(ctx, {
     operation: "assignment_grant", requestKey, requestHash,
@@ -973,9 +990,10 @@ export async function assignRole(ctx, body) {
       const u = (await client.query(`select is_active from public.users where id = $1`, [userId])).rows[0];
       if (!u) throw NOT_FOUND();
       if (!u.is_active) throw refuse("user_inactive");
-      const existing = (await client.query(`select id, expires_at from public.user_role_assignments
+      // Lapsed or not by the database's clock (the same now() the twin and the guards read).
+      const existing = (await client.query(`select id, (expires_at is not null and expires_at <= now()) as lapsed from public.user_role_assignments
           where user_id = $1 and role_id = $2 and scope_type = $3 and scope_id = $4 and revoked_at is null`, [userId, roleId, scopeType, scopeId])).rows[0];
-      if (existing && !(existing.expires_at && existing.expires_at <= new Date())) throw refuse("assignment_exists", { assignmentId: existing.id });
+      if (existing && !existing.lapsed) throw refuse("assignment_exists", { assignmentId: existing.id });
       return { basis, lapsed: existing?.id ?? null };
     },
     write: async (client, p) => {
@@ -1012,9 +1030,9 @@ export async function revokeAssignment(ctx, assignmentIdRaw, body) {
       await client.query(PAIR_SQL, [ctx.userId, found.user_id]);
       const basis = await lockActor(client, ctx, { scopeType: found.scope_type, scopeId: found.scope_id, assignmentForUpdate: assignmentId });
       if (!basis || !(await staffStanding(ctx)(client, clubId))) throw NOT_FOUND();
-      const a = (await client.query(`select user_id, role_id, revoked_at, expires_at from public.user_role_assignments where id = $1`, [assignmentId])).rows[0];
+      const a = (await client.query(`select user_id, role_id, revoked_at, (expires_at is not null and expires_at <= now()) as lapsed from public.user_role_assignments where id = $1`, [assignmentId])).rows[0];
       if (String(a.user_id) !== expectedUser || String(a.role_id) !== expectedRole) throw refuse("assignment_mismatch");
-      if (a.revoked_at || (a.expires_at && a.expires_at <= new Date())) throw refuse("assignment_already_revoked", { current: await assignmentView(client, assignmentId) });
+      if (a.revoked_at || a.lapsed) throw refuse("assignment_already_revoked", { current: await assignmentView(client, assignmentId) });
       return { basis };
     },
     write: async (client) => {

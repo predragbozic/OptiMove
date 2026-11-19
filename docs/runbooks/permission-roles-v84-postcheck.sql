@@ -3,9 +3,10 @@
 --   begin transaction read only; <block>; rollback;
 -- Every ok column must be true; block 6a is compared by the reader with preflight block 3a.
 
--- 1. v84 is recorded once, with a checksum, and is the last migration.
+-- 1. v84 is recorded once, its checksum the file's sha256 (the literal below; the runbook test keeps it equal to the
+--    file), and it is the last migration.
 select count(*) = 1 as recorded_once,
-       bool_and(checksum ~ '^[0-9a-f]{64}$') as checksum_shaped,
+       bool_and(checksum = 'ab7a6daca62af0ebd18eb3f2f0e0b97e86f7774d001a28f2d6be9fa1e518a624') as checksum_is_the_file,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') = 'migrations_v2/202611201000_roles_v84_permission_roles.sql' as is_last
   from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql';
 

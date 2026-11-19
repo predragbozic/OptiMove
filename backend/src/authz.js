@@ -141,10 +141,20 @@ const loggedRolePermissionFailures = new Set();
 
 async function loadRolePermissions(userId, queryRunner) {
   let rows;
+  // A caller-supplied runner may be inside the caller's own transaction
+  // (dashboardSimple/previewContext.js): the read runs under a savepoint, so a
+  // failure leaves that transaction usable and the request still fails closed
+  // (503 permissions_unavailable), never 25P02. Outside a transaction the
+  // savepoint is refused and the read runs as it is.
+  const ownRunner = queryRunner === query;
+  let savepoint = false;
   try {
+    if (!ownRunner) savepoint = await queryRunner("savepoint authz_role_permissions").then(() => true, () => false);
     rows = (await queryRunner(ROLE_PERMISSIONS_SQL, [userId])).rows;
     if (!Array.isArray(rows)) throw new Error("no rows");
+    if (savepoint) await queryRunner("release savepoint authz_role_permissions");
   } catch (error) {
+    if (savepoint) await queryRunner("rollback to savepoint authz_role_permissions").catch(() => {});
     // Logged once per error code per process, so a database without v84 (a
     // test database built from a curated list) does not log on every request.
     const code = String(error?.code || "error");
