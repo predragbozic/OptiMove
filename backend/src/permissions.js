@@ -232,6 +232,21 @@ export function teamScope(id) {
 //     the admin of the team's club (authz.managedTeamIds) when the Club admin
 //     set holds it.
 // A platform-only word never passes for anyone else, whatever the sets say.
+// A club or team scope without an id (null, undefined, "") is no resource:
+// nobody but a platform admin passes it.
+//
+// Two conventions about the scope, which the SQL twin of R2
+// (public.user_has_permission) must copy exactly:
+//   1. global scope = a platform admin only, WHATEVER the word. A club or
+//      team word checked at global scope ("accounts.manage", "athletes.remove"
+//      in routes/organization.js) means "this resource belongs to no club or
+//      team", so no club's or team's role reaches it.
+//   2. a club's word holds at a team under that club. A word that may be
+//      assigned only for a club ("staff.assign") can therefore be checked at
+//      team scope; it then passes for the admin of the team's club and never
+//      for the team's own coach, unless the Team coach set holds the word too.
+// The catalog's `scopeTypes` say where a role may be ASSIGNED, not which
+// resource scopes a check may name.
 export function can(authz, permission, scope) {
   const entry = Object.hasOwn(PERMISSIONS, permission) ? PERMISSIONS[permission] : null;
   if (!entry) throw new Error(`Unknown permission: ${String(permission)}`);
@@ -241,6 +256,7 @@ export function can(authz, permission, scope) {
   }
   if (isPlatformAdministrator(authz)) return true;
   if (entry.platformOnly || type === "global") return false;
+  if (scope.id == null || scope.id === "") return false;
   if (type === "club") {
     return CLUB_ADMIN_SET.has(permission) && holdsClubAdminRole(authz, scope.id);
   }

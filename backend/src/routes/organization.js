@@ -1167,6 +1167,10 @@ router.put("/teams/:teamId", async (req, res, next) => {
   let name;
   let team;
   try {
+    // Transitional (roles R1): "org.view" reproduces today's first gate, which the
+    // team's own coach passes (and is then refused by the club check below). Once a
+    // view-only role exists (R4) this gate becomes "resolve the team to its club,
+    // then org.teams.manage"; a holder of org.view alone must never get further.
     if (!can(req.authz, "org.view", teamScope(req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Team name is required." });
