@@ -87,15 +87,46 @@ with [Add] and [Leave].
   change is needed.
 - The rule of one RPE channel per event holds, and its refusals read as the sentences of #643.
 
-### K5-4 — GPS sessions waiting for import (with the OptiMove manager's mapping stream)
+### K5-4 — GPS sessions waiting for import (the OptiMove manager's answers, 2026-11-19)
 
-- **The mark.** A day mark such as "📡 2 GPS sessions to review". Its click opens Imports on that day.
-- **The data.** The count comes from the existing candidates route of the workspace's team or teams, so there is no
-  new backend in the calendar stream. Two questions are for the OptiMove manager:
-  - (a) whether the calendar may read that route, and how often (cache, one read per week shown);
-  - (b) whether Imports takes a day to open on, which is a small change in his screen.
-- **Who sees it.** Only those who see Imports today (the team's coach and the identity administrators). Everyone else
-  sees nothing.
+The manager agrees with the direction, on one condition: the calendar **writes nothing into another module and
+duplicates none of its rules**. It only reads, and leads there.
+
+**(a) The calendar may read `GET /api/training-load/gpexe/teams/:teamId/candidates`, within these limits:**
+
+- **No GPEXE request.** The route reads only the stored candidates and never sends a request to GPEXE. The calendar
+  never starts *Find new sessions* (`POST …/checks`); that stays in Imports, on a click.
+- **Who reads it.** The route answers the same 404 to anyone who is not the team's coach, the club's admin or a
+  platform admin in the right workspace.
+  - The calendar calls it only for the active workspace's team, and treats a 404 or 403 silently: no mark and no
+    message.
+  - An athlete never calls it.
+- **How often.** One read per team per week shown. It is cached in memory until the week or the workspace changes,
+  or until a realtime or manual refresh. There is no polling.
+- **How accurate the mark can be.**
+  - The list is capped at 200 rows, is not filtered by date, and does not return replaced versions. So a mark says
+    only that GPS sessions are waiting, for a day the answer shows.
+  - If exactly 200 rows arrive, the number is not shown as final.
+  - The day is the session's date from the candidate (a naive day, with no time zone), as in the Imports calendar.
+- **What is counted.**
+  - Only candidates that are neither imported nor *Stays out*.
+  - *Ready to import* is told apart from *Needs attention* by the same fields Imports uses (`approvalBlockers`,
+    `reasons`, `blockedCode`). That logic is imported from `frontend/gpexe-import-*.js`, never rewritten.
+- **What is shown.** Only the GPS icon and the number of sessions. Never an athlete's name, a GPEXE id or a value.
+- **A longer period.** If an exact count per day over a longer period is ever needed, it is a small new read route
+  (`from` / `to`, numbers only), built by the mapping stream. The existing route is not widened from the calendar
+  stream.
+
+**(b) Imports opening on a given day: yes.** The calendar stream builds it, with the manager's GO, as its own small
+frontend PR (★, his gate).
+
+- Imports already has a local day filter in its sessions calendar (Phase 4b). Only an entry "open on day D" is
+  needed, which sets that filter (and the team), plus a *Back to calendar* band in the K4-0 pattern.
+- **Conditions:**
+  - no backend change;
+  - Imports' guards (a batch in flight, an unconfirmed outcome) are untouched;
+  - `frontend/gpexe-import-{view,actions,data}.js` otherwise belong to the mapping stream, so the calendar stream
+    tells the manager before it starts, to avoid a clash with his pull requests.
 
 ### K5-5 — the way back to the hub from the module calendars (frontend only)
 
@@ -108,7 +139,8 @@ with [Add] and [Leave].
 1. **K5-1 and K5-2:** one small frontend package after K3 / K2c-3 and K4a-F. The reviews are `code-reviewer`,
    `mobile-qa` and `ux-design-reviewer`, plus a browser check at 1280 / 390 / 375 / 360 px and the Frontend PR gate.
 2. **K5-3:** its own contract first. If a route changes, add `security-reviewer`.
-3. **K5-4:** first the OptiMove manager's answers to (a) and (b), then the contract.
+3. **K5-4:** the manager answered (a) and (b) (section K5-4). Its contract comes next, and the Imports entry is its own
+   small PR, announced to the manager before it starts.
 4. **K5-5:** a small frontend change; it may go with K5-1.
 
 The designer makes mockups of K5-1 and K5-2 (the GPS icon, the chips and *Go there*) before any code, and the owner
