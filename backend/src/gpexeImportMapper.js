@@ -27,6 +27,7 @@
 // turns the locked activation rows into those specs; buildGpexeImportPlan()
 // applies them at the levels each version covers; classifyMappedPlan() sorts
 // the outcome into the whole-candidate blocks and the values left out.
+import { sameSourceRange, sourceRangeOf } from "./sourceConditionRules.js";
 import { canonicalDecimal, compareDecimal, extractabilityCode, extractorFor, SKIP_CATEGORY } from "./sourceMetricExtractors.js";
 import { convertAtStorageScale } from "./sourceMetricPreview.js";
 import { statusProven } from "./sourceFieldEvidence.js";
@@ -232,6 +233,9 @@ export function mappedMetricSpecs(rows, { unitWords = new Map() } = {}) {
         max: activation.maxValue === null || activation.maxValue === undefined ? null : canonicalDecimal(activation.maxValue),
       }),
       extract: (input) => extractor.extract(input, sourceParameters, { sourceUnit: activation.revisionSourceUnit, unitWords, provenWord: activation.revisionUnitWord ?? null }),
+      // v80: a column matched to a variable with a condition through the team's GPEXE setting.
+      conditionRule: activation.conditionRule ?? null,
+      matchedSourceRange: activation.matchedSourceRange ?? null,
     });
   });
   return { block: null, specs };
@@ -370,6 +374,13 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null,
   const drillsCount = Number(session.drills_count ?? 0);
   if (!Number.isInteger(drillsCount) || drillsCount < 0) throw new GpexeMappingError("invalid_drills_count", `drills_count ${session.drills_count} is not a non-negative integer.`);
   const thresholdsUsed = validateTeamThresholds(bundle.teamThresholds, session, startInstant);
+  // v80: a column matched through the team's GPEXE setting reads this session only while the session's team setting is
+  // the one it was matched with; otherwise the whole candidate is blocked (team_setting_changed), never imported silently.
+  const settingChanged = metricSpecs
+    .filter((spec) => !spec.raw && spec.conditionRule)
+    .map((spec) => ({ spec, current: sourceRangeOf(spec.conditionRule, bundle.teamThresholds)?.range ?? null }))
+    .filter(({ spec, current }) => !sameSourceRange(current, spec.matchedSourceRange))
+    .map(({ spec, current }) => ({ activationId: spec.activationId, current, matched: spec.matchedSourceRange }));
 
   const anomalies = [];
   const rows = (bundle.athleteSessions || []).filter((row) => String(row.teamsession) === sessionId);
@@ -598,6 +609,7 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null,
     },
     segments,
     participants,
+    ...(settingChanged.length > 0 ? { settingChanged } : {}),
     anomalies,
     leftOut,
     // The preview hash's activation set (J17 section 3, step 11).
@@ -619,6 +631,8 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null,
 // left out (C110) never block.
 export function classifyMappedPlan(plan, { importableIds, activationCount }) {
   if (!activationCount) return { block: "no_mapped_values" };
+  // v80: a team setting that is not the one a column was matched with blocks the whole candidate first.
+  if (plan.settingChanged?.length > 0) return { block: "team_setting_changed", activationId: plan.settingChanged[0].activationId };
   const importable = new Set([...(importableIds ?? [])].map(String));
   const admitted = importable.size > 0 ? importable : new Set(plan.participants.map((p) => p.gpexeAthleteId));
   const records = plan.leftOut.filter((record) => admitted.has(record.gpexeAthleteId));

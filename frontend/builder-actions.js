@@ -68,6 +68,12 @@ function getBuilderBatchId(draft = state.builder.draft) {
 }
 
 function shouldSyncBuilderBatch() {
+  // A reopened, published plan (an edit draft) is applied to this athlete only:
+  // the server never syncs an edit draft's batch (wantsBatchSync and
+  // syncBatchFromPlan in backend/src/routes/builder.js), so the request must
+  // not claim to. A new batch draft keeps the coach's "Apply changes to all
+  // athletes" choice.
+  if (state.builder.draft?.plan?.isEditDraft) return false;
   const batchPlans = state.builder.draft?.batch?.plans || [];
   return Boolean(state.builder.batchSync && (batchPlans.length > 1 || getBuilderBatchId()));
 }

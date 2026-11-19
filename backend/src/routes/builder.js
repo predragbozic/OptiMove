@@ -253,6 +253,136 @@ router.get("/drafts", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// K3 (docs/ai/central-calendar-k3-plan.md section 3.1): which of an event's
+// athletes already have a weekly plan of a week, so "Plan the training" can
+// tell its cases (none / one shared batch / mixed) apart before anything is
+// created. Read only.
+//
+// - The query string is checked before any query: `weekStart` a real date
+//   (any day; the week's Monday is used), `athleteIds` 1 to 200 UUIDs
+//   (`public.athletes.id`, the calendar's ids), comma-separated.
+// - The workspace rule is the create's own (resolveWeeklyPlanOwnerScope and
+//   isAthleteInWorkspaceScope, in one statement here): an athlete outside the
+//   active workspace, archived or unknown answers `{ athleteId, plannable:
+//   false }` and nothing else, whether or not a plan exists.
+// - A plannable athlete's plan is the one ensureWeeklySlot (POST /plans)
+//   would refuse on: the oldest active, non-edit-draft weekly plan of that
+//   week, whoever made it, leaving out the caller's own empty Builder plan
+//   (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
+//   rule) is `{ editable: false }` only: no id, name, author or status.
+export const WEEKLY_PLANS_READ_MAX = 200;
+const ATHLETE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidGregorianDate(iso) {
+  const date = new Date(`${iso}T12:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === iso;
+}
+
+function weeklyPlansReadQuery(rawQuery) {
+  const weekRaw = typeof rawQuery?.weekStart === "string" ? rawQuery.weekStart.trim() : "";
+  const weekStart = /^\d{4}-\d{2}-\d{2}$/.test(weekRaw) && isValidGregorianDate(weekRaw) ? normalizedWeekStart(weekRaw) : null;
+  if (!weekStart) return { error: { code: "invalid_week_start", message: "weekStart must be a valid YYYY-MM-DD date." } };
+  const raw = typeof rawQuery?.athleteIds === "string" ? rawQuery.athleteIds : "";
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length || parts.length > WEEKLY_PLANS_READ_MAX) {
+    return { error: { code: "invalid_athletes", message: `athleteIds must list 1 to ${WEEKLY_PLANS_READ_MAX} athlete ids.` } };
+  }
+  if (parts.some((part) => !ATHLETE_UUID.test(part))) return { error: { code: "invalid_athletes", message: "athleteIds must be UUIDs." } };
+  return { weekStart, athleteIds: [...new Set(parts.map((part) => part.toLowerCase()))] };
+}
+
+// The create's workspace rule (isAthleteInWorkspaceScope), for one athlete
+// alias, with its parameters appended to `params`.
+function athleteInWeeklyScopeSql(scope, alias, params) {
+  if (scope.type === "platform") return "true";
+  if (scope.type === "club") {
+    params.push(scope.clubId);
+    return `exists (select 1 from public.athlete_memberships m where m.athlete_id = ${alias}.id and m.membership_type = 'club' and m.status = 'active' and m.club_id = $${params.length})`;
+  }
+  if (scope.type === "team") {
+    params.push(scope.teamId);
+    return `exists (select 1 from public.athlete_memberships m where m.athlete_id = ${alias}.id and m.membership_type = 'team' and m.status = 'active' and m.team_id = $${params.length})`;
+  }
+  if (scope.type === "private_coach") {
+    params.push(scope.userId);
+    return `exists (select 1 from public.user_athletes ua where ua.athlete_id = ${alias}.id and ua.user_id = $${params.length} and ua.is_active = true)`;
+  }
+  return "false";
+}
+
+// One athlete's answer of GET /weekly-plans from its row (exported for its
+// test). Outside the workspace: plannable false and nothing else. A plan the
+// caller may not open: `{ editable: false }` only (with today's rules an
+// athlete inside the workspace is always one the caller may open, so this is
+// a fail-closed branch).
+export function weeklyPlansReadAnswer(row) {
+  if (row.plannable !== true) return { athleteId: row.athlete_id, plannable: false };
+  if (!row.plan_id) return { athleteId: row.athlete_id, plannable: true, plan: null };
+  if (row.editable !== true) return { athleteId: row.athlete_id, plannable: true, plan: { editable: false } };
+  return {
+    athleteId: row.athlete_id,
+    plannable: true,
+    plan: {
+      planId: row.plan_id,
+      status: row.status === "draft" ? "draft" : "active",
+      batchId: row.builder_batch_id || null,
+      mine: row.mine === true,
+      editable: true,
+      openDraftId: row.open_draft_id || null,
+    },
+  };
+}
+
+router.get("/weekly-plans", async (req, res, next) => {
+  try {
+    const parsed = weeklyPlansReadQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error.code, message: parsed.error.message });
+    const scope = await resolveWeeklyPlanOwnerScope(req, res);
+    if (!scope) return;
+    const params = [parsed.athleteIds, parsed.weekStart, req.user.id, canAccessAllAthletes(req)];
+    const inScope = athleteInWeeklyScopeSql(scope, "a", params);
+    const result = await query(
+      `select k.athlete_id::text as athlete_id,
+              (a.id is not null and coalesce(a.is_active, true) and ${inScope}) as plannable,
+              p.id as plan_id, p.status, p.builder_batch_id,
+              (p.created_by_user_id = $3) as mine,
+              (p.id is not null and (p.created_by_user_id = $3 or $4::boolean or ${athleteAccessPredicate("a", "$3")})) as editable,
+              (select d.id from plans.plans d
+                where d.edit_source_plan_id = p.id and d.is_edit_draft = true and d.created_by_user_id = $3
+                order by d.updated_at desc limit 1) as open_draft_id
+         from unnest($1::uuid[]) with ordinality as k(athlete_id, n)
+         left join public.athletes a on a.id = k.athlete_id
+         left join lateral (
+           select p.id, p.status, p.builder_batch_id, p.created_by_user_id
+             from plans.plans p
+            where p.plan_type = 'weekly' and p.athlete_id = a.id and p.week_start = $2::date
+              and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)
+              -- ensureWeeklySlot's skip: the caller's own EMPTY Builder plan
+              -- is removed by POST /plans, so it is not reported either
+              -- (planHasWeeklyTrainingContentWithClient's content rule).
+              and not (
+                p.source_type = 'builder' and p.created_by_user_id = $3
+                and not exists (select 1 from plans.plan_items pi
+                                  join plans.plan_sessions ps on ps.id = pi.plan_session_id
+                                  join plans.plan_days pd on pd.id = ps.plan_day_id
+                                 where pd.plan_id = p.id)
+                and not exists (select 1 from plans.plan_nodes pn
+                                  join plans.plan_sessions ps on ps.id = pn.plan_session_id
+                                  join plans.plan_days pd on pd.id = ps.plan_day_id
+                                 where pd.plan_id = p.id and nullif(trim(coalesce(pn.name, '')), '') is not null)
+              )
+            order by p.created_at
+            limit 1
+         ) p on true
+        order by k.n`,
+      params,
+    );
+    const athletes = result.rows.map(weeklyPlansReadAnswer);
+    res.set("Cache-Control", "no-store");
+    res.json({ weekStart: parsed.weekStart, athletes });
+  } catch (error) { next(error); }
+});
+
 router.get("/plans/:planId", async (req, res, next) => {
   try {
     const plan = await getEditablePlan(req, req.params.planId);

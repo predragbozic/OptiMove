@@ -126,9 +126,9 @@ test("9-B: every block the mapping context and the mapper can answer is the stab
     for (const m of text.matchAll(/block: "([a-z_]+)"/g)) codes.add(m[1]);
   }
   for (const c of ["mapping_not_usable", "source_unit_mismatch", "source_instance_held"]) assert.ok(codes.has(c), `the scan sees ${c}`);
-  // J17 section 6: the eight blocking codes of a mapped import (BLOCKING_CODES of the audience module).
+  // J17 section 6: the blocking codes of a mapped import (BLOCKING_CODES of the audience module); v80 adds team_setting_changed.
   assert.deepEqual([...BLOCKING_CODES].sort(), ["mapping_not_usable", "no_mapped_values", "session_imported_under_another_instance", "source_instance_changed",
-    "source_instance_held", "source_shape_mismatch", "source_threshold_contract_mismatch", "source_unit_mismatch"]);
+    "source_instance_held", "source_shape_mismatch", "source_threshold_contract_mismatch", "source_unit_mismatch", "team_setting_changed"]);
   for (const c of [...codes, ...BLOCKING_CODES]) assert.equal(blockedCodeFor(c), BLOCKED_CODES.data_setup_incomplete, c);
   assert.equal(BLOCKED_CODES.data_setup_incomplete, "data_setup_incomplete");
   for (const c of ["required_value_missing", "canonical_value_out_of_range"]) {

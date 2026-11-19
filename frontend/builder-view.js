@@ -117,6 +117,10 @@ export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
   const current = batchPlans[currentIndex];
   const previous = batchPlans[currentIndex - 1];
   const next = batchPlans[currentIndex + 1];
+  // A reopened, published plan (an edit draft) saves to this athlete only (the
+  // server does not sync an edit draft's batch), so it offers no
+  // "Apply changes to all athletes" checkbox.
+  const isEditDraft = Boolean(state.builder.draft?.plan?.isEditDraft);
   const syncChecked = state.builder.batchSync ? "checked" : "";
   return `
     <section class="builder-batch-switcher" aria-label="Batch athlete plans">
@@ -147,15 +151,20 @@ export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
           <button class="plain-button icon-button" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(next?.id || "")}" ${next ? "" : "disabled"} aria-label="Next athlete"><span class="button-icon">&gt;</span></button>
         </div>
         <div class="builder-batch-mode">
+          ${isEditDraft ? `<small data-builder-batch-edit-note>Changes go to this athlete only.</small>` : `
           <label class="builder-batch-sync">
             <input type="checkbox" data-action="builder-toggle-batch-sync" ${syncChecked}>
             <span>Apply changes to all athletes</span>
           </label>
-          <small>Turn off before fine-tuning only this athlete.</small>
+          <small>Turn off before fine-tuning only this athlete.</small>`}
         </div>
       </div>
     </section>
   `;
+}
+
+export function renderBuilderEditDraftBatchNote() {
+  return `<p class="builder-batch-edit-note" data-builder-batch-edit-note>Changes go to this athlete only.</p>`;
 }
 
 function renderBuilderDraftsPanel() {
@@ -600,6 +609,14 @@ function renderBuilderInner() {
   const batchPlans = Array.isArray(draft.batch?.plans) ? draft.batch.plans : [];
   const batchIndex = batchPlans.findIndex((plan) => String(plan.id) === String(draft.plan.id));
   const hasBatch = batchPlans.length > 1 && batchIndex >= 0;
+  // A reopened, published member of a group (an edit draft) is not in the
+  // batch's list (loadBuilderBatch leaves edit drafts out), so no switcher is
+  // drawn for it; say plainly that its changes reach this athlete only.
+  // The group's size counts the members this coach may not open too (the
+  // server sends them only as hiddenCount).
+  const hiddenCount = Number(draft.batch?.hiddenCount) || 0;
+  const isEditDraftOfBatch = isEditDraft && batchPlans.length + hiddenCount > 1 && !hasBatch
+    && batchPlans.some((plan) => String(plan.id) === String(draft.plan.editSourcePlanId || ""));
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
@@ -614,7 +631,9 @@ function renderBuilderInner() {
         </div>
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
-      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : batchIndex >= 0 && Number(draft.batch?.hiddenCount) > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(draft.batch.hiddenCount)}</p>` : ""}
+      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex)
+        : isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() + (hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : "")
+        : batchIndex >= 0 && hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type === "cross-plan-block" ? "block" : state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? renderBuilderTrainingLoadSettings(draft) : ""}
       <div class="builder-layout">
