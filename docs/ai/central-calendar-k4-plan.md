@@ -19,6 +19,7 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O9** | „ostali predlozi su dobri i slazem se" · „samo ovo treba na neki bolji nacin resiti" · „na primer iz glavnog kalendara je lako kada ulazimo iz dogadjaa u builder pa kreiramo aktivnosti unutar tog dogadjaja" | The owner agrees with the rest of the plan. The main way is **from the calendar**: open an event, go into the Builder, and create its sessions inside that event (K3, now the main path, section 5.1). The Builder's own events row (5.2) is the way back for a coach who starts in the Builder. |
 | **O10** | „ako iz buildera krenemo mi mozemo na primer da imamo dugme kreiranje dogadjaj i da nas odmah odvede u kalendar i da kreiramo dogadjaj kao sto se i sada kreira i da se odmah iz tog dogajdaja ili back dugmetom ako necemo da ga kreiramo vratimo u bulder" · „pa da dole onda biramo dogajdaj za tu sesiju" · „ili taj dan" | From the Builder, **Create event** opens the calendar's own event form. After *Save*, or after Back with nothing made, the coach is back in the Builder, and the session (or the whole day) chooses its event below. There is one event form in the app. Section 5.2. |
 | **O11** | „ali nemoguce je da izaberemo drugi dan za dogjadjaj u suprotnom danu, datomi miraoju da budu isti, zar ne i satnice moraju da se poklapaju ako u sesiji hocemo satnicu da podesimo" | A session joins only an event of its own day. The time has one source, the event (section 5.2, point 10). |
+| **O12** | „ako ne mi mozemo da stavimo pre posle tokom treinga kao da sada i da se to nadje u dogadjaju koji je planiran" · „mislim da je to najlakse za nas" | A session keeps today's slot (Before / Training / After) and needs no time of its own; it is placed in the planned event, and the event gives the time. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
@@ -270,13 +271,13 @@ After training · Recovery                Event: [ No event     ▾]
     - **The day.** A session joins only an event of its own day. The selector lists only that day's events, and the
       server already refuses another day (`session_outside_event`). An event of several days (a camp) covers each of
       its days.
-    - **One source for the time.** A session in an event shows the event's time ("10:00 · from the event") and has no
-      time of its own while it is linked, so the two can never disagree.
-    - **Before and After** keep their order around the training (the Builder's slot). They show the same event time
-      as their reference.
+    - **No time of its own (O12, "the easiest for us").** A session keeps today's slot (Before training / Training /
+      After training), and that is all it needs. It is placed in the planned event, and the event gives the time
+      ("10:00 · from the event"), so the two can never disagree. Before and After stand around the training in that
+      order.
     - **Changing the time.** It is changed on the event, and the event opens in the calendar in one click; Back
-      returns. A session that had its own time before it was linked shows "Your time 18:00 is replaced by the
-      event's 10:00" once, when it is linked.
+      returns. A session that had its own time before it was linked shows "The event's time 10:00 is used" once, when
+      it is linked.
     - **Where the Weekly plan and the athlete's Calendar read the time.** The recommendation is to read it from the
       event for a linked session, never a copy that could go stale. The K3 / K2c-3 contract decides it.
 11. **The two directions are the same pattern.** K3 goes from the calendar into the Builder with a band and *Back to
