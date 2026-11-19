@@ -10,6 +10,7 @@ code. The designer's mockups and the owner's approval come first; then a UI cont
 | **S1** | „u kalendaru glavnom moglo bi se filtriranje i po sportisti (slika npr sa levo desno scrolom ili strelicom za prebacivanje ili vec ne znam kako je najefikasnije) zatim isto tako u weekly programu pa ulazak u nekom sekciju čiji naziv deli više igrača da bismo olakšali treneru da veoma lako pretražuje po sportisti. Mi sada tako nesto efikasno imamo u builderu" | Filter the calendar by athlete with photos, a sideways scroll and arrows. Do the same in the Weekly plan, so that a coach steps through the athletes inside a session several of them share. Use the Builder's athlete switcher as the model. |
 | **S2** | „Po timu takodje unutar kluba" | The same switcher for the teams of a club. |
 | **S3** | „To već imamo vrv" | The team filter already exists in the calendar: the *Groups* chips in Filters. K6 reuses it and builds no second team control; it only brings it next to the athlete strip, so a team can be chosen in one tap. |
+| **S4** | „U suštini jedan admin kluba bi mogao da vidi sve timove i sve sportiste da filtrira i lako pronalazi sve" | A club admin sees every team and every athlete of the club, filters by them, and finds anyone quickly. |
 
 ## 1. What exists today (`920459c0`)
 
@@ -34,6 +35,11 @@ anyone the coach may not see in the workspace.
   - Under it is the **athlete** strip of the chosen team (S1), starting with "All".
   - Choosing an athlete reads the calendar with `athleteIds`. One tap moves to the next or previous athlete.
   - It combines with K5's *Show only* (for example only GPS, for one athlete).
+  - **The club admin (S4).** With *All teams* the strip holds every athlete of the club, ordered by team and then by
+    name, each pill carrying its team's colour. The **search** finds any athlete of the club in a few letters,
+    whatever team they are in, and choosing one sets their team too. For a large club (100+ athletes) the search is
+    the main way in, and the strip stays as the quick ‹ › within a team.
+
 - **K6-2, the Weekly plan** (frontend only).
   - The plan's header carries the switcher: "‹ Ana K. ›", with the athletes of her team.
   - Moving to another athlete keeps the same week, the same day and the same open session (S1: "ulazak u neku sekciju
