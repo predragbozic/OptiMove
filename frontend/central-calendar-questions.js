@@ -1,9 +1,12 @@
 // Central calendar K2b-2a-2b - "Ask athletes": the pure parts shared by the
 // event form and the event panel (docs/ai/central-calendar-k2b2a2-ui-contract.md
-// sections 3 to 5 and 10). Nothing here talks to the server or the DOM: the
+// sections 3 to 5 and 10). Nothing here talks to the server or the DOM (the
+// panel's section is a template string): the
 // window rule mirrored from the server's computeWindow (calendarQuestions.js,
 // which stays the judge), the words of a window, the sentences of the
 // refusals, and the form's question state with the body it sends.
+
+import { escapeAttr, escapeHtml } from "./utils.js";
 
 export const CC_QUESTION_KINDS = Object.freeze(["rpe", "wellness"]);
 export const CC_QUESTION_WORDS = Object.freeze({ rpe: "RPE", wellness: "WELLNESS" });
@@ -211,4 +214,155 @@ export function ccQuestionsRequest(questions, ev, { create }) {
     list.push({ kind, window: ccWindowWire(p.window) });
   }
   return { errors, part: Object.keys(errors).length ? null : { questions: list } };
+}
+
+// ---------------------------------------------------------------------------
+// The event panel's section "Questions for athletes" (contract section 4)
+// ---------------------------------------------------------------------------
+const STATUS_WORDS = Object.freeze({
+  closed_early: "Closed early — the answers given stay.",
+  event_cancelled: "Event cancelled — the answers given stay.",
+});
+
+// The event's facts from its card (the span is the event's days).
+export function ccQuestionEventOfCard(item) {
+  return ccQuestionEventOf({ day: item?.span?.from || item?.date, endDay: item?.span?.to || "", startTime: item?.startTime, endTime: item?.endTime });
+}
+
+// The questions in their order (RPE first), the live and the ended ones the
+// read names.
+export function ccPanelQuestionList(read) {
+  const list = Array.isArray(read?.questions) ? read.questions : [];
+  return CC_QUESTION_KINDS.flatMap((kind) => list.filter((q) => q.kind === kind));
+}
+
+export function ccRemoveStepText(question) {
+  const word = CC_QUESTION_WORDS[question.kind] || "";
+  const answered = Number(question.counts?.answered) || 0;
+  if (!answered) return { text: `Remove the ${word} question? Athletes won't be asked.`, button: "Remove question" };
+  return { text: `Stop the ${word} question? ${answered} ${answered === 1 ? "answer is" : "answers are"} kept; nobody else can answer.`, button: "Stop question" };
+}
+
+export function ccQuestionDoneText(act, { kind = "", closed = false } = {}) {
+  if (act === "question-ask") return `${CC_QUESTION_WORDS[kind] || "The question"} asked. Athletes will be notified.`;
+  if (act === "question-move") return "Time moved. Athletes will be notified.";
+  return closed ? "Closed. The answers given stay." : "Removed.";
+}
+
+export function ccPanelRefusalText(info) {
+  if (info.status === 401) return "Please sign in again. Nothing was saved.";
+  if (info.status === 404) return "This question isn't available any more.";
+  if (info.status === 403) return "Events cannot be changed in this workspace. Nothing was saved.";
+  return CC_PANEL_QUESTION_TEXT[info.code] || "Nothing was saved. Try again.";
+}
+
+// The refusals after which the event and its questions are read again.
+const PANEL_REREAD = new Set(["question_already_asked", "event_changed", "event_cancelled", "questions_off", "questions_answered", "rpe_from_sessions", "rpe_already_linked", "rpe_from_question"]);
+export const ccPanelRefusalRereads = (info) => info.status === 404 || PANEL_REREAD.has(info.code);
+// The refusals that keep the open step, so another time can be chosen.
+const KEEP_STEP = new Set(["window_one_day", "invalid_window", "wellness_already_scheduled", "no_athletes"]);
+export const ccPanelRefusalKeepsStep = (info) => KEEP_STEP.has(info.code);
+
+// Check result: settled only by an answer the server gives after its request
+// record (as the event's writes); anything else stays not confirmed.
+export function ccQuestionCheckSettles(info, settles) {
+  return info.status >= 400 && info.status < 500 && (settles(info) || String(info.code || "").startsWith("invalid_"));
+}
+
+function windowChoiceHtml(step, ev, today) {
+  const name = `ccQuestionStepWindow-${step.act}`;
+  const choices = CC_WINDOW_KINDS.map((wk) => {
+    const range = wk === "custom" ? null : ccQuestionWindowRange(ev, { kind: wk });
+    const quiet = wk === "custom" ? "" : range?.error ? "Doesn't fit this event" : ccWindowWords(range, { today });
+    return `<label class="cc-question-choice"><input type="radio" name="${name}" value="${wk}"${step.window.kind === wk ? " checked" : ""} data-cc-qstep-window="1"><span>${escapeHtml(CC_WINDOW_LABELS[wk])}${quiet ? ` <span class="cc-check-note">${escapeHtml(quiet)}</span>` : ""}</span></label>`;
+  }).join("");
+  const last = ev.endDay && ev.endDay >= ev.day ? ev.endDay : ev.day;
+  const custom = step.window.kind === "custom"
+    ? `<div class="cc-question-custom">
+        <label class="cc-field" for="ccQuestionStep-date"><span class="cc-field-label">Day</span><input id="ccQuestionStep-date" type="date" value="${escapeAttr(step.window.date)}"${ev.day ? ` min="${escapeAttr(ev.day)}" max="${escapeAttr(ccAddDays(last, 1))}"` : ""} data-cc-qstep-part="date"></label>
+        <label class="cc-field" for="ccQuestionStep-from"><span class="cc-field-label">From</span><input id="ccQuestionStep-from" type="time" value="${escapeAttr(step.window.from)}" data-cc-qstep-part="from"></label>
+        <label class="cc-field" for="ccQuestionStep-to"><span class="cc-field-label">To</span><input id="ccQuestionStep-to" type="time" value="${escapeAttr(step.window.to)}" data-cc-qstep-part="to"></label>
+        <span class="cc-field-hint">${escapeHtml(CC_ONE_DAY)}</span>
+      </div>`
+    : "";
+  return `<fieldset class="cc-question-when"><legend>When to ask</legend>${choices}${custom}</fieldset>`;
+}
+
+const qButton = (act, label, { attrs = "", off = false, primary = false } = {}) =>
+  `<button type="button" class="plain-button${primary ? " cc-primary" : ""} cc-panel-button cc-question-button" data-action="central-calendar-question" data-act="${act}"${attrs}${off ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+
+function stepHtml(step, { ev, today, busy, question = null }) {
+  const off = busy;
+  const error = step.error ? `<p class="cc-field-error" role="alert">${escapeHtml(step.error)}</p>` : "";
+  if (step.act === "remove") {
+    const words = ccRemoveStepText(question);
+    return `<div class="cc-inline-confirm" role="group" aria-labelledby="ccQuestionStepText">
+        <p id="ccQuestionStepText">${escapeHtml(words.text)}</p>${error}
+        <div class="cc-form-actions">${qButton("send", busy ? "Saving…" : words.button, { off, primary: true })}${qButton("step-cancel", "Keep it", { off })}</div>
+      </div>`;
+  }
+  const send = step.act === "ask" ? "Ask athletes" : "Save time";
+  return `<div class="cc-question-step" data-cc-question-step>
+      ${step.act === "ask" ? `<p class="cc-panel-note"><strong>${escapeHtml(CC_QUESTION_WORDS[step.kind])}</strong> — ${escapeHtml(CC_QUESTION_PROMPTS[step.kind])}</p>` : ""}
+      ${windowChoiceHtml(step, ev, today)}${error}
+      <div class="cc-form-actions">${qButton("send", busy ? "Saving…" : send, { off, primary: true })}${qButton("step-cancel", "Cancel", { off })}</div>
+    </div>`;
+}
+
+function namesHtml(label, people, open) {
+  const list = Array.isArray(people) ? people : [];
+  const body = list.length ? `<ul class="cc-question-names" role="list">${list.map((p) => `<li>${escapeHtml(p?.name || "Athlete")}</li>`).join("")}</ul>` : `<p class="cc-panel-note">Nobody.</p>`;
+  return `<details class="cc-question-list"${open ? " open" : ""}><summary>${escapeHtml(`${label} (${list.length})`)}</summary>${body}</details>`;
+}
+
+// `pq`: the panel's read ({ key, loading, error, retry, hidden, read });
+// `step`: the open inline step; `busy`: a write of this panel in flight;
+// `off`: every control off (a write in flight or not confirmed anywhere);
+// `feedback`: this section's line and its Check result (rendered by the view).
+export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", rpeFromSessions = false, today = "" } = {}) {
+  if (!pq || pq.key !== item.key || pq.hidden) return "";
+  const head = `<h4 class="cc-panel-subtitle" id="ccQuestionsTitle" tabindex="-1">Questions for athletes</h4>`;
+  if (pq.loading) return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}<p class="cc-panel-note" role="status">Loading the questions…</p></section>`;
+  if (pq.error) {
+    return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}<p class="cc-panel-note" role="alert">${escapeHtml(pq.error)}</p>${pq.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-questions-retry">Try again</button>`}</section>`;
+  }
+  const ev = ccQuestionEventOfCard(item);
+  const questions = ccPanelQuestionList(pq.read);
+  const liveKinds = new Set(questions.filter((q) => q.status === "live").map((q) => q.kind));
+  const rows = questions.map((q) => {
+    const c = q.counts || {};
+    const asked = Number(c.asked) || 0;
+    const answered = Number(c.answered) || 0;
+    const all = asked > 0 && answered >= asked;
+    const status = STATUS_WORDS[q.status] ? `<p class="cc-panel-note cc-question-status">${escapeHtml(STATUS_WORDS[q.status])}</p>` : "";
+    const notAnswered = Array.isArray(q.notAnswered) ? q.notAnswered : [];
+    const own = step && step.questionId === q.id ? step : null;
+    const buttons = q.status === "live" && !own
+      ? `<div class="cc-question-actions">${qButton("move-open", "Move time", { attrs: ` data-question-id="${escapeAttr(q.id)}"`, off: off || Boolean(step) || answered > 0 })}${qButton("remove-open", "Remove question", { attrs: ` data-question-id="${escapeAttr(q.id)}"`, off: off || Boolean(step) })}</div>`
+      : "";
+    return `<li class="cc-question-row">
+        <p class="cc-question-head"><strong>${escapeHtml(CC_QUESTION_WORDS[q.kind] || "")}</strong> · ${escapeHtml(`${answered}/${asked} answered`)}${all ? ' <span class="cc-question-done" aria-label="all answered">✓</span>' : ""}</p>
+        <p class="cc-panel-note cc-question-window">${escapeHtml(ccPanelWindowText(q.window, { today }))}</p>
+        ${status}
+        ${namesHtml("Answered", q.answered, false)}
+        ${namesHtml("Later", q.later, false)}
+        ${namesHtml("Not answered yet", notAnswered, notAnswered.length > 0)}
+        ${q.status === "live" && answered > 0 && !own ? `<p class="cc-field-hint">Athletes have already answered, so the time can't move.</p>` : ""}
+        ${buttons}
+        ${own ? stepHtml(own, { ev, today, busy, question: q }) : ""}
+      </li>`;
+  });
+  const askable = item.cancelled ? [] : CC_QUESTION_KINDS.filter((kind) => !liveKinds.has(kind));
+  const asks = askable.map((kind) => {
+    if (kind === "rpe" && rpeFromSessions) return `<p class="cc-panel-note">RPE comes from the linked trainings.</p>`;
+    if (step && step.act === "ask" && step.kind === kind) return stepHtml(step, { ev, today, busy });
+    return qButton("ask-open", `Ask ${CC_QUESTION_WORDS[kind]}`, { attrs: ` data-kind="${kind}"`, off: off || Boolean(step) });
+  });
+  if (!rows.length && !askable.length && !feedback) return "";
+  return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle"${busy ? ' aria-busy="true"' : ""}>
+      ${head}
+      ${feedback}
+      ${rows.length ? `<ul class="cc-question-rows" role="list">${rows.join("")}</ul>` : ""}
+      ${asks.length ? `<div class="cc-question-asks">${asks.join("")}</div>` : ""}
+    </section>`;
 }

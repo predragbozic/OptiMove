@@ -129,6 +129,13 @@ export const emptyCentralCalendarState = () => ({
   linkRefused: new Map(),
   alignStep: null,
   alignBlocked: null,
+  // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,
+  // error, retry, hidden, stale, read }), the open inline step of Ask / Move
+  // time / Remove ({ act, kind, questionId, window, eventKey, revision,
+  // error }), and a failed catalog read that stops the panel asking for it.
+  panelQuestions: null,
+  questionStep: null,
+  questionsCatalogFailed: false,
 });
 
 export const emptyExerciseOptions = () => ({

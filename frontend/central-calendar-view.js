@@ -24,6 +24,7 @@ import {
   centralCalendarResultsQuestion,
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
+import { renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -878,9 +879,11 @@ function eventDatesText(item) {
 // The event's own facts in its panel (K2a-2): the days, the place, what it
 // expects, the gaps, the notes (a manager's view only carries them); K2b-1d:
 // the place from the card's `place`, and a manager's details below.
-function renderEventFactsHtml(item) {
+// `askRpe` (K2b-2a-2b, contract 4.4): the club's switch is on and the coach
+// manages the event - the RPE gap names the panel's next step.
+function renderEventFactsHtml(item, { askRpe = false } = {}) {
   const expects = item.expects || [];
-  const gaps = (item.gaps || []).map((gap) => GAP_NOTES[gap]).filter(Boolean);
+  const gaps = (item.gaps || []).map((gap) => (gap === "rpe" && askRpe ? `${GAP_NOTES.rpe} Use Ask RPE below.` : GAP_NOTES[gap])).filter(Boolean);
   if (item.scheduleFold?.external === "separate") gaps.push("The linked RPE request reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts.");
   if (item.scheduleFold?.test === "separate") gaps.push("The linked test reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts.");
   const multiDay = item.span?.from && item.span?.to && item.span.to !== item.span.from;
@@ -922,8 +925,8 @@ function linkRowHtml(title, meta, button, refusedReason = "") {
   return `<li class="cc-link-row"><div class="cc-link-text"><p class="cc-link-name">${escapeHtml(title)}</p>${meta ? `<p class="cc-link-meta">${escapeHtml(meta)}</p>` : ""}${refusedReason ? `<p class="cc-link-refused">${escapeHtml(refusedReason)}</p>` : ""}</div>${refusedReason ? "" : button}</li>`;
 }
 
-function linkFeedbackHtml(cal, panelKey, pending) {
-  const message = cal.linkMessage && cal.linkMessage.panelKey === panelKey ? cal.linkMessage : null;
+function linkFeedbackHtml(cal, panelKey, pending, family = "link") {
+  const message = cal.linkMessage && cal.linkMessage.panelKey === panelKey && (cal.linkMessage.family || "link") === family ? cal.linkMessage : null;
   const messageHtml = message ? `<p class="cc-panel-note cc-link-message" role="${message.alert ? "alert" : "status"}" tabindex="-1">${escapeHtml(message.text)}</p>` : "";
   if (!pending) return messageHtml;
   const checking = cal.linkWrite?.check === true;
@@ -961,10 +964,13 @@ function renderAlignHtml(item, cal, off) {
   return `<div class="cc-link-align"><p class="cc-panel-note">${escapeHtml(align.text)}</p>${linkButtonHtml({ act: "align", label: align.button, off, extraClass: "cc-link-wrap" })}</div>`;
 }
 
-function renderEventLinksHtml(item, cal, pending) {
+// `otherPending`: a question command of this event not confirmed - it keeps
+// these buttons off too (one control at a time), its Check result is drawn in
+// the questions section.
+function renderEventLinksHtml(item, cal, pending, otherPending = null) {
   if (!centralCalendarEventLinkable(item)) return "";
   const busy = Boolean(cal.linkWrite);
-  const off = busy || Boolean(pending);
+  const off = busy || Boolean(pending) || Boolean(otherPending);
   const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent : null;
   const suggestions = centralCalendarLinkSuggestions(cal.data, item, cal.linkRefused);
   const parts = [];
@@ -1095,7 +1101,10 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
   // K2c-1: this panel's link command left not confirmed (by the event, or by
   // the planned card it was sent from).
   const pending = uncertainWrites.find((entry) => entry.mode === "link" && (entry.panelKey === item.key || (item.kind === "event" && entry.eventId === item.eventId))) || null;
-  const linksLocked = Boolean(cal.linkWrite) || Boolean(pending && item.kind === "event");
+  // K2b-2a-2b: this event's question command left not confirmed.
+  const pendingQuestion = item.kind === "event" ? uncertainWrites.find((entry) => entry.mode === "question" && entry.eventId === item.eventId) || null : null;
+  const linksLocked = Boolean(cal.linkWrite) || Boolean(pending && item.kind === "event") || Boolean(pendingQuestion);
+  const questionsOn = item.kind === "event" && item.canManage === true && formCtx.catalog?.questionsEnabled === true;
   const body = `<header class="cc-panel-head">
         <h3 class="cc-panel-title" id="ccPanelTitle">${escapeHtml(centralCalendarTitle(item))}</h3>
         <button type="button" class="plain-button icon-button cc-panel-close" data-action="central-calendar-close-panel" aria-label="Close">&times;</button>
@@ -1104,14 +1113,28 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when ? ` · ${escapeHtml(when)}` : ""}</p>
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
-      ${item.kind === "event" ? renderEventFactsHtml(item) : ""}
+      ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: questionsOn && !item.cancelled }) : ""}
       ${item.kind === "event" ? renderCentralCalendarEventDetailsHtml(item, cal.panelEvent) : ""}
-      ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending) : ""}
+      ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending, pendingQuestion) : ""}
+      ${questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : ""}
       ${renderEventActionsHtml(item, { locked: linksLocked })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
       ${trainingLoad}
       <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`;
   return panelHost(body, layout);
+}
+
+// K2b-2a-2b (contract 4.2): the questions of a manager's event; every
+// control off while a write of this panel is in flight or not confirmed.
+function renderEventQuestionsHtml(item, cal, pendingQuestion, linkPending, today) {
+  const busy = cal.linkWrite?.family === "question";
+  const step = cal.questionStep && cal.questionStep.eventKey === item.key ? cal.questionStep : null;
+  const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent.event : null;
+  return renderCentralCalendarQuestionsHtml(item, cal.panelQuestions, {
+    step, busy, off: Boolean(cal.linkWrite) || Boolean(pendingQuestion) || linkPending, today,
+    feedback: linkFeedbackHtml(cal, item.key, pendingQuestion, "question"),
+    rpeFromSessions: (view?.sessionLinks || []).length > 0,
+  });
 }
 
 // The event saves the coach left while their result was not known (the
@@ -1124,6 +1147,7 @@ function renderUncertainWritesHtml(cal, writes) {
     const title = String(entry.eventTitle || "").replace(/\s+/g, " ").trim() || (entry.mode === "create" ? "the new event" : "the event");
     if (entry.mode === "values") return `Check the details of “${title}”`;
     if (entry.mode === "link") return `Check linking for “${title}”`;
+    if (entry.mode === "question") return `Check the question for “${title}”`;
     return entry.mode === "create" ? `Check “${title}”` : entry.mode === "cancel" ? `Check cancelling “${title}”` : `Check the change to “${title}”`;
   };
   return `<div class="cc-refresh-note cc-uncertain-line" role="status">
