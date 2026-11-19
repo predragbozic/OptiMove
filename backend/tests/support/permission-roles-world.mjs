@@ -17,7 +17,7 @@ import { runMigrations } from "../../src/migrate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const MIGRATIONS = path.join(__dirname, "..", "..", "..", "migrations_v2");
-export const V84_FILE = "202611201000_roles_v84_permission_roles.sql";
+export const V84_FILE = "202611201300_roles_v84_permission_roles.sql";
 export const V84_NAME = `migrations_v2/${V84_FILE}`;
 export const RUNBOOKS = path.join(__dirname, "..", "..", "..", "docs", "runbooks");
 export const ROLE_IDS = Object.freeze({

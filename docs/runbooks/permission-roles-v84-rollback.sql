@@ -1,4 +1,4 @@
--- Rollback of migration v84 (roles and permissions, step R2; migrations_v2/202611201000_roles_v84_permission_roles.sql).
+-- Rollback of migration v84 (roles and permissions, step R2; migrations_v2/202611201300_roles_v84_permission_roles.sql).
 --
 -- Not a migration and never run automatically. Rehearsed on disposable databases (backend/tests/permission-roles-v84.test.mjs test 1, and backend/scripts/permission-roles-v84-rehearsal.mjs:
 -- apply -> rollback -> the catalog identical to before -> apply again), on PostgreSQL 16 and, by the command in
@@ -28,15 +28,15 @@ begin
   if not pg_try_advisory_xact_lock(822026) then
     raise exception 'v84 rollback refused: the migrator is running' using errcode = '23514';
   end if;
-  if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql') then
+  if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201300_roles_v84_permission_roles.sql') then
     raise exception 'v84 rollback refused: v84 is not recorded on this database' using errcode = '23514';
   end if;
   -- "Later" is decided by the time each migration was APPLIED, not by its prefix: the runner applies every unapplied file
   -- whatever its prefix, so a migration that sorts after v84 may have been applied before it (and depends on nothing of
   -- v84), while one applied after v84 may depend on it. Any migration (either folder) applied at or after v84's own row
   -- refuses the rollback.
-  if exists (select 1 from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611201000_roles_v84_permission_roles.sql'
-              and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql')) then
+  if exists (select 1 from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611201300_roles_v84_permission_roles.sql'
+              and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611201300_roles_v84_permission_roles.sql')) then
     raise exception 'v84 rollback refused: later migrations are applied' using errcode = '23514';
   end if;
   if exists (select 1 from public.user_role_assignments) or exists (select 1 from public.permission_role_changes)
@@ -119,5 +119,5 @@ drop function public.user_role_assignments_refuse_delete();
 drop function public.user_role_assignments_complete();
 drop function public.permission_requests_guard();
 
-delete from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql';
+delete from public.schema_migrations where migration_name = 'migrations_v2/202611201300_roles_v84_permission_roles.sql';
 commit;

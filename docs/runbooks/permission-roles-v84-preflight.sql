@@ -1,4 +1,4 @@
--- Read-only PREFLIGHT for migration v84 (roles and permissions, step R2; migrations_v2/202611201000_roles_v84_permission_roles.sql).
+-- Read-only PREFLIGHT for migration v84 (roles and permissions, step R2; migrations_v2/202611201300_roles_v84_permission_roles.sql).
 -- A merge to main is the deploy (Render Auto-Deploy): run it right before the merge, at the quiet moment chosen for it
 -- (docs/runbooks/permission-roles-v84.md). Changes nothing: run each block as
 --   begin transaction read only; <block>; rollback;
@@ -9,7 +9,7 @@
 select current_setting('server_version_num')::int >= 130000 as server_13_or_later,
        current_setting('server_version') as server_version,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration,
-       not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql') as v84_not_recorded,
+       not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201300_roles_v84_permission_roles.sql') as v84_not_recorded,
        not exists (select 1 from public.schema_migrations where checksum is null or checksum !~ '^[0-9a-f]{64}$') as checksums_shaped;
 
 -- 2. No object of v84 exists (the nine tables, the functions, the two constraints).

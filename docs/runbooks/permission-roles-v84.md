@@ -1,6 +1,6 @@
 # v84: roles and permissions (step R2)
 
-Migration `migrations_v2/202611201000_roles_v84_permission_roles.sql`. Contract: `docs/ai/roles-r2-contract.md`
+Migration `migrations_v2/202611201300_roles_v84_permission_roles.sql`. Contract: `docs/ai/roles-r2-contract.md`
 (accepted 2026-11-19). Files beside this one: `permission-roles-v84-preflight.sql`, `permission-roles-v84-postcheck.sql`,
 `permission-roles-v84-rollback.sql`. The rehearsal tool: `backend/scripts/permission-roles-v84-rehearsal.mjs` with its
 bash (`.sh`) and PowerShell (`.ps1`) wrappers.
@@ -107,8 +107,11 @@ How the deploy behaves (`backend/package.json`: `"start": "node src/migrate.js &
 **The rollback SQL** (`permission-roles-v84-rollback.sql`, one transaction, `psql -v ON_ERROR_STOP=1 -f ...`) is only for
 a database where nothing was applied after v84, after the previous code is deployed, and on the owner's word for that
 database. "After" is decided by `schema_migrations.applied_at` (each file is applied in its own transaction, so its
-`now()` orders them), never by prefix: v80 (`202611201100`) and the calendar's v83 (`202611201200`) sort after v84 but
-reach production before it, and they do not refuse it; any migration applied at or after v84's own row does (test 1c).
+`now()` orders them), never by prefix: the runner applies every unapplied file whatever its prefix, so a migration
+with a later prefix may reach a database before v84 (it does not refuse the rollback), and one with an earlier prefix
+may reach it after (it does). Any migration applied at or after v84's own row refuses it (test 1c). v84's prefix,
+`202611201300`, sorts after v80 (`202611201100`) and the calendar's v83 (`202611201200`), which merge before it;
+`202611201000` is retired.
 It also refuses, changing nothing, once a role was created, changed, copied or archived, an assignment or a request
 exists, a display row exists, another table refers to the nine, or the seed differs. Post-check block 1's
 `applied_after_v84` shows the count.

@@ -63,10 +63,10 @@ test("7a. the preflight before v84: every block's ok columns true, block 3a's fi
   // Block 5 is for the reader; can_create_in_public is still a requirement.
   assert.equal((await run(PRE["5"])).can_create_in_public, true);
   fingerprintBefore = await run(PRE["3a"]);
-  // 1: a migration with a LATER prefix already applied (v80, v83 reach production before v84) keeps block 1 true.
-  await c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611201300_later_prefix.sql', $1, 'test')`, ["e".repeat(64)]);
+  // 1: a migration with a LATER prefix already applied (any file the runner applies before v84, whatever its prefix) keeps block 1 true.
+  await c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611201400_later_prefix.sql', $1, 'test')`, ["e".repeat(64)]);
   allTrue("1 with a later prefix applied", await run(PRE["1"]));
-  await c.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/202611201300_later_prefix.sql'`);
+  await c.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/202611201400_later_prefix.sql'`);
   // 3: a row of another word.
   await c.query(`set session_replication_role = replica`);
   const planted = (await c.query(`insert into public.user_club_roles (user_id, club_id, role) select user_id, club_id, 'club_manager' from public.user_club_roles limit 1 returning id`)).rows[0].id;
@@ -100,14 +100,14 @@ test("7b. the post-check after v84: every block's ok columns true and block 6a e
   await c.query("set search_path = pg_catalog");
   try { allTrue("3 under search_path pg_catalog", await run(POST["3"])); } finally { await c.query("reset search_path"); }
   // 1: post-check block 1's literal is the file's sha256 (the runner's checksum); a tampered recorded checksum flips it.
-  const fileSum = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, "202611201000_roles_v84_permission_roles.sql"))).digest("hex");
+  const fileSum = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, "202611201300_roles_v84_permission_roles.sql"))).digest("hex");
   assert.ok(POSTCHECK.includes(`checksum = '${fileSum}'`), "post-check block 1 names the file's sha256");
-  await c.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, ["migrations_v2/202611201000_roles_v84_permission_roles.sql", "0".repeat(64)]);
+  await c.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, ["migrations_v2/202611201300_roles_v84_permission_roles.sql", "0".repeat(64)]);
   assert.equal((await run(POST["1"])).checksum_is_the_file, false);
   // 1b of the preflight (generated in the checkout): the same tampered row is a differing recorded checksum.
   const { checksumSql } = await import("../scripts/permission-roles-v84-checksums.mjs");
   assert.equal((await run(checksumSql())).no_recorded_checksum_differs, false);
-  await c.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, ["migrations_v2/202611201000_roles_v84_permission_roles.sql", fileSum]);
+  await c.query(`update public.schema_migrations set checksum = $2 where migration_name = $1`, ["migrations_v2/202611201300_roles_v84_permission_roles.sql", fileSum]);
   const oneB = await run(checksumSql());
   assert.equal(oneB.no_recorded_checksum_differs, true);
   assert.equal(Number(oneB.recorded_not_in_repo), 0);

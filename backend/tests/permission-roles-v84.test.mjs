@@ -114,7 +114,7 @@ test("1. v84 applied by the runner rewrites no existing role row; applied twice 
   }
 });
 
-test("1c. order by application, not by prefix (v80 and v83 sort after v84 but reach production before it): a later-prefixed migration applied BEFORE v84 leaves the rollback possible (it passes); a migration applied AFTER v84, even with an earlier prefix, refuses it (23514, nothing changed); the post-check's block 1 stays true either way; the previous code's runner starts over a recorded v84 and the CHECKs take the old writers' words", async () => {
+test("1c. order by application, not by prefix (the runner applies every unapplied file, whatever its prefix): a later-prefixed migration applied BEFORE v84 leaves the rollback possible (it passes); a migration applied AFTER v84, even with an earlier prefix, refuses it (23514, nothing changed); the post-check's block 1 stays true either way; the previous code's runner starts over a recorded v84 and the CHECKs take the old writers' words", async () => {
   const rollback = fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-rollback.sql"), "utf8");
   const post = fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-postcheck.sql"), "utf8");
   const block1 = post.split(/\n(?=-- \d+a?\. )/).find((b) => b.startsWith("-- 1. ")).split("\n").filter((l) => !l.startsWith("--")).join("\n");
@@ -125,7 +125,7 @@ test("1c. order by application, not by prefix (v80 and v83 sort after v84 but re
   await ca.connect();
   const tmpA = migrationsWithout([V84_FILE]);
   try {
-    dummy(tmpA.dir, "202611201300_r2_dummy_after_prefix.sql");
+    dummy(tmpA.dir, "202611201400_r2_dummy_after_prefix.sql");
     await runMigrations({ databaseUrl: a.url, migrationsRoot: tmpA.dir });
     fs.copyFileSync(path.join(MIGRATIONS, V84_FILE), path.join(tmpA.dir, V84_FILE));
     await runMigrations({ databaseUrl: a.url, migrationsRoot: tmpA.dir });
