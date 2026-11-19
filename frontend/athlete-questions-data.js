@@ -196,7 +196,19 @@ const painters = new Set();
 export function registerAthleteQuestionsPainter(paint) {
   if (typeof paint === "function") painters.add(paint);
 }
-const signatureOf = () => (athleteQuestionsReady() ? athleteOpenQuestionRows(g().rows).map((row) => row.questionId).join(",") : "");
+// The open rows, and what their time-to-answer words depend on: the minutes left under an hour, else the device's
+// day (so "Answer in the next 5 minutes" and "today" stay true without a read).
+const pad2 = (n) => String(n).padStart(2, "0");
+const localDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+const signatureOf = () => {
+  if (!athleteQuestionsReady()) return "";
+  const now = clock();
+  const rows = athleteOpenQuestionRows(g().rows, now).map((row) => {
+    const left = Date.parse(row.closesAt) - now;
+    return `${row.questionId}:${left < 60 * 60 * 1000 ? Math.ceil(left / 60000) : ""}`;
+  });
+  return `${localDay(now)}|${rows.join(",")}`;
+};
 export function stopAthleteQuestionsTick() {
   if (tickTimer !== null) globalThis.clearInterval(tickTimer);
   tickTimer = null;

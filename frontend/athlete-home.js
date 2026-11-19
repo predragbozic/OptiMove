@@ -108,7 +108,7 @@ function renderAthleteHomeHeader(athlete, today) {
       ${image ? renderImage(image, "athlete-home-avatar") : `<span class="athlete-home-avatar athlete-home-avatar-fallback">${escapeHtml(programInitials(athlete.name || "Athlete"))}</span>`}
       <div class="athlete-home-header-body">
         <p class="athlete-home-greeting">Welcome back</p>
-        <h3>${escapeHtml(athlete.name || "Athlete")}</h3>
+        <h3 tabindex="-1">${escapeHtml(athlete.name || "Athlete")}</h3>
         <p class="muted">${escapeHtml(formatDate(today.date))}</p>
       </div>
     </header>

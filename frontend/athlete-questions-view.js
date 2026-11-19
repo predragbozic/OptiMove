@@ -1,6 +1,7 @@
 // K2b-2a-3, the athlete's side of *Ask athletes* (docs/ai/central-calendar-k2b2a3-ui-contract.md sections 2, 6 and 7):
 // pure template strings for the soft prompt and the card at the top of Home, over state.athleteQuestions. Nothing here
 // talks to the server. No id, code or count of anyone else is ever drawn as text: ids live only in data-* attributes.
+import { athleteHomeEventDayWord } from "./athlete-home-events-view.js";
 import { athleteOpenQuestionRows, athleteQuestionsNow, registerAthleteQuestionsPainter } from "./athlete-questions-data.js";
 import { state } from "./state.js";
 import { addDaysIso, escapeAttr, escapeHtml, localDateIso } from "./utils.js";
@@ -16,15 +17,12 @@ export function athleteQuestionAsk(kind) {
   return kind === "wellness" ? "How are you feeling?" : "How hard was it?";
 }
 
-// "Today", "Tomorrow", "Yesterday", else "Sat 21.11.".
+// Upcoming events' own day word (K2b-1e: "Today", "Tomorrow", else "Thu 19 Nov"), plus "Yesterday" for a *Next
+// morning* question of the day before.
 export function athleteQuestionDayWord(iso, today) {
   if (!iso) return "";
-  if (iso === today) return "Today";
-  if (today && iso === addDaysIso(today, 1)) return "Tomorrow";
   if (today && iso === addDaysIso(today, -1)) return "Yesterday";
-  const date = new Date(`${iso}T12:00:00`);
-  const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "short" }).format(date);
-  return `${weekday} ${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+  return athleteHomeEventDayWord(iso, today);
 }
 
 // "Training · Today 17:00".
@@ -35,7 +33,7 @@ export function athleteQuestionEventLine(row, today) {
 
 const pad = (n) => String(n).padStart(2, "0");
 
-// The time to answer, in the device's time: "Answer by 23:59 today." / "… tomorrow." / "… on Sun 22.11.";
+// The time to answer, in the device's time: "Answer by 23:59 today." / "… tomorrow." / "… on Sun 22 Nov.";
 // under an hour: "Answer in the next 25 minutes.".
 export function athleteQuestionDueText(closesAt, now = athleteQuestionsNow()) {
   const closes = new Date(closesAt);
@@ -49,8 +47,7 @@ export function athleteQuestionDueText(closesAt, now = athleteQuestionsNow()) {
   const day = localDateIso(closes);
   if (day === today) return `Answer by ${time} today.`;
   if (day === addDaysIso(today, 1)) return `Answer by ${time} tomorrow.`;
-  // The day word ends with its own full stop ("Sun 22.11.").
-  return `Answer by ${time} on ${athleteQuestionDayWord(day, today)}`;
+  return `Answer by ${time} on ${athleteQuestionDayWord(day, today)}.`;
 }
 
 // ---------------------------------------------------------------------------

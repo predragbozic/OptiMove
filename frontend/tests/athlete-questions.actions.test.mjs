@@ -20,8 +20,9 @@ const {
   ATHLETE_QUESTION_ROW_KEYS, athleteQuestionsAnswered, athleteQuestionsTick, loadAthleteQuestions, resetAthleteQuestions, setAthleteQuestionsClock,
 } = data;
 const {
-  ATHLETE_QUESTION_CLOSED, ATHLETE_QUESTION_NOT_OPEN, ATHLETE_QUESTION_NOT_OPENED, athleteQuestionsBack, athleteQuestionsPromptOpen, closeAthleteQuestionsPrompt, handleAthleteQuestionsAction,
-  handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion,
+  ATHLETE_QUESTION_CLOSED, ATHLETE_QUESTION_NOT_OPEN, ATHLETE_QUESTION_NOT_OPENED, athleteQuestionsBack, athleteQuestionsPromptOpen, beginAthleteHomeLoad,
+  closeAthleteQuestionsPrompt, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion,
+  setAthleteQuestionsPromptHandlers,
 } = actions;
 
 after(() => restoreFetch());
@@ -97,9 +98,10 @@ const key = (k, opts = {}) => new dom.window.KeyboardEvent("keydown", { key: k, 
 
 // Home's entry: the read, Home painted, then the prompt check (app.js loadAthleteHome).
 async function enterHome({ deepLink = false, athleteMode = true } = {}) {
+  const load = beginAthleteHomeLoad();
   await loadAthleteQuestions({ render });
   render();
-  return maybeShowAthleteQuestionsPrompt({ doc: doc(), athleteMode, deepLink });
+  return maybeShowAthleteQuestionsPrompt({ doc: doc(), athleteMode, deepLink, load });
 }
 
 let opened;
@@ -134,7 +136,7 @@ beforeEach(() => {
   homeData = HOME_DATA;
   world = { switchOn: true, athlete: true, questions: [], keys: new Map() };
   // As athlete.html: the media viewer and the exit question are always on the page, hidden, each with an aria-modal dialog.
-  dom = new JSDOM(`<!doctype html><body><header class="athlete-home-header"><h3 tabindex="-1">Ana</h3></header><main id="content"></main>
+  dom = new JSDOM(`<!doctype html><body><main id="content"></main>
     <div class="media-modal" id="mediaModal" hidden><div class="media-dialog" role="dialog" aria-modal="true" aria-label="Exercise media"></div></div>
     <div class="exit-confirm-modal" id="exitConfirmModal" hidden><div class="exit-confirm-dialog" role="alertdialog" aria-modal="true"></div></div></body>`);
   globalThis.document = dom.window.document;
@@ -469,6 +471,7 @@ test("Q16. the minute's tick: a closed window leaves the card with no request an
   await enterHome();
   assert.ok(prompt());
   const header = $("section.athlete-home header");
+  $("#athleteQuestionsPromptHost [data-action='athlete-questions-answer']").focus();
   const reads = mineCalls(calls).length;
   const repaints = renders;
   now = new Date(2026, 10, 18, 17, 51).getTime();
@@ -478,10 +481,24 @@ test("Q16. the minute's tick: a closed window leaves the card with no request an
   assert.equal($("section.athlete-home header"), header, "the rest of Home is the same node");
   assert.equal($$("section.athlete-questions-card li").length, 1);
   assert.equal(prompt(), null, "the prompt of the closed question closed");
+  assert.equal(doc().activeElement?.id, "athleteQuestionsTitle", "the focus goes to the card's title, not the page");
   assert.equal(athleteQuestionsTick(), false, "nothing changed since");
   now = new Date(2026, 10, 19, 0, 1).getTime();
   athleteQuestionsTick();
   assert.equal(card(), null);
+  assert.equal(doc().activeElement, $("section.athlete-home .athlete-home-header h3"), "no card: Home's own heading has the focus");
+});
+
+test("Q16b. the tick keeps the time-to-answer words true: under an hour the minutes count down with no request", async () => {
+  world.questions = [question({ id: "q-1", closes: at(17, 55), later: true })];
+  const calls = server();
+  await enterHome();
+  assert.match(card().textContent, /Answer in the next 25 minutes\./);
+  const reads = mineCalls(calls).length;
+  now = new Date(2026, 10, 18, 17, 50).getTime();
+  assert.equal(athleteQuestionsTick(), true);
+  assert.match(card().textContent, /Answer in the next 5 minutes\./);
+  assert.equal(mineCalls(calls).length, reads);
 });
 
 test("Q19. the phone's Back on the prompt is its Later; with no prompt open Back is not ours (answers false, sends nothing)", async () => {
@@ -495,6 +512,54 @@ test("Q19. the phone's Back on the prompt is its Later; with no prompt open Back
   assert.equal(laterCalls(calls).length, 1);
   assert.equal(athleteQuestionsBack(handlers()), false);
   assert.equal(laterCalls(calls).length, 1);
+});
+
+test("Q20. real clicks on the prompt (it lives outside #content, with its own listener): Later, the backdrop and Answer now; nothing reaches the document", async () => {
+  setAthleteQuestionsPromptHandlers(() => handlers());
+  let reachedDocument = 0;
+  const onDoc = () => { reachedDocument += 1; };
+  doc().addEventListener("click", onDoc);
+  const click = (el) => el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  world.questions = [question({ id: "q-1" })];
+  const calls = server();
+  await enterHome();
+  assert.equal(doc().getElementById("content").contains(prompt()), false, "outside #content");
+  click($("#athleteQuestionsPromptHost [data-action='athlete-questions-later']"));
+  await settle();
+  await settle();
+  assert.equal(prompt(), null, "Later closed it");
+  assert.equal(doc().body.classList.contains("athlete-questions-prompt-open"), false, "the page scrolls again");
+  assert.deepEqual(laterCalls(calls).map((c) => c.url), ["/api/calendar/questions/q-1/later"]);
+  resetAthleteQuestions();
+  world.questions = [question({ id: "q-2" })];
+  await enterHome();
+  click($("#athleteQuestionsPromptHost .athlete-questions-backdrop"));
+  await settle();
+  await settle();
+  assert.equal(prompt(), null, "the backdrop closed it");
+  assert.equal(laterCalls(calls).at(-1).url, "/api/calendar/questions/q-2/later");
+  resetAthleteQuestions();
+  world.questions = [question({ id: "q-3", formId: "ext-3" })];
+  await enterHome();
+  click($("#athleteQuestionsPromptHost [data-action='athlete-questions-answer']"));
+  await settle();
+  assert.deepEqual(opened, [["rpe", "ext-3"]], "Answer now opened the form once");
+  assert.equal(prompt(), null);
+  assert.equal(reachedDocument, 0, "the prompt's clicks go nowhere else");
+  doc().removeEventListener("click", onDoc);
+  setAthleteQuestionsPromptHandlers(null);
+});
+
+test("Q21. only the latest Home load may show the prompt: an older load settling after a deep link started shows nothing", async () => {
+  world.questions = [question({ id: "q-1" })];
+  server();
+  const older = beginAthleteHomeLoad();
+  await loadAthleteQuestions({ render });
+  render();
+  // A notification click starts its own (deep-link) load meanwhile.
+  beginAthleteHomeLoad();
+  assert.equal(maybeShowAthleteQuestionsPrompt({ doc: doc(), load: older }), false);
+  assert.equal(prompt(), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -521,7 +586,7 @@ test("Q18. the time-to-answer words: today, tomorrow, another day, under an hour
   const { athleteQuestionDueText } = await import("../athlete-questions-view.js");
   assert.equal(athleteQuestionDueText(at(23, 59), NOW), "Answer by 23:59 today.");
   assert.equal(athleteQuestionDueText(at(12, 0, 1), NOW), "Answer by 12:00 tomorrow.");
-  assert.match(athleteQuestionDueText(at(12, 0, 3), NOW), /^Answer by 12:00 on Sat 21\.11\.$/);
+  assert.equal(athleteQuestionDueText(at(12, 0, 3), NOW), "Answer by 12:00 on Sat 21 Nov.", "Upcoming events' own day word");
   assert.equal(athleteQuestionDueText(at(17, 55), NOW), "Answer in the next 25 minutes.");
   assert.equal(athleteQuestionDueText(at(17, 30, 0), NOW + 30_000), "Answer in the next 1 minute.");
 });

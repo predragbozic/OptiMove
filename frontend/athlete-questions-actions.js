@@ -22,8 +22,20 @@ const BODY_CLASS = "athlete-questions-prompt-open";
 const FOCUSABLE = "button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])";
 
 let shownIds = [];
-let returnFocus = null;
 let promptDoc = null;
+// What the prompt's clicks call (app.js sets it): the prompt lives outside #content, so the content's click handler
+// never sees its buttons; the host has its own listener (code review, BLOCKER).
+let promptHandlers = () => ({});
+export function setAthleteQuestionsPromptHandlers(fn) {
+  promptHandlers = typeof fn === "function" ? fn : () => ({});
+}
+// Every Home load takes a number; only the latest one may show the prompt, so an older load that settles after a deep
+// link started never puts the prompt over the form that deep link opens (code review, MEDIUM).
+let homeLoadSeq = 0;
+export function beginAthleteHomeLoad() {
+  homeLoadSeq += 1;
+  return homeLoadSeq;
+}
 
 export function athleteQuestionsPromptOpen() {
   return shownIds.length > 0;
@@ -46,8 +58,9 @@ export function athleteQuestionsPromptBlocked(doc = globalThis.document) {
 
 // After a read on Home (app open, a return to Home). `deepLink` is true when Home was opened by a notification click
 // or another deep link: then the prompt is not shown. Answers true when it was shown.
-export function maybeShowAthleteQuestionsPrompt({ doc = globalThis.document, athleteMode = true, deepLink = false } = {}) {
+export function maybeShowAthleteQuestionsPrompt({ doc = globalThis.document, athleteMode = true, deepLink = false, load = homeLoadSeq } = {}) {
   if (!athleteMode || deepLink || athleteQuestionsPromptOpen()) return false;
+  if (load !== homeLoadSeq) return false;
   if (state.activeTab !== "athlete-home") return false;
   const rows = athleteQuestionsPromptable();
   if (!rows.length) return false;
@@ -57,9 +70,16 @@ export function maybeShowAthleteQuestionsPrompt({ doc = globalThis.document, ath
   if (!host) {
     host = doc.createElement("div");
     host.id = HOST_ID;
+    host.addEventListener("click", (event) => {
+      const action = event.target?.closest?.("[data-action]");
+      if (!action || !host.contains(action)) return;
+      // The prompt is modal: its clicks go nowhere else.
+      event.preventDefault();
+      event.stopPropagation();
+      void handleAthleteQuestionsAction(action, promptHandlers());
+    });
     doc.body.appendChild(host);
   }
-  returnFocus = doc.activeElement && doc.activeElement !== doc.body ? doc.activeElement : null;
   host.innerHTML = html;
   promptDoc = doc;
   // Every row the prompt lists counts as shown (the rest, past the limit, stay for the card and a later prompt).
@@ -70,8 +90,7 @@ export function maybeShowAthleteQuestionsPrompt({ doc = globalThis.document, ath
   return true;
 }
 
-// `focus`: "card" (Home's card title, after Later), "none" (the form takes it), "home" (Home's heading, when the card
-// has gone), "return" (what had it before).
+// `focus`: "card" (Home's card title, or Home's heading when the card has gone), "none" (the form takes it).
 export function closeAthleteQuestionsPrompt({ focus = "none" } = {}) {
   const doc = promptDoc || globalThis.document;
   const host = doc?.getElementById?.(HOST_ID);
@@ -79,12 +98,8 @@ export function closeAthleteQuestionsPrompt({ focus = "none" } = {}) {
   doc?.body?.classList?.remove?.(BODY_CLASS);
   const wasOpen = athleteQuestionsPromptOpen();
   shownIds = [];
-  const previous = returnFocus;
-  returnFocus = null;
   if (!wasOpen || !doc) return wasOpen;
   if (focus === "card") (doc.getElementById(ATHLETE_QUESTIONS_TITLE_ID) || doc.querySelector(".athlete-home-header h3"))?.focus?.();
-  else if (focus === "home") doc.querySelector(".athlete-home-header h3")?.focus?.();
-  else if (focus === "return") previous?.focus?.();
   return true;
 }
 
@@ -200,5 +215,5 @@ export async function openCalendarQuestion(questionId, handlers = {}) {
 registerAthleteQuestionsPainter(() => {
   if (!athleteQuestionsPromptOpen()) return;
   const open = new Set(athleteOpenQuestionRows(state.athleteQuestions?.rows, athleteQuestionsNow()).map((row) => row.questionId));
-  if (!shownIds.some((id) => open.has(id))) closeAthleteQuestionsPrompt({ focus: "home" });
+  if (!shownIds.some((id) => open.has(id))) closeAthleteQuestionsPrompt({ focus: "card" });
 });

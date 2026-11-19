@@ -400,12 +400,17 @@ frozen.
   page carries both, as `athlete.html` does (Q6), and mutation M13 (the old check) fails nine tests.
 - **The focus after Later.** Later's read again repaints the whole of Home, which drops the focus to the page. Once
   that read has settled, the card's title takes the focus again, unless she has moved on meanwhile (Q8, mutation M14).
-- **The day word** has "Yesterday" too, for a *Next morning* question whose event was the day before.
-- **The time to answer** is shown in the device's time from `closesAt`. The browser check found that an assignment's
-  window follows the **athlete's own time zone** (`public.athletes.device_timezone`), not the event's. So with an event
-  in UTC asked 00:00–23:59 and an athlete in Europe/Sarajevo, the athlete is shown "Answer by 22:59 today" on a UTC
-  device. The screen shows the stored instant faithfully; whether the window should follow the event's zone or the
-  athlete's is a backend question for the manager (Tests and Training Load behaviour), not changed here.
+- **The day word** is Upcoming events' own (`athleteHomeEventDayWord`, "Today", "Tomorrow", else "Thu 19 Nov"), so the
+  card and Upcoming events show a day the same way. It adds "Yesterday" for a *Next morning* question whose event was
+  the day before. Section 2.2's "Sat 21.11." is replaced by "Sat 21 Nov".
+- **The time to answer** is shown in the device's time from `closesAt`. In the browser check the stored window did not
+  always match the event's own window. The events were in UTC, asked 00:00–23:59; the athlete's own zone
+  (`public.athletes.device_timezone`) was Europe/Sarajevo; the device was in UTC:
+  - the first event, asking RPE and WELLNESS, showed "Answer by 22:59 today" on both rows;
+  - a later RPE-only event showed "Answer by 23:59 today".
+
+  The screen shows the stored instant faithfully. Which zone an assignment's window follows (the event's or the
+  athlete's) is a backend question for the manager (Tests and Training Load behaviour), not changed here.
 - **The prompt's host** is `#athleteQuestionsPromptHost`, created at the end of `<body>` the first time it is shown, so
   Home's repaints never rebuild it. The page's scroll is locked by the class `athlete-questions-prompt-open` on `<body>`.
 - **The keyboard**: the prompt's own `keydown` listener is registered before the app's Escape handler and stops it when
@@ -445,3 +450,34 @@ decision 9).
 **Not run:**
 - a physical iOS device (the keyboard over the RPE form, the safe areas on a notched phone);
 - a screen reader.
+
+### 13.1 Review round 1 (on `6bbe2ac0`) and what was done
+
+| Reviewer | Finding | Severity | Done | Proof |
+|---|---|---|---|---|
+| code | The prompt's buttons and backdrop did nothing to a tap or click. The prompt lives outside `#content`, and only `#content`'s click handler routed `athlete-questions-*`. The suite called the handler directly; the browser check used Escape. | BLOCKER | The host has its own click listener (`setAthleteQuestionsPromptHandlers`, set by `app.js`). Its clicks go nowhere else. The card's *Answer*, inside `#content`, keeps the content handler, so nothing is handled twice. | Q20: real `click` events on *Later*, the backdrop and *Answer now*; none reaches the document. M15. Browser: a mouse click on *Later* and on *Answer now*. |
+| code | An older Home load settling after a deep link started could show the prompt over the form the deep link opens. | MEDIUM | Every Home load takes a number (`beginAthleteHomeLoad`); only the latest may show the prompt. | Q21, M16 |
+| code | Focus to Home's heading did nothing: the real `<h3>` was not focusable, and the suite's own fixture header hid it. | MEDIUM | Home's `<h3>` has `tabindex="-1"`. The suite uses Home's real header. The tick closing the prompt focuses the card's title, or Home's heading when the card has gone. | Q16, M17 |
+| code | A question opened from a notification loaded Home twice (two `/mine` reads). | LOW | *Answer* opens the RPE form without loading Home again: Home is already loaded on every path. | Browser: the notification path reads `/mine` once. |
+| code | The time-to-answer words went stale under the tick ("next 25 minutes" at 17:54). | LOW | The tick's signature has the minutes left under an hour, and the device's day. | Q16b, M18 |
+| code | A second day-word helper beside Upcoming events'. | LOW | It reuses `athleteHomeEventDayWord` (above). | Q18 |
+| code | NITs: the K2b-1e comment separated from its branch; the unused `focus: "return"`. | NIT | Both done. | — |
+| mobile-qa | The phone's Back with the prompt open opened the exit question hidden behind it. | MEDIUM | Back on the prompt is its *Later*: `athleteQuestionsBrowserBack` (app.js), called first in `handleBrowserBack` (the popstate); it puts back the history entry the browser consumed. Not in `handleAppBack`: `overlay-ladder`, `athlete-mobile-navigation` and `training-load-dashboards-ux` pin those functions' calls and text, so the hook is one short line. | Q19, M20; browser: Back on the prompt. |
+| ux | The "isn't open" notice had no next step. | MEDIUM | GO decision 3's sentence, then "Open questions show here at the top of Home." | Q17 |
+| ux | The notice can sit under Session feedback's "Rate today's session" for the same RPE. | MEDIUM | Softened by the step above (it no longer reads as "you can't answer"). Session feedback is GO decision 5's. Reported to the manager as a follow-up. | — |
+| ux | "This question has closed." could be false when the form failed to open for another reason. | LOW | Only when the new read no longer lists the question; otherwise "The question couldn't be opened. Try Answer again." | Q13, M19 |
+
+**Recorded, not changed (LOW):**
+- the event line repeats on each row of one event;
+- the title's focus frame after *Later* (shown for keyboard users);
+- the WELLNESS form's US date format and the RPE form's "Outside plan" badge (Tests and Training Load forms);
+- `100vh` in the 761–1024 px sheet (prefer `100dvh`);
+- the sheet's last row flush against the actions when three rows scroll;
+- iOS scroll chaining behind `body { overflow: hidden }` (needs a device).
+
+**Evidence after the round:**
+- the suite: 22 + 4 tests;
+- 20 mutations, all killed (M1–M20);
+- the browser check: 58 checks, all passing. It now has real mouse clicks on the prompt's *Later* and *Answer now*, the
+  phone's Back on the prompt (*Later* for each question shown, no exit question), and one `/mine` read on the
+  notification path.

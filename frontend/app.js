@@ -97,7 +97,7 @@ import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } fr
 import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
 import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
 import { loadAthleteQuestions, resetAthleteQuestions } from "./athlete-questions-data.js";
-import { athleteQuestionsBack, closeAthleteQuestionsPrompt, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
+import { athleteQuestionsBack, beginAthleteHomeLoad, closeAthleteQuestionsPrompt, setAthleteQuestionsPromptHandlers, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
@@ -685,6 +685,7 @@ function bindEvents() {
   installThumbnailResolver(document.body);
   // K2b-2a-3: the questions' prompt first - Escape is its Later, Tab stays inside it.
   document.addEventListener("keydown", handleAthleteQuestionsKeys);
+  setAthleteQuestionsPromptHandlers(athleteQuestionHandlers);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!els.mediaModal?.hidden) { closeMedia(); return; }
@@ -2173,6 +2174,7 @@ const BACK_STAYED = "stayed";
 
 function handleBrowserBack() {
   if (state.allowBrowserExit) return;
+  if (athleteQuestionsBrowserBack()) return; // K2b-2a-3
   if (state.appHistoryDepth > 0) {
     state.appHistoryDepth -= 1;
     if (handleAppBack() === BACK_STAYED) {
@@ -2210,8 +2212,6 @@ function handleAppBack() {
     closeMedia();
     return true;
   }
-  // K2b-2a-3: Back on the questions' prompt is its Later (as Escape).
-  if (athleteQuestionsBack(athleteQuestionHandlers())) return true;
 
   // feature/mobile-messages-fullscreen: menu -> Hide-confirm -> thread-to-
   // list -> close-Messages, in that exact priority order - see
@@ -2543,6 +2543,8 @@ function closeCoachHomePicker() {
 
 // `deepLink`: Home was opened by a notification click (or another deep link), so the questions' prompt is not shown.
 async function loadAthleteHome({ forceRefresh = false, deepLink = false } = {}) {
+  // K2b-2a-3: only the latest Home load may show the questions' prompt.
+  const load = beginAthleteHomeLoad();
   state.navStack = [];
   els.context.textContent = "Home";
   els.title.textContent = "Home";
@@ -2566,9 +2568,17 @@ async function loadAthleteHome({ forceRefresh = false, deepLink = false } = {}) 
     // Her open questions of events (K2b-2a-3): the card at the top of Home, and the soft prompt once the reads settled.
     loadAthleteQuestions({ render: renderAthleteHomeFromCache }),
   ]).then((results) => {
-    maybeShowAthleteQuestionsPrompt({ athleteMode: isAthleteMode(), deepLink });
+    maybeShowAthleteQuestionsPrompt({ athleteMode: isAthleteMode(), deepLink, load });
     return results;
   });
+}
+
+// K2b-2a-3: the phone's Back (handleBrowserBack) on the questions' prompt is its Later, as Escape; the history entry the
+// browser consumed is put back, so the next Back behaves as before. False when no prompt is open.
+function athleteQuestionsBrowserBack() {
+  if (!athleteQuestionsBack(athleteQuestionHandlers())) return false;
+  window.history.pushState(state.appHistoryDepth > 0 ? { optimove: true } : { optimoveGuard: true }, "", window.location.href);
+  return true;
 }
 
 // K2b-2a-3: the prompt's keys (registered before the app's Escape handler, which it stops when it handled one).
@@ -2579,7 +2589,12 @@ function handleAthleteQuestionsKeys(event) {
 // K2b-2a-3: what the questions' Answer / Later / notification click call (athlete-questions-actions.js).
 function athleteQuestionHandlers() {
   return {
-    openRpe: (assignmentId) => openTrainingLoadAssignment(assignmentId),
+    // Home is already loaded (the card, the prompt, or the notification path's loadHome): only the form opens, with no
+    // second Home load (code review, LOW).
+    openRpe: async (assignmentId) => {
+      await openExternalAssignmentFromNotification(assignmentId);
+      renderActiveTrainingLoadSurface();
+    },
     openWellness: (assignmentId) => openTestAssignment(assignmentId),
     rpeFormOpenFor: (assignmentId) => String(state.trainingLoad.rpeForm?.externalAssignmentId || "") === String(assignmentId),
     render: renderAthleteHomeFromCache,
@@ -3099,13 +3114,13 @@ async function handleContentClick(event) {
     await loadActiveTab();
     return;
   }
-  // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer. Gated by its prefix, so every other click
-  // keeps reaching the handlers below without an await.
-  // K2b-2a-3: the questions' Answer / Later (the prompt, its backdrop, Home's card).
+  // K2b-2a-3: the questions' Answer on Home's card (the prompt has its own listener, athlete-questions-actions.js).
   if (type?.startsWith("athlete-questions-")) {
     await handleAthleteQuestionsAction(action, athleteQuestionHandlers());
     return;
   }
+  // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer. Gated by its prefix, so every other click
+  // keeps reaching the handlers below without an await.
   if (type?.startsWith("athlete-home-events-")) {
     await handleAthleteHomeEventsAction(action, { render: renderAthleteHomeFromCache });
     return;
