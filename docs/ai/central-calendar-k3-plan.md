@@ -161,7 +161,7 @@ The press reads the event's athletes of that day (the card's `athleteIds`) and t
 | Case | What the coach sees | Buttons |
 |---|---|---|
 | **(b) none has a plan** | Nothing first: the Builder opens a new weekly plan for all of them (one batch), named after the event ("Training · Mon 12.10"). | — |
-| **(a) all share one batch (live)** | Q3 (decided): case (a) waits for the Builder fix (batch sync for edit drafts). Reached before that fix, a short sheet: "18 athletes already have this week's plan. This week's plan can be changed for one athlete at a time until a Builder fix lands." | **Open the plan** · Cancel |
+| **(a) all share one batch (live)** | Q3 (decided): case (a) waits for the Builder fix (batch sync for edit drafts). Reached before that fix, a short sheet: "18 athletes already have this week's plan. Changes go to the athlete on screen only." | **Open the plan** · Cancel |
 | **(a′) all share one draft batch (not saved)** | Nothing first: that draft opens. | — |
 | **(c) mixed** | A sheet: "12 athletes have no plan for this week. 6 already have one: Ana K., Ben D., … (and 2 more)." | **Plan for the 12** (primary) · **Open an existing plan** (a list of the 6, one opens) · Cancel |
 | **an athlete you can't plan for** (not on your roster, or outside this workspace) | One line under the counts: "2 athletes of this event aren't in your workspace; plan their training in their own workspace." | — |
@@ -260,8 +260,7 @@ the event's panel.
 - Calendar: "Plan the training" · "Open the training" · "Opening the Builder…"
 - Band: "Sessions on this day go into this event." · "Back to calendar" · "In this event" · "Not in this event" ·
   "Put back"
-- Sheets: "N athletes already have this week's plan. Changes you make go to the athlete on screen only; use *Next
-  athlete* to change the others." · "N athletes have no plan for this week. M already have one: …" · "Plan for the N"
+- Sheets: "N athletes already have this week's plan. Changes go to the athlete on screen only." · "N athletes have no plan for this week. M already have one: …" · "Plan for the N"
   · "Open an existing plan" · "N athletes of this event aren't in your workspace; plan their training in their own
   workspace." · "None of this event's athletes can be planned from this workspace."
 - Save: the sentences of 2.5.
@@ -308,8 +307,8 @@ question with its options for the record.
 - **Q3, decided:** the run (1.1) proves that an edit of a published batch reaches only the athlete on screen,
   although the Builder shows the batch switcher and *Apply changes to all athletes*. The stream manager reported it to
   the OptiMove manager as a Builder fix (batch sync for edit drafts). **K3 ships cases (b) and (c) first; case (a)
-  waits for that fix.** If case (a) is reached before the fix lands, its sheet says: "This week's plan can be changed
-  for one athlete at a time until a Builder fix lands." (2.2).
+  waits for that fix.** If case (a) is reached before the fix lands, its sheet says: "Changes go to the athlete on
+  screen only." (2.2, 2.8; the OptiMove manager's GO: one sentence, the word "fix" never shown to a coach).
 
 - **Q1 — The read of 3.1.** Add the small read route (recommended), or open the Builder for case (b) only and send
   every other case to the existing Builder with a sentence. Recommend the route: cases (a) and (c) are the coach's
