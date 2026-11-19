@@ -31,6 +31,12 @@ export function popAppHistoryEntry() {
   return entries.length ? entries.pop() : null;
 }
 
+// The newest entry without taking it (K3's Back to calendar asks whether the
+// step before was the calendar).
+export function peekAppHistoryEntry() {
+  return entries.length ? entries[entries.length - 1] : null;
+}
+
 export function appHistoryEntryCount() {
   return entries.length;
 }

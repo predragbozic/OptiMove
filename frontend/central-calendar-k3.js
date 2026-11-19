@@ -375,7 +375,7 @@ export function k3SaveAndLinkOutcome({ save, run = { parts: [] }, sessionCount =
   const done = linked.reduce((n, p) => n + p.ids.length, 0);
   const lead = linked.length ? `Saved. ${done} of ${total} links are confirmed.` : "Saved.";
   if (unknown.length) {
-    return { state: linked.length ? "partial_unknown" : "unconfirmed", tone: "warning", text: `${lead} We couldn't confirm the rest. Checking never links twice.`, actions: ["checkResult"] };
+    return { state: linked.length ? "partial_unknown" : "unconfirmed", tone: "warning", text: linked.length ? `${lead} We couldn't confirm the rest. Checking never links twice.` : "Saved. We couldn't confirm the link. Checking never links twice.", actions: ["checkResult"] };
   }
   const reason = centralCalendarLinkRefusalText(refused[0].info || {});
   return { state: linked.length ? "partial_refused" : "refused", tone: "warning", text: `${lead} ${linked.length ? "The rest weren't linked. " : ""}${reason}`, actions: ["tryLinking", "backToCalendar"] };

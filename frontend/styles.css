@@ -8948,6 +8948,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-batch-sync { width: 100%; justify-content: center; box-sizing: border-box; }
   .builder-batch-buttons { justify-content: space-between; }
   .builder-batch-pills { max-width: 100%; }
+  /* A batch of many athletes (a K3 team plan: the whole team) scrolls its
+     pills sideways inside the switcher instead of widening the page. */
+  .builder-batch-switcher, .builder-batch-controls, .builder-batch-buttons { min-width: 0; max-width: 100%; }
+  .builder-batch-controls, .builder-batch-buttons { width: 100%; box-sizing: border-box; }
+  .builder-batch-pills { flex: 1 1 0; min-width: 0; }
   .builder-source-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
   .builder-copy-plan-footer { align-items: stretch; flex-direction: column; }
   .builder-copy-plan-footer .plain-button { width: 100%; }
@@ -20648,7 +20653,8 @@ body.exercise-header-pinned #viewToolbar {
    same tokens. */
 .central-calendar,
 .calendar-settings,
-.athlete-home-events {
+.athlete-home-events,
+.builder-workspace {
   --cc-team-0: #1f6f68;
   --cc-team-1: #b5542b;
   --cc-team-2: #4a5fc1;
@@ -29029,4 +29035,98 @@ body.athlete-questions-prompt-open {
   .athlete-questions-answer {
     width: 100%;
   }
+}
+
+/* ============================================================
+   K3 (docs/ai/central-calendar-k3-plan.md 2.1 - 2.7; the owner-approved
+   mockup docs/design/calendar-k4/01): Plan the training in the event's
+   panel, its sheet, and in the Builder the band, the event's day, the
+   In / Not in this event chips and the Save and link bar. Every state has
+   words and a glyph, never colour alone; 44 px targets.
+   ============================================================ */
+.cc-panel-k3 { display: grid; gap: 8px; margin: 12px 0; }
+.cc-panel-k3 .cc-panel-note { margin: 0; }
+.cc-panel-k3 .k3-plan-button { width: 100%; justify-content: center; }
+.cc-panel-k3 .cc-panel-button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.k3-error { margin: 0; color: #9b2c2c; font-weight: 700; }
+
+.k3-sheet-layer { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; }
+.k3-sheet-backdrop { position: absolute; inset: 0; border: 0; background: rgba(16, 24, 32, .45); cursor: default; }
+.k3-sheet { position: relative; display: grid; gap: 12px; width: min(520px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface, #fff); box-shadow: 0 18px 40px rgba(16, 24, 32, .2); }
+.k3-sheet-title { margin: 0; font-size: 18px; }
+.k3-sheet-text, .k3-sheet-note { margin: 0; }
+.k3-sheet-note { color: var(--muted); font-size: 14px; }
+.k3-sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.k3-sheet-button { min-height: 44px; }
+.k3-sheet-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.k3-sheet-list .k3-sheet-button { width: 100%; justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
+body:has(.k3-sheet-layer) { overflow: hidden; }
+
+.k3-band {
+  --k3-c: var(--k3-color, var(--accent));
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  margin: 0 0 14px; padding: 10px 12px 10px 16px;
+  border: 1px solid var(--line); border-left: 6px solid var(--k3-c); border-radius: var(--radius);
+  background: var(--surface, #fff); box-shadow: 0 4px 14px rgba(22, 34, 45, .06);
+}
+.k3-band-title { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 800; overflow-wrap: anywhere; }
+.k3-band-title .k3-type-icon { color: var(--k3-c); flex: none; }
+.k3-band-meta { color: var(--muted); font-weight: 600; }
+.k3-band-line { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.k3-band-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; white-space: nowrap; }
+
+.builder-block.is-k3-day { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
+.k3-day-mark, .k3-chip {
+  --k3-c: var(--k3-color, var(--accent));
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--k3-c); background: color-mix(in srgb, var(--k3-c) 10%, white); color: var(--text, #20242a);
+  font: inherit; font-size: 14px; font-weight: 800; white-space: nowrap;
+}
+.k3-day-mark { min-height: 30px; font-size: 12px; margin-left: 8px; }
+.k3-chip { min-height: 44px; }
+button.k3-chip { cursor: pointer; }
+.k3-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--k3-c); flex: none; }
+.k3-ring { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
+.k3-chip.is-out, .k3-chip.is-outside { border-color: var(--line); background: var(--surface-soft); color: var(--muted); }
+.k3-chip.is-warning { border-color: #ecc98a; background: #fbefd9; color: #6d4103; }
+.k3-chip svg, .k3-note svg, .k3-outcome-text svg { flex: none; }
+.k3-session { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-left: auto; }
+.k3-session-time { color: var(--muted); font-size: 14px; white-space: nowrap; }
+.k3-put-back { min-height: 44px; padding: 0 4px; font-weight: 800; }
+.k3-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 6px 0 0; padding: 8px 10px; border-radius: var(--radius); font-size: 14px; font-weight: 700; }
+.k3-note.is-warning { background: #fbefd9; color: #6d4103; }
+.k3-note-button { min-height: 44px; }
+
+.k3-save-bar {
+  position: sticky; bottom: 0; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface, #fff); box-shadow: 0 -6px 16px rgba(22, 34, 45, .06);
+}
+.k3-save-line { flex: 1 1 260px; margin: 0; color: var(--muted); }
+.k3-save-button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: auto; }
+
+.k3-outcome { display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px; border-radius: var(--radius); }
+.k3-outcome:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.k3-outcome.is-ok { background: #e4f3e6; color: #1f5a28; }
+.k3-outcome.is-busy { background: var(--surface-soft); color: var(--muted); }
+.k3-outcome.is-warning { background: #fbefd9; color: #6d4103; }
+.k3-outcome.is-error { background: #fbe4e4; color: #8a1f1f; }
+.k3-outcome-text { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.k3-outcome-note { margin: 0; font-size: 14px; }
+.k3-outcome-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.k3-outcome-button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+
+@media (max-width: 760px) {
+  .k3-sheet-layer { place-items: end stretch; padding: 48px 0 0; }
+  .k3-sheet { width: 100%; max-height: calc(100vh - 48px); border-radius: 16px 16px 0 0; }
+  .k3-sheet-actions .k3-sheet-button { flex: 1 1 100%; }
+  .k3-band { grid-template-columns: minmax(0, 1fr); position: sticky; top: 0; z-index: 5; }
+  /* The sticky band never covers the row being edited (2.7): what the page
+     scrolls to stops under it, with a 12 px gap. */
+  html:has(.k3-band) { scroll-padding-top: 150px; }
+  html:has(.k3-save-bar) { scroll-padding-bottom: 140px; }
+  .k3-band-back { width: 100%; justify-content: center; }
+  .k3-session { margin-left: 0; width: 100%; }
+  .k3-save-button { flex: 1 1 100%; justify-content: center; }
+  .k3-outcome-button { flex: 1 1 100%; justify-content: center; }
 }

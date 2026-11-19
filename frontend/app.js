@@ -67,8 +67,11 @@ import {
   builderLibraryDropBlocked,
   dropBuilderLibraryExercise,
   moveBuilderItemTo,
+  clearBuilderSessionTime,
   submitBuilderForm as submitBuilderFormAction,
+  submitBuilderPlanForK3,
 } from "./builder-actions.js";
+import { clearK3Memory, k3CheckResult, k3Context, k3KeepEditing, k3SaveAndLink, k3ToggleSession, k3TryLinking, setK3BuilderRender } from "./central-calendar-k3-actions.js";
 import { ensureBuilderExercises, loadBuilderDrafts, loadBuilderExercises, loadBuilderExercisesDetached, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
@@ -84,7 +87,7 @@ import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { closeBuilderCalendarEventPanel, handleBuilderCalendarEventAction, handleBuilderCalendarEventInput, resetBuilderCalendarEventForWorkspaceChange } from "./builder-calendar-event-actions.js";
-import { appHistoryEntryOf, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
+import { appHistoryEntryOf, beginAppBack, clearAppHistoryEntries, endAppBack, peekAppHistoryEntry, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, restoreCentralCalendarPlace, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
@@ -1789,6 +1792,8 @@ async function signOut() {
     // athlete Back-button guard must never be nominally active post-logout.
     window.removeEventListener("popstate", handleBrowserBack);
     clearAppHistoryEntries();
+    // K3: the event-planning memory of this tab (ids and slot keys) goes too.
+    clearK3Memory();
     // A deliberate navigation: the Imports reload/close guard does not ask.
     state.deliberateNavigation = true;
     state.currentUser = null;
@@ -2328,6 +2333,8 @@ function handleAppBack() {
   // plan without a picked athlete is only "No athlete selected.").
   // The place the last in-app step left (app-history.js): the tab, and the
   // calendar's view, week, day and open panel. Asked the same as a tab click.
+  // K3 (2.6): Back waits while Save and link is running.
+  if (state.activeTab === "builder" && state.builder.k3?.saving && !state.builder.k3.saved) return BACK_STAYED;
   const backTo = takeAppBackEntry(state.activeTab);
   if (backTo) {
     if (!confirmLeaveTrainingLoad(backTo.tab)) return BACK_STAYED;
@@ -3023,7 +3030,7 @@ async function handleContentClick(event) {
     return;
   }
   if (type.startsWith("central-calendar-")) {
-    await handleCentralCalendarAction(action, { render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar });
+    await handleCentralCalendarAction(action, { render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar, openBuilder: openBuilderForK3 });
     return;
   }
   if (type === "back") {
@@ -3554,6 +3561,9 @@ async function onWorkspaceChanged() {
   // The Builder's Make an event panel and badges belong to the old workspace;
   // a create not confirmed stays in the calendar's memory under it.
   resetBuilderCalendarEventForWorkspaceChange();
+  // K3: an event's band and its session memory belong to the old workspace.
+  clearK3Memory();
+  if (state.builder) state.builder.k3 = null;
   state.athletes = [];
   state.selectedAthleteId = null;
   // The new workspace's roster is on its way: the list stays blank, never "No athletes here".
@@ -4235,12 +4245,14 @@ function renderCopyPlanSource() {
 
 async function handleBuilderAction(action) {
   if (state.builder.leaving || state.builder.batchSwitchPending || state.builder.openingDraftId) return;
-  const leaving = ["builder-submit-plan", "builder-cancel", "builder-discard-current-draft"].includes(action.dataset.action);
+  const leaving = ["builder-submit-plan", "builder-cancel", "builder-discard-current-draft", "builder-k3-save-link"].includes(action.dataset.action);
   if (leaving) {
     state.builder.leaving = true;
     document.querySelector(".builder-workspace")?.setAttribute("inert", "");
   }
   try {
+    // K3: the event's band, its sessions and Save and link (central-calendar-k3-actions.js).
+    if (await handleBuilderK3Action(action)) return;
     // K2c-2-F: "Make an event" from a weekly session (builder-calendar-event-actions.js).
     if (await handleBuilderCalendarEventAction(action, { renderBuilder, openCalendarAt: openCentralCalendarFromBuilder })) return;
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
@@ -4253,6 +4265,105 @@ async function handleBuilderAction(action) {
       document.querySelector(".builder-workspace")?.removeAttribute("inert");
     }
   }
+}
+
+// K3 (docs/ai/central-calendar-k3-plan.md 2.3 - 2.6): the Builder opened
+// from an event's panel. One history step is pushed first, so Back (the
+// band's and the browser's) returns to the calendar on the event's day with
+// its panel open.
+// A band restored after a reload repaints the Builder when it is on screen.
+setK3BuilderRender(() => {
+  if (state.activeTab === "builder") renderBuilder();
+});
+
+async function openBuilderForK3(draft, context) {
+  pushAppHistory();
+  state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart: String(draft?.plan?.weekStart || "").slice(0, 10), draft });
+  state.builder.k3 = context;
+  state.activeTab = "builder";
+  state.navStack = [];
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  renderTabs();
+  renderLibraryNav();
+  await loadBuilder();
+  // The event's day is brought into view (2.3).
+  document.querySelector(".builder-block.is-k3-day")?.scrollIntoView?.({ block: "start", inline: "start" });
+}
+
+// Back to calendar (2.6): the app's Back when the step before was the
+// calendar, else the calendar opened on the event's day with its panel.
+function k3BackToCalendar() {
+  const context = k3Context();
+  if (!context || (context.saving && !context.saved)) return;
+  invalidateCentralCalendarCache();
+  if (state.appHistoryDepth > 0 && peekAppHistoryEntry()?.tab === "central-calendar") {
+    window.history.back();
+    return;
+  }
+  openCentralCalendarFromBuilder({ date: context.date, key: context.eventKey });
+}
+
+async function handleBuilderK3Action(action) {
+  const type = action.dataset.action || "";
+  if (!type.startsWith("builder-k3-")) return false;
+  const context = k3Context();
+  if (!context) return true;
+  if (type === "builder-k3-back") {
+    k3BackToCalendar();
+    return true;
+  }
+  if (type === "builder-k3-toggle-session") {
+    k3ToggleSession(action.dataset.k3Key || "");
+    renderBuilder();
+    return true;
+  }
+  if (type === "builder-k3-dismiss-blocker") {
+    context.blocker = null;
+    renderBuilder();
+    return true;
+  }
+  if (type === "builder-k3-use-event-time") {
+    const sessionId = action.dataset.sessionId || "";
+    try {
+      await clearBuilderSessionTime(sessionId);
+      if (context.blocker?.sessionId === sessionId) context.blocker = null;
+      if (context.timeMessage?.sessionId === sessionId) context.timeMessage = null;
+      renderBuilder();
+    } catch (error) {
+      renderBuilder();
+      renderBuilderError(error);
+    }
+    return true;
+  }
+  if (type === "builder-k3-save-link") {
+    // A save not confirmed is not sent again by itself: Try again starts over.
+    if (context.saved) return true;
+    context.outcome = null;
+    await k3SaveAndLink({ submit: () => submitBuilderPlanForK3({ flushBuilderAutosaves }), render: renderBuilder });
+    document.querySelector(".k3-outcome")?.focus?.({ preventScroll: false });
+    return true;
+  }
+  if (type === "builder-k3-check-result") {
+    await k3CheckResult({ render: renderBuilder });
+    return true;
+  }
+  if (type === "builder-k3-try-linking") {
+    await k3TryLinking({ render: renderBuilder });
+    return true;
+  }
+  if (type === "builder-k3-keep-editing") {
+    await k3KeepEditing({
+      adopt: (draft) => {
+        state.builder.draft = draft;
+        state.builder.selectedSessionId = "";
+        state.builder.selectedNodeId = "";
+      },
+      render: renderBuilder,
+    });
+    return true;
+  }
+  return true;
 }
 
 // K2c-2-F: "Open in calendar" from the Builder - the calendar on that day,

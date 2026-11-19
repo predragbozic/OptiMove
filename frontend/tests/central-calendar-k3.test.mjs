@@ -232,7 +232,7 @@ test("4b. never 'linked' without a confirmed answer: pending, unknown and refuse
   const lost = { parts: [k3SettlePart(k3LinkRun(ids(3), key).parts[0], { info: { status: 0, code: "no_answer" } })] };
   const unconfirmed = k3SaveAndLinkOutcome({ ...base, run: lost });
   assert.equal(unconfirmed.state, "unconfirmed");
-  assert.equal(unconfirmed.text, "Saved. We couldn't confirm the rest. Checking never links twice.");
+  assert.equal(unconfirmed.text, "Saved. We couldn't confirm the link. Checking never links twice.");
   assert.deepEqual(unconfirmed.actions, ["checkResult"]);
 });
 
