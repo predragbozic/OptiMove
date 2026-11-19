@@ -20,6 +20,7 @@ import {
   calendarSettingsMapsUrl,
   calendarSettingsOutcomeUnknown,
   calendarSettingsPath,
+  calendarSettingsSwitchAdmin,
   calendarTeamById,
   calendarTypeById,
   loadCalendarSettings,
@@ -64,8 +65,13 @@ function typeDraft(type) {
     label: type?.label || "", kind: type?.kind || "", iconKey: type?.iconKey ?? null, colorKey: type?.colorKey ?? null,
     defaultExpects: CENTRAL_CALENDAR_EVENT_EXPECTS.filter((e) => (type?.defaultExpects || []).includes(e)),
     fieldIds: [...(type?.fieldIds || [])].map(String),
+    // K2b-2a-2b: the type's questions for athletes, only while the club's
+    // switch is on (the read gives them only then); absent otherwise.
+    ...(Array.isArray(type?.defaultQuestions) ? { defaultQuestions: CALENDAR_QUESTION_KINDS.filter((k) => type.defaultQuestions.includes(k)) } : {}),
   };
 }
+
+export const CALENDAR_QUESTION_KINDS = Object.freeze(["rpe", "wellness"]);
 
 function fieldDraft(field) {
   const number = (value) => (value === null || value === undefined ? "" : String(value));
@@ -166,6 +172,7 @@ function buildType(form) {
   if ((d.colorKey ?? null) !== (b.colorKey ?? null)) body.colorKey = colorKey;
   if (!sameList(d.defaultExpects, b.defaultExpects)) body.defaultExpects = d.defaultExpects;
   if (!sameList(d.fieldIds, b.fieldIds)) body.fieldIds = d.fieldIds;
+  if (Array.isArray(d.defaultQuestions) && !sameList(d.defaultQuestions, b.defaultQuestions)) body.defaultQuestions = d.defaultQuestions;
   if (!Object.keys(body).length) return { unchanged: true };
   return { body: { expectedRevision: form.revision, ...body } };
 }
@@ -387,6 +394,7 @@ const FIELD_TEXT = Object.freeze({
 
 export function calendarSettingsErrorText(info) {
   if (info.status === 401) return "Please sign in again. Nothing was saved.";
+  if (info.code === "request_key_reused") return "This could not be sent. Nothing was saved; try again.";
   if (info.code === "try_again") return "The calendar settings are busy. Nothing was saved; try again in a moment.";
   if (info.code === "nothing_to_change") return "Nothing changed: change something, or Cancel.";
   if (info.code === "last_type") return "Nothing was saved: the club keeps at least one event type. Add or restore another type first.";
@@ -419,6 +427,7 @@ function savedText(cmd, data) {
     archive: `“${title}” was archived. ${ARCHIVE_TAIL[cmd.kind] || ""}`.trim(),
     restore: `“${title}” was restored.`,
     order: `“${cmd.title}” was moved ${cmd.direction}.`,
+    questions: `Questions for athletes are now ${cmd.body?.enabled ? "on" : "off"} for this club.`,
   }[cmd.verb];
   return `${cmd.checked ? "Checked: " : ""}${text}`;
 }
@@ -473,6 +482,10 @@ async function settled(cmd, data, render, { check }) {
   d.command = null;
   if (cmd.form && d.form === cmd.form) d.form = null;
   if (data?.types) replaceCalendarSettingsTypes(data.types);
+  if (cmd.verb === "questions") {
+    if (d.data && data?.questions) d.data.questions = { enabled: data.questions.enabled === true, updatedAt: data.questions.updatedAt || null };
+    d.questionsForm = null;
+  }
   for (const kind of ["type", "field", "location", "team"]) if (data?.[kind]) patchCalendarSettings(kind, data[kind]);
   cmd.checked = check;
   setNotice(savedText(cmd, data));
@@ -493,6 +506,19 @@ async function refused(cmd, info, render, { check }) {
   const form = cmd.form && d.form === cmd.form ? cmd.form : null;
   const prefix = check ? "Checked: " : "";
   const code = info.code;
+  if (cmd.verb === "questions") return refusedQuestionsSwitch(cmd, info, render, { prefix });
+  if (code === "questions_off") {
+    // The switch was turned off meanwhile: the whole change was refused, and
+    // the type's questions are not offered any more.
+    if (form) {
+      delete form.draft.defaultQuestions;
+      delete form.base.defaultQuestions;
+      form.error = `${prefix}Questions for athletes are not turned on for this club. Nothing was saved. Save again without the questions.`;
+    } else setNotice(`${prefix}Questions for athletes are not turned on for this club. Nothing was saved.`, "error");
+    render?.();
+    await reread(render);
+    return;
+  }
   if (info.status === 403 || info.status === 404 || code === "workspace_required") {
     d.form = null;
     setNotice(`${prefix}${NOT_AVAILABLE}`, "error");
@@ -555,6 +581,25 @@ async function refused(cmd, info, render, { check }) {
   render?.();
 }
 
+// The switch's refusals (contract section 2.1): the identical 404 is never
+// explained; a missing reason is the field's.
+async function refusedQuestionsSwitch(cmd, info, render, { prefix }) {
+  const d = cs();
+  const qf = d.questionsForm;
+  if (info.status === 403 || info.status === 404 || info.code === "workspace_required") {
+    d.questionsForm = null;
+    setNotice(`${prefix}This setting isn't available for you here. Nothing was saved.`, "error");
+    await reread(render);
+    return;
+  }
+  if (qf) {
+    qf.confirming = false;
+    qf.error = info.code === "invalid_reason" ? "Write a reason of at most 500 characters." : "";
+  }
+  if (info.code !== "invalid_reason") setNotice(`${prefix}${calendarSettingsErrorText(info)}`, "error");
+  render?.();
+}
+
 // ---------------------------------------------------------------------------
 // Leaving
 // ---------------------------------------------------------------------------
@@ -565,9 +610,11 @@ export function calendarSettingsMayBeLeft({ final = false } = {}) {
   const verb = final === "sign-out" || final === true ? "Sign out" : final === "switch" ? "Switch" : "Leave";
   if (d.command?.busy) return ask(`A calendar setting is still being saved. ${verb} anyway? Its result will not be shown here.`);
   if (d.command?.unconfirmed) return ask(`The last calendar setting's save is not confirmed. ${verb} without checking?`);
-  if (calendarSettingsFormDirty(d.form)) return ask(`Discard the calendar setting you have not saved? ${verb} anyway?`);
+  if (calendarSettingsFormDirty(d.form) || questionsReasonTyped(d)) return ask(`Discard the calendar setting you have not saved? ${verb} anyway?`);
   return true;
 }
+
+const questionsReasonTyped = (d) => Boolean(d.questionsForm && String(d.questionsForm.reason || "").trim());
 
 // app.js's "beforeunload": closing or reloading the page loses a save in
 // flight, an unconfirmed result and unsaved values.
@@ -575,7 +622,7 @@ export function handleCalendarSettingsBeforeUnload(event) {
   if (state.deliberateNavigation) return false;
   const d = cs();
   const saving = Boolean(d.command);
-  const unsaved = calendarSettingsFormDirty(d.form) && event?.isTrusted !== false;
+  const unsaved = (calendarSettingsFormDirty(d.form) || questionsReasonTyped(d)) && event?.isTrusted !== false;
   if (!saving && !unsaved) return false;
   event.preventDefault();
   event.returnValue = "A calendar setting is not saved or its result is not confirmed.";
@@ -587,6 +634,37 @@ export function handleCalendarSettingsBeforeUnload(event) {
 // ---------------------------------------------------------------------------
 function liveTypes() {
   return (cs().data?.types || []).filter((type) => !type.archived);
+}
+
+// The club's switch (contract section 2.1, GO decision 5): the reason first,
+// then one inline step (one sentence, two buttons), then the write.
+async function questionsSwitchAction(type, render) {
+  const d = cs();
+  const current = d.data?.questions;
+  if (!current || !calendarSettingsSwitchAdmin()) return true;
+  const qf = d.questionsForm || (d.questionsForm = { reason: "", confirming: false, error: "" });
+  if (type === "calendar-settings-questions-cancel") {
+    qf.confirming = false;
+    render?.();
+    focusSoon('[data-action="calendar-settings-questions-request"]');
+    return true;
+  }
+  const reason = multiLine(qf.reason);
+  if (type === "calendar-settings-questions-request") {
+    qf.error = !reason ? "Write a reason." : chars(reason) > 500 ? "Write a reason of at most 500 characters." : "";
+    qf.confirming = !qf.error;
+    render?.();
+    focusSoon(qf.error ? "[data-cs-questions-reason]" : '[data-action="calendar-settings-questions-confirm"]');
+    return true;
+  }
+  if (!qf.confirming || !reason) return true;
+  const enabled = !current.enabled;
+  await runCommand({
+    verb: "questions", kind: "questions", id: "", form: null, title: "", method: "PUT", path: "/questions",
+    body: { requestKey: newCalendarSettingsRequestKey(), enabled, reason },
+    busy: false, unconfirmed: false, checkNote: "",
+  }, render);
+  return true;
 }
 
 export async function handleCalendarSettingsAction(action, { render } = {}) {
@@ -633,6 +711,7 @@ export async function handleCalendarSettingsAction(action, { render } = {}) {
     if (!d.command?.unconfirmed || d.command.busy) return true;
     if (!ask("Close without checking? The change may or may not be saved. The settings are read again, so you can see what is saved now.")) return true;
     if (d.command.form && d.form === d.command.form) d.form = null;
+    if (d.command.verb === "questions") d.questionsForm = null;
     d.command = null;
     setNotice("Not checked. The settings were read again: look whether your change is there before making it again.");
     // It may have been saved: the calendar reads its catalog again too.
@@ -649,6 +728,9 @@ export async function handleCalendarSettingsAction(action, { render } = {}) {
   // Everything below writes or opens a form: never while a write runs or its
   // answer is not confirmed.
   if (locked) return true;
+  if (type === "calendar-settings-questions-request" || type === "calendar-settings-questions-confirm" || type === "calendar-settings-questions-cancel") {
+    return questionsSwitchAction(type, render);
+  }
   if (type === "calendar-settings-new" || type === "calendar-settings-edit") {
     const kind = action.dataset.kind || "";
     if (!DRAFTS[kind]) return true;
@@ -791,7 +873,17 @@ export async function handleCalendarSettingsAction(action, { render } = {}) {
 const DRAFT_FIELDS = new Set(["label", "name", "address", "note", "description", "unit", "minValue", "maxValue", "kind", "valueKind", "colorKey", "defaultLocationId"]);
 
 export function handleCalendarSettingsInput(target, { render } = {}) {
-  const el = target?.closest?.("[data-cs-field],[data-cs-expect],[data-cs-option],[data-cs-add-field]");
+  const reasonEl = target?.closest?.("[data-cs-questions-reason]");
+  if (reasonEl) {
+    const d = cs();
+    if (!d.command) {
+      d.questionsForm = d.questionsForm || { reason: "", confirming: false, error: "" };
+      d.questionsForm.reason = String(reasonEl.value ?? "");
+      d.questionsForm.error = "";
+    }
+    return true;
+  }
+  const el = target?.closest?.("[data-cs-field],[data-cs-expect],[data-cs-question],[data-cs-option],[data-cs-add-field]");
   if (!el || !el.closest?.("[data-calendar-settings-form]")) return false;
   const form = cs().form;
   if (!form || cs().command) return true;
@@ -811,6 +903,14 @@ export function handleCalendarSettingsInput(target, { render } = {}) {
     if (on) set.add(expect);
     else set.delete(expect);
     form.draft.defaultExpects = CENTRAL_CALENDAR_EVENT_EXPECTS.filter((e) => set.has(e));
+    return true;
+  }
+  if (el.dataset.csQuestion) {
+    if (!Array.isArray(form.draft.defaultQuestions)) return true;
+    const set = new Set(form.draft.defaultQuestions);
+    if (el.checked === true) set.add(el.dataset.csQuestion);
+    else set.delete(el.dataset.csQuestion);
+    form.draft.defaultQuestions = CALENDAR_QUESTION_KINDS.filter((k) => set.has(k));
     return true;
   }
   if (el.dataset.csOption) {

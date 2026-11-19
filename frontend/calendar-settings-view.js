@@ -11,9 +11,10 @@ import {
   calendarFieldById,
   calendarSettingsContext,
   calendarSettingsMapsUrl,
+  calendarSettingsSwitchAdmin,
   calendarTypeById,
 } from "./calendar-settings-data.js";
-import { CALENDAR_SETTINGS_ICON_HOST, subjectTitle } from "./calendar-settings-actions.js";
+import { CALENDAR_QUESTION_KINDS, CALENDAR_SETTINGS_ICON_HOST, subjectTitle } from "./calendar-settings-actions.js";
 import { CENTRAL_CALENDAR_EVENT_EXPECTS, CENTRAL_CALENDAR_EVENT_KINDS } from "./central-calendar-data.js";
 import { CENTRAL_CALENDAR_EXPECT_LABELS, CENTRAL_CALENDAR_EXPECT_SHORT } from "./central-calendar-event-form.js";
 import { CENTRAL_CALENDAR_EVENT_KIND_ICONS, CENTRAL_CALENDAR_EVENT_KIND_LABELS } from "./central-calendar-view.js";
@@ -82,6 +83,7 @@ export function renderCalendarSettingsPanelHtml() {
       ${tabsHtml(d)}
       ${commandBannerHtml(d)}
       ${noticeHtml(d)}
+      ${d.data && d.clubId === ctx.clubId ? questionsSwitchHtml(d) : ""}
       ${d.data && d.error ? `<p class="data-sources-error cs-reread-error" role="alert">${escapeHtml(d.error)} <button class="plain-button compact-button" type="button" data-action="calendar-settings-retry">Try again</button></p>` : ""}
       ${body}
     </section>`;
@@ -136,6 +138,7 @@ function otherSectionCommandHtml(d, cmd) {
 
 const VERB_WORDS = Object.freeze({ archive: "Archiving", restore: "Restoring", order: "Moving", create: "Adding", save: "Saving" });
 function commandBusyText(cmd) {
+  if (cmd.verb === "questions") return `Turning questions for athletes ${cmd.body?.enabled ? "on" : "off"}…`;
   return `${VERB_WORDS[cmd.verb] || "Saving"} “${cmd.title || "the item"}”…`;
 }
 function commandWhat(cmd) {
@@ -143,6 +146,7 @@ function commandWhat(cmd) {
   return {
     archive: `Archiving ${title}`, restore: `Restoring ${title}`, order: `Moving ${title} ${cmd.direction}`,
     create: `Adding ${title}`, save: `The changes to ${title}`,
+    questions: `Turning questions for athletes ${cmd.body?.enabled ? "on" : "off"}`,
   }[cmd.verb] || "The change";
 }
 
@@ -154,6 +158,60 @@ function unconfirmedHtml(cmd, what) {
         <button class="plain-button data-sources-primary" type="button" data-action="calendar-settings-check-result"${disabledIf(cmd.busy)}>${cmd.busy ? "Checking…" : "Check result"}</button>
         <button class="plain-button ghost" type="button" data-action="calendar-settings-drop-unconfirmed"${disabledIf(cmd.busy)}>Close without checking</button>
       </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// K2b-2a-2b: questions for athletes, for the club (contract section 2.1)
+// ---------------------------------------------------------------------------
+const QUESTION_WORDS = Object.freeze({ rpe: "RPE", wellness: "WELLNESS" });
+function dayText(iso) {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(date.getDate())}.${p(date.getMonth() + 1)}.${date.getFullYear()}`;
+}
+
+function questionsSwitchHtml(d) {
+  const q = d.data?.questions;
+  if (!q) return "";
+  const on = q.enabled === true;
+  const day = dayText(q.updatedAt);
+  const stateLine = on
+    ? `<p class="cs-questions-state is-on"><span aria-hidden="true">●</span> <strong>On</strong> — this club's coaches can ask athletes questions after events.${day ? ` <span class="muted">Turned on ${escapeHtml(day)}.</span>` : ""}</p>`
+    : `<p class="cs-questions-state is-off"><span aria-hidden="true">○</span> <strong>Off</strong> — questions to athletes are not turned on for this club.${calendarSettingsSwitchAdmin() ? "" : " A platform administrator can turn them on."}${day ? ` <span class="muted">Turned off ${escapeHtml(day)}.</span>` : ""}</p>`;
+  return `<div class="cs-questions" aria-labelledby="cs-questions-title">
+      <h4 id="cs-questions-title">Questions for athletes</h4>
+      ${stateLine}
+      ${calendarSettingsSwitchAdmin() ? questionsSwitchFormHtml(d, on) : ""}
+    </div>`;
+}
+
+function questionsSwitchFormHtml(d, on) {
+  const qf = d.questionsForm || { reason: "", confirming: false, error: "" };
+  const cmd = d.command?.verb === "questions" ? d.command : null;
+  const busy = Boolean(d.command);
+  const verb = on ? "Turn off" : "Turn on";
+  const confirm = qf.confirming && !cmd
+    ? `<div class="cs-inline-confirm" role="group" aria-labelledby="cs-questions-confirm-text">
+        <p id="cs-questions-confirm-text">${on
+          ? "Turn off questions for athletes for this club? Coaches can't ask new questions; the answers given stay."
+          : "Turn on questions for athletes for this club? Its coaches can then ask athletes after events."}</p>
+        <div class="data-sources-form-actions">
+          <button class="plain-button data-sources-primary" type="button" data-action="calendar-settings-questions-confirm">${verb}</button>
+          <button class="plain-button ghost" type="button" data-action="calendar-settings-questions-cancel">Cancel</button>
+        </div>
+      </div>`
+    : "";
+  return `<div class="cs-questions-form">
+      <div class="cs-field">
+        <label for="cs-questions-reason">${on ? "Why are you turning it off?" : "Why are you turning it on?"}</label>
+        <textarea id="cs-questions-reason" rows="2" maxlength="500" data-cs-questions-reason${qf.error ? ` aria-invalid="true" aria-describedby="cs-questions-reason-error"` : ""}${disabledIf(busy || qf.confirming)}>${escapeHtml(qf.reason || "")}</textarea>
+        ${qf.error ? `<p class="cs-field-error" id="cs-questions-reason-error">${escapeHtml(qf.error)}</p>` : ""}
+      </div>
+      ${confirm}
+      ${cmd?.busy ? `<p class="data-sources-notice cs-busy" role="status">${escapeHtml(`Turning questions for athletes ${on ? "off" : "on"}…`)}</p>` : ""}
+      ${qf.confirming || cmd ? "" : `<div class="data-sources-form-actions"><button class="plain-button data-sources-primary" type="button" data-action="calendar-settings-questions-request"${disabledIf(busy)}>${verb} for this club</button></div>`}
     </div>`;
 }
 
@@ -207,6 +265,7 @@ function typeMeta(type) {
   return [
     `Base kind: ${CENTRAL_CALENDAR_EVENT_KIND_LABELS[type.kind] || "Event"}`,
     expects.length ? `Collects ${expects.join(", ")}` : "Collects nothing",
+    ...(Array.isArray(type.defaultQuestions) && type.defaultQuestions.length ? [`Asks ${type.defaultQuestions.map((k) => QUESTION_WORDS[k]).join(" and ")}`] : []),
     details ? `${plural(details, "detail", "details")}${archived ? ` (${archived} archived)` : ""}` : "No details",
     usedBy(type.eventCount || 0),
   ].join(" · ");
@@ -347,12 +406,20 @@ function typeFormHtml(form, d) {
       <span class="cs-field-hint">Ticking does not ask anyone: an event of this type waits for these after it ends. Ask for RPE or a test the usual way. A new event starts with these ticked; the coach can change them for each event.</span>
       ${CENTRAL_CALENDAR_EVENT_EXPECTS.map((expect) => `<label class="cs-check"><input type="checkbox" data-cs-expect="${expect}"${draft.defaultExpects.includes(expect) ? " checked" : ""}> <span>${escapeHtml(CENTRAL_CALENDAR_EXPECT_LABELS[expect])}</span></label>`).join("")}
     </fieldset>`;
+  const questions = Array.isArray(draft.defaultQuestions)
+    ? `<fieldset class="cs-fieldset">
+      <legend>Questions for athletes</legend>
+      <span class="cs-field-hint">New events of this type start with these questions ticked. Coaches can change them per event.</span>
+      ${CALENDAR_QUESTION_KINDS.map((kind) => `<label class="cs-check"><input type="checkbox" data-cs-question="${kind}"${draft.defaultQuestions.includes(kind) ? " checked" : ""}> <span>${QUESTION_WORDS[kind]}</span></label>`).join("")}
+    </fieldset>`
+    : "";
   return formShell(form, d, create ? "New event type" : `Edit “${subjectTitle("type", type)}”`, `
       ${textInput(form, "label", "Name", { max: LIMITS.typeLabel, required: true, first: true })}
       ${kindRow}
       ${iconRow}
       ${colorFieldset(form, { legend: "Colour", hint: "Tints the type's icon." })}
       ${expects}
+      ${questions}
       ${typeDetailsHtml(form, d)}
     `);
 }

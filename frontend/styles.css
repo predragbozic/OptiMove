@@ -23046,6 +23046,47 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .calendar-settings [aria-invalid="true"] {
   border-color: var(--danger);
 }
+/* K2b-2a-2b: questions for athletes, for the club (Settings -> Calendar). */
+.cs-questions {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.cs-questions h4,
+.cs-questions-state {
+  margin: 0;
+}
+.cs-questions-state {
+  overflow-wrap: anywhere;
+}
+.cs-questions-state.is-on span[aria-hidden] {
+  color: var(--success, var(--accent));
+}
+.cs-questions-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cs-questions-form textarea {
+  font-size: 16px;
+  min-height: 44px;
+}
+.cs-inline-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-soft);
+  border-radius: var(--radius);
+}
+.cs-inline-confirm p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .cs-field-group {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

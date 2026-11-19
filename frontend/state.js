@@ -62,6 +62,9 @@ export const emptyCalendarSettingsState = () => ({
   noticeTone: "",
   form: null,
   command: null,
+  // K2b-2a-2b: the club's Ask athletes switch form of a platform admin
+  // ({ reason, confirming, error }); null while closed.
+  questionsForm: null,
 });
 
 // The central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): one
