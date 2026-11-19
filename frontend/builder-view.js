@@ -104,6 +104,14 @@ function builderStructureContext() {
   };
 }
 
+// The members of a group the coach may not open are only a count from the
+// server (loadBuilderBatch's hiddenCount): said in one sentence, never drawn.
+export function renderBuilderBatchHiddenNote(hiddenCount) {
+  const n = Number(hiddenCount) || 0;
+  if (n < 1) return "";
+  return `<small class="builder-batch-hidden" data-builder-batch-hidden>${n} other athlete${n === 1 ? "" : "s"} in this group ${n === 1 ? "has a plan" : "have plans"} you can't open.</small>`;
+}
+
 export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
   if (!batchPlans.length || currentIndex < 0) return "";
   const current = batchPlans[currentIndex];
@@ -120,6 +128,7 @@ export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
         <p class="eyebrow">Group builder</p>
         <strong>${escapeHtml(current?.athleteName || current?.name || "Current copy")}</strong>
         <small>${currentIndex + 1} / ${batchPlans.length}</small>
+        ${renderBuilderBatchHiddenNote(state.builder.draft?.batch?.hiddenCount)}
         <small data-builder-batch-status role="status" aria-live="polite" hidden></small>
       </div>
       <div class="builder-batch-controls">
@@ -528,7 +537,7 @@ function renderBuilderInner() {
   const draftBatchPlans = Array.isArray(draft?.batch?.plans) ? draft.batch.plans : [];
   els.context.textContent = "Program builder";
   els.title.textContent = draft
-    ? (draftBatchPlans.length > 1
+    ? (draftBatchPlans.length + (Number(draft?.batch?.hiddenCount) || 0) > 1
       ? "Group builder"
       : (draft.plan.athleteName || (draft.plan.isTemplate ? "Reusable template" : "Draft")))
     : "New program";
@@ -603,7 +612,10 @@ function renderBuilderInner() {
   // A reopened, published member of a group (an edit draft) is not in the
   // batch's list (loadBuilderBatch leaves edit drafts out), so no switcher is
   // drawn for it; say plainly that its changes reach this athlete only.
-  const isEditDraftOfBatch = isEditDraft && batchPlans.length > 1 && !hasBatch
+  // The group's size counts the members this coach may not open too (the
+  // server sends them only as hiddenCount).
+  const hiddenCount = Number(draft.batch?.hiddenCount) || 0;
+  const isEditDraftOfBatch = isEditDraft && batchPlans.length + hiddenCount > 1 && !hasBatch
     && batchPlans.some((plan) => String(plan.id) === String(draft.plan.editSourcePlanId || ""));
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
@@ -619,7 +631,9 @@ function renderBuilderInner() {
         </div>
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
-      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() : ""}
+      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex)
+        : isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() + (hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : "")
+        : batchIndex >= 0 && hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type === "cross-plan-block" ? "block" : state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? renderBuilderTrainingLoadSettings(draft) : ""}
       <div class="builder-layout">
