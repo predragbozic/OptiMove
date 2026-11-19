@@ -869,6 +869,10 @@ export async function createEvent(ctx, body) {
       const ids = canonical.sessions.logicalSessionIds;
       const unlocked = await readLinkableSessions(client, ctx, null, ids, { targets });
       if (!allLinkable(owner, unlocked, ids)) throw sessionNotAvailable();
+      // RPE-1 (plan 9.2, path 1): linked sessions are the event's RPE channel,
+      // so a manual RPE schedule in the same body is refused (before any lock
+      // of a plan, nothing written).
+      if (canonical.externalScheduleId) throw rpeFromSessions();
       await lockPlansForShare(client, unlocked.map((x) => x.plan_id));
       linkSessions = await readLinkableSessions(client, ctx, null, ids, { targets });
       judgeSessionsForLink(owner, { day: canonical.day, end_day: canonical.endDay }, linkSessions, ids, null);
@@ -1019,6 +1023,10 @@ export async function updateEvent(ctx, eventId, body) {
     // schedule changes only through that question.
     const liveRpe = state.live.find((q) => q.kind === "rpe");
     if (liveRpe && "externalScheduleId" in f && String(f.externalScheduleId ?? "") !== String(liveRpe.external_schedule_id)) throw rpeFromQuestion();
+    // RPE-1 (plan 9.2, path 2): an event with a live session link takes no new
+    // manual RPE schedule (clearing it, or keeping the stored one, is allowed).
+    // Read under the event row lock, which every writer of the links holds.
+    if ("externalScheduleId" in f && f.externalScheduleId && extChanged && await Q.hasLiveSessionLinks(client, row.id)) throw rpeFromSessions();
     if (state.installed) {
       if ("questions" in f && !state.enabled) throw Q.questionsOff();
       qplan = await planQuestions(client, {
@@ -1621,6 +1629,10 @@ export async function attachSessions(ctx, eventId, body) {
     if (liveRpe && (await Q.answeredCount(client, liveRpe)) > 0) {
       throw conflict("rpe_already_answered", "Athletes have already answered this event's RPE. Remove the session link or keep the event's own RPE.");
     }
+    // RPE-1 (plan 9.2, path 3): a manual RPE schedule (not a live question's)
+    // is the event's RPE channel; sessions are not linked over it. Decided
+    // before the session read and the plans' locks.
+    if (row.external_schedule_id && !(liveRpe && String(liveRpe.external_schedule_id) === String(row.external_schedule_id))) throw rpeAlreadyLinked();
     // Decided first on an unlocked read, so a refused id never takes (or
     // waits on) a lock of a plan the caller may not link; then the plans of
     // the linkable sessions FOR SHARE in ascending id, and the sessions read
@@ -1700,6 +1712,10 @@ export async function alignSessions(ctx, eventId, body) {
   const { requestKey, canonical } = validateAlignSessionsBody(body);
   return runEventCommand(ctx, { requestKey, canonical, eventId: eventId.toLowerCase() }, async ({ client, row }) => {
     await requireOpenAndCurrent(client, ctx, row, canonical.expectedRevision);
+    // RPE-1 (plan 9.2, path 4, O3): an align that turns RPE on for the linked
+    // sessions is refused while a manual RPE schedule is the event's channel;
+    // turning RPE off stays allowed (it only reduces).
+    if ((row.expects || []).includes("rpe") && await hasManualRpeReference(client, row)) throw rpeAlreadyLinked();
     const linked = (await client.query(
       `select l.plan_id, ps.logical_session_id
          from calendar.event_session_links l
@@ -1862,6 +1878,19 @@ function questionEventOf(owner, ev, targets) {
 const questionAlreadyAsked = () => conflict("question_already_asked", "This event already asks this question.");
 const rpeFromQuestion = () => conflict("rpe_from_question", "This event already asks athletes for RPE. Remove that question first.");
 const rpeFromSessions = () => conflict("rpe_from_sessions", "RPE comes from the linked sessions.");
+
+// RPE-1 (plan 9.2.1): the event names an RPE schedule that no live RPE
+// question of it names (a schedule set by hand). Read under the event row
+// lock, which every question command holds as well.
+async function hasManualRpeReference(client, row) {
+  if (!row.external_schedule_id) return false;
+  if (!(await questionsInstalled(client))) return true;
+  return !(await client.query(
+    `select exists (select 1 from calendar.event_questions
+                     where event_id = $1 and kind = 'rpe' and ended_at is null and external_schedule_id = $2) as asked`,
+    [row.id, row.external_schedule_id],
+  )).rows[0].asked;
+}
 const rpeAlreadyLinked = () => conflict("rpe_already_linked", "This event already collects RPE through another schedule.");
 const questionsAnswered = () => conflict("questions_answered", "Athletes have already answered this event's questions.");
 const wellnessAlreadyScheduled = () => conflict("wellness_already_scheduled", "Today's WELLNESS already covers this day.");

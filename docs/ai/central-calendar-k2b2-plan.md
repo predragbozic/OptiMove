@@ -826,3 +826,155 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   team members and the joiner) are `cancelled` with a `covered_by_event` skip naming that question, nothing else in their
   rows changes, and the club-only athlete and the schedule's own athlete target stay identical to the old body. Mutation
   I3 (the test's v81 copy ignores the event's audience in the covered check) fails it.
+
+### 9.2 RPE one channel for manual references (follow-up "RPE-1"; accepted 2026-11-19, 9.2.10)
+
+**Why.** The independent review of #616 (INFO-1): an event can carry a manually referenced Training Load RPE schedule
+(`calendar.events.external_schedule_id`, set by create or PATCH, not by a question) and, at the same time, live links to
+planned sessions. Its athletes are then asked RPE twice, against plan 2.1 ("exactly one channel"). #614 holds the rule
+only for a question-made schedule (`rpe_from_sessions`, `rpe_already_linked`, `rpe_from_question`). Read on `caa6b4b5`.
+
+#### 9.2.1 What "the sessions are the event's RPE channel" means in the code
+
+#614's definition, reused unchanged: **the event has a live planned-session link** (`Q.hasLiveSessionLinks`: a row of
+`calendar.event_session_links` with `ended_at is null`), or, in a create, the command links sessions (`sessionsLinked`).
+The session's own flags (`rpe_enabled`, `training_load_enabled`; the read's `asksRpe`) are **not** part of it.
+
+- **Why not the flags (O1).** The flags change outside the calendar's locks: the Builder, the quick toggles, and the
+  calendar's own align, which turns RPE on for every linked session of an event that expects RPE. A rule on the flags
+  would be stale the moment a coach ticks RPE in the Builder. A rule on the link holds whatever the flags say. It also
+  matches plan 2.1 ("when the event has planned sessions linked, its RPE is theirs") and #614.
+- **A manual reference:** `events.external_schedule_id` is set and no live RPE question of the event names that
+  schedule. A question-made schedule keeps #614's paths (`rpe_from_question`, and the attach's `replaced_by_sessions`).
+
+#### 9.2.2 Every path where the two meet
+
+| # | Command | State before | Answer | Where the check sits |
+|---|---|---|---|---|
+| 1 | `POST /events` (create, #616) | the body names `externalScheduleId` **and** `sessions` | `409 rpe_from_sessions`, nothing written | after the unlocked session read and `allLinkable` (an unavailable id still answers `session_not_available` first), **before** the plans' `FOR SHARE` locks; no lock of its own |
+| 2 | `PATCH /events/:id` | the body sets `externalScheduleId` to a schedule other than the stored one (not `null`), and the event has a live session link | `409 rpe_from_sessions`, nothing written | right after `lockQuestionState` (beside #614's H2 check), under the event row lock; before `planQuestions` and the first write |
+| 3 | `POST /events/:id/sessions` (attach) | the event has a manual reference | `409 rpe_already_linked`, nothing written | right after the live-question check, under the event row lock; **before** the unlocked session read and the plans' locks |
+| 4 | `POST /events/:id/sessions/align` | the event has a manual reference **and** `expects` contains `rpe` (the align would turn RPE **on**) | `409 rpe_already_linked`, nothing written | after the event row lock, before the plans' locks |
+
+- **Not refused:**
+  - a PATCH that clears the reference (`externalScheduleId: null`) or leaves it as it is;
+  - a detach;
+  - an align that turns RPE **off** (`expects` without `rpe`), because it only reduces;
+  - a create with only one of the two.
+- **The way out for the coach** is always open: clear the reference (PATCH) or detach the sessions. The calendar never
+  cancels or clears a manual reference by itself. Unlike a question's schedule, it is not the calendar's: a coach made
+  it in Training Load, and other events may name it.
+- **Path 1 is decidable from the body alone.** It still answers inside the command (409, after the session check), not
+  as a 400 of validation. A refused request's key is therefore never stored, as for every other 409 of the runner.
+
+#### 9.2.3 The refusal codes (no new code)
+
+- `rpe_from_sessions`: "RPE comes from the linked sessions." (paths 1 and 2; #614's sentence)
+- `rpe_already_linked`: "This event already collects RPE through another schedule." (paths 3 and 4; #614's sentence)
+
+#### 9.2.4 Events already in that state
+
+- **Nothing is rewritten.** No migration, no data fix, no automatic clear.
+- **Every other command still works on them:** title, days, targets, a PATCH that keeps the reference, cancel, detach.
+  Only paths 2–4 above refuse, and only when they would add or keep growing the second channel.
+- **The read:** the manager view already shows both, `externalScheduleId` and `sessionLinks[]` with `asksRpe`. No new
+  field is proposed (O2). A hint on the screen ("RPE is asked twice") would be a frontend slice of its own.
+- **How many exist:** not known (the production database is not read by the executor). A read-only count the manager
+  can run through its connector:
+
+  ```sql
+  select count(*) as both_channels
+    from calendar.events e
+   where e.status = 'planned' and e.external_schedule_id is not null
+     and not exists (select 1 from calendar.event_questions q
+                      where q.event_id = e.id and q.kind = 'rpe' and q.ended_at is null
+                        and q.external_schedule_id = e.external_schedule_id)
+     and exists (select 1 from calendar.event_session_links l where l.event_id = e.id and l.ended_at is null);
+  ```
+
+  Without v81 (before #614's deploy) the `event_questions` clause is dropped.
+
+#### 9.2.5 A database twin: not proposed (recommendation)
+
+- **Recommended:** a service-level guard only, no v82.
+- **Reason 1, every writer serializes on the event row.** Every application write of both halves runs inside the
+  event's command, under the event row lock (`FOR NO KEY UPDATE`, `prepare`):
+  - `events.external_schedule_id`: create, update, attach's clear, and the question commands;
+  - `event_session_links`: create, attach, detach, and cancel's end.
+
+  A check read under that lock cannot race another command of the same event (verified by grep on `caa6b4b5`: no other
+  writer of `event_session_links` exists, and no trigger writes either column).
+- **Reason 2, a twin would be cross-table and transition-only.** It would need a trigger on both `calendar.events` and
+  `calendar.event_session_links`, each reading the other table (a lock-order question of its own). It must also let the
+  existing rows of 9.2.4 stand, refusing only the transition. #614's `events_rpe_question_link` is one table against
+  rows the same commands write, which is why it was cheap.
+- **What a twin would add:** protection against a raw SQL write, which ADR-003's rule already puts outside the contract.
+- If the owner wants a twin anyway, it is a migration v82 or later on the owner's order, with its own runbook.
+
+#### 9.2.6 Lock order
+
+Unchanged. No new lock and no new write; each check is a read under locks the command already holds, before its first
+write:
+- create: writer lock, then the switch / questions (no event row yet), the unlocked session read, **check 1**, the plans
+  `FOR SHARE`;
+- update: writer lock, event row, switch, live questions, **check 2**, schedules, day keys;
+- attach: writer lock, event row, switch, live questions, **check 3**, the plans `FOR SHARE`;
+- align: writer lock, event row, **check 4**, the plans `FOR SHARE`, the sessions `FOR UPDATE`.
+
+#### 9.2.7 Tests and mutations
+
+Tests: one new test file, or tests in `central-calendar-k2b2-questions.test.mjs`, through the routes.
+- **Path 1:** a create with `externalScheduleId` and `sessions` gives `409 rpe_from_sessions`. No event, no link and no
+  request row is written. With either one alone the create succeeds (201).
+- **Path 2:**
+  - on an event with a live link, a PATCH to another schedule gives `409 rpe_from_sessions`, and the row is unchanged;
+  - `null` clears it (200);
+  - the same id, or a title-only PATCH on an event already in both states, succeeds (200).
+- **Path 3:** an attach to an event with a manual reference gives `409 rpe_already_linked`, no link, and the plans are
+  not locked (the recorded SQL has no `FOR SHARE` of `plans.plans`). After a PATCH to `null`, the attach succeeds.
+- **Path 4:**
+  - an align with `rpe` in `expects` and a manual reference gives `409 rpe_already_linked`, and no flag changes;
+  - an align without `rpe` succeeds;
+  - an event that is question-made (no manual reference) aligns as before.
+- **#614's paths unchanged:** the question replaced by sessions, `rpe_from_question`, and a create with `sessions` plus
+  a type default RPE that is skipped.
+- **The recorded SQL of paths 1–4 (test 36b, after the code review's LOWs):** each check comes before the first write
+  and takes no plan or session lock; a create with an unavailable session id still answers `session_not_available`
+  first.
+
+Mutations, each must be killed:
+- each of the four checks removed;
+- path 2 refusing on a `null` value;
+- path 3 refusing a question-made schedule (the live-question exception removed);
+- path 4 refusing an RPE-off align.
+
+#### 9.2.8 Reviews
+
+- **`code-reviewer`** on the whole diff.
+- **No `db-reviewer`:** no migration, no new lock, no new write, no change to a transaction's statements other than
+  refusals before the first write. If the GO wants a twin (9.2.5), `db-reviewer` comes in with the migration.
+- **The independent review and the gate:**
+  - the guard relies on the event row lock serializing two writers, which is trigger 4's subject (concurrency);
+  - recommended: ★★ (the independent review and the manager's gate), even though no lock changes.
+
+#### 9.2.9 Open questions for the GO (with the executor's recommendation)
+
+- **O1, the definition:** any live session link (#614's), not the session flags. Recommended: the link (9.2.1).
+- **O2, the read:** no new field for an event already in both states. Recommended: none in this slice.
+- **O3, align:** refuse only an RPE-**on** align when a manual reference exists. Recommended: yes. Refusing every align
+  would also block the reduction that helps resolve the state.
+- **O4, the twin:** none; a service guard only. Recommended: no v82 (9.2.5).
+- **O5, the count of existing events (9.2.4):** for the manager to run read-only, if the number matters for the order.
+
+#### 9.2.10 The manager's GO (2026-11-19)
+
+GO on 9.2 at `bbeeb2f3`, every recommendation accepted:
+- **O1:** the live link is the channel, not the flags, consistent with #614 (an RPE question is already refused on any
+  event with a live link, whatever the flags say).
+- **O2:** no new read field.
+- **O3:** only an align that turns RPE on is refused.
+- **O4:** no DB twin and no v82, for the reasons in 9.2.5.
+- **O5:** the OptiMove manager runs the read-only count; it is information only and blocks nothing.
+
+Reviews: `code-reviewer` on a frozen head with the full packet, then the independent review and the OptiMove manager's
+gate (★★, trigger 4). The manager opens the pull request.

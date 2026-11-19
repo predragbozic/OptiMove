@@ -65,6 +65,7 @@ async function createTeamEvent(body = {}, cookie = role("teamCoach").cookie) {
       day: body.day || TODAY, ...(body.endDay ? { endDay: body.endDay } : {}), ...(body.startTime ? { startTime: body.startTime } : {}),
       ...(body.endTime ? { endTime: body.endTime } : {}), timezone: "UTC",
       targets: body.targets || [{ kind: "team", id: m.teams.t1 }], ...(body.questions ? { questions: body.questions } : {}),
+      ...(body.externalScheduleId ? { externalScheduleId: body.externalScheduleId } : {}), ...(body.sessions ? { sessions: body.sessions } : {}),
     },
   });
   return res;
@@ -1705,4 +1706,178 @@ test("35. the Tests full edit decides skip_days_off from the RESULTING kind (fou
     assert.deepEqual(res.body, { ok: true, skipDaysOff: value });
     assert.equal((await row(e)).skip_days_off, value);
   }
+});
+
+test("36. RPE-1 (plan 9.2): a manual RPE schedule and linked sessions never meet — create, PATCH, attach and an RPE-on align are refused with nothing written; the ways out stay open; #614's paths unchanged", async () => {
+  const coach = role("teamCoach");
+  const day = addDays(TODAY, 30);
+  const manual = async (label) => {
+    const res = await api("/api/training-load/external-schedules", {
+      method: "POST", cookie: coach.cookie,
+      body: { eventName: label, scheduleKind: "one_time", startDate: day, timezone: "UTC", opensTime: "18:00", closesTime: "22:00", targets: [{ kind: "team", id: m.teams.t1 }] },
+    });
+    assert.equal(res.status, 201, res.text);
+    return res.body.schedules[0].id;
+  };
+  const extA = await manual("RPE-1 manual A");
+  const extB = await manual("RPE-1 manual B");
+  const requestRows = async () => (await q(`select count(*)::int as n from calendar.event_requests`))[0].n;
+  const linkRows = async (eventId) => (await q(`select count(*)::int as n from calendar.event_session_links where event_id = $1 and ended_at is null`, [eventId]))[0].n;
+
+  // Path 1: create with externalScheduleId AND sessions.
+  const s1 = await planSession(m.athletes.athlete, day);
+  const eventsBefore = (await q(`select count(*)::int as n from calendar.events`))[0].n;
+  const reqBefore = await requestRows();
+  const both = await createTeamEvent({ day, title: "RPE-1 both", questions: [], externalScheduleId: extA, sessions: { logicalSessionIds: [s1.logicalSessionId] } });
+  assert.equal(both.status, 409, both.text);
+  assert.equal(both.body.error, "rpe_from_sessions");
+  assert.equal(both.body.message, "RPE comes from the linked sessions.");
+  assert.equal((await q(`select count(*)::int as n from calendar.events`))[0].n, eventsBefore, "no event");
+  assert.equal(await requestRows(), reqBefore, "no request row");
+  assert.equal((await q(`select count(*)::int as n from calendar.event_session_links l join plans.plans p on p.id = l.plan_id where p.id = $1`, [s1.planId]))[0].n, 0, "no link");
+  const onlyManual = await createTeamEvent({ day, title: "RPE-1 only manual", questions: [], externalScheduleId: extA });
+  assert.equal(onlyManual.status, 201, onlyManual.text);
+  const onlySessions = await createTeamEvent({ day, title: "RPE-1 only sessions", questions: [], sessions: { logicalSessionIds: [s1.logicalSessionId] } });
+  assert.equal(onlySessions.status, 201, onlySessions.text);
+
+  // Path 2: PATCH on an event with a live link.
+  const linked = onlySessions.body.event;
+  const patch = (ev, rev, body) => api(`/api/calendar/events/${ev.id}`, { method: "PATCH", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: rev, ...body } });
+  const p2 = await patch(linked, 1, { externalScheduleId: extA });
+  assert.equal(p2.status, 409, p2.text);
+  assert.equal(p2.body.error, "rpe_from_sessions");
+  assert.equal((await eventRow(linked.id)).external_schedule_id, null, "the row unchanged");
+  assert.equal((await eventRow(linked.id)).revision, 1);
+  const p2null = await patch(linked, 1, { externalScheduleId: null, title: "RPE-1 cleared" });
+  assert.equal(p2null.status, 200, p2null.text);
+
+  // An event already in both states (made by a raw write, as before RPE-1): every other command works.
+  const legacy = (await createTeamEvent({ day, title: "RPE-1 legacy", questions: [], sessions: { logicalSessionIds: [(await planSession(m.athletes.athlete, day)).logicalSessionId] } })).body.event;
+  const rawEventWrite = (set) => q(`begin; set local session_replication_role = replica; update calendar.events set ${set} where id = '${legacy.id}'; commit;`);
+  await rawEventWrite(`external_schedule_id = '${extB}'`);
+  const keep = await patch(legacy, 1, { externalScheduleId: extB, title: "RPE-1 legacy kept" });
+  assert.equal(keep.status, 200, `the same id is kept: ${keep.text}`);
+  const titleOnly = await patch(legacy, 2, { title: "RPE-1 legacy title" });
+  assert.equal(titleOnly.status, 200, titleOnly.text);
+  const toOther = await patch(legacy, 3, { externalScheduleId: extA });
+  assert.equal(toOther.status, 409, toOther.text);
+  assert.equal(toOther.body.error, "rpe_from_sessions");
+
+  // Path 4: an RPE-on align with a manual reference is refused, flags untouched; RPE off is allowed.
+  assert.ok(((await eventRow(legacy.id)).expects || []).includes("rpe"), "a Training expects RPE");
+  const flagsOf = async (eventId) => (await q(
+    `select ps.rpe_enabled from calendar.event_session_links l join plans.plan_days pd on pd.plan_id = l.plan_id and pd.date = l.day
+       join plans.plan_sessions ps on ps.plan_day_id = pd.id where l.event_id = $1 and l.ended_at is null`, [eventId])).map((r) => r.rpe_enabled);
+  await q(`update plans.plan_sessions ps set rpe_enabled = false from calendar.event_session_links l join plans.plan_days pd on pd.plan_id = l.plan_id and pd.date = l.day
+            where l.event_id = $1 and ps.plan_day_id = pd.id`, [legacy.id]);
+  const align = (ev, rev) => api(`/api/calendar/events/${ev.id}/sessions/align`, { method: "POST", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: rev } });
+  const a4 = await align(legacy, 3);
+  assert.equal(a4.status, 409, a4.text);
+  assert.equal(a4.body.error, "rpe_already_linked");
+  assert.equal(a4.body.message, "This event already collects RPE through another schedule.");
+  assert.deepEqual(await flagsOf(legacy.id), [false], "no flag changed");
+  await rawEventWrite(`expects = '{}'`);
+  const aOff = await align(legacy, 3);
+  assert.equal(aOff.status, 200, `an RPE-off align is allowed: ${aOff.text}`);
+  // The way out of the legacy state: clearing the stored reference while links exist is allowed.
+  const clearLegacy = await patch(legacy, 4, { externalScheduleId: null });
+  assert.equal(clearLegacy.status, 200, clearLegacy.text);
+  assert.equal((await eventRow(legacy.id)).external_schedule_id, null);
+  // Path 3: an attach to an event with a manual reference: refused, no link, no plan locked.
+  const manualEv = onlyManual.body.event;
+  const s3 = await planSession(m.athletes.athlete, day);
+  const sql = [];
+  eventHooks.beforeLocks = async ({ client }) => {
+    const original = client.query.bind(client);
+    client.query = (...args) => { sql.push(typeof args[0] === "string" ? args[0] : args[0]?.text || ""); return original(...args); };
+  };
+  let a3;
+  try {
+    a3 = await api(`/api/calendar/events/${manualEv.id}/sessions`, { method: "POST", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, logicalSessionIds: [s3.logicalSessionId] } });
+  } finally {
+    delete eventHooks.beforeLocks;
+  }
+  assert.equal(a3.status, 409, a3.text);
+  assert.equal(a3.body.error, "rpe_already_linked");
+  assert.equal(await linkRows(manualEv.id), 0, "no link");
+  assert.ok(!sql.some((s) => /from plans\.plans[\s\S]*for share/i.test(s)), "no plan was locked before the refusal");
+  assert.ok(!sql.some((s) => /^\s*(insert|delete)\b/i.test(s) || /^\s*update\s+calendar\./i.test(s)), "nothing written");
+  // The way out: clear the reference, then attach.
+  const cleared = await patch(manualEv, 1, { externalScheduleId: null });
+  assert.equal(cleared.status, 200, cleared.text);
+  const a3ok = await api(`/api/calendar/events/${manualEv.id}/sessions`, { method: "POST", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: 2, logicalSessionIds: [s3.logicalSessionId] } });
+  assert.equal(a3ok.status, 200, a3ok.text);
+
+  // #614's paths unchanged: a question-made schedule is replaced by an attach; a question-made event aligns.
+  const qEv = (await createTeamEvent({ day, title: "RPE-1 question", questions: [{ kind: "rpe", window: { kind: "after_event" } }] })).body.event;
+  const [rpeQ] = await liveQuestions(qEv.id);
+  const s4 = await planSession(m.athletes.athlete, day);
+  const replaced = await api(`/api/calendar/events/${qEv.id}/sessions`, { method: "POST", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, logicalSessionIds: [s4.logicalSessionId] } });
+  assert.equal(replaced.status, 200, replaced.text);
+  assert.equal((await q(`select end_reason from calendar.event_questions where id = $1`, [rpeQ.id]))[0].end_reason, "replaced_by_sessions");
+  const qAlign = await align(qEv, 2);
+  assert.equal(qAlign.status, 200, `a question-made event aligns as before: ${qAlign.text}`);
+});
+
+test("36b. RPE-1, the order of the checks (code review LOWs): create answers session_not_available before rpe_from_sessions and refuses before any plan lock; PATCH and align refuse before any lock or write of their own", async () => {
+  const coach = role("teamCoach");
+  const day = addDays(TODAY, 31);
+  const ext = (await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coach.cookie,
+    body: { eventName: "RPE-1 order", scheduleKind: "one_time", startDate: day, timezone: "UTC", opensTime: "18:00", closesTime: "22:00", targets: [{ kind: "team", id: m.teams.t1 }] },
+  })).body.schedules[0].id;
+  const record = () => {
+    const sql = [];
+    eventHooks.beforeLocks = async ({ client }) => {
+      const original = client.query.bind(client);
+      client.query = (...args) => { sql.push(typeof args[0] === "string" ? args[0] : args[0]?.text || ""); return original(...args); };
+    };
+    return sql;
+  };
+  const planLock = (sql) => sql.some((s) => /from plans\.plans[\s\S]*for share/i.test(s));
+  const sessionLock = (sql) => sql.some((s) => /plan_sessions/i.test(s) && /for update/i.test(s));
+  const wrote = (sql) => sql.some((s) => /^\s*(insert|delete)\b/i.test(s) || /^\s*update\s+(calendar|plans)\./i.test(s));
+  // (a) An unavailable session id with a manual schedule: the session's own answer first.
+  const unknown = await createTeamEvent({ day, questions: [], externalScheduleId: ext, sessions: { logicalSessionIds: [crypto.randomUUID()] } });
+  assert.equal(unknown.status, 400, unknown.text);
+  assert.equal(unknown.body.error, "session_not_available");
+  // (b) A valid session with a manual schedule: refused before any plan lock.
+  const s1 = await planSession(m.athletes.athlete, day);
+  let sql = record();
+  let res;
+  try {
+    res = await createTeamEvent({ day, questions: [], externalScheduleId: ext, sessions: { logicalSessionIds: [s1.logicalSessionId] } });
+  } finally {
+    delete eventHooks.beforeLocks;
+  }
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.error, "rpe_from_sessions");
+  assert.ok(sql.length > 0, "the create's SQL was recorded");
+  assert.ok(!planLock(sql), "create: no plan locked before the refusal");
+  assert.ok(!wrote(sql), "create: nothing written");
+  // (c) PATCH and an RPE-on align on an event in both states: no write, no plan or session lock.
+  const ev = (await createTeamEvent({ day, title: "RPE-1 order legacy", questions: [], sessions: { logicalSessionIds: [s1.logicalSessionId] } })).body.event;
+  await q(`begin; set local session_replication_role = replica; update calendar.events set external_schedule_id = '${ext}' where id = '${ev.id}'; commit;`);
+  const other = (await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coach.cookie,
+    body: { eventName: "RPE-1 order other", scheduleKind: "one_time", startDate: day, timezone: "UTC", opensTime: "18:00", closesTime: "22:00", targets: [{ kind: "team", id: m.teams.t1 }] },
+  })).body.schedules[0].id;
+  sql = record();
+  try {
+    res = await api(`/api/calendar/events/${ev.id}`, { method: "PATCH", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, externalScheduleId: other } });
+  } finally {
+    delete eventHooks.beforeLocks;
+  }
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.error, "rpe_from_sessions");
+  assert.ok(sql.length > 0 && !wrote(sql) && !planLock(sql), "PATCH: no write and no plan lock before the refusal");
+  sql = record();
+  try {
+    res = await api(`/api/calendar/events/${ev.id}/sessions/align`, { method: "POST", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: 1 } });
+  } finally {
+    delete eventHooks.beforeLocks;
+  }
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.error, "rpe_already_linked");
+  assert.ok(sql.length > 0 && !wrote(sql) && !planLock(sql) && !sessionLock(sql), "align: no write, no plan or session lock before the refusal");
 });

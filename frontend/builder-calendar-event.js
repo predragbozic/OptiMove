@@ -49,6 +49,9 @@ export const MATCH_SENTENCES = Object.freeze({
   absent: "This training isn't on this workspace's calendar. Check that the plan is for athletes of this workspace on this day.",
   ambiguous: "This training matches more than one training on the calendar, so no event was made. Make it from the calendar instead.",
   linkedMany: "This training is already in the calendar. Open the calendar to see it.",
+  // An event for this training was sent and its result is not confirmed (a
+  // panel released by a plan change): never a second create beside it.
+  pending: "An event for this training isn't confirmed yet. Check it in the calendar.",
 });
 export const linkedSentence = (title) => `This training is in the calendar as “${oneLine(title) || "an event"}”.`;
 
@@ -82,10 +85,17 @@ export function builderCalendarMatch({ draft, block, session, answer }) {
   return { kind: "none", reason: draft?.plan?.isEditDraft ? "apply" : "absent" };
 }
 
+// Whether the draft on screen still holds a session (a plan change in the
+// series replaces the whole draft).
+export function builderCalendarDraftHoldsSession(draft, sessionId) {
+  return (draft?.blocks || []).some((block) => (block.sessions || []).some((session) => session.id === sessionId));
+}
+
 export function builderCalendarMatchSentence(match) {
   if (match.kind === "linked") return linkedSentence(match.event.title);
   if (match.kind === "linked_many") return MATCH_SENTENCES.linkedMany;
   if (match.kind === "ambiguous") return MATCH_SENTENCES.ambiguous;
+  if (match.kind === "pending") return MATCH_SENTENCES.pending;
   if (match.kind === "none") return MATCH_SENTENCES[match.reason] || MATCH_SENTENCES.absent;
   return "";
 }
@@ -156,6 +166,7 @@ export function builderCalendarEventBody({ form, card, type, day, requestKey, ti
 export const RESULT_NOT_CONFIRMED = "We couldn't confirm the event was made.";
 export const CHECK_NEVER_TWICE = "Checking never makes a second event.";
 export const FINISH_FIRST = "Finish the event being made first.";
+export const WAITING_FOR_SAVE = "Saving your changes first…";
 export const CHECK_STILL_NOT_CONFIRMED = "Still not confirmed. Check again in a moment.";
 
 export function builderCalendarEventDoneText(title, day) {

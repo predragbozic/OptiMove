@@ -8,6 +8,7 @@ import { renderDashboardChartPlots } from "./training-load-analysis-echarts-opti
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
 import { pickable, pickerName } from "./metric-picker-visibility.js";
+import { CALCULATED_TEXT } from "./calculated-text.js";
 
 const WIDGET_TYPES = [
   { key: "kpi", label: "KPI", hint: "One number" },
@@ -515,14 +516,25 @@ function renderWidgetBodyHtml(widget, results) {
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
   if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
-  if (widget.widget_type === "kpi") return renderKpiHtml(model);
+  if (widget.widget_type === "kpi") return renderKpiHtml(model) + calculatedNoteHtml(widget);
   if (widget.widget_type === "table") {
     if (model.series.length === 1 && model.series[0].status === "ready" && ["day", "athlete"].includes(model.groupBy)) {
-      return renderDashboardMetricTable(model, state.trainingLoad.orgPickerData?.athletes ?? [], seriesLabel(model.series[0].definition));
+      return renderDashboardMetricTable(model, state.trainingLoad.orgPickerData?.athletes ?? [], seriesLabel(model.series[0].definition)) + calculatedNoteHtml(widget);
     }
-    return renderTableHtml(model);
+    return renderTableHtml(model) + calculatedNoteHtml(widget);
   }
-  return renderChartHtml(model);
+  return renderChartHtml(model) + calculatedNoteHtml(widget);
+}
+
+// J21: a widget that shows a calculated variable says from when it has values, so an earlier period with none is never an
+// unexplained blank (the Rukovodilac's condition of 2026-11-19). From the catalog's own flag; nothing else changes.
+function calculatedNoteHtml(widget) {
+  const definitions = state.trainingLoad.analysis.metricPicker.definitions || [];
+  const names = (widget.series || [])
+    .map((series) => series.metric_definition_id && definitions.find((d) => d.id === series.metric_definition_id && d.calculated === true))
+    .filter(Boolean).map((d) => d.label);
+  if (!names.length) return "";
+  return `<p class="muted tl-calculated-note">${escapeHtml([...new Set(names)].join(", "))}: ${escapeHtml(CALCULATED_TEXT.fromNow)}</p>`;
 }
 
 function renderWidgetHtml(widget, position) {

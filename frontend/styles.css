@@ -19483,6 +19483,42 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .metric-variables-levels > .metric-variables-field-error {
   flex-basis: 100%;
 }
+/* J21: the variables a calculated one adds up - one per row, each a 44 px target like the levels. */
+.metric-variables-unavailable > summary,
+.source-fields-parked > summary {
+  /* a list item keeps the disclosure triangle (display:flex drops it in Safari) */
+  display: list-item;
+  min-height: 44px;
+  padding: 11px 0;
+  box-sizing: border-box;
+  line-height: 22px;
+  cursor: pointer;
+}
+.metric-variables-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.metric-variables-inputs > label,
+.metric-variables-unavailable .checkbox-row,
+.metric-variables-kind > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.metric-variables-inputs input[type="checkbox"],
+.metric-variables-unavailable input[type="checkbox"],
+.metric-variables-kind input[type="radio"] {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
 .metric-variables-field-error,
 .metric-variables-form .search-field > span.metric-variables-field-error {
   color: var(--danger);

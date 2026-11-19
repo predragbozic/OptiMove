@@ -7,6 +7,7 @@
 // canManageDashboardRow before any of these are reached).
 import { query } from "./db.js";
 import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
+import { calculatedDefinitionSql } from "./calculatedValues.js";
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -110,6 +111,7 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
      from training_load.metric_definitions d
      join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
      where d.key = any($1::text[]) and d.state = 'active'
+       and ($2 <> 'athlete' or not ${calculatedDefinitionSql("d")})
        and (
          d.owner_scope = 'system'
          or (d.owner_scope = 'club' and $2 = 'club' and d.owner_club_id = $3)
