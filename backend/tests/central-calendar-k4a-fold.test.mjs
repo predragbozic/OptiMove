@@ -358,8 +358,19 @@ test("11. her folded activity: nothing of it in her calendar answer (id, values,
   const res = await read(s.ana.cookie);
   assert.equal(res.status, 200, res.text);
   assert.equal(eventCard(res, ev.id).sessions[0].rpe, "submitted");
-  for (const secret of [activityId, "\"rpe\":6", "73", "durationMinutes", "srpe", ...others.map((o) => o.athlete_id), s.ben.athleteId, s.ben.name]) {
+  // Ids and names as whole strings (a UUID or a name cannot occur by chance).
+  for (const secret of [activityId, ...others.map((o) => o.athlete_id), s.ben.athleteId, s.ben.name]) {
     assert.ok(!res.text.includes(String(secret)), `her calendar answer carries ${secret}`);
+  }
+  // The activity's values only anchored to their fields: a bare number would
+  // also match inside a UUID (the Independent's MEDIUM on #660). No value key
+  // of an activity appears at all, and no field carries her 6 or her 73.
+  for (const pattern of [
+    /"(durationMinutes|duration_minutes|duration|minutes|srpe|sRpe|s_rpe|rpeValue|value)"\s*:/,
+    /"rpe"\s*:\s*6\b/,
+    /"[A-Za-z_]+"\s*:\s*73\b/,
+  ]) {
+    assert.doesNotMatch(res.text, pattern, `her calendar answer carries ${pattern}`);
   }
   const after = await herScreens();
   assert.deepEqual(after, before, "the link changes nothing on her other screens");
