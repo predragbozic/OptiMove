@@ -42,14 +42,14 @@ document maps each condition to the place that meets it.
     `event_cancelled`) and from Training Load's own `POST /external-schedules/:scheduleId/cancel`
     (`backend/src/routes/trainingLoad.js:2412`);
   - an occurrence turned `cancelled` (no route does it today; the submit refuses it defensively,
-    `trainingLoad.js:2565-2575`).
+    `trainingLoad.js:2568-2576`).
 
   An answered assignment stays `completed`; the answers stay when a question ends
   (`calendarQuestions.js:374-375`).
 
 ### 1.3 The submit path today
 
-`POST /api/training-load/external-assignments/:assignmentId/rpe`, `backend/src/routes/trainingLoad.js:2514-2660`:
+`POST /api/training-load/external-assignments/:assignmentId/rpe`, `backend/src/routes/trainingLoad.js:2514-2659`:
 
 1. `requireAthlete` (2517); a malformed id is `404 "Training session not found."` (2520).
 2. The body: `rpe` an integer 0–10 (2524-2526), `durationMinutes` an integer 1–600 (2527-2529), `note` trimmed, ≤ 500
@@ -58,15 +58,15 @@ document maps each condition to the place that meets it.
    `404` (2547-2550).
 4. **Locks, in this order:** schedule `FOR UPDATE` (2552), occurrence `FOR UPDATE` (2553), assignment `FOR UPDATE`
    (2555); the athlete re-checked on the locked row (2557-2560).
-5. Gates under the locks: schedule `active` (2562-2566), occurrence not `cancelled` (2571-2575), assignment not
-   `missed` / `excused` / `cancelled` (2588-2591, `409 "This check-in window is closed."`), `now()` inside
-   `opens_at`–`closes_at` (2593-2598, the same sentence). `now()` is the transaction's start time, not the time after
+5. Gates under the locks: schedule `active` (2563-2567), occurrence not `cancelled` (2573-2576), assignment not
+   `missed` / `excused` / `cancelled` (2589-2592, `409 "This check-in window is closed."`), `now()` inside
+   `opens_at`–`closes_at` (2594-2599, the same sentence). `now()` is the transaction's start time, not the time after
    the locks.
-6. `insert … on conflict (external_assignment_id) do nothing` (2601-2608); on an insert the assignment becomes
+6. `insert … on conflict (external_assignment_id) do nothing` (2601-2607); on an insert the assignment becomes
    `completed` (2611), the occurrence is materialized as one activity (2629-2632), `commit` (2633), the realtime
    event `training_load_changed` (2636), `201`.
-7. On a conflict: the existing row is read (2640-2644); an identical answer is `200` (2648), anything else
-   **`409 "This session already has a submitted result."`** (2649). This is the path K4b changes.
+7. On a conflict: the existing row is read (2640-2644); an identical answer is `200` (2647), anything else
+   **`409 "This session already has a submitted result."`** (2648). This is the path K4b changes.
 
 No users or athletes row is locked by the submit.
 
@@ -375,12 +375,12 @@ value (ADR-004) with no mark. **Q4** asks whether a mark is wanted there later.
 
 ## 6. The UI (English copy)
 
-- **Athlete Home** (the "Today's sessions" list, `frontend/training-load-view.js:169-176`, today a plain summary for a
+- **Athlete Home** (the "Today's sessions" list, `frontend/training-load-view.js:170-176`, today a plain summary for a
   rated row) and the **event card** of the athlete's Calendar (K4a): a rated external row with `changeable` reads
   **"Your RPE: 7 · Change (until 22:00)"**; *Change* is a button. Without `changeable` it reads "Your RPE: 7" as
   today. The time is `closesAt` in the device's time; a window that ends on another day reads "until Sun 22:00"
   (the questions card's day words, `frontend/athlete-questions-view.js:36-50`).
-- *Change* opens the existing RPE form (`renderRpeFormHtml`, `training-load-view.js:299`) **filled in** with the saved
+- *Change* opens the existing RPE form (`renderRpeFormHtml`, `training-load-view.js:301`) **filled in** with the saved
   RPE, duration and note, the eyebrow "Change your answer", the line "You can change it until 22:00." under the
   title, and the primary button **Save change** (off while nothing differs from the saved answer, or the form is
   invalid). Cancel closes without a request.
