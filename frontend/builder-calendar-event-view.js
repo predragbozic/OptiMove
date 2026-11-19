@@ -94,7 +94,7 @@ function renderBody({ block, panel, types, busy }) {
   const match = panel.match;
   if (!match || match.kind !== "planned") {
     const sentence = match ? builderCalendarMatchSentence(match) : "";
-    const calendarButton = match && (match.kind === "linked" || match.kind === "linked_many" || match.kind === "none" || panel.offerCalendar)
+    const calendarButton = match && (match.kind === "linked" || match.kind === "linked_many" || match.kind === "none" || match.kind === "pending" || panel.offerCalendar)
       ? `<div class="cc-builder-event-actions"><button class="plain-button cc-builder-event-primary" type="button" data-action="builder-calendar-event-open-calendar">Open in calendar</button></div>` : "";
     return `${message}${sentence && sentence !== panel.message ? `<p class="cc-builder-event-line" role="status">${escapeHtml(sentence)}</p>` : ""}${calendarButton}`;
   }

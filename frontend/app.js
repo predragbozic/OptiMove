@@ -694,8 +694,9 @@ function bindEvents() {
     if (state.mobileNavOpen) closeMobileNav();
     // Central calendar (K1b): Escape closes the open item panel.
     if (closeCentralCalendarPanel(renderCentralCalendar)) return;
-    // K2c-2: the Builder's Make an event panel (never while a create is on its way or not confirmed).
-    if (state.activeTab === "builder" && closeBuilderCalendarEventPanel(renderBuilder)) return;
+    // K2c-2: the Builder's Make an event panel (never while a create is on its way or not confirmed),
+    // only once the workspace switcher above it is closed.
+    if (state.activeTab === "builder" && !state.workspaceSwitcher.open && closeBuilderCalendarEventPanel(renderBuilder)) return;
     // Imports P4: the phone's period sheet closes, and the focus goes back to "Find new sessions" (P5: the help closes
     // first, and the focus goes back to "How importing works").
     const importsHelp = Boolean(state.trainingLoad?.gpexe?.helpOpen);

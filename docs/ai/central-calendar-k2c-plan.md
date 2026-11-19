@@ -1230,19 +1230,24 @@ Frontend only; the manager's go after #622's merge, the light regime.
 - **A plan change in the series.** `setBuilderDraft` replaces the whole draft, so a panel whose session is no longer in
   the draft on screen no longer holds the other sessions' buttons, and the next press releases it. A create in it is
   not lost: it has been in the calendar's memory since its send, so it is checked there, and a late answer still
-  settles it there (with no badge).
+  settles it there (with no badge). Back on that session, while the calendar's memory still holds a create whose
+  sessions are this training's, the panel offers no form: "An event for this training isn't confirmed yet. Check it in
+  the calendar." with *Open in calendar*, so no second create with a new key is sent beside it (code review LOW).
 - **The linked event's title** is escaped like every other sentence; a test pins it (`<`, `&`, `"`).
 - **Escape** closes the open panel (`closeBuilderCalendarEventPanel`, in `app.js`'s Escape handler right after the
-  calendar's own), never while a create is on its way or not confirmed.
+  calendar's own), never while a create is on its way or not confirmed, and not while the workspace switcher above it
+  is open (code review LOW).
 - **A pending Builder save.** `builder-actions.js` exports `builderSavesPending()` and `builderSavesSettled()` over its
   mutation queue. **Deviation from 2.1.2:** the button is not drawn disabled. Not every Builder save draws the session
   row again when it lands, so a button drawn off could stay off after the save. Instead a press during a save shows
   "Saving your changes first…" and reads the day only once every queued save has settled, so the match sees the plan
   as saved.
 
-**Tests:** 12–15 of `frontend/tests/builder-calendar-event.actions.test.mjs` (23 in all); the 6 new mutations are
-killed (a gone panel still holding the buttons, the panel not released, the sentence not escaped, Escape closing a
-locked panel, no wait for a save, a pending count that never falls).
+**Tests:** 12, 12b, 13, 14 and 15 of `frontend/tests/builder-calendar-event.actions.test.mjs` (24 in all); the 8 new
+mutations are killed (a gone panel still holding the buttons, the panel not released, the sentence not escaped,
+Escape closing a locked panel, no wait for a save, a pending count that never falls, a second create beside one not
+confirmed, Escape before the workspace switcher). Review: `code-reviewer` READY WITH NON-BLOCKING NOTES; both LOWs
+fixed as above.
 
 ## 3. K3 — "New training" from an event (named only)
 

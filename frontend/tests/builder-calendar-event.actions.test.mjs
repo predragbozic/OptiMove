@@ -624,6 +624,28 @@ test("12. a plan change in the series releases a panel whose session is gone: no
   assert.equal(centralCalendarUncertainWrites().length, 1, "the old create is kept to check in the calendar");
 });
 
+test("12b. after a release, a press on the same session while its create is not confirmed offers no form and sends no second create", async () => {
+  const { calls } = await open({ lose: ["notSaved"] });
+  await press("send");
+  assert.equal(state.builder.calendarEvent.phase, "unconfirmed");
+  const original = state.builder.draft;
+  const other = draftWith();
+  other.blocks[0].sessions = [{ id: "s9", amPm: "AM", bta: "T", time: "", name: "Morning session", nodes: [] }];
+  state.builder.draft = other;
+  await press("open", { sessionId: "s9" });
+  state.builder.draft = original;
+  await press("open");
+  const rec = state.builder.calendarEvent;
+  assert.equal(rec.sessionId, "s1");
+  assert.equal(rec.match.kind, "pending");
+  const html = panelHtml();
+  assert.ok(html.includes(escapeHtml(pure.MATCH_SENTENCES.pending)), html);
+  assert.doesNotMatch(html, /builder-calendar-event-send/);
+  assert.match(html, /builder-calendar-event-open-calendar/);
+  await press("send");
+  assert.equal(posts(calls).length, 1, "one create only");
+});
+
 test("13. the linked event's title is escaped in the panel", async () => {
   const title = `<b>Gym & "Speed"</b>`;
   await open({ items: () => [eventCard(E_OLD, title, [PLAN_LIVE])] });
@@ -648,7 +670,7 @@ test("14. Escape closes the open panel, never while a create is on its way or no
   const appJs = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const start = appJs.indexOf('if (event.key !== "Escape") return;');
   assert.ok(start > 0);
-  assert.match(appJs.slice(start, start + 2000), /if \(state\.activeTab === "builder" && closeBuilderCalendarEventPanel\(renderBuilder\)\) return;/);
+  assert.match(appJs.slice(start, start + 2000), /if \(state\.activeTab === "builder" && !state\.workspaceSwitcher\.open && closeBuilderCalendarEventPanel\(renderBuilder\)\) return;/);
 });
 
 test("15. a Builder save on its way: the panel says so and reads the day only once the save has landed", async () => {

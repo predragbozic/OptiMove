@@ -30,7 +30,7 @@ import {
   REREAD_AFTER,
 } from "./builder-calendar-event.js";
 import { builderSavesPending, builderSavesSettled } from "./builder-actions.js";
-import { rememberCentralCalendarCreate } from "./central-calendar-actions.js";
+import { centralCalendarUncertainWrites, rememberCentralCalendarCreate } from "./central-calendar-actions.js";
 import {
   centralCalendarErrorInfo,
   centralCalendarOutcomeUnknown,
@@ -103,6 +103,10 @@ async function readDay(rec, render) {
   }
   rec.types = Array.isArray(catalog.types) ? catalog.types : [];
   rec.match = builderCalendarMatch({ draft: state.builder.draft, block: found.block, session: found.session, answer });
+  // A create for this training still in the calendar's memory (sent from a
+  // panel a plan change released, its result not confirmed): no form, so no
+  // second create with a new key beside it (code review LOW).
+  if (rec.match.kind === "planned" && createNotConfirmedFor(rec.match.card)) rec.match = { kind: "pending" };
   if (rec.match.kind === "planned") {
     const fresh = builderCalendarEventDraft({ card: rec.match.card, session: found.session, types: rec.types });
     const training = builderCalendarTrainingTypes(rec.types);
@@ -112,6 +116,12 @@ async function readDay(rec, render) {
   rec.phase = "ready";
   render?.();
   focusPanel();
+}
+
+function createNotConfirmedFor(card) {
+  const ids = new Set((card?.links?.logicalSessionIds || []).map(String));
+  return centralCalendarUncertainWrites().some((write) => write.mode === "create"
+    && (write.sentBody?.sessions?.logicalSessionIds || []).some((id) => ids.has(String(id))));
 }
 
 // The inputs of the open panel, mirrored into its form (a re-render keeps
