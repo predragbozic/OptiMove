@@ -178,6 +178,9 @@ test("the list groups the fields by source, shows the unit (expected units marke
   assert.doesNotMatch(text(), /REST v1|athlete_session\./, "no data family and no key on the list");
   // One sentence of introduction, naming no repository path.
   assert.equal($(".metric-variables-head p.muted").textContent, "The fields each data source delivers, and how far each one's unit and meaning are proven.");
+  // The proof words live in the technical view (the plain row is the next test).
+  assert.equal($("details.source-fields-legend-chip"), null, "no legend in the plain view");
+  await click('[data-action="source-fields-technical"]');
   const items = [...content.querySelectorAll(".metric-variables-item")].map((b) => b.textContent.replace(/\s+/g, " ").trim());
   assert.equal(items.length, 3);
   assert.match(items[0], /Total time Unit s<b> \(confirmed\) · Meaning not confirmed · Session and Drill Evidence: Observed/);
@@ -634,4 +637,32 @@ test("an answer that lands after the workspace was left changes nothing; a works
   assert.equal(sourceFieldsState().form, null);
   assert.equal(sourceFieldsState().detail.id, null);
   assert.equal(calls.length, before, "nothing is read for the old workspace");
+});
+
+test("the plain row (the owner's screenshot): a human name with GPEXE's own under it, the unit as people write it, one state and one next step; zone sets and threshold events in one closed group; no proof word until technical details are on", async () => {
+  fields = [
+    field({ revisions: [revision({ sourceUnit: "s", unitVerifiedAt: "2026-10-20T08:00:00.000Z", meaningVerifiedAt: "2026-10-20T08:00:00.000Z", evidenceStatus: "verified" })],
+      inUse: { teams: ["First team", "U19"], count: 3 } }),
+    field({ id: "ffffffff-0000-4000-8000-0000000000a1", key: "athlete_session.max_v", label: "SPEEDmax", extractorAvailable: true,
+      revisions: [revision({ sourceUnit: "m/s", unitVerifiedAt: "2026-10-20T08:00:00.000Z", meaningVerifiedAt: "2026-10-20T08:00:00.000Z", evidenceStatus: "verified" })], inUse: { teams: [], count: 0 } }),
+    field({ id: "ffffffff-0000-4000-8000-0000000000a2", key: "details.players.tot_burst_events", label: "tot_burst_events",
+      revisions: [revision({ expectedSourceUnit: "count", evidenceStatus: "observed" })], inUse: { teams: [], count: 0 } }),
+    ...allFields().slice(1),
+  ];
+  await loadSourceFieldsSection(render);
+  const rows = [...content.querySelectorAll(".metric-classification-section > .metric-variables-list > li")].map((li) => li.textContent.replace(/\s+/g, " ").trim());
+  assert.deepEqual(rows, [
+    "Duration (s) GPEXE: Total time In use for First team, U19 and 1 more Its values come in with each new session.",
+    "Top speed (m/s) GPEXE: SPEEDmax Ready to use Put it on a variable on a team's board (Data configuration > Map by drag and drop).",
+    "Burst events (count) GPEXE: tot_burst_events Not available yet Open it to confirm its unit and meaning.",
+  ]);
+  const parked = $("details.source-fields-parked");
+  assert.ok(parked && !parked.open, "the zone sets and threshold events are in one closed group");
+  assert.match(parked.querySelector("summary").textContent, /Zone sets and threshold events: not available yet \(2\)/);
+  assert.match(parked.textContent, /Distance in each power zone \(m\).*Accelerations above a threshold \(count\)/s);
+  for (const word of [/Evidence/, /Verified/, /Observed/, /not proven/, /Meaning confirmed/]) assert.doesNotMatch(text().split("More values GPEXE sends")[0], word, `${word} only in technical details`);
+  await click('[data-action="source-fields-technical"]');
+  assert.match(text(), /Evidence: Verified/);
+  assert.ok($("details.source-fields-legend-chip"));
+  assert.equal($("details.source-fields-parked"), null, "the technical view lists every field as before");
 });

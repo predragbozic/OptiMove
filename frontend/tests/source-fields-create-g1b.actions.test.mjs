@@ -289,6 +289,7 @@ test("8. the status words (8.4): a GPEXE-stated revision is never 'confirmed' - 
   ];
   invItems = [];
   await loadSourceFieldsSection(render);
+  await click('[data-action="source-fields-technical"]');
   const facts = [...content.querySelectorAll(".metric-variables-item-facts")].map((e) => e.textContent.replace(/\s+/g, " ").trim());
   assert.ok(facts[0].startsWith("Unit W/kg stated by GPEXE, checked on the board · Meaning: GPEXE's own label, checked on the board"), facts[0]);
   assert.doesNotMatch(facts[0], /confirmed/i);
