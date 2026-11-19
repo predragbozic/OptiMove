@@ -827,7 +827,11 @@ export async function readPlacement({ ctx, queryString }) {
   if (!mayUseBoard(ctx)) throw NOT_FOUND();
   const q = readQuery(queryString, { teamId: "uuid", candidateId: "uuid", pair: "index", fieldId: "uuid", targetId: "uuid" }, ["teamId", "candidateId", "pair", "fieldId", "targetId"]);
   const world = await boundedRead((client) => loadWorld(client, ctx, { teamId: q.teamId, candidateId: q.candidateId }));
-  return placementOf(world, q.pair, { fieldId: q.fieldId, targetId: q.targetId });
+  const out = placementOf(world, q.pair, { fieldId: q.fieldId, targetId: q.targetId });
+  if (!out.placement) return out;
+  // v80: the rule and the match are the save's own (the stored condition never leaves the server as it is stored).
+  const { conditionRule: _rule, conditionMatch: _match, ...placement } = out.placement;
+  return { ...out, placement };
 }
 
 // ---------------------------------------------------------------------------
