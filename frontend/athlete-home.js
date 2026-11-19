@@ -1,4 +1,6 @@
 import { renderAthleteHomeEventsHtml } from "./athlete-home-events-view.js";
+import { athleteQuestionHoldsAssignment } from "./athlete-questions-data.js";
+import { renderAthleteQuestionsCardHtml } from "./athlete-questions-view.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
 import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadHomeCardHtml, renderTrainingLoadWeekButtonHtml } from "./training-load-view.js";
@@ -62,6 +64,7 @@ export function renderAthleteHomeHtml({ data, error }) {
   return `
     <section class="content-section athlete-home">
       ${renderAthleteHomeHeader(athlete, today)}
+      ${renderAthleteQuestionsCardHtml(state.athleteQuestions)}
       ${renderWellnessCard(wellness)}
       ${renderTrainingLoadHomeCardHtml(state.trainingLoad.athleteToday)}
       ${renderTodayCard(today)}
@@ -84,6 +87,8 @@ export function renderAthleteHomeHtml({ data, error }) {
 // client-side eligibility check to keep in sync with the backend's.
 function renderWellnessCard(wellness) {
   if (!wellness.count) return "";
+  // K2b-2a-3 (GO decision 5): one WELLNESS check-in that is an event's question is already on the questions' card.
+  if (wellness.count === 1 && athleteQuestionHoldsAssignment("wellness", wellness.assignmentId)) return "";
   const multiple = wellness.count > 1;
   return `
     <button type="button" class="panel athlete-home-wellness" data-action="athlete-home-open-wellness" data-count="${wellness.count}" data-assignment-id="${escapeAttr(wellness.assignmentId || "")}">
@@ -103,7 +108,7 @@ function renderAthleteHomeHeader(athlete, today) {
       ${image ? renderImage(image, "athlete-home-avatar") : `<span class="athlete-home-avatar athlete-home-avatar-fallback">${escapeHtml(programInitials(athlete.name || "Athlete"))}</span>`}
       <div class="athlete-home-header-body">
         <p class="athlete-home-greeting">Welcome back</p>
-        <h3>${escapeHtml(athlete.name || "Athlete")}</h3>
+        <h3 tabindex="-1">${escapeHtml(athlete.name || "Athlete")}</h3>
         <p class="muted">${escapeHtml(formatDate(today.date))}</p>
       </div>
     </header>
