@@ -515,29 +515,35 @@ test("12. a Save racing an event attach, both orders: no deadlock; attach first:
 });
 
 test("13. a Save racing an athlete's RPE submit on a session the edit removes, both orders (condition 10.2.5)", async () => {
-  // Submit first (the route's own statements, held open): the Save waits on the session row, then sees the result.
+  // Submit first, through the real route: it locks the session row FOR UPDATE, then the workspace's planned-RPE
+  // settings row FOR UPDATE; a held settings row pauses it right after its session lock. The Save then waits on the
+  // session row, and once the submit commits it reads the result: has_results, nothing written.
   {
     const s = await squad("rpeA");
     const [a, b] = await publishedBatch(s, { extraSessions: [{ day: 2, name: "Wednesday" }] });
     const wedB = byName(await treeOf(b), "Wednesday");
     const draft = await reopen(s.coach.cookie, a);
     ok(await api(`/api/builder/sessions/${sessionsOf(draft).find((x) => x.name === "Wednesday").id}`, { method: "DELETE", cookie: s.coach.cookie }));
-    const submit = new pg.Client({ connectionString: db.url });
-    await submit.connect();
+    const holder = new pg.Client({ connectionString: db.url });
+    await holder.connect();
     try {
-      await submit.query("begin");
-      await submit.query(`select ps.id from plans.plan_sessions ps where ps.id = $1 for update of ps`, [wedB.id]);
-      await submit.query(`insert into training_load.session_feedback (athlete_id, plan_session_id, logical_session_id, session_date, plan_name, rpe, duration_minutes)
-                          select $1, ps.id, ps.logical_session_id, pd.date, 'Group week', 7, 45 from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $2`, [s.athletes[1].athleteId, wedB.id]);
+      await holder.query("begin");
+      await holder.query(`select id from training_load.planned_rpe_workspace_settings where owner_scope = 'team' and owner_team_id = $1 for update`, [s.teamId]);
+      const rating = api(`/api/training-load/sessions/${wedB.id}/rpe`, { method: "POST", cookie: s.athletes[1].cookie, body: { rpe: 7, durationMinutes: 45 } });
+      await waitForLockWait((r) => /training_load\.plan_workspace_ownership/.test(r.query));
+      const before = await digestOf([a, b]);
       const saving = save(s.coach.cookie, draft.plan.id, { batchScope: "all" });
-      await waitForLockWait((r) => /for update/.test(r.query));
-      await submit.query("commit");
+      await waitForLockWait((r) => /plan_sessions where id = any/.test(r.query));
+      await holder.query("commit");
+      const rated = await rating;
+      assert.ok(rated.status < 300, rated.text);
       const asked = await saving;
       assert.equal(asked.status, 409, asked.text);
       assert.deepEqual(asked.body.cannot.named, [{ name: s.athletes[1].name, reasons: ["has_results"] }]);
+      assert.equal(await digestOf([a, b]), before, "nothing written");
       assert.ok(byName(await treeOf(b), "Wednesday"));
     } finally {
-      await submit.end();
+      await holder.end();
     }
   }
   // Save first, paused under its locks; the real RPE route waits on the session row and then answers 404.
