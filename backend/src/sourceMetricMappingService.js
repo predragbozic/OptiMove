@@ -40,6 +40,8 @@
 //
 // Responses carry no acting user's id, no SQL, no trigger text and no free
 // text beyond the M1-bounded label, evidence references and conversion note.
+import { conditionRuleFor, storedRule } from "./sourceConditionRules.js";
+import { conditionMatchInstalled, conditionRuleColumn, ruleFits } from "./sourceConditionMatch.js";
 import { statusProven } from "./sourceFieldEvidence.js";
 import crypto from "node:crypto";
 import pg from "pg";
@@ -1164,7 +1166,7 @@ export async function createVersion({ ctx, mappingId, body }) {
       )).rows[0];
       assertExtractable({ ...field, parameter_kind: revision.parameter_kind, source_parameters: revision.parameter_kind === "none" ? {} : source });
       await assertUnitWord(client, ctx, field, revision.source_unit, sourceRevisionId);
-      const canonicalSql = `select d.state, d.current_version_id, ${CANONICAL_VERSION_COLUMNS},
+      const canonicalSql = `select d.state, d.current_version_id, ${CANONICAL_VERSION_COLUMNS}, v.condition_description as cd_raw,
                                    (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes
                               from training_load.metric_definitions d
                               left join training_load.metric_definition_versions v on v.id = d.current_version_id and v.metric_definition_id = d.id
@@ -1173,8 +1175,15 @@ export async function createVersion({ ctx, mappingId, body }) {
       if (!target || target.state !== "active" || !target.version_id) throw refusal(409, "target_not_active", MESSAGES.target_not_active);
       const notReady = notReadyCodeOf(target);
       if (notReady) throw refusal(409, notReady, MESSAGES[notReady]);
+      // v80: a field without parameters fills a variable with a condition only through its condition rule - the team
+      // setting of GPEXE that gives the column its range (a numbered zone, an event setting) - when the rule fits the
+      // condition's shape; each team's match is checked when it is switched on (insertStarts, the board's save).
+      let conditionRule = null;
+      const ruleInstalled = await conditionMatchInstalled(client);
       if (revision.parameter_kind === "none" && target.cd_type !== null && target.cd_type !== undefined) {
-        throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
+        const rule = ruleInstalled ? conditionRuleFor(field.source_metric_key) : null;
+        if (!rule || !ruleFits(rule, target.cd_raw)) throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
+        conditionRule = storedRule(rule);
       }
       const scopes = target.scopes ?? [];
       if ((body.appliesToSession && !scopes.includes("session")) || (body.appliesToDrill && !scopes.includes("component"))) {
@@ -1264,17 +1273,17 @@ export async function createVersion({ ctx, mappingId, body }) {
            (mapping_id, source_metric_definition_id, metric_definition_id, source_metric_version_id, version_number, metric_definition_version_id,
             conversion_kind, scale, scale_divisor, "offset", source_unit, target_unit, conversion_note, parameter_kind,
             source_parameters, canonical_parameters, parameter_scale, parameter_scale_divisor, parameter_offset,
-            applies_to_session, applies_to_drill, created_by_user_id)
+            applies_to_session, applies_to_drill, created_by_user_id${ruleInstalled ? ", condition_rule" : ""})
          select $1, $2, $3, $4,
                 (select coalesce(max(version_number), 0) + 1 from training_load.source_metric_mapping_versions where mapping_id = $1),
                 $5, 'numeric_linear', $6::numeric, $7::numeric, $8::numeric, $9, $10, $11, $12,
                 ${NUMERIC_PARAMS("$13")}, ${NUMERIC_PARAMS("$14")},
-                $15::numeric, $16::numeric, $17::numeric, $18, $19, $20
+                $15::numeric, $16::numeric, $17::numeric, $18, $19, $20${ruleInstalled ? ", $21::jsonb" : ""}
          returning id, parameter_fingerprint`,
         [id, mapping.source_metric_definition_id, mapping.metric_definition_id, sourceRevisionId, target.version_id,
           factors.scale, factors.scale_divisor, factors.offset, sourceUnit, targetUnit, conversionNote, revision.parameter_kind,
           JSON.stringify(sourceJson), JSON.stringify(canonical), parameterFactors.scale, parameterFactors.scale_divisor, parameterFactors.offset,
-          body.appliesToSession, body.appliesToDrill, ctx.userId],
+          body.appliesToSession, body.appliesToDrill, ctx.userId, ...(ruleInstalled ? [conditionRule === null ? null : JSON.stringify(conditionRule)] : [])],
       )).rows[0];
       if (inserted.parameter_fingerprint !== expectedFingerprint) throw new Error("fingerprint_disagrees");
       await insertRequestRecord(client, { action: "mapping_version_create", mappingId: id, mappingVersionId: inserted.id, toStatus: "draft", ctx, operationId, requestKey, requestHash });
@@ -1387,13 +1396,14 @@ async function databaseTextAgrees(client, reason) {
 // The version and its mapping, a plain read to learn the units and ids (every
 // column but the status is immutable, v34); the owner is the workspace's.
 async function transitionTarget(client, ctx, mId, vId) {
+  const ruleInstalled = await conditionMatchInstalled(client);
   const v = (await client.query(
     `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
             v.metric_definition_version_id, v.parameter_fingerprint, v.owner_key, v.source_unit, v.target_unit,
             trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
             v.parameter_kind, v.source_parameters ->> 'unit' as source_bound_unit, v.canonical_parameters ->> 'unit' as canonical_bound_unit,
             trim_scale(v.parameter_scale)::text as parameter_scale, trim_scale(v.parameter_scale_divisor)::text as parameter_scale_divisor,
-            trim_scale(v.parameter_offset)::text as parameter_offset, v.applies_to_session, v.applies_to_drill
+            trim_scale(v.parameter_offset)::text as parameter_offset, v.applies_to_session, v.applies_to_drill, ${conditionRuleColumn(ruleInstalled)}
        from training_load.source_metric_mapping_versions v
        join training_load.source_metric_mappings m on m.id = v.mapping_id
       where v.id = $1 and v.mapping_id = $2 and m.owner_key = $3`,
@@ -1567,7 +1577,8 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       if (!revision || revision.state !== "active" || !statusProven(revision.evidence_status)) throw refusal(409, "revision_not_verified", MESSAGES.revision_not_verified);
       if (!md || md.state !== "active") throw refusal(409, "target_not_active", MESSAGES.target_not_active);
       if (md.current_version_id !== v.metric_definition_version_id) throw refusal(409, "canonical_version_changed", MESSAGES.canonical_version_changed);
-      if (v.parameter_kind === "none" && hasCondition) throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
+      // v80: a version with a condition rule is matched per team at its starts (insertStarts).
+      if (v.parameter_kind === "none" && hasCondition && !v.condition_rule) throw refusal(409, "condition_mismatch", MESSAGES.condition_mismatch);
       const conversion = await conversionsHold(client, v);
       if (conversion) throw refusal(409, conversion, MESSAGES[conversion]);
       if ((v.applies_to_session && !scopes.includes("session")) || (v.applies_to_drill && !scopes.includes("component"))) {
@@ -1856,6 +1867,7 @@ export async function insertCopiedMappings(client, ctx, { clubDefinitionId, club
     mappings.push({ mappingId, v });
   }
   const copied = [];
+  const ruleInstalled = await conditionMatchInstalled(client);
   for (const { mappingId, v } of mappings) {
     progress.sourceMetricId = v.source_metric_definition_id;
     const created = (await client.query(
@@ -1863,11 +1875,13 @@ export async function insertCopiedMappings(client, ctx, { clubDefinitionId, club
          (mapping_id, source_metric_definition_id, metric_definition_id, source_metric_version_id, version_number, metric_definition_version_id,
           conversion_kind, scale, scale_divisor, "offset", source_unit, target_unit, conversion_note, parameter_kind,
           source_parameters, canonical_parameters, parameter_scale, parameter_scale_divisor, parameter_offset,
-          applies_to_session, applies_to_drill, created_by_user_id)
+          applies_to_session, applies_to_drill, created_by_user_id${ruleInstalled ? ", condition_rule" : ""})
        select $1, s.source_metric_definition_id, $2, s.source_metric_version_id, 1, $3,
               s.conversion_kind, s.scale, s.scale_divisor, s."offset", s.source_unit, s.target_unit, s.conversion_note, s.parameter_kind,
               s.source_parameters, s.canonical_parameters, s.parameter_scale, s.parameter_scale_divisor, s.parameter_offset,
               s.applies_to_session, s.applies_to_drill, $4
+              -- v80: the copy's variable has the system variable's condition, so the rule is copied with it.
+              ${ruleInstalled ? ", s.condition_rule" : ""}
          from training_load.source_metric_mapping_versions s where s.id = $5
        returning id, parameter_fingerprint`,
       [mappingId, clubDefinitionId, clubVersionId, ctx.userId, v.id],
