@@ -1,6 +1,6 @@
 # Central calendar — K4 plan: the athlete's calendar, and changing an answer
 
-Status: **Proposed** (2026-11-19, written against `main` `f406ee2d`). This plan contains no code. The first step is
+Status: **Accepted by the owner** (2026-11-19: „jasna ti je logika, bez previse promena ti ovo sada isplaniraj i sredi do kraja"; written against `main` `f406ee2d`). This plan contains no code. The first step is
 **K4-0**, which comes from the reproduction described in section 3; it needs the manager's GO before any code. K4a
 needs a UI contract and a GO. K4b has the OptiMove manager's approval of its direction, with migration v83 (`202611201200`) and his six conditions (section 4); its contract comes next.
 
@@ -23,6 +23,7 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O13** | „i da nam za to ne treba neka velika promena trenutnog stanja" | The Builder ↔ event work reuses what exists: the calendar's event form, the link and unlink routes, the slots, and Back. No migration, and the smallest change that does the job. |
 | **O14** | „vreme sesijama opt takodje mozemo birati ako hocemo ali se ne moze razilaziti sa vremenom dogadjaja na primer" | Amends O12. A linked session may have its own time, as an option, but only inside the event's time. |
 | **O15** | „mora uci u granice tog vremena ili mozemo kao do sada da biramo odrednice pre posole, tokom am pm takodje mora se ograniciti s obzirom da neki dogadjaji traju samo pre podne posle podne i sl" | Both stay: a session keeps Before / Training / After and AM / PM, as today. Both its own time and its AM / PM must fit the event. A morning event takes only AM sessions, an afternoon event only PM ones. |
+| **O16** | „jasna ti je logika, bez previse promena ti ovo sada isplaniraj i sredi do kraja" | The plan is accepted as written, and the stream carries it to the end in the order of section 6, with the smallest changes. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
