@@ -33,7 +33,6 @@ import { runMigrations } from "../src/migrate.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = path.join(__dirname, "..", "..", "migrations_v2");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
-const PLATFORM_LOCK_KEY = 726354981;
 const CLUB_LOCK_NAMESPACE = 891234567;
 
 let db, k, server, apiBase, appPool, createSession;
@@ -386,6 +385,8 @@ test("28. the switch-off's recorded SQL order: every advisory lock first (platfo
   assert.equal(usersStatements.length, 1, `exactly one statement locks users rows:\n${tx.join("\n")}`);
   assert.equal(usersStatements[0], locking[0], "the users statement is the first row lock");
   assert.match(tx[locking[0]], /order by u\.id for update of u$/i);
+  // It covers the WHOLE union: the platform admins (the target is one) and both clubs.
+  assert.deepEqual(txParams[locking[0]], [true, [kA, kB]], "the users statement names the platform admins and every affected club");
   // Then only the role rows the decision counts, each locking its role table
   // alone: the platform_admin rows, then the club_admin rows.
   const roleLocks = locking.slice(1);
@@ -469,9 +470,11 @@ test("D3. the order of the answers stays: a platform admin target that is also t
   const creatorCookie = `optimove_session=${await createSession(creator.id)}`;
   const forbidden = await api(`/users/${target.id}/login-status`, { method: "PUT", body: { active: false }, cookie: creatorCookie });
   assert.equal(forbidden.status, 403, forbidden.text);
+  assert.deepEqual(forbidden.body, { error: "Only a platform admin can manage a platform admin account." });
   assert.equal(await loginActive(target.id), true);
   const self = await switchOff(W.pa.id);
   assert.equal(self.status, 400, self.text);
+  assert.deepEqual(self.body, { error: "You cannot disable your own account." });
   assert.equal(await loginActive(W.pa.id), true);
 });
 
@@ -499,4 +502,41 @@ test("28c. only the rows the decision counts are locked: the switch-off of an ad
     await release(p1); await release(p2); await release(p3);
   }
   assert.equal(await loginActive(Z.id), false);
+});
+
+test("28d. the users statement covers the platform admins: the switch-off of a platform admin waits for another platform admin's users row while a peer holds it", async () => {
+  const Z = await person(0x50, "z-pa-target");
+  const other = await person(0x30, "other-pa");
+  await grantPlatform(Z.id); await grantPlatform(other.id);
+  const p = await holdUser(other.id);
+  const off = switchOff(Z.id);
+  try {
+    await untilWaiting(1, "the switch-off on the other platform admin's users row", 2_000);
+  } finally {
+    await release(p);
+  }
+  const res = await off;
+  assert.equal(res.status, 200, res.text);
+  assert.equal(await loginActive(Z.id), false);
+});
+
+test("D4. a target who is both the last platform admin and the last admin of a club gets LAST_PLATFORM_ADMIN (the platform check comes first), and nothing changes", async () => {
+  const kc = await club(0x10);
+  const Z = await person(0x50, "z-last-of-all");
+  await grantPlatform(Z.id); await grantClub(Z.id, kc);
+  // Every other platform admin role is switched off for this test and restored after it,
+  // so Z is the only qualifying platform admin. Z acts on itself: LAST_PLATFORM_ADMIN is
+  // checked before the self-disable rule.
+  const others = (await k.query(`update public.user_global_roles set is_active = false
+                                  where role = 'platform_admin' and is_active and user_id <> $1 returning id`, [Z.id])).rows.map((r) => r.id);
+  try {
+    const cookie = `optimove_session=${await createSession(Z.id)}`;
+    const res = await api(`/users/${Z.id}/login-status`, { method: "PUT", body: { active: false }, cookie });
+    assert.equal(res.status, 409, res.text);
+    assert.deepEqual(res.body, { error: "LAST_PLATFORM_ADMIN" });
+  } finally {
+    await k.query(`update public.user_global_roles set is_active = true where id = any($1::uuid[])`, [others]);
+  }
+  assert.equal(await loginActive(Z.id), true);
+  assert.equal(await clubRoleActive(Z.id, kc), true);
 });

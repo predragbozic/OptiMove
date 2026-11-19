@@ -989,9 +989,11 @@ router.delete("/users/:userId/global-roles/:role", async (req, res, next) => {
     try {
       await client.query("begin");
       if (role === "platform_admin") {
-        // Same shared advisory lock the disable-login path uses, then the
-        // same fresh (login-active AND role-active) qualifying-count read -
-        // see lockPlatformAdminHeadcount/loadQualifyingPlatformAdminIds.
+        // The same shared advisory lock the disable-login path takes, then a
+        // fresh (login-active AND role-active) qualifying-count read - see
+        // lockPlatformAdminHeadcount/loadQualifyingPlatformAdminIds. (The
+        // disable-login path reads its own qualifying sets in
+        // lockLoginDisableRows, after every advisory lock it takes.)
         await lockPlatformAdminHeadcount(client);
         const qualifyingIds = await loadQualifyingPlatformAdminIds(client);
         const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
@@ -2808,6 +2810,12 @@ async function lockClubAdminHeadcountsOfUser(client, targetUserId) {
 //      also the fresh read of its qualifying set ("qualifying" = login active
 //      AND role active), taken under the locks.
 // No bypass for platform admin actors - exactly as before.
+// The last-admin invariants rest on the headcount advisory locks, not on these
+// row locks: every writer that LOWERS a count (this switch-off and the old
+// platform_admin and club_admin revocations) takes them before it reads the
+// count; a writer that only raises a count may skip them. Any new writer that
+// lowers a count (the Roles API's revoke, when it can lower a basic role's
+// count) must take them too.
 async function lockLoginDisableRows(client, { includePlatformAdmins, clubIds }) {
   const platformAdminIds = [];
   const clubAdminIdsByClub = new Map(clubIds.map((clubId) => [String(clubId), []]));
