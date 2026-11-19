@@ -33,7 +33,7 @@ const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest
 const forSupport = () => boardContext()?.isPlatformAdmin === true;
 // A numbered zone column's range from the session's team limits (every board caller gets them: a club only its own team's).
 // Shown as a fact, on the owner-stated evidence of GPEXE's settings screen (docs/ai/gpexe-field-inventory-plan.md 8.13).
-// v80 step A: an event column's team setting the same way ("Events above 2.5 m/s² lasting 0.3 s").
+// v80 step A: an event column's team setting the same way ("Events at or above 2.5 m/s² lasting 0.3 s").
 const zoneRangeLine = (board, key) => {
   const text = columnSettingText(key, board?.zoneThresholds);
   return text ? `<small class="mb-zone-range">${escapeHtml(text)}</small>` : "";

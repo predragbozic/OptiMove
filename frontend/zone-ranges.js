@@ -59,16 +59,17 @@ export function eventKindOf(nameOrKey) {
 const shownUnit = (unit) => (unit === "m/s2" ? "m/s²" : unit);
 const numberText = (n) => String(n);
 
-// "Events above 2.5 m/s² lasting 0.3 s", "Events below -2.5 m/s² lasting 0.3 s", or null when the set carries no single
+// "Events at or above 2.5 m/s² lasting 0.3 s", "Events at or below -2.5 m/s² lasting 0.3 s" (the operator words of the
+// variable's own condition, so a match reads as one; the v80 plan section 2: acceleration >=, deceleration <=), or null when the set carries no single
 // setting for that kind (none read, or settings that differ between teams).
 export function eventSettingText(nameOrKey, thresholds) {
   const kind = eventKindOf(nameOrKey);
   const set = kind && thresholds ? thresholds[kind] : null;
   if (!set || set.differ || typeof set.value !== "number" || typeof set.duration !== "number") return null;
-  return `Events ${kind === "acceleration" ? "above" : "below"} ${numberText(set.value)} ${shownUnit("m/s2")} lasting ${numberText(set.duration)} s`;
+  return `Events ${kind === "acceleration" ? "at or above" : "at or below"} ${numberText(set.value)} ${shownUnit("m/s2")} lasting ${numberText(set.duration)} s`;
 }
 
-// The line under a column of the board: "Zone 25–60 W/kg" or "Events above 2.5 m/s² lasting 0.3 s", or null.
+// The line under a column of the board: "Zone 25–60 W/kg" or "Events at or above 2.5 m/s² lasting 0.3 s", or null.
 export function columnSettingText(key, thresholds) {
   const zone = zoneRangeText(key, thresholds);
   return zone ? `Zone ${zone}` : eventSettingText(key, thresholds);

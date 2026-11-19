@@ -896,7 +896,7 @@ test("Z4 (v80 step A): an event column shows the team's event setting; a variabl
   state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
   await actions.loadBoardSection(render);
   const col = [...content.querySelectorAll(".mb-col-item")].find((li) => li.textContent.includes("Acceleration events per athlete"));
-  assert.equal(col.querySelector(".mb-zone-range").textContent, "Events above 2.5 m/s² lasting 0.3 s");
+  assert.equal(col.querySelector(".mb-zone-range").textContent, "Events at or above 2.5 m/s² lasting 0.3 s");
   assert.match(text(), /Zone ranges and event settings come from this session's team settings in GPEXE\./);
   const slot = [...content.querySelectorAll(".mb-slot")].find((li) => li.textContent.includes("Accelerations"));
   assert.match(slot.textContent.replace(/\s+/g, " "), /Counts only events at or above 2\.5 m\/s² lasting at least 0\.3 s\. No column fills it yet\./);

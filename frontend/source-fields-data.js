@@ -120,7 +120,7 @@ export function readableName(item, thresholds = null) {
     return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} · ${range ? `${range} · ` : ""}${MEASURE[z.measure] || z.measure}`;
   }
   const name = String(item?.name || "").replace(/^athlete_?session_?/, "").replace(/_+/g, " ").trim();
-  // v80 step A: an event value names the team's event setting beside it ("Acceleration events · above 2.5 m/s² lasting 0.3 s").
+  // v80 step A: an event value names the team's event setting beside it ("Acceleration events · at or above 2.5 m/s² lasting 0.3 s").
   const setting = thresholds ? eventSettingText(item?.name, thresholds) : null;
   const plain = capitalize(name) || String(item?.name || "");
   return setting ? `${plain} · ${setting.replace(/^Events /, "")}` : plain;
