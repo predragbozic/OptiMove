@@ -318,7 +318,8 @@ function Invoke-OmPgTool {
     [System.Security.SecureString]$Password = $null,
     [string]$PgPassFile = '',
     [string]$SslMode = '',
-    [string]$SslRootCert = ''
+    [string]$SslRootCert = '',
+    [switch]$ReadOnly
   )
   $info = New-Object System.Diagnostics.ProcessStartInfo
   $info.FileName = $Exe
@@ -332,6 +333,9 @@ function Invoke-OmPgTool {
   $info.EnvironmentVariables['PGCLIENTENCODING'] = 'UTF8'
   if ($SslMode) { $info.EnvironmentVariables['PGSSLMODE'] = $SslMode }
   if ($SslRootCert) { $info.EnvironmentVariables['PGSSLROOTCERT'] = $SslRootCert }
+  # A second fence for the connections to the source: every transaction of the session starts read only,
+  # so even a mistaken statement could not change anything there.
+  if ($ReadOnly) { $info.EnvironmentVariables['PGOPTIONS'] = '-c default_transaction_read_only=on' }
   if ($null -ne $Password) {
     $info.EnvironmentVariables['PGPASSWORD'] = (New-Object System.Net.NetworkCredential('', $Password)).Password
   } elseif ($PgPassFile) {

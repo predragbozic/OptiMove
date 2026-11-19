@@ -74,10 +74,10 @@ try {
   $sslMode = ''
   $sslRootCert = ''
   if (-not (Test-OmLoopbackHost -HostName $hostName)) {
-    if ($config['ssl_root_cert']) { $sslMode = 'verify-full'; $sslRootCert = $config['ssl_root_cert'] }
+    if ($config['ssl_root_cert']) { $sslMode = 'verify-full'; $sslRootCert = $config['ssl_root_cert']; Write-Host '  TLS:      encrypted, and the server is verified with ssl_root_cert' }
     else {
       $sslMode = 'require'
-      Write-Host "  TLS:      encrypted, but the server's certificate is not checked (set ssl_root_cert to check it)"
+      Write-Host "  TLS:      encrypted, but the server is NOT verified. Add ssl_root_cert to the config file (runbook, step 4)."
     }
   }
 
@@ -92,7 +92,8 @@ try {
   $step = 'reading the password source'
   $pgPassPath = Get-OmDefaultPgPassPath
   $secret = Resolve-OmPassword -HostName $hostName -Port $port -Database $database -User $user -PgPassPath $pgPassPath -NoPrompt:$NoPrompt -PromptText 'Database password (only stars are shown while you type)'
-  $connection = @{ Password = $secret.Password; PgPassFile = $secret.PgPassFile; SslMode = $sslMode; SslRootCert = $sslRootCert }
+  # ReadOnly: psql and pg_dump open read-only sessions on the source (a second fence; the run only reads anyway).
+  $connection = @{ Password = $secret.Password; PgPassFile = $secret.PgPassFile; SslMode = $sslMode; SslRootCert = $sslRootCert; ReadOnly = $true }
   $connectionArgs = Get-OmConnectionArgs -HostName $hostName -Port $port -User $user -Database $database
 
   $step = 'connecting to the database'

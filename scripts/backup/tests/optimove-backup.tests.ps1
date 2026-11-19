@@ -420,6 +420,18 @@ try {
         Assert-Equal $list.ExitCode 0
         Assert-Equal (Get-OmTableCountFromList -ListText $list.StdOut) 12
       }
+      Test-Case 'read-only fence: a session opened with -ReadOnly cannot write; without it the same statement works' {
+        $arguments = { param($sql) @('--no-psqlrc', '--tuples-only', '--no-align', '--set', 'ON_ERROR_STOP=1', '--command', $sql) + (Get-OmConnectionArgs -HostName $PgHost -Port $PgPort -User $PgUser -Database $sourceDb) }
+        $r = Invoke-OmPgTool -Exe $tools.Psql -PgPassFile $pgPass -ReadOnly -Arguments (& $arguments 'show default_transaction_read_only')
+        Assert-Equal $r.StdOut.Trim() 'on'
+        $r = Invoke-OmPgTool -Exe $tools.Psql -PgPassFile $pgPass -ReadOnly -Arguments (& $arguments 'create table public.fence_probe (id int)')
+        Assert-True ($r.ExitCode -ne 0 -and $r.StdErr -match 'read-only transaction') "a write went through: $($r.StdErr)"
+        $r = Invoke-OmPgTool -Exe $tools.Psql -PgPassFile $pgPass -ReadOnly -Arguments (& $arguments 'delete from public.users')
+        Assert-True ($r.ExitCode -ne 0 -and $r.StdErr -match 'read-only transaction') "a delete went through: $($r.StdErr)"
+        Assert-Equal (Invoke-TestSql -Database $sourceDb -Sql 'select count(*) from public.users') '7'
+        $r = Invoke-OmPgTool -Exe $tools.Psql -PgPassFile $pgPass -Arguments (& $arguments 'create table public.fence_probe (id int); drop table public.fence_probe')
+        Assert-Equal $r.ExitCode 0 'the probe itself is wrong:'
+      }
       Test-Case 'backup: a wrong password fails the run, writes no dump, logs FAILED and deletes nothing' {
         Clear-Backups
         Set-Content -LiteralPath (Join-Path $backups 'optimove-2020-01-01-0200.dump') -Value 'x'
@@ -522,6 +534,22 @@ try {
           $files = Get-BackupFiles
           Assert-Equal (@($files | Where-Object { $_ -match '\.dump\.failed$' }).Count) 1 "files: $($files -join ', ')"
           Assert-Equal (@($files | Where-Object { $_ -match '\.dump$' }).Count) 0
+        }
+        Test-Case 'backup: psql and pg_dump reach the source through read-only sessions (PGOPTIONS), and the dump still works' {
+          Clear-Backups
+          $record = Join-Path (New-TempFolder 'record') 'options.txt'
+          $folder = New-ToolFolder 'record' @{
+            psql    = "echo `"psql `$PGOPTIONS`" >> `"$record`"; exec `"$(Join-Path $tools.Folder 'psql')`" `"`$@`""
+            pg_dump = "case `"`$1`" in --version) ;; *) echo `"pg_dump `$PGOPTIONS`" >> `"$record`";; esac; exec `"$(Join-Path $tools.Folder 'pg_dump')`" `"`$@`""
+            pg_restore = "echo `"pg_restore [`$PGOPTIONS]`" >> `"$record`"; exec `"$(Join-Path $tools.Folder 'pg_restore')`" `"`$@`""
+          }
+          (Get-Content -LiteralPath $configPath) -replace '^pg_bin = .*$', "pg_bin = $folder" | Set-Content -LiteralPath $configPath -Encoding ASCII
+          try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { Set-TestConfig }
+          Assert-Equal $run.ExitCode 0 "output: $($run.Output)"
+          $lines = @(Get-Content -LiteralPath $record)
+          Assert-Equal (@($lines | Where-Object { $_ -eq 'psql -c default_transaction_read_only=on' }).Count) 2 "recorded: $($lines -join ' / ')"
+          Assert-Equal (@($lines | Where-Object { $_ -eq 'pg_dump -c default_transaction_read_only=on' }).Count) 1 "recorded: $($lines -join ' / ')"
+          Assert-Equal (@($lines | Where-Object { $_ -like 'psql*' -or $_ -like 'pg_dump*' }).Count) 3 'a connection to the source without the fence'
         }
         Test-Case 'backup: a libpq variable left in the shell does not redirect the tools' {
           Clear-Backups

@@ -14,8 +14,28 @@ The scripts:
 | `scripts/backup/optimove-backup.ps1` | makes one backup file and checks it |
 | `scripts/backup/optimove-restore-test.ps1` | proves a backup file can really be restored, on your own computer |
 
+## Read this first: what has NOT been tested yet
+
+The scripts were written and tested on Linux, with PowerShell 7 and a throwaway PostgreSQL 16. These things have
+**not** been run by anyone yet:
+
+- on **Windows**, and on **Windows PowerShell 5.1** (the PowerShell that comes with Windows);
+- **Task Scheduler** (step 7 is written from knowledge, not from a run);
+- the **PostgreSQL 17** tools and a PostgreSQL 17 server;
+- the encrypted connection (TLS) to the **Supabase session pooler**, with and without the certificate, and the
+  read-only setting the script asks the pooler for;
+- the **real production database**: whether its backup restores cleanly into a plain local PostgreSQL.
+
+Your first runs are that test. So the rule is:
+
+> **Until the restore test (step 8) has said `RESTORE TEST OK` for a backup of production, do not consider that a
+> backup exists.** A file in the folder and an `OK` from the backup script are not enough.
+
+If a step behaves differently from what is written here, stop and report what the screen says (only the line with
+`FAILED` or `refusing`, not the whole screen).
+
 A backup file that has never been restored is only a hope. Do the restore test once after the first backup, and
-then once a month (step 7).
+then once a month (step 8).
 
 ---
 
@@ -88,13 +108,40 @@ Optional lines:
 | Line | Meaning |
 |---|---|
 | `retention_days = 14` | how many days a backup is kept (14 when the line is missing) |
-| `ssl_root_cert = C:\Users\<you>\OptiMove-backups\prod-ca.crt` | checks that the computer really talks to Supabase. Download the certificate in Supabase: Database settings > SSL configuration > Download certificate. Without this line the connection is still encrypted, but the server's identity is not checked: use it only on a network you trust, not on public Wi-Fi |
 | `pg_bin = C:\Program Files\PostgreSQL\17\bin` | where the tools are, if the script does not find them by itself |
-| `skip_schemas = name1, name2` | see "a schema ... which this backup does not know" in step 8. Do not add it on your own |
+| `skip_schemas = name1, name2` | see "a schema ... which this backup does not know" in step 9. Do not add it on your own |
 
 A line with a password in this file stops the script. If you ever typed one there, delete the line.
 
-## 4. The password file (once)
+## 4. The Supabase certificate (once, strongly recommended)
+
+The connection to Supabase is always encrypted. But without Supabase's certificate the script cannot check that the
+server on the other end really **is** Supabase: someone who controls the network between your computer and Supabase
+(a public or hotel Wi-Fi, for example) could stand in the middle and read the password and the data. With the
+certificate the script checks the server every time and refuses to connect to anything else.
+
+1. In the Supabase dashboard open the project > **Project Settings > Database > SSL Configuration** >
+   **Download certificate**. You get a file named like `prod-ca-2021.crt`. It is not a secret.
+2. Move it into the backup folder from step 2, for example `C:\Users\<you>\OptiMove-backups\prod-ca-2021.crt`.
+3. Add this line to the config file from step 3 (`notepad "$env:APPDATA\OptiMove\optimove-backup.local.conf"`), with
+   the real path and file name:
+
+   ```
+   ssl_root_cert = C:\Users\<you>\OptiMove-backups\prod-ca-2021.crt
+   ```
+
+From then on the script prints `TLS: encrypted, and the server is verified with ssl_root_cert`.
+
+Without that line the script still works and prints
+`TLS: encrypted, but the server is NOT verified. Add ssl_root_cert to the config file (runbook, step 4).`
+That is acceptable for a first try on your home network. Do not leave it like that for the nightly run, and never
+run it that way on a public network.
+
+If a run with the certificate fails with `certificate verify failed` or `root certificate file ... does not exist`:
+check the path in the config file, and that the file is the one downloaded from **this** project. Do not remove
+the line to "make it work" without reporting it first.
+
+## 5. The password file (once)
 
 The PostgreSQL tools read the password from their own file, `pgpass.conf`. This way the password is never typed on
 a command line, never shown on the screen and never written to a log.
@@ -132,7 +179,7 @@ Never copy it anywhere and never send it.
 Without a line in `pgpass.conf` the script asks for the password instead, and only stars are shown while you type.
 That works when you run it by hand, but not for the nightly run.
 
-## 5. The first run
+## 6. The first run
 
 In PowerShell, from the OptiMove code folder:
 
@@ -150,12 +197,13 @@ OptiMove backup (read only)
   database: postgres
   folder:   C:\Users\<you>\OptiMove-backups
   keeps:    14 days
+  TLS:      encrypted, and the server is verified with ssl_root_cert
 ```
 
 After a few minutes it ends with one of two lines:
 
 - `OK: optimove-2026-11-19-0200.dump, 48211234 bytes, 143 tables` — the backup is in the folder.
-- `FAILED while ...` — there is **no** new backup. Go to step 8.
+- `FAILED while ...` — there is **no** new backup. Go to step 9.
 
 After an `OK` the folder holds:
 
@@ -168,7 +216,9 @@ After an `OK` the folder holds:
 What the script does, in order:
 
 1. checks the config file, the folder and the tool version (the tools must not be older than the server);
-2. checks the database's list of schemas (see step 8, "a schema ...");
+   every connection to the database is opened **read only** (a second fence: a mistaken statement could not
+   change anything);
+2. checks the database's list of schemas (see step 9, "a schema ...");
 3. runs `pg_dump --format=custom --no-owner --no-privileges` for the application's schemas: `calendar`, `library`,
    `media`, `plans`, `public`, `tests`, `training`, `training_load`;
 4. reads the new file back with `pg_restore --list`. If that fails or lists no tables, the file is renamed to
@@ -178,7 +228,7 @@ What the script does, in order:
 
 Run it at a quiet moment: not during a deploy or a migration. On a quiet database nobody notices the backup.
 
-## 6. Every night, by itself (Task Scheduler)
+## 7. Every night, by itself (Task Scheduler)
 
 1. Open **Task Scheduler** > **Create Task...** (not "Create Basic Task").
 2. **General:** name `OptiMove backup`. Choose **Run only when user is logged on**.
@@ -201,7 +251,7 @@ Run it at a quiet moment: not during a deploy or a migration. On a quiet databas
 today's date. In Task Scheduler the column **Last Run Result** reads `0x0` after an OK run and `0x1` after a failed
 one. A computer that is switched off at night makes no backup, and nothing warns you: only the log shows it.
 
-## 7. The restore test (once now, then every month)
+## 8. The restore test (once now, then every month)
 
 It restores a backup into a **new, throwaway** database on your own computer, prints a few numbers, and deletes
 that database again. It works on `localhost` only and refuses any other host. It never connects to production and
@@ -246,7 +296,7 @@ too, stop and report the line after `FAILED` (not the whole screen).
 If the window was closed in the middle, a database named `optimove_restore_test_...` can stay on your local
 PostgreSQL. Delete it in pgAdmin: Databases > right click > Delete/Drop.
 
-## 8. When a run says FAILED
+## 9. When a run says FAILED
 
 Nothing was damaged: the script only reads. No old backup was deleted. The last line on the screen and the last
 line of the log say where it stopped.
@@ -258,10 +308,12 @@ line of the log say where it stopped.
 | `pg_dump, pg_restore and psql were not found` | step 1, or add the `pg_bin` line (step 3) |
 | `pg_dump is version 16 and the server is PostgreSQL 17` | the tools are too old: install PostgreSQL 17 (step 1) |
 | `port 6543 is the transaction pooler` | use port 5432 in the config file **and** in `pgpass.conf` |
-| `no line for this connection in the password file` | step 4: host, port and user in `pgpass.conf` must match the config file exactly |
+| `no line for this connection in the password file` | step 5: host, port and user in `pgpass.conf` must match the config file exactly |
 | `the database could not be reached` | wrong password, host or user, or no internet. Check the line above it on the screen. Try again later. Never reset the database password |
 | `a schema ... which this backup does not know` | the database has a new part the backup was not told about. **Stop and report the schema's name.** Nothing was dumped. Do not add `skip_schemas` on your own: that would leave data out of every backup from then on |
 | `has no schema ...` | the config file points at the wrong database |
+| `certificate verify failed` | step 4: the certificate file is wrong or the path is wrong. Do not remove the line; report it |
+| `unsupported startup parameter` or `PGOPTIONS` in the line above `FAILED` | the pooler refused the script's read-only setting (not yet tested against Supabase, see the top). Nothing was dumped. Report it |
 | `pg_dump ended with exit code ...` | the connection broke, the disk is full, or a migration was running. Run it again at a quiet moment |
 | `cannot be read back` or `lists no tables` | the file is damaged. It was renamed to `.failed`. Run again |
 | `already exists; wait a minute` | two runs in the same minute. Wait and run again |
@@ -272,7 +324,7 @@ after 14 days, or delete it yourself (and empty the recycle bin).
 If the same message comes back three nights in a row, report it. When you report, copy only the `FAILED ...` line:
 the rest of the screen can show the host and the project reference.
 
-## 9. What a backup does NOT cover
+## 10. What a backup does NOT cover
 
 - **Media files** (exercise images and videos). They are in object storage (R2), not in the database. The backup
   holds only their records.
@@ -285,13 +337,66 @@ the rest of the screen can show the host and the project reference.
 It is also only as safe as the computer: a stolen or broken laptop takes the backups with it. That is one of the
 reasons to move to Supabase Pro.
 
-## 10. Restoring production for real
+## 11. Restoring for real, into a new Supabase project
 
-This procedure does not do it, on purpose. Putting a backup back over the production database deletes everything
-entered since that backup, and is a separate decision with its own plan. If you think you need it: stop, do not run
-anything, and report. Keep the backup files as they are.
+**Never alone, and never at night.** A real restore is done together with help (the developer side of the project),
+step by step, with someone reading along. If you think you need it: stop, do not run anything, report, and keep the
+backup files exactly as they are.
 
-## 11. Relation to the GPEXE backup
+Two things this procedure never does, on purpose:
+
+- it never restores **over** the existing production database. That would delete everything entered since the
+  backup, and is a separate decision with its own plan;
+- it has **not been rehearsed against a real Supabase project**. The steps below are the known path and the known
+  obstacle, so that nobody meets them for the first time during an emergency.
+
+The known path, into a **new, empty** Supabase project:
+
+1. Create a new Supabase project (PostgreSQL 17, the same region). Take its Session pooler host, port 5432 and
+   user, as in step 3. Its password goes into `pgpass.conf` as a new line, as in step 5.
+2. **The known obstacle.** The backup carries its own `CREATE SCHEMA public`, and a new Supabase project already has
+   an (empty) `public`. A plain `pg_restore --exit-on-error` therefore stops at once with
+   `schema "public" already exists` and restores nothing. The preferred way around it drops nothing: restore from a
+   list that leaves that one entry out.
+
+   ```
+   cd C:\Users\<you>\OptiMove-backups
+   & "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" --list --file=restore-list.txt optimove-YYYY-MM-DD-HHmm.dump
+   Get-Content restore-list.txt | Where-Object { $_ -notmatch '^\d+; \d+ \d+ SCHEMA - public ' } | Set-Content -Encoding ASCII restore-list-no-public.txt
+   ```
+
+   Exactly one line must be gone from `restore-list-no-public.txt`: the one that reads `... SCHEMA - public ...`.
+3. Restore with that list. Read the host on the command line twice before pressing Enter: it must be the **new**
+   project, not production.
+
+   ```
+   $env:PGSSLMODE = "require"
+   & "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" --exit-on-error --no-owner --no-privileges --use-list=restore-list-no-public.txt --no-password --host <NEW-pooler-host> --port 5432 --username postgres.<NEW-project-ref> --dbname postgres optimove-YYYY-MM-DD-HHmm.dump
+   ```
+
+   It must end without any `error` line. The other way around the obstacle is to drop the new project's empty
+   `public` schema first and restore without a list; it is the second choice, because it deletes something, and
+   Supabase sets permissions on `public` that would then have to be put back.
+4. Check the new database before anything points at it: the same counts as the restore test prints (users, clubs,
+   teams, athletes, exercises, plans, the last migration).
+5. Only then point the application at it: in Render, change the service's `DATABASE_URL` to the new project's
+   connection string, and deploy. The application's own start-up checks the migrations.
+
+What the backup does **not** bring to the new project, and has to be handled separately:
+
+- the **media files** in R2 (they stay where they are; the new database only has their records);
+- the **settings and secrets in Render** (they stay in Render; only `DATABASE_URL` changes);
+- database **roles and permissions** (the backup is made with `--no-owner --no-privileges`), and anything set by
+  hand in the old Supabase project's dashboard;
+- everything entered **after** the backup was made.
+
+What was proven about step 2 and 3: on a throwaway PostgreSQL 16 database that already had an empty `public`, the
+plain restore failed with `schema "public" already exists`, and the restore with the edited list ended without an
+error, with every table, row, function and the comment on `public` in place. The commands of steps 2 and 3 were run
+as written there (with PowerShell 7 on Linux, exactly one line removed from the list). They were **not** run on
+Windows and **not** against a Supabase project.
+
+## 12. Relation to the GPEXE backup
 
 `docs/runbooks/gpexe-backup-verify.md` is a stricter backup made before a GPEXE import: it also compares the
 restored copy with the source, table by table. It stays the rule there. This nightly backup does not replace it.
@@ -300,7 +405,7 @@ restored copy with the source, table by table. It stays the rule there. This nig
 
 ## For a Mac or Linux computer (bash)
 
-The same backup in two commands. The password comes from `~/.pgpass` (same lines as in step 4; the file must be
+The same backup in two commands. The password comes from `~/.pgpass` (same lines as in step 5; the file must be
 private: `chmod 600 ~/.pgpass`). Run them in the backup folder.
 
 ```
