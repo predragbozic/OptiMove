@@ -187,7 +187,9 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
   `bash -c "$X"`.
 - A database URL or `PGHOST`/`PGHOSTADDR`/`PGSERVICE` set for a command (prefix, `env`,
   `export`) that is not this machine, or cannot be read (`$VAR`, backticks).
-- A command that names a file holding secrets: `.env`, `.env.local`/`.production`/...,
+- A command that names a file holding secrets: `.env` and every copy or variant of it
+  (`.env.local`, `.env.bak`, `.env~`, `.env.save`, `backend/.env/`), `.envrc`,
+  `/proc/<pid>/environ`,
   `pgpass.conf`, `.pgpass`, `*.pem`, `*.key`, `*.p12`, `id_rsa`/`id_ed25519` (not `.pub`),
   `.netrc`, `.npmrc`, `.git-credentials`, `credentials`, `.credentials.json`. Not
   `.env.example`/`.sample`/`.template`.
@@ -206,12 +208,15 @@ the hook also reads:
 - what runs inside `$( )`, `<( )`, `>( )` and backticks (not inside single quotes);
 - the code of `bash/sh/zsh/dash/ksh -c` (any flag cluster with `c`, e.g. `-lc`), `eval`,
   PowerShell `-Command` and `cmd /c`;
+- a shell as the first word inside `<( )` or `>( )` that reads what it is fed (`cat >(sh)`)
+  asks; a substitution is one operand for the option check (`cat <(sort -r x)` is `cat` with
+  one operand);
 - the body of a heredoc that a shell reads (`bash <<'E'`), and a here-string to a shell. The
   body of any other heredoc is data (a commit message, a file being written, a Python
   script) and is not read as shell; a heredoc without its closing word is read as commands;
 - a variable as the command word (`$GIT push -f`) is read as git;
 - every word as the program receives it: `'git'`, `"git"`, `g\it`, `re""set`, `$'reset'`,
-  `$'\x72eset'` are all plain words, and a backslash-newline inside a word joins it
+  `$'\x72eset'`, `$'\u0072eset'`, `$'\U00000072eset'` are all plain words, and a backslash-newline inside a word joins it
   (`--ha\⏎rd` is `--hard`);
 - a line with a background job (a single `&`) gets no merge exemption.
 What still cannot be seen: what a script file, a Python or Node program, or a git
@@ -242,13 +247,19 @@ backslashes removed), redirection words are not options.
 | `Bash(find:*)` | `-name -iname -path -type -maxdepth -mindepth -newer -mtime -size -empty -print -prune` and the operators | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint*`, `-fls`, `-files0-from`, anything else |
 | `Bash(sort:*)` | the ordering, key and field options | `-o`, `--output`, `-T`, `--compress-program`, `--files0-from` |
 | `Bash(uniq:*)` | its counting and comparing options | a second file name (the output file) |
-| `git status/diff/log/show/fetch/rev-parse/merge-base/ls-remote/ls-tree/merge-tree`, `git worktree list` | per subcommand: the reading, formatting, revision-range and pickaxe options; `fetch` with a remote and branch names | `--output`, `--ext-diff`, `--textconv`, `--upload-pack`, `--exec`, `--show-signature` (runs gpg), a fetch refspec with `:` (it writes local refs); git global options other than `-C`, `--no-pager`, `--no-optional-locks`, `--literal-pathspecs` |
+| `git status/diff/log/show/fetch/rev-parse/merge-base/ls-remote/ls-tree/merge-tree`, `git worktree list` | per subcommand: the reading, formatting, revision-range and pickaxe options; `fetch` and `ls-remote` with a remote NAME (`origin`) and branch names or ref patterns — a URL or a path asks (a request to any host) | `--output`, `--ext-diff`, `--textconv`, `--upload-pack`, `--exec`, `--show-signature` (runs gpg), a fetch refspec with `:` (it writes local refs); git global options other than `-C`, `--no-pager`, `--no-optional-locks`, `--literal-pathspecs` |
 | `Bash(node --test backend/tests/*)`, `…frontend/tests/*` | test files under the two folders (no `..`, no absolute path); `--test-name-pattern`, `--test-skip-pattern`, `--test-concurrency`, `--test-timeout`, `--test-only`, `--test-shard`, `--test-reporter=spec/tap/dot/junit/lcov`, `--test-reporter-destination=stdout/stderr`, `--experimental-test-isolation=none/process` | `--import`, `--require`, `-r`, `--loader`, `-e`, a reporter module or a destination file, anything else |
 
 **Writing to a file.** An allowed command with an output redirection (`>`, `>>`, `>|`, `&>`,
 `N>`) asks, unless the target is `/dev/null`, `/dev/stdout`, `/dev/stderr`, a descriptor
 (`2>&1`, `>&2`), or a plain absolute path that, with every symbolic link followed, lies inside
-the system's temporary directory (`os.tmpdir()`, `/tmp`). A target with `..`, `~`, a glob, or a
+the system's temporary directory (`os.tmpdir()`, `/tmp`) AND is not inside a git work tree (no
+parent folder holds a `.git` file or folder: executors' and reviewers' worktrees live under the
+temporary directory too), not inside or named `.git`, and either does not exist yet or is an
+existing plain data file (not executable, no script extension such as `.sh .mjs .js .cjs .ts
+.ps1 .py .sql`). Overwriting or appending to a scratch script asks: it may be run later. (Measured
+on the replay: asking for every existing file would stop 29 calls, this rule 16 — all of them
+rewrites of scratch scripts.) A target with `..`, `~`, a glob, or a
 variable whose value is not a plain assignment earlier in the same line (`S=/tmp/x; ... > $S/out`)
 asks. Commands that are not on the allow list (`echo x > file`) are left to Claude Code's own
 redirection check.

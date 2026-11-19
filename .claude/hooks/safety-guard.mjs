@@ -657,6 +657,15 @@ export function normalizeSegment(segment) {
 // Single-quoted text is literal and skipped; double-quoted text is scanned, as the shell
 // does. An unclosed one runs to the end of the segment.
 export function extractSubstitutions(segment) {
+  return scanSubstitutions(segment).map((s) => s.text);
+}
+
+// The command texts inside <( ) and >( ) only (a process substitution).
+export function processSubstitutions(segment) {
+  return scanSubstitutions(segment).filter((s) => s.kind !== "$" && s.kind !== "`").map((s) => s.text);
+}
+
+function scanSubstitutions(segment) {
   const found = [];
   if (typeof segment !== "string") return found;
   let quote = null;
@@ -673,17 +682,17 @@ export function extractSubstitutions(segment) {
         if (segment[j] === "(") depth++;
         else if (segment[j] === ")") depth--;
       }
-      found.push(segment.slice(i + 2, depth === 0 ? j - 1 : j));
+      found.push({ kind: ch, text: segment.slice(i + 2, depth === 0 ? j - 1 : j) });
       i = (depth === 0 ? j - 1 : j);
       continue;
     }
     if (ch === "`") {
       const end = segment.indexOf("`", i + 1);
-      found.push(segment.slice(i + 1, end === -1 ? segment.length : end));
+      found.push({ kind: "`", text: segment.slice(i + 1, end === -1 ? segment.length : end) });
       i = end === -1 ? segment.length : end;
     }
   }
-  return found.map((t) => t.trim()).filter(Boolean);
+  return found.map((t) => ({ kind: t.kind, text: t.text.trim() })).filter((t) => t.text);
 }
 
 // Heredocs. The body of a heredoc that a shell reads (`bash <<EOF`, `sh -s <<'E'`) is
@@ -787,6 +796,14 @@ export function shellWord(raw) {
             j += 2 + hex.length;
             continue;
           }
+          if ((e === "u" || e === "U") && /^[0-9a-fA-F]/.test(raw.slice(j + 2))) {
+            const hex = new RegExp(`^[0-9a-fA-F]{1,${e === "u" ? 4 : 8}}`).exec(raw.slice(j + 2))[0];
+            const code = parseInt(hex, 16);
+            out += code <= 0x10ffff ? String.fromCodePoint(code) : "";
+            j += 2 + hex.length;
+            continue;
+          }
+          if (e === "c" && j + 2 < raw.length) { out += String.fromCharCode(raw.charCodeAt(j + 2) & 0x1f); j += 3; continue; }
           if (/[0-7]/.test(e)) {
             const oct = /^[0-7]{1,3}/.exec(raw.slice(j + 1))[0];
             out += String.fromCharCode(parseInt(oct, 8));
@@ -837,8 +854,43 @@ function withoutRedirections(tokens) {
   return out;
 }
 
+// A substitution is one word to the program (its output, or /dev/fd/N); its own words are
+// judged separately (extractSubstitutions). Masked here so `cat <(sort -r x)` is cat with one
+// operand, not cat with the option -r.
+export function maskSubstitutions(segment) {
+  if (typeof segment !== "string") return "";
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (quote === "'") { out += ch; if (ch === "'") quote = null; continue; }
+    if (ch === "\\") { out += ch + (segment[i + 1] ?? ""); i++; continue; }
+    if (ch === "'" && quote === null) { quote = "'"; out += ch; continue; }
+    if (ch === '"') { quote = quote === '"' ? null : '"'; out += ch; continue; }
+    if ((ch === "$" || ch === "<" || ch === ">") && segment[i + 1] === "(") {
+      let depth = 1;
+      let j = i + 2;
+      for (; j < segment.length && depth > 0; j++) {
+        if (segment[j] === "(") depth++;
+        else if (segment[j] === ")") depth--;
+      }
+      out += ch === "$" ? "SUBSTITUTED" : "/dev/fd/63";
+      i = j - 1;
+      continue;
+    }
+    if (ch === "`") {
+      const end = segment.indexOf("`", i + 1);
+      out += "SUBSTITUTED";
+      i = end === -1 ? segment.length : end;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 export function commandWords(segment) {
-  return withoutRedirections(tokenizeWords(normalizeSegment(segment))).map(shellWord);
+  return withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment)))).map(shellWord);
 }
 
 // Option lists. short: letters without a value; shortArg: letters that take a value (the
@@ -1043,6 +1095,7 @@ const GIT_LOG_FAMILY = {
     "--diff-merges", "--show-linear-break", "--no-walk", "--cc"],
   numeric: true,
 };
+const REMOTE_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 const GIT_SUBCOMMANDS = {
   status: spec({
     short: "sbvzu",
@@ -1061,7 +1114,9 @@ const GIT_SUBCOMMANDS = {
       "--no-progress", "--porcelain", "--no-recurse-submodules", "--all", "--no-write-fetch-head", "--write-fetch-head", "--atomic"],
     longArg: ["--depth", "--deepen", "--shallow-since", "--shallow-exclude", "--jobs"],
     // a remote name or URL, and branch names; never a refspec with ":" (it writes local refs)
-    operands: (ops) => ops.every((o, idx) => (idx === 0 ? !/^-/.test(o) : /^[A-Za-z0-9_./@-]+$/.test(o) && !o.includes(":"))),
+    // a remote NAME (origin), then branch names; never a URL or a path (a request to any host),
+    // never a refspec with ":" (it writes local refs)
+    operands: (ops) => ops.every((o, idx) => (idx === 0 ? REMOTE_NAME_RE.test(o) : /^[A-Za-z0-9_./@-]+$/.test(o) && !o.includes(":"))),
   }),
   "rev-parse": spec({
     short: "q",
@@ -1077,6 +1132,7 @@ const GIT_SUBCOMMANDS = {
     short: "htq",
     long: ["--heads", "--tags", "--branches", "--refs", "--quiet", "--exit-code", "--symref", "--get-url"],
     longArg: ["--sort"],
+    operands: (ops) => ops.every((o, idx) => (idx === 0 ? REMOTE_NAME_RE.test(o) : /^[A-Za-z0-9_./*@-]+$/.test(o) && !o.includes(":"))),
   }),
   "ls-tree": spec({
     short: "rtdlz",
@@ -1263,30 +1319,66 @@ export function outputRedirectTargets(segment) {
 
 const DEVICE_TARGETS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"]);
 
-function realDirectoryUnderTemp(target) {
-  const tempRoots = new Set();
+// Where a redirect may write without a question: a NEW file in the system's temporary
+// directory that is not inside a git work tree (an executor's or reviewer's worktree lives
+// under the temporary directory too) and not inside a `.git` directory. Every symbolic link
+// is followed (the target's, or its nearest existing parent's). An existing file asks:
+// overwriting or appending to it may change something that runs later (a scratch script, a
+// hook). EXISTING_FILE_POLICY "strict" asks for every existing file; "plain" lets an existing
+// plain data file through (not executable, no script extension, outside any work tree).
+export const EXISTING_FILE_POLICY = { mode: "plain" };
+const SCRIPT_EXTENSIONS = /\.(sh|bash|zsh|mjs|js|cjs|ts|mts|ps1|psm1|py|rb|pl|sql|bat|cmd)$/i;
+
+function tempRoots() {
+  const roots = new Set();
   for (const t of [os.tmpdir(), "/tmp"]) {
-    try { tempRoots.add(fs.realpathSync(t)); } catch { /* missing on this system */ }
+    try { roots.add(fs.realpathSync(t)); } catch { /* missing on this system */ }
   }
-  let probe = target;
-  for (let n = 0; n < 64; n++) {
-    let real = null;
-    try { real = fs.realpathSync(probe); } catch { real = null; }
-    if (real !== null) {
-      for (const root of tempRoots) {
-        if (real === root || real.startsWith(root + path.sep)) return true;
-      }
-      return false;
-    }
-    const parent = path.dirname(probe);
-    if (parent === probe) return false;
-    probe = parent;
+  return roots;
+}
+
+function insideGitWorkTreeOrGitDir(realPath, stopAt) {
+  if (realPath.split(path.sep).includes(".git")) return true;
+  let dir = realPath;
+  for (let n = 0; n < 128; n++) {
+    try { if (fs.existsSync(path.join(dir, ".git"))) return true; } catch { return true; }
+    if (dir === stopAt) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
   return false;
 }
 
-// A redirect target is harmless when it is a device, or a plain absolute path that, with
-// every symlink followed, lies inside the system's temporary directory.
+export function isWritableTempTarget(target) {
+  let existing = null;
+  try { existing = fs.lstatSync(target); } catch { existing = null; }
+  // the real place: the target itself if it exists (links followed), else its nearest existing parent
+  let probe = existing ? target : path.dirname(target);
+  let real = null;
+  for (let n = 0; n < 64 && real === null; n++) {
+    try { real = fs.realpathSync(probe); } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) return false;
+      probe = parent;
+    }
+  }
+  if (real === null) return false;
+  if (existing && existing.isSymbolicLink()) {
+    try { existing = fs.statSync(target); } catch { return false; } // a dangling link: unknown
+  }
+  const root = [...tempRoots()].find((r) => real === r || real.startsWith(r + path.sep));
+  if (!root || real === root && existing) return false;
+  if (insideGitWorkTreeOrGitDir(existing ? real : path.join(real, path.basename(target)), root)) return false;
+  if (!existing) return true;
+  if (EXISTING_FILE_POLICY.mode !== "plain") return false;
+  if (!existing.isFile()) return false;
+  if (process.platform !== "win32" && (existing.mode & 0o111) !== 0) return false;
+  return !SCRIPT_EXTENSIONS.test(real);
+}
+
+// A redirect target is harmless when it is a device, or a plain absolute path that
+// isWritableTempTarget accepts.
 export function isHarmlessRedirectTarget(rawTarget, variables = new Map()) {
   let raw = rawTarget;
   for (const [name, value] of variables) {
@@ -1297,7 +1389,7 @@ export function isHarmlessRedirectTarget(rawTarget, variables = new Map()) {
   if (DEVICE_TARGETS.has(target) || /^\/dev\/fd\/\d+$/.test(target)) return true;
   if (!path.isAbsolute(target)) return false;
   if (target.split(/[\\/]/).includes("..")) return false;
-  return realDirectoryUnderTemp(target);
+  return isWritableTempTarget(target);
 }
 
 // Plain assignments in a command line (`S=/tmp/x`, `export S=/tmp/x`): their values are
@@ -1369,7 +1461,9 @@ export function setsNonLocalDatabase(segment) {
 
 // Files that hold secrets. Their examples (.env.example, .env.sample, .env.template) do not.
 const SECRET_PATH_PATTERNS = [
-  /(^|[\\/])\.env(\.(local|production|prod|development|dev|staging|test)(\.local)?)?$/i,
+  /(^|[\\/])\.env([.~_-][^\\/]*)?[\\/]?$/i, // .env and every copy or variant: .env.local, .env.bak, .env~, backend/.env/
+  /(^|[\\/])\.envrc$/i,
+  /^\/proc\/[^/]+\/environ$/, // another process's environment
   /(^|[\\/])\.?pgpass(\.conf)?$/i,
   /\.(pem|key|p12|pfx|jks|keystore)$/i,
   /(^|[\\/])id_(rsa|dsa|ecdsa|ed25519)$/,
@@ -1377,7 +1471,7 @@ const SECRET_PATH_PATTERNS = [
   /(^|[\\/])\.?credentials(\.json)?$/i,
 ];
 // Names a glob could reach: a glob whose literal part can match one of them asks.
-const SECRET_SAMPLE_NAMES = [".env", ".env.local", ".env.production", ".pgpass", "pgpass.conf", "server.pem", "server.key", "id_rsa",
+const SECRET_SAMPLE_NAMES = [".env", ".env.local", ".env.bak", ".envrc", ".env.production", ".pgpass", "pgpass.conf", "server.pem", "server.key", "id_rsa",
   "id_ed25519", ".netrc", ".npmrc", ".git-credentials", "credentials", ".credentials.json", "cert.p12"];
 
 function expandBraces(word, limit = 64) {
@@ -1661,6 +1755,8 @@ export function classifyShellCommand(cmd, cwd) {
     if (isGitPushDelete(segment)) return { decision: "ask", reason: ASK_REASONS.pushDelete };
     if (isGitPullRebase(segment)) return { decision: "ask", reason: ASK_REASONS.pullRebase };
     if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
+    // `cat >(sh)`, `x <(bash)`: a shell inside a process substitution reads what it is fed
+    if (processSubstitutions(segment).some((inner) => isUnreadableShellInput(inner, true))) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (allowedCommandNeedsQuestion(segment, variables)) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
     if (setsDangerousEnvironment(segment)) return { decision: "ask", reason: ASK_REASONS.dangerousEnv };
     if (definesAlias(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };

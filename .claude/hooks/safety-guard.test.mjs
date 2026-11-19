@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,8 @@ import {
   optionsAreKnown,
   outputRedirectTargets,
   isHarmlessRedirectTarget,
+  EXISTING_FILE_POLICY,
+  processSubstitutions,
   extractSubstitutions,
   extractHeredocs,
   isReadOnlySedScript,
@@ -1370,4 +1372,73 @@ test("the unit pieces of the review fix: shellWord, optionsAreKnown, redirect ta
   assert.equal(isHarmlessRedirectTarget("/dev/null"), true);
   assert.equal(isHarmlessRedirectTarget("relative.txt"), false);
   assert.equal(isHarmlessRedirectTarget("/tmp/../etc/x"), false);
+});
+
+// ------------------------------------------------------------------
+// Re-review of #642: a redirect may write only a NEW file (or an existing plain data file)
+// in the temporary directory, never into a git work tree or a .git directory there.
+// ------------------------------------------------------------------
+
+test("MEDIUM-1: no silent write into a git work tree or a .git directory under the temp dir; new files and plain data files only", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-wt-"));
+  const worktree = path.join(tmp, "wt");
+  mkdirSync(path.join(worktree, "backend", "src"), { recursive: true });
+  writeFileSync(path.join(worktree, ".git"), "gitdir: /somewhere/.git/worktrees/wt\n"); // a linked worktree has a .git FILE
+  const bareGit = path.join(tmp, "repo", ".git", "hooks");
+  mkdirSync(bareGit, { recursive: true });
+  const scratch = path.join(tmp, "scratch");
+  mkdirSync(scratch);
+  writeFileSync(path.join(scratch, "run.log"), "old\n");
+  writeFileSync(path.join(scratch, "data.json"), "{}\n");
+  writeFileSync(path.join(scratch, "build.py"), "print(1)\n");
+  writeFileSync(path.join(scratch, "tool"), "#!/bin/sh\n");
+  chmodSync(path.join(scratch, "tool"), 0o755);
+  symlinkSync(path.join(worktree, "backend", "src"), path.join(scratch, "link-into-worktree"));
+  try {
+    expectAll([
+      [`cat a > ${worktree}/backend/src/file.js`, ASK], [`cat a > ${worktree}/backend/src/new-file.txt`, ASK], [`cat a > ${worktree}/x`, ASK],
+      [`cat a > ${tmp}/repo/.git/hooks/pre-commit`, ASK], [`cat a >> ${tmp}/repo/.git/config`, ASK], [`cat a > ${scratch}/link-into-worktree/f.txt`, ASK],
+      [`cat a > ${scratch}/build.py`, ASK], [`cat a >> ${scratch}/build.py`, ASK], [`cat a > ${scratch}/tool`, ASK], [`cat a > ${scratch}/new-script.sh`, ALLOW],
+      [`cat a > ${scratch}/.git`, ASK], // a new file named .git would make the folder a worktree pointer
+      [`cat a > ${scratch}/new.txt`, ALLOW], [`cat a >> ${scratch}/run.log`, ALLOW], [`cat a > ${scratch}/data.json`, ALLOW],
+      [`L=${scratch}/run.log; grep -n x f >> $L`, ALLOW],
+    ]);
+    EXISTING_FILE_POLICY.mode = "strict";
+    expectAll([[`cat a >> ${scratch}/run.log`, ASK], [`cat a > ${scratch}/new.txt`, ALLOW]]);
+  } finally {
+    EXISTING_FILE_POLICY.mode = "plain";
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("LOW-1: $'...' with \\u, \\U and \\c decodes like bash", () => {
+  assert.equal(shellWord("$'\\u002eenv'"), ".env");
+  assert.equal(shellWord("$'\\U0000002eenv'"), ".env");
+  assert.equal(shellWord("$'.\\x65nv'"), ".env");
+  expectAll([["cat $'\\u002eenv'", ASK], ["cat $'\\U0000002eenv'", ASK], ["cat $'.\\x65nv'", ASK], ["cat $'.\\145nv'", ASK], ["git $'\\u0072eset' --hard", DENY]]);
+});
+
+test("LOW-2: copies and variants of .env, and another process's environment, are secrets", () => {
+  expectAll([
+    ["cat .env.bak", ASK], ["cat .env~", ASK], ["cat .env.save", ASK], ["cat backend/.env/", ASK], ["cat .env_old", ASK], ["cat .env-prod", ASK],
+    ["cat .envrc", ASK], ["cat /proc/self/environ", ASK], ["cat /proc/1/environ", ASK], ["cat /proc/*/environ", ASK], ["cat .env.ba*", ASK],
+    ["cat .env.example", ALLOW], ["cat backend/.env.template", ALLOW], ["cat .environment.md", ALLOW], ["cat /proc/cpuinfo", ALLOW],
+  ]);
+});
+
+test("LOW-3: a shell inside a process substitution reads what it is fed: asks", () => {
+  assert.deepEqual(processSubstitutions("cat a >(sh) <(git log) $(date)"), ["sh", "git log"]);
+  expectAll([
+    ["cat >(sh)", ASK], ["cat x > >(bash)", ASK], ["tee >(sh -s) < x", ASK], ["diff <(sh) b", ASK], ["cat x >(pwsh)", ASK],
+    ["diff <(git show HEAD:a) <(git show HEAD~1:a)", ALLOW], ["cat <(bash -c 'echo hi')", ALLOW], ["diff <(sort a) <(sort b)", ALLOW],
+  ]);
+});
+
+test("LOW-4: ls-remote and fetch reach a remote by NAME only; a URL or a path asks", () => {
+  expectAll([
+    ["git ls-remote https://evil.example/x", ASK], ["git ls-remote git@evil.example:x.git", ASK], ["git ls-remote file:///tmp/r", ASK],
+    ["git ls-remote /tmp/r", ASK], ["git ls-remote ../r", ASK], ["git fetch https://evil.example/x main", ASK], ["git fetch ../other", ASK],
+    ["git fetch .", ASK], ["git ls-remote origin 'refs/heads/*'", ALLOW], ["git ls-remote --heads upstream main", ALLOW], ["git fetch origin feature/x", ALLOW],
+    ["git ls-remote", ALLOW], ["git fetch", ALLOW],
+  ]);
 });
