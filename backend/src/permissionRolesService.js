@@ -941,9 +941,11 @@ export async function assignRole(ctx, body) {
   if (clubId) await gateClub(ctx, clubId, { needs: "staff" });
   else if (!isPlatform(ctx)) throw NOT_FOUND();
   const role = (await pool.query(`select owner_scope, owner_club_id from public.permission_roles where id = $1`, [roleId])).rows[0];
-  if (!role || (role.owner_scope === "club" && (clubId == null || String(role.owner_club_id) !== String(clubId)))) throw NOT_FOUND();
+  if (!role) throw NOT_FOUND();
   if (userId === String(ctx.userId).toLowerCase()) throw refuse("self_assignment");
+  // A global or private scope (a platform admin only gets here): never in R2 (O9).
   if (!clubId) throw refuse("role_not_assignable_here");
+  if (role.owner_scope === "club" && String(role.owner_club_id) !== String(clubId)) throw NOT_FOUND();
   const target = (await pool.query(`select is_active from public.users where id = $1`, [userId])).rows[0];
   if (!target) throw NOT_FOUND();
   const requestHash = requestHashOf("assignment_grant", { userId, roleId, scopeType, scopeId, displayTitle, expiresAt, reason });
