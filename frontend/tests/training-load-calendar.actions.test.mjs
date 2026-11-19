@@ -1276,3 +1276,28 @@ test("7h-V: a busy server (503) is not cached as an answer without names; the ne
   assert.equal(answers, 2, "the second open asks the server again");
   assert.deepEqual(nav.data.variableNamesById, CLUB_NAMES);
 });
+
+// ------------------------------------------------------------
+// J21 (calculated variables PR 3): never an unexplained blank
+// ------------------------------------------------------------
+test("a calculated variable's column says it is OptiMove's and from when; its empty cell says why; an ordinary empty cell is unchanged", () => {
+  resetState();
+  const cal = state.trainingLoad.calendar;
+  const calc = (athleteId) => metricValueFact(athleteId, { metricDefinitionId: "def-hmld", metricDefinitionVersionId: "defv-hmld", valueNumeric: 400, isDerived: true,
+    aggregationRole: "derived_rollup", coverage: "complete", computedByRef: { formulaVersionId: "defv-hmld", inputValueIds: ["v1", "v2", "v3"] } });
+  withActivitySelected(cal, { detail: activityDetailPayload({
+    facts: [metricValueFact("ath-1"), calc("ath-1"), metricValueFact("ath-2", { valueNumeric: 4200 })],
+    athleteNamesById: { "ath-1": "Ana", "ath-2": "Bea" },
+    variableNamesById: { "def-hmld": { label: "HMLD", shortLabel: null, unit: "m" }, "def-distance": { label: "Distance", shortLabel: null, unit: "m" } },
+  }) });
+  const html = renderTrainingLoadCalendarHtml();
+  assert.match(html, /HMLD is calculated by OptiMove from other variables\. Calculated for sessions imported after this variable was made\./);
+  assert.match(html, /An empty cell means one of the variables it adds up has no value for that athlete\./);
+  assert.ok(html.includes('aria-label="Not calculated: one of the variables it adds up has no value for this athlete here."'), "Bea's HMLD cell says why it is empty");
+  // Without a calculated variable, nothing new is said.
+  resetState();
+  withActivitySelected(state.trainingLoad.calendar, { detail: activityDetailPayload({ facts: [metricValueFact("ath-1"), metricValueFact("ath-2", { metricDefinitionId: "def-b" })] }) });
+  const plain = renderTrainingLoadCalendarHtml();
+  assert.ok(!plain.includes("calculated by OptiMove"));
+  assert.ok(!plain.includes("Not calculated"));
+});

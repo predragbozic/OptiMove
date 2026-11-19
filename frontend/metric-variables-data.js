@@ -290,20 +290,7 @@ const OPERATOR_SIGN = { ">=": "≥", ">": ">", "<=": "≤", "<": "<" };
 export const CALCULATED_CONDITION_NOTE = "Stated by the person who made this variable. OptiMove does not check it against the variables it adds up yet.";
 export const conditionNoteFor = (version) => (version?.calculation && version?.condition ? CALCULATED_CONDITION_NOTE : "");
 
-// Calculated variables (J21): the sentences the screens say, in one place.
-export const CALCULATED_TEXT = Object.freeze({
-  // C144 and the Rukovodilac's condition (1): never an unexplained blank.
-  fromNow: "Calculated for sessions imported after this variable was made. Sessions imported earlier stay without it.",
-  // C141: no switch per team.
-  perTeam: "OptiMove calculates it for a team once every variable it adds up is switched on for that team.",
-  // C142 and C145.
-  missing: "If one of them has no value in a session, this variable has no value there either (zero is a value; missing is not).",
-  // The overlap is not checked in step 1 (J21).
-  overlap: "OptiMove does not check whether two of them count the same thing (for example zone 3 and \"above 25 W/kg\"): choose variables that do not overlap.",
-  // C147.
-  athletes: "Athletes do not see calculated variables.",
-  dayRule: "A day's values are added up (Sum). A calculated variable has no allowed values.",
-});
+export { CALCULATED_TEXT } from "./calculated-text.js";
 // The variables a calculated variable may add up, from the lists the workspace reads (its own and, in a club, OptiMove's):
 // every active variable but the one being edited, each with the reason it cannot be added, if any - listed, never hidden
 // (the Rukovodilac, 2026-11-18). The server checks again on Save.
