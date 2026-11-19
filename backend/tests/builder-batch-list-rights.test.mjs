@@ -182,6 +182,38 @@ test("2. a viewer who may open every member gets exactly today's list, with hidd
   assert.equal(created.body.batch.hiddenCount, 0);
 });
 
+test("4. two coaches, the whole answer: each coach's answer equals the same answer once the other team's members are taken out of the batch, except hiddenCount (code review MEDIUM)", async () => {
+  const w = await world("whole");
+  const teamB = (await q(`select team_id from public.athlete_memberships where athlete_id = $1 and membership_type = 'team'`, [w.b1.athleteId]))[0].team_id;
+  const coachBId = await makeUser("whole Coach B");
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [coachBId, teamB]);
+  await setWorkspace(coachBId, "team", teamB);
+  const coachB = await cookieOf(coachBId);
+  const viewers = [
+    { label: "coach A", cookie: w.coachA, own: w.planA1, others: [w.planB1], hidden: 1 },
+    { label: "coach B", cookie: coachB, own: w.planB1, others: [w.planA1, w.planA2], hidden: 2 },
+  ];
+  for (const v of viewers) {
+    const withOthers = ok(await api(`/api/builder/plans/${v.own}`, { cookie: v.cookie })).text;
+    // Take the other team's plans out of the batch (as a deleted plan is), then read again.
+    await q(`update plans.plans set is_active = false where id = any($1::uuid[])`, [v.others]);
+    const without = ok(await api(`/api/builder/plans/${v.own}`, { cookie: v.cookie })).text;
+    await q(`update plans.plans set is_active = true where id = any($1::uuid[])`, [v.others]);
+    assert.ok(withOthers.includes(`"hiddenCount":${v.hidden}`), `${v.label}: ${withOthers.slice(0, 200)}`);
+    assert.equal(withOthers.replace(`"hiddenCount":${v.hidden}`, `"hiddenCount":0`), without, `${v.label}: nothing but the count differs`);
+  }
+});
+
+test("5. a platform admin who did not create the batch sees every member, exactly as today", async () => {
+  const w = await world("platform");
+  const id = await makeUser("platform Admin");
+  await q(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true)`, [id]);
+  await setWorkspace(id, "platform", null);
+  const draft = ok(await api(`/api/builder/plans/${w.planB1}`, { cookie: await cookieOf(id) }));
+  assert.deepEqual(draft.body.batch.plans, await unfilteredMembers(w.planB1));
+  assert.equal(draft.body.batch.hiddenCount, 0);
+});
+
 test("3. one source of truth: the switcher's rows are exactly the plans getEditablePlan opens for that viewer", async () => {
   const w = await world("same");
   const draft = ok(await api(`/api/builder/plans/${w.planA1}`, { cookie: w.coachA }));
