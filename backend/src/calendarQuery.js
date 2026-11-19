@@ -549,7 +549,19 @@ async function readEventTeamTargets(eventIds) {
 // more is ORPHANED (no session_id) — counted on the event's card, never an
 // error and never silently gone; a session renamed since the link still
 // resolves and is counted as renamed. One statement.
-async function readEventSessionLinks(eventIds) {
+// K4a (docs/ai/central-calendar-k4a-contract.md 1.1): for the athlete, only
+// the links of the athlete's OWN plans are read - a teammate's link never
+// enters the athlete's request. Without `athleteId` (a coach) the statement is
+// the one it always was.
+export async function readEventSessionLinks(eventIds, { athleteOnly = false, athleteId = null } = {}) {
+  const params = [eventIds];
+  let own = "";
+  if (athleteOnly) {
+    // Fail closed: an athlete's read without her id never reads every link.
+    if (!athleteId) throw new Error("readEventSessionLinks: an athlete's link read needs her athlete id.");
+    params.push(athleteId);
+    own = ` and l.plan_id in (select p.id from plans.plans p where p.athlete_id = $2::uuid)`;
+  }
   const result = await query(
     `select l.id, l.event_id, l.plan_id, l.day, l.am_pm, l.bta, l.session_order, l.session_name_at_link,
             s.session_id, s.session_name
@@ -565,8 +577,8 @@ async function readEventSessionLinks(eventIds) {
           order by ps.id
           limit 1
        ) s on true
-      where l.event_id = any($1::uuid[]) and l.ended_at is null`,
-    [eventIds],
+      where l.event_id = any($1::uuid[]) and l.ended_at is null${own}`,
+    params,
   );
   return result.rows;
 }
@@ -730,6 +742,35 @@ function compareCards(x, y) {
   return 0;
 }
 
+// K4a (contract 1.2): the athlete's OWN sessions folded into an event card,
+// each with exactly these keys. Only rows of `athleteId` (the planned rows are
+// hers already; this is the second guard). The time is the session's own, else
+// the event's start on the event's first day (O12 / O14, the rule of
+// linkedSessionTimes.js); the RPE state is computed from her own row only.
+const SLOT_RANK = { AM: 1, PM: 2, B: 1, T: 2, A: 3 };
+function athleteEventSessions(rows, eventRow, day, athleteId) {
+  const own = rows.filter((r) => String(r.athlete_id) === String(athleteId));
+  const byId = new Map();
+  for (const r of own) if (!byId.has(String(r.session_id))) byId.set(String(r.session_id), r);
+  const rank = (v) => SLOT_RANK[v] || 0;
+  return [...byId.values()]
+    .sort((a, b) => rank(a.am_pm) - rank(b.am_pm) || rank(a.bta) - rank(b.bta)
+      || (Number(a.session_order) || 0) - (Number(b.session_order) || 0) || String(a.session_id).localeCompare(String(b.session_id)))
+    .map((r) => {
+      const ownTime = timeStr(r.session_time);
+      const eventTime = day === dateStr(eventRow.day) ? timeStr(eventRow.start_time) : null;
+      return {
+        title: String(r.session_name ?? "").trim() || null,
+        slot: { amPm: r.am_pm || null, bta: r.bta || null, order: Number(r.session_order) || 0 },
+        time: ownTime || eventTime || null,
+        timeFromEvent: !ownTime && Boolean(eventTime),
+        sessionId: String(r.session_id),
+        logicalSessionId: r.logical_session_id ? String(r.logical_session_id) : null,
+        rpe: r.rpe_expected ? (r.rpe_submitted ? "submitted" : "missing") : "not_asked",
+      };
+    });
+}
+
 // The linked planned sessions and activities of one event day (K2a-1b, plan
 // sections 2.3 and 3.2) become the event's channels:
 //   - RPE x/y over the linked sessions that ask (rpe_enabled and the
@@ -873,8 +914,10 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
   }
 
-  // The links (K2a-1b) are a coach's matter: the athlete workspace folds
-  // nothing (plan section 5) and reads none. A PLANNED event folds its linked
+  // The links (K2a-1b): a coach's card folds every linked session and
+  // activity; the athlete (K4a-B, docs/ai/central-calendar-k4a-contract.md
+  // 1.1, Q2) folds only HER OWN linked planned sessions and reads no activity
+  // link and no orphaned / renamed count. A PLANNED event folds its linked
   // sessions and activities on a day it is shown; a cancelled event folds
   // nothing (manager decision 9.12), so its sessions are planned cards again.
   // A response that does not carry the event cards (`kinds` without `event`)
@@ -886,9 +929,15 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     ? uniq(eventDays.filter(({ row }) => eventWriteBasis(ctx, eventOwnerOfRow(row)) !== null).map(({ row }) => String(row.id)))
     : [];
   const detailCounts = managedEventIds.length ? await readEventDetailCounts(managedEventIds) : new Map();
-  const foldsLinks = coachView && kinds.has("event") && eventRows.length > 0;
-  const sessionLinks = foldsLinks ? await readEventSessionLinks(eventRows.map((r) => r.id)) : [];
-  const activityLinks = foldsLinks ? await readEventActivityLinks(eventRows.map((r) => r.id)) : [];
+  // K4a (contract 1.1, Q2): the athlete folds only her OWN linked planned
+  // sessions, and only when the planned kind is asked too (Home's
+  // `kinds=event` read stays as it was). No activity link is read for her.
+  const athleteFolds = ctx.type === "athlete" && kinds.has("event") && kinds.has("planned") && eventRows.length > 0;
+  const foldsLinks = (coachView && kinds.has("event") && eventRows.length > 0) || athleteFolds;
+  const sessionLinks = foldsLinks
+    ? await readEventSessionLinks(eventRows.map((r) => r.id), athleteFolds ? { athleteOnly: true, athleteId: ctx.athleteId } : undefined)
+    : [];
+  const activityLinks = foldsLinks && coachView ? await readEventActivityLinks(eventRows.map((r) => r.id)) : [];
   const eventById = new Map(eventRows.map((r) => [String(r.id), r]));
   const foldsInto = (eventId, day) => {
     const row = eventById.get(String(eventId));
@@ -1266,6 +1315,10 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     for (const scheduleId of questionFolds.get(`${row.id}|${day}`) || []) cards.delete(`test:${scheduleId}:${day}`);
     const fold = folds ? eventFolds.get(card.key) : null;
     if (fold) applyEventFold(card, fold);
+    if (athleteFolds && row.status === "planned") {
+      const own = eventFolds.get(card.key);
+      if (own?.rows.length) card.sessions = athleteEventSessions(own.rows, row, day, ctx.athleteId);
+    }
     if (ctx.type !== "athlete") {
       // The links that no longer find their session (a deleted plan, a
       // session moved to another slot) and the sessions renamed since the
@@ -1335,6 +1388,8 @@ function publicCard(card, includeAthletes) {
       status: card.cancelled ? "cancelled" : "planned", cancelled: card.cancelled,
       teamIds: [...card.teamIds].sort(),
       links: { eventId: card.eventId },
+      // K4a: her own linked sessions, only when one folded (contract 1.2).
+      ...(card.sessions?.length ? { sessions: card.sessions } : {}),
     };
   }
   const athleteIds = uniq(card.athletes.map((a) => a.athleteId));
