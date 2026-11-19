@@ -8,12 +8,12 @@ written into the sections below.
 
 | | |
 |---|---|
-| Status | **Proposed.** Not accepted; nothing is built. The owner decided O1-O6 and O8 on 2026-11-19 (section 10.0). Before any code: the owner's acceptance and the open points O7, O9, O10 and the plan's D4, a migration number agreed with the *Rukovodilac* of OptiMove (M1-M15), and both external reviews (the *Rukovodilac* and the *Nezavisni revizor*). |
+| Status | **Proposed.** Not accepted; nothing is built, and no code is written before the GO. The owner decided O1-O10 and the plan's D4 on 2026-11-19 (section 10.0); the *Rukovodilac* of OptiMove decided M1-M15 (section 10.2). Reviews: the three internal reviews (database, security, consistency) ended READY on `ab38f76`. The external review (the *Nezavisni revizor*, relayed by the *Rukovodilac*) was NO-GO at `2e5324c` with two MEDIUM findings: the lock order against the login switch-off (4.3.1) and the drift of the twin against `can()` (test 31a). Both are written into this head. Still owed: the narrow external re-review of those parts, then the owner's acceptance. |
 | Mark | ★★: external-review triggers 1 (a migration), 2 (auth, roles, info hiding) and 4 (transactions, lock order, idempotency) of `CLAUDE.md`. |
-| Written against | The plan at `3a6723a` (branch `docs/roles-permissions-plan`) and the R1 code at `f4dd289` (branch `feature/roles-r1-can`, PR #619, not merged when this was revised). Every `file:line` below is of `f4dd289` unless it names another commit. R2's implementation re-checks each at its own base. |
+| Written against | The plan at `3a6723a` and the R1 code at `f4dd289`. Both are merged: `origin/main` at `b08cfb7` (2026-11-19) holds them and is merged into this branch. `backend/src/permissions.js`, `routes/organization.js`, `authz.js`, `auth.js`, `server.js` and `backend/tests/permissions-r1.test.mjs` are byte-identical at `f4dd289` and at `b08cfb7` (`git diff`), so every `file:line` below holds at both. R2's implementation re-checks each at its own base. |
 | Depends on | R1 merged (`backend/src/permissions.js`, `can()`), and the read-only production count of the plan's section 2.1 rule 2 (rows of `user_club_roles` / `user_team_roles` with another word; expected 0). The manager of this stream relays that the *Rukovodilac* of OptiMove read 0 rows on 2026-11-19 at 07:57 UTC; the database was not read for this document, and the preflight counts again (7.1 block 3). |
-| Migration | One file, number and name **not chosen** (M1). On 2026-11-19 the newest file of `migrations_v2/` on `f4dd289` and on `origin/main` is `202611191000_calendar_v81_athlete_questions.sql`. Working name: `<YYYYMMDDHHMM>_roles_v<N>_permission_roles.sql`. "vN" below means this migration. |
-| Decides | The owner: O7, O9, O10 and the plan's D4, all open (section 10.1); O1-O6 and O8 are decided (section 10.0). The *Rukovodilac*: M1-M15, open (section 10.2). The manager of this stream decided the points of section 10.3 on 2026-11-19 after the first review round. |
+| Migration | One file, **v84** (M1): v79, v80 and v82 are the mapping stream's and the calendar's next is v83. The 12-digit prefix is fixed when the file is written; `202611191200` is taken. On `b08cfb7` the newest file of `migrations_v2/` is `202611191000_calendar_v81_athlete_questions.sql`. Working name: `<YYYYMMDDHHMM>_roles_v84_permission_roles.sql`. "vN" below means this migration. |
+| Decides | Nothing is open. The owner: section 10.0. The *Rukovodilac* of OptiMove: section 10.2. The manager of this stream: section 10.3. |
 
 ## 0. In short
 
@@ -21,6 +21,11 @@ written into the sections below.
   `public.lock_permission_actor()`, one CHECK on each of the two old scoped role tables, the Roles API (backend
   only), and moves `can()` from the code constant `BASIC_ROLE_PERMISSIONS` (`backend/src/permissions.js:200-215`)
   to the database. Module switches are not in R2: they are a later migration of their own (O6 (b), section 2.8).
+- **R2 changes existing locking behaviour in `routes/organization.js`.** Switching a login off
+  (`setUserLoginStatus`) today locks user rows in several statements, each in id order only inside itself. R2
+  makes it lock all of them in one statement in id order, so that it cannot deadlock with an assignment or a
+  revocation of the Roles API (section 4.3.1). This is the one change R2 makes to an existing route's
+  transaction; reviewers should read it first.
 - The migration assigns no role to anyone and reads no existing row to build its seed. The three old role tables stay
   the only way today's four roles are granted and revoked. For every existing account, every answer of `can()` on
   the day of the deploy is the answer R1 gives, with one stated exception: `roles.manage` now passes for a club's
@@ -45,7 +50,10 @@ written into the sections below.
 2. The backend Roles API of section 5 (a new service and router). No frontend (R3).
 3. `can()` and `loadAuthorizationContext()` reading role items and non-basic assignments from the database
    (section 6).
-4. A runbook with a read-only preflight, a post-check and a rehearsed rollback (section 7), and the tests of section 8.
+4. **A change of existing locking in `backend/src/routes/organization.js`** (section 4.3.1): the login switch-off
+   locks every qualifying admin it reads in one statement in id order. No status code, body or rule of that route
+   changes.
+5. A runbook with a read-only preflight, a post-check and a rehearsed rollback (section 7), and the tests of section 8.
 
 ### 1.2 What R2 does not deliver
 
@@ -114,10 +122,10 @@ and TRUNCATE (`23514` "permissions: the catalog is fixed").
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `owner_scope` | text | no | - | `in ('system', 'club')` |
 | `owner_club_id` | uuid | yes | - | FK `clubs(id)`; `(owner_scope = 'system') = (owner_club_id is null)`; indexed |
-| `name` | text | no | - | `permission_text_ok(name, 80)` (O7, open) |
+| `name` | text | no | - | `permission_text_ok(name, 80)` (O7) |
 | `description` | text | yes | - | null or `permission_text_ok(description, 500)` |
-| `assignable_club`, `assignable_team`, `assignable_private`, `assignable_global` | boolean | no | `false` | at least one true; a club's role: `private` and `global` false; `assignable_global` only where `basic_key = 'platform_admin'`; in R2 `assignable_private` only where `basic_key = 'independent_coach'` (a trigger, so that a later migration can relax it; O9, open) |
-| `is_basic` | boolean | no | `false` | `is_basic = (basic_key is not null)` (O10, open); a basic role is `system` |
+| `assignable_club`, `assignable_team`, `assignable_private`, `assignable_global` | boolean | no | `false` | at least one true; a club's role: `private` and `global` false; `assignable_global` only where `basic_key = 'platform_admin'`; in R2 `assignable_private` only where `basic_key = 'independent_coach'` (a trigger, so that a later migration can relax it; O9) |
+| `is_basic` | boolean | no | `false` | `is_basic = (basic_key is not null)` (O10); a basic role is `system` |
 | `basic_key` | text | yes | - | `in ('platform_admin', 'club_admin', 'team_coach', 'independent_coach')`; unique where not null |
 | `copied_from_role_id` | uuid | yes | - | FK `permission_roles(id)`; indexed; only on a club's role |
 | `copied_from_revision` | integer | yes | - | null exactly when `copied_from_role_id` is null |
@@ -128,7 +136,7 @@ and TRUNCATE (`23514` "permissions: the catalog is fixed").
 | `created_at`, `updated_at` | timestamptz | no | `now()` | - |
 
 Indexes: unique `(coalesce(owner_club_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(name)) where
-archived_at is null` (O7, open; written as its recommendation (a)); `(owner_club_id) where archived_at is null`.
+archived_at is null` (O7, option (a)); `(owner_club_id) where archived_at is null`.
 
 Triggers:
 
@@ -138,7 +146,7 @@ Triggers:
 | same | any change of `id`, `owner_scope`, `owner_club_id`, `is_basic`, `basic_key`, `copied_from_*`, `created_*`; a revision that is not the old one plus 1; any write to the row with `basic_key = 'platform_admin'`; a change of an archived role; `archived_at` going back to null | `23514` "permission role: this change is not allowed" |
 | same | an `assignable_*` flag going from true to false while any row of `user_role_assignments` names the role (the plan: scope types "may only widen after the first assignment") | `23514` "permission role: a scope type cannot be removed once the role was assigned" |
 | same | a widened `assignable_*` flag that an existing item's scope types do not cover | `23514` "permission role: an item does not cover the role's scope types" |
-| same | `archived_at` set while an active assignment of the role exists (O3 (b); "active" as in 2.7). Revoked rows and, under D4 (open), lapsed rows do not count | `23514` "permission role: a role that is assigned cannot be archived" |
+| same | `archived_at` set while an active assignment of the role exists (O3 (b); "active" as in 2.7). Revoked rows and, under D4, lapsed rows do not count | `23514` "permission role: a role that is assigned cannot be archived" |
 | `AFTER INSERT OR UPDATE`, deferred constraint | no `permission_role_changes` row of this transaction for this role and revision | `23514` "permission role: the change has no change record" |
 | `BEFORE DELETE` (row), `BEFORE TRUNCATE` | always | `23514` "permission role: roles are archived, never deleted" |
 
@@ -167,7 +175,7 @@ its items (written under the role's `FOR UPDATE`, read under `FOR SHARE`).
 | rule 7, first check, at COMMIT (deferred): the Club admin role lacks a required word. The required list is a literal in the guard function: `staff.assign` and `roles.manage` (O1 (b)). It grows only by a later migration that replaces the function, `accounts.manage` first, when account actions move with their target rule | `23514` "permission role item: the Club admin role must hold this permission" |
 | rule 7, second check, at COMMIT (deferred; fired by an item INSERT or DELETE and by an archive): for every non-archived system role other than Platform admin, every item word whose catalog scope types include `club` is an item of the Club admin role. It reads the catalog, not the role's own `assignable_*` flags, so a word of Team coach counts too. Consequence: no system role can carry `accounts.manage` until Club admin holds it | `23514` "permission role item: a system role holds a permission the Club admin role lacks" |
 
-**The seed and later migrations (M15, open).** In the file of vN the seed INSERTs run before the guard triggers
+**The seed and later migrations (M15).** In the file of vN the seed INSERTs run before the guard triggers
 exist; every trigger is created after the seed, and the two `ALTER TABLE` statements of 2.10 come last. A later
 migration that adds or removes items (a module's step) has no acting user. Recommended, one defined mode, in this
 order: the role's UPDATE (`revision` + 1), then the `permission_role_changes` row of kind `migration` (2.6), then
@@ -193,7 +201,7 @@ the module-switch migration (section 2.8).
 | `id` | uuid | no | PK, `gen_random_uuid()` |
 | `role_id` | uuid | no | FK; unique `(role_id, revision_after)` |
 | `revision_after` | integer | no | `>= 1` |
-| `kind` | text | no | `in ('create', 'copy', 'change', 'archive', 'migration')` (`migration`: M15, open) |
+| `kind` | text | no | `in ('create', 'copy', 'change', 'archive', 'migration')` (`migration`: M15) |
 | `performed_by_user_id` | uuid | yes | FK `users(id)`; indexed; null exactly for kind `migration` |
 | `basis` | text | yes | `in ('platform_admin', 'club_admin')`; a system role: `platform_admin` only; null exactly for kind `migration` |
 | `migration_name` | text | yes | the migration's file name, a non-empty literal written in that file; not null exactly for kind `migration`; a row of that kind only on a system role |
@@ -207,7 +215,12 @@ the module-switch migration (section 2.8).
 | `created_at` | timestamptz | no | default `now()` |
 
 A `change` or `migration` row must change at least one thing (CHECK). A `migration` row is accepted only while no
-acting user is set (a session of the service always sets one). `BEFORE INSERT`, every other kind: the acting user is `performed_by_user_id`
+acting user is set (a session of the service always sets one). A deferred guard also requires, at COMMIT, a row
+of `public.schema_migrations` with the same `migration_name`, written by the same transaction (M15). The runner
+makes that possible: it sends `begin`, the file, the INSERT into `public.schema_migrations` and `commit` on one
+connection (`backend/src/migrate.js:780-791`, read at `b08cfb7`), so the row exists when the deferred guard fires.
+A `migration` row written outside the runner (a psql session, a test that executes the file directly) therefore
+fails at COMMIT; tests apply such a migration through the runner. `BEFORE INSERT`, every other kind: the acting user is `performed_by_user_id`
 (`42501`); the basis is the one the database derives (`42501`); the role row carries `revision_after` and was written
 by this transaction, and the item rows of this transaction agree with `items_added` (`23514` "permission role
 change: the record must follow its own change in the same transaction"). UPDATE, DELETE, TRUNCATE: `23514`
@@ -228,10 +241,10 @@ change: the record must follow its own change in the same transaction"). UPDATE,
 | `granted_by_user_id` | uuid | no | - | FK `users(id)`; indexed |
 | `grant_basis` | text | no | - | `in ('platform_admin', 'club_admin')` |
 | `grant_reason` | text | no | - | `permission_text_ok(grant_reason, 500)` (M10) |
-| `expires_at` | timestamptz | yes | - | null or `> created_at` (the plan's D4, open: written as its recommendation, an optional end date) |
+| `expires_at` | timestamptz | yes | - | null or `> created_at` (the plan's D4: an optional end date) |
 | `revoked_at` | timestamptz | yes | - | null together with the three columns below |
 | `revoked_by_user_id` | uuid | yes | - | FK `users(id)`; indexed |
-| `revoke_kind` | text | yes | - | `in ('revoked', 'expired')` (`expired`: D4, open). The plan's "replaced" has no writer in R2 and is not in the CHECK |
+| `revoke_kind` | text | yes | - | `in ('revoked', 'expired')` (`expired`: D4). The plan's "replaced" has no writer in R2 and is not in the CHECK |
 | `revoke_reason` | text | yes | - | `permission_text_ok(revoke_reason, 500)`; may be null only for `expired` |
 | `created_at` | timestamptz | no | `now()` | - |
 
@@ -241,19 +254,19 @@ null`; `(scope_type, scope_id) where revoked_at is null`.
 "Active" everywhere means `revoked_at is null and (expires_at is null or expires_at > now())`. `now()` is the
 transaction's start, on purpose: a transaction in flight when a row expires finishes under the answer it started
 with (plan section 5). No job stamps an expired row; the next grant of the same (user, role, scope) first stamps it
-`expired` and then inserts. Expiry, "lapsed" and the `expired` stamp all depend on the plan's D4 (open).
+`expired` and then inserts. Expiry, "lapsed" and the `expired` stamp all depend on the plan's D4.
 
 | Guard | SQLSTATE, message |
 |---|---|
 | `BEFORE INSERT`: no acting user, or the row's `granted_by_user_id` is another user | `42501` "role assignment: the row names another user than the acting user" |
 | the acting user holds neither `staff.assign` for the scope's club nor the platform admin role; `grant_basis` is not the derived one | `42501` "role assignment: the acting user may not assign roles here" |
 | the acting user does not hold every item of the role in that scope (ceiling and dominance; a platform admin holds everything) | `42501` "role assignment: the acting user does not hold every permission of this role" |
-| the role has a `basic_key` (the old tables stay their only source); `scope_type = 'global'`; in R2 `scope_type = 'private'` (no private assignment can be made in R2; O9, open) | `23514` "role assignment: this role is not assigned here" |
+| the role has a `basic_key` (the old tables stay their only source); `scope_type = 'global'`; in R2 `scope_type = 'private'` (no private assignment can be made in R2; O9) | `23514` "role assignment: this role is not assigned here" |
 | the role is archived; not assignable for `scope_type`; a club's role outside its club (club scope: `scope_id` is not `owner_club_id`; team scope: the team's `club_id` is not) | `23514` "role assignment: the role cannot be assigned for this scope" |
 | the user is inactive; the club or team (or the team's club) is missing or archived. (The earlier draft's check of a `private` scope is not needed while the row above refuses it; it returns with O9.) The club and team rows are read without a lock (section 9) | `23514` "role assignment: the user or the scope takes no assignment" |
 | `user_id = granted_by_user_id` (M11) | `23514` "role assignment: nobody assigns a role to themselves" |
 | `BEFORE UPDATE`: anything but the four revocation columns going from null to a value, together; the acting user is not `revoked_by_user_id`; the acting user does not hold `staff.assign` for the scope's club (in R2: a platform admin or that club's admin). One rule in the service and in the database: such a holder may revoke any assignment in that scope, its own included, with no dominance check. That is safe only while `staff.assign` is in the Club admin role alone (2.4); the migration that relaxes that adds dominance here | `23514` "role assignment: only a revocation may change the row" / `42501` "role assignment: the acting user may not revoke this assignment" |
-| `AFTER INSERT OR UPDATE`, deferred: no `permission_requests` row of this transaction names the assignment. One exception (D4, open): an `expired` stamp needs no request row of its own when the same transaction inserts the replacing row for the same (user, role, scope) and that row's `granted_by_user_id` is the stamp's `revoked_by_user_id`; the replacing row's request record covers both | `23514` "role assignment: the write has no request record" |
+| `AFTER INSERT OR UPDATE`, deferred: no `permission_requests` row of this transaction names the assignment. One exception (D4): an `expired` stamp needs no request row of its own when the same transaction inserts the replacing row for the same (user, role, scope) and that row's `granted_by_user_id` is the stamp's `revoked_by_user_id`; the replacing row's request record covers both | `23514` "role assignment: the write has no request record" |
 | `BEFORE DELETE`, `BEFORE TRUNCATE` | `23514` "role assignment: assignments are revoked, never deleted" |
 
 ### 2.8 Module switches: not in R2 (O6 (b))
@@ -289,7 +302,7 @@ What the later migration must do:
 | `requested_by_user_id` | uuid | no | FK `users(id)` |
 | `operation` | text | no | `in ('role_create', 'role_copy', 'role_change', 'role_archive', 'assignment_grant', 'assignment_revoke')` |
 | `request_hash` | text | no | `~ '^[0-9a-f]{64}$'` |
-| `owner_scope` | text | no | `in ('system', 'club')`. No `private`: nothing of a private workspace is written in R2 (O9, open) |
+| `owner_scope` | text | no | `in ('system', 'club')`. No `private`: nothing of a private workspace is written in R2 (O9) |
 | `owner_club_id` | uuid | yes | null exactly for `system`; FK `clubs(id)`; indexed. A plain column, in place of the earlier draft's polymorphic `owner_id` (M7) |
 | `basis` | text | no | `in ('platform_admin', 'club_admin')` |
 | `role_change_id` | uuid | yes | FK `permission_role_changes(id)`; unique where not null |
@@ -410,7 +423,7 @@ club only, 2 for a team only, 4 global. `platform.admin` belongs to the module `
 
 No word has the scope type `private` in the seed: R1's catalog has none, and R1's `can()` throws for a scope type
 other than `global`, `club`, `team` (`backend/src/permissions.js:262-264`). Which words exist in a private workspace
-is O9 (open). This section follows its recommendation (a): none in R2.
+is O9. This section follows its recommendation (a): none in R2.
 
 ### 3.3 Basic roles and their starting items
 
@@ -419,7 +432,7 @@ is O9 (open). This section follows its recommendation (a): none in R2.
 | `platform_admin` | Platform admin | global | none; holds everything by rule, not by rows (M5); not editable |
 | `club_admin` | Club admin | club | `org.view`, `org.teams.manage`, `org.club.edit`, `athletes.manage`, `athletes.remove`, `staff.assign`, `roles.manage` (7) |
 | `team_coach` | Team coach | team | `org.view`, `athletes.manage`, `athletes.remove` (3) |
-| `independent_coach` | Independent coach | private | none (O9, open) |
+| `independent_coach` | Independent coach | private | none (O9) |
 
 So the seed has 10 item rows.
 
@@ -499,7 +512,7 @@ row lock is not allowed in a non-volatile function) and caches nothing in a sess
    | `team` T of club X | an active `user_team_roles` row (T, `team_coach`) -> Team coach; an active `user_club_roles` row (X, `club_admin`) -> Club admin | scope `team` T; scope `club` X |
    | `private` U | `p_user = U` and an active `independent_coach` row -> Independent coach | scope `private` U, only where `p_user = U` |
 
-   The `private` row depends on O9 (open). Under its recommendation (a) no word has the scope type `private` and
+   The `private` row depends on O9. Under its recommendation (a) no word has the scope type `private` and
    the Independent coach role has no items, so in R2 a check at private scope is `false` for everyone but a
    platform admin.
 
@@ -519,7 +532,7 @@ For the two basic sets of 3.3 and no assignment, steps 3-7 return exactly what `
 (`permissions.js:265-272`), apart from `roles.manage`, which R1's constant does not hold and the seed gives to
 Club admin; test 31 of section 8 proves it over the whole matrix. The claim is about active users and the old
 tables' `is_active` rows. It excludes an inactive user (`users.is_active`): the twin answers `false` at step 2,
-while `can()` relies on the session, which a disabled login loses (M13, open). That difference has its own named
+while `can()` relies on the session, which a disabled login loses (M13). That difference has its own named
 test and is not part of the equivalence.
 
 ### 4.2 `public.lock_permission_actor(p_user uuid, p_scope_type text, p_scope_id uuid) returns text`
@@ -546,7 +559,7 @@ For the lock function, the guards, the role editor, assignment and revocation:
    every qualifying admin of a club in id order, `for update of u, r` (`organization.js:2750-2761`), so "actor
    first" meets it in the opposite order when the target's id is the lower one. The actor's row is therefore not
    locked alone first in these two writes; the single statement is still the first rights lock, users before any
-   role row (M6, open: this is now its recommendation).
+   role row (M6).
 3. Assignment rows: first the acting user's rows of the old tables (`user_global_roles`, then `user_club_roles`,
    then `user_team_roles`), `FOR SHARE`; then rows of `user_role_assignments` by `id` ascending (the acting user's
    `FOR SHARE`; the row being revoked `FOR NO KEY UPDATE`).
@@ -558,8 +571,51 @@ For the lock function, the guards, the role editor, assignment and revocation:
 
 The editor's own rights (1 and 3) are locked before the role it edits (4), so a right lost at the same moment
 cannot be handed on. Every lock is taken before the first write. No club or team row is locked; the existing
-headcount advisory locks (`organization.js:534-536`, `:2739-2741`) are not taken by any R2 route, because no R2
-route grants or revokes a basic role.
+headcount advisory locks (`organization.js:534-536`, `:2739-2741`) are not taken by any route of the Roles API,
+because none of them grants or revokes a basic role. The existing login switch-off keeps taking them (4.3.1).
+
+#### 4.3.1 A change of existing locking behaviour: the login switch-off
+
+**This changes code that exists and works today.** Found by the external review (MEDIUM-1), concluded from the
+code, not reproduced. Decided by the *Rukovodilac* of OptiMove (its option (a)).
+
+What the code does today (`backend/src/routes/organization.js`, read at `b08cfb7`). Switching a login off,
+`setUserLoginStatus` (`:584`; its transaction opens at `:597`), sends in this order:
+
+1. the platform headcount advisory lock (`:598`, `lockPlatformAdminHeadcount`, `:534-536`);
+2. only if the target is a platform admin: `loadQualifyingPlatformAdminIds` (`:609`, `:547-556`), which locks every
+   qualifying platform admin, `order by u.id for update of u, g`;
+3. `findClubAdminLastAdminBlock` (`:616`, `:2775`): it reads the active clubs the target administers in `club_id`
+   order, takes each club's headcount advisory lock in that order (`lockClubAdminHeadcount`, `:2739-2741`), and
+   then, club by club in that order, calls `loadQualifyingClubAdminUserIds` (`:2750-2761`), which locks that club's
+   qualifying admins, `order by u.id for update of u, r`.
+
+So user rows are locked in up to 1 + N statements (N = the target's clubs). The id order holds inside one statement
+only, never across them. The pair statement of P9 / P10 (place 2 above) takes two user rows in id order, so the
+two can wait for each other:
+
+- Z administers clubs K1 < K2. K1 has the admin T, K2 has the admin A, and A < T. Switching Z off locks T (with
+  K1's admins) and then asks for A (with K2's). At the same moment A assigns a role to T: the pair statement locks
+  A and asks for T. Each waits for the other.
+- The same holds between step 2 and step 3: a platform admin's row locked in step 2 can have a higher id than a
+  club admin's row asked for in step 3.
+
+The change, in `setUserLoginStatus` and the two helpers it calls:
+
+| | Today | In R2 |
+|---|---|---|
+| Advisory locks | platform headcount; later, inside step 3, each club's headcount in `club_id` order | unchanged locks and keys, all taken first: platform headcount, then each club's headcount in `club_id` order, before any row lock |
+| User rows | step 2 and each club of step 3 lock their own set, `for update of u, g` / `of u, r` | **one statement** locks the `users` rows of the union (the qualifying platform admins if the target is one, and the qualifying admins of every affected club), `order by u.id for update of u` |
+| Role rows | locked together with the user rows, row by row | locked after the user rows: the `user_global_roles` rows, then the `user_club_roles` rows, each in one statement in user id order. Users before role rows, as `.claude/rules/migrations.md` asks |
+| The decision | each set is counted from its own locked read | the qualifying sets are read again under the locks and counted per club and for the platform; the answers `LAST_PLATFORM_ADMIN`, `LAST_CLUB_ADMIN` and their order stay as today |
+
+What does not change: the two advisory lock keys and their meaning; the old revocations of `platform_admin`
+(`:988-989`) and `club_admin` (`:2888-2889`), each of which locks one set in one statement in id order after its
+advisory lock; every status code and body of the login routes; who may switch a login off. `DELETE /users/:userId`
+goes through the same function and changes with it.
+
+The implementation reads these functions again at its own base and reports, rather than guesses, if they differ
+from this description. Tests 28 (the recorded SQL order of the switch-off) and 29a are its proof.
 
 Required proofs (`.claude/rules/migrations.md`, "Lock order: rights rows"):
 
@@ -574,7 +630,10 @@ Required proofs (`.claude/rules/migrations.md`, "Lock order: rights rows"):
 A new router and service, mounted at `/api/organization/roles` behind `requireAuth` only, before the organization
 router. It is **not** behind `requireCoach`, as the organization router is (`backend/src/server.js:138`):
 `requireCoach` answers 403 (`backend/src/auth.js:158-161`), and this API has no 403. The service does the 404 gate
-for every caller, an athlete and an account without any role included (M8, open: this is its recommendation). No frontend. Identity comes only from the session; a body
+for every caller, an athlete and an account without any role included (M8). The router ends with a catch-all
+that answers the same `404 {"error": "notFound"}` for every unknown path and method under it. Without it an unknown
+path would fall through to the organization router behind `requireCoach`: an athlete would get 403 and a coach
+`{"error":"Not found","path":…}`. No frontend. Identity comes only from the session; a body
 never names an actor, a basis or an owner other than the `clubId` of the resource.
 
 **Scope of a call.** `clubId` (query or body) names the club whose roles are meant; without it the call is about
@@ -617,19 +676,19 @@ Every write body carries `requestKey` (a UUID). Text is trimmed nowhere: a value
 | P5 | `expectedRevision`, `reason`, and any of `name`, `description`, `items[]` (the full new set), `scopeTypes[]`, `moduleDisplay` | the role at its new revision, `affected: { people, clubs }` |
 | P6 | `expectedRevision`, `reason` | the archived role; refused with `role_has_assignments` while an active assignment exists (O3 (b)) |
 | P7 | `clubId`, `name?` | the new club role: a snapshot of the source's items, minus system-role-only words, minus words that are not honoured and minus words the caller does not hold; `dropped[]` lists each with its reason (`system_role_only`, `not_honoured`, `not_held`) |
-| P8 | - | rows "user - role - scope" from both sources: the old tables (as basic roles, `source: "basic"`) and `user_role_assignments`, with title, granted by, expiry (D4, open) and state; keyset pages of 100 |
-| P9 | `userId`, `roleId`, `scopeType`, `scopeId`, `displayTitle?`, `expiresAt?` (the plan's D4, open), `reason` | the assignment; a lapsed row of the same key is stamped `expired` first |
+| P8 | - | rows "user - role - scope" from both sources: the old tables (as basic roles, `source: "basic"`) and `user_role_assignments`, with title, granted by, expiry (D4) and state; keyset pages of 100 |
+| P9 | `userId`, `roleId`, `scopeType`, `scopeId`, `displayTitle?`, `expiresAt?` (the plan's D4), `reason` | the assignment; a lapsed row of the same key is stamped `expired` first |
 | P10 | `reason`, `expected: { userId, roleId }` | the revoked assignment |
 
 `400` (nothing locked, nothing written): a malformed id or `requestKey`, a missing or refused text, an unknown
-permission or module word, an unknown scope type, `expiresAt` not in the future (D4, open), an empty change.
+permission or module word, an unknown scope type, `expiresAt` not in the future (D4), an empty change.
 
 `409`, each with a stable `code` and a fixed sentence; a refusal is never database text (rule 15):
 
 | Code | When |
 |---|---|
 | `staleRevision` | `expectedRevision` is not the row's revision; the answer carries the current role |
-| `role_name_taken` | the owner already has a non-archived role of that name (O7, open) |
+| `role_name_taken` | the owner already has a non-archived role of that name (O7) |
 | `role_not_editable` | the Platform admin role; a basic role on archive |
 | `role_archived` | a change, a copy or an assignment of an archived role |
 | `role_has_assignments` | an archive while an active assignment of the role exists (O3 (b)); the answer carries the count the caller may see. A role whose assignments are all revoked or lapsed can be archived |
@@ -637,16 +696,16 @@ permission or module word, an unknown scope type, `expiresAt` not in the future 
 | `role_exceeds_your_permissions` | dominance: the caller does not hold every item of the role (edit, archive, assign). Not on a revoke (2.7) |
 | `permission_not_delegable` | a system-role-only word in any role but Club admin (2.4) |
 | `permission_not_honoured` | a word no `can()` call site checks at a club or team scope yet, in any role (3.3) |
-| `role_limit_reached` | the club already has 50 non-archived roles (M9, open: this is its recommendation). A service check; 4.3 locks no club row, so the cap is best-effort under concurrency: two creates sent at once at 49 may both pass. No lock is added for it |
+| `role_limit_reached` | the club already has 50 non-archived roles (M9). A service check; 4.3 locks no club row, so the cap is best-effort under concurrency: two creates sent at once at 49 may both pass. No lock is added for it |
 | `permission_platform_only` | a platform-only word in any role |
 | `permission_scope_mismatch` | a word that does not cover the role's scope types |
 | `club_admin_requires` | rule 7: the change would leave the Club admin role without `staff.assign` or `roles.manage`, or would leave a non-archived system role holding a word whose catalog scope types include `club` and that the Club admin role lacks (the catalog reading of 2.4) |
 | `scope_types_narrowed` | a scope type removed from a role that was assigned |
-| `role_not_assignable_here` | a basic role (use the existing routes), a global scope, a private scope (R2; O9, open), a scope type the role does not have |
+| `role_not_assignable_here` | a basic role (use the existing routes), a global scope, a private scope (R2; O9), a scope type the role does not have |
 | `assignment_exists` | an active assignment of the same user, role and scope, under another `requestKey`; carries its id |
-| `assignment_already_revoked` | a revoke of a revoked or (D4, open) lapsed row under a new key; carries the current state |
+| `assignment_already_revoked` | a revoke of a revoked or (D4) lapsed row under a new key; carries the current state |
 | `assignment_mismatch` | `expected` does not name the row's user and role |
-| `self_assignment` | the caller names itself, a platform admin included (M11, open). A caller may revoke an assignment of its own |
+| `self_assignment` | the caller names itself, a platform admin included (M11). A caller may revoke an assignment of its own |
 | `user_inactive` | the target account's login is off |
 | `request_key_reused` | the same key with another body or operation |
 | `try_again` | a bounded lock wait (`55P03`) or a deadlock (`40P01`); nothing was written |
@@ -695,7 +754,7 @@ controls the shared database credentials (`…v35…:38-47`).
   `managedTeamIds` and `loadAvailableWorkspaces` never read the new fields. A static test asserts it.
 - `can(authz, permission, scope)` keeps its signature, its two throws and its conventions. The platform-admin
   short-circuit stays first and reads no new field. For everyone else the answer is section 4.1's steps 4-7 over the
-  context. It accepts the scope type `private` (answering as 4.1; O9, open); `privateScope(userId)` is added beside
+  context. It accepts the scope type `private` (answering as 4.1; O9); `privateScope(userId)` is added beside
   `clubScope` / `teamScope`. It reads the new field `rolePermissions`; R1's tests b6 and b7 change for these two
   points (test 32).
 - `PERMISSIONS` and `PERMISSION_GROUPS` stay in the code as the catalog the routes name; a test asserts that the
@@ -748,7 +807,9 @@ order of the Metrics Core plan the *Rukovodilac* runs the preflight and the post
    differs from the repository's.
 2. No object of vN exists (the nine tables, the functions, the two constraints).
 3. `user_club_roles` rows with a word other than `club_admin`: 0. `user_team_roles` rows other than `team_coach`: 0.
-   (All rows, active or not.)
+   (All rows, active or not.) Counted again here, whatever was read on 2026-11-19.
+3a. A fingerprint of the three old role tables (row count and a digest of every row, per table), kept for
+    post-check block 6a.
 4. `user_global_roles` holds only its two words (its CHECK is in force).
 5. The roles `anon` and `authenticated`: present or not (decides which revokes run); the owner of `public.users`.
 6. No function or setting named `optimove.permission_actor`, `user_has_permission`, `lock_permission_actor` exists.
@@ -768,6 +829,7 @@ order of the Metrics Core plan the *Rukovodilac* runs the preflight and the post
 5. No row in `user_role_assignments`, `permission_role_changes`, `permission_requests`; no role beyond the four;
    no table named `module_switches` or `module_switch_changes`.
 6. Both CHECKs present and validated on the old tables.
+6a. The fingerprint of the three old role tables equals preflight block 3a: vN rewrites no existing role row.
 7. `user_has_permission` spot rows: a known platform admin `true` at global scope; the nil user `false`.
 
 ### 7.3 Rollback
@@ -792,10 +854,22 @@ no longer passes `roles.manage`, which only the Roles API checks.
   file, after `set local lock_timeout`, and the deploy is made at a quiet moment. They are plain `ADD CONSTRAINT`, not `NOT VALID` plus
   `VALIDATE`: both tables are small, and production held 0 rows of another word on 2026-11-19 at 07:57 UTC (read by
   the *Rukovodilac* of OptiMove, as relayed; the preflight counts again).
+- **If an `ADD CONSTRAINT` times out under `lock_timeout`:** the statement fails, the whole migration rolls back
+  (one transaction, `backend/src/migrate.js:780-791`), nothing of vN remains, and `npm start` stops, so the new
+  deploy does not start and the previous instance keeps serving. The remedy is to deploy again at a quiet moment;
+  the runbook says so, and the preflight's block 7 is read right before the deploy.
 - A request of the old instance that meets the lock waits for the COMMIT; nothing it writes is refused by vN.
-- The executor and the reviewers run PostgreSQL 16; production runs 17.6 (`docs/ai/CURRENT_STATE.md`). To rehearse on
-  both where possible: foreign keys (`ON DELETE RESTRICT`) on the stored generated columns of 2.7, with a `pg_dump`
-  read-back on each version (M7, open: this is its recommendation); `pg_current_xact_id()`; and every CHECK
+- **Conditions of the *Rukovodilac* of OptiMove for R2** (production runs 17.6, `docs/ai/CURRENT_STATE.md`;
+  everything so far ran on 16):
+  - the rehearsal apply -> rollback -> apply again is run on PostgreSQL 17 as well as 16;
+  - and on a database built from the production schema snapshot
+    (`backend/tests/support/legacy-schema.sql`, then the runner);
+  - the migration rewrites no existing role row (blocks 3a and 6a, test 1);
+  - the preflight counts the rows with another word again (block 3).
+
+  The owner's daily production backup, verified by a restore (relayed, from 2026-11-19), does not relax them.
+- Rehearsed on both versions, mandatory: foreign keys (`ON DELETE RESTRICT`) on the stored generated columns of
+  2.7, with a `pg_dump` read-back on 16 and on 17 (M7); `pg_current_xact_id()`; and every CHECK
   written in the form `pg_dump` reads back, so the backup verifier does not report a difference as it does for v32's
   CHECK (`CURRENT_STATE.md`, "Known baseline/environment test issues").
 
@@ -803,17 +877,21 @@ no longer passes `roles.manage`, which only the Roles API checks.
 
 **Schema and seed**
 
-1. vN applied by the runner on the snapshot schema; applied twice is a no-op; the rollback rehearsal of 7.3.
+1. vN applied by the runner on the snapshot schema; applied twice is a no-op; the rollback rehearsal of 7.3 (apply
+   -> rollback -> apply again), on PostgreSQL 16 and on 17, and on a database built from the production schema
+   snapshot. Every row of the three old role tables is the same before and after vN (a digest per table).
 2. The seed equals `PERMISSIONS` (52 words, 89 scope rows), `PERMISSION_GROUPS` (keys, labels, order) and the
    sets of 3.3 (10 item rows; Club admin is R1's set plus `roles.manage`, and holds no `accounts.manage`); no scope
-   row `private` (O9, open); no item row for Platform admin or Independent coach; no module-switch table.
+   row `private` (O9); no item row for Platform admin or Independent coach; no module-switch table.
 3. vN refuses to run with a planted `user_club_roles` row of another word (active, then inactive), and the same for
    teams; the fixed message; nothing of vN remains.
 4. After vN, an INSERT or UPDATE of another word into either old table is `23514` by the named constraint.
 5. Lookup tables: UPDATE, DELETE, TRUNCATE refused; an INSERT of a word without a scope row fails at COMMIT; an
    INSERT of a scope row that breaks `platform_only = (only 'global')` fails at COMMIT.
-5a. A later migration's item write (M15, open): with a `migration` change row and no acting user it passes and
-    raises the revision; without the change row, or with an acting user set, it is refused.
+5a. A later migration's item write (M15): with a `migration` change row and no acting user it passes and
+    raises the revision; without the change row, or with an acting user set, it is refused. Applied through the
+    runner it commits; the same statements without a `public.schema_migrations` row of that `migration_name` in the
+    transaction fail at COMMIT.
 6. Row-level security and revokes: as a role without ownership, every table and function is refused.
 7. Every preflight and post-check block returns the expected value before and after; each hard value flipped once
    shows the refusal.
@@ -836,7 +914,7 @@ no longer passes `roles.manage`, which only the Roles API checks.
 14. Assignments: each refusal of 2.7, one case per row, a private scope included; the UPDATE rule (only the
     revocation stamp, once); `revoke_kind = 'replaced'` refused by the CHECK. An `expired` stamp with its replacing
     row in the same transaction passes without a request row of its own; alone, by another granter, or for another
-    (user, role, scope) it fails at COMMIT (D4, open).
+    (user, role, scope) it fails at COMMIT (D4).
 15. Append-only: UPDATE, DELETE, TRUNCATE of the change and request tables.
 16. A multi-row `VALUES`, an `INSERT … SELECT` and a data-modifying CTE cannot write two change or request rows for
     one operation.
@@ -870,16 +948,17 @@ no longer passes `roles.manage`, which only the Roles API checks.
 
 22. The actors x routes matrix: platform admin; admin of A; admin of A and B; admin of B; coach of a team of A;
     independent coach; athlete; an account with no role at all; inactive admin; admin of an archived club. The
-    router is not behind `requireCoach`, so no cell answers 403. Every cell not allowed is the identical
+    router is not behind `requireCoach`, so no cell answers 403. An unknown path and an unknown method under
+    `/api/organization/roles` answer the same 404 for an athlete, a coach and a platform admin (the catch-all). Every cell not allowed is the identical
     404 (status and `error`), also for a role id and an assignment id of another club and for random ids.
 23. P2, P3 and P8 never return a role, a holder or a count of another club; `holderCount` for a club caller counts
     that club only.
 24. No answer and no log line carries database text of a guard refusal. A raise inside a deferred guard, and the
     twin's `22023` for an unknown word (M12), reach the client as a sanitized `500 internal_error`.
 
-**Expiry** (follows the plan's D4, open)
+**Expiry** (follows the plan's D4)
 
-25. (D4, open.) An assignment past `expires_at` gives nothing in `can()` and in the twin; a transaction opened before the expiry
+25. (D4.) An assignment past `expires_at` gives nothing in `can()` and in the twin; a transaction opened before the expiry
     finishes under its first answer; a new grant stamps the lapsed row `expired` and inserts.
 26. (Not in R2.) The module-switch tests belong to the module-switch migration (O6 (b)): a module switched off
     gives nothing to the club's admin and to every holder there, in `can()` and in the twin; another club is
@@ -897,6 +976,12 @@ no longer passes `roles.manage`, which only the Roles API checks.
     granter (M6); two saves of one role (`staleRevision`); two grants of one key and of one (user, role, scope);
     grant against archive; grant against the user's login switched off. For M6: an assignment and a new revoke
     against the old club-admin revocation, with the target's id below and above the actor's.
+29a. **The login switch-off against P9 and P10** (4.3.1): switching off an admin of two clubs K1 < K2, while an
+    admin of K2 assigns a role to (P9) and revokes an assignment of (P10) an admin of K1; run with the actor's id
+    below and above the target's, and in both orders of arrival; no `40P01` logged. The same with a target that is
+    a platform admin and a club's admin. Test 28 also records the switch-off's own SQL order: the advisory locks,
+    then one users statement in id order, then the role rows. The existing suites of the login routes pass
+    unchanged (`LAST_PLATFORM_ADMIN`, `LAST_CLUB_ADMIN`, self-disable).
 30. COMMIT outcomes through a fault seam, per operation: an error before the COMMIT (nothing written); the COMMIT
     never answering (`verified_after_commit_error`, or `503 outcome_unknown`, then the same key replays); a replay
     after the right was lost (404); `request_key_reused`; `try_again` on a held lock.
@@ -908,6 +993,16 @@ no longer passes `roles.manage`, which only the Roles API checks.
     difference, `roles.manage` for a club's admin, asserted cell by cell. The contexts name the old tables'
     `is_active` explicitly (an inactive `user_club_roles` or `user_team_roles` row gives nothing in all three).
     `users.is_active` is a separately named difference (M13) and is outside the matrix.
+31a. **The twin against `can()` with non-basic assignments** (the external review's MEDIUM-2; R1's matrix has
+    none). On a seeded database the test generates non-basic assignments and compares the new `can()` (over the
+    context the loader builds) with `public.user_has_permission`, cell by cell, for every honoured word and every
+    scope of the matrix. The generated cases: an assignment for a club and for a team; the account's own and
+    another account's; active, revoked and expired; of a role that was archived afterwards (by direct SQL, since
+    the guard of 2.3 refuses it); together with a basic role of the old tables (the union of the two sources); a
+    club assignment checked at a team of that club (`true`) and at a team of another club (`false`); a team
+    assignment checked at its club (`false`) and at another team (`false`). Any cell where the two differ fails.
+    The module-switch migration, which replaces the twin's body, must repeat this same comparison with switches
+    in the generated cases.
 32. R1's suite (`backend/tests/permissions-r1.test.mjs`), test by test, read at `f4dd289`:
     - unchanged, because they read the catalog, the constant or the source and never the new `can()`'s inputs:
       a1-a6, b1, b1x, b5, b9, c1, c1m, c2, c3;
@@ -916,7 +1011,7 @@ no longer passes `roles.manage`, which only the Roles API checks.
       from a seeded database;
     - b4: one changed expectation, `roles.manage` passes for a club's admin. b4 and b7 also use hand-built
       contexts, so their changed expectations are run with contexts that carry role items;
-    - b6: `{ type: "private" }` no longer throws (O9, open); the other throws stay;
+    - b6: `{ type: "private" }` no longer throws (O9); the other throws stay;
     - b7: its allowed field list gains `rolePermissions`; reading a workspace field still throws.
     Each changed expectation is listed in the pull request.
 32a. A hand-built club-admin context without `rolePermissions` is not answered `true`: no fallback to the constant.
@@ -958,8 +1053,9 @@ development database, so it needs the owner's approval for that session or is re
 - **A grant against a club or team archive.** Club and team rows are not locked (4.3). The guard of 2.7 reads
   `is_active` without a lock, so a grant that commits at the same moment as the archive can leave an active
   assignment in an archived scope. It gives nothing there: every route reads an archived scope as 404.
-- **A later migration writes items without an acting user** (M15, open). The `migration` kind is a path around the
-  actor checks that only a migration file can take; the alternative is recorded in 2.4.
+- **A later migration writes items without an acting user** (M15). The `migration` kind is a path around the
+  actor checks; the deferred guard of 2.6 ties it to a `public.schema_migrations` row of the same transaction, so
+  only the runner can take it. The alternative is recorded in 2.4.
 - **Nothing closes a module until the module-switch migration** (O6 (b)). Until then the plan's rule 4 ("minus the
   modules closed") has nothing to subtract, in `can()` and in the twin alike, and no screen offers a switch (R3
   comes later). That migration replaces a function every guard of vN calls, so it carries an md5 precondition and
@@ -970,13 +1066,17 @@ development database, so it needs the owner's approval for that session or is re
 - **`import.approve` and `import.undo` are team-only** in the catalog, so the Club admin role (assignable for a
   club) cannot carry them under the coverage rule of 2.4, although the plan's 4.1 gives a club's admin "Approve".
   R6 decides it (a scope row added, or the rule changed).
+- **R2 changes the locking of the existing login switch-off** (4.3.1). It is a change to a route that works
+  today, made so that the Roles API cannot deadlock with it. The risk is a regression in the last-admin rules;
+  the route's existing suites and tests 28 and 29a are the proof. The deadlock itself is concluded from the code,
+  not reproduced.
 - **Two user rows are locked by an assignment** (M6). The contract now locks the pair in id order in one statement
   (4.3), a deviation from the plan. Reasoned from the code, not reproduced: the old revocations
   lock every qualifying admin of a club in id order (`organization.js:2750-2761`), so "acting user first" could meet
   them in the opposite order. Test 29 runs both orders; a `40P01` that still occurs writes nothing (`try_again`).
 - **The theoretical gap of v54** (a user reactivated between two statements of the lock function) applies here too.
 - **Role names are data shown to others.** The text rule refuses invisible characters; a club's role named like a
-  system role is O7 (open).
+  system role is O7.
 - **A target id tells active from inactive** (`user_inactive` against 404 on `userId` in P9) to a club's admin
   who already knows the id. Accepted as a known limit: today's grant lets the same caller learn it.
   Today's grant answers 404 "User not found." for an unknown id and accepts an inactive one (`organization.js:2832-2844`).
@@ -992,9 +1092,13 @@ development database, so it needs the owner's approval for that session or is re
 | O6 | As recommended, (b): module switches are their own later migration; R2 ships without section 2.8 and the points that depend on it. |
 | O4 | (a), with a display rule (plan D6f): the platform admin still sees a module it closed for a club; the club's admin sees it locked; coaches and everyone else of the club do not see it. It takes effect with the module-switch migration (O6), not in R2. |
 | O8 | As recommended, (a): non-basic assignments act on the organization routes from R2, with the per-call-site review as a merge condition. |
+| O7 | As recommended ("po preporuci", in the manager's chat, relayed). Lengths: name 80, description 500, title 80, reasons 500. Unique per owner among non-archived roles, case-insensitive; a club's role may not take the name of a current system role (checked one way only, when the club's role is named). |
+| O9 | As recommended: no word exists in a private workspace in R2; each module's step adds its rows. Written in: no `private` scope row and no Independent coach item (3.2, 3.3); `assignable_private` refused on a non-basic role (2.3); a private assignment refused (2.7, `role_not_assignable_here`); no `private` in `permission_requests.owner_scope` (2.9); the `private` row of 4.1 step 6 and `privateScope()` (6); tests 2, 11, 14 and R1's b6 (test 32). |
+| O10 | As recommended: `is_basic` means one of the four seeded roles that mirror the old tables; a platform-made role is a system role. |
+| D4 (the plan's) | As recommended: an assignment has an optional end date. Written in: `expires_at`, the `expired` revoke kind, the definition of "active" and the exception of the deferred request-record check (2.7); "lapsed" in the archive guard (2.3) and in `role_has_assignments`; expiry in P8; `expiresAt` in P9 and its `400`; "lapsed" in `assignment_already_revoked`; tests 10, 14 and 25. |
 
-Still open: the owner's O7, O9 and O10 and the plan's D4 (section 10.1), and M1-M15 of the *Rukovodilac* of
-OptiMove (section 10.2).
+Nothing of the owner's is open. O7, O9, O10 and D4 were decided on 2026-11-19 after the second revision; their
+content in the sections above did not change, only the "open" marks were removed.
 
 **Revised for 10.0 on 2026-11-19 at `f4dd289`** (the head of R1, branch `feature/roles-r1-can`), against the plan
 at `3a6723a`. Sections 0-9 and 11 now follow the decisions above. Every count was recomputed from R1's code at that
@@ -1006,42 +1110,33 @@ tables" was a miscount of eleven; without the two module-switch tables R2 has ni
 not ready, no blocker), for the decisions of section 10.3. The plan at `3a6723a` is merged into this branch, so the
 D6e and D6f this document cites are in the tree.
 
-## 10. Open points
+## 10. Decided points
 
 ### 10.1 For the owner
 
-O1, O2, O3, O4, O5, O6 and O8 are decided: see section 10.0. The points below are **open**. Each is written into
-the sections above as its recommendation, and the place names the point it depends on.
+None open. O1-O10 and the plan's D4 are decided: see section 10.0.
 
-| # | Question | Options | Recommendation |
-|---|---|---|---|
-| O7 | Role names: uniqueness and length. | Length: name 80, description 500, title 80, reasons 500. Uniqueness: (a) per owner among non-archived roles, case-insensitive (2.3); (b) per owner including archived; and whether a club's role may take the name of a system role. | **(a)**; a club's role may not take the name of a current system role (checked one way only, when the club's role is named, so a system role's name never reveals a club's). |
-| O9 | Which words exist in a private workspace (scope type `private`)? The plan's 3.1 names areas, 4.1 leaves two cells "to verify". | (a) None in R2; each module's step adds its rows. (b) Seed the plan's list now. | **(a).** R1 has no private scope and no Independent coach set. Depends on it: no `private` scope row and no Independent coach item (3.2, 3.3); `assignable_private` refused on a non-basic role (2.3); a private assignment refused (2.7, `role_not_assignable_here`); no `private` in `permission_requests.owner_scope` (2.9); the `private` row of 4.1 step 6 and `privateScope()` (6); tests 2, 11, 14 and R1's b6 (test 32). |
-| O10 | "A platform admin adds a new basic role" (plan section 4): is a platform-made role "basic"? | (a) `is_basic` means one of the four seeded roles that mirror the old tables; a platform-made role is a system role. (b) `is_basic` is a flag a platform admin sets on any system role. | **(a)** in R2; the CHECK is relaxed later if a separate badge is wanted. |
-| D4 (the plan's) | Does an assignment have an optional end date? Open in the plan's section 9. | Yes, optional; or no end date. | **Yes, optional** (the plan's). Depends on it: `expires_at`, the `expired` revoke kind, the definition of "active" and the exception of the deferred request-record check (2.7); "lapsed" in the archive guard (2.3) and in `role_has_assignments`; expiry in P8; `expiresAt` in P9 and its `400`; "lapsed" in `assignment_already_revoked`; tests 10, 14 and 25. Without it those parts are removed and nothing else changes. |
+### 10.2 Decided by the *Rukovodilac* of OptiMove (2026-11-19, relayed by the manager of this stream)
 
-### 10.2 For the *Rukovodilac* of OptiMove
+All decided, each as the contract or the external reviewer recommended.
 
-All **open**. The sections above follow each recommendation. M6, M7, M8 and M9 carry the recommendation the
-manager of this stream set after the first review round (section 10.3).
-
-| # | Point | Recommendation |
+| # | Point | Decision |
 |---|---|---|
-| M1 | The migration's number, prefix and name; its place relative to the open migration pull requests. | Agreed when the file is written; the unique-prefix check on the merge tree. |
+| M1 | The migration's number, prefix and name; its place relative to the open migration pull requests. | **v84.** v79, v80 and v82 are the mapping stream's; the calendar's next is v83. The 12-digit prefix is fixed when the file is written (`202611191200` is taken); the unique-prefix check on the merge tree. |
 | M2 | The acting-user setting: own (`optimove.permission_actor`) or v35's `optimove.source_metric_actor`. | Own: no dependency of `public` on `training_load`, independent rollbacks. |
 | M3 | The text rule: a `public` copy of v40's function, or a call of `training_load.source_metric_text_ok`. | The copy, with a test that the two bodies agree. |
 | M4 | Scope types as a child table instead of a column of `permissions`. | The child table (2.2). |
 | M5 | Platform admin: no item rows and a short-circuit, or 52 rows refused for change. | No rows: a later word needs no maintenance, and the platform admin's answer never depends on these tables. |
-| M6 | Two user rows in an assignment: the plan's "acting user, then the other user", or both in one statement in id order. | Both in one statement in id order (4.3), recorded as a deviation from the plan's section 5: the old revocation locks a club's admins in id order `for update of u, r` (`organization.js:2750-2761`). Test 29 in both orders. |
-| M7 | Foreign keys of the polymorphic `scope_id` through stored generated columns, or trigger checks only. | Stored generated columns with `ON DELETE RESTRICT`, rehearsed on 16 and 17 with a `pg_dump` read-back. `permission_requests` has a plain `owner_club_id` (2.9). |
-| M8 | The router's mount and file (`/api/organization/roles`, a new router before the organization router), and the 404 body `{"error":"notFound"}` although `organization.js` answers `{"error":"Not found","path":…}` (`:413`). | Mounted behind `requireAuth` only, not `requireCoach` (section 5); the service does the 404 gate; the new router follows rule 11. |
-| M9 | A cap on a club's non-archived roles; a write quota. | A cap of 50 per club in the service, `409 role_limit_reached`, test 17a; no quota (as the mapping API, C68 of the mapping discovery document). |
+| M6 | Two user rows in an assignment: the plan's "acting user, then the other user", or both in one statement in id order. | Both in one statement in id order (4.3), recorded as a deviation from the plan's section 5: the old revocation locks a club's admins in id order `for update of u, r` (`organization.js:2750-2761`). Test 29 in both orders. With it, the login switch-off locks its users in one statement in id order (4.3.1, test 29a). |
+| M7 | Foreign keys of the polymorphic `scope_id` through stored generated columns, or trigger checks only. | Stored generated columns with `ON DELETE RESTRICT`; a `pg_dump` read-back on 16 **and** 17 is mandatory. `permission_requests` has a plain `owner_club_id` (2.9). |
+| M8 | The router's mount and file (`/api/organization/roles`, a new router before the organization router), and the 404 body `{"error":"notFound"}` although `organization.js` answers `{"error":"Not found","path":…}` (`:413`). | Mounted behind `requireAuth` only, not `requireCoach` (section 5); the service does the 404 gate; a catch-all 404 ends the router; the new router follows rule 11. |
+| M9 | A cap on a club's non-archived roles; a write quota. | A cap of 50 per club in the service, best-effort under concurrency, `409 role_limit_reached`, test 17a; no quota (as the mapping API, C68 of the mapping discovery document). |
 | M10 | Is the reason mandatory on a grant (the plan's section 2: "with a reason")? Today's grants have none. | Mandatory. |
 | M11 | Self-assignment for a platform admin. | Refused for everyone: a platform admin gains nothing by it. Revoking one's own assignment is allowed (2.7). |
 | M12 | An unknown word or scope type in the twin: raise (as `can()` throws), or `false`. | Raise `22023`: a guard that names a wrong word must fail its tests, not refuse silently forever. Test 24: the raise reaches the client as a sanitized 500. |
 | M13 | The twin requires an active user and does not check an archived club or team; `can()` relies on the session (a disabled login loses its sessions) and checks neither. | As written; each difference has a named test and is not part of the equivalence claim, which excludes inactive users explicitly (4.1, test 31). |
 | M14 | No cross-request cache of role items. | None in R2; measure the extra statement per request before adding one. |
-| M15 | How a later migration adds or removes role items, with no acting user (2.4). | One defined mode: a `permission_role_changes` row of kind `migration` (`performed_by_user_id` null only for it, `migration_name` set), the guards skipping their actor checks only for it; the revision raised. Alternative: disable and enable the triggers under md5 preconditions, with a post-check. |
+| M15 | How a later migration adds or removes role items, with no acting user (2.4). | One defined mode: a `permission_role_changes` row of kind `migration` (`performed_by_user_id` null only for it, `migration_name` set), the guards skipping their actor checks only for it; the revision raised; a deferred guard requires the `public.schema_migrations` row of the same name in the same transaction (2.6). The alternative (disable and enable the triggers under md5 preconditions) is not taken. |
 
 ### 10.3 Decided by the manager of this stream (2026-11-19, after the first review round)
 
@@ -1067,8 +1162,23 @@ reviewers afterwards: the pair statement is the first rights lock of P9 and P10 
 below.
 
 **Review record.** The three internal reviews (database, security, consistency) ended READY on `ab38f76`, two of
-them with non-blocking notes; a wording pass followed for those notes, with no new design. Still owed: both
-external reviews (the *Rukovodilac* of OptiMove and the *Nezavisni revizor*) and the owner's acceptance.
+them with non-blocking notes; a wording pass followed for those notes (`2e5324c`), with no new design. The external
+review of `2e5324c` (the *Nezavisni revizor*, relayed by the *Rukovodilac* of OptiMove) was NO-GO with two MEDIUM
+and three LOW findings, all written into the next head:
+
+| Finding | Where it is written |
+|---|---|
+| MEDIUM-1: the pair statement can deadlock with the login switch-off | 4.3.1, sections 0, 1.1 and 9, tests 28 and 29a |
+| MEDIUM-2: nothing compares the twin with `can()` once a non-basic assignment exists | test 31a |
+| LOW-1: an unknown path under the roles router | section 5, test 22 |
+| LOW-2: `ADD CONSTRAINT` timing out | 7.4 |
+| LOW-3: tie the `migration` kind to the runner | 2.6, test 5a, M15 |
+
+Still owed: the narrow external re-review of those parts, then the owner's acceptance. No code before the GO.
+
+**Notes for the review packet of R2's implementation.** The packet names, first, the change of existing locking
+in `organization.js` (4.3.1) as a change to working code outside the new files, with its before / after table and
+tests 28 and 29a; then the per-call-site review of section 6; then the conditions of 7.4.
 
 On "honoured", for the owner's O1 (b): "honoured" counts a call
 site at a club or team scope only. Counting global-scope sites too would make `accounts.manage` honoured and let a
