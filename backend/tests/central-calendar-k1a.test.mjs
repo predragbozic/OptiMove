@@ -882,10 +882,12 @@ test("13. test schedules: results x/y, awaiting entry until every result is in, 
   assert.equal(card.title, "WELLNESS");
   assert.equal(card.startTime, "07:00");
   assert.deepEqual(card.expects, ["test_result"]);
-  assert.deepEqual(card.results, { expected: 2, completed: 1, missed: 0 });
-  assert.equal(card.status, "awaiting_entry");
+  // K2b-2a-1 (plan 5, the fix): an open assignment whose window has closed
+  // is missed, as the Tests module derives it (it was "missing" before).
+  assert.deepEqual(card.results, { expected: 2, completed: 1, missed: 1 });
+  assert.equal(card.status, "missed");
   assert.equal(card.links.testOccurrenceId, occurrenceId);
-  assert.deepEqual(card.athletes.map((x) => x.result).sort(), ["completed", "missing"]);
+  assert.deepEqual(card.athletes.map((x) => x.result).sort(), ["completed", "missed"]);
   await q(`update tests.test_assignments set status = 'completed', completed_at = now() where id = $1`, [asgB]);
   const done = await calendar(team.coach.cookie, { extra: "&kinds=test" });
   assert.equal(itemsOn(done, PAST)[0].status, "done");
