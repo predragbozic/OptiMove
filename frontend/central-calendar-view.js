@@ -1137,6 +1137,9 @@ function renderEventQuestionsHtml(item, cal, pendingQuestion, linkPending, today
   return renderCentralCalendarQuestionsHtml(item, cal.panelQuestions, {
     step, busy, off: Boolean(cal.linkWrite) || Boolean(pendingQuestion) || linkPending || Boolean(cal.alignStep), today,
     feedback: linkFeedbackHtml(cal, item.key, pendingQuestion, "question"),
+    // Where that line belongs: the row of the command that sent it.
+    feedbackAt: (cal.linkMessage?.family === "question" && cal.linkMessage.panelKey === item.key ? cal.linkMessage.at : null)
+      || (pendingQuestion ? { kind: pendingQuestion.kind || "", questionId: pendingQuestion.questionId || "" } : null),
     rpeFromSessions: (view?.sessionLinks || []).length > 0,
   });
 }

@@ -468,6 +468,13 @@ shared part of `state.js` touched is named. The executor does not open the PR.
   change and after every Settings → Calendar write, the switch's included. A failed or lost read is not kept: that panel
   shows no section and no message, and the next panel open reads it again. It is never read per card, for a reader, or
   in the athlete workspace.
+- **4.2 and 4.3, decided:** on an answered question the button reads **Stop question**, as its step does; an unanswered one
+  keeps **Remove question**. A command's result or refusal is drawn in the row that sent it (`role="status"` for a
+  result, `role="alert"` for a refusal), and beside that kind's *Ask* when no row holds it (an *Ask* refused, a question
+  removed). Only a section-wide read ("The questions could not be read.") stays under the section's title. The coach UI
+  keeps **WELLNESS**, the name the coach sees in Tests.
+- **Known limit:** turning the club's switch off hides the questions in the panel; live questions keep their window, and
+  a coach who must stop one turns the switch back on first.
 - **7, the TL screen:** in `frontend/training-load-actions.js`, only the external-schedule form's save and the Pause /
   Resume / Cancel call read `409 schedule_managed_by_calendar` as "This RPE request belongs to a calendar event. Change it
   on the event."; every other refusal keeps today's handling.

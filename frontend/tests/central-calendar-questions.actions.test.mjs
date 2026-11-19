@@ -938,3 +938,60 @@ test("P20. the switch off with a question still not confirmed: no 'Use Ask RPE b
   assert.ok(dom().querySelector('.cc-panel [data-action="central-calendar-link-check"]'), "Check result stays");
   assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/);
 });
+
+test("P21. the button says what its step does: Remove question while unanswered, Stop question once answered", async () => {
+  await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER(), { answered: 2 }), liveQuestion(Q_WELL, "wellness", AFTER())] });
+  const label = (kind) => dom().querySelector(`.cc-question-row:has(.cc-question-head) [data-act="remove-open"][data-question-id="${kind === "rpe" ? Q_RPE : Q_WELL}"]`).textContent;
+  assert.equal(label("rpe"), "Stop question");
+  assert.equal(label("wellness"), "Remove question");
+});
+
+const rowOf = (el) => el?.closest(".cc-question-row")?.querySelector(".cc-question-head strong")?.textContent || "";
+
+test("P22. a result or refusal is drawn in the row that sent it (status / alert); without a row, beside that kind's Ask; a read failure stays at the top", async () => {
+  const calls = await openQuestionsPanel({
+    questions: [liveQuestion(Q_RPE, "rpe", AFTER(), { answered: 1 }), liveQuestion(Q_WELL, "wellness", AFTER())],
+  });
+  // Move time on WELLNESS: its line in the WELLNESS row, role status.
+  await qact("move-open", { questionId: Q_WELL });
+  input2({ ccQstepWindow: "1" }, "next_morning");
+  await qact("send");
+  let line = dom().querySelector(".cc-panel-questions .cc-link-message");
+  assert.equal(line.textContent, "Time moved. Athletes will be notified.");
+  assert.equal(line.getAttribute("role"), "status");
+  assert.equal(rowOf(line), "WELLNESS");
+  assert.equal(dom().querySelector(".cc-panel-questions > .cc-link-message"), null, "not at the section's top");
+  // Remove WELLNESS (unanswered): the row is gone, so the line sits beside Ask WELLNESS.
+  await qact("remove-open", { questionId: Q_WELL });
+  await qact("send");
+  line = dom().querySelector(".cc-panel-questions .cc-link-message");
+  assert.equal(line.textContent, "Removed.");
+  assert.ok(line.closest(".cc-question-ask-feedback"), "beside its kind's Ask");
+  assert.ok(line.closest(".cc-question-asks").querySelector('[data-act="ask-open"][data-kind="wellness"]'));
+  // Stop RPE: in the RPE row (closed early).
+  await qact("remove-open", { questionId: Q_RPE });
+  await qact("send");
+  line = dom().querySelector(".cc-panel-questions .cc-link-message");
+  assert.equal(line.textContent, "Closed. The answers given stay.");
+  assert.equal(rowOf(line), "RPE");
+  assert.ok(questionWrites(calls).length >= 3);
+});
+
+test("P23. a refused Ask: role alert, beside that kind's Ask; a lost Move: Check result in its row", async () => {
+  await openQuestionsPanel({ refuse: (call) => (call.method === "POST" && call.url.endsWith("/questions") ? { status: 409, body: { error: "rpe_already_linked", message: "?" } } : null) });
+  await qact("ask-open", { kind: "rpe" });
+  await qact("send");
+  const line = dom().querySelector(".cc-panel-questions .cc-link-message");
+  assert.equal(line.getAttribute("role"), "alert");
+  assert.equal(line.textContent, "This event already collects RPE through another request.");
+  assert.ok(line.closest(".cc-question-ask-feedback").nextElementSibling?.matches?.('[data-act="ask-open"][data-kind="rpe"]') || line.closest(".cc-question-asks"));
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  clearCentralCalendarUncertainWrites();
+  await openQuestionsPanel({ lose: true, questions: [liveQuestion(Q_RPE, "rpe", AFTER()), liveQuestion(Q_WELL, "wellness", AFTER())] });
+  await qact("move-open", { questionId: Q_WELL });
+  input2({ ccQstepWindow: "1" }, "next_morning");
+  await qact("send");
+  const check = dom().querySelector('.cc-panel-questions [data-action="central-calendar-link-check"]');
+  assert.equal(rowOf(check), "WELLNESS", "the not-confirmed box sits in the row that sent it");
+});

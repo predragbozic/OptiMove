@@ -1292,13 +1292,15 @@ function wireOf(act) {
 // The words a link command's result is shown in (review M4): in the open
 // panel's own line when its links section is there, else the screen's notice
 // line (the panel closed, the event was cancelled, a 404 closed it).
-function showLinkText(cal, text, { alert = false, family = "link" } = {}) {
+// `at`: a question command's spec - its line is drawn in the row that sent it
+// (contract 4.3), by the question's id, else its kind.
+function showLinkText(cal, text, { alert = false, family = "link", at = null } = {}) {
   const item = cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
   const sectionShown = item && (family === "question"
     ? Boolean(cal.panelQuestions && cal.panelQuestions.key === item.key && !cal.panelQuestions.hidden)
     : centralCalendarEventLinkable(item) || item.kind === "planned");
   if (sectionShown) {
-    cal.linkMessage = { panelKey: item.key, text, alert, family };
+    cal.linkMessage = { panelKey: item.key, text, alert, family, at: at ? { kind: at.kind || "", questionId: at.questionId || "" } : null };
     cal.notice = "";
   } else {
     cal.linkMessage = null;
@@ -1351,13 +1353,13 @@ async function sendLinkWrite(cal, spec, render, { check = false } = {}) {
   if (centralCalendarOutcomeUnknown(info)) {
     rememberLinkWrite(spec);
     if (family === "question") cal.questionStep = null;
-    if (check) showLinkText(cal, "No answer again. The result is still not confirmed.", { family });
+    if (check) showLinkText(cal, "No answer again. The result is still not confirmed.", { family, at: spec });
     else cal.linkMessage = null;
     render?.();
     return;
   }
   if (check && !checkSettlesFor(spec, info)) {
-    showLinkText(cal, linkCheckNoteText(info), { family });
+    showLinkText(cal, linkCheckNoteText(info), { family, at: spec });
     render?.();
     return;
   }
@@ -1565,7 +1567,7 @@ async function questionSettled(cal, spec, data, render) {
   if (!(await rereadForQuestions(cal, render, spec))) return;
   const after = spec.questionId ? panelQuestionById(cal, spec.questionId) : null;
   const done = ccQuestionDoneText(spec.act, { kind: spec.kind, closed: after?.status === "closed_early" });
-  showLinkText(cal, readFailed(cal) ? `${done}${READ_FAILED_TAIL}` : done, { family: "question" });
+  showLinkText(cal, readFailed(cal) ? `${done}${READ_FAILED_TAIL}` : done, { family: "question", at: spec });
   render?.();
   const doc = globalThis.document;
   const target = doc?.querySelector?.(".cc-panel-questions .cc-link-message") || doc?.querySelector?.("#ccQuestionsTitle");
@@ -1588,7 +1590,7 @@ async function questionRefused(cal, spec, info, render) {
     if (info.code === "questions_off") dropStaleEventTypes(cal);
     if (!(await rereadForQuestions(cal, render, spec))) return;
   }
-  showLinkText(cal, text, { alert: true, family: "question" });
+  showLinkText(cal, text, { alert: true, family: "question", at: spec });
   render?.();
 }
 

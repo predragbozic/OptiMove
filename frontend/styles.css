@@ -22451,6 +22451,12 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   flex: 0 0 auto;
 }
 
+/* A command's line beside its kind's Ask (no row to hold it). */
+.cc-question-ask-feedback {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
 .cc-question-step {
   display: grid;
   gap: 6px;

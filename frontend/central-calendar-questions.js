@@ -326,7 +326,10 @@ export function ccPanelQuestionsWaiting(pq, item) {
 }
 export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions for athletes.";
 
-export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", rpeFromSessions = false, today = "" } = {}) {
+// `feedbackAt` ({ kind, questionId }): the command the line belongs to - drawn
+// in that question's row, else in the row of its kind's live question, else
+// beside that kind's Ask; only a line with no such place stays at the top.
+export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", feedbackAt = null, rpeFromSessions = false, today = "" } = {}) {
   const head = `<h4 class="cc-panel-subtitle" id="ccQuestionsTitle" tabindex="-1">Questions for athletes</h4>`;
   // A command left not confirmed keeps its Check result here, whatever the read says.
   if (!pq || pq.key !== item.key || pq.hidden) return feedback ? `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}</section>` : "";
@@ -337,6 +340,12 @@ export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy
   const ev = ccQuestionEventOfCard(item);
   const questions = ccPanelQuestionList(pq.read);
   const liveKinds = new Set(questions.filter((q) => q.status === "live").map((q) => q.kind));
+  const askableKinds = item.cancelled ? [] : CC_QUESTION_KINDS.filter((kind) => !liveKinds.has(kind));
+  const atRow = feedback && feedbackAt
+    ? questions.find((q) => feedbackAt.questionId && q.id === feedbackAt.questionId) || questions.find((q) => q.kind === feedbackAt.kind && q.status === "live") || null
+    : null;
+  const atAsk = feedback && feedbackAt && !atRow && askableKinds.includes(feedbackAt.kind) ? feedbackAt.kind : "";
+  const topFeedback = feedback && !atRow && !atAsk ? feedback : "";
   const rows = questions.map((q) => {
     const c = q.counts || {};
     const asked = Number(c.asked) || 0;
@@ -345,13 +354,15 @@ export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy
     const status = STATUS_WORDS[q.status] ? `<p class="cc-panel-note cc-question-status">${escapeHtml(STATUS_WORDS[q.status])}</p>` : "";
     const notAnswered = Array.isArray(q.notAnswered) ? q.notAnswered : [];
     const own = step && step.questionId === q.id ? step : null;
+    // An answered question is stopped, not removed: its button says what its step does.
     const buttons = q.status === "live" && !own
-      ? `<div class="cc-question-actions">${qButton("move-open", "Move time", { attrs: ` data-question-id="${escapeAttr(q.id)}"`, off: off || Boolean(step) || answered > 0 })}${qButton("remove-open", "Remove question", { attrs: ` data-question-id="${escapeAttr(q.id)}"`, off: off || Boolean(step) })}</div>`
+      ? `<div class="cc-question-actions">${qButton("move-open", "Move time", { attrs: ` data-question-id="${escapeAttr(q.id)}"`, off: off || Boolean(step) || answered > 0 })}${qButton("remove-open", answered > 0 ? "Stop question" : "Remove question", { attrs: ` data-question-id="${escapeAttr(q.id)}"`, off: off || Boolean(step) })}</div>`
       : "";
     return `<li class="cc-question-row">
         <p class="cc-question-head"><strong>${escapeHtml(CC_QUESTION_WORDS[q.kind] || "")}</strong> · ${escapeHtml(`${answered}/${asked} answered`)}${all ? ' <span class="cc-question-done" aria-label="all answered">✓</span>' : ""}</p>
         <p class="cc-panel-note cc-question-window">${escapeHtml(ccPanelWindowText(q.window, { today }))}</p>
         ${status}
+        ${atRow === q ? feedback : ""}
         ${namesHtml("Answered", q.answered, false)}
         ${namesHtml("Later", q.later, false)}
         ${q.status === "live" ? namesHtml("Not answered yet", notAnswered, notAnswered.length > 0) : namesHtml("Did not answer", notAnswered, false)}
@@ -360,16 +371,16 @@ export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy
         ${own ? stepHtml(own, { ev, today, busy, question: q }) : ""}
       </li>`;
   });
-  const askable = item.cancelled ? [] : CC_QUESTION_KINDS.filter((kind) => !liveKinds.has(kind));
-  const asks = askable.map((kind) => {
-    if (kind === "rpe" && rpeFromSessions) return `<p class="cc-panel-note">RPE comes from the linked trainings.</p>`;
-    if (step && step.act === "ask" && step.kind === kind) return stepHtml(step, { ev, today, busy });
-    return qButton("ask-open", `Ask ${CC_QUESTION_WORDS[kind]}`, { attrs: ` data-kind="${kind}"`, off: off || Boolean(step) });
+  const asks = askableKinds.map((kind) => {
+    const line = atAsk === kind ? `<div class="cc-question-ask-feedback">${feedback}</div>` : "";
+    if (kind === "rpe" && rpeFromSessions) return `${line}<p class="cc-panel-note">RPE comes from the linked trainings.</p>`;
+    if (step && step.act === "ask" && step.kind === kind) return `${line}${stepHtml(step, { ev, today, busy })}`;
+    return `${line}${qButton("ask-open", `Ask ${CC_QUESTION_WORDS[kind]}`, { attrs: ` data-kind="${kind}"`, off: off || Boolean(step) })}`;
   });
-  if (!rows.length && !askable.length && !feedback) return "";
+  if (!rows.length && !askableKinds.length && !feedback) return "";
   return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle"${busy ? ' aria-busy="true"' : ""}>
       ${head}
-      ${feedback}
+      ${topFeedback}
       ${rows.length ? `<ul class="cc-question-rows" role="list">${rows.join("")}</ul>` : ""}
       ${asks.length ? `<div class="cc-question-asks">${asks.join("")}</div>` : ""}
     </section>`;
