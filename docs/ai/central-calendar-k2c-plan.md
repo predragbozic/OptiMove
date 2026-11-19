@@ -1189,9 +1189,7 @@ Frontend only; no backend file, no migration. Built on 2.1 with the GO of 2.2, o
   session's name. Otherwise the panel says the training isn't on the calendar yet (the `apply` / `absent` sentence)
   with *Open in calendar*. The exact match (a slot and a name per session link on the event card) is a follow-up,
   beside F5.
-- **Not built (2.1.2, 2.1.4):** the button is not turned off while a Builder save is pending (the match reads the live
-  plan, so a pending autosave of the edit draft cannot link the wrong session), and Escape does not close the panel
-  (Close and Cancel do). Both are follow-ups.
+- **Not built in #622 (2.1.2, 2.1.4), built in its follow-up (2.7):** a pending Builder save and Escape.
 
 **Tests:** `frontend/tests/builder-calendar-event.actions.test.mjs`, 19 tests through the real handlers, data module
 and templates with a fake fetch that keeps the create route's contract (replay, `request_key_reused`, the fold): who
@@ -1224,6 +1222,27 @@ showed only two 403s of `/api/tests/athlete/timezone`, as before this change.
 | code LOW: the panel and the badges survived a workspace switch | `resetBuilderCalendarEventForWorkspaceChange`; a late answer adds no badge | 11 |
 | code LOW: *Open in calendar* moved the calendar before the leave guard | The calendar goes back if the tab does not change | code read (`app.js` is not loaded by the suites) |
 | code LOW: the pending-save and Escape points of 2.1 | Recorded above as not built | — |
+
+### 2.7 K2c-2 follow-ups after #622 (2026-11-19)
+
+Frontend only; the manager's go after #622's merge, the light regime.
+
+- **A plan change in the series.** `setBuilderDraft` replaces the whole draft, so a panel whose session is no longer in
+  the draft on screen no longer holds the other sessions' buttons, and the next press releases it. A create in it is
+  not lost: it has been in the calendar's memory since its send, so it is checked there, and a late answer still
+  settles it there (with no badge).
+- **The linked event's title** is escaped like every other sentence; a test pins it (`<`, `&`, `"`).
+- **Escape** closes the open panel (`closeBuilderCalendarEventPanel`, in `app.js`'s Escape handler right after the
+  calendar's own), never while a create is on its way or not confirmed.
+- **A pending Builder save.** `builder-actions.js` exports `builderSavesPending()` and `builderSavesSettled()` over its
+  mutation queue. **Deviation from 2.1.2:** the button is not drawn disabled. Not every Builder save draws the session
+  row again when it lands, so a button drawn off could stay off after the save. Instead a press during a save shows
+  "Saving your changes first…" and reads the day only once every queued save has settled, so the match sees the plan
+  as saved.
+
+**Tests:** 12–15 of `frontend/tests/builder-calendar-event.actions.test.mjs` (23 in all); the 6 new mutations are
+killed (a gone panel still holding the buttons, the panel not released, the sentence not escaped, Escape closing a
+locked panel, no wait for a save, a pending count that never falls).
 
 ## 3. K3 — "New training" from an event (named only)
 

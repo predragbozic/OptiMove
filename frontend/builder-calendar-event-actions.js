@@ -21,6 +21,7 @@ import {
   builderCalendarEventDoneText,
   builderCalendarEventDraft,
   builderCalendarEventFormError,
+  builderCalendarDraftHoldsSession,
   builderCalendarEventRefusalText,
   builderCalendarMadeKey,
   builderCalendarMatch,
@@ -28,6 +29,7 @@ import {
   CHECK_STILL_NOT_CONFIRMED,
   REREAD_AFTER,
 } from "./builder-calendar-event.js";
+import { builderSavesPending, builderSavesSettled } from "./builder-actions.js";
 import { rememberCentralCalendarCreate } from "./central-calendar-actions.js";
 import {
   centralCalendarErrorInfo,
@@ -209,10 +211,29 @@ async function deliver(rec, render, { check }) {
   }
 }
 
+// A plan change in the series replaces the draft: a panel whose session is
+// gone is released. A create in it stays in the calendar's memory since its
+// send, so it is checked in the calendar; its answer still settles there.
+function releaseIfGone() {
+  const rec = state.builder.calendarEvent;
+  if (rec && !builderCalendarDraftHoldsSession(state.builder.draft, rec.sessionId)) state.builder.calendarEvent = null;
+}
+
+// Escape (app.js): the open panel closes, unless a create is on its way or
+// not confirmed. Returns whether it closed one.
+export function closeBuilderCalendarEventPanel(renderBuilder) {
+  const rec = state.builder.calendarEvent;
+  if (!rec || locked(rec)) return false;
+  state.builder.calendarEvent = null;
+  renderBuilder?.();
+  return true;
+}
+
 // The Builder's actions of this feature (`builder-calendar-event-*`).
 export async function handleBuilderCalendarEventAction(action, { renderBuilder, openCalendarAt } = {}) {
   const type = action?.dataset?.action || "";
   if (!type.startsWith("builder-calendar-event-")) return false;
+  releaseIfGone();
   const rec = state.builder.calendarEvent;
   if (type === "builder-calendar-event-open") {
     if (locked(rec)) return true;
@@ -229,6 +250,14 @@ export async function handleBuilderCalendarEventAction(action, { renderBuilder, 
       madeKey: builderCalendarMadeKey(state.builder.draft, found.block, found.session),
     };
     state.builder.calendarEvent = next;
+    // A Builder save still on its way: the day is read once it has landed,
+    // so the match sees the plan as saved.
+    if (builderSavesPending()) {
+      next.phase = "saving";
+      renderBuilder?.();
+      await builderSavesSettled();
+      if (!current(next)) return true;
+    }
     await readDay(next, renderBuilder);
     return true;
   }

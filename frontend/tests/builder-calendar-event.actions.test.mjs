@@ -27,6 +27,7 @@ const helpers = await import("../builder-helpers.js");
 const { renderBuilderBlock } = await import("../builder-structure.js");
 const { centralCalendarMayBeLeft, centralCalendarUncertainWrites, clearCentralCalendarUncertainWrites, handleCentralCalendarBeforeUnload, openCentralCalendarAt } = await import("../central-calendar-actions.js");
 const { addDaysIso, localDateIso } = await import("../utils.js");
+const builderActions = await import("../builder-actions.js");
 
 const D = addDaysIso(localDateIso(), 2);
 const PLAN_LIVE = "50000000-0000-4000-8000-000000000001";
@@ -601,6 +602,79 @@ test("11. a workspace switch drops the panel and the badges; a create not confir
   await sending;
   assert.deepEqual(state.builder.calendarEventsMade, []);
   assert.equal(centralCalendarUncertainWrites().length, 0);
+});
+
+// --- 12-15: the follow-ups of #622 -----------------------------------------------------------
+test("12. a plan change in the series releases a panel whose session is gone: no button stays off, the create not confirmed stays in the calendar's memory", async () => {
+  await open({ lose: ["saved"] });
+  await press("send");
+  assert.equal(state.builder.calendarEvent.phase, "unconfirmed");
+  // Another plan of the series: the whole draft is replaced.
+  const other = draftWith();
+  other.plan.id = "50000000-0000-4000-8000-0000000000d2";
+  other.plan.editSourcePlanId = PLAN_OTHER;
+  other.blocks[0].sessions = [{ id: "s9", amPm: "AM", bta: "T", time: "", name: "Morning session", nodes: [] }];
+  state.builder.draft = other;
+  const html = rowHtml();
+  assert.match(html, /data-action="builder-calendar-event-open" data-session-id="s9"/);
+  assert.doesNotMatch(html, /data-action="builder-calendar-event-open" data-session-id="s9"[^>]*disabled/, "the new plan's button is on");
+  assert.ok(!html.includes(escapeHtml(pure.FINISH_FIRST)));
+  await press("open", { sessionId: "s9" });
+  assert.equal(state.builder.calendarEvent.sessionId, "s9", "a new panel opens");
+  assert.equal(centralCalendarUncertainWrites().length, 1, "the old create is kept to check in the calendar");
+});
+
+test("13. the linked event's title is escaped in the panel", async () => {
+  const title = `<b>Gym & "Speed"</b>`;
+  await open({ items: () => [eventCard(E_OLD, title, [PLAN_LIVE])] });
+  assert.equal(state.builder.calendarEvent.match.kind, "linked");
+  const html = panelHtml();
+  assert.ok(html.includes(escapeHtml(pure.linkedSentence(title))), html);
+  assert.doesNotMatch(html, /<b>Gym/);
+  assert.match(html, /&lt;b&gt;Gym &amp; &quot;Speed&quot;&lt;\/b&gt;/);
+});
+
+test("14. Escape closes the open panel, never while a create is on its way or not confirmed", async () => {
+  await open();
+  assert.equal(actions.closeBuilderCalendarEventPanel(render), true);
+  assert.equal(state.builder.calendarEvent, null);
+  assert.equal(actions.closeBuilderCalendarEventPanel(render), false, "nothing open");
+  await open({ lose: ["saved"] });
+  await press("send");
+  assert.equal(actions.closeBuilderCalendarEventPanel(render), false);
+  assert.equal(state.builder.calendarEvent.phase, "unconfirmed", "kept");
+  // app.js wires it into the Escape handler (the suites do not load app.js).
+  const { readFileSync } = await import("node:fs");
+  const appJs = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const start = appJs.indexOf('if (event.key !== "Escape") return;');
+  assert.ok(start > 0);
+  assert.match(appJs.slice(start, start + 2000), /if \(state\.activeTab === "builder" && closeBuilderCalendarEventPanel\(renderBuilder\)\) return;/);
+});
+
+test("15. a Builder save on its way: the panel says so and reads the day only once the save has landed", async () => {
+  const fake = server();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const calls = installFetchMock(async (call) => {
+    if (call.method === "PATCH") { await gate; return { status: 200, body: draftWith({ session: { trackingEnabled: true, rpeEnabled: false } }) }; }
+    return fake(call);
+  });
+  state.builder.draft = draftWith({ session: { trackingEnabled: true, rpeEnabled: true } });
+  const saving = builderActions.handleBuilderWorkspaceAction(fakeAction({ action: "builder-toggle-session-rpe", sessionId: "s1" }), { renderBuilder: render });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(builderActions.builderSavesPending(), true);
+  const opening = press("open");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(state.builder.calendarEvent.phase, "saving");
+  assert.ok(panelHtml().includes(escapeHtml(pure.WAITING_FOR_SAVE)));
+  assert.equal(calls.filter((call) => call.url.startsWith("/api/calendar?")).length, 0, "no read before the save lands");
+  release();
+  await saving;
+  await opening;
+  assert.equal(builderActions.builderSavesPending(), false);
+  assert.equal(state.builder.calendarEvent.phase, "ready");
+  assert.equal(state.builder.calendarEvent.match.kind, "planned");
+  assert.equal(calls.filter((call) => call.url.startsWith("/api/calendar?")).length, 1);
 });
 
 // --- 10. Open in calendar -----------------------------------------------------------------

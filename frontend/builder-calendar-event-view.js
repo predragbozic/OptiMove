@@ -4,6 +4,7 @@
 // under the calendar's prefix (`cc-builder-event`).
 import {
   builderCalendarEventBlockedReason,
+  builderCalendarDraftHoldsSession,
   builderCalendarEventOffered,
   builderCalendarMadeKey,
   builderCalendarMatchSentence,
@@ -13,6 +14,7 @@ import {
   formatDay,
   NO_TRAINING_TYPE,
   RESULT_NOT_CONFIRMED,
+  WAITING_FOR_SAVE,
 } from "./builder-calendar-event.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -22,7 +24,11 @@ const ICON_CALENDAR = `<svg class="cc-builder-event-icon" viewBox="0 0 24 24" ar
 export function renderBuilderCalendarEventButton({ draft, block, session, workspaceType, panel, made }) {
   if (!builderCalendarEventOffered(draft, block, workspaceType)) return "";
   const blocked = builderCalendarEventBlockedReason(draft);
-  const busyElsewhere = Boolean(panel && panel.sessionId !== session.id && (panel.phase === "sending" || panel.phase === "unconfirmed"));
+  // Only a panel of a session still in this draft holds the other buttons:
+  // after a change of plan in the series the old panel is released (its
+  // create stays in the calendar's memory, to check there).
+  const busyElsewhere = Boolean(panel && panel.sessionId !== session.id && (panel.phase === "sending" || panel.phase === "unconfirmed")
+    && builderCalendarDraftHoldsSession(draft, panel.sessionId));
   const open = Boolean(panel && panel.sessionId === session.id);
   const disabled = Boolean(blocked) || busyElsewhere;
   const inCalendar = (made || []).includes(builderCalendarMadeKey(draft, block, session));
@@ -66,6 +72,7 @@ export function renderBuilderCalendarEventPanel({ session, block, panel, types }
 }
 
 function renderBody({ block, panel, types, busy }) {
+  if (panel.phase === "saving") return `<p class="cc-builder-event-line" role="status">${escapeHtml(WAITING_FOR_SAVE)}</p>`;
   if (panel.phase === "reading") return `<p class="cc-builder-event-line" role="status">Reading the calendar…</p>`;
   if (panel.phase === "read_error") {
     // A refusal whose re-read failed keeps its sentence (code review LOW).
