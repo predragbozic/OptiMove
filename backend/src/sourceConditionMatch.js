@@ -5,6 +5,15 @@
 // mapping service use it under their own locks).
 import { conditionMatches, needsEventConfirmation, rangeWords, sourceRangeOf } from "./sourceConditionRules.js";
 
+// Whether v80 is installed on this database (its confirmations table; every v80 object comes and goes together). Without
+// it the services behave as before v80: no rule, no match, no column of v80 read or written - the precedent of v72's field
+// inventory (gpexeImportService.js) and the calendar's questions. Asked once per transaction that may need it.
+export async function conditionMatchInstalled(queryable) {
+  return (await queryable.query(`select to_regclass('training_load.source_metric_event_setting_confirmations') is not null as ok`)).rows[0].ok === true;
+}
+// The version's rule as a select column: the column itself, or null before v80.
+export const conditionRuleColumn = (installed, alias = "v") => (installed ? `${alias}.condition_rule` : "null::jsonb as condition_rule");
+
 // A rule fits a condition's shape (the database's condition_rule_fits): a zone rule a zone condition (between, or >= for
 // a top zone), an acceleration rule a '>=' event condition, a deceleration rule a '<=' one.
 export function ruleFits(rule, cd) {

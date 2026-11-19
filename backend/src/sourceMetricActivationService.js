@@ -24,6 +24,7 @@
 // the state checks after the right, the writes with the keyed audit row last
 // and the bounded COMMIT (v48's deferred links). Answers carry no acting user
 // and no reason (C63, G).
+import { conditionMatchInstalled, conditionRuleColumn } from "./sourceConditionMatch.js";
 import { adminWriteKit, classifyDatabaseError, unitWordCode, unitWordMessage } from "./sourceMetricMappingService.js";
 import { mayManageActivations, activationInScope, bindingClubHolds } from "./sourceMetricAccess.js";
 import {
@@ -94,10 +95,11 @@ export async function startActivations({ ctx, body }) {
     body: async (client, operationId) => {
       // Step 2: the scope on a plain read, before any lock - the version of the
       // named mapping, its owner, each binding's club and team.
+      const ruleInstalled = await conditionMatchInstalled(client);
       const v = (await client.query(
         `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
                 v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family,
-                d.source_metric_key, v.source_unit, v.condition_rule, v.metric_definition_version_id
+                d.source_metric_key, v.source_unit, ${conditionRuleColumn(ruleInstalled)}, v.metric_definition_version_id
            from training_load.source_metric_mapping_versions v
            join training_load.source_metric_mappings m on m.id = v.mapping_id
            join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -278,10 +280,11 @@ export async function switchToCopy({ ctx, activationId, body }) {
         `select source_metric_definition_id, source_metric_version_id from training_load.source_metric_mapping_versions where id = $1`,
         [old.mapping_version_id],
       )).rows[0];
+      const toRuleInstalled = await conditionMatchInstalled(client);
       const to = (await client.query(
         `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
                 v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family,
-                v.condition_rule, v.metric_definition_version_id
+                ${conditionRuleColumn(toRuleInstalled)}, v.metric_definition_version_id
            from training_load.source_metric_mapping_versions v
            join training_load.source_metric_mappings m on m.id = v.mapping_id
            join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id

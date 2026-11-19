@@ -1269,7 +1269,8 @@ const ZONE_25_60 = { kind: "zone", operator: "between", lower: "25", upper: "60"
 const ACC_03 = { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" };
 const placementRaw = async (who, t, cand, f, target) => ok(await placement(who, t, cand.id, f, target)).placement;
 const noMatchLeaks = (text) => {
-  for (const needle of ["conditionMatch", "conditionRule", "matched", "condition_raw", "1473", "\"min\":", "\"max\":"]) assert.equal(text.includes(needle), false, needle);
+  // Keys only (a set id like 1473 can occur inside a random UUID by chance, so values are not searched as text).
+  for (const needle of ["conditionMatch", "conditionRule", "matched", "condition_raw", "setId", "\"min\":", "\"max\":"]) assert.equal(text.includes(needle), false, needle);
 };
 const activationRow = (id) => one(`select a.matched_condition, a.matched_source_range, a.matched_threshold_set_id, a.matched_at is not null as at, v.condition_rule
   from ${T5} a join ${T4} v on v.id = a.mapping_version_id where a.id = $1`, [id]);

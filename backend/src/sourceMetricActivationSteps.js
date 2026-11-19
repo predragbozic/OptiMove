@@ -11,7 +11,7 @@
 // (training_load.source_metric_binding_club, v48), never the team's club. The
 // database guards every write again (v48): the acting user, the basis it
 // derives, the binding's club and the audit chain.
-import { MATCH_TEXT, matchCondition, newestTeamThresholds } from "./sourceConditionMatch.js";
+import { conditionMatchInstalled, MATCH_TEXT, matchCondition, newestTeamThresholds } from "./sourceConditionMatch.js";
 import { refusal, activationInScope } from "./sourceMetricAccess.js";
 
 const NOT_FOUND = () => refusal(404, "notFound", "Not found.");
@@ -237,6 +237,7 @@ export async function insertStarts(client, ctx, v, bindings, locked, reason) {
   const starts = [];
   // v80: a version with a condition rule: the variable's condition, matched for each team against its newest stored
   // session's team setting (the variable version is immutable, the candidate's bundle too; the team is locked).
+  const matchInstalled = await conditionMatchInstalled(client);
   const cd = v.condition_rule ? (await client.query(
     `select condition_description from training_load.metric_definition_versions where id = $1`, [v.metric_definition_version_id],
   )).rows[0]?.condition_description ?? null : null;
@@ -256,11 +257,11 @@ export async function insertStarts(client, ctx, v, bindings, locked, reason) {
         `insert into training_load.source_metric_mapping_activations
            (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint,
             source_team_binding_id, team_id, applies_to_session, applies_to_drill, requirement,
-            activated_by_user_id, activated_basis, reason, matched_condition, matched_source_range, matched_threshold_set_id, matched_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, case when $14::jsonb is null then null else now() end) returning id`,
+            activated_by_user_id, activated_basis, reason${matchInstalled ? ", matched_condition, matched_source_range, matched_threshold_set_id, matched_at" : ""})
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13${matchInstalled ? ", $14::jsonb, $15::jsonb, $16, case when $14::jsonb is null then null else now() end" : ""}) returning id`,
         [v.id, v.mapping_id, v.source_metric_definition_id, v.metric_definition_id, v.parameter_fingerprint,
           bindingId, teamId, v.applies_to_session, v.applies_to_drill, requirement, ctx.userId, ctx.basis, reason,
-          match ? JSON.stringify(match.condition) : null, match ? JSON.stringify(match.sourceRange) : null, match ? match.setId : null],
+          ...(matchInstalled ? [match ? JSON.stringify(match.condition) : null, match ? JSON.stringify(match.sourceRange) : null, match ? match.setId : null] : [])],
       )).rows[0].id;
     } catch (error) {
       if (error?.code === "23505" && ACTIVATION_UNIQUE_CODES.has(error.constraint)) {

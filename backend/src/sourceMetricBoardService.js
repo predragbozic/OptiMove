@@ -18,7 +18,7 @@
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
 import { conditionRuleFor, storedRule } from "./sourceConditionRules.js";
-import { matchCondition, ruleFits, settingMismatchText } from "./sourceConditionMatch.js";
+import { conditionMatchInstalled, conditionRuleColumn, matchCondition, ruleFits, settingMismatchText } from "./sourceConditionMatch.js";
 import { revisionProven } from "./sourceFieldEvidence.js";
 import { bundleZoneThresholds } from "./sourceZoneThresholds.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
@@ -270,12 +270,13 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   )).rows;
 
   // The active mapping versions the club can use: OptiMove's and its own; on the platform board OptiMove's only.
+  const matchInstalled = await conditionMatchInstalled(client);
   const versions = (await client.query(
     `select v.id, v.mapping_id, v.owner_key, v.source_metric_definition_id as field_id, v.metric_definition_id as variable_id,
             v.source_metric_version_id as revision_id, v.metric_definition_version_id as target_version_id,
             v.parameter_kind, v.parameter_fingerprint, v.source_unit, v.target_unit,
             trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
-            v.applies_to_session, v.applies_to_drill, v.condition_rule
+            v.applies_to_session, v.applies_to_drill, ${conditionRuleColumn(matchInstalled)}
        from training_load.source_metric_mapping_versions v
       where v.status = 'active' and v.owner_key = any($1::text[])
       order by v.id`,
@@ -371,7 +372,8 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   // under its locks, so the match it writes is the one checked there).
   const matches = new Map();
   const thresholds = candidate?.raw_bundle?.teamThresholds ?? null;
-  for (const variable of variables.filter((x) => x.has_condition === true && !x.calculated)) {
+  // Before v80 (no rule, no match on this database) nothing is matched: the board is as before.
+  for (const variable of matchInstalled ? variables.filter((x) => x.has_condition === true && !x.calculated) : []) {
     for (const f of fields) {
       const rule = conditionRuleFor(f.source_metric_key);
       if (!rule || !ruleFits(rule, variable.condition_raw)) continue;
@@ -379,7 +381,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
       matches.set(`${f.id}:${variable.id}`, { ...result, rule: storedRule(rule) });
     }
   }
-  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, unitWords, fields, variables, versions, open, switchedOff, replacedBySystem, conversions, names, matches };
+  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, unitWords, fields, variables, versions, open, switchedOff, replacedBySystem, conversions, names, matches, matchInstalled };
 }
 
 // ---------------------------------------------------------------------------
