@@ -977,7 +977,7 @@ GO on 9.2 at `bbeeb2f3`, every recommendation accepted:
 Reviews: `code-reviewer` on a frozen head with the full packet, then the independent review and the OptiMove manager's
 gate (★★, trigger 4). The manager opens the pull request.
 
-### 9.3 A question's Tests schedule folds into its event (follow-up "Q-FOLD"; proposed, waiting for the manager's GO)
+### 9.3 A question's Tests schedule folds into its event (follow-up "Q-FOLD"; accepted 2026-11-19, 9.3.9)
 
 **Why.** Found in the browser check of #625. When a coach asks WELLNESS on an event, the question's Tests schedule
 appears in the calendar as its own "Scheduled test" card next to the event. An RPE question does not do this: it sets
@@ -1103,3 +1103,36 @@ Mutations, each must be killed:
 - **Q2:** fold for the athlete too, unlike RPE, because her calendar test card has no action. Recommended: yes.
 - **Q3:** ended questions fold, and a cancelled event folds too. Recommended: yes.
 - **Q4:** no coverage condition, since no number moves. Recommended: yes.
+
+#### 9.3.9 The manager's GO (2026-11-19)
+
+GO on 9.3 at `23d6064e`, all four recommendations accepted:
+- **Q1:** a `window_date` with no event card keeps its test card (D16).
+- **Q2:** the athlete folds too. Her WELLNESS card has no action, and K2b-2a-3 (PR #633) does not make the calendar
+  card her way to the form; she answers through the Home card and the prompt.
+- **Q3:** ended questions and a cancelled event fold as well.
+- **Q4:** no coverage condition. The question's targets are the event's own, copied, and they move with the event.
+
+Added to 9.3.6: one test that a reader's and an athlete's answer gains no new key (the fold only removes a card), and
+that the athlete's card allowlist (D21) is unchanged. Review: `code-reviewer` on a frozen head (not ★★).
+
+#### 9.3.10 As built
+
+- `readQuestionTestFolds` (`calendarQuery.js`) does the one read of 9.3.5. The event-card loop deletes
+  `test:<schedule>:<day>` for the questions of that event and day, for every viewer and every event status.
+- **The read runs only when `kinds` contains `event`.** This is 9.3.4's "with `kinds` without `event` the test card
+  stays", which the loop alone would not give: `kinds` is applied only when the days are assembled, after the loop.
+  Mutation F6 removes the guard and fails test 37.
+- **Observed, not changed:** the existing RPE and `test`-event folds delete the referenced schedule's card in the same
+  loop without that guard. A request with `kinds=external` (no `event`) therefore omits an RPE schedule that a planned
+  event folds, while a linked session stays (`foldsLinks` requires `event`). This predates Q-FOLD and is recorded for
+  the manager.
+- **Test 37:**
+  - one card for a manager (the club's admin), a reader (the team's coach) and the athlete, for a live question, and
+    for removed, closed-early and cancelled-event questions, each on a team of its own (WELLNESS is never asked twice
+    on a day);
+  - with `kinds=test` the card stays;
+  - *Next morning* keeps its card, in a window that also holds the event's day;
+  - no new key on the event card, and the athlete's D21 allowlist exactly as before;
+  - RPE and a plain schedule unchanged. The `test`-event fold stays covered by `central-calendar-k2a-events`.
+- **Mutations:** F1–F5 of 9.3.6 and F6 (the `kinds` guard), all killed.

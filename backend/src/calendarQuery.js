@@ -1169,6 +1169,16 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     }
   }
 
+  // Q-FOLD (K2b-2 plan 9.3): a Tests schedule an event's WELLNESS question
+  // names (live or ended) folds into that event's card on the question's day,
+  // for every viewer, whatever the event's status, without moving any number
+  // (D14: one count per card). Only where the event card is emitted for this
+  // viewer on that day (D16); a window_date with no event card keeps its test
+  // card. One read for the test cards already built; nothing without v81.
+  // A response without the event cards (`kinds` without `event`) folds
+  // nothing: the test card stays (as the links' fold, security review K2a-1b).
+  const questionFolds = kinds.has("event") ? await readQuestionTestFolds(cards) : new Map();
+
   // Event cards (K2a plan section 1.4), one per event day decided above, with
   // the referenced schedule's day card, the linked sessions (K2a-1b) and the
   // linked activities folded under a PLANNED event.
@@ -1249,6 +1259,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
         cards.delete(tst.key);
       }
     }
+    for (const scheduleId of questionFolds.get(`${row.id}|${day}`) || []) cards.delete(`test:${scheduleId}:${day}`);
     const fold = folds ? eventFolds.get(card.key) : null;
     if (fold) applyEventFold(card, fold);
     if (ctx.type !== "athlete") {
@@ -1281,6 +1292,28 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     days.push({ date, items: items.map((card) => publicCard(card, includeAthletes)) });
   }
   return { from, to, today, workspace: { type: ctx.workspace.type, scopeId: ctx.workspace.scopeId ?? null }, teams, days };
+}
+
+// Q-FOLD (plan 9.3.5): `${eventId}|${windowDate}` -> the Tests schedule ids
+// the event's WELLNESS questions name, among the test cards already built.
+async function readQuestionTestFolds(cards) {
+  const folds = new Map();
+  const scheduleIds = [...new Set([...cards.values()].filter((c) => c.kind === "test" && c.links?.testScheduleId).map((c) => String(c.links.testScheduleId)))];
+  if (!scheduleIds.length) return folds;
+  const installed = (await query(`select to_regclass('calendar.event_questions') is not null as ok`)).rows[0].ok;
+  if (!installed) return folds;
+  const rows = (await query(
+    `select q.test_schedule_id, q.event_id, q.window_date
+       from calendar.event_questions q
+      where q.kind = 'wellness' and q.test_schedule_id = any($1::uuid[])`,
+    [scheduleIds],
+  )).rows;
+  for (const r of rows) {
+    const key = `${r.event_id}|${dateStr(r.window_date)}`;
+    if (!folds.has(key)) folds.set(key, []);
+    folds.get(key).push(String(r.test_schedule_id));
+  }
+  return folds;
 }
 
 function publicCard(card, includeAthletes) {
