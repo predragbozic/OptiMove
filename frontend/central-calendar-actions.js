@@ -1,3 +1,20 @@
+import {
+  CC_FORM_QUESTION_TEXT,
+  CC_QUESTION_KINDS,
+  CC_QUESTION_WORDS,
+  CC_WINDOW_KINDS,
+  ccEditFormQuestions,
+  ccPanelQuestionList,
+  ccPanelRefusalKeepsStep,
+  ccPanelRefusalRereads,
+  ccPanelRefusalText,
+  ccQuestionCheckSettles,
+  ccQuestionDoneText,
+  ccQuestionEventOfCard,
+  ccQuestionWindowRange,
+  ccWindowFieldError,
+  ccWindowWire,
+} from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
@@ -10,7 +27,9 @@ import {
   centralCalendarErrorInfo,
   centralCalendarOutcomeUnknown,
   createCentralCalendarEvent,
+  centralCalendarQuestionPath,
   fetchCentralCalendarEvent,
+  fetchCentralCalendarEventQuestions,
   invalidateCentralCalendarCache,
   loadCentralCalendar,
   loadCentralCalendarDay,
@@ -42,6 +61,8 @@ import {
   setCentralCalendarFormExpect,
   setCentralCalendarFormField,
   setCentralCalendarFormTarget,
+  setCentralCalendarQuestionOn,
+  setCentralCalendarQuestionWindow,
 } from "./central-calendar-event-form.js";
 import {
   centralCalendarEventLinkable,
@@ -184,8 +205,16 @@ export function closeCentralCalendarPanel(render) {
   const cal = state.centralCalendar;
   if (cal.form) return closeEventForm(render) ? true : CENTRAL_CALENDAR_STAYED;
   if (!cal.panel.open) return false;
+  // An open question step closes first, as its Not now / Keep it (the panel stays).
+  if (cal.questionStep && !cal.linkWrite) {
+    cal.questionStep = null;
+    render?.();
+    if (render) focusQuestionControl(".cc-question-button");
+    return true;
+  }
   const key = cal.panel.key;
   cal.panel = closedPanel();
+  cal.panelQuestions = null;
   render?.();
   if (render) focusCard(key);
   return true;
@@ -316,10 +345,22 @@ export function openCentralCalendarAt({ date, key = "" } = {}) {
   cal.anchor = date;
   cal.selectedDate = date;
   if (key && !cal.form) {
-    cal.panelEvent = null;
+    // The same reset as an ordinary open: nothing of an earlier panel stays.
+    resetPanelReads(cal);
     cal.panel = { ...closedPanel(), open: true, key, date };
   }
   invalidateCentralCalendarCache();
+}
+
+// Every panel open starts from nothing of an earlier one: its event read, its
+// link and question lines and steps, and its questions read (answers and
+// Later move no revision, so an old read is never trusted).
+function resetPanelReads(cal) {
+  cal.panelEvent = null;
+  cal.linkMessage = null;
+  cal.alignStep = null;
+  cal.questionStep = null;
+  cal.panelQuestions = null;
 }
 
 // Leaving the form (another item, Escape / Back, a workspace switch through
@@ -351,12 +392,13 @@ function calendarMayBeLeft({ final = false, leavingSlice = true } = {}) {
   const waiting = () => Boolean(words) && (anyUncertainWrite() || Boolean(cal?.linkWrite));
   // A link command in flight (K2c-1, review M1): asked about, and on a yes
   // kept to check under the event before the slice is replaced.
+  const what = cal?.linkWrite?.family === "question" ? "A question" : "A link";
   if (leavingSlice && cal?.linkWrite && !cal.linkWrite.check && !words) {
-    if (!ask("A link is still being saved. Leave anyway? You can check it later under the event.")) return false;
+    if (!ask(`${what} is still being saved. Leave anyway? You can check it later under the event.`)) return false;
     rememberLinkWrite(cal.linkWrite);
   }
   if (cal?.linkWrite && words && !form) {
-    const leave = ask(`A link is still being saved. ${verb} anyway? ${later}`);
+    const leave = ask(`${what} is still being saved. ${verb} anyway? ${later}`);
     if (leave) rememberLinkWrite(cal.linkWrite);
     return leave;
   }
@@ -482,6 +524,11 @@ function panelEventWanted(item) {
   return centralCalendarEventLinkable(item) || Boolean(item.details && item.details.selected >= 1);
 }
 function syncPanelEvent(cal, render) {
+  const questions = syncPanelQuestions(cal, render);
+  const event = syncPanelEventOnly(cal, render);
+  return questions || event ? Promise.all([questions, event]) : null;
+}
+function syncPanelEventOnly(cal, render) {
   if (state.centralCalendar !== cal || !cal.panel.open || cal.form) return null;
   const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
   const view = cal.panelEvent;
@@ -498,12 +545,84 @@ function syncPanelEvent(cal, render) {
 }
 setCentralCalendarAppliedHook(syncPanelEvent);
 
+// K2b-2a-2b (contract 4.1): the open panel of a manager's event reads its
+// questions once, only while the club's switch is on (B1, from the catalog
+// the event form reads too: one shared read per workspace, dropped by a
+// workspace change and by every Settings -> Calendar write, never per card,
+// for a reader or in the athlete workspace). A failed or lost catalog read is
+// not kept: that panel shows no section and no word, and the next panel open
+// reads it again. The questions are read again when the card's
+// revision moves or a question write was confirmed (`stale`). A 404 hides the
+// section without a word; a failure waits for Try again.
+function panelQuestionsWanted(cal, item) {
+  const ws = cal.data?.workspace?.type;
+  return Boolean(item && item.kind === "event" && item.canManage === true && (ws === "club" || ws === "team"));
+}
+function syncPanelQuestions(cal, render, { force = false } = {}) {
+  if (state.centralCalendar !== cal || !cal.panel.open || cal.form) return null;
+  const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
+  const current = cal.panelQuestions;
+  if (!panelQuestionsWanted(cal, item)) {
+    if (current) cal.panelQuestions = null;
+    return null;
+  }
+  if (!cal.eventCatalog) {
+    // The panel object is new on every open: a failure belongs to this open only.
+    if (cal.questionsCatalogFailedFor === cal.panel) return null;
+    if (!cal.questionsCatalogRead) {
+      const panel = cal.panel;
+      cal.questionsCatalogRead = ensureEventTypes(cal).then((result) => {
+        cal.questionsCatalogRead = null;
+        if (state.centralCalendar !== cal) return null;
+        if (result?.error || !cal.eventCatalog) {
+          cal.questionsCatalogFailedFor = panel;
+          return null;
+        }
+        return syncPanelQuestions(cal, render);
+      });
+    }
+    return cal.questionsCatalogRead;
+  }
+  if (!centralCalendarCatalogOf(cal).questionsEnabled) {
+    if (current) cal.panelQuestions = null;
+    return null;
+  }
+  if (current && current.key === item.key) {
+    if (current.loading) return current.promise;
+    // A failure waits for Try again; a 404 is read again only when the card's
+    // revision moves (the switch may have changed with it).
+    if (!force && current.error) return null;
+    if (!force && !current.stale && current.revision === item.revision) return null;
+  }
+  return loadPanelQuestions(cal, item, render);
+}
+
+function loadPanelQuestions(cal, item, render) {
+  const view = { key: item.key, eventId: item.eventId, revision: item.revision, loading: true, error: "", retry: true, hidden: false, stale: false, read: null, promise: null };
+  cal.panelQuestions = view;
+  render?.();
+  view.promise = fetchCentralCalendarEventQuestions(item.eventId).then((read) => ({ read }), (failure) => ({ info: centralCalendarErrorInfo(failure) })).then(({ read, info }) => {
+    if (state.centralCalendar !== cal || cal.panelQuestions !== view) return;
+    view.loading = false;
+    if (info) {
+      // The identical 404 is never explained: the section goes.
+      if (info.status === 404) view.hidden = true;
+      else {
+        view.error = info.status === 401 ? "Please sign in again to see the questions." : "The questions could not be read.";
+        view.retry = info.status !== 401;
+      }
+    } else view.read = read && typeof read === "object" ? read : { questions: [] };
+    render?.();
+  });
+  return view.promise;
+}
+
 // The waiting write to check first, if any: a create before New event, an
 // edit or a cancel of the same event before its Edit / Cancel.
 function pendingEntryFor({ mode, eventId = "" }) {
   const list = centralCalendarUncertainWrites();
   if (mode === "create") return list.find((entry) => entry.mode === "create") || null;
-  return list.find((entry) => entry.mode !== "create" && entry.mode !== "link" && entry.eventId && entry.eventId === eventId) || null;
+  return list.find((entry) => entry.mode !== "create" && entry.mode !== "link" && entry.mode !== "question" && entry.eventId && entry.eventId === eventId) || null;
 }
 
 function openPendingCheck(cal, entry, render) {
@@ -621,6 +740,13 @@ async function loadEditEvent(form, cal, render) {
     ensureEventTypes(cal),
     fetchCentralCalendarEvent(form.eventId).then((data) => ({ event: data?.event || null }), (error) => ({ error: centralCalendarErrorInfo(error) })),
   ]);
+  // K2b-2a-2b: the event's live questions, only while the club's switch is
+  // on (read after the catalog said so); a 404 or a failure leaves the
+  // section out, and nothing about questions is then sent.
+  let questionsRead = null;
+  if (!typesResult.error && centralCalendarCatalogOf(cal).questionsEnabled && eventResult.event?.canManage === true && cal.form === form) {
+    questionsRead = await fetchCentralCalendarEventQuestions(form.eventId).then((data) => ({ data }), (error) => ({ error: centralCalendarErrorInfo(error) }));
+  }
   if (state.centralCalendar !== cal || cal.form !== form) return;
   if (eventResult.error?.status === 404 || (eventResult.event && eventResult.event.canManage !== true)) {
     // The identical 404 (ADR-006), or a reader's view: never a hint why.
@@ -637,6 +763,9 @@ async function loadEditEvent(form, cal, render) {
   const ws = cal.data?.workspace || {};
   const teams = cal.data?.teams || [];
   const label = state.currentUser?.activeWorkspace?.label || "";
+  form.rpeFromSessions = (eventResult.event.sessionLinks || []).length > 0;
+  if (questionsRead?.data && ws.type !== "platform") form.questions = ccEditFormQuestions(questionsRead.data);
+  else if (questionsRead?.error && questionsRead.error.status !== 404) form.questionsNote = "The questions for athletes could not be read, so they stay as they are.";
   centralCalendarEditFormFromEvent(form, eventResult.event, {
     types: typesResult.types || [],
     typesFailed: Boolean(typesResult.error),
@@ -795,9 +924,16 @@ export async function submitCentralCalendarEventForm({ render } = {}) {
   const cal = state.centralCalendar;
   const form = cal.form;
   if (!form || form.busy || form.unconfirmed || form.loading || form.loadError) return;
-  const { body, errors, unchanged } = buildCentralCalendarEventRequest(form, { timezone: browserTimeZone() });
+  const { body, errors, unchanged, confirmClose } = buildCentralCalendarEventRequest(form, { timezone: browserTimeZone() });
   form.errors = errors;
   form.error = "";
+  if (body && confirmClose) {
+    // An answered question unticked: the inline step first (GO decision 5).
+    form.questions.askClose = true;
+    render?.();
+    globalThis.document?.querySelector?.('[data-action="central-calendar-event-questions-close-confirm"]')?.focus?.();
+    return;
+  }
   if (unchanged) {
     form.error = form.mode === "values" ? "Nothing changed: change a detail, or Close." : "Nothing changed: change a field, or Close.";
     render?.();
@@ -873,7 +1009,20 @@ function formTitle(form, event = null) {
 function savedText(form, data, { check = false } = {}) {
   const title = formTitle(form, data?.event || null);
   const words = { create: `“${title}” was created.`, edit: `Changes to “${title}” were saved.`, cancel: `“${title}” was cancelled.`, values: `The details of “${title}” were saved.` };
-  return `${check ? "Checked: " : ""}${words[form.mode]}`;
+  return `${check ? "Checked: " : ""}${words[form.mode]}${questionsSavedTail(data)}`;
+}
+
+// K2b-2a-2b (contract 3.4): what the save did not ask, and the WELLNESS a Day
+// off cancelled.
+function questionsSavedTail(data) {
+  const parts = [];
+  const skipped = Array.isArray(data?.questionsSkipped) ? data.questionsSkipped.filter((k) => CC_QUESTION_WORDS[k]) : [];
+  if (skipped.length === 2) parts.push("RPE and WELLNESS weren't asked: they can't be asked for this event.");
+  else if (skipped[0] === "rpe") parts.push("RPE wasn't asked: it can't be asked for this event.");
+  else if (skipped[0] === "wellness") parts.push("WELLNESS wasn't asked: this day's WELLNESS already covers it.");
+  const n = Number(data?.dayOffCancelled) || 0;
+  if (n > 0) parts.push(`${n} open WELLNESS ${n === 1 ? "check-in" : "check-ins"} on these days ${n === 1 ? "was" : "were"} cancelled.`);
+  return parts.length ? ` ${parts.join(" ")}` : "";
 }
 
 // A settled refusal of a write the coach no longer has open as a form (a late
@@ -990,6 +1139,24 @@ async function refused(form, info, render, { check = false } = {}) {
     });
     return;
   }
+  if (info.code === "question_already_asked") {
+    await settleAndReload(cal, render, { notice: `Nothing was saved. ${CC_FORM_QUESTION_TEXT.question_already_asked}`, panelKey: form.key, panelDate: form.date });
+    return;
+  }
+  if (info.code === "questions_off") {
+    // Turned off meanwhile: the section goes, the catalog is read again later.
+    form.questions = null;
+    cal.eventTypesStale = true;
+    form.error = `${CC_FORM_QUESTION_TEXT.questions_off} Nothing was saved. Save again without the questions.`;
+    render?.();
+    return;
+  }
+  if (CC_FORM_QUESTION_TEXT[info.code]) {
+    if (form.questions) form.questions.confirmClose = false;
+    form.error = `${CC_FORM_QUESTION_TEXT[info.code]} Nothing was saved.`;
+    render?.();
+    return;
+  }
   const field = FIELD_OF_CODE[info.code];
   if (field && fieldShown(form, field)) {
     form.errors = { ...form.errors, [field]: FIELD_TEXT[info.code] };
@@ -1048,7 +1215,7 @@ function findItemOnDay(cal, key, date) {
 // command is never sent again by itself; pressing again makes a new key.
 // ---------------------------------------------------------------------------
 function linkEntries() {
-  return centralCalendarUncertainWrites().filter((entry) => entry.mode === "link");
+  return centralCalendarUncertainWrites().filter((entry) => entry.mode === "link" || entry.mode === "question");
 }
 
 function linkLockedFor(cal, item) {
@@ -1061,7 +1228,7 @@ function rememberLinkWrite(spec) {
   const key = workspaceKeyOf();
   if (!key) return;
   const entry = {
-    mode: "link", act: spec.act, eventId: spec.eventId, eventTitle: spec.eventTitle, requestKey: spec.requestKey,
+    mode: spec.family === "question" ? "question" : "link", act: spec.act, kind: spec.kind || "", questionId: spec.questionId || "", eventId: spec.eventId, eventTitle: spec.eventTitle, requestKey: spec.requestKey,
     path: spec.path, sentBody: spec.body, name: spec.name, panelKey: spec.panelKey, date: spec.date, eventKey: spec.eventKey,
     pairKey: spec.pairKey || "",
   };
@@ -1160,6 +1327,7 @@ function focusLinkStatus() {
 // The route a pressed act sends to ("align-confirm" / "align-results" are the
 // Align row's second step, review M6).
 function wireOf(act) {
+  if (String(act).startsWith("question-")) return "question";
   if (act === "link-to-event") return "link-session";
   if (act === "align-confirm" || act === "align-results") return "align";
   return act;
@@ -1168,11 +1336,15 @@ function wireOf(act) {
 // The words a link command's result is shown in (review M4): in the open
 // panel's own line when its links section is there, else the screen's notice
 // line (the panel closed, the event was cancelled, a 404 closed it).
-function showLinkText(cal, text, { alert = false } = {}) {
+// `at`: a question command's spec - its line is drawn in the row that sent it
+// (contract 4.3), by the question's id, else its kind.
+function showLinkText(cal, text, { alert = false, family = "link", at = null } = {}) {
   const item = cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
-  const sectionShown = item && (centralCalendarEventLinkable(item) || item.kind === "planned");
+  const sectionShown = item && (family === "question"
+    ? Boolean(cal.panelQuestions && cal.panelQuestions.key === item.key && !cal.panelQuestions.hidden)
+    : centralCalendarEventLinkable(item) || item.kind === "planned");
   if (sectionShown) {
-    cal.linkMessage = { panelKey: item.key, text, alert };
+    cal.linkMessage = { panelKey: item.key, text, alert, family, at: at ? { kind: at.kind || "", questionId: at.questionId || "" } : null };
     cal.notice = "";
   } else {
     cal.linkMessage = null;
@@ -1181,7 +1353,7 @@ function showLinkText(cal, text, { alert = false } = {}) {
 }
 
 async function startLinkWrite(cal, dataset, render) {
-  if (cal.form || linkLockedFor(cal, findItemOnDay(cal, cal.panel.key, cal.panel.date))) return;
+  if (cal.form || cal.questionStep || linkLockedFor(cal, findItemOnDay(cal, cal.panel.key, cal.panel.date))) return;
   // The Align row's first press only shows its step (review M6).
   if (dataset.act === "align") {
     const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
@@ -1211,29 +1383,33 @@ async function sendLinkWrite(cal, spec, render, { check = false } = {}) {
   if (state.centralCalendar !== cal) {
     // The workspace changed while it was in flight (review M1): the leave
     // question kept it to check; a settled answer ends that wait.
-    if (!info || (!centralCalendarOutcomeUnknown(info) && (!check || centralCalendarLinkCheckSettles(info)))) forgetUncertainWrite(spec.requestKey);
+    if (!info || (!centralCalendarOutcomeUnknown(info) && (!check || checkSettlesFor(spec, info)))) forgetUncertainWrite(spec.requestKey);
     return;
   }
   cal.linkWrite = null;
+  const family = spec.family === "question" ? "question" : "link";
   if (!info) {
     forgetUncertainWrite(spec.requestKey);
-    await linkSettled(cal, spec, data, render);
+    if (family === "question") await questionSettled(cal, spec, data, render);
+    else await linkSettled(cal, spec, data, render);
     return;
   }
   if (centralCalendarOutcomeUnknown(info)) {
     rememberLinkWrite(spec);
-    if (check) showLinkText(cal, "No answer again. The result is still not confirmed.");
+    if (family === "question") cal.questionStep = null;
+    if (check) showLinkText(cal, "No answer again. The result is still not confirmed.", { family, at: spec });
     else cal.linkMessage = null;
     render?.();
     return;
   }
-  if (check && !centralCalendarLinkCheckSettles(info)) {
-    showLinkText(cal, linkCheckNoteText(info));
+  if (check && !checkSettlesFor(spec, info)) {
+    showLinkText(cal, linkCheckNoteText(info), { family, at: spec });
     render?.();
     return;
   }
   forgetUncertainWrite(spec.requestKey);
-  await linkRefused(cal, spec, info, render);
+  if (family === "question") await questionRefused(cal, spec, info, render);
+  else await linkRefused(cal, spec, info, render);
 }
 
 function linkCheckNoteText(info) {
@@ -1256,11 +1432,14 @@ async function checkLinkWrite(cal, entry, render, { openPanel = false } = {}) {
       cal.panelEvent = null;
       cal.linkMessage = null;
       cal.alignStep = null;
+      cal.questionStep = null;
+      cal.panelQuestions = null;
       render?.();
       void syncPanelEvent(cal, render);
     }
   }
   const spec = {
+    family: entry.mode === "question" ? "question" : "link", kind: entry.kind || "", questionId: entry.questionId || "",
     act: entry.act, wire: wireOf(entry.act), requestKey: entry.requestKey,
     path: entry.path, body: entry.sentBody, name: entry.name, pairKey: entry.pairKey, eventId: entry.eventId,
     eventKey: entry.eventKey, eventTitle: entry.eventTitle, date: entry.date, panelKey: entry.panelKey,
@@ -1327,7 +1506,170 @@ async function linkRefused(cal, spec, info, render) {
   render?.();
 }
 
+// ---------------------------------------------------------------------------
+// K2b-2a-2b (contract 4.3, 5): the question commands of the open panel - Ask,
+// Move time, Remove - through the link commands' one-at-a-time path (family
+// "question", memory mode "question"). Each opens an inline step first; only
+// its send button sends, with a fresh key; Check result sends the same again.
+// ---------------------------------------------------------------------------
+function checkSettlesFor(spec, info) {
+  return spec.family === "question" ? ccQuestionCheckSettles(info, centralCalendarCheckSettles) : centralCalendarLinkCheckSettles(info);
+}
+
+function questionPanelItem(cal) {
+  const item = cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
+  const pq = cal.panelQuestions;
+  if (!item || !pq || pq.key !== item.key || pq.loading || pq.error || pq.hidden || !pq.read) return null;
+  return item;
+}
+
+function panelQuestionById(cal, id) {
+  return ccPanelQuestionList(cal.panelQuestions?.read).find((q) => q.id === id) || null;
+}
+
+function focusQuestionControl(selector) {
+  globalThis.document?.querySelector?.(`.cc-panel-questions ${selector}`)?.focus?.({ preventScroll: false });
+}
+
+function openQuestionStep(cal, dataset, render) {
+  const item = questionPanelItem(cal);
+  if (!item || cal.form || cal.questionStep || cal.alignStep || linkLockedFor(cal, item)) return;
+  const act = dataset.act;
+  let step = null;
+  if (act === "ask-open") {
+    const kind = dataset.kind || "";
+    const live = ccPanelQuestionList(cal.panelQuestions.read).some((q) => q.kind === kind && q.status === "live");
+    if (!CC_QUESTION_KINDS.includes(kind) || live || item.cancelled) return;
+    step = { act: "ask", kind, questionId: "", window: { kind: "after_event", date: "", from: "", to: "" } };
+  } else {
+    const q = panelQuestionById(cal, dataset.questionId || "");
+    if (!q || q.status !== "live") return;
+    if (act === "move-open") {
+      if ((Number(q.counts?.answered) || 0) > 0) return;
+      const w = q.window || {};
+      step = { act: "move", kind: q.kind, questionId: q.id, window: { kind: CC_WINDOW_KINDS.includes(w.kind) ? w.kind : "after_event", date: w.kind === "custom" ? w.date || "" : "", from: w.kind === "custom" ? w.from || "" : "", to: w.kind === "custom" ? w.to || "" : "" } };
+    } else if (act === "remove-open") step = { act: "remove", kind: q.kind, questionId: q.id, window: null };
+    else return;
+  }
+  cal.questionStep = { ...step, eventKey: item.key, revision: item.revision, error: "" };
+  cal.linkMessage = null;
+  render?.();
+  focusQuestionControl(step.act === "remove" ? '[data-act="send"]' : 'input[type="radio"]:checked');
+}
+
+function questionSpecOf(cal) {
+  const item = questionPanelItem(cal);
+  const step = cal.questionStep;
+  if (!item || !step || step.eventKey !== item.key) return null;
+  const body = { expectedRevision: eventRevisionOf(cal, item) };
+  let path = "";
+  if (step.act === "ask") {
+    body.kind = step.kind;
+    body.window = ccWindowWire(step.window);
+    path = centralCalendarQuestionPath(item.eventId);
+  } else if (step.act === "move") {
+    body.window = ccWindowWire(step.window);
+    path = centralCalendarQuestionPath(item.eventId, step.questionId, "move");
+  } else if (step.act === "remove") {
+    path = centralCalendarQuestionPath(item.eventId, step.questionId, "remove");
+  } else return null;
+  const requestKey = newCentralCalendarRequestKey();
+  return {
+    family: "question", act: `question-${step.act}`, wire: "question", kind: step.kind, questionId: step.questionId || "",
+    requestKey, path, body: { requestKey, ...body }, name: CC_QUESTION_WORDS[step.kind] || "",
+    eventId: item.eventId, eventKey: item.key, eventTitle: centralCalendarTitle(item), date: item.date, panelKey: item.key,
+  };
+}
+
+async function sendQuestionStep(cal, render) {
+  const step = cal.questionStep;
+  const item = questionPanelItem(cal);
+  if (!step || !item || cal.form || cal.linkWrite || linkLockedFor(cal, item)) return;
+  if (step.window) {
+    const error = ccWindowFieldError(ccQuestionEventOfCard(item), step.window);
+    if (error) {
+      step.error = error;
+      render?.();
+      return;
+    }
+  }
+  const spec = questionSpecOf(cal);
+  if (!spec) return;
+  step.error = "";
+  await sendLinkWrite(cal, spec, render);
+}
+
+// The event and its questions read again (the card's counts, the lists).
+async function rereadForQuestions(cal, render, spec) {
+  if (cal.panelQuestions && cal.panelQuestions.key === spec.panelKey) cal.panelQuestions.stale = true;
+  const stayed = cal.panel.open && cal.panel.key === spec.panelKey;
+  return rereadForLinks(cal, render, stayed ? { panelKey: spec.panelKey, panelDate: cal.panel.date } : {});
+}
+
+async function questionSettled(cal, spec, data, render) {
+  cal.questionStep = null;
+  if (!(await rereadForQuestions(cal, render, spec))) return;
+  const after = spec.questionId ? panelQuestionById(cal, spec.questionId) : null;
+  const done = ccQuestionDoneText(spec.act, { kind: spec.kind, closed: after?.status === "closed_early" });
+  showLinkText(cal, readFailed(cal) ? `${done}${READ_FAILED_TAIL}` : done, { family: "question", at: spec });
+  render?.();
+  const doc = globalThis.document;
+  const target = doc?.querySelector?.(".cc-panel-questions .cc-link-message") || doc?.querySelector?.("#ccQuestionsTitle");
+  target?.focus?.({ preventScroll: true });
+  // The line sits in its row, below the names: brought into view.
+  target?.scrollIntoView?.({ block: "nearest" });
+}
+
+async function questionRefused(cal, spec, info, render) {
+  const text = ccPanelRefusalText(info, spec.act);
+  const step = cal.questionStep;
+  // Only while that step's panel is still open; else the sentence goes to the screen's line.
+  if (ccPanelRefusalKeepsStep(info) && step && step.eventKey === spec.panelKey && cal.panel.open && cal.panel.key === spec.panelKey) {
+    // Another time can be chosen in the same step; a new press is a new key.
+    step.error = `${text}${/Nothing was saved/.test(text) ? "" : " Nothing was saved."}`;
+    render?.();
+    return;
+  }
+  cal.questionStep = null;
+  if (info.code === "questions_off") cal.eventTypesStale = true;
+  if (ccPanelRefusalRereads(info)) {
+    if (info.code === "questions_off") dropStaleEventTypes(cal);
+    if (!(await rereadForQuestions(cal, render, spec))) return;
+  }
+  showLinkText(cal, text, { alert: true, family: "question", at: spec });
+  render?.();
+  globalThis.document?.querySelector?.(".cc-panel-questions .cc-link-message")?.scrollIntoView?.({ block: "nearest" });
+}
+
+function handleQuestionStepInput(target, render) {
+  const cal = state.centralCalendar;
+  const step = cal?.questionStep;
+  if (!step || !step.window || cal.linkWrite) return true;
+  const dataset = target.dataset || {};
+  if (dataset.ccQstepWindow) {
+    const value = String(target.value ?? "");
+    if (!CC_WINDOW_KINDS.includes(value) || step.window.kind === value) return true;
+    step.window.kind = value;
+    if (value === "custom" && !step.window.date) {
+      const item = findItemOnDay(cal, step.eventKey, cal.panel.date);
+      const ev = ccQuestionEventOfCard(item);
+      step.window.date = ccQuestionWindowRange(ev, { kind: "after_event" }).date || ev.day;
+      step.window.from = step.window.from || "09:00";
+      step.window.to = step.window.to || "11:00";
+    }
+    step.error = "";
+    render?.();
+    return true;
+  }
+  if (["date", "from", "to"].includes(dataset.ccQstepPart)) {
+    step.window[dataset.ccQstepPart] = String(target.value ?? "");
+    step.error = "";
+  }
+  return true;
+}
+
 export function handleCentralCalendarInput(target, { render } = {}) {
+  if (target?.closest?.("[data-cc-question-step]")) return handleQuestionStepInput(target, render);
   if (!target?.closest?.("[data-cc-event-form]")) return false;
   const cal = state.centralCalendar;
   const form = cal?.form;
@@ -1354,6 +1696,20 @@ export function handleCentralCalendarInput(target, { render } = {}) {
   }
   if (dataset.ccEventExpect) {
     if (setCentralCalendarFormExpect(form, dataset.ccEventExpect, Boolean(target.checked))) render?.();
+    return true;
+  }
+  // K2b-2a-2b: Ask athletes.
+  if (dataset.ccQuestionOn) {
+    if (setCentralCalendarQuestionOn(form, dataset.ccQuestionOn, Boolean(target.checked))) render?.();
+    return true;
+  }
+  if (dataset.ccQuestionWindow) {
+    if (target.type === "radio" && !target.checked) return true;
+    if (setCentralCalendarQuestionWindow(form, dataset.ccQuestionWindow, "kind", String(target.value ?? ""))) render?.();
+    return true;
+  }
+  if (dataset.ccQuestionPart) {
+    setCentralCalendarQuestionWindow(form, dataset.ccQuestionKind || "", dataset.ccQuestionPart, String(target.value ?? ""));
     return true;
   }
   if (dataset.ccEventTarget) {
@@ -1464,13 +1820,12 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     // The open item again folds the panel.
     if (cal.panel.open && cal.panel.key === key) {
       cal.panel = closedPanel();
+      cal.panelQuestions = null;
       render?.();
       return true;
     }
     cal.panel = { open: true, key, date, athletes: null, loading: true, error: "" };
-    cal.panelEvent = null;
-    cal.linkMessage = null;
-    cal.alignStep = null;
+    resetPanelReads(cal);
     render?.();
     // The sheet is modal below 1024 px: the focus moves to its Close.
     globalThis.document?.querySelector?.(".cc-sheet .cc-panel-close")?.focus?.();
@@ -1489,7 +1844,9 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
       return true;
     }
     const key = cal.panel.key;
+    if (!cal.linkWrite) cal.questionStep = null;
     cal.panel = closedPanel();
+    cal.panelQuestions = null;
     render?.();
     focusCard(key);
     return true;
@@ -1548,6 +1905,20 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     await startLinkWrite(cal, action.dataset || {}, render);
     return true;
   }
+  if (type === "central-calendar-question") {
+    const act = action.dataset?.act || "";
+    if (act === "step-cancel") {
+      if (!cal.linkWrite) cal.questionStep = null;
+      render?.();
+      focusQuestionControl(".cc-question-button");
+    } else if (act === "send") await sendQuestionStep(cal, render);
+    else openQuestionStep(cal, action.dataset || {}, render);
+    return true;
+  }
+  if (type === "central-calendar-questions-retry") {
+    if (cal.panel.open && !cal.form) await syncPanelQuestions(cal, render, { force: true });
+    return true;
+  }
   if (type === "central-calendar-align-cancel") {
     if (!cal.linkWrite) cal.alignStep = null;
     render?.();
@@ -1555,7 +1926,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === "central-calendar-link-check") {
-    const entry = centralCalendarUncertainWrites().find((other) => other.mode === "link" && other.requestKey === action.dataset.requestKey);
+    const entry = centralCalendarUncertainWrites().find((other) => (other.mode === "link" || other.mode === "question") && other.requestKey === action.dataset.requestKey);
     if (entry) await checkLinkWrite(cal, entry, render);
     return true;
   }
@@ -1567,7 +1938,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-edit-event" || type === "central-calendar-cancel-event") {
     const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
-    if (linkLockedFor(cal, item)) return true;
+    if (linkLockedFor(cal, item) || cal.questionStep) return true;
     if (type === "central-calendar-edit-event") await openEditForm(item, render);
     else openCancelForm(item, render);
     return true;
@@ -1601,11 +1972,25 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     if (cal.form?.unconfirmed && !cal.form.busy) await sendEventForm(render);
     return true;
   }
+  // K2b-2a-2b: the inline step of a save that closes an answered question.
+  if (type === "central-calendar-event-questions-close-confirm" || type === "central-calendar-event-questions-close-cancel") {
+    const q = cal.form?.questions;
+    if (!q?.askClose || cal.form.busy || cal.form.unconfirmed) return true;
+    q.askClose = false;
+    if (type === "central-calendar-event-questions-close-cancel") {
+      render?.();
+      globalThis.document?.querySelector?.('.cc-event-form [type="submit"]')?.focus?.();
+      return true;
+    }
+    q.confirmClose = true;
+    await submitCentralCalendarEventForm({ render });
+    return true;
+  }
   // The screen's line of writes left unconfirmed: one opens its pending check.
   if (type === "central-calendar-event-pending") {
     const entry = centralCalendarUncertainWrites().find((other) => other.requestKey === action.dataset.requestKey);
     if (cal.linkWrite) return true;
-    if (entry?.mode === "link") await checkLinkWrite(cal, entry, render, { openPanel: true });
+    if (entry?.mode === "link" || entry?.mode === "question") await checkLinkWrite(cal, entry, render, { openPanel: true });
     else if (entry && !cal.form) openPendingCheck(cal, entry, render);
     return true;
   }

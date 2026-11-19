@@ -475,9 +475,11 @@ test("4b. Edit and Cancel event only on an event whose card says canManage and t
   await act({ action: "central-calendar-cancel-event", key: `event:${E_MEETING}:${DAY(0)}`, date: DAY(0) });
   assert.equal(state.centralCalendar.form, null);
   // K2b-1d3: the cards wear their type's look from the card itself, so no
-  // catalog is read. K2c-1: the manager's planned event is read once for its
-  // links; the reader's and the cancelled event's panels read nothing.
-  assert.deepEqual(calls.filter((call) => call.url.startsWith("/api/calendar/events")).map((call) => call.url), [`/api/calendar/events/${E_MATCH}`], "only the manager's planned event");
+  // catalog is read for them. K2c-1: the manager's planned event is read once
+  // for its links; the reader's and the cancelled event's panels read nothing.
+  // K2b-2a-2b: a manager's panel reads the catalog once per workspace to learn
+  // the club's questions switch (off here, so no questions are read).
+  assert.deepEqual(calls.filter((call) => call.url.startsWith("/api/calendar/events")).map((call) => call.url), ["/api/calendar/events/types", `/api/calendar/events/${E_MATCH}`], "only the manager's planned event, and the catalog once");
 });
 
 // --- 5. Create --------------------------------------------------------------------

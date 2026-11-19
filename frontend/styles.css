@@ -22406,6 +22406,154 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   }
 }
 
+/* K2b-2a-2b: the panel's "Questions for athletes" (contract 4.2, 6). */
+.cc-panel-questions {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cc-question-rows {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-question-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.cc-question-head,
+.cc-question-window,
+.cc-question-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-question-head {
+  font-size: 14px;
+}
+
+.cc-question-list summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* A flex summary loses the native marker: the glyph says it opens. */
+.cc-question-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.cc-question-list summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--muted);
+}
+
+.cc-question-list[open] > summary::before {
+  content: "▾";
+}
+
+.cc-question-names {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 6px;
+  padding-left: 18px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.cc-question-actions,
+.cc-question-asks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-question-button {
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+/* One kind's Ask: a line it sent above its button; open or with a line, a full row. */
+.cc-question-ask {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  min-width: 0;
+}
+
+.cc-question-ask.is-wide {
+  flex: 1 1 100%;
+}
+
+.cc-question-ask-feedback {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Brought into view after a command, never flush against the window's edge. */
+.cc-panel-questions .cc-link-message,
+.cc-panel-questions .cc-link-unconfirmed {
+  scroll-margin: 16px;
+}
+
+.cc-question-step {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.cc-question-custom input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cc-question-step input:not([type="radio"]) {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.cc-question-step .cc-question-when {
+  margin-left: 0;
+}
+
+@media (max-width: 390px) {
+  .cc-question-actions,
+  .cc-question-asks {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cc-question-button {
+    width: 100%;
+  }
+
+  .cc-question-ask {
+    justify-items: stretch;
+  }
+
+  .cc-question-ask.is-wide {
+    flex: 0 0 auto;
+  }
+}
+
 /* The event form: every field 16 px (iOS never zooms) and 44 px tall. */
 .cc-event-form {
   display: grid;
@@ -22554,6 +22702,86 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   color: var(--muted);
   font-size: 12px;
   font-style: italic;
+}
+
+/* K2b-2a-2b: "Ask athletes" in the event form (contract section 3). */
+.cc-questions {
+  gap: 6px;
+}
+
+.cc-question {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cc-question-when {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0 0 4px 30px;
+  padding: 0;
+  border: 0;
+}
+
+.cc-question-when legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cc-question-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 14px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.cc-question-choice input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cc-question-custom {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.cc-question-custom .cc-field-hint {
+  grid-column: 1 / -1;
+}
+
+.cc-inline-confirm {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.cc-inline-confirm p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.cc-inline-confirm .plain-button {
+  min-height: 44px;
+}
+
+@media (max-width: 420px) {
+  .cc-question-when {
+    margin-left: 0;
+  }
 }
 
 /* No scroller of its own: the panel or the sheet scrolls (and keeps its
@@ -23081,6 +23309,47 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 }
 .calendar-settings [aria-invalid="true"] {
   border-color: var(--danger);
+}
+/* K2b-2a-2b: questions for athletes, for the club (Settings -> Calendar). */
+.cs-questions {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.cs-questions h4,
+.cs-questions-state {
+  margin: 0;
+}
+.cs-questions-state {
+  overflow-wrap: anywhere;
+}
+.cs-questions-state.is-on span[aria-hidden] {
+  color: var(--success, var(--accent));
+}
+.cs-questions-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cs-questions-form textarea {
+  font-size: 16px;
+  min-height: 44px;
+}
+.cs-inline-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-soft);
+  border-radius: var(--radius);
+}
+.cs-inline-confirm p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .cs-field-group {
   display: grid;

@@ -62,6 +62,9 @@ export const emptyCalendarSettingsState = () => ({
   noticeTone: "",
   form: null,
   command: null,
+  // K2b-2a-2b: the club's Ask athletes switch form of a platform admin
+  // ({ reason, confirming, error }); null while closed.
+  questionsForm: null,
 });
 
 // The central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): one
@@ -126,6 +129,14 @@ export const emptyCentralCalendarState = () => ({
   linkRefused: new Map(),
   alignStep: null,
   alignBlocked: null,
+  // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,
+  // error, retry, hidden, stale, read }), the open inline step of Ask / Move
+  // time / Remove ({ act, kind, questionId, window, eventKey, revision,
+  // error }), and the panel open whose catalog read failed (that open only).
+  panelQuestions: null,
+  questionStep: null,
+  questionsCatalogFailedFor: null,
+  questionsCatalogRead: null,
 });
 
 export const emptyExerciseOptions = () => ({

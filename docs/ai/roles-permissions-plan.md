@@ -1,9 +1,11 @@
 # Roles and permissions plan (R0)
 
 Status: **Accepted by the owner as the direction** (2026-11-18: "plan usvojen", with the order to
-review it and start work on a GO). Documents only; nothing is built. The owner's own decisions are
-D1, D2, D6a, D6b, D6c and D6d of section 9. Everything else in this document - the rules of
-sections 2.1 and 5, the catalog's rows, the proposed roles' ticks, D3, D4, D5, D7-D9 - is a
+review it and start work on a GO). **Progress (added 2026-11-19, from the git history and the stream
+manager's relay): R0 and R1 are done** - R0 is this plan (PR #615, merge `69c4c07`); R1 is PR #619,
+merge `e3aa978`, deployed on 2026-11-19 (section 7). Nothing else is built. The owner's own decisions are
+D1, D2, D6a, D6b, D6c, D6d, D6e and D6f of section 9, and D4 since 2026-11-19. Everything else in this document - the rules of
+sections 2.1 and 5, the catalog's rows, the proposed roles' ticks, D3, D5, D7-D9 - is a
 recommendation that the owner may change, and each is marked so in section 9. The internal database
 and security reviews and the independent review of 2026-11-19 are folded in. Every code step
 touches external-review trigger 2 (auth, roles); R2, R6 and R6a also triggers 1 and 4.
@@ -126,6 +128,12 @@ athletes and programs.
    basis on the audit row; "nobody there has it" of section 3.3 means nobody of the club.
 5. **Three permissions are not delegable:** `staff.assign`, `accounts.manage` and `roles.manage`
    exist only in system roles; the database refuses them in a club's role. (The recommendation for D5.)
+   *Note (2026-11-19; the R2 contract `docs/ai/roles-r2-contract.md`, sections 2.4 and 10.3, the
+   stream manager's decision after the first review round):* in R2 the three words are items of the
+   basic Club admin role only, which is stricter than this rule: the old grant and revoke routes of
+   `club_admin` and `team_coach` check `staff.assign` alone, with no ceiling or dominance, so any
+   other holder could grant Club admin. A later step may relax it, together with dominance on those
+   old routes.
 6. **Account actions have a target rule.** An e-mail change, a password reset or a login switch on
    another account is allowed only when the target holds no global role, holds roles only in the
    actor's scope, and holds nothing there the actor does not; otherwise the identical 404. Without
@@ -390,8 +398,11 @@ section's routes with the same 404 as for an invisible one, so nothing can be re
 the network or the page source. A count, a name or a date of the closed section is not shown
 around the lock either.
 
-Schema (R2): a small table of module switches per club and per independent coach (module word,
-state `on` / `off`, shown as `hidden` / `locked`, who changed it and when, append-only history);
+Schema: a small table of module switches per club and per independent coach (module word,
+state `on` / `off`, shown as `hidden` / `locked`, who changed it and when, append-only history).
+**Not in R2 (corrected 2026-11-19; the owner's decision of that day, the R2 contract's O6 (b),
+sections 2.8 and 10.0): the module switches are a later migration of their own, with its own
+contract.** In R2 (section 5):
 for a role, one "show as locked" flag per module in the role. Modules are a closed list beside the
 permission catalog; every permission belongs to exactly one module.
 
@@ -412,6 +423,9 @@ today's abilities (section 4.1), so nobody gains or loses anything on the first 
 
 A basic role's permissions in a module that has not yet moved to permissions (section 7) are shown
 as "not adjustable yet": there the old check still decides, so an adjustment would have no effect.
+*The R2 rule (added 2026-11-19; the R2 contract's section 3.3, the stream manager's decision):* a
+role, basic or not, may hold only "honoured" words - words that some `can()` call site checks at a
+club or a team scope; in R2 that is seven words.
 
 | Role | Scope | Permissions |
 |---|---|---|
@@ -461,6 +475,11 @@ corrected. "To verify" marks cells the first pass did not establish.
 
 ## 5. Schema sketch (R2; one migration, ★★)
 
+*Corrected on 2026-11-19 from the R2 contract (`docs/ai/roles-r2-contract.md`, Proposed; the owner's
+decisions in its section 10.0, the stream manager's in its 10.3): the module switches left R2 and
+the lock order of an assignment changed. Each change is marked where it stands. Where this sketch
+and the contract differ, the contract is the newer text.*
+
 The internal database review of this plan (2026-11-18) set the rules below; R2 is not written before
 they are settled.
 
@@ -484,10 +503,21 @@ they are settled.
   revoked at, by and why. Unique `(user, role, scope type, scope id) where revoked_at is null`.
   The only UPDATE allowed is the revocation stamp going from empty to a value; an extension is a
   revocation plus a new row.
+- A request record with a `requestKey` for the role save and the assignment (the v36
+  pattern), so an unanswered COMMIT is never a second write or an unknown outcome.
+
+**Not in R2: the module switches (the owner, 2026-11-19; the R2 contract's O6 (b), section 2.8).**
+They are a later migration of their own, with its own contract. The design stays as written here:
+
 - `public.module_switches` (owner type and id, module, state, display) and its append-only change
   table. No row means on, so existing clubs need no backfill.
-- A request record with a `requestKey` for the role save, the assignment and the switch (the v36
-  pattern), so an unanswered COMMIT is never a second write or an unknown outcome.
+- The request record then also covers a switch write.
+- **Effective permission = the role's items, minus modules switched off for the owner.** The twin
+  reads the switches, so a module closed after roles exist stops working in the database too.
+  Where the platform's and a role's display choice differ, the stricter (hidden) wins. That
+  migration replaces the twin's body and gives `can()` the same subtraction.
+- The module switch row takes its place in the lock order below, after the role rows and before
+  the request record.
 
 **Rules.**
 
@@ -505,14 +535,17 @@ they are settled.
 - **Invariants the database holds:** Platform admin has no editable items; the Club admin basic
   role cannot lose `staff.assign` or the role editor; a club's role is assigned only inside that
   club; an archived role, an inactive user, an archived club or team takes no new assignment.
-- **Effective permission = the role's items, minus modules switched off for the owner.** The twin
-  reads the switches, so a module closed after roles exist stops working in the database too.
-  Where the platform's and a role's display choice differ, the stricter (hidden) wins.
+- **Effective permission in R2 = the role's items.** Nothing is subtracted until the module-switch
+  migration (above); until then rule 4 of section 2.1 has no module part to apply.
 - **One lock order** for the twin, the guards, the role editor, assignment and revocation: the
-  acting user's `users` row (a statement of its own, as v54) -> the other user's row for an
-  assign or revoke -> assignment rows by id -> role rows by id (the role row serializes its
-  items: written under FOR UPDATE, read under FOR SHARE) -> the module switch -> the request
-  record. The editor's own rights are locked before the role it edits, so a right lost at the
+  acting user's `users` row (a statement of its own, as v54) -> assignment rows by id -> role
+  rows by id (the role row serializes its items: written under FOR UPDATE, read under FOR SHARE)
+  -> the request record. **For an assignment and a revocation both `users` rows (the acting
+  user's and the other user's) are locked in ONE statement, in id order, as the first rights
+  lock** (corrected 2026-11-19; the R2 contract's section 4.3, the stream manager's decision in
+  its 10.3; M6 is still open with the *Rukovodilac* of OptiMove). It replaces "the acting user's row -> the other
+  user's row": the database review found a real deadlock against the club-admin revocation of
+  `organization.js`, which locks a club's admins in id order. The editor's own rights are locked before the role it edits, so a right lost at the
   same moment cannot be handed on. R2 ships a recorded-SQL-order test and route-against-route
   tests (a role edit against a holder's guarded write; a revocation against a role save).
 - **Functions.** The lock function is called once per transaction; the check is STABLE, not
@@ -553,13 +586,18 @@ database with an old-vs-new test.
 |---|---|---|---|
 | **R0** | This plan and the owner's decisions | docs only | the owner, the *Rukovodilac* |
 | **R1** | A new permissions module (catalog, groups, the basic roles' starting sets for the organization routes as a code constant) and `can(authz, permission, resourceScope)`; the JS role predicates of `routes/organization.js` (`isPlatformAdministrator`, `canManageClub`, `canManageTeamById`, `canAssign*`) replaced by `can()`; the test of section 2.1 rule 2, and before its merge the read-only production count that rule asks for. No behaviour change, proven by old-vs-new tests | a new module, `routes/organization.js`, tests (`authz.js` only if `can()` lives there) | code, security; independent / external (trigger 2) |
-| **R2** | The migration of section 5, the SQL twin, the Roles API | migration, new service and route | db, security, code; ★★ |
+| **R2** | The migration of section 5 without the module switches, the SQL twin, the Roles API | migration, new service and route | db, security, code; ★★ |
+| *(later)* | The module switches (sections 3.3 and 5): their own migration and contract (the owner, 2026-11-19; the R2 contract's O6 (b)) | migration, service and route | ★★ |
 | **R3** | Settings > Roles, assignment in Users, "My team" | `organization-*` and new frontend files | code, ux, mobile; external (trigger 2) |
 | **R4** | Read / manage split and the first real role, **Director**: a club workspace in read mode, the fixes of section 1 facts 1-4 | `authz.js`, `workspace.js`, then module by module | security; external |
 | **R5** | Builder and exercises on permissions; Assistant coach | `routes/builder.js`, `plans.js`, `templates.js`, `exercises.js`, `taxonomy.js` | code, security; external (trigger 2) |
 | **R6** | Imports: `import.approve` and `import.undo` replace the approver grant and the platform-only undo | GPEXE files, a migration for the guards | ★★, with the *Rukovodilac* |
 | **R6a** | Data configuration: `variables.*`, `mappings.manage`, `sources.connect` in the services and their actor guards | Metrics Core files, a migration | ★★, with the *Rukovodilac* |
 | **R7** | Calendar, Training Load, dashboards, tests, messages | their own files | with each stream's manager; external (trigger 2) |
+
+**Status (2026-11-19; the git history, and the stream manager's relay for the deploy).** R0 is done:
+PR #615, merge `69c4c07`. R1 is done: PR #619, merge `e3aa978`, deployed on 2026-11-19. R2's contract
+is `docs/ai/roles-r2-contract.md` (PR #620, Proposed).
 
 **What R1 must not do** (the independent review, 2026-11-19): change the shape of
 `loadAuthorizationContext`, `computeCapabilities`, `loadAvailableWorkspaces` or `/me`; change any
@@ -612,7 +650,7 @@ access there (fail closed).
 | D1 | Who may create roles? | **Decided (2026-11-18): a platform admin (system roles) and a club's admin (its own club's roles), under the ceiling rule.** |
 | D2 | Director: named athlete data (`load.view.athlete`, `athletes.view`, `tests.results.view`) or team totals only? | **Decided (2026-11-18): the club's admin decides.** The system role Director starts narrow (team totals only); a club's admin widens or narrows it for its club by its own copy of the role. |
 | D3 | May a Director write messages? | Recommended, following D2: off in the system role; a club's admin may tick it in its club's copy. |
-| D4 | Does an assignment have an optional end date? | Yes, optional. |
+| D4 | Does an assignment have an optional end date? | **Decided (2026-11-19, as recommended; relayed by the stream's manager): yes, an optional end date.** |
 | D5 | May a club's admin hand on `staff.assign` (someone else assigns roles)? | **Recommended by the security review, awaits the owner: no.** `staff.assign`, `accounts.manage` and `roles.manage` exist only in system roles (section 2.1, rule 5). The owner may reopen it with its own contract. |
 | D6 | Athlete-side roles (parent, guardian)? | Not in this plan. |
 | D6a | Levels of an independent coach by subscription | **Decided (2026-11-18): an option kept open (section 3.1); the platform admin designs the levels later.** |
@@ -624,3 +662,7 @@ access there (fail closed).
 | D7 | The catalog of section 3: anything missing, or too fine? | - |
 | D8 | The three proposed roles of section 4: the ticks for each. | As in the table. |
 | D9 | Order after R3: Director first (R4) or Builder first (R5)? | Director first. |
+
+**The R2 contract's own points** live in `docs/ai/roles-r2-contract.md`, section 10. Its O7 (role
+names), O9 (no words in a private workspace in R2) and O10 (what "basic" means) were decided by the
+owner on 2026-11-19, as recommended, the same day as D4 (relayed by the stream's manager).
