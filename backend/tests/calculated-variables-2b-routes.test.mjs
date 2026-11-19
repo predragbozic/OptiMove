@@ -728,4 +728,20 @@ test("11. v79: a coach's dashboard refuses a ratio in plain words (the dashboard
   assert.equal(highest.status, "ok", JSON.stringify(highest));
   const stored = (await admin.query(`select value_numeric::float8 as v from training_load.metric_values where metric_definition_id = $1`, [perMin.id])).rows.map((x) => x.v);
   for (const row of highest.data.current.filter((x) => x.value !== null && !x.error)) assert.ok(stored.includes(Number(row.value)), `${row.value} is a stored ratio`);
+  // The simple dashboard builder neither lists nor loads a ratio; it lists the difference.
+  const { createSimpleCapabilityReader } = await import("../src/dashboardSimple/capabilities.js");
+  const reader = createSimpleCapabilityReader({ query: (sql, params) => admin.query(sql, params), canManageDashboardRow: () => true, dataWorkspaceMatches: () => true });
+  const req = { user: { id: team.coach.id } };
+  const listed = async (search) => (await reader.listMetrics({ req, dataWorkspace: null, dashboardId: made.body.dashboard.id, search })).metrics.map((m) => String(m.id));
+  assert.deepEqual(await listed(perMin.label), [], "no ratio in the simple builder");
+  assert.deepEqual(await listed(rest.label), [String(rest.id)], "the difference is there");
+  await assert.rejects(reader.load({ req, dataWorkspace: null, dashboardId: made.body.dashboard.id, metricRef: { kind: "metric", metricDefinitionId: String(perMin.id) } }), (e) => e.code === "notFound");
+  // A template's key hint that names a ratio stays unresolved in a clone (the dashboards do not take one yet).
+  const { resolveTemplateSeriesBatchForWorkspace } = await import("../src/trainingLoadDashboardWidgets.js");
+  const keyOf = async (d) => (await admin.query(`select key from training_load.metric_definitions where id = $1`, [d])).rows[0].key;
+  const resolved = await resolveTemplateSeriesBatchForWorkspace((sql, params) => admin.query(sql, params),
+    [{ sourceSeriesId: "ratio", hints: [{ key: await keyOf(perMin.id) }] }, { sourceSeriesId: "difference", hints: [{ key: await keyOf(rest.id) }] }],
+    { dataWorkspaceType: "team", dataWorkspaceScopeId: team.teamId, ownerUserId: team.coach.id });
+  assert.equal(resolved.get("ratio").status, "unresolved");
+  assert.deepEqual(resolved.get("difference"), { status: "resolved", candidateIds: [String(rest.id)] });
 });
