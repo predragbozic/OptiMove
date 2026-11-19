@@ -382,7 +382,13 @@ export function isGitMergeOrRebase(segment) {
 const MERGE_ORIGIN_MAIN_ALLOWED_FLAGS = new Set(["--no-edit"]);
 const PROTECTED_BRANCHES = new Set(["main", "master", "HEAD"]);
 
+// Only these leading shapes qualify: no environment prefix (GIT_DIR=…), and no git
+// global option except `--no-pager` and `-C <dir>` (no `-c key=val`, no `--git-dir`,
+// no `--work-tree`, which could point the merge elsewhere than the branch we check).
+const MERGE_ORIGIN_MAIN_PREFIX = /^git\s+(?:--no-pager\s+)?(?:-C\s+\S+\s+)?(?:--no-pager\s+)?merge\s/;
+
 export function isMergeOriginMainIntoWorkBranch(segment, cwd) {
+  if (!MERGE_ORIGIN_MAIN_PREFIX.test(segment.trim())) return false;
   const parsed = extractGitSubcommandArgs(segment, "merge");
   if (!parsed) return false;
   const tokens = tokenizeWords(parsed.rest).map(stripQuotes);

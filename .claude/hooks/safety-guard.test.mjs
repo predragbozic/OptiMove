@@ -356,6 +356,12 @@ test("every other merge or rebase on a work branch still asks", () => {
       "git merge --abort",
       "git merge origin/main feature/y",
       "git rebase origin/main",
+      // Only --no-pager and -C <dir> may precede `merge`; anything that could point the
+      // merge somewhere else than the branch the hook checked still asks.
+      "git -c core.hooksPath=/tmp/x merge origin/main",
+      "git --git-dir=/tmp/other merge origin/main",
+      "git --work-tree=/tmp/other merge origin/main",
+      "GIT_DIR=/tmp/other git merge origin/main",
     ]) {
       assert.equal(classifyToolCall(bash(cmd, repoDir))?.decision, "ask", cmd);
     }

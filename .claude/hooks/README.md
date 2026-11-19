@@ -119,7 +119,14 @@ the opposite of what a safety layer should do.
   `main`/`master` (`isMergeOriginMainIntoWorkBranch`). That merge gets no decision from
   the hook, and `.claude/settings.json` allows those two exact commands. Every other merge,
   every rebase, the same merge on `main`, a detached HEAD, and an unknown branch still
-  ask. A dangerous command chained after the merge is still caught on its own.
+  ask, as does any environment prefix or git global option other than `--no-pager` and
+  `-C <dir>`. A dangerous command chained after the merge is still caught on its own.
+  **Residual risk, accepted:** the two `settings.json` allow rules cannot see the branch,
+  so on `main` this hook is the only layer that asks. If the hook could not run at all,
+  a local `git merge origin/main` on `main` would go through unprompted. A push to
+  `main` is still denied. Only `main`, `master` and a detached `HEAD` count as protected.
+  A local branch literally named `origin/main` would shadow the remote ref; don't create
+  one.
 - `gh pr merge`.
 - A push that targets `main` explicitly, or a bare `git push`/`git push origin` while the
   hook can determine (via a fast, read-only `git rev-parse --abbrev-ref HEAD` in the
