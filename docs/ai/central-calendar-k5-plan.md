@@ -1,6 +1,6 @@
 # Central calendar — K5 plan: the calendar as the hub of the app's activities
 
-Status: **Direction accepted by the owner (H1–H3) and agreed by the OptiMove manager** (2026-11-19, written against `main` `1a5cdb79`). This plan contains no code. Each part needs a
+Status: **Direction accepted by the owner (H1–H5), its mockups approved (2026-11-19, „Ove slike izgledaju ok”), and agreed by the OptiMove manager** (2026-11-19, written against `main` `1a5cdb79`). This plan contains no code. Each part needs a
 UI contract and the manager's GO. The part that touches Imports (K5-4) is agreed with the OptiMove manager first,
 because Imports belongs to his mapping stream.
 
