@@ -551,6 +551,54 @@ try {
           Assert-Equal (@($lines | Where-Object { $_ -eq 'pg_dump -c default_transaction_read_only=on' }).Count) 1 "recorded: $($lines -join ' / ')"
           Assert-Equal (@($lines | Where-Object { $_ -like 'psql*' -or $_ -like 'pg_dump*' }).Count) 3 'a connection to the source without the fence'
         }
+        Test-Case 'backup: a server that refuses the read-only setting gets one retry without it; the run says so on the screen and in the log, and ends OK' {
+          Clear-Backups
+          $record = Join-Path (New-TempFolder 'record-fallback') 'options.txt'
+          $folder = New-ToolFolder 'refuse-options' @{
+            psql    = "echo `"psql [`$PGOPTIONS]`" >> `"$record`"; if [ -n `"`$PGOPTIONS`" ]; then echo 'psql: error: FATAL:  unsupported startup parameter: options' >&2; exit 2; fi; exec `"$(Join-Path $tools.Folder 'psql')`" `"`$@`""
+            pg_dump = "case `"`$1`" in --version) ;; *) echo `"pg_dump [`$PGOPTIONS]`" >> `"$record`"; if [ -n `"`$PGOPTIONS`" ]; then echo 'pg_dump: error: FATAL:  unsupported startup parameter: options' >&2; exit 1; fi;; esac; exec `"$(Join-Path $tools.Folder 'pg_dump')`" `"`$@`""
+          }
+          (Get-Content -LiteralPath $configPath) -replace '^pg_bin = .*$', "pg_bin = $folder" | Set-Content -LiteralPath $configPath -Encoding ASCII
+          try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { Set-TestConfig }
+          Assert-Equal $run.ExitCode 0 "output: $($run.Output)"
+          Assert-True ($run.Output -match 'NOTE:\s+Read-only setting not accepted by the server; continuing without it\. The backup only reads\.') "output: $($run.Output)"
+          Assert-True ($run.Output -match 'OK: optimove-')
+          $lines = @(Get-Content -LiteralPath $record)
+          Assert-Equal ($lines -join ' / ') 'psql [-c default_transaction_read_only=on] / psql [] / psql [] / pg_dump []' 'the order of the connections:'
+          $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
+          Assert-Equal $log.Count 2 "log: $($log -join ' / ')"
+          Assert-True ($log[0] -match '\| NOTE \| - \| 0 bytes \| 0 tables \| Read-only setting not accepted by the server; continuing without it\. The backup only reads\.$') "log: $($log[0])"
+          Assert-True ($log[1] -match '\| OK \| optimove-') "log: $($log[1])"
+          Assert-Equal (@(Get-BackupFiles | Where-Object { $_ -match '\.dump$' }).Count) 1
+        }
+        Test-Case 'backup: no fallback for any other reason: a later connection that fails with the setting on fails the run' {
+          Clear-Backups
+          $record = Join-Path (New-TempFolder 'record-later') 'options.txt'
+          $folder = New-ToolFolder 'dump-refuses' @{
+            pg_dump = "case `"`$1`" in --version) exec `"$(Join-Path $tools.Folder 'pg_dump')`" --version;; esac; echo `"pg_dump [`$PGOPTIONS]`" >> `"$record`"; echo 'pg_dump: error: connection failed' >&2; exit 1"
+          }
+          (Get-Content -LiteralPath $configPath) -replace '^pg_bin = .*$', "pg_bin = $folder" | Set-Content -LiteralPath $configPath -Encoding ASCII
+          try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { Set-TestConfig }
+          Assert-Equal $run.ExitCode 1
+          Assert-True ($run.Output -notmatch 'Read-only setting not accepted') 'it fell back'
+          Assert-Equal (@(Get-Content -LiteralPath $record) -join ' / ') 'pg_dump [-c default_transaction_read_only=on]' 'pg_dump was tried again, or without the fence:'
+          Assert-True ((@(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log')) -join ' / ') -notmatch 'NOTE')
+        }
+        Test-Case 'backup: a wrong password is still a connection failure after the retry, with no note about the read-only setting' {
+          Clear-Backups
+          $record = Join-Path (New-TempFolder 'record-wrongpw') 'options.txt'
+          $folder = New-ToolFolder 'count-psql' @{ psql = "echo `"psql [`$PGOPTIONS]`" >> `"$record`"; exec `"$(Join-Path $tools.Folder 'psql')`" `"`$@`"" }
+          (Get-Content -LiteralPath $configPath) -replace '^pg_bin = .*$', "pg_bin = $folder" | Set-Content -LiteralPath $configPath -Encoding ASCII
+          Set-TestPgPass -Password 'certainly-not-the-password-4711'
+          try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { Set-TestPgPass -Password $testPassword; Set-TestConfig }
+          Assert-Equal $run.ExitCode 1
+          Assert-True ($run.Output -match 'FAILED while connecting to the database')
+          Assert-True ($run.Output -notmatch 'Read-only setting not accepted') 'a wrong password was reported as a refused setting'
+          Assert-Equal (@(Get-Content -LiteralPath $record) -join ' / ') 'psql [-c default_transaction_read_only=on] / psql []'
+          $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
+          Assert-Equal $log.Count 1
+          Assert-True ($log[0] -match '\| FAILED \|')
+        }
         Test-Case 'backup: a libpq variable left in the shell does not redirect the tools' {
           Clear-Backups
           $env:PGHOST = 'pghost.invalid'; $env:PGHOSTADDR = '203.0.113.9'; $env:PGDATABASE = 'elsewhere'; $env:PGSERVICE = 'nope'; $env:PGPASSWORD = 'wrong-from-the-shell'

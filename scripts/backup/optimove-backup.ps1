@@ -97,10 +97,22 @@ try {
   $connectionArgs = Get-OmConnectionArgs -HostName $hostName -Port $port -User $user -Database $database
 
   $step = 'connecting to the database'
-  $run = Invoke-OmPgTool -Exe $tools.Psql -Arguments (@('--no-psqlrc', '--tuples-only', '--no-align', '--set', 'ON_ERROR_STOP=1', '--command', 'show server_version_num') + $connectionArgs) @connection
+  $versionArgs = @('--no-psqlrc', '--tuples-only', '--no-align', '--set', 'ON_ERROR_STOP=1', '--command', 'show server_version_num') + $connectionArgs
+  $run = Invoke-OmPgTool -Exe $tools.Psql -Arguments $versionArgs @connection
   if ($run.ExitCode -ne 0) {
-    Write-Host $run.StdErr
-    throw 'the database could not be reached (wrong password, host, port or user, or no network)'
+    # Some poolers refuse the read-only start-up setting. Only here, on the first connection, the same
+    # connection is tried once more without it. If that works, the whole run goes on without the setting,
+    # and says so on the screen and in the log. If it fails too, it is a real connection failure.
+    $connection['ReadOnly'] = $false
+    $retry = Invoke-OmPgTool -Exe $tools.Psql -Arguments $versionArgs @connection
+    if ($retry.ExitCode -ne 0) {
+      Write-Host $retry.StdErr
+      throw 'the database could not be reached (wrong password, host, port or user, or no network)'
+    }
+    $run = $retry
+    $fenceNote = 'Read-only setting not accepted by the server; continuing without it. The backup only reads.'
+    Write-Host "  NOTE:     $fenceNote"
+    Add-Content -LiteralPath $logPath -Value (Format-OmLogLine -Now (Get-Date) -Outcome 'NOTE' -Note $fenceNote) -Encoding UTF8
   }
   $serverMajor = Get-OmServerMajorVersion -VersionNum $run.StdOut
   Write-Host "  server:   PostgreSQL $serverMajor, pg_dump $dumpMajor"

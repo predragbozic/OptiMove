@@ -23,7 +23,8 @@ The scripts were written and tested on Linux, with PowerShell 7 and a throwaway 
 - **Task Scheduler** (step 7 is written from knowledge, not from a run);
 - the **PostgreSQL 17** tools and a PostgreSQL 17 server;
 - the encrypted connection (TLS) to the **Supabase session pooler**, with and without the certificate, and the
-  read-only setting the script asks the pooler for;
+  read-only setting the script asks the pooler for (if the pooler refuses it, the script goes on without it and
+  says so; that fallback was tested only with a stand-in, not with Supabase);
 - the **real production database**: whether its backup restores cleanly into a plain local PostgreSQL.
 
 Your first runs are that test. So the rule is:
@@ -217,7 +218,8 @@ What the script does, in order:
 
 1. checks the config file, the folder and the tool version (the tools must not be older than the server);
    every connection to the database is opened **read only** (a second fence: a mistaken statement could not
-   change anything);
+   change anything); if the server does not accept that setting, the script says so once and goes on
+   without it (see the note below);
 2. checks the database's list of schemas (see step 9, "a schema ...");
 3. runs `pg_dump --format=custom --no-owner --no-privileges` for the application's schemas: `calendar`, `library`,
    `media`, `plans`, `public`, `tests`, `training`, `training_load`;
@@ -225,6 +227,11 @@ What the script does, in order:
    `.failed` and the run is `FAILED`;
 5. writes the sha256 and the log line;
 6. **only after all that** deletes its own backup files older than the retention. A failed run deletes nothing.
+
+If the screen and the log show
+`NOTE: Read-only setting not accepted by the server; continuing without it. The backup only reads.`, the backup is
+still good: the script never writes to the database, with or without that setting. It is not a failure. Report it
+once, so that it is known.
 
 Run it at a quiet moment: not during a deploy or a migration. On a quiet database nobody notices the backup.
 
@@ -313,7 +320,7 @@ line of the log say where it stopped.
 | `a schema ... which this backup does not know` | the database has a new part the backup was not told about. **Stop and report the schema's name.** Nothing was dumped. Do not add `skip_schemas` on your own: that would leave data out of every backup from then on |
 | `has no schema ...` | the config file points at the wrong database |
 | `certificate verify failed` | step 4: the certificate file is wrong or the path is wrong. Do not remove the line; report it |
-| `unsupported startup parameter` or `PGOPTIONS` in the line above `FAILED` | the pooler refused the script's read-only setting (not yet tested against Supabase, see the top). Nothing was dumped. Report it |
+| a `NOTE` line about the read-only setting, and then `OK` | not a failure: see the note in step 6. Report it once |
 | `pg_dump ended with exit code ...` | the connection broke, the disk is full, or a migration was running. Run it again at a quiet moment |
 | `cannot be read back` or `lists no tables` | the file is damaged. It was renamed to `.failed`. Run again |
 | `already exists; wait a minute` | two runs in the same minute. Wait and run again |
