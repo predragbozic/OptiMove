@@ -15,6 +15,8 @@ import { autosizeTextareas } from "./textarea-autosize.js";
 import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
+import { builderCalendarEventWorkspaceType } from "./builder-calendar-event-actions.js";
+import { renderBuilderCalendarEventButton, renderBuilderCalendarEventPanel } from "./builder-calendar-event-view.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
   ICON_CHECK,
@@ -91,6 +93,14 @@ function builderStructureContext() {
     builderNodePresets: state.builder.nodePresets || [],
     blockAddOpen: state.builder.blockAddOpen,
     sessionQuickAdd: state.builder.sessionQuickAdd,
+    // K2c-2-F: "Make an event" on a weekly session's row and its panel.
+    renderCalendarEventButton: (block, session) => renderBuilderCalendarEventButton({
+      draft: state.builder.draft, block, session, workspaceType: builderCalendarEventWorkspaceType(),
+      panel: state.builder.calendarEvent, made: state.builder.calendarEventsMade,
+    }),
+    renderCalendarEventPanel: (block, session) => renderBuilderCalendarEventPanel({
+      session, block, panel: state.builder.calendarEvent, types: state.builder.calendarEvent?.types || [],
+    }),
   };
 }
 

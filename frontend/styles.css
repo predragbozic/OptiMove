@@ -28398,3 +28398,138 @@ body.athlete-mode:not(.login-mode) .brand-mark {
   font-weight: 700;
 }
 /* End of My training. */
+
+/* K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.1.9): the Builder's "Make an
+   event" - the button in a weekly session's row and its inline panel. Under
+   the calendar's prefix; the Builder's own rules are not changed. The body
+   prefix out-ranks the Builder's mobile blocks that shrink row controls. */
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-trigger {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+.cc-builder-event-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.cc-builder-event-badge {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+.cc-builder-event-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+.cc-builder-event {
+  display: grid;
+  gap: 10px;
+  margin: 6px 0 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+.cc-builder-event-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cc-builder-event-title {
+  margin: 0;
+  font-size: 15px;
+}
+.cc-builder-event-line,
+.cc-builder-event-quiet {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cc-builder-event-line:focus,
+.cc-builder-event-title:focus {
+  outline: none;
+}
+.cc-builder-event-line:focus-visible,
+.cc-builder-event-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cc-builder-event-quiet {
+  color: var(--muted);
+  font-size: 14px;
+}
+.cc-builder-event-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cc-builder-event-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 700;
+}
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-field input,
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-field select {
+  min-height: 44px;
+  width: 100%;
+  font-size: 16px;
+  box-sizing: border-box;
+}
+/* One column at every width: the panel sits in a Builder day column, which is
+   narrow on a computer too (ux review: the End input overflowed at 1280 px). */
+.cc-builder-event-times {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.cc-builder-event-who summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+.cc-builder-event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event .plain-button {
+  min-height: 44px;
+  white-space: normal;
+  text-align: left;
+}
+.cc-builder-event-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.cc-builder-event-primary:disabled,
+.cc-builder-event-secondary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+@media (max-width: 430px) {
+  body:not(.athlete-mode):not(.login-mode) .cc-builder-event-actions .plain-button {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+}
