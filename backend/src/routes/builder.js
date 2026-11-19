@@ -7,6 +7,7 @@ import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySes
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
+import { batchEditTestHooks, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
@@ -512,7 +513,13 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
     // this branch returns before either does.
     if (plan.is_edit_draft && plan.edit_source_plan_id) {
       const updated = await timing.measure("apply", () => applyEditDraft(req, plan, timing));
-      return timing.json(await timing.measure("response", () => buildSubmitResponse(req, updated)));
+      if (updated?.alreadyApplied) {
+        return res.status(409).json({ error: "This draft was already saved or discarded.", code: "edit_draft_already_applied" });
+      }
+      if (updated?.needsChoice) return res.status(409).json(updated.needsChoice);
+      const response = await timing.measure("response", () => buildSubmitResponse(req, updated));
+      if (updated.batchEdit) response.batchEdit = updated.batchEdit;
+      return timing.json(response);
     }
     const shouldSyncBatch = wantsBatchSync(req, plan);
     // Non-batch: the empty-draft check stays its OWN separate, quick
@@ -874,6 +881,24 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
 
     client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
+    // docs/ai/builder-batch-edit-plan.md 10.2.3: the live plan's row FOR SHARE
+    // before it is copied, so a Save of its batch that holds it FOR UPDATE
+    // finishes first and the copy sees what that Save wrote. One row, the only
+    // lock this transaction takes before its copy.
+    const lockedSource = await client.query(
+      `select name, note, icon_url, color, visibility, is_template, start_date, duration_days, week_start,
+              track_training_load_default, request_rpe_default
+       from plans.plans where id = $1 and coalesce(is_active, true) for share`,
+      [plan.id],
+    );
+    if (!lockedSource.rows[0]) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(404).json({ error: "Program not found or not editable." });
+    }
+    // The values the copy writes are the ones read under the lock.
+    Object.assign(plan, lockedSource.rows[0]);
     const created = await client.query(
       // Training Activity Integration 2A: track_training_load_default/
       // request_rpe_default are copied VERBATIM from the source plan -
@@ -1948,14 +1973,20 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
 // this app ever changes it afterward), so reading it before the lock is
 // safe; every value actually WRITTEN below comes from a row re-read
 // fresh AFTER its own lock is acquired, never from this discovery read.
-async function lockBatchPlansForUpdate(client, sourcePlanId, user) {
+// `members: "live"` (docs/ai/builder-batch-edit-plan.md section 2): the same
+// discovery and the same ascending order, for applying an edit of a published
+// batch. The candidates are the batch's plans created by the SOURCE plan's
+// creator (immutable, like builder_batch_id), whoever saves; the siblings
+// returned are the active ones. Rights are checked per member after the locks
+// by the caller, never by this filter.
+async function lockBatchPlansForUpdate(client, sourcePlanId, user, { members = "draft" } = {}) {
   const candidates = await client.query(
     `select id from plans.plans
      where (id = $1 or builder_batch_id = (select builder_batch_id from plans.plans where id = $1))
-       and created_by_user_id = $2
+       and created_by_user_id = ${members === "live" ? "(select created_by_user_id from plans.plans where id = $1)" : "$2"}
        and coalesce(is_active, true)
        and not coalesce(is_edit_draft, false)`,
-    [sourcePlanId, user.id],
+    members === "live" ? [sourcePlanId] : [sourcePlanId, user.id],
   );
   const ids = candidates.rows.map((row) => String(row.id)).sort();
   if (!ids.length) return { sourceRow: null, siblingRows: [] };
@@ -1976,7 +2007,8 @@ async function lockBatchPlansForUpdate(client, sourcePlanId, user) {
   // section's own header comment above for why an already-ACTIVE
   // sibling (a retried Submit landing after the first one already
   // published everything) must never be touched again.
-  const siblingRows = [...rowsById.values()].filter((row) => String(row.id) !== String(sourceRow.id) && row.status === "draft");
+  const wanted = members === "live" ? "active" : "draft";
+  const siblingRows = [...rowsById.values()].filter((row) => String(row.id) !== String(sourceRow.id) && row.status === wanted);
   return { sourceRow, siblingRows };
 }
 
@@ -2114,6 +2146,68 @@ async function syncAndActivateBatchWithClient(client, sourcePlanId, user, guard 
   return { activatedPlans: updated.rows };
 }
 
+// Under the plan locks of applyEditDraft: classify every other live member
+// (docs/ai/builder-batch-edit-plan.md sections 1, 3, 4 and 10). Returns the
+// members to write, or the question to ask; nothing is written here.
+async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
+  const before = await loadWeeklyTree(client, source.id);
+  const after = await loadWeeklyTree(client, freshDraft.id);
+  // Condition 10.2.1: a member's athlete is named only when the coach already
+  // sees that name in the batch switcher (loadBuilderBatch's list).
+  const switcher = await client.query(
+    `select p.id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name
+     from plans.plans p left join public.athletes a on a.id = p.athlete_id
+     where p.builder_batch_id = $1 and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)`,
+    [source.builder_batch_id],
+  );
+  const names = new Map(switcher.rows.map((row) => [String(row.id), row.athlete_name || null]));
+  const visible = batchEditTestHooks.visibleMemberIds ? new Set(batchEditTestHooks.visibleMemberIds.map(String)) : new Set(names.keys());
+  const nameOf = (planId) => (visible.has(String(planId)) ? names.get(String(planId)) || null : null);
+  const members = [];
+  for (const row of [...siblingRows].sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1))) {
+    const tree = await loadWeeklyTree(client, row.id);
+    if (!tree.plan.athlete_active) { members.push({ planId: row.id, outcome: "skip", reasons: ["archived"] }); continue; }
+    if (!(await getEditablePlan(req, row.id))) { members.push({ planId: row.id, outcome: "skip", reasons: ["not_editable"] }); continue; }
+    const facts = await readSiblingFacts(client, before, after, tree);
+    if (facts.openDraft) { members.push({ planId: row.id, outcome: "ask", reasons: ["being_edited"] }); continue; }
+    const change = planSiblingChange(before, after, tree, facts);
+    if (change.reasons.length) members.push({ planId: row.id, outcome: "ask", reasons: change.reasons });
+    else members.push({ planId: row.id, outcome: "apply", reasons: [], ops: change.ops });
+  }
+  if (batchEditTestHooks.afterLocks) await batchEditTestHooks.afterLocks({ client, members });
+  const ask = members.filter((m) => m.outcome === "ask");
+  const apply = members.filter((m) => m.outcome === "apply");
+  const skip = members.filter((m) => m.outcome === "skip");
+  const describe = (list) => ({
+    named: list.filter((m) => nameOf(m.planId)).map((m) => ({ name: nameOf(m.planId), reasons: m.reasons })),
+    unnamedCount: list.filter((m) => !nameOf(m.planId)).length,
+  });
+  if (ask.length) {
+    const choiceToken = choiceTokenOf(members);
+    const applyTo = Array.isArray(req.body?.applyTo) ? req.body.applyTo.map(String).sort() : null;
+    const applyIds = apply.map((m) => String(m.planId)).sort();
+    const accepted = applyTo && req.body?.choiceToken === choiceToken
+      && applyTo.length === applyIds.length && applyTo.every((id, i) => id === applyIds[i]);
+    if (!accepted) {
+      return {
+        needsChoice: {
+          error: "Some athletes can't take these changes.",
+          code: "batch_members_need_choice",
+          choiceToken,
+          applyTo: applyIds,
+          applyCount: apply.length,
+          cannot: describe(ask),
+          notChanged: describe(skip),
+        },
+      };
+    }
+  }
+  return {
+    apply,
+    summary: { applied: apply.length + 1, notChanged: describe([...skip, ...ask]) },
+  };
+}
+
 async function applyEditDraft(req, draftPlan, timing) {
   let client;
   try {
@@ -2144,12 +2238,34 @@ async function applyEditDraft(req, draftPlan, timing) {
       // edit-draft first - nothing left here to apply. Genuinely rare
       // (a real double-submit), never the ordinary "a PATCH won the
       // race" case (that one still finds a perfectly normal edit-draft
-      // row here and proceeds below).
-      throw new Error("Edit draft was already applied or discarded.");
+      // row here and proceeds below). Answered as 409
+      // edit_draft_already_applied (plan 5 / Q6), never a 500.
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return { alreadyApplied: true };
     }
     const source = await getEditablePlan(req, freshDraft.edit_source_plan_id);
     if (!source) throw new Error("Original program not found or not editable.");
-    await client.query("select id from plans.plans where id=$1 for update", [source.id]);
+    // "All athletes" for a published weekly batch (docs/ai/builder-batch-
+    // edit-plan.md): every live member, the source included, FOR UPDATE in
+    // ascending id - the one order every multi-plan caller uses - never the
+    // source alone first. Otherwise the source alone, as before.
+    const wantsAll = req.body?.batchScope === "all" && freshDraft.plan_type === "weekly" && source.builder_batch_id;
+    let batch = null;
+    if (wantsAll) {
+      const locked = await lockBatchPlansForUpdate(client, source.id, req.user, { members: "live" });
+      if (!locked.sourceRow) throw new Error("Original program not found or not editable.");
+      batch = await prepareBatchEdit(req, client, source, freshDraft, locked.siblingRows);
+      if (batch.needsChoice) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return { needsChoice: batch.needsChoice };
+      }
+    } else {
+      await client.query("select id from plans.plans where id=$1 for update", [source.id]);
+    }
     const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
       from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
       join plans.plan_days day on day.id = session.plan_day_id
@@ -2183,12 +2299,26 @@ async function applyEditDraft(req, draftPlan, timing) {
       else await copyProgramTree(client, freshDraft.id, source.id);
     });
     await assertExerciseReuseAllowed(client, req.user.id, { planIds: [source.id], retainedItems: retained.rows });
+    // The siblings take the change, ascending, before the edit draft (their
+    // "after") is deleted.
+    if (batch) {
+      await timing.measure("apply_batch", async () => {
+        for (const member of batch.apply) {
+          await writeSiblingChange(client, member.planId, member.ops, {
+            copyLegacySession,
+            assertReuse: (c, planId, retainedItems) => assertExerciseReuseAllowed(c, req.user.id, { planIds: [planId], retainedItems }),
+          });
+        }
+      });
+    }
     await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, freshDraft.id));
     await client.query("delete from plans.plans where id = $1", [freshDraft.id]);
     await client.query("commit");
     client.release();
     client = null;
-    return await getEditablePlan(req, source.id);
+    const updated = await getEditablePlan(req, source.id);
+    if (batch) updated.batchEdit = batch.summary;
+    return updated;
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}

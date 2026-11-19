@@ -154,6 +154,59 @@ export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
   `;
 }
 
+// Who gets the changes of a reopened weekly batch member
+// (docs/ai/builder-batch-edit-plan.md sections 4 and 10). Plain sentences,
+// one question at a time, no ids or codes.
+const BATCH_EDIT_REASON_TEXT = {
+  changed_separately: "changed on their own before",
+  has_results: "has results on a session this would remove or move",
+  linked_to_event: "has a session linked to a calendar event that this would remove or move",
+  being_edited: "plan is open for editing",
+  archived: "archived",
+  not_editable: "you can't change this plan",
+};
+function batchEditMemberLines(group) {
+  const lines = (group?.named || []).map((m) => `<li><strong>${escapeHtml(m.name)}</strong>: ${escapeHtml((m.reasons || []).map((r) => BATCH_EDIT_REASON_TEXT[r] || "can't take these changes").join("; "))}</li>`);
+  const unnamed = Number(group?.unnamedCount || 0);
+  if (unnamed) lines.push(`<li>${unnamed} other athlete${unnamed === 1 ? "" : "s"}</li>`);
+  return lines.length ? `<ul class="builder-batch-edit-list">${lines.join("")}</ul>` : "";
+}
+
+export function renderBuilderBatchEditPanel(draft, batchPlans) {
+  const choice = state.builder.batchEditChoice;
+  const name = draft.plan.athleteName || "this athlete";
+  const count = batchPlans.length;
+  const only = `<button class="plain-button" type="button" data-action="builder-batch-edit-only">Only ${escapeHtml(name)}</button>`;
+  const cancel = `<button class="plain-button" type="button" data-action="builder-batch-edit-cancel">Cancel</button>`;
+  let body;
+  if (!choice) {
+    body = `<p>${escapeHtml(name)} is one of ${count} athletes in this group. When you save, you choose who gets the changes.</p>`;
+  } else if (choice.stage === "scope") {
+    body = `<p><strong>Apply these changes to all ${count} athletes?</strong></p>
+      <div class="builder-batch-edit-actions"><button class="plain-button builder-batch-edit-primary" type="button" data-action="builder-batch-edit-all">All athletes</button>${only}${cancel}</div>`;
+  } else if (choice.stage === "ask") {
+    const data = choice.data || {};
+    const cannot = Number(data.cannot?.named?.length || 0) + Number(data.cannot?.unnamedCount || 0);
+    const others = Number(data.applyCount || 0);
+    body = `<p><strong>${cannot} athlete${cannot === 1 ? "" : "s"} can't take these changes:</strong></p>${batchEditMemberLines(data.cannot)}
+      ${batchEditMemberLines(data.notChanged) ? `<p>Not changed either:</p>${batchEditMemberLines(data.notChanged)}` : ""}
+      <div class="builder-batch-edit-actions"><button class="plain-button builder-batch-edit-primary" type="button" data-action="builder-batch-edit-others">Apply to ${escapeHtml(name)} and the other ${others}</button>${only}${cancel}</div>`;
+  } else if (choice.stage === "unconfirmed") {
+    body = `<p><strong>Result not confirmed.</strong> The save may or may not have gone through.</p>
+      <div class="builder-batch-edit-actions"><button class="plain-button builder-batch-edit-primary" type="button" data-action="builder-batch-edit-check">Check result</button></div>`;
+  } else if (choice.stage === "closed") {
+    body = `<p><strong>This draft is no longer open.</strong> It was saved or discarded. Open the plan to see it.</p>
+      <div class="builder-batch-edit-actions"><button class="plain-button builder-batch-edit-primary" type="button" data-action="builder-batch-edit-done">Done</button></div>`;
+  } else {
+    const summary = choice.summary || {};
+    const applied = Number(summary.applied || 1);
+    const notChanged = batchEditMemberLines(summary.notChanged);
+    body = `<p><strong>Saved for ${applied} athlete${applied === 1 ? "" : "s"}.</strong></p>${notChanged ? `<p>Not changed:</p>${notChanged}` : ""}
+      <div class="builder-batch-edit-actions"><button class="plain-button builder-batch-edit-primary" type="button" data-action="builder-batch-edit-done">Done</button></div>`;
+  }
+  return `<section class="builder-batch-edit" data-builder-batch-edit role="status" aria-live="polite">${body}</section>`;
+}
+
 export function renderBuilderEditDraftBatchNote() {
   return `<p class="builder-batch-edit-note" data-builder-batch-edit-note>Changes go to this athlete only.</p>`;
 }
@@ -605,6 +658,13 @@ function renderBuilderInner() {
   // drawn for it; say plainly that its changes reach this athlete only.
   const isEditDraftOfBatch = isEditDraft && batchPlans.length > 1 && !hasBatch
     && batchPlans.some((plan) => String(plan.id) === String(draft.plan.editSourcePlanId || ""));
+  // Step 2: a reopened WEEKLY member asks at Save who gets the changes (the
+  // panel below); a program batch keeps "Changes go to this athlete only."
+  const batchEditPanel = isEditDraftOfBatch && isWeekly ? renderBuilderBatchEditPanel(draft, batchPlans) : "";
+  if (batchEditPanel && state.builder.batchEditChoice?.stage === "done") {
+    els.content.innerHTML = `<section class="content-section builder-workspace">${batchEditPanel}</section>`;
+    return;
+  }
   els.content.innerHTML = `
     <section class="content-section builder-workspace">
       <header class="builder-program-bar">
@@ -619,7 +679,7 @@ function renderBuilderInner() {
         </div>
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
-      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() : ""}
+      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : batchEditPanel || (isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() : "")}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type === "cross-plan-block" ? "block" : state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? renderBuilderTrainingLoadSettings(draft) : ""}
       <div class="builder-layout">
