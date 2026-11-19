@@ -11,6 +11,7 @@
 // (training_load.source_metric_binding_club, v48), never the team's club. The
 // database guards every write again (v48): the acting user, the basis it
 // derives, the binding's club and the audit chain.
+import { MATCH_TEXT, matchCondition, newestTeamThresholds } from "./sourceConditionMatch.js";
 import { refusal, activationInScope } from "./sourceMetricAccess.js";
 
 const NOT_FOUND = () => refusal(404, "notFound", "Not found.");
@@ -32,6 +33,11 @@ export const ACTIVATION_MESSAGES = Object.freeze({
   activation_not_open: "The activation has ended.",
   variable_hidden: "The club of a listed team binding hides this variable.",
   not_a_copy_of_this_version: "The club version is not the copy of this activation's system version.",
+  // v80: the match of a column without parameters to a variable with a condition, for one team.
+  team_setting_missing: MATCH_TEXT.team_setting_missing,
+  team_setting_mismatch: "A listed team's setting in GPEXE is not what this variable counts, so this column cannot fill it for that team.",
+  event_setting_not_confirmed: MATCH_TEXT.event_setting_not_confirmed,
+  conversion_unavailable: MATCH_TEXT.conversion_unavailable,
 });
 // v34's T5 texts (the backstop of the checks below), exactly; an ended row
 // written again is an end that lost its race.
@@ -229,18 +235,32 @@ export async function checkListedStarts(client, v, bindings, locked) {
 // id with its binding and team.
 export async function insertStarts(client, ctx, v, bindings, locked, reason) {
   const starts = [];
+  // v80: a version with a condition rule: the variable's condition, matched for each team against its newest stored
+  // session's team setting (the variable version is immutable, the candidate's bundle too; the team is locked).
+  const cd = v.condition_rule ? (await client.query(
+    `select condition_description from training_load.metric_definition_versions where id = $1`, [v.metric_definition_version_id],
+  )).rows[0]?.condition_description ?? null : null;
   for (const { bindingId, requirement } of bindings) {
     const teamId = locked.get(bindingId).team_id;
+    let match = null;
+    if (v.condition_rule) {
+      const result = await matchCondition(client, {
+        rule: v.condition_rule, cd, thresholds: await newestTeamThresholds(client, teamId), revisionId: v.source_metric_version_id,
+      });
+      if (!result.ok) throw stateRefusal(result.code, { bindingId });
+      match = result.match;
+    }
     let id;
     try {
       id = (await client.query(
         `insert into training_load.source_metric_mapping_activations
            (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint,
             source_team_binding_id, team_id, applies_to_session, applies_to_drill, requirement,
-            activated_by_user_id, activated_basis, reason)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id`,
+            activated_by_user_id, activated_basis, reason, matched_condition, matched_source_range, matched_threshold_set_id, matched_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, case when $14::jsonb is null then null else now() end) returning id`,
         [v.id, v.mapping_id, v.source_metric_definition_id, v.metric_definition_id, v.parameter_fingerprint,
-          bindingId, teamId, v.applies_to_session, v.applies_to_drill, requirement, ctx.userId, ctx.basis, reason],
+          bindingId, teamId, v.applies_to_session, v.applies_to_drill, requirement, ctx.userId, ctx.basis, reason,
+          match ? JSON.stringify(match.condition) : null, match ? JSON.stringify(match.sourceRange) : null, match ? match.setId : null],
       )).rows[0].id;
     } catch (error) {
       if (error?.code === "23505" && ACTIVATION_UNIQUE_CODES.has(error.constraint)) {

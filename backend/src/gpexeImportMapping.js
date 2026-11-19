@@ -87,7 +87,7 @@ const ACTIVATIONS_SQL = `
          md.key as definition_key, md.label as definition_label, md.owner_scope as definition_owner_scope,
          md.state as definition_state, md.current_version_id,
          mv.value_type, trim_scale(mv.min_value)::text as min_value, trim_scale(mv.max_value)::text as max_value,
-         mv.daily_aggregation_method
+         mv.daily_aggregation_method, v.condition_rule, a.matched_source_range
     from training_load.source_metric_mapping_activations a
     join training_load.source_metric_mapping_versions v on v.id = a.mapping_version_id
     join training_load.source_metric_mappings m on m.id = a.mapping_id
@@ -102,6 +102,9 @@ function rowOf(r) {
   return {
     activationId: String(r.activation_id),
     requirement: r.requirement,
+    // v80: the version's condition rule and the range this team's activation was matched with (null for any other).
+    conditionRule: r.condition_rule ?? null,
+    matchedSourceRange: r.matched_source_range ?? null,
     appliesToSession: r.applies_to_session === true,
     appliesToDrill: r.applies_to_drill === true,
     mappingVersionId: String(r.mapping_version_id),

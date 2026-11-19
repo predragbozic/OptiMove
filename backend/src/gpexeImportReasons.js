@@ -77,7 +77,7 @@ const SOURCE_CODE_TO_BLOCKED = new Map([
   // J17 section 6: the eight blocking codes of a mapped import. The two
   // Left-out reasons of C110 (required_value_missing,
   // canonical_value_out_of_range) block nothing and are never here.
-  ...["mapping_not_usable", "source_threshold_contract_mismatch", "source_unit_mismatch", "source_shape_mismatch", "no_mapped_values",
+  ...["mapping_not_usable", "source_threshold_contract_mismatch", "team_setting_changed", "source_unit_mismatch", "source_shape_mismatch", "no_mapped_values",
     "source_instance_held", "source_instance_changed", "session_imported_under_another_instance"]
     .map((c) => [c, BLOCKED_CODES.data_setup_incomplete]),
 ]);

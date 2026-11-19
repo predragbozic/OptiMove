@@ -26,7 +26,7 @@ export function normalizeImportAudience(level) {
 
 // J17 section 6: the eight codes that block a whole candidate.
 export const BLOCKING_CODES = Object.freeze(new Set([
-  "mapping_not_usable", "source_threshold_contract_mismatch", "source_unit_mismatch", "source_shape_mismatch", "no_mapped_values",
+  "mapping_not_usable", "source_threshold_contract_mismatch", "team_setting_changed", "source_unit_mismatch", "source_shape_mismatch", "no_mapped_values",
   "source_instance_held", "source_instance_changed", "session_imported_under_another_instance",
 ]));
 export const PLATFORM_ONLY_CODES = Object.freeze(new Set(["source_instance_held", "source_instance_changed", "session_imported_under_another_instance"]));

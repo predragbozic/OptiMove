@@ -17,6 +17,8 @@
 // service); return, log or put into a URL an athlete id or a GPEXE athlete
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
+import { conditionRuleFor, storedRule } from "./sourceConditionRules.js";
+import { matchCondition, ruleFits, settingMismatchText } from "./sourceConditionMatch.js";
 import { revisionProven } from "./sourceFieldEvidence.js";
 import { bundleZoneThresholds } from "./sourceZoneThresholds.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
@@ -273,7 +275,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
             v.source_metric_version_id as revision_id, v.metric_definition_version_id as target_version_id,
             v.parameter_kind, v.parameter_fingerprint, v.source_unit, v.target_unit,
             trim_scale(v.scale)::text as scale, trim_scale(v.scale_divisor)::text as scale_divisor, trim_scale(v."offset")::text as "offset",
-            v.applies_to_session, v.applies_to_drill
+            v.applies_to_session, v.applies_to_drill, v.condition_rule
        from training_load.source_metric_mapping_versions v
       where v.status = 'active' and v.owner_key = any($1::text[])
       order by v.id`,
@@ -364,7 +366,20 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   for (const row of identities) if (typeof row.display_name === "string" && row.display_name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.display_name);
   for (const row of linked) if (typeof row.name === "string" && row.name.trim() !== "") names.set(String(row.gpexe_athlete_id), row.name);
 
-  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, unitWords, fields, variables, versions, open, switchedOff, replacedBySystem, conversions, names };
+  // v80: each variable with a condition, against each column whose condition rule fits it, matched once against this
+  // session's team setting (the variable version and the bundle are immutable rows; the save reads the world again
+  // under its locks, so the match it writes is the one checked there).
+  const matches = new Map();
+  const thresholds = candidate?.raw_bundle?.teamThresholds ?? null;
+  for (const variable of variables.filter((x) => x.has_condition === true && !x.calculated)) {
+    for (const f of fields) {
+      const rule = conditionRuleFor(f.source_metric_key);
+      if (!rule || !ruleFits(rule, variable.condition_raw)) continue;
+      const result = await matchCondition(client, { rule, cd: variable.condition_raw, thresholds, revisionId: f.revision_id });
+      matches.set(`${f.id}:${variable.id}`, { ...result, rule: storedRule(rule) });
+    }
+  }
+  return { clubId, ownerKey, systemBoard, team, candidate, defaultSkipped, defaultPlan, sessionRefusal, teamTimezone, unitWords, fields, variables, versions, open, switchedOff, replacedBySystem, conversions, names, matches };
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +404,20 @@ export function boardCondition(cd) {
     return { kind: "event_threshold", operator: cd.operator, value: conditionNumber(cd.value), durationSeconds: conditionNumber(cd.duration_seconds), unit: cd.unit };
   }
   return { kind: "unsupported" };
+}
+
+// v80: the match of a column to a variable with a condition in this session (loadWorld's), or a refusal: a column with no
+// fitting rule is condition_mismatch.
+function conditionMatchOf(world, fieldId, variableId) {
+  return world.matches?.get(`${fieldId}:${variableId}`) ?? { ok: false, code: "condition_mismatch", range: null, rule: null };
+}
+function matchingFieldIds(world, variableId) {
+  return [...(world.matches ?? new Map()).entries()].filter(([k, m]) => m.ok && k.endsWith(`:${variableId}`)).map(([k]) => k.split(":")[0]);
+}
+// A refusal of a match names both settings in plain words (the board's sentence; never an id).
+function matchRefusalExtra(world, m, variable) {
+  if (m.code !== "team_setting_mismatch") return {};
+  return { message: settingMismatchText(variable.label, m.range, variable.condition_raw, world.team?.name ?? null) };
 }
 
 function columnsOf(world) {
@@ -552,8 +581,9 @@ function boardOf(world, pairIndex) {
     // version's revision is the column's active one, its variable is active, current and not hidden.
     if (!col || !col.readable || v.parameter_kind !== "none" || col.field.revision_id !== v.revision_id) continue;
     if (!variable || variable.version_id !== v.target_version_id || variable.hidden) continue;
-    // A field without a condition never fills a variable with one (the review of 2026-11-18): never offered, never feeds.
-    if (variable.has_condition) continue;
+    // A field without a condition never fills a variable with one (the review of 2026-11-18): never offered, never feeds -
+    // v80: except through its condition rule, when this session's team setting matches.
+    if (variable.has_condition && !(v.condition_rule && conditionMatchOf(world, v.field_id, v.variable_id).ok)) continue;
     if (v.owner_key === "system") {
       if (!fedBySystem.has(v.variable_id)) fedBySystem.set(v.variable_id, []);
       fedBySystem.get(v.variable_id).push(v.field_id);
@@ -606,9 +636,11 @@ function boardOf(world, pairIndex) {
         // v77 (J21): a calculated variable takes no column; its value is its calculation.
         // v80 step A: a variable with a condition takes no column of this board (the save refuses condition_mismatch); it
         // is never shown as a free target, and says its condition instead (until v80 matches a column's team setting).
-        placeable: v.calculated !== true && v.has_condition !== true
+        placeable: v.calculated !== true && (v.has_condition !== true || matchingFieldIds(world, v.id).length > 0)
           && (v.owner_scope === "club" || world.systemBoard ? v.value_type === "numeric" && v.unit_is_token === true : fedBySystem.has(v.id)),
         condition: v.has_condition === true ? boardCondition(v.condition_raw) : null,
+        // v80: the columns whose team setting in this session is the variable's condition.
+        matchingFieldIds: v.has_condition === true ? matchingFieldIds(world, v.id) : [],
         filledByFieldIds: v.owner_scope === "system" ? fedBySystem.get(v.id) ?? [] : [],
       })),
       on: world.open.map((o) => ({
@@ -685,15 +717,30 @@ function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
     const v = world.versions.find((x) => x.owner_key === "system" && x.field_id === fieldId && x.variable_id === targetId && x.parameter_kind === "none"
       && x.revision_id === col.field.revision_id && x.target_version_id === variable.version_id);
     if (!v || !col.readable) return refuse("target_scope_mismatch");
-    if (variable.has_condition) return refuse("condition_mismatch");
+    let systemMatch = null;
+    if (variable.has_condition) {
+      if (!v.condition_rule) return refuse("condition_mismatch");
+      const m = conditionMatchOf(world, fieldId, targetId);
+      if (!m.ok) return refuse(m.code, matchRefusalExtra(world, m, variable));
+      systemMatch = m.match;
+    }
     if (world.open.some((o) => o.mapping_version_id === v.id)) return refuse("activation_exists");
     const row = versionRow(world, pair, col, v);
-    return { placement: { placeable: true, ...row, collisions: collisionsOf(world, { fieldId, variableId: targetId, levels: row.levels }) } };
+    return { placement: { placeable: true, ...row, conditionMatch: systemMatch, collisions: collisionsOf(world, { fieldId, variableId: targetId, levels: row.levels }) } };
   }
 
   if (col.reason !== null) return refuse(col.reason);
   if (variable.calculated === true || variable.value_type !== "numeric" || !variable.unit_is_token) return refuse("target_not_usable");
-  if (variable.has_condition) return refuse("condition_mismatch");
+  // v80: a variable with a condition takes a column only through the column's condition rule, when this session's team
+  // setting matches the condition (the refusal names both).
+  let conditionMatch = null;
+  let conditionRule = null;
+  if (variable.has_condition) {
+    const m = conditionMatchOf(world, fieldId, targetId);
+    if (!m.ok) return refuse(m.code, matchRefusalExtra(world, m, variable));
+    conditionMatch = m.match;
+    conditionRule = m.rule;
+  }
   const conversion = conversionBetween(world, col.field.source_unit, variable.unit);
   if (!conversion) return refuse("conversion_unavailable", { sourceUnit: col.field.source_unit, targetUnit: variable.unit });
   const scopes = variable.scopes ?? [];
@@ -733,6 +780,7 @@ function placementOf(world, pairIndex, { fieldId, targetId }, shared = null) {
       placeable: true, kind: "new", fieldId, targetId,
       revisionId: col.field.revision_id, expectedTargetVersionId: variable.version_id,
       reusesVersionId: active ? active.id : null,
+      conditionRule, conditionMatch,
       sourceUnit: col.field.source_unit, targetUnit: variable.unit,
       conversion: conversion.kind === "same_unit" ? { kind: "same_unit" } : { kind: "converted", ...conversion.factors },
       levels,
@@ -758,14 +806,21 @@ function preplacedOf(world, shared, mappingVersionId) {
   if (world.sessionRefusal) throw world.sessionRefusal;
   if (!col.readable || v.parameter_kind !== "none") return { code: col.reason ?? "field_has_parameters", v };
   // A field without a condition never fills a variable with one (the review of 2026-11-18), even through an existing
-  // version: the save never switches such a version on.
-  if (variable.has_condition) return { code: "condition_mismatch", v };
+  // version: the save never switches such a version on - v80: except a version with a condition rule whose team setting
+  // matches in this session.
+  let match = null;
+  if (variable.has_condition) {
+    if (!v.condition_rule) return { code: "condition_mismatch", v };
+    const m = conditionMatchOf(world, v.field_id, v.variable_id);
+    if (!m.ok) return { code: m.code, v };
+    match = m.match;
+  }
   if (col.field.revision_id !== v.revision_id) return { code: "revision_not_usable", v };
   if (variable.version_id !== v.target_version_id) return { code: "canonical_version_changed", v };
   if (variable.hidden) return { code: "variable_hidden", v };
   if (world.open.some((o) => o.mapping_version_id === v.id)) return { code: "activation_exists", v };
   const row = versionRow(world, shared.pairOf(), col, v);
-  return { row: { ...row, collisions: collisionsOf(world, { fieldId: v.field_id, variableId: v.variable_id, levels: row.levels }) }, v };
+  return { row: { ...row, collisions: collisionsOf(world, { fieldId: v.field_id, variableId: v.variable_id, levels: row.levels }) }, v, match };
 }
 
 export async function readPlacement({ ctx, queryString }) {

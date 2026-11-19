@@ -97,7 +97,7 @@ export async function startActivations({ ctx, body }) {
       const v = (await client.query(
         `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
                 v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family,
-                d.source_metric_key, v.source_unit
+                d.source_metric_key, v.source_unit, v.condition_rule, v.metric_definition_version_id
            from training_load.source_metric_mapping_versions v
            join training_load.source_metric_mappings m on m.id = v.mapping_id
            join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id
@@ -138,7 +138,8 @@ export async function startActivations({ ctx, body }) {
            join training_load.metric_definition_versions cv on cv.id = d.current_version_id and cv.metric_definition_id = d.id
           where r.id = $1 and d.id = $2`, [v.source_metric_version_id, v.metric_definition_id],
       )).rows[0]?.mismatch === true;
-      if (conditionMismatch) throw refusal(409, "condition_mismatch", ACTIVATION_MESSAGES.condition_mismatch);
+      // v80: a version with a condition rule is matched per team at its insert (insertStarts).
+      if (conditionMismatch && !v.condition_rule) throw refusal(409, "condition_mismatch", ACTIVATION_MESSAGES.condition_mismatch);
       // G1b-3 (the code review's MEDIUM): a version active from before the exact-word rule (a created field proven by a
       // document in a unit two GPEXE words share) is not switched on for another team - its import would read nothing.
       const unitWord = await unitWordCode(client, v, v.source_unit, v.source_metric_version_id);
