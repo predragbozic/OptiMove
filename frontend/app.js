@@ -4411,11 +4411,12 @@ async function reopenSavedPlanInBuilder(planId) {
 async function openCalendarCreateFromBuilder(day) {
   if (!day) return;
   // Prefilled from the day (mockup 03): the first own time of its sessions, and
-  // the name of its session when it has only one (D6: the band names it then).
+  // the name of its session when it has only one, as the title only. The event
+  // is made alone (D6): the band never promises it is chosen for a session.
   const sessions = (state.builder.draft?.blocks || []).find((block) => block.date === day)?.sessions || [];
   const startTime = sessions.map((session) => String(session.time || "").slice(0, 5)).filter(Boolean).sort()[0] || "";
   const only = sessions.length === 1 ? String(sessions[0].name || "").trim() : "";
-  const opened = await openCentralCalendarCreateForBuilder({ day, targets: builderEventTargets(), startTime, title: only, sessionName: only }, null);
+  const opened = await openCentralCalendarCreateForBuilder({ day, targets: builderEventTargets(), startTime, title: only }, null);
   if (!opened) {
     // A create left unconfirmed waits in the calendar: the calendar on that day shows its Check result.
     openCentralCalendarFromBuilder({ date: day });

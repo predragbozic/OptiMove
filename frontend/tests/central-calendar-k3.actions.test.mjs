@@ -434,3 +434,13 @@ test("15. another plan opened ends the band and drops its memory", () => {
   assert.equal(state.builder.k3, null);
   assert.equal(store.size, 0);
 });
+
+test("16. Create event → from the Builder: the form's band names the day and never promises a session it does not link", async () => {
+  const { renderK2c3FormBandHtml } = await import("../central-calendar-k3-view.js");
+  const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const call = app.slice(app.indexOf("async function openCalendarCreateFromBuilder"), app.indexOf("async function openCalendarCreateFromBuilder") + 1200);
+  assert.doesNotMatch(call, /sessionName/, "no session is named for a link the create does not make");
+  const html = renderK2c3FormBandHtml({ returnTo: { tab: "builder", day: DAY, sessionName: "" }, busy: false });
+  assert.match(html, /with this event in the day&#039;s row\./);
+  assert.doesNotMatch(html, /chosen for/);
+});
