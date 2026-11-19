@@ -149,6 +149,20 @@ test("6. a result not confirmed (no answer, a 5xx, 503): 'We can't tell yet…',
   assert.match(html(), /Your RPE: 4/);
 });
 
+test("6b. a busy answer to Check result says nothing of the first attempt: still not confirmed, never 'Nothing was saved', the same key", async () => {
+  fresh();
+  await act({ action: "training-load-rpe-change-open", assignmentId: ASSIGNMENT });
+  await act({ action: "training-load-rpe-slider-input" }, { value: "4" });
+  const calls = installFetchMock([{ throwNetworkError: true }, { status: 409, body: { error: "try_again", message: "Nothing was saved. Try again." } }]);
+  await act({ action: "training-load-rpe-submit" });
+  await act({ action: "training-load-rpe-submit" });
+  assert.equal(form().unconfirmed, true);
+  assert.match(html(), /We can(?:'|&#039;)t tell yet whether your change was saved\./);
+  assert.doesNotMatch(html(), /Nothing was saved/);
+  assert.match(html(), />Check result</);
+  assert.equal(calls[0].body.requestKey, calls[1].body.requestKey);
+});
+
 test("7. answer_locked: the stable sentence, the fields frozen, only Done; answer_changed: the form refilled with the current answer and its revision; try_again: the form stays and the next try is a new key", async () => {
   fresh();
   await act({ action: "training-load-rpe-change-open", assignmentId: ASSIGNMENT });

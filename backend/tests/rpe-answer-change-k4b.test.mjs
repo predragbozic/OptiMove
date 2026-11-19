@@ -236,10 +236,14 @@ test("3. a change inside the window: RPE, duration and note change in place, srp
   const a = await answered();
   const beforeRow = await feedbackRow(a.feedback.id);
   emitted.length = 0;
+  // The order is recorded through the seams, never by a race of two connections: the COMMIT hook sets the flag, the
+  // emit hook reads it.
+  let committed = false;
   let committedAtEmit = null;
+  hooks.commit = async (cl) => { await cl.query("commit"); committed = true; };
   hooks.emit = (userId, event, payload) => {
     emitted.push({ userId: String(userId), event, payload });
-    committedAtEmit = q(`select count(*)::int as n from training_load.session_feedback_changes where session_feedback_id = $1`, [a.feedback.id]);
+    committedAtEmit = committed;
   };
   const res = await change(athlete().cookie, a.assignmentId, { rpe: 5, durationMinutes: 75, note: "  legs heavy  ", expectedRevision: 0 });
   assert.equal(res.status, 200, res.text);
@@ -258,7 +262,8 @@ test("3. a change inside the window: RPE, duration and note change in place, srp
   assert.match(h.request_hash, /^[0-9a-f]{64}$/);
   assert.equal(emitted.length, 1);
   assert.deepEqual(emitted[0], { userId: String(athlete().id), event: "training_load_changed", payload: { externalAssignmentId: a.assignmentId } });
-  assert.equal((await committedAtEmit)[0].n, 1, "the event goes out only once the change is committed (another connection sees it)");
+  assert.equal(committedAtEmit, true, "the event goes out only once the COMMIT answered");
+  hooks.commit = null;
   hooks.emit = (userId, event, payload) => emitted.push({ userId: String(userId), event, payload });
 });
 
@@ -737,4 +742,19 @@ test("21. the COMMIT: an answer lost after a real COMMIT is verified (200, verif
   assert.deepEqual(refused.body, { error: "internal_error", message: "Nothing was saved. Try again." });
   assert.equal((await historyOf(c.feedback.id)).length, 0);
   assert.equal((await feedbackRow(c.feedback.id)).rpe, 7);
+});
+
+test("22. the closing edge: the function passed but the history guard's own clock read refused (23514 'the question is closed') - the athlete gets answer_locked, not a 500; nothing written", async () => {
+  const a = await answered();
+  // The guard's refusal, raised where it would arrive (inside the change's transaction, before the COMMIT).
+  hooks.afterFunction = (cl) => cl.query(`do $$ begin raise exception 'training_load.session_feedback_changes: the question is closed' using errcode = '23514'; end $$`);
+  try {
+    const res = await change(athlete().cookie, a.assignmentId, { rpe: 2, durationMinutes: 60 });
+    assert.equal(res.status, 409, res.text);
+    assert.deepEqual(res.body, { error: "answer_locked", message: "This answer can no longer be changed. The question is closed." });
+  } finally {
+    hooks.afterFunction = null;
+  }
+  assert.equal((await feedbackRow(a.feedback.id)).rpe, 7);
+  assert.equal((await historyOf(a.feedback.id)).length, 0);
 });

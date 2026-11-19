@@ -2861,21 +2861,24 @@ async function submitRpeChangeForm(renderTrainingLoad) {
   form.error = "";
   renderTrainingLoad();
   const athleteWeeklyContext = captureTrainingLoadAthleteWeeklyMutationContext(form.date);
+  const invalidate = () => {
+    if (trainingLoadMutationContextIsCurrentWorkspace(athleteWeeklyContext)) invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
+    invalidateAllTrainingLoadCalendarGenerations();
+  };
   let outcome;
   try {
     const result = await changeExternalRpe(form.externalAssignmentId, body);
+    // A change the server confirmed drops the cached reads even when the form was replaced meanwhile.
+    if (result?.outcome === "changed" || result?.outcome === "replayed") invalidate();
     if (state.trainingLoad.rpeForm !== form) return;
     outcome = applyRpeChangeAnswer(form, { result });
   } catch (error) {
+    // A result not confirmed may have committed: drop the cached reads too.
+    invalidate();
     if (state.trainingLoad.rpeForm !== form) return;
     outcome = applyRpeChangeAnswer(form, { error });
   }
-  if (outcome === "unchanged") {
-    state.trainingLoad.rpeForm = null;
-  } else if (outcome === "saved") {
-    if (trainingLoadMutationContextIsCurrentWorkspace(athleteWeeklyContext)) invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
-    invalidateAllTrainingLoadCalendarGenerations();
-  }
+  if (outcome === "unchanged") state.trainingLoad.rpeForm = null;
   renderTrainingLoad();
 }
 

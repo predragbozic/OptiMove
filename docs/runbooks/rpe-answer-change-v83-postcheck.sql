@@ -6,7 +6,7 @@
 
 -- 1. v83 is recorded once, with a checksum, and nothing later is.
 select count(*) = 1 as ok_recorded_once,
-       bool_and(checksum = 'f9b4802041278ffcaa43f8db07a5108096170fad4f5f02084b048c34b9ab41ed') as ok_checksum_is_the_file,
+       bool_and(checksum = 'e044a4ef3d91e4e66fa8531e05a41da5d56ae372663a348a3ce35ebf8ba94b82') as ok_checksum_is_the_file,
        not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611201200_training_load_v83_rpe_answer_change.sql') as ok_nothing_later
   from public.schema_migrations where migration_name = 'migrations_v2/202611201200_training_load_v83_rpe_answer_change.sql';
 
@@ -21,7 +21,7 @@ select (select relrowsecurity from t) as ok_rls_on,
           from pg_index i where i.indrelid = 'training_load.session_feedback_changes'::regclass) = 'b3adad0e91cf6441b1ab01e701051e40' as ok_indexes_as_written;
 
 -- 3. The functions (body md5, not security definer, volatility, settings) and that none is executable by PUBLIC, anon or authenticated
---    but the two read helpers.
+--    but the two marker helpers (rpe_change_marker_ok, rpe_change_current_xmin; they read no table).
 with f as (select p.oid, p.proname, p.prosrc, p.prosecdef, p.provolatile, p.proconfig, p.proacl, p.proowner from pg_proc p
             where p.pronamespace = 'training_load'::regnamespace
               and p.proname in ('rpe_change_marker_ok', 'rpe_change_current_xmin', 'session_feedback_changes_append_only', 'session_feedback_changes_guard',
@@ -33,8 +33,7 @@ select (select count(*) from f) = 8 as ok_eight_functions,
        not exists (select 1 from f where f.prosecdef) as ok_no_security_definer,
        not exists (select 1 from f, aclexplode(coalesce(f.proacl, acldefault('f', f.proowner))) a
                     where a.grantee in (select oid from grantees)
-                      and f.proname in ('change_external_rpe', 'session_feedback_changes_append_only', 'session_feedback_changes_guard',
-                                        'protect_session_feedback_snapshot_v83', 'session_feedback_change_link_check')) as ok_writers_not_granted;
+                      and f.proname not in ('rpe_change_marker_ok', 'rpe_change_current_xmin')) as ok_only_marker_helpers_granted;
 
 -- 4. The triggers: the snapshot trigger now calls the v83 function, the deferred link is deferrable initially deferred, the
 --    history's three guards are there; every one enabled. The v5 function is still in place, unchanged.

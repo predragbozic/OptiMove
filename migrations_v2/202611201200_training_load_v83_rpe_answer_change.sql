@@ -388,6 +388,7 @@ comment on function training_load.change_external_rpe(uuid, uuid, uuid, integer,
 alter table training_load.session_feedback_changes enable row level security;
 revoke all on training_load.session_feedback_changes from public;
 revoke execute on function training_load.change_external_rpe(uuid, uuid, uuid, integer, integer, text, integer) from public;
+revoke execute on function training_load.rpe_change_state(uuid) from public;
 revoke execute on function training_load.session_feedback_changes_guard() from public;
 revoke execute on function training_load.session_feedback_changes_append_only() from public;
 revoke execute on function training_load.session_feedback_change_link_check() from public;

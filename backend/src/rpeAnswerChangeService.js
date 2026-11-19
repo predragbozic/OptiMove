@@ -140,6 +140,11 @@ export async function changeExternalRpe(input) {
       if (["55P03", "40P01", "57014"].includes(error?.code)) {
         return { status: 409, body: { error: "try_again", message: NOTHING_SAVED } };
       }
+      // The function and the history guard each read the clock; at the very edge of closes_at the function can pass
+      // and the guard refuse. Nothing was written: the same answer as a closed window.
+      if (error?.code === "23514" && /: the question is closed$/.test(String(error?.message))) {
+        return { status: 409, body: { error: "answer_locked", message: ANSWER_LOCKED } };
+      }
       throw error;
     }
     console.error(`[rpe-change] commit failed: ${error?.code ?? ""} ${error?.message}`);

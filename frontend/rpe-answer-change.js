@@ -147,8 +147,13 @@ export function applyRpeChangeAnswer(form, { result = null, error = null } = {})
     return "locked";
   }
   if (status === 409 && data.error === "try_again") {
-    // Nothing was saved: a new attempt uses a new key, unless this was a Check result.
-    if (!form.unconfirmed) form.requestKey = "";
+    // A Check result that met a busy server says nothing about the first attempt, which may still commit: it stays
+    // not confirmed, with the same key. Only a first attempt refused as busy saved nothing.
+    if (form.unconfirmed) {
+      form.error = RPE_CHANGE_UNCONFIRMED;
+      return "unconfirmed";
+    }
+    form.requestKey = "";
     form.error = RPE_CHANGE_BUSY;
     return "kept";
   }
