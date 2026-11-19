@@ -9,7 +9,7 @@
 import { Router } from "express";
 import {
   archiveField, archiveLocation, archiveType, createField, createLocation, createType, getSettings, orderTypes, restoreField,
-  restoreLocation, restoreType, updateField, updateLocation, updateTeam, updateType,
+  restoreLocation, restoreType, setQuestionsSwitch, updateField, updateLocation, updateTeam, updateType,
 } from "../calendarSettingsService.js";
 import { calendarCommand, calendarContextOf, respondCalendarError } from "./calendarRouteErrors.js";
 
@@ -44,5 +44,8 @@ router.post("/locations/:locationId/archive", command((ctx, req) => archiveLocat
 router.post("/locations/:locationId/restore", command((ctx, req) => restoreLocation(ctx, req.params.locationId, req.body)));
 
 router.put("/teams/:teamId", command((ctx, req) => updateTeam(ctx, req.params.teamId, req.body)));
+// K2b-2a-1: the club's switch for Ask athletes (a platform admin; the 404 for
+// everyone else).
+router.put("/questions", command((ctx, req) => setQuestionsSwitch(ctx, req.body)));
 
 export default router;

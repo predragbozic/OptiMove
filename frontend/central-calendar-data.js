@@ -1,3 +1,4 @@
+import { CC_QUESTION_SETTLED_CODES } from "./central-calendar-questions.js";
 import { api } from "./api.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { emptyCentralCalendarState, state } from "./state.js";
@@ -266,6 +267,17 @@ export const updateCentralCalendarEvent = (eventId, body) => eventWrite(eventPat
 export const cancelCentralCalendarEvent = (eventId, body) => eventWrite(`${eventPath(eventId)}/cancel`, "POST", body);
 // K2b-1b's values command: { requestKey, expectedRevision, values: [{ fieldId, value }] }.
 export const setCentralCalendarEventFields = (eventId, body) => eventWrite(`${eventPath(eventId)}/fields`, "POST", body);
+// K2c-1: a link command of an event (central-calendar-links.js builds the
+// path and the body: /sessions, /sessions/detach, /sessions/align,
+// /activities, /activities/detach), sent again unchanged by Check result.
+export const sendCentralCalendarLinkWrite = (path, body) => eventWrite(path, "POST", body);
+// K2b-2a-2b: an event's questions. The read is for a manager while the club's
+// switch is on (the identical 404 otherwise); the three writes take
+// { requestKey, expectedRevision, ... } and are sent again unchanged by Check
+// result.
+export const fetchCentralCalendarEventQuestions = (eventId) => api(`${eventPath(eventId)}/questions`);
+export const centralCalendarQuestionPath = (eventId, questionId = "", tail = "") => `${eventPath(eventId)}/questions${questionId ? `/${encodeURIComponent(questionId)}` : ""}${tail ? `/${tail}` : ""}`;
+export const sendCentralCalendarQuestionWrite = (path, body) => eventWrite(path, "POST", body);
 
 // The workspace's event catalog (GET /events/types, K2b-1a): the types for
 // the form and the cards, and - additively - the details, the club's places
@@ -300,6 +312,9 @@ async function readCatalogOnce(cal, generation) {
         fields: Array.isArray(data?.fields) ? data.fields : [],
         locations: Array.isArray(data?.locations) ? data.locations : [],
         teamDefaults: data?.teamDefaults && typeof data.teamDefaults === "object" ? data.teamDefaults : {},
+        // K2b-2a-2b (B1): the owner club's Ask athletes switch (false without
+        // a club, the platform, or a server without it).
+        questionsEnabled: data?.questions?.enabled === true,
       };
       cal.eventTypesStale = false;
     }
@@ -321,6 +336,8 @@ export function centralCalendarErrorInfo(error) {
     current: data?.current || null,
     // K2b-1b's invalid_value names the detail it refused.
     fieldId: typeof data?.fieldId === "string" ? data.fieldId : "",
+    // K2c-1: the alignment's has_existing_results counts the answers given.
+    resultCount: Number.isInteger(data?.resultCount) ? data.resultCount : null,
   };
 }
 
@@ -347,6 +364,9 @@ const SETTLED_ON_CHECK = new Set([
   "invalid_notes", "invalid_targets", "invalid_reason", "invalid_revision", "invalid_schedule",
   // K2b-1b: the place, the details and the values command.
   "invalid_request_key", "invalid_fields", "location_not_available", "field_not_available", "invalid_values", "invalid_value",
+  // K2b-2a-2b: the questions of an event (the event's runner reads its
+  // request record before these).
+  ...CC_QUESTION_SETTLED_CODES,
 ]);
 export const centralCalendarCheckSettles = (info) => info.status >= 400 && info.status < 500 && SETTLED_ON_CHECK.has(info.code);
 

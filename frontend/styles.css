@@ -12050,6 +12050,47 @@ button.tests-assignment-card {
   display: none;
 }
 
+/* K2b-2a-2a: "Skip days off" (a daily schedule's option). The whole row is
+   the label, at least 44 px tall, so the checkbox and its text are one
+   touch target at every width. */
+.tests-skip-days-off {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+.tests-skip-days-off input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin: 1px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.tests-skip-days-off:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.tests-skip-days-off-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tests-skip-days-off-label {
+  font-weight: 600;
+}
+
+.tests-skip-days-off-hint {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 /* Item 3 (mobile scheduling hotfix): Opens/Closes as two equal columns in
    one row by default, everywhere - minmax(0, 1fr) (not a bare 1fr) so a
    narrow <input type="time"> never forces the row wider than its
@@ -19442,6 +19483,42 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
 .metric-variables-levels > .metric-variables-field-error {
   flex-basis: 100%;
 }
+/* J21: the variables a calculated one adds up - one per row, each a 44 px target like the levels. */
+.metric-variables-unavailable > summary,
+.source-fields-parked > summary {
+  /* a list item keeps the disclosure triangle (display:flex drops it in Safari) */
+  display: list-item;
+  min-height: 44px;
+  padding: 11px 0;
+  box-sizing: border-box;
+  line-height: 22px;
+  cursor: pointer;
+}
+.metric-variables-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.metric-variables-inputs > label,
+.metric-variables-unavailable .checkbox-row,
+.metric-variables-kind > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.metric-variables-inputs input[type="checkbox"],
+.metric-variables-unavailable input[type="checkbox"],
+.metric-variables-kind input[type="radio"] {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
 .metric-variables-field-error,
 .metric-variables-form .search-field > span.metric-variables-field-error {
   color: var(--danger);
@@ -22218,6 +22295,265 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   gap: 8px;
 }
 
+/* K2c-1: an event's links (its trainings and activities) and a planned
+   card's "Link to an event" (docs/ai/central-calendar-k2c-plan.md 1.1.8). */
+.cc-panel-links {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cc-link-heading {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted, #5b6472);
+}
+
+.cc-link-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 0;
+  border-top: 1px solid var(--line, #e3e6eb);
+}
+
+.cc-link-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cc-link-name,
+.cc-link-meta,
+.cc-link-refused {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-link-name {
+  font-weight: 700;
+}
+
+.cc-link-meta,
+.cc-link-refused {
+  font-size: 13px;
+  color: var(--muted, #5b6472);
+}
+
+/* A refused pair's short reason sits under its meta line (review LOW). */
+.cc-link-refused {
+  font-style: italic;
+}
+
+/* Long button words wrap inside the sheet (the Align and Check result
+   buttons; review LOW). */
+.cc-link-wrap {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.cc-link-align-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-link-button {
+  min-height: 44px;
+  min-width: 44px;
+  flex: 0 0 auto;
+}
+
+.cc-link-one,
+.cc-link-align,
+.cc-link-unconfirmed {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.cc-link-one .cc-link-button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+@media (max-width: 390px) {
+  .cc-link-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cc-link-row .cc-link-button,
+  .cc-link-one .cc-link-button,
+  .cc-link-align .cc-link-button,
+  .cc-link-unconfirmed .cc-panel-button {
+    width: 100%;
+    justify-self: stretch;
+  }
+}
+
+/* K2b-2a-2b: the panel's "Questions for athletes" (contract 4.2, 6). */
+.cc-panel-questions {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cc-question-rows {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cc-question-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.cc-question-head,
+.cc-question-window,
+.cc-question-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-question-head {
+  font-size: 14px;
+}
+
+.cc-question-list summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* A flex summary loses the native marker: the glyph says it opens. */
+.cc-question-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.cc-question-list summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--muted);
+}
+
+.cc-question-list[open] > summary::before {
+  content: "▾";
+}
+
+.cc-question-names {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 6px;
+  padding-left: 18px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.cc-question-actions,
+.cc-question-asks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cc-question-button {
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+/* One kind's Ask: a line it sent above its button; open or with a line, a full row. */
+.cc-question-ask {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  min-width: 0;
+}
+
+.cc-question-ask.is-wide {
+  flex: 1 1 100%;
+}
+
+.cc-question-ask-feedback {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Brought into view after a command, never flush against the window's edge. */
+.cc-panel-questions .cc-link-message,
+.cc-panel-questions .cc-link-unconfirmed {
+  scroll-margin: 16px;
+}
+
+.cc-question-step {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.cc-question-custom input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cc-question-step input:not([type="radio"]) {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.cc-question-step .cc-question-when {
+  margin-left: 0;
+}
+
+@media (max-width: 390px) {
+  .cc-question-actions,
+  .cc-question-asks {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cc-question-button {
+    width: 100%;
+  }
+
+  .cc-question-ask {
+    justify-items: stretch;
+  }
+
+  .cc-question-ask.is-wide {
+    flex: 0 0 auto;
+  }
+}
+
 /* The event form: every field 16 px (iOS never zooms) and 44 px tall. */
 .cc-event-form {
   display: grid;
@@ -22366,6 +22702,86 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   color: var(--muted);
   font-size: 12px;
   font-style: italic;
+}
+
+/* K2b-2a-2b: "Ask athletes" in the event form (contract section 3). */
+.cc-questions {
+  gap: 6px;
+}
+
+.cc-question {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cc-question-when {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0 0 4px 30px;
+  padding: 0;
+  border: 0;
+}
+
+.cc-question-when legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cc-question-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 14px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.cc-question-choice input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cc-question-custom {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.cc-question-custom .cc-field-hint {
+  grid-column: 1 / -1;
+}
+
+.cc-inline-confirm {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.cc-inline-confirm p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.cc-inline-confirm .plain-button {
+  min-height: 44px;
+}
+
+@media (max-width: 420px) {
+  .cc-question-when {
+    margin-left: 0;
+  }
 }
 
 /* No scroller of its own: the panel or the sheet scrolls (and keeps its
@@ -22893,6 +23309,47 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 }
 .calendar-settings [aria-invalid="true"] {
   border-color: var(--danger);
+}
+/* K2b-2a-2b: questions for athletes, for the club (Settings -> Calendar). */
+.cs-questions {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.cs-questions h4,
+.cs-questions-state {
+  margin: 0;
+}
+.cs-questions-state {
+  overflow-wrap: anywhere;
+}
+.cs-questions-state.is-on span[aria-hidden] {
+  color: var(--success, var(--accent));
+}
+.cs-questions-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cs-questions-form textarea {
+  font-size: 16px;
+  min-height: 44px;
+}
+.cs-inline-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-soft);
+  border-radius: var(--radius);
+}
+.cs-inline-confirm p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .cs-field-group {
   display: grid;
@@ -28246,3 +28703,138 @@ body.athlete-mode:not(.login-mode) .brand-mark {
   font-weight: 700;
 }
 /* End of My training. */
+
+/* K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.1.9): the Builder's "Make an
+   event" - the button in a weekly session's row and its inline panel. Under
+   the calendar's prefix; the Builder's own rules are not changed. The body
+   prefix out-ranks the Builder's mobile blocks that shrink row controls. */
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-trigger {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+.cc-builder-event-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.cc-builder-event-badge {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+.cc-builder-event-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+.cc-builder-event {
+  display: grid;
+  gap: 10px;
+  margin: 6px 0 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+.cc-builder-event-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cc-builder-event-title {
+  margin: 0;
+  font-size: 15px;
+}
+.cc-builder-event-line,
+.cc-builder-event-quiet {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cc-builder-event-line:focus,
+.cc-builder-event-title:focus {
+  outline: none;
+}
+.cc-builder-event-line:focus-visible,
+.cc-builder-event-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cc-builder-event-quiet {
+  color: var(--muted);
+  font-size: 14px;
+}
+.cc-builder-event-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cc-builder-event-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 700;
+}
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-field input,
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event-field select {
+  min-height: 44px;
+  width: 100%;
+  font-size: 16px;
+  box-sizing: border-box;
+}
+/* One column at every width: the panel sits in a Builder day column, which is
+   narrow on a computer too (ux review: the End input overflowed at 1280 px). */
+.cc-builder-event-times {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.cc-builder-event-who summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+.cc-builder-event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+body:not(.athlete-mode):not(.login-mode) .cc-builder-event .plain-button {
+  min-height: 44px;
+  white-space: normal;
+  text-align: left;
+}
+.cc-builder-event-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.cc-builder-event-primary:disabled,
+.cc-builder-event-secondary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+@media (max-width: 430px) {
+  body:not(.athlete-mode):not(.login-mode) .cc-builder-event-actions .plain-button {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+}

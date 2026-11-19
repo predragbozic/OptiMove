@@ -905,6 +905,9 @@ test("8. route 6, erasure on request: only a platform admin in the platform work
   refused(await nothingWritten(() => erase(W.pa, { requestKey: key(), reasonCode: "wrong_confirmation" })), 409, "values_already_removed");
 });
 
+// Known (the Independent, 2026-11-18): this test fails when the file is run directly with
+// `node --test --experimental-test-isolation=none` and passes through the T1 runner; the cause is not established yet (a
+// follow-up). Run this suite through the runner.
 test("9. route 7 and the scheduled removal: values past their date are removed in batches, under the admin's identity with one audit row per confirmation (the last keyed) or by the schedule with none; two runs never remove the same confirmation; a run that removes nothing writes nothing; the schedule starts nothing inside the test runner or without a database", async () => {
   const removal = await import("../src/sourceMetricConfirmationRemoval.js");
   const remove = (who, body = { requestKey: key() }) => post("/confirmations/expired-values/remove", who, body);
@@ -1148,7 +1151,7 @@ test("Z4 (the review of PR #602): a zone mapping that is not on for the team is 
   });
 });
 
-test("CM (the review of 2026-11-18): a field without a condition never fills a variable with one - creating its mapping version is refused for a platform admin and a club admin, activating an existing one is refused, and the board's save never switches one on; nothing written", async () => {
+test("CM (the review of 2026-11-18): a field without a condition never fills a variable with one - creating its mapping version is refused for a platform admin and a club admin, activating an existing one is refused, starting it for a team (S1) is refused, and the board's save never switches one on; nothing written", async () => {
   const cond = { kind: "zone", operator: ">=", value: "25.2", unit: "km/h" };
   const fSys = await field("dist");
   const fClub = await field("dist");
@@ -1196,6 +1199,14 @@ test("CM (the review of 2026-11-18): a field without a condition never fills a v
     activated_by_user_id: W.pa.id, activated_at: new Date().toISOString(), activated_basis: "platform_admin" });
   await k.query(`delete from ${T4} where id = $1`, [pendingSys]).catch(() => {});
   const { t, cand } = await freshTeam();
+  // S1 refuses it too (the Independent's LOW on PR #609), for a platform admin and the club's admin; no activation written.
+  const activations = async () => (await one(`select count(*)::int n from training_load.source_metric_mapping_activations`)).n;
+  for (const who of [W.pa, W.caA]) {
+    const before = await activations();
+    const res = await start(who, { mappingId: mappings[0], versionId: activeSys }, t);
+    assert.deepEqual([res.status, res.body.error], [409, "condition_mismatch"], res.text);
+    assert.equal(await activations(), before);
+  }
   await nothingWritten(async () => {
     rowRefused(await save(W.caA, t, cand, [{ kind: "preplaced", mappingVersionId: activeSys, placementHash: "0".repeat(64), requirement: "optional", replaces: [] }]), "condition_mismatch", 0);
   });

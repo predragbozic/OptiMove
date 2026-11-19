@@ -49,6 +49,8 @@ export function emptySourceFieldsState() {
     form: null,
     // I2 / I3: the names GPEXE sent that no source field covers yet (read-only).
     inventory: emptyInventory(),
+    // The plain row of the fields OptiMove reads (the owner's screenshot): the proof words only when this is on.
+    technical: false,
     notice: "",
     // "" for what was saved; "warning" for a refusal or an unchecked result.
     noticeKind: "",
@@ -232,6 +234,44 @@ export function operatorWords(parameterKind, operator) {
   return label || String(operator ?? "");
 }
 export const hasBound = (revision) => revision?.parameterKind === "zone_bounds" || revision?.parameterKind === "event_threshold";
+// The plain row (the Rukovodilac, 2026-11-18, the owner's screenshot): a human name first, GPEXE's own small under it.
+const SEEDED_NAMES = Object.freeze({
+  "athlete_session.max_v": "Top speed",
+  "athlete_session.total_distance": "Total distance",
+  "athlete_session.total_time": "Duration",
+  "details.players.tot_brake_events": "Brake events",
+  "details.players.tot_burst_events": "Burst events",
+  "more.complementary_data.power.distance": "Distance in each power zone",
+  "more.complementary_data.power.distance.open_top": "Distance in the top power zone",
+  "more.complementary_data.speed.distance": "Distance in each speed zone",
+  "more.events.acceleration_events_count": "Accelerations above a threshold",
+  "more.events.deceleration_events_count": "Decelerations above a threshold",
+});
+export const fieldHumanName = (field) => SEEDED_NAMES[field?.key] || field?.label || field?.key || "";
+// A zone set or a threshold event: not available yet (as on the board, the same closed group).
+export const parameterized = (revision) => Boolean(revision?.parameterKind && revision.parameterKind !== "none");
+// One state: "in_use" (with the teams the caller may see), "ready", or "not_available".
+export function fieldPlainState(field, revision) {
+  if (field?.inUse?.count > 0) return "in_use";
+  if (field?.state !== "active" || !revision || parameterized(revision) || field.extractorAvailable === false) return "not_available";
+  const unitKnown = Boolean(revision.sourceUnit);
+  const meaningKnown = Boolean(revision.meaningVerifiedAt) || revision.evidenceStatus === "source_stated";
+  return unitKnown && meaningKnown ? "ready" : "not_available";
+}
+export function fieldStateText(field, state) {
+  if (state === "in_use") {
+    const names = field.inUse.teams || [];
+    const more = Math.max(0, (field.inUse.count || 0) - names.length);
+    return `In use for ${names.join(", ")}${more ? ` and ${more} more` : ""}`;
+  }
+  return state === "ready" ? "Ready to use" : "Not available yet";
+}
+export function fieldNextStep(ctx, revision, state) {
+  if (state === "in_use") return "Its values come in with each new session.";
+  if (state === "ready") return "Put it on a variable on a team's board (Data configuration > Map by drag and drop).";
+  if (!revision) return "";
+  return ctx?.mayVerify ? "Open it to confirm its unit and meaning." : "OptiMove confirms it; there is nothing to do here.";
+}
 export const levelsText = (revision) => [revision?.supportsSession ? "Session" : "", revision?.supportsDrill ? "Drill" : ""].filter(Boolean).join(" and ") || "None";
 
 // The revision a field reads from now: the active one, else the newest.

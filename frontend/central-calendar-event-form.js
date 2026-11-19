@@ -11,6 +11,23 @@ import {
   renderCentralCalendarValuesFieldsHtml,
   setCentralCalendarPlaceText,
 } from "./central-calendar-event-details.js";
+import {
+  CC_ONE_DAY,
+  CC_QUESTION_KINDS,
+  CC_QUESTION_PROMPTS,
+  CC_QUESTION_WORDS,
+  CC_WINDOW_KINDS,
+  CC_WINDOW_LABELS,
+  ccAddDays,
+  ccApplyTypeQuestions,
+  ccNewFormQuestions,
+  ccQuestionEventOf,
+  ccQuestionWindowRange,
+  ccQuestionsClosingEarly,
+  ccQuestionsRequest,
+  ccShortDay,
+  ccWindowWords,
+} from "./central-calendar-questions.js";
 import { CENTRAL_CALENDAR_EVENT_KIND_LABELS } from "./central-calendar-view.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -67,6 +84,10 @@ function baseForm(mode, extra = {}) {
     athleteQuery: "", athletesOpen: false,
     errors: {}, error: "",
     busy: false, unconfirmed: false, checkNote: "", requestKey: "", sentBody: null, dirty: false,
+    // K2b-2a-2b: Ask athletes (central-calendar-questions.js); null while the
+    // section is not shown (the club's switch off, or an edit whose questions
+    // could not be read) - then `questions` is never sent.
+    questions: null, rpeFromSessions: false, questionsNote: "",
     ...extra,
   };
 }
@@ -82,6 +103,7 @@ export function applyCentralCalendarEventType(form, type, catalog = null) {
   if (!form.expectsTouched) form.draft.expects = CENTRAL_CALENDAR_EVENT_EXPECTS.filter((expect) => (type.defaultExpects || []).includes(expect));
   if (form.titleAuto) form.draft.title = type.label || "";
   if (catalog) centralCalendarTypeChangedDetails(form, type, catalog);
+  ccApplyTypeQuestions(form.questions, type);
   return true;
 }
 
@@ -92,6 +114,7 @@ export function newCentralCalendarCreateForm({ day, owner, types, targets = [], 
   const form = baseForm("create", { owner, loading: !types });
   form.draft.day = day;
   form.draft.targets = targets.map((target) => ({ ...target }));
+  if (catalog?.questionsEnabled) form.questions = ccNewFormQuestions(types?.[0]);
   if (types?.length) applyCentralCalendarEventType(form, types[0]);
   if (types && catalog) initCentralCalendarCreateDetails(form, types[0], catalog);
   return form;
@@ -102,6 +125,9 @@ export function newCentralCalendarCreateForm({ day, owner, types, targets = [], 
 // and its default details and the team's default place with it.
 export function centralCalendarFormTypesLoaded(form, types, catalog = null) {
   form.loading = false;
+  if (form.mode === "create" && catalog?.questionsEnabled && !form.questions) {
+    form.questions = ccNewFormQuestions((types || []).find((type) => type.id === form.draft.eventTypeId) || types?.[0]);
+  }
   if (form.mode === "create" && !form.draft.eventTypeId && types?.length) applyCentralCalendarEventType(form, types[0]);
   if (form.mode === "create" && catalog) initCentralCalendarCreateDetails(form, (types || []).find((type) => type.id === form.draft.eventTypeId), catalog);
 }
@@ -249,6 +275,8 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
   }
   const expects = CENTRAL_CALENDAR_EVENT_EXPECTS.filter((expect) => d.expects.includes(expect));
   const targets = d.targets.map((target) => ({ kind: target.kind, id: target.id }));
+  const asked = ccQuestionsRequest(form.questions, ccQuestionEventOf(d), { create: form.mode === "create" });
+  Object.assign(errors, asked.errors);
   if (Object.keys(errors).length) return { errors, body: null, unchanged: false };
 
   if (form.mode === "create") {
@@ -258,6 +286,7 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
     if (endTime) body.endTime = endTime;
     Object.assign(body, details.create);
     if (notes) body.notes = notes;
+    Object.assign(body, asked.part);
     return { errors, body, unchanged: false };
   }
 
@@ -277,8 +306,58 @@ export function buildCentralCalendarEventRequest(form, { timezone = "UTC" } = {}
   if (notes !== multiLine(o.notes)) body.notes = orNull(notes);
   if (!sameSet(expects, o.expects)) body.expects = expects;
   if (!form.readOnlyTargets && !sameSet(d.targets.map(targetKey), o.targets.map(targetKey))) body.targets = targets;
+  Object.assign(body, asked.part);
   const unchanged = Object.keys(body).length === 1;
-  return { errors, body: unchanged ? null : body, unchanged };
+  // An answered question unticked closes early: asked once, inline, before
+  // the save is sent (GO decision 5).
+  const closing = ccQuestionsClosingEarly(form.questions);
+  const confirmClose = !unchanged && closing.length > 0 && !form.questions.confirmClose ? closing : null;
+  return { errors, body: unchanged ? null : body, unchanged, confirmClose };
+}
+
+// ---------------------------------------------------------------------------
+// K2b-2a-2b: Ask athletes - the section's input
+// ---------------------------------------------------------------------------
+export function setCentralCalendarQuestionOn(form, kind, on) {
+  const q = form.questions;
+  if (!q || !CC_QUESTION_KINDS.includes(kind)) return false;
+  if (kind === "rpe" && form.rpeFromSessions && on) return false;
+  // An answered question stays as it is unless it is unticked.
+  const p = q.picks[kind];
+  if (p.on === on) return false;
+  p.on = on;
+  q.touched = true;
+  q.confirmClose = false;
+  q.askClose = false;
+  form.dirty = true;
+  return true;
+}
+
+export function setCentralCalendarQuestionWindow(form, kind, part, value) {
+  const q = form.questions;
+  if (!q || !CC_QUESTION_KINDS.includes(kind)) return false;
+  if ((q.answered[kind] || 0) > 0 && q.base?.[kind]?.on) return false;
+  const w = q.picks[kind].window;
+  if (part === "kind") {
+    if (!CC_WINDOW_KINDS.includes(value) || w.kind === value) return false;
+    w.kind = value;
+    if (value === "custom" && !w.date) {
+      const range = ccQuestionWindowRange(ccQuestionEventOf(form.draft), { kind: "after_event" });
+      w.date = range.date || form.draft.day;
+      w.from = w.from || "09:00";
+      w.to = w.to || "11:00";
+    }
+  } else if (["date", "from", "to"].includes(part)) {
+    if (w[part] === value) return false;
+    w[part] = value;
+  } else return false;
+  q.touched = true;
+  form.dirty = true;
+  if (form.errors?.[`question:${kind}`]) {
+    form.errors = { ...form.errors };
+    delete form.errors[`question:${kind}`];
+  }
+  return part === "kind";
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +471,82 @@ function expectsHtml(form, types) {
       <span class="cc-field-hint">${escapeHtml(fromType || "Nothing ticked: nothing is waited for after this event.")}</span>
       ${errorHtml(form, "expects")}
     </fieldset>`;
+}
+
+// K2b-2a-2b (contract section 3): Ask athletes - a box per question, and for
+// a ticked one When to ask (After the event, Next morning, Custom inside one
+// day). An answered question shows locked; unticking it closes it early.
+function questionsHtml(form, today) {
+  const q = form.questions;
+  if (!q) return form.questionsNote ? `<p class="cc-field-hint cc-questions-note">${escapeHtml(form.questionsNote)}</p>` : "";
+  const ev = ccQuestionEventOf(form.draft);
+  const rows = CC_QUESTION_KINDS.map((kind) => {
+    const p = q.picks[kind];
+    const answered = (q.answered[kind] || 0) > 0 && q.base?.[kind]?.on;
+    const blocked = kind === "rpe" && form.rpeFromSessions && !p.on;
+    const box = `<label class="cc-check cc-question-check"><input type="checkbox"${p.on ? " checked" : ""}${blocked ? " disabled" : ""} data-cc-question-on="${kind}" data-cc-focus="question:${kind}"><span class="cc-check-label"><strong>${CC_QUESTION_WORDS[kind]}</strong> — ${escapeHtml(CC_QUESTION_PROMPTS[kind])}</span></label>`;
+    if (blocked) return `<div class="cc-question">${box}<span class="cc-field-hint">RPE comes from the linked trainings.</span></div>`;
+    if (!p.on) {
+      const closing = answered ? `<span class="cc-field-hint">Removing it stops new answers; the answers given stay.</span>` : "";
+      return `<div class="cc-question">${box}${closing}</div>`;
+    }
+    if (answered) {
+      return `<div class="cc-question">${box}<span class="cc-field-hint">${escapeHtml(windowLine(p.window, ev, today))} · Athletes have already answered, so this question can't change here.</span></div>`;
+    }
+    const error = form.errors?.[`question:${kind}`];
+    const name = `ccQuestionWindow-${kind}`;
+    const choices = CC_WINDOW_KINDS.map((wk) => {
+      const range = wk === "custom" ? null : ccQuestionWindowRange(ev, { kind: wk });
+      const quiet = wk === "custom" ? "" : range?.error ? "Doesn't fit this event" : ccWindowWords(range, { today });
+      return `<label class="cc-question-choice"><input type="radio" name="${name}" value="${wk}"${p.window.kind === wk ? " checked" : ""} data-cc-question-window="${kind}" data-cc-focus="question-window:${kind}:${wk}"><span>${escapeHtml(CC_WINDOW_LABELS[wk])}${quiet ? ` <span class="cc-check-note">${escapeHtml(quiet)}</span>` : ""}</span></label>`;
+    }).join("");
+    const last = ev.endDay && ev.endDay >= ev.day ? ev.endDay : ev.day;
+    const custom = p.window.kind === "custom"
+      ? `<div class="cc-question-custom">
+          <label class="cc-field" for="ccQuestion-${kind}-date"><span class="cc-field-label">Day</span><input id="ccQuestion-${kind}-date" type="date" value="${escapeAttr(p.window.date)}"${ev.day ? ` min="${escapeAttr(ev.day)}" max="${escapeAttr(ccAddDays(last, 1))}"` : ""} data-cc-question-part="date" data-cc-question-kind="${kind}" data-cc-focus="question-date:${kind}"></label>
+          <label class="cc-field" for="ccQuestion-${kind}-from"><span class="cc-field-label">From</span><input id="ccQuestion-${kind}-from" type="time" value="${escapeAttr(p.window.from)}" data-cc-question-part="from" data-cc-question-kind="${kind}" data-cc-focus="question-from:${kind}"></label>
+          <label class="cc-field" for="ccQuestion-${kind}-to"><span class="cc-field-label">To</span><input id="ccQuestion-${kind}-to" type="time" value="${escapeAttr(p.window.to)}" data-cc-question-part="to" data-cc-question-kind="${kind}" data-cc-focus="question-to:${kind}"></label>
+          <span class="cc-field-hint">${escapeHtml(CC_ONE_DAY)}</span>
+        </div>`
+      : "";
+    return `<div class="cc-question">${box}
+        <fieldset class="cc-question-when"${error ? ` aria-describedby="ccQuestion-${kind}-error"` : ""}>
+          <legend>When to ask</legend>
+          ${choices}
+          ${custom}
+          ${error ? `<span class="cc-field-error" id="ccQuestion-${kind}-error">${escapeHtml(error)}</span>` : ""}
+        </fieldset>
+      </div>`;
+  });
+  const closing = ccQuestionsClosingEarly(q);
+  const confirm = q.askClose
+    ? `<div class="cc-inline-confirm" role="group" aria-labelledby="ccQuestionsCloseText">
+        <p id="ccQuestionsCloseText">${escapeHtml(closeQuestionText(closing, q))}</p>
+        <div class="cc-form-actions">
+          <button type="button" class="plain-button cc-primary" data-action="central-calendar-event-questions-close-confirm">${closing.length > 1 ? "Stop questions and save" : "Stop question and save"}</button>
+          <button type="button" class="plain-button" data-action="central-calendar-event-questions-close-cancel">Keep it</button>
+        </div>
+      </div>`
+    : "";
+  return `<fieldset class="cc-fieldset cc-questions">
+      <legend>Ask athletes</legend>
+      ${rows.join("")}
+      ${confirm}
+    </fieldset>`;
+}
+
+function windowLine(window, ev, today) {
+  const range = window.kind === "custom" ? { date: window.date, from: window.from, to: window.to } : ccQuestionWindowRange(ev, window);
+  if (window.kind === "custom") return `${ccShortDay(window.date)}, ${window.from}–${window.to}`;
+  return `${CC_WINDOW_LABELS[window.kind]}, ${ccWindowWords(range, { today })}`;
+}
+
+function closeQuestionText(kinds, q) {
+  if (kinds.length === 1) {
+    const n = q.answered[kinds[0]] || 0;
+    return `Stop the ${CC_QUESTION_WORDS[kinds[0]]} question? ${n} ${n === 1 ? "answer is" : "answers are"} kept; nobody else can answer.`;
+  }
+  return "Stop the RPE and WELLNESS questions? The answers given are kept; nobody else can answer.";
 }
 
 // Who the event is for, by its owner (plan section 1.2): a club event - the
@@ -571,6 +726,7 @@ export function renderCentralCalendarEventFormHtml(form, ctx = {}) {
         ${targetsHtml(form, ctx)}
         ${renderCentralCalendarPlaceFieldHtml(form, catalog, helpers)}
         ${expectsHtml(form, types)}
+        ${questionsHtml(form, ctx.today || "")}
         ${renderCentralCalendarDetailsFieldHtml(form, catalog, helpers)}
         <label class="cc-field" for="${fieldId("notes")}">
           <span class="cc-field-label">Notes <span class="cc-field-optional">(optional, coaches only)</span></span>

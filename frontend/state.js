@@ -62,6 +62,9 @@ export const emptyCalendarSettingsState = () => ({
   noticeTone: "",
   form: null,
   command: null,
+  // K2b-2a-2b: the club's Ask athletes switch form of a platform admin
+  // ({ reason, confirming, error }); null while closed.
+  questionsForm: null,
 });
 
 // The central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): one
@@ -111,6 +114,29 @@ export const emptyCentralCalendarState = () => ({
   eventCatalog: null,
   panelEvent: null,
   form: null,
+  // K2c-1 (docs/ai/central-calendar-k2c-plan.md 1.1): the link command in
+  // flight ({ act, eventId, panelKey, requestKey, … }, null when none; a
+  // command whose result is not confirmed waits in the actions module's
+  // memory instead), the last refusal's sentence under the panel's links
+  // ({ panelKey, text }), and the links the server refused for a reason the
+  // read cannot see (central-calendar-links.js centralCalendarRefusedPairKey ->
+  // the code). `alignStep`: the Align row's second step ({ eventKey, stage:
+  // "confirm" | "results", resultCount }); `alignBlocked`: an Align that could
+  // change nothing here ({ eventId, revision }), not offered again until the
+  // event's revision moves.
+  linkWrite: null,
+  linkMessage: null,
+  linkRefused: new Map(),
+  alignStep: null,
+  alignBlocked: null,
+  // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,
+  // error, retry, hidden, stale, read }), the open inline step of Ask / Move
+  // time / Remove ({ act, kind, questionId, window, eventKey, revision,
+  // error }), and the panel open whose catalog read failed (that open only).
+  panelQuestions: null,
+  questionStep: null,
+  questionsCatalogFailedFor: null,
+  questionsCatalogRead: null,
 });
 
 export const emptyExerciseOptions = () => ({
@@ -312,6 +338,12 @@ export const emptyBuilderState = (overrides = {}) => ({
   addConfirmation: null, // { itemId, title } - transient inline "<title> added" banner + Edit now, cleared on next navigation/add.
   editItemId: "", // set while a single item's Sets/Reps/Load/Instruction is open in Added-exercises mode.
   editItemInstructionOpen: false, // Instruction starts collapsed per item; resets whenever editItemId changes.
+  // K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.1): the open "Make an
+  // event" panel of one weekly session (builder-calendar-event-actions.js),
+  // and the sessions made into an event from this Builder (the in-memory
+  // "In calendar" badge; never stored).
+  calendarEvent: null,
+  calendarEventsMade: [],
   ...overrides,
 });
 
@@ -385,6 +417,18 @@ export const emptyScheduleForm = (overrides = {}) => ({
   opensTime: "06:00",
   dueTime: "",
   closesTime: "22:00",
+  // K2b-2a-2a: "Skip days off" of a daily WELLNESS schedule
+  // (docs/ai/central-calendar-k2b2a2-ui-contract.md section 1). Offered only
+  // while questionsEnabled is true (the club's Ask athletes switch, read from
+  // GET /api/calendar/events/types; null = not read yet, false = off or the
+  // read failed). skipDaysOffInitial is an edited schedule's stored value
+  // (null on a create); an edit sends skipDaysOff only when it differs.
+  // testName: the schedule's test (an edit) or the library's schedulable
+  // test (a create); the option is offered for WELLNESS only.
+  skipDaysOff: true,
+  skipDaysOffInitial: null,
+  questionsEnabled: null,
+  testName: "",
   // Calendar picker state, shared by BOTH interaction modes (see the
   // scheduleKind comment above). calendarMonth is a "YYYY-MM" string (the
   // month currently displayed). selectedDates (multi-select mode only)

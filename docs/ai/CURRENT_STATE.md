@@ -61,7 +61,9 @@ at `355ae868` (merge of PR #346); nothing else was re-derived then. Phase 7i-B1 
 before the merge, its deploy and the *Rukovodilac*'s v53 post-check were added on 2026-11-04 at `26b6c8bc` (merge of PR
 #352); nothing else was re-derived then. The central calendar's K2b-1d and K2b-1e entries, and the fix of the
 `central-calendar-k2b-settings` 1a / 1b note, were brought up to date on 2026-11-18 at `94aab138` (merge of PR #601), by
-the K2b-1e pull request; nothing else was re-derived then.
+the K2b-1e pull request; nothing else was re-derived then. The roles and permissions block (the Settings and roles
+stream: the plan PR #615, R1 PR #619 and its deploy, the open R2 contract PR #620) was added on 2026-11-19 at `e3aa978`
+(merge of PR #619); nothing else was re-derived then.
 
 ## Active phase
 
@@ -308,6 +310,38 @@ Where it stands after the pilot (owner-run orders, main session in the pilot acc
 - Test data left on the pilot account for the owner to delete: the exercises
   `cb99c1d2-f902-4a17-8a20-3d9becf9ddcd` and `8cac8fca-7cd4-4fb9-8514-30ff2d7d18fe` and the unassigned
   draft "R2 pilot test program" `430ea51d-e39a-4743-aafa-0fe23f929895`.
+
+**Roles and permissions (the Settings and roles stream): R1 merged and deployed (added 2026-11-19 at `e3aa978`;
+nothing else was re-derived then).**
+- **The stream** has its own manager, by the owner's order of 2026-11-18 (relayed by that manager). Its merges to
+  `main` go through the queue of the *Rukovodilac* of OptiMove (its gate and the *Nezavisni revizor*). The stream never
+  deploys or migrates on its own.
+- **The plan**, `docs/ai/roles-permissions-plan.md`: PR #615, merge `69c4c07`. The owner accepted it as the direction
+  on 2026-11-18; the owner's decisions are its section 9.
+- **R1**, PR #619, merge `e3aa978` (parents `69c4c07` and `f4dd289`), exactly from head `f4dd289`. No behaviour change,
+  no migration, no frontend.
+  - `backend/src/permissions.js`: the closed catalog of 52 permissions in 12 groups, the basic roles' starting sets
+    for the organization routes as a code constant, and `can(authz, permission, resourceScope)`.
+  - The 36 role-predicate call sites of `backend/src/routes/organization.js` (29 handlers) check through `can()`.
+    `backend/tests/permissions-r1.test.mjs` pins the per-call-site table and compares `can()` with the predicate that
+    stood at each site.
+  - Evidence, as relayed by the *Rukovodilac* of OptiMove (not read here):
+    - the *Nezavisni revizor*'s GO on `f4dd289`, with no findings;
+    - the *Rukovodilac*'s gate on the merge preview: the backend disposable and backend-fast runs with only baseline
+      failures, the build ok, e2e 252 of 252;
+    - a read-only production count on 2026-11-19 at 07:57 UTC found no row of `user_club_roles` or `user_team_roles`
+      with a word other than `club_admin` / `team_coach` (the plan's section 2.1, rule 2);
+    - deployed by the owner: `/api/health` served `e3aa978` three times at 09:08 UTC.
+  - Not run for R1: the full `test:backend:shared`, PostgreSQL 17.
+- **R2**: the contract `docs/ai/roles-r2-contract.md` is PR #620 (Proposed, not merged).
+  - Its three internal reviews ended READY (the contract's section 10.3); it is with the *Nezavisni revizor* for the
+    external review (relayed).
+  - The owner decided the plan's D4 and the contract's O7, O9 and O10 as recommended on 2026-11-19 (relayed by the
+    stream's manager; the contract's text at `2e5324c` still lists them as open).
+  - No code and no migration file before both external GOs, the owner's acceptance and a migration number from the
+    *Rukovodilac* of OptiMove.
+- **Open:** PR #630 (test only: `organization-get-orchestration` expects `archivedTeams`), in the queue (relayed).
+- **Next by the plan:** R2, then R3 (Settings > Roles, assignment in Users, the coach's "My team").
 
 **The central calendar** (another track, its own stream manager; plans `docs/ai/central-calendar-k0-discovery.md`,
 `central-calendar-k1-plan.md`, `central-calendar-k1b-plan.md`, `central-calendar-k2a-plan.md`,

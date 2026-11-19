@@ -109,7 +109,19 @@ function normalizeSettings(data) {
     fields: Array.isArray(data?.fields) ? data.fields : [],
     locations: Array.isArray(data?.locations) ? data.locations : [],
     teams: Array.isArray(data?.teams) ? data.teams : [],
+    // K2b-2a-2b: the club's Ask athletes switch (absent without migration
+    // v81): its state and date only.
+    questions: data?.questions && typeof data.questions === "object"
+      ? { enabled: data.questions.enabled === true, updatedAt: data.questions.updatedAt || null }
+      : null,
   };
+}
+
+// K2b-2a-2b (contract section 2.1): the switch's form is offered to a platform
+// admin in the club's workspace (today also the club's admin, the only way into
+// a club workspace); the server decides again on every write.
+export function calendarSettingsSwitchAdmin() {
+  return state.organization?.data?.isPlatformAdmin === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,5 +214,8 @@ const SETTLED_ON_CHECK = new Set([
   "type_archived", "field_archived", "location_archived", "type_live", "field_live", "location_live",
   "last_type", "label_taken", "field_answered", "too_few_options", "too_many",
   "field_not_available", "location_not_available", "option_not_available", "nothing_to_change",
+  // K2b-2a-2b: the switch's and the type's questions (validateQuestionsSwitch,
+  // validateTypeUpdate, updateType after the record).
+  "invalid_reason", "invalid_enabled", "invalid_questions", "questions_off",
 ]);
 export const calendarSettingsCheckSettles = (info) => info.status >= 400 && info.status < 500 && SETTLED_ON_CHECK.has(info.code);

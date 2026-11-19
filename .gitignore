@@ -15,6 +15,12 @@ __pycache__/
 *.xlsx
 *.tsv
 *.dump
+# Manual production backups (docs/runbooks/production-manual-backup.md): the local config file and the
+# backup's side files live outside the repository; these lines are a second fence.
+optimove-backup.local.conf
+*.dump.failed
+*.dump.sha256
+pgpass.conf
 *.docx
 # Legacy local script that holds plain credentials; it lives outside the repository.
 gpexe-code-check.js
