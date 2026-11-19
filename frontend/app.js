@@ -87,7 +87,7 @@ import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsResetForWorkspaceChange, checkBuilderEventsResult, chooseSessionEvent, chooseWholeDay, loadBuilderEvents, setBuilderEventsRender } from "./builder-events-row.js";
-import { appHistoryEntryOf, beginAppBack, clearAppHistoryEntries, endAppBack, peekAppHistoryEntry, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
+import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
@@ -4310,7 +4310,7 @@ function k3BackToCalendar() {
   const context = k3Context();
   if (!context || (context.saving && !context.saved)) return;
   invalidateCentralCalendarCache();
-  if (state.appHistoryDepth > 0 && peekAppHistoryEntry()?.tab === "central-calendar") {
+  if (state.appHistoryDepth > 0 && appHistoryTopEntry()?.tab === "central-calendar") {
     window.history.back();
     return;
   }
@@ -4430,7 +4430,7 @@ async function openCalendarCreateFromBuilder(day) {
 setCentralCalendarBuilderReturn(({ created }) => {
   if (created) builderEventMade(created);
   if (state.builder.events) state.builder.events.key = "";
-  if (state.appHistoryDepth > 0 && peekAppHistoryEntry()?.tab === "builder") {
+  if (state.appHistoryDepth > 0 && appHistoryTopEntry()?.tab === "builder") {
     window.history.back();
     return;
   }
