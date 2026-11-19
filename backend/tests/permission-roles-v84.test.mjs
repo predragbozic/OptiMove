@@ -186,6 +186,23 @@ test("2b. the text rule is a byte-for-byte copy of v40's; the honoured list of t
   assert.deepEqual(honoured, [...HONOURED_PERMISSIONS].sort());
 });
 
+test("2c. no v84 function body, CHECK or default holds a literal the legacy-schema tool refuses (a schema-only dump of a database with v84 must stay generatable; the seed's literal ids are data, not schema)", async () => {
+  const { scanText } = await import("../../tools/legacy-schema/scan.mjs");
+  const defs = (await k.query(`
+    select pg_get_functiondef(p.oid) as def from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'permission\\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user\\_role\\_assignments\\_%')
+    union all
+    select pg_get_constraintdef(c.oid) from pg_constraint c
+     where c.conrelid::regclass::text like 'permission%' or c.conrelid::regclass::text in ('user_role_assignments', 'user_club_roles', 'user_team_roles')
+    union all
+    select pg_get_expr(d.adbin, d.adrelid) from pg_attrdef d
+     where d.adrelid::regclass::text like 'permission%' or d.adrelid::regclass::text = 'user_role_assignments'`)).rows;
+  assert.ok(defs.length > 40, `definitions read: ${defs.length}`);
+  const findings = defs.flatMap(({ def }) => scanText(def).map((f) => `${f.rule}: ${def.split("\n")[f.line - 1]?.trim()}`));
+  assert.deepEqual(findings, []);
+});
+
 test("3. v84 refuses to run with a planted row of another word in user_club_roles or user_team_roles (active, then inactive): the fixed message, nothing of v84 remains", async () => {
   const pre = await buildDatabase({ label: "v84_refuse", withoutV84: true });
   const c = new pg.Client({ connectionString: pre.url });

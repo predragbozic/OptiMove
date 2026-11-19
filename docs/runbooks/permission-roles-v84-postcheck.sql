@@ -32,7 +32,7 @@ select (select md5(string_agg(c.relname || '.' || g.tgname || ':' || g.tgenabled
        not exists (select 1 from pg_trigger g where g.tgrelid in (select oid from tables) and not g.tgisinternal and g.tgenabled <> 'O') as every_trigger_enabled,
        (select md5(string_agg(p.oid::regprocedure::text || '=' || md5(p.prosrc) || ':' || p.prosecdef::text || ':' || p.provolatile::text || ':' || coalesce(array_to_string(p.proconfig, ';'), ''), ',' order by p.oid::regprocedure::text))
           from pg_proc p where p.pronamespace = 'public'::regnamespace
-           and (p.proname like 'permission\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user\_role\_assignments\_%')) = 'f97c4bb987fae6bf27a1bb5edbbdf5bd' as functions_as_written,
+           and (p.proname like 'permission\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user\_role\_assignments\_%')) = '639eaff140bac893282f6b7e6f2cd2a7' as functions_as_written,
        not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef
                     and (p.proname like 'permission\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor'))) as no_security_definer,
        not exists (select 1 from pg_constraint k where k.conrelid in (select oid from tables) and k.contype = 'f' and k.confdeltype <> 'r') as every_fk_restrict,

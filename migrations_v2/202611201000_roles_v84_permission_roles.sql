@@ -856,9 +856,13 @@ create trigger permission_role_items_no_truncate before truncate on public.permi
 
 -- Rule 7 (contract 2.4), at COMMIT, fired by an item write and by a role update.
 create function public.permission_rule7_check() returns trigger as $$
+declare
+  -- Club admin by its basic key (unique, immutable), never by a literal id: a schema-only
+  -- dump keeps this body, and the legacy-schema tool refuses a uuid literal in it.
+  v_club_admin uuid := (select id from public.permission_roles where basic_key = 'club_admin');
 begin
-  if not exists (select 1 from public.permission_role_items where role_id = '00000000-0000-4000-8000-000000000842' and permission_word = 'staff.assign')
-     or not exists (select 1 from public.permission_role_items where role_id = '00000000-0000-4000-8000-000000000842' and permission_word = 'roles.manage') then
+  if not exists (select 1 from public.permission_role_items where role_id = v_club_admin and permission_word = 'staff.assign')
+     or not exists (select 1 from public.permission_role_items where role_id = v_club_admin and permission_word = 'roles.manage') then
     raise exception 'permission role item: the Club admin role must hold this permission' using errcode = '23514';
   end if;
   if exists (
@@ -867,10 +871,10 @@ begin
          join public.permission_roles r on r.id = i.role_id
         where r.owner_scope = 'system' and r.archived_at is null
           and r.basic_key is distinct from 'platform_admin'
-          and r.id <> '00000000-0000-4000-8000-000000000842'
+          and r.id <> v_club_admin
           and exists (select 1 from public.permission_scope_types s where s.permission_word = i.permission_word and s.scope_type = 'club')
           and not exists (select 1 from public.permission_role_items ci
-                           where ci.role_id = '00000000-0000-4000-8000-000000000842' and ci.permission_word = i.permission_word)) then
+                           where ci.role_id = v_club_admin and ci.permission_word = i.permission_word)) then
     raise exception 'permission role item: a system role holds a permission the Club admin role lacks' using errcode = '23514';
   end if;
   return null;
