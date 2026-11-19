@@ -229,11 +229,18 @@ function releaseIfGone() {
   if (rec && !builderCalendarDraftHoldsSession(state.builder.draft, rec.sessionId)) state.builder.calendarEvent = null;
 }
 
+// A Builder modal (builder-modals.js) drawn over the panel: Escape is its.
+function builderModalOpen() {
+  const b = state.builder;
+  return Boolean(b.athletePickerOpen || b.infoOpen || b.copyPlanId || b.overwriteDayConfirm || b.blockPicker?.open);
+}
+
 // Escape (app.js): the open panel closes, unless a create is on its way or
-// not confirmed. Returns whether it closed one.
+// not confirmed, or a Builder modal is open over it (the typed title and
+// times would be lost - #624's LOW). Returns whether it closed one.
 export function closeBuilderCalendarEventPanel(renderBuilder) {
   const rec = state.builder.calendarEvent;
-  if (!rec || locked(rec)) return false;
+  if (!rec || locked(rec) || builderModalOpen()) return false;
   state.builder.calendarEvent = null;
   renderBuilder?.();
   return true;

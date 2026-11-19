@@ -399,6 +399,28 @@ test("Q11. Later refused: 404 or question_not_open drop the row quietly and read
   }
 });
 
+test("Q11b. a Later refused (404 or question_not_open) that lands after a reset (a workspace switch) touches nothing of the new context and reads nothing", async () => {
+  for (const refusal of [{ status: 404, body: { error: "notFound" } }, { status: 409, body: { error: "question_not_open", message: "x" } }]) {
+    resetAthleteQuestions();
+    world.questions = [question({ id: "q-1" })];
+    const gate = deferred();
+    const calls = server({ later: async () => { await gate.promise; return refusal; } });
+    await enterHome();
+    const later = handleAthleteQuestionsAction(fakeAction({ action: "athlete-questions-later" }), handlers());
+    await settle();
+    // The switch: a new context whose list holds a row of the same id.
+    resetAthleteQuestions();
+    await loadAthleteQuestions({ render });
+    const readsBefore = mineCalls(calls).length;
+    assert.deepEqual(state.athleteQuestions.rows.map((r) => r.questionId), ["q-1"]);
+    gate.resolve();
+    await later;
+    await settle();
+    assert.deepEqual(state.athleteQuestions.rows.map((r) => r.questionId), ["q-1"], `${refusal.status}: the new context's row stays`);
+    assert.equal(mineCalls(calls).length, readsBefore, `${refusal.status}: no read for the old context`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Answer now and the card
 // ---------------------------------------------------------------------------
@@ -440,6 +462,47 @@ test("Q13c. the form did not open and the reread fails (an outage): never 'has c
   assert.equal(state.athleteQuestions.status, "hidden");
   assert.equal($(".athlete-questions-notice").textContent, ATHLETE_QUESTION_UNREACHABLE);
   assert.notEqual($(".athlete-questions-notice").textContent, ATHLETE_QUESTION_CLOSED);
+});
+
+test("Q13d. a WELLNESS form that did not open: the same lines as RPE - 'has closed' once the new read no longer lists it, a neutral line while it is", async () => {
+  world.questions = [question({ id: "q-2", kind: "wellness", formId: "ta-9" })];
+  const calls = server();
+  await enterHome();
+  const closedForm = handlers({ wellnessFormOpenFor: () => false });
+  await handleAthleteQuestionsAction(fakeAction({ action: "athlete-questions-answer", questionId: "q-2" }), closedForm);
+  assert.deepEqual(opened, [["wellness", "ta-9"]]);
+  assert.equal($(".athlete-questions-notice").textContent, ATHLETE_QUESTION_NOT_OPENED, "still listed");
+  world.questions[0].answered = true;
+  const before = mineCalls(calls).length;
+  await handleAthleteQuestionsAction(fakeAction({ action: "athlete-questions-answer", questionId: "q-2" }), closedForm);
+  assert.equal(mineCalls(calls).length, before + 1);
+  assert.equal($(".athlete-questions-notice").textContent, ATHLETE_QUESTION_CLOSED);
+  // A form that opened: no line, no read.
+  world.questions = [question({ id: "q-3", kind: "wellness", formId: "ta-3" })];
+  await enterHome();
+  const reads = mineCalls(calls).length;
+  assert.equal(await actions.answerAthleteQuestion("q-3", handlers({ wellnessFormOpenFor: () => true })), true);
+  assert.equal(mineCalls(calls).length, reads);
+});
+
+test("Q14b. a submit with no open calendar question sends no read; with one, of this form or not, the list is read again", async () => {
+  const calls = server();
+  await enterHome();
+  assert.equal(state.athleteQuestions.rows.length, 0);
+  const none = mineCalls(calls).length;
+  await athleteQuestionsAnswered("ext-unrelated");
+  await athleteQuestionsAnswered("ta-unrelated");
+  assert.equal(mineCalls(calls).length, none, "no question: nothing sent");
+  world.questions = [question({ id: "q-1", formId: "ext-1" })];
+  await enterHome();
+  let reads = mineCalls(calls).length;
+  await athleteQuestionsAnswered("ext-other");
+  assert.equal(mineCalls(calls).length, reads + 1, "an open question: read again");
+  reads = mineCalls(calls).length;
+  world.questions[0].answered = true;
+  await athleteQuestionsAnswered("ext-1");
+  assert.equal(mineCalls(calls).length, reads + 1, "its own answer: read again");
+  assert.equal(state.athleteQuestions.rows.length, 0);
 });
 
 test("Q14. the card: at the top of Home with one Answer per open question; gone after the answer (the row dropped at once, then the read)", async () => {

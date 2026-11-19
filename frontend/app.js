@@ -2600,6 +2600,7 @@ function athleteQuestionHandlers() {
     },
     openWellness: (assignmentId) => openTestAssignment(assignmentId),
     rpeFormOpenFor: (assignmentId) => String(state.trainingLoad.rpeForm?.externalAssignmentId || "") === String(assignmentId),
+    wellnessFormOpenFor: (assignmentId) => String(state.tests.form?.assignmentId || "") === String(assignmentId) && state.tests.form?.canSubmit !== false,
     render: renderAthleteHomeFromCache,
     reload: () => loadAthleteQuestions({ render: renderAthleteHomeFromCache }),
     loadHome: async () => {
