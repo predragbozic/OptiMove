@@ -86,7 +86,7 @@ drop table public.permission_scope_types;
 drop table public.permissions;
 drop table public.permission_modules;
 
-drop function public.lock_permission_actor(uuid, text, uuid, uuid, uuid);
+drop function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid);
 drop function public.user_holds_role_items(uuid, uuid, text, uuid);
 drop function public.permission_actor_basis(uuid, text, text, uuid);
 drop function public.permission_role_actor_may(uuid, text, uuid);

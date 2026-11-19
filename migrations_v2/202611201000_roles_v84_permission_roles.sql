@@ -73,8 +73,8 @@ create table public.permission_scope_types (
 create function public.permission_text_ok(v text, max_len integer) returns boolean
   language sql immutable as $$
     select coalesce(char_length(v) between 1 and max_len
-       and v !~ '^[    -   　]|[    -   　]$'
-       and v !~ '[\u0001-\u001f\u007f-\u009f­͏؜ᅟᅠ឴឵᠋-᠏​-‏ -‮⁠-⁯⠀ㅤ︀-️﻿ﾠ￰-￻\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff]', false)
+       and v !~ '^[\u0020\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]|[\u0020\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]$'
+       and v !~ '[\u0001-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff]', false)
   $$;
 
 -- A role's per-module display, as recorded on a change row: a flat object
@@ -499,15 +499,18 @@ $$ language sql stable set search_path = pg_catalog, public;
 -- Locks FOR SHARE every row the answer of user_has_permission for that user and
 -- scope rests on, in the order of 4.3: the acting user's users row (its own
 -- statement); the acting user's rows of the old tables (global, club, team);
--- the assignment rows by id; the role rows by id. As built (not in the
--- contract's signature): p_role_for_update names the role being edited or
--- archived, locked FOR UPDATE in its place in the id order; p_assignment_for_update
--- names the assignment being revoked, locked FOR NO KEY UPDATE in its place.
+-- the assignment rows by id; the role rows by id. As built (the contract's
+-- three parameters, plus three optional ones): p_role_for_update names the role
+-- being edited or archived, locked FOR UPDATE in its place in the id order;
+-- p_assignment_for_update names the assignment being revoked, locked FOR NO KEY
+-- UPDATE in its place; p_role_for_share names a role only read (the role being
+-- assigned, the source of a copy), locked FOR SHARE in its place.
 -- Returns 'platform_admin', 'club_admin' (the user holds staff.assign or
 -- roles.manage at the scope) or null.
 create function public.lock_permission_actor(p_user uuid, p_scope_type text, p_scope_id uuid,
                                              p_role_for_update uuid default null,
-                                             p_assignment_for_update uuid default null)
+                                             p_assignment_for_update uuid default null,
+                                             p_role_for_share uuid default null)
 returns text as $$
 declare
   club uuid;
@@ -558,6 +561,7 @@ begin
         or (r.basic_key = 'team_coach' and p_scope_type = 'team' and exists (
               select 1 from public.user_team_roles t where t.user_id = p_user and t.team_id = p_scope_id and t.role = 'team_coach' and t.is_active))
     union select p_role_for_update where p_role_for_update is not null
+    union select p_role_for_share where p_role_for_share is not null
   ) s;
   if role_ids is not null then
     foreach rid in array role_ids loop

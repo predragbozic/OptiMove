@@ -20,6 +20,7 @@ import exercisesRouter from "./routes/exercises.js";
 import exerciseCollectionsRouter from "./routes/exerciseCollections.js";
 import builderRouter from "./routes/builder.js";
 import organizationRouter from "./routes/organization.js";
+import permissionRolesRouter from "./routes/permissionRoles.js";
 import coachesRouter from "./routes/coaches.js";
 import notificationsRouter from "./routes/notifications.js";
 import messagesRouter from "./routes/messages.js";
@@ -135,6 +136,10 @@ app.use("/api/templates", requireAuth, templatesRouter);
 app.use("/api/exercises", requireAuth, requireCoach, exercisesRouter);
 app.use("/api/exercise-collections", requireAuth, requireCoach, exerciseCollectionsRouter);
 app.use("/api/builder", requireAuth, requireCoach, builderRouter);
+// The Roles API (roles R2) before the organization router, behind requireAuth
+// only: its service answers the identical 404 for every caller it does not
+// serve, so it never answers 403 (contract section 5).
+app.use("/api/organization/roles", requireAuth, permissionRolesRouter);
 app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
 app.use("/api/taxonomy", requireAuth, requireCoach, taxonomyRouter);
 app.use("/api/coaches", requireAuth, coachesRouter);
