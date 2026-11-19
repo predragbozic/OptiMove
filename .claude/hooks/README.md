@@ -126,8 +126,13 @@ the opposite of what a safety layer should do.
 - `git merge` / `git rebase` — except a plain `git merge [--no-edit|--no-ff|--no-commit|-q] origin/main`
   (or `origin/master`) while the current branch is known and is not `main`/`master` (read as a full
   ref, see below), alone or after read-only commands (`git status/fetch/rev-parse/log/diff/show/
-  merge-base` without `--output`, `--ext-diff` or `--textconv`, `wc/head/tail`) in the same line;
-  every other segment of that line is still judged and the strictest verdict wins.
+  merge-base` without `--output`, `--ext-diff` or `--textconv`, `wc/head/tail`, the same with
+  `git -C <path>`, and `git worktree add` without `-B`/`--force`) in the same line; every other
+  segment of that line is still judged and the strictest verdict wins. In a worktree the merge
+  may be written `git -C <path> merge …` or follow ONE `cd <path> &&` in the same line: the hook
+  resolves that folder itself (relative to its `cwd`) and checks the branch THERE. A path with
+  `~`, `$`, a glob or quotes, a second `cd`, `cd -`, or a folder whose branch is main/master or
+  whose HEAD is detached: asks as before.
 - `gh pr merge`.
 - A push that targets `main` explicitly, or a bare `git push`/`git push origin` while the
   hook can determine (via a fast, read-only `git symbolic-ref -q HEAD` in the command's own
