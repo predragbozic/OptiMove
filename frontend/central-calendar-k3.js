@@ -252,8 +252,10 @@ export function k3PlacedSessions(eventViews, planIds) {
   for (const { event, view } of eventViews || []) {
     const eventId = String(event?.eventId || event?.id || view?.id || "");
     for (const link of view?.sessionLinks || []) {
-      if (!plans.has(String(link.planId)) || link.state === "orphaned" || !link.sessionName) continue;
-      const key = k3SessionKey(link.day, { amPm: link.amPm || "", bta: link.bta || "", name: link.sessionName });
+      // An unnamed session is linked too (its name is ""): only a link with no
+      // live session (orphaned) is left out.
+      if (!plans.has(String(link.planId)) || link.state === "orphaned") continue;
+      const key = k3SessionKey(link.day, { amPm: link.amPm || "", bta: link.bta || "", name: link.sessionName ?? "" });
       const entry = placed.get(key);
       if (entry && entry.eventId !== eventId) {
         conflicts.add(key);

@@ -13,6 +13,7 @@ import {
   builderSessionEvent,
   builderSessionOutside,
   EVENTS_LOAD_FAILED,
+  SAVE_FIRST_GROUP_NOTE,
   SAVE_FIRST_QUESTION,
 } from "./builder-events-row.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
@@ -135,6 +136,7 @@ export function renderBuilderEventsAskHtml() {
       <div class="k3-sheet" role="dialog" aria-modal="true" aria-labelledby="bEvAskTitle"${busy ? ' aria-busy="true"' : ""}>
         <h3 class="k3-sheet-title" id="bEvAskTitle">This plan isn't saved yet</h3>
         <p class="k3-sheet-text">${escapeHtml(SAVE_FIRST_QUESTION)}</p>
+        ${(state.builder.draft?.batch?.plans || []).length > 1 ? `<p class="k3-sheet-note">${escapeHtml(SAVE_FIRST_GROUP_NOTE)}</p>` : ""}
         <div class="k3-sheet-actions">
           <button type="button" class="plain-button cc-primary k3-sheet-button" data-action="builder-events-save-first" data-answer="yes" data-k3-focus${busy ? " disabled" : ""}>${busy ? "Saving…" : "Save and continue"}</button>
           <button type="button" class="plain-button k3-sheet-button" data-action="builder-events-save-first" data-answer="no"${busy ? " disabled" : ""}>Cancel</button>

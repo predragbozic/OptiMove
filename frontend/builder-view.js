@@ -317,6 +317,19 @@ export function renderBuilder() {
   renderBuilderBatchSwitchProgress();
   renderBuilderDraftOpenProgress();
   if (state.builder.leaving) els.content.querySelector(".builder-workspace")?.setAttribute("inert", "");
+  syncK3StickyHeights();
+}
+
+// K3 (2.7): what the page scrolls to stops under the sticky band and above the
+// sticky Save and link bar, whatever their real height (a long title wraps).
+function syncK3StickyHeights() {
+  const root = globalThis.document?.documentElement;
+  if (!root?.style) return;
+  for (const [name, selector] of [["--k3-band-h", ".builder-workspace .k3-band"], ["--k3-save-h", ".k3-save-bar"]]) {
+    const el = els.content?.querySelector?.(selector);
+    if (el?.offsetHeight) root.style.setProperty(name, `${el.offsetHeight}px`);
+    else root.style.removeProperty(name);
+  }
 }
 
 export function renderBuilderDraftOpenProgress() {

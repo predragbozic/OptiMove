@@ -25,6 +25,9 @@ import { addDaysIso } from "./utils.js";
 export const BUILDER_EVENTS_WORKSPACES = Object.freeze(new Set(["club", "team", "private_coach"]));
 export const EVENTS_LOAD_FAILED = "Events could not be loaded.";
 export const SAVE_FIRST_QUESTION = "Save it (the athletes will see it) and continue?";
+// A saved group plan opens again one athlete at a time (the Builder's edit
+// draft, K3 plan 1.1 / Q3): said before the click, not found out after it.
+export const SAVE_FIRST_GROUP_NOTE = "After saving, changes go to the athlete on screen only.";
 const NOT_ON_CALENDAR = "This session isn't on the calendar yet: save the plan, then choose its event.";
 
 const workspaceType = () => state.currentUser?.activeWorkspace?.type || "";
@@ -273,7 +276,12 @@ export async function chooseSessionEvent(day, sessionId, value) {
       const linkIds = row.placed.get(item.key)?.linkIds || [];
       const detach = detachSpec(from, linkIds);
       const out = await send(detach);
-      if (out.state !== "ok") return finishWrite(at, out, { spec: detach });
+      if (out.state !== "ok") {
+        const done = target
+          ? `${k3SessionLabel(item.session)} is out of ${eventName(from)}, but not put in ${eventName(target)}. Choose ${eventName(target)} again.`
+          : `${k3SessionLabel(item.session)} is out of ${eventName(from)}.`;
+        return finishWrite(at, out, { spec: detach, done });
+      }
       if (!target) {
         await loadBuilderEvents();
         say(at, `${k3SessionLabel(item.session)} is out of ${eventName(from)}.`, "ok");
@@ -298,7 +306,7 @@ export async function chooseSessionEvent(day, sessionId, value) {
       say(at, `Taken out of ${eventName(from)}, but not put in ${eventName(fresh)}. ${centralCalendarLinkRefusalText(out.info)}`, "warning", { retry: { day, sessionId, value } });
       return;
     }
-    finishWrite(at, out, { spec });
+    finishWrite(at, out, { spec, done: `${k3SessionLabel(item.session)} is in ${eventName(fresh)}.` });
   } finally {
     row.write = null;
     invalidateCentralCalendarCache();
@@ -306,10 +314,11 @@ export async function chooseSessionEvent(day, sessionId, value) {
   }
 }
 
-function finishWrite(at, out, { spec }) {
+// `done`: the sentence a confirmed Check result says (what is true now).
+function finishWrite(at, out, { spec, done = "" }) {
   const row = rowState();
   if (out.state === "unknown") {
-    row.pending = { at, spec };
+    row.pending = { at, spec, done };
     say(at, "We couldn't confirm the result. Checking never links twice.", "warning");
     return;
   }
@@ -365,7 +374,7 @@ export async function chooseWholeDay(day, value) {
       say(at, [`${keys.length - missing.length} ${keys.length - missing.length === 1 ? "session is" : "sessions are"} in ${eventName(event)}.`, ...left].join(" "), left.length ? "warning" : "ok");
       return;
     }
-    finishWrite(at, out, { spec });
+    finishWrite(at, out, { spec, done: `${keys.length - missing.length} ${keys.length - missing.length === 1 ? "session is" : "sessions are"} in ${eventName(event)}.` });
   } finally {
     row.write = null;
     invalidateCentralCalendarCache();
@@ -389,7 +398,7 @@ export async function checkBuilderEventsResult() {
     row.pending = null;
     if (out.state === "ok") {
       await loadBuilderEvents();
-      say(pending.at, "Done: the calendar was read again.", "ok");
+      say(pending.at, pending.done || "Done: the calendar was read again.", "ok");
       return;
     }
     say(pending.at, centralCalendarLinkRefusalText(out.info || {}), "warning");
@@ -419,12 +428,13 @@ export async function answerSaveFirst(yes, { submit, reopen }) {
   }
   row.ask = { ...ask, busy: true };
   paint();
+  const at = ask.kind === "day" ? `day:${ask.day}` : `session:${ask.sessionId}`;
   let result;
   try {
     result = await submit();
   } catch (error) {
     row.ask = null;
-    say(ask.kind === "day" ? `day:${ask.day}` : `session:${ask.sessionId}`, !error?.status || error.status >= 500
+    say(at, !error?.status || error.status >= 500
       ? "We couldn't confirm the plan was saved. Nothing was linked."
       : "The plan wasn't saved, so nothing was linked.", "warning");
     paint();
@@ -433,18 +443,25 @@ export async function answerSaveFirst(yes, { submit, reopen }) {
   const plan = result?.plan || result;
   if (result?.deleted || !plan?.id) {
     row.ask = null;
-    say(ask.kind === "day" ? `day:${ask.day}` : `session:${ask.sessionId}`, "Add an exercise or a named section first: a plan without them isn't saved.", "warning");
+    say(at, "Add an exercise or a named section first: a plan without them isn't saved.", "warning");
     paint();
     return;
   }
-  await reopen(plan.id);
+  try {
+    await reopen(plan.id);
+  } catch {
+    // Saved, but not opened again here: the row is released and says so.
+    row.ask = null;
+    say(at, "Saved. The plan couldn't be opened again here: open it again from the Weekly plan, then choose the event.", "warning");
+    paint();
+    return;
+  }
   row.ask = null;
   await weekReadNow();
   // The session's ids changed with the reopened edit draft: find it again by its slot.
   if (ask.kind === "day") await chooseWholeDay(ask.day, ask.value);
   else {
-    const before = ask.sessionKey;
-    const again = draftSessions(state.builder.draft).find((s) => s.day === ask.day && (s.key === before || s.session.id === ask.sessionId));
+    const again = draftSessions(state.builder.draft).find((s) => s.day === ask.day && (s.key === ask.sessionKey || s.session.id === ask.sessionId));
     if (again) await chooseSessionEvent(ask.day, again.session.id, ask.value);
   }
   paint();

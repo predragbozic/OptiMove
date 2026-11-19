@@ -184,6 +184,7 @@ export function renderK3OutcomeHtml(context) {
   return `<div class="k3-outcome is-${escapeAttr(outcome.tone || "ok")}" role="${outcome.tone === "ok" || outcome.tone === "busy" ? "status" : "alert"}" tabindex="-1">
       <p class="k3-outcome-text">${glyph}<span>${escapeHtml(busy && outcome.tone !== "busy" ? "Checking…" : outcome.text)}</span></p>
       ${outcome.note ? `<p class="k3-outcome-note">${escapeHtml(outcome.note)}</p>` : ""}
+      ${(outcome.actions || []).includes("keepEditing") && context.athleteCount > 1 && !busy ? `<p class="k3-outcome-note">Keep editing opens the saved plan one athlete at a time.</p>` : ""}
       ${outcome.error ? `<p class="k3-outcome-note" role="alert">${escapeHtml(outcome.error)}</p>` : ""}
       ${actions ? `<div class="k3-outcome-actions">${actions}</div>` : ""}
     </div>`;

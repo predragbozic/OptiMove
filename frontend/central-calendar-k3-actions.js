@@ -221,6 +221,8 @@ export function k3AdoptDraft(draft) {
       saveK3Memory(context);
       return;
     }
+    // Another plan ends the band (2.3), and its memory with it.
+    dropK3Memory(context);
     state.builder.k3 = null;
   }
   if (draft.plan.planType !== "weekly" || !K3_WORKSPACES.has(workspaceType())) return;
@@ -523,17 +525,24 @@ export function k3UseEventTimeRequest(sessionId) {
   return { path: `/api/builder/sessions/${encodeURIComponent(sessionId)}`, body: { time: "" } };
 }
 
+// The planned cards of the event's day(s), read WITHOUT events: the server
+// then folds nothing, so a session already linked to this event is still its
+// planned card (its attach answers alreadyAttached, never "not found").
 function calendarRead(context) {
-  const params = new URLSearchParams({ from: context.date, to: context.endDate || context.date, include: "athletes" });
+  const params = new URLSearchParams({ from: context.date, to: context.endDate || context.date, kinds: "planned", include: "athletes" });
   return api(`/api/calendar?${params.toString()}`);
 }
 
-function eventCardOf(answer, context) {
-  for (const day of answer?.days || []) {
-    const card = (day.items || []).find((it) => it.kind === "event" && String(it.eventId) === context.eventId);
-    if (card) return card;
+// The event as it is now (its revision, whether it is cancelled); null when it
+// is gone or not this coach's (the same 404).
+async function eventNow(context) {
+  try {
+    const data = await api(`/api/calendar/events/${encodeURIComponent(context.eventId)}`);
+    return data?.event || null;
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
   }
-  return null;
 }
 
 const plannedOf = (answer) => (answer?.days || []).flatMap((day) => (day.items || []).filter((it) => it.kind === "planned"));
@@ -563,30 +572,32 @@ async function sendPart(context, part, revision, { check = false } = {}) {
   }
   const settled = k3SettlePart({ ...part, spec }, { data, info, check });
   if (settled.state !== "unknown") forget();
-  return settled;
+  // Every attach raises the event's revision: the next part is sent with the new one.
+  const bumped = Number(data?.event?.revision) || 0;
+  return bumped ? { ...settled, revision: bumped } : settled;
 }
 
 async function runParts(context, run, revision, { check = false } = {}) {
   const parts = [];
   let current = revision;
-  let reread = false;
   for (const part of run.parts) {
     if (part.state !== "pending" && !(check && part.state === "unknown")) {
       parts.push(part);
       continue;
     }
     let settled = await sendPart(context, part, current, { check });
-    if (!check && k3PartRetriesOnStale(settled) && !reread) {
-      reread = true;
+    // A part refused as event_changed is read again and sent once more (per part).
+    if (!check && k3PartRetriesOnStale(settled)) {
       try {
-        const card = eventCardOf(await calendarRead(context), context);
-        if (card) {
-          current = Number(card.revision) || current;
+        const event = await eventNow(context);
+        if (event) {
+          current = Number(event.revision) || current;
           const fresh = { ...part, requestKey: newCentralCalendarRequestKey(), spec: null };
           settled = await sendPart(context, fresh, current);
         }
       } catch {}
     }
+    if (settled.revision) current = settled.revision;
     parts.push(settled);
   }
   return { parts, revision: current };
@@ -602,13 +613,13 @@ function finish(context, { save, run, notFound = false, sessionCount, athleteCou
 async function linkSaved(context, { keys, outsideNames }) {
   const saved = context.saved;
   let answer;
+  let card;
   try {
-    answer = await calendarRead(context);
+    [answer, card] = await Promise.all([calendarRead(context), eventNow(context)]);
   } catch {
     return finish(context, { save: "saved", notFound: true, sessionCount: keys.length, athleteCount: context.athleteCount, outsideNames });
   }
-  const card = eventCardOf(answer, context);
-  if (!card || card.cancelled) {
+  if (!card || card.status === "cancelled") {
     const info = { status: card ? 409 : 404, code: card ? "event_cancelled" : "not_found" };
     saved.run = { parts: [{ ids: [], requestKey: "", state: "refused", info }] };
     return finish(context, { save: "saved", run: saved.run, sessionCount: 0, athleteCount: context.athleteCount, outsideNames });
@@ -634,6 +645,22 @@ export const K3_DELETED_EMPTY = "The plan was empty, so it wasn't saved and noth
 // (planHasWeeklyTrainingContentWithClient): an exercise, or a named section.
 function draftHasContent(draft) {
   return (draft?.blocks || []).some((block) => (block.sessions || []).some((session) => (session.nodes || []).some((node) => (node.items || []).length > 0 || String(node.name || "").trim())));
+}
+
+// Whether a save whose answer was lost landed: the draft read back. An edit
+// draft that is gone was applied to its plan; a new plan that is no longer a
+// draft was published. Returns the saved plan, null when it is still a draft
+// (the save is sent again), and throws when the read itself fails.
+async function savedAlready(draft) {
+  const plan = draft?.plan || {};
+  try {
+    const now = await api(`/api/builder/plans/${encodeURIComponent(plan.id)}`);
+    if (now?.plan && now.plan.status === "draft") return null;
+    return { plan: { id: String(now?.plan?.id || plan.id) } };
+  } catch (error) {
+    if (error?.status === 404 && plan.isEditDraft && plan.editSourcePlanId) return { plan: { id: String(plan.editSourcePlanId) } };
+    throw Object.assign(new Error("unconfirmed"), { status: 0 });
+  }
 }
 
 // *Save and link* (2.5). `submit()` is the Builder's own Save and finish
@@ -663,10 +690,15 @@ export async function k3SaveAndLink({ submit, render }) {
   render?.();
   let plan;
   try {
-    plan = await submit();
+    // After a save whose answer was lost, the plan is read back first: a save
+    // that landed is never sent again, nor ever called "not saved" (2.5).
+    const landed = context.saveUnknown ? await savedAlready(draft) : null;
+    plan = landed || await submit();
+    context.saveUnknown = false;
   } catch (error) {
     context.saving = false;
-    const unknown = !error?.status || error.status >= 500;
+    const unknown = context.saveUnknown || !error?.status || error.status >= 500;
+    context.saveUnknown = unknown;
     context.outcome = finish(context, { save: unknown ? "unconfirmed" : "not_saved", athleteCount: context.athleteCount });
     render?.();
     return;
@@ -735,8 +767,8 @@ export async function k3TryLinking({ render }) {
   } else {
     let revision = saved.revision || 0;
     try {
-      const card = eventCardOf(await calendarRead(context), context);
-      if (card) revision = Number(card.revision) || revision;
+      const event = await eventNow(context);
+      if (event) revision = Number(event.revision) || revision;
     } catch {}
     const retry = k3RetryRun(saved.run, newCentralCalendarRequestKey);
     retry.parts = retry.parts.map((p) => (p.state === "pending" ? { ...p, spec: null } : p));
@@ -770,12 +802,6 @@ export async function k3KeepEditing({ adopt, render }) {
   render?.();
 }
 
-// The band ends with its plan (2.3) or a workspace switch.
-export function k3End() {
-  const context = k3Context();
-  if (context) dropK3Memory(context);
-  if (state.builder) state.builder.k3 = null;
-}
 
 // Whether a session's own time no longer fits the event (the mark of 7.1).
 export function k3SessionTimeMark(context, block, session) {

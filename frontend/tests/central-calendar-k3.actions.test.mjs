@@ -104,8 +104,8 @@ test("2. the session memory (GO): ids and slot keys only - never a name or a tit
 
 test("2b. sign-out and a workspace change clear the K3 memory and end the band (app.js)", () => {
   const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
-  const signOut = app.slice(app.indexOf("async function signOut()"), app.indexOf("async function signOut()") + 1200);
-  assert.match(signOut, /clearAppHistoryEntries\(\);\s*\/\/ K3[^\n]*\n\s*clearK3Memory\(\);/, "sign-out clears it");
+  const signOut = app.slice(app.indexOf("async function signOut()"), app.indexOf("async function signOut()") + 2400);
+  assert.match(signOut, /clearAllViewCache\(\);\s*\/\/ K3[^\n]*\n\s*clearK3Memory\(\);/, "sign-out clears it");
   assert.match(app, /builderEventsResetForWorkspaceChange\(\);\s*\/\/ K3[^\n]*\n\s*clearK3Memory\(\);\s*if \(state\.builder\) state\.builder\.k3 = null;/, "a workspace change clears it and ends the band");
 });
 
@@ -144,7 +144,12 @@ test("3b. a create refused 409 (a plan made meanwhile) reads the plans again and
   assert.match(state.centralCalendar.k3.sheet.text, /1 athlete has no plan for this week\. 1 already has one: Ana Example\./);
 });
 
+// The event as GET /api/calendar/events/:id gives it to its manager (its revision).
+let eventRevision = 3;
+const eventRead = (call) => (call.url === "/api/calendar/events/e1" && (call.method || "GET") === "GET" ? { status: 200, body: { event: { id: "e1", revision: eventRevision, status: "planned" } } } : null);
+
 function k3Builder({ outKeys = [], expectsRpe = false } = {}) {
+  eventRevision = 3;
   state.activeTab = "builder";
   state.builder = emptyBuilderState({ draft: draftOf() });
   state.builder.k3 = {
@@ -158,6 +163,7 @@ function k3Builder({ outKeys = [], expectsRpe = false } = {}) {
 test("4. Save and link: the save, one read of the day, one attach with the event's revision and a fresh key; 'linked' only on its 200", async () => {
   const context = k3Builder();
   const calls = installFetchMock((call) => {
+    if (eventRead(call)) return eventRead(call);
     if (call.url.startsWith("/api/calendar?")) return { status: 200, body: calendarAnswer([EVENT, planned(["l1", "l2"])]) };
     if (call.url === "/api/calendar/events/e1/sessions") return { status: 200, body: { attached: 2, alreadyAttached: 0 } };
     return { status: 404, body: {} };
@@ -165,6 +171,8 @@ test("4. Save and link: the save, one read of the day, one attach with the event
   let submitted = 0;
   await k3.k3SaveAndLink({ submit: async () => { submitted += 1; return { plan: { id: "p1" } }; }, render: () => {} });
   assert.equal(submitted, 1);
+  const read = calls.find((c) => c.url.startsWith("/api/calendar?"));
+  assert.equal(new URL(read.url, "http://x").searchParams.get("kinds"), "planned", "read without events: nothing folds");
   const attach = calls.find((c) => c.url === "/api/calendar/events/e1/sessions");
   assert.deepEqual({ ...attach.body, requestKey: "k" }, { requestKey: "k", expectedRevision: 3, logicalSessionIds: ["l1", "l2"], alignSessions: false });
   assert.match(attach.body.requestKey, /^[0-9a-f-]{36}$/);
@@ -178,6 +186,7 @@ test("4b. RPE expected: the attach aligns (Q4); a session taken out of the event
   const context = k3Builder({ outKeys: [`${DAY}|AM|T|main session`], expectsRpe: true });
   state.builder.draft.blocks[0].sessions.push({ id: "s2", amPm: "AM", bta: "B", name: "Mobility", time: "", nodes: [] });
   const calls = installFetchMock((call) => {
+    if (eventRead(call)) return eventRead(call);
     if (call.url.startsWith("/api/calendar?")) return { status: 200, body: calendarAnswer([EVENT, planned(["l1", "l2"]), planned(["m1", "m2"], { name: "Mobility", bta: "B" })]) };
     if (call.url === "/api/calendar/events/e1/sessions") return { status: 200, body: { attached: 2 } };
     return { status: 404, body: {} };
@@ -193,6 +202,7 @@ test("5. a lost attach: not linked, kept in the calendar's memory; Check result 
   const context = k3Builder();
   let lose = true;
   const calls = installFetchMock((call) => {
+    if (eventRead(call)) return eventRead(call);
     if (call.url.startsWith("/api/calendar?")) return { status: 200, body: calendarAnswer([EVENT, planned(["l1", "l2"])]) };
     if (call.url === "/api/calendar/events/e1/sessions") return lose ? { throwNetworkError: true } : { status: 200, body: { attached: 0, alreadyAttached: 2 } };
     return { status: 404, body: {} };
@@ -216,6 +226,7 @@ test("6. more than 200 sessions: parts of 200 with their own keys; a refused par
   const ids = Array.from({ length: 250 }, (_, i) => `l${i}`);
   let refuse = true;
   const calls = installFetchMock((call) => {
+    if (eventRead(call)) return eventRead(call);
     if (call.url.startsWith("/api/calendar?")) return { status: 200, body: calendarAnswer([EVENT, planned(ids)]) };
     if (call.url === "/api/calendar/events/e1/sessions") {
       if (call.body.logicalSessionIds.length === 50 && refuse) return { status: 409, body: { error: "athlete_not_targeted" } };
@@ -335,4 +346,91 @@ test("10. openCentralCalendarAt sets the calendar's day and opens the event's pa
   openCentralCalendarAt({ date: DAY, key: EVENT.key });
   assert.equal(state.centralCalendar.panel.open, false);
   assert.equal(state.centralCalendar.anchor, DAY);
+});
+
+test("11. a save whose answer was lost: Try again reads the plan back - an applied edit draft is never sent again nor called 'not saved'", async () => {
+  const context = k3Builder();
+  state.builder.draft = draftOf({ isEditDraft: true });
+  const calls = installFetchMock((call) => {
+    if (eventRead(call)) return eventRead(call);
+    if (call.url === "/api/builder/plans/d1") return { status: 404, body: { error: "Plan not found." } };
+    if (call.url.startsWith("/api/calendar?")) return { status: 200, body: calendarAnswer([planned(["l1", "l2"])]) };
+    if (call.url === "/api/calendar/events/e1/sessions") return { status: 200, body: { attached: 2 } };
+    return { status: 404, body: {} };
+  });
+  let submits = 0;
+  const submit = async () => {
+    submits += 1;
+    if (submits === 1) throw new TypeError("Failed to fetch");
+    throw Object.assign(new Error("Plan not found."), { status: 404 });
+  };
+  await k3.k3SaveAndLink({ submit, render: () => {} });
+  assert.equal(context.outcome.state, "save_unconfirmed");
+  await k3.k3SaveAndLink({ submit, render: () => {} });
+  assert.equal(submits, 1, "the save is not sent again");
+  assert.ok(calls.some((c) => c.url === "/api/builder/plans/d1"), "the draft was read back");
+  assert.equal(context.outcome.state, "linked");
+  assert.doesNotMatch(context.outcome.text, /wasn't saved/);
+});
+
+test("11b. a lost save that is still a draft is sent again; a 4xx on that resend is still 'not confirmed', never 'not saved'", async () => {
+  const context = k3Builder();
+  installFetchMock((call) => (call.url === "/api/builder/plans/p1" ? { status: 200, body: { plan: { id: "p1", status: "draft" } } } : { status: 404, body: {} }));
+  let submits = 0;
+  const submit = async () => {
+    submits += 1;
+    if (submits === 1) throw new TypeError("Failed to fetch");
+    throw Object.assign(new Error("Conflict"), { status: 409 });
+  };
+  await k3.k3SaveAndLink({ submit, render: () => {} });
+  await k3.k3SaveAndLink({ submit, render: () => {} });
+  assert.equal(submits, 2);
+  assert.equal(context.outcome.state, "save_unconfirmed");
+});
+
+test("12. three parts of 200: each part is sent with the revision the previous attach answered (no event_changed)", async () => {
+  const context = k3Builder();
+  const ids = Array.from({ length: 450 }, (_, i) => `l${i}`);
+  const calls = installFetchMock((call) => {
+    if (eventRead(call)) return eventRead(call);
+    if (call.url.startsWith("/api/calendar?")) return { status: 200, body: calendarAnswer([planned(ids)]) };
+    if (call.url === "/api/calendar/events/e1/sessions") {
+      if (call.body.expectedRevision !== eventRevision) return { status: 409, body: { error: "event_changed" } };
+      eventRevision += 1;
+      return { status: 200, body: { event: { id: "e1", revision: eventRevision }, attached: call.body.logicalSessionIds.length } };
+    }
+    return { status: 404, body: {} };
+  });
+  await k3.k3SaveAndLink({ submit: async () => ({ plan: { id: "p1" } }), render: () => {} });
+  const sends = calls.filter((c) => c.url === "/api/calendar/events/e1/sessions");
+  assert.deepEqual(sends.map((c) => c.body.expectedRevision), [3, 4, 5]);
+  assert.equal(context.outcome.state, "linked");
+});
+
+test("13. an unnamed linked session is placed in its event (its name is empty, not missing)", async () => {
+  const { k3PlacedSessions, k3SessionKey } = await import("../central-calendar-k3.js");
+  const view = { id: "e1", sessionLinks: [{ id: "k1", planId: "p1", day: DAY, amPm: "AM", bta: "T", sessionName: null, state: "linked" }] };
+  const { placed } = k3PlacedSessions([{ event: { eventId: "e1" }, view }], ["p1"]);
+  assert.ok(placed.has(k3SessionKey(DAY, { amPm: "AM", bta: "T", name: "" })));
+});
+
+test("14. Save and continue: the plan saved but not opened again releases the row and says it was saved", async () => {
+  state.activeTab = "builder";
+  state.builder = emptyBuilderState({ draft: draftOf() });
+  installFetchMock((call) => (call.url.startsWith("/api/calendar?") ? { status: 200, body: calendarAnswer([EVENT]) } : { status: 500, body: {} }));
+  await row.loadBuilderEvents();
+  await row.chooseSessionEvent(DAY, "s1", "e1");
+  await row.answerSaveFirst(true, { submit: async () => ({ plan: { id: "p1" } }), reopen: async () => { throw new TypeError("Failed to fetch"); } });
+  assert.equal(state.builder.events.ask, null);
+  assert.equal(row.builderEventsBusy(), false);
+  assert.match(state.builder.events.message.text, /^Saved\. The plan couldn't be opened again here/);
+});
+
+test("15. another plan opened ends the band and drops its memory", () => {
+  k3Builder();
+  k3.k3ToggleSession(`${DAY}|AM|T|main session`);
+  assert.equal(store.size, 1);
+  k3.k3AdoptDraft({ plan: { id: "other", planType: "weekly", weekStart: WEEK }, batch: { plans: [] }, blocks: [] });
+  assert.equal(state.builder.k3, null);
+  assert.equal(store.size, 0);
 });

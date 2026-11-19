@@ -81,6 +81,13 @@ for (const width of [1280, 390, 375, 360]) {
         assert.match(await band.textContent(), /12 athletes/);
         assert.equal(await page.locator('[data-action="builder-submit-plan"]').count(), 0, "Save and link replaces the check button");
         assert.match(await page.locator(".k3-save-bar").textContent(), /Saving publishes the plan to 12 athletes\. No session is put in the event\./);
+        // The event's day is in view on entry, its column whole (2.3).
+        const seen = await page.evaluate(() => {
+          const d = document.querySelector(".builder-block.is-k3-day").getBoundingClientRect();
+          const g = document.querySelector(".builder-block-grid").getBoundingClientRect();
+          return d.left >= g.left - 1 && d.right <= g.right + 1;
+        });
+        assert.ok(seen, "the event's day column is whole in the strip");
         const day = page.locator(".builder-block.is-k3-day");
         assert.equal(await day.count(), 1, "the event's day is marked");
         assert.match(await day.textContent(), /In this event/);
@@ -133,6 +140,23 @@ for (const width of [1280, 390, 375, 360]) {
         await page.waitForFunction(() => /Open the training/.test(document.querySelector('[data-action="central-calendar-plan-training"]')?.textContent || ""), null, { timeout: 20_000 });
         assert.equal(await overflow(page, width), 0, "no horizontal page scroll on the calendar");
         await shot(page, `k3-04-back-${width}`);
+
+        // Open the training: the published plan (case a, one athlete at a time), already linked; Save and link again
+        // says linked (the slot is already in the event), never "not on the calendar".
+        await open.click();
+        const sheet = page.locator(".k3-sheet");
+        await sheet.waitFor({ timeout: 20_000 });
+        assert.match(await sheet.textContent(), /12 athletes already have this week's plan\. Changes go to the athlete on screen only\./);
+        await sheet.locator('[data-k3="open-plan"]').click();
+        await page.locator(".k3-band").waitFor({ timeout: 20_000 });
+        assert.equal(await page.locator('.builder-block.is-k3-day [data-action="builder-k3-toggle-session"].is-in').count(), 1, "the linked session is in the event");
+        await page.locator('[data-action="builder-k3-save-link"]').click();
+        await page.waitForSelector(".k3-outcome:not(.is-busy)", { timeout: 30_000 });
+        const again = page.locator(".k3-outcome");
+        assert.match(await again.getAttribute("class"), /is-ok/, await again.textContent());
+        assert.match(await again.textContent(), /Saved\. 1 session for \d+ athletes? is in Team training/);
+        const after = await call(world, "team_coach", "GET", `/api/calendar/events/${event.id}`);
+        assert.equal((after.body.event.sessionLinks || []).filter((l) => l.state !== "orphaned").length, 12, "no second link");
         assert.deepEqual(pageErrors, []);
       } finally {
         await context.close();

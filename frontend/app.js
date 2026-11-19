@@ -1796,8 +1796,6 @@ async function signOut() {
     // athlete Back-button guard must never be nominally active post-logout.
     window.removeEventListener("popstate", handleBrowserBack);
     clearAppHistoryEntries();
-    // K3: the event-planning memory of this tab (ids and slot keys) goes too.
-    clearK3Memory();
     // A deliberate navigation: the Imports reload/close guard does not ask.
     state.deliberateNavigation = true;
     state.currentUser = null;
@@ -1811,6 +1809,8 @@ async function signOut() {
     // resetMessagesState() - a typed-but-not-yet-cleared search must never
     // be attributable to whichever account logs in next.
     clearAllViewCache();
+    // K3: the event-planning memory of this tab (ids and slot keys) goes too.
+    clearK3Memory();
     // The unconfirmed GPEXE name loads (a request key per team, memory only)
     // belong to this sign-in alone.
     clearPendingIdentityLoads();
@@ -4293,8 +4293,15 @@ async function openBuilderForK3(draft, context) {
   renderTabs();
   renderLibraryNav();
   await loadBuilder();
-  // The event's day is brought into view (2.3).
-  document.querySelector(".builder-block.is-k3-day")?.scrollIntoView?.({ block: "start", inline: "start" });
+  // The event's day is brought into view (2.3), its column whole.
+  showK3Day();
+}
+
+function showK3Day() {
+  const day = document.querySelector(".builder-block.is-k3-day");
+  const grid = day?.closest?.(".builder-block-grid");
+  if (grid && day) grid.scrollLeft = Math.max(0, grid.scrollLeft + day.getBoundingClientRect().left - grid.getBoundingClientRect().left - 8);
+  day?.scrollIntoView?.({ block: "start" });
 }
 
 // Back to calendar (2.6): the app's Back when the step before was the
@@ -4403,7 +4410,12 @@ async function reopenSavedPlanInBuilder(planId) {
 // Create event → (6.3): the calendar's own form, prefilled, with its band.
 async function openCalendarCreateFromBuilder(day) {
   if (!day) return;
-  const opened = await openCentralCalendarCreateForBuilder({ day, targets: builderEventTargets() }, null);
+  // Prefilled from the day (mockup 03): the first own time of its sessions, and
+  // the name of its session when it has only one (D6: the band names it then).
+  const sessions = (state.builder.draft?.blocks || []).find((block) => block.date === day)?.sessions || [];
+  const startTime = sessions.map((session) => String(session.time || "").slice(0, 5)).filter(Boolean).sort()[0] || "";
+  const only = sessions.length === 1 ? String(sessions[0].name || "").trim() : "";
+  const opened = await openCentralCalendarCreateForBuilder({ day, targets: builderEventTargets(), startTime, title: only, sessionName: only }, null);
   if (!opened) {
     // A create left unconfirmed waits in the calendar: the calendar on that day shows its Check result.
     openCentralCalendarFromBuilder({ date: day });
