@@ -1,6 +1,6 @@
 # Calendar K3 / K2c-3 / K4: screen designs (mockups)
 
-Status: **Proposed design** (2026-11-19), for the stream manager's review and the owner's approval. Documents and
+Status: **Approved by the owner** (2026-11-19, „ovo izgleda ok”, relayed by the stream manager), with D1–D11 accepted as recommended except D9 (duration editable, the OptiMove manager's K4b Q1 ruling). It is the binding visual reference for the builders. Documents and
 mockups only: no product code, no route, no migration. Written against `main` `f406ee2d`, the K4 plan
 (`claude/central-calendar-k4-plan`, head `89f26566`, O1–O16) and the K3 / K2c-3 plan (`claude/central-calendar-k3-plan`,
 head `fb4f2c39`).
@@ -147,14 +147,13 @@ Design choices:
   path.
 - The form opens filled in: the 0–10 scale with 7 selected (48 px buttons, 6 per row on a phone), the note, the deadline
   and "Your coach sees that it was changed." (honest: the coach does).
-- **Duration** is shown read-only with "Set by your coach; it can't be changed here." This follows the OptiMove manager's
-  condition 4 (only what the athlete entered may change). If the contract finds the external form's duration is the
-  athlete's own entry, the field simply becomes editable.
+- **Duration** is editable in the change form (a 16 px number field, prefilled with the athlete's answer): the OptiMove
+  manager ruled on K4b Q1 that the athlete may change the duration too. It has the same deadline as the RPE.
 - **Closed:** a grey line with a lock: "Your RPE: 7 · Answers closed at 22:00." No *Change* button, no dead control.
 
-Open design question:
-- **D9. Duration: read-only, or hidden?** Recommend read-only and visible (the athlete sees what was recorded), pending
-  the contract's answer on whose entry it is.
+Decided:
+- **D9. Duration.** Superseded by the OptiMove manager's ruling on K4b Q1: the athlete may change the duration, so the
+  field is editable (the earlier read-only proposal is withdrawn).
 
 ## 6. The coach's event panel with answers (package 5)
 

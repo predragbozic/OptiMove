@@ -349,7 +349,7 @@ function k4bPage() {
   <p class="k4-note">Monday 12.10 · 10:00–11:30. Your answer: <b>7</b>, sent at 12:04.</p>
   <div class="k4-rpe-scale" role="radiogroup" aria-label="RPE 0 to 10">${scale}</div>
   <div class="k4-rpe-word"><span>0 · Rest</span><span>10 · Maximal</span></div>
-  <label class="k4-field"><span>Duration (minutes)</span><input value="90" readonly><small class="k4-muted">Set by your coach; it can't be changed here.</small></label>
+  <label class="k4-field k4-callout" data-callout="editable (K4b Q1)"><span>Duration (minutes)</span><input type="number" inputmode="numeric" min="1" max="600" value="90"><small class="k4-muted">How long you trained, in minutes.</small></label>
   <label class="k4-field"><span>Note <span class="k4-muted">(optional)</span></span><textarea rows="2">Legs heavy after the weekend.</textarea></label>
   <p class="k4-note">${icon("clock")} You can change it until 22:00. Your coach sees that it was changed.</p>
   <div class="k4-row"><button class="plain-button cc-primary k4-btn">Save change</button><button class="plain-button k4-btn">Cancel</button></div>
