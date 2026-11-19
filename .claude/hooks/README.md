@@ -182,6 +182,23 @@ across projects/instances:
   branch is additive, not destructive — same spirit as the "disposable test database"
   allowance elsewhere in this project's rules).
 
+### ALLOW — a verified line (Bash only)
+
+The one decision that opens a door: `permissionDecision: "allow"` for a Bash command line whose
+EVERY part the hook has verified itself. It is computed only after the whole line produced no
+deny and no ask; deny and ask rules in `settings.json` still apply on top (Claude Code evaluates
+them regardless of the hook). Verified parts: a plain assignment (`S=/tmp/x`, `export S=…`,
+`X=$(<verified command>)`, never a name like `PATH`, `NODE_OPTIONS`, `GIT_*`); `for NAME in …`,
+`while/until/if <verified>`, `do`, `then`, `else`, `done`, `fi`, `break`, `continue`, `true`,
+`false`, `:`; `( … )` and `{ …; }` groups; `sleep N`; `test`/`[ … ]`; `echo`; `printf` (not `-v`);
+`cd`; `pwd`; `timeout [-k N|-s SIG] N <verified>`; the prefixes `TZ`, `LANG`, `LC_*`, `NODE_ENV`, `CI`,
+`FORCE_COLOR`, `NO_COLOR` and a local `*DATABASE_URL` in front of a verified command; and the
+allow list's own commands with known options (`git status/diff/log/show/…`, `grep`, `sed -n`,
+`node --test backend|frontend/tests/…`, `node scripts/test-runner.mjs …`). Every substitution
+inside must be verified too, and every redirect must be harmless. A heredoc, a background `&`,
+or ANY part it does not know: no decision at all, as before. The PowerShell tool never gets one.
+Measured on the replay: lines without any question 377 → 449 of 1,252.
+
 ### ALLOW (no decision — everything else)
 
 `git status`/`diff`/`log`/`show`/`branch`, staging explicitly named files, commit/push on

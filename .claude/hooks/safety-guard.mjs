@@ -1970,6 +1970,98 @@ export function classifyShellCommand(cmd, cwd) {
 }
 
 // ---------------------------------------------------------------------------
+// The one decision that OPENS a door: "allow" for a Bash line whose every part this hook has
+// verified itself (owner's decision via the Rukovodilac, 2026-11-19: P1 plain shell, P2
+// wrappers around allowed commands, P6 safe environment prefixes). It is computed only after
+// the whole line produced no deny and no ask, and only when the classifier is certain about
+// EVERY part; anything it does not know gives no decision at all (Claude Code's own flow
+// decides, as before). Never "allow by similarity".
+// ---------------------------------------------------------------------------
+
+const SAFE_PREFIX_RE = /^(TZ|LANG|LC_[A-Z]+|NODE_ENV|CI|FORCE_COLOR|NO_COLOR|(?:[A-Za-z0-9_]*_)?DATABASE_URL)=/;
+const KEYWORD_ONLY_RE = /^(done|fi|do|then|else|break|continue|true|false|:|wait)$/;
+
+function substitutionsVerified(text, cwd, depth) {
+  return extractSubstitutions(text).every((inner) => isVerifiedSilentLine(inner, cwd, depth + 1));
+}
+
+function peelGroups(segment) {
+  let t = segment.trim();
+  for (let n = 0; n < 8; n++) {
+    const before = t;
+    t = t.replace(/^[({]\s*/, "").replace(/(^|[\s;])\}\s*$/, "$1").trim();
+    // a trailing ")" closes a subshell only when it is unbalanced; `X=$(cmd)` keeps its own
+    const opens = (t.match(/\(/g) ?? []).length;
+    const closes = (t.match(/\)/g) ?? []).length;
+    if (closes > opens) t = t.replace(/\s*\)\s*$/, "").trim();
+    t = t.replace(/^(do|then|else)\s+/, "").trim();
+    if (t === before) break;
+  }
+  return t;
+}
+
+function isVerifiedSilentSegment(segment, variables, cwd, depth) {
+  if (depth > 4) return false;
+  const t = peelGroups(segment);
+  if (t === "") return true;
+  if (KEYWORD_ONLY_RE.test(t)) return true;
+  if (!substitutionsVerified(t, cwd, depth)) return false;
+  // every write of this part must be harmless (a device, or a new file in the temp dir)
+  if (!outputRedirectTargets(t).every((target) => isHarmlessRedirectTarget(target, variables))) return false;
+  let m = /^for\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+(.*)$/.exec(t);
+  if (m) return true; // the list of words: its substitutions were verified above
+  m = /^(while|until|if|elif)\s+(.*)$/.exec(t);
+  if (m) return isVerifiedSilentSegment(m[2], variables, cwd, depth + 1);
+  // plain assignments (P1)
+  m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(t);
+  if (m && !/\s/.test(m[2].replace(/\$\([^)]*\)/g, "").replace(/"[^"]*"/g, "").replace(/'[^']*'/g, ""))) {
+    if (DANGEROUS_ENV_RE.test(m[1])) return false;
+    return true; // the value's substitutions were verified above
+  }
+  const words = tokenizeWords(t);
+  const first = shellWord(words[0] ?? "");
+  if (first === "sleep") return words.length === 2 && /^\d+(\.\d+)?[smh]?$/.test(shellWord(words[1]));
+  if (first === "test" || first === "[") return true;
+  if (first === "echo") return true;
+  if (first === "printf") return !words.slice(1).some((w) => /^-[a-zA-Z]*v/.test(shellWord(w)));
+  if (first === "cd") return words.length <= 2;
+  if (first === "pwd") return words.length === 1;
+  // P2: timeout around a verified command
+  if (first === "timeout") {
+    let k = 1;
+    while (k < words.length && shellWord(words[k]).startsWith("-")) k += /^-[sk]$/.test(shellWord(words[k])) ? 2 : 1;
+    if (!/^\d+(\.\d+)?[smhd]?$/.test(shellWord(words[k] ?? ""))) return false;
+    return isVerifiedSilentSegment(words.slice(k + 1).join(" "), variables, cwd, depth + 1);
+  }
+  // P6: safe environment prefixes in front of a verified command (a non-local database URL asks earlier)
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
+    let k = 0;
+    while (k < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k])) {
+      if (!SAFE_PREFIX_RE.test(words[k]) || /[$`]/.test(words[k])) return false;
+      k++;
+    }
+    return k < words.length && isVerifiedSilentSegment(words.slice(k).join(" "), variables, cwd, depth + 1);
+  }
+  // the allow list's own commands, judged by their option lists
+  const cw = commandWords(t);
+  if (cw[0] === "node" && cw[1] === "scripts/test-runner.mjs") return true; // on the allow list as it stands
+  if (cw[0] === "git" && cw[1] === "branch" && cw[2] === "--show-current" && cw.length === 3) return true;
+  return allowedCommandOptionsAreKnown(cw) === true && sedRawScriptsAreReadOnly(t);
+}
+
+// True only when every part of the line is one of the verified forms above.
+export function isVerifiedSilentLine(cmd, cwd, depth = 0) {
+  if (typeof cmd !== "string" || !cmd.trim() || depth > 4) return false;
+  const { text, shellBodies } = extractHeredocs(cmd);
+  if (shellBodies.length || text !== cmd.replace(/\r\n/g, "\n")) return false; // a heredoc: not verified
+  if (hasBackgroundJob(text)) return false;
+  const topLevel = splitCommandSegments(text);
+  if (!topLevel.length) return false;
+  const known = redirectVariables(text, topLevel);
+  return topLevel.every((segment, i) => isVerifiedSilentSegment(segment, known[i] ?? new Map(), cwd, depth));
+}
+
+// ---------------------------------------------------------------------------
 // Supabase MCP tool dispatcher — matched by tool-name SUFFIX (the prefix is an
 // instance-specific server id we must not hardcode) rather than exact name.
 // ---------------------------------------------------------------------------
@@ -2035,7 +2127,12 @@ export function classifyToolCall(input) {
       return { decision: "ask", reason: "Could not find a recognizable 'command' field on this tool call; failing to a confirmation prompt rather than allowing it silently." };
     }
     if (!toolInput.command.trim()) return null; // genuinely empty command: nothing to run, nothing to ask about
-    return classifyShellCommand(toolInput.command, cwd);
+    const result = classifyShellCommand(toolInput.command, cwd);
+    if (result) return result; // deny and ask always come first
+    if (toolName === "Bash" && isVerifiedSilentLine(toolInput.command, cwd)) {
+      return { decision: "allow", reason: "Every part of this command line is a verified read-only or plain shell form (safety-guard)." };
+    }
+    return null;
   }
 
   if (toolName.startsWith("mcp__")) {
@@ -2089,7 +2186,7 @@ export function runCli(rawStdin) {
     }
     return;
   }
-  if (result && (result.decision === "deny" || result.decision === "ask")) {
+  if (result && (result.decision === "deny" || result.decision === "ask" || result.decision === "allow")) {
     emitDecision(result.decision, result.reason);
   }
   // Safe operations: no output at all — Claude Code's normal permission flow decides.

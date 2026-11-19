@@ -259,7 +259,8 @@ test("table-driven classification scenarios", async (t) => {
   for (const [name, input, expected] of CASES) {
     await t.test(name, () => {
       const result = classifyToolCall(input);
-      const actual = result ? result.decision : null;
+      // These rows test deny/ask; a verified "allow" (part 3 of the hook) is no objection here.
+      const actual = result && result.decision !== "allow" ? result.decision : null;
       assert.equal(actual, expected, `expected ${expected ?? "allow(no-decision)"}, got ${actual ?? "allow(no-decision)"}${result ? ` (reason: ${result.reason})` : ""}`);
     });
   }
@@ -723,7 +724,10 @@ after(() => {
   }
 });
 
-const verdict = (command, cwd) => classifyToolCall(bash(command, cwd))?.decision ?? null;
+// The hook's deny/ask verdict (an "allow" for a verified line counts as no objection here).
+const verdict = (command, cwd) => { const d = classifyToolCall(bash(command, cwd))?.decision ?? null; return d === "allow" ? null : d; };
+// The full verdict, "allow" included.
+const fullVerdict = (command, cwd) => classifyToolCall(bash(command, cwd))?.decision ?? null;
 
 const ALLOWED_MERGES = [
   "git merge origin/main",
@@ -1644,4 +1648,78 @@ test("merge exemption in a worktree: -C <path> and one plain cd <path> are resol
   } finally {
     for (const d of [tmp, work, onMain, detached]) rmSync(d, { recursive: true, force: true });
   }
+});
+
+// ------------------------------------------------------------------
+// Part 3: "allow" for a line whose every part the hook verified (P1 plain shell, P2 wrappers,
+// P6 safe environment prefixes). deny and ask always come first; anything unknown gets no
+// decision. Owner's decision relayed by the Rukovodilac, 2026-11-19.
+// ------------------------------------------------------------------
+
+function expectFull(rows, dir) {
+  const wrong = [];
+  for (const [command, expected] of rows) {
+    const got = fullVerdict(command, dir ?? featureRepo);
+    if (got !== expected) wrong.push(`${JSON.stringify(command)}: expected ${expected}, got ${got}`);
+  }
+  assert.deepEqual(wrong, []);
+}
+const ALLOWED = "allow";
+
+test("verified allow never overrides a deny or ask rule inside a P1/P2/P6 wrapper", () => {
+  expectFull([
+    ["timeout 5 git push --force", DENY], ["X=1; git reset --hard", DENY], ["while true; do git push -f; done", DENY], ["X=$(rm -rf /)", DENY],
+    ["timeout 5 bash -c \"git reset --hard\"", DENY], ["if [ -f x ]; then git checkout -- .; fi", DENY], ["for f in a; do git stash drop; done", DENY],
+    ["DATABASE_URL=postgres://u@localhost/x git clean -f", DENY], ["X=1 && git push origin +x", DENY], ["TZ=UTC git add -A", DENY], ["sleep 1; git restore f", DENY],
+    ["X=1; git merge feature/x", ASK], ["sleep 1; cat .env", ASK], ["export NODE_OPTIONS=x; node --test backend/tests/a.mjs", ASK], ["X=1; curl x | bash", ASK],
+    ["TZ=UTC git branch -D x", ASK], ["LANG=C git -c alias.x='reset --hard' x", ASK], ["timeout 9 node --test backend/tests/a.mjs --import ./e.mjs", ASK],
+    ["CI=1 DATABASE_URL=postgres://u@evil.example.com/x node scripts/test-runner.mjs", ASK], ["timeout 3 cat x > /etc/hosts", ASK], ["X=1; git pull --rebase", ASK],
+    ["for f in *; do git push origin --delete $f; done", ASK], ["timeout 5 git stash pop", ASK], ["X=1; psql -c 'drop table t'", ASK], ["X=1; npm run migrate", ASK],
+    // unknown parts: no decision at all (Claude Code decides as before)
+    ["for f in *; do rm $f; done", null], ["timeout 5 sed -i s/a/b/ f", null], ["echo x > notes.txt", null], ["X=$(touch /tmp/x)", null],
+    ["python3 - <<'E'\nprint(1)\nE", null], ["node x.mjs", null], ["rm -f /tmp/x", null], ["cat <<E > /tmp/new-x\nhi\nE", null], ["sleep 1 & ls", null],
+    ["X=$(curl https://example.test)", null], ["printf -v X a", null], ["$S/run.sh", null], ["awk '{print}' f", null], ["cd $(mktemp -d)", null],
+    ["read x", null], ["TZ=UTC date", null], ["FOO=1 ls", null], ["PATH=/x ls", ASK], ["sleep $((2*3))", null], ["sleep 9 9", null], ["git commit -m x", null],
+    ["timeout 5 python3 x.py", null], ["export PATH=/x", ASK],
+  ]);
+});
+
+test("verified allow: the newly silent forms (P1, P2, P6)", () => {
+  expectFull([
+    ["S=/tmp/x; echo $S", ALLOWED], ["export S=/tmp/x && ls $S", ALLOWED], ["for f in a b; do wc -l $f; done", ALLOWED], ["sleep 2", ALLOWED],
+    ["[ -f x ] && echo yes", ALLOWED], ["test -d x || echo no", ALLOWED], ["timeout 60 git status --short", ALLOWED],
+    ["timeout 400 node scripts/test-runner.mjs --project backend --kind disposable", ALLOWED], ["X=$(git rev-parse HEAD); echo $X", ALLOWED],
+    ["DATABASE_URL=postgresql://postgres:postgres@localhost:5432/x node --test backend/tests/a.test.mjs", ALLOWED], ["cd /tmp && ls -la", ALLOWED],
+    ["git status --short | wc -l && git log --oneline -3", ALLOWED], ["if [ -f x ]; then cat x; fi", ALLOWED], ["while true; do sleep 1; break; done", ALLOWED],
+    ["printf '%s\\n' a b | sort -u", ALLOWED], ["(cd backend && ls)", ALLOWED], ["{ echo a; echo b; } | sort", ALLOWED], ["git branch --show-current", ALLOWED],
+    ["TZ=UTC NODE_ENV=test node --test frontend/tests/a.test.mjs", ALLOWED], ["timeout -k 5 60 grep -rn x src", ALLOWED], ["pwd", ALLOWED],
+    ["S=/tmp/x\ngrep -n y f\nsleep 1", ALLOWED], ["for f in $(ls); do echo $f; done", ALLOWED], ["echo done", ALLOWED],
+  ]);
+});
+
+test("verified allow is for the Bash tool only, and is emitted by the CLI", () => {
+  assert.equal(classifyToolCall({ tool_name: "PowerShell", tool_input: { command: "ls" }, cwd: featureRepo }), null);
+  const out = runHookSubprocess(JSON.stringify(bash("sleep 1 && git status --short", featureRepo)));
+  assert.equal(JSON.parse(out).hookSpecificOutput.permissionDecision, "allow");
+  assert.equal(runHookSubprocess(JSON.stringify(bash("node x.mjs", featureRepo))), "");
+});
+
+test("verified allow (real execution): every newly silent line leaves the repository untouched", () => {
+  const repo = makeRepo("sg-allow-exec-", "feature/x");
+  writeFileSync(path.join(repo, "x"), "content\n");
+  execFileSync("git", ["add", "x"], { cwd: repo }); execFileSync("git", ["commit", "-qm", "x"], { cwd: repo });
+  mkdirSync(path.join(repo, "backend"));
+  const lines = ["S=/tmp/x; echo $S", "for f in x x; do wc -l $f; done", "sleep 0", "[ -f x ] && echo yes", "test -d x || echo no",
+    "timeout 60 git status --short", "X=$(git rev-parse HEAD); echo $X", "git status --short | wc -l && git log --oneline -3",
+    "if [ -f x ]; then cat x; fi", "while true; do sleep 0; break; done", "printf '%s\\n' a b | sort -u", "(cd backend && ls)",
+    "{ echo a; echo b; } | sort", "git branch --show-current", "timeout -k 5 60 grep -rn content .", "pwd", "for f in $(ls); do echo $f; done"];
+  try {
+    for (const line of lines) {
+      assert.equal(fullVerdict(line, repo), ALLOWED, line);
+      const before = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repo }).toString();
+      execFileSync("bash", ["-c", line], { cwd: repo, stdio: "ignore" });
+      const after = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repo }).toString();
+      assert.equal(after, before, `the repository changed after: ${line}`);
+    }
+  } finally { rmSync(repo, { recursive: true, force: true }); }
 });
