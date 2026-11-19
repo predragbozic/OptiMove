@@ -2,7 +2,7 @@
 
 Status: **Proposed design** (2026-11-19), for the stream manager's review and the owner's approval. Documents and
 mockups only: no product code, no route, no migration. Written against `main` `1a5cdb79` and the K5 plan
-(`claude/central-calendar-k5-plan`, PR #658: head `7e2d0220`, with the owner's H3 relayed from head `c1b8d210`).
+(`claude/central-calendar-k5-plan`, PR #658: head `7e2d0220`, with the owner's H3 relayed from head `c1b8d210` and H4 relayed later the same day).
 It follows the approved K4 mockups (`docs/design/calendar-k4/`, PR #651); `mockup.css` here starts with a copy of
 the K4 base, so this folder stands alone.
 
@@ -14,8 +14,9 @@ the K4 base, so this folder stands alone.
 | `04-k5-4-gps-to-review.html` | K5-4: the day mark "2 GPS sessions to review" and Imports opened on that day |
 | `05-k5-5-open-in-calendar.html` | K5-5: *Open in calendar* on Tests' week and Coach Home's day |
 | `06-h3-filter-only-this.html` | H3 (the owner): the filter's *GPS imports* chip and a one-tap "Show only" |
+| `07-h4-event-holds-icons.html` | H4 (the owner): an event card carries a small icon per kind it holds (RPE, GPS, test); the athlete's card has none |
 | `screenshots/NN-…-390.png`, `…-1280.png` | Full-page Playwright screenshots, deviceScaleFactor 2 |
-| `build.mjs`, `shoot.mjs` | `node build.mjs` writes the pages; `node shoot.mjs` shoots them and prints overflow and inputs under 16 px (all 0 on the pushed head) |
+| `build.mjs`, `shoot.mjs` | `node build.mjs` writes the pages; `node shoot.mjs` (no environment prefix) shoots them and prints overflow and inputs under 16 px (all 0 on the pushed head) |
 
 As in K4: the dark labels are steps, a red dashed outline marked **NEW** is what this design adds, and the rest is
 today's look (`cc-card`, `cc-panel`, `cc-badge`, `cc-chip`, `plain-button`, `cc-primary`). Every name, place and
@@ -130,6 +131,28 @@ Open questions:
   green line whenever it is not *All*, so nobody forgets that the week is filtered.
 - **E11. Does "GPS imports" include events that hold an import?** Recommend yes (as drawn): the owner looks for GPS
   sessions, and many are folded into a training.
+
+## 7. H4 — what an event holds (the owner)
+
+The owner: „Događaj na kalendaru glavnom mogao bi da sadrži na sebi već ikonice rpe, gps ili testa čisto kao oznaka da
+on sadrži to u sebi ako sadrzi."
+
+- An event card carries **one small icon (14 px) per kind it really holds**: RPE (`gauge`, amber), GPS (`gps`, blue),
+  test (`clipboard`, violet). These are the same icons and colours as the chips and the filter. They sit in the
+  card's top line, right after the type's icon and before the time.
+- They are **only a mark**: no number and no state. The status line and the panel stay as they are.
+- **At most three icons, in one row with the type's icon.** They never push the title out of view; the title wraps
+  under them, even in a long-title case such as "Speed, agility and change of direction".
+- **An event that holds none of these gets no icon.** The screen shows three cases: Team training with all three,
+  U19 vs Lakeside with only GPS, and the Bus to City stadium with none.
+- **The athlete's reduced event card gets no icons.** Her own question stays its own button (K4a).
+- The icon row carries `role="img"` with a label ("Holds RPE, GPS, a test"), so a screen reader says what the colours
+  and shapes mean.
+
+Open question:
+- **E12. H4 vs K5-2's "GPS · 18" pill on the card.** H4 asks for no number on the card. Recommend that H4 replaces
+  the pill: the card shows the GPS icon only, and "GPS data of 18 athletes is in this event." stays in the panel.
+  Screens 01–06 still show the pill; they will be aligned once you confirm.
 
 ---
 

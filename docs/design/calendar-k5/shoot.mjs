@@ -1,12 +1,18 @@
 // Screenshots of the mockups at 390 and 1280 px, deviceScaleFactor 2.
-// Run: node docs/design/calendar-k4/shoot.mjs   (needs Playwright + Chromium)
+// Run: node docs/design/calendar-k5/shoot.mjs   (needs Playwright + Chromium; no environment prefix)
 import { readdirSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 
-const require = createRequire(import.meta.url);
-const { chromium } = require("playwright");
+function loadPlaywright() {
+  try { return createRequire(import.meta.url)("playwright"); } catch {
+    const root = execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+    return createRequire(join(root, "noop.js"))("playwright");
+  }
+}
+const { chromium } = loadPlaywright();
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "screenshots");
 mkdirSync(out, { recursive: true });

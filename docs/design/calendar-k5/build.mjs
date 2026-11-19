@@ -260,6 +260,31 @@ function filterPage() {
   ].join("\n"));
 }
 
+// ============================================ 07 H4 what an event holds =====
+function holdsPage() {
+  const holds = (kinds) => kinds.length ? `<span class="k5-holds" role="img" aria-label="Holds ${kinds.map((k) => ({ rpe: "RPE", gps: "GPS", test: "a test" })[k]).join(", ")}">${kinds.map((k) => `<svg viewBox="0 0 24 24" aria-hidden="true" style="color:${({ rpe: C.rpe, gps: C.gps, test: C.test })[k]}">${P[({ rpe: "gauge", gps: "gps", test: "tests" })[k]]}</svg>`).join("")}</span>` : "";
+  const hcard = ({ when, kind, title, place, color = C.training, ic = "run", kinds = [], count = "18", callout = "" }) => `<button type="button" class="cc-card cc-card-event${callout ? " k4-callout" : ""}"${callout ? ` data-callout="${callout}"` : ""} style="--cc-team-color:${color}">
+  <span class="cc-card-stripe" aria-hidden="true"></span>
+  <span class="cc-card-body">
+    <span class="cc-card-top"><span class="k4-tint" style="--k4-c:${color}">${icon(ic)}</span>${holds(kinds)}<span class="cc-card-when">${when}</span><span class="cc-card-kind">${kind}</span></span>
+    <span class="cc-card-title">${title}</span>
+    <span class="cc-card-place">${place}</span>
+    <span class="cc-card-meta"><span class="cc-team-pill"><span class="cc-team-dot" style="background:${color}"></span><span class="cc-team-pill-name">U19</span></span><span class="cc-card-count">${count}</span></span>
+  </span></button>`;
+  const three = hcard({ when: "10:00", kind: "Training", title: "Team training", place: "North field", kinds: ["rpe", "gps", "test"], callout: "all three" });
+  const gpsOnly = hcard({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", kinds: ["gps"], count: "20", callout: "only GPS" });
+  const none = hcard({ when: "12:30", kind: "Travel", title: "Bus to City stadium", place: "Club car park", color: "#4a5fc1", ic: "calendar", kinds: [], count: "20", callout: "none" });
+  const long = hcard({ when: "17:30", kind: "Training", title: "Speed, agility and change of direction", place: "Indoor hall", kinds: ["rpe", "gps", "test"], callout: "long title" });
+  const data = { 12: { cards: [three], marks: [] }, 13: { cards: [long], marks: [] }, 17: { cards: [none, gpsOnly], marks: [] } };
+  const athlete = `<div class="k4-main athlete-home-events" style="max-width:520px">${`<article class="k4-acard" style="--k4-c:${C.training}"><span class="k4-acard-bar"></span><div class="k4-acard-body"><p class="k4-acard-top"><span class="k4-tint">${icon("run")}</span><span class="k4-when">10:00–11:30</span><span>Training</span></p><p class="k4-acard-title">Team training</p><p class="k4-acard-place">${icon("pin")} North field <a href="#">Open in maps</a></p><div class="k4-acard-actions"><button class="plain-button k4-btn">Open training</button></div></div></article>`}<p class="k4-note" style="margin-top:8px">The athlete's reduced card: no RPE / GPS / test icons (H4). Her own question stays as its own button (K4a).</p></div>`;
+  return page("H4 · What an event holds", [
+    step("1 · The week", "an event card carries one small icon per kind it really holds (RPE, GPS, test), right after the type's icon; no number, no state"),
+    shell("Central calendar", "Calendar", `${nav()}<div class="k4-cal" style="grid-template-columns:1fr">${weekColumns(data)}${weekList(data)}</div>`),
+    step("2 · The athlete's card", "no icons"),
+    athlete,
+  ].join("\n"));
+}
+
 const pages = {
   "01-k5-1-go-there.html": goPage(),
   "02-k5-2-gps-and-marks.html": marksPage(),
@@ -267,6 +292,7 @@ const pages = {
   "04-k5-4-gps-to-review.html": reviewPage(),
   "05-k5-5-open-in-calendar.html": backPage(),
   "06-h3-filter-only-this.html": filterPage(),
+  "07-h4-event-holds-icons.html": holdsPage(),
 };
 for (const [name, html] of Object.entries(pages)) writeFileSync(join(here, name), html.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n"));
 console.log(Object.keys(pages).join("\n"));
