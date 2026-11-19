@@ -552,6 +552,18 @@ test("6. every refusal code reads as one sentence with no code or id; nothing ch
     assert.doesNotMatch(links.centralCalendarLinkRefusalText({ status: 409, code }), CODES);
   }
   assert.equal(links.centralCalendarLinkRefusalText({ status: 401, code: "x" }), "Please sign in again. Nothing was saved.");
+  // The event's RPE channel (FE-FOLLOWUPS 1): one plain sentence with its next step, never the generic one, and a
+  // Check result answered with one of them settles the write (the replay comes first on the server).
+  assert.equal(links.centralCalendarLinkRefusalText({ status: 409, code: "rpe_already_linked" }), "This event already collects RPE through another schedule; remove it first. Nothing was saved.");
+  for (const code of ["rpe_already_linked", "rpe_already_answered", "rpe_from_question"]) {
+    const text = links.centralCalendarLinkRefusalText({ status: 409, code });
+    assert.notEqual(text, "Nothing was saved. Try again.", code);
+    assert.match(text, /Nothing was saved\.$/, code);
+    assert.doesNotMatch(text, CODES, code);
+    assert.doesNotMatch(text, /rpe_/, code);
+    assert.equal(links.centralCalendarLinkCheckSettles({ status: 409, code }), true, `${code}: settles a check`);
+  }
+  assert.equal(links.centralCalendarLinkCheckSettles({ status: 409, code: "try_again" }), false);
 });
 
 // --- 7. A lost answer -----------------------------------------------------------------------------
