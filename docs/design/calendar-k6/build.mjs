@@ -107,13 +107,13 @@ function switcher({ groups = "u19", teamId = "u19", chosen = null, mixed = false
 
 // ---------------------------------------------------------------- the week ----
 const DAYS = [["Mon", 12], ["Tue", 13], ["Wed", 14], ["Thu", 15], ["Fri", 16], ["Sat", 17], ["Sun", 18]];
-function card({ when, kind, title, place = "", color = C.training, ic = "run", extra = "", count = "", teamName = "U19" }) {
+const holds = (kinds) => kinds.length ? `<span class="k5-holds" role="img" aria-label="Holds ${kinds.map((k) => ({ rpe: "RPE", gps: "GPS", test: "a test" })[k]).join(", ")}">${kinds.map((k) => `<svg viewBox="0 0 24 24" aria-hidden="true" style="color:${({ rpe: C.rpe, gps: C.gps, test: C.test })[k]}">${P[({ rpe: "gauge", gps: "gps", test: "tests" })[k]]}</svg>`).join("")}</span>` : "";
+function card({ when, kind, title, place = "", color = C.training, ic = "run", extra = "", count = "", teamName = "U19", holds: kinds = [] }) {
   return `<button type="button" class="cc-card cc-card-event" style="--cc-team-color:${color}"><span class="cc-card-stripe" aria-hidden="true"></span><span class="cc-card-body">
-    <span class="cc-card-top"><span class="k4-tint" style="--k4-c:${color}">${icon(ic)}</span><span class="cc-card-when">${when}</span><span class="cc-card-kind">${kind}</span></span>
+    <span class="cc-card-top"><span class="k4-tint" style="--k4-c:${color}">${icon(ic)}</span>${holds(kinds)}<span class="cc-card-when">${when}</span><span class="cc-card-kind">${kind}</span></span>
     <span class="cc-card-title">${title}</span>${place ? `<span class="cc-card-place">${place}</span>` : ""}
     <span class="cc-card-meta"><span class="cc-team-pill"><span class="cc-team-dot" style="background:${color}"></span><span class="cc-team-pill-name">${teamName}</span></span>${extra}${count ? `<span class="cc-card-count">${count}</span>` : ""}</span></span></button>`;
 }
-const gpsMark = (n) => `<span class="k5-gps"><svg viewBox="0 0 24 24" aria-hidden="true">${P.gps}</svg> GPS · ${n}</span>`;
 const chip = (ic, text, color) => `<button type="button" class="k5-mark" style="--k5-c:${color}"><svg viewBox="0 0 24 24" aria-hidden="true">${P[ic]}</svg>${text}</button>`;
 function week(data) {
   const cols = `<div class="cc-week">${DAYS.map(([d, n]) => { const it = data[n] || [];
@@ -122,27 +122,27 @@ function week(data) {
   return `<div class="k4-cal" style="grid-template-columns:1fr">${cols}${list}</div>`;
 }
 const teamWeek = {
-  12: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", extra: gpsMark(18), count: "18" }), `<div class="k5-marks">${chip("gauge", "RPE · Gym", C.rpe)}</div>`],
+  12: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", holds: ["gps"], count: "18" }), `<div class="k5-marks">${chip("gauge", "RPE · Gym", C.rpe)}</div>`],
   13: [card({ when: "17:30", kind: "Training", title: "Speed & agility", place: "Indoor hall", count: "18" }), `<div class="k5-marks">${chip("tests", "CMJ test", C.test)}</div>`],
   15: [card({ when: "10:00", kind: "Training", title: "Tactical session", place: "North field", count: "18" }), `<div class="k5-marks">${chip("gps", "GPS 10:05", C.gps)}</div>`],
-  17: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", count: "20", extra: gpsMark(16) })],
+  17: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", count: "20", holds: ["gps"] })],
 };
 const anaWeek = {
-  12: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", extra: gpsMark(1) }), `<div class="k5-marks">${chip("gauge", "RPE · 7", C.rpe)}</div>`],
-  13: [card({ when: "17:30", kind: "Training", title: "Speed & agility", place: "Indoor hall" }), `<div class="k5-marks">${chip("tests", "CMJ · 41 cm", C.test)}</div>`],
+  12: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", holds: ["rpe", "gps"] })],
+  13: [card({ when: "17:30", kind: "Training", title: "Speed & agility", place: "Indoor hall", holds: ["test"] })],
   15: [card({ when: "10:00", kind: "Training", title: "Tactical session", place: "North field" })],
   16: [`<div class="k5-marks">${chip("builder", "Gym · upper body", "#3b7f9c")}</div>`],
-  17: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", extra: gpsMark(1) })],
+  17: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", holds: ["gps"] })],
 };
 const anaGps = {
-  12: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", extra: gpsMark(1) })],
-  17: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", extra: gpsMark(1) })],
+  12: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", holds: ["gps"] })],
+  17: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", holds: ["gps"] })],
 };
 const markoWeek = {
-  12: [card({ when: "09:00", kind: "Training", title: "First team training", place: "Main pitch", color: "#b5542b", teamName: "First team", extra: gpsMark(1) })],
+  12: [card({ when: "09:00", kind: "Training", title: "First team training", place: "Main pitch", color: "#b5542b", teamName: "First team", holds: ["gps"] })],
   14: [card({ when: "09:00", kind: "Training", title: "Recovery & video", place: "Club house", color: "#b5542b", teamName: "First team" })],
-  16: [card({ when: "11:00", kind: "Training", title: "Set pieces", place: "Main pitch", color: "#b5542b", teamName: "First team" }), `<div class="k5-marks">${chip("gauge", "RPE · 6", C.rpe)}</div>`],
-  18: [card({ when: "16:00", kind: "Match", title: "First team vs Harbor FC", place: "City stadium", color: C.match, ic: "trophy", teamName: "First team", extra: gpsMark(1) })],
+  16: [card({ when: "11:00", kind: "Training", title: "Set pieces", place: "Main pitch", color: "#b5542b", teamName: "First team", holds: ["rpe"] })],
+  18: [card({ when: "16:00", kind: "Match", title: "First team vs Harbor FC", place: "City stadium", color: C.match, ic: "trophy", teamName: "First team", holds: ["gps"] })],
 };
 const chosenLine = (name, team, extra = "") => `<p class="k6-chosen" role="status">Showing <b>${name}</b> · ${team}${extra} <button class="k4-link">Show everyone</button></p>`;
 const quick = (on) => `<div class="k5-quick" role="radiogroup" aria-label="Show only">${[["all", "All", null], ["event", "Events", "calendar"], ["gps", "GPS imports", "gps"], ["rpe", "RPE requests", "gauge"], ["test", "Scheduled tests", "tests"]].map(([k, l, ic]) => `<button type="button" role="radio" aria-checked="${k === on}" class="k5-q${k === on ? " is-on" : ""}${k === "gps" ? " k5-q-gps" : ""}">${ic ? `<svg viewBox="0 0 24 24" aria-hidden="true">${P[ic]}</svg>` : ""}${l}</button>`).join("")}</div>`;

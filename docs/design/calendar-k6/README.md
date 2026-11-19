@@ -72,7 +72,17 @@ of the chosen team starting with *All*.
 - It opens the Weekly plan on that session. The switcher holds **only the event's athletes** ("3 / 5 in this
   event"), and *Back to calendar* sits above it. Back returns to the event's panel (K4-0).
 
+## Event cards follow H4
+
+As in K5 (E12, decided 2026-11-19): an event card shows what it holds as icons only (RPE, GPS, test), with no number.
+The count stays in the panel. A day chip of something in no event ("RPE · Gym", "CMJ test", "GPS 10:05") stays as it
+is (H5). In one athlete's week, the event's own RPE or test is therefore an icon on the card, not a chip.
+`base-k5.css` is re-copied from the K5 branch to carry the `k5-holds` style.
+
 ## Open questions (each with a recommendation)
+
+F1–F6 were accepted as recommended by the stream manager on 2026-11-19, pending the owner.
+
 
 - **F1. Where does the switcher live on the calendar: always open, or folded behind a button?** Recommend always open
   on a computer, and folded to one line on a phone ("Everyone · U19 ▾") that opens the box. On a phone the box takes

@@ -305,3 +305,7 @@ body.k4-doc {
 .k5-mark svg, .k5-gps svg, .k5-daymark svg, .k5-q svg, .k5-filter-status svg, .k5-month svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .k5-filter-status .k4-link { min-height: 32px; }
 .k5-gps { white-space: nowrap; }
+
+/* H4: what an event holds — one small icon per kind (RPE, GPS, test), a mark only. */
+.k5-holds { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.k5-holds svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
