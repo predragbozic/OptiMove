@@ -8,7 +8,7 @@
 // the server answers everyone else with the same 404. The revision lifecycle
 // (L1-L5: a new revision, activate, retire, replace) is not part of this
 // screen.
-import { zoneRange } from "./zone-ranges.js";
+import { eventSettingText, zoneRange } from "./zone-ranges.js";
 import { api } from "./api.js";
 import { state } from "./state.js";
 import { LIMITS, UNIT_FORBIDDEN, WRITE_BOUND_MS, errorInfo, newRequestKey, outcomeUnknown } from "./metric-variables-data.js";
@@ -120,7 +120,10 @@ export function readableName(item, thresholds = null) {
     return `${ZONE_FAMILY[z.family] || capitalize(z.family)} zone ${z.number} · ${range ? `${range} · ` : ""}${MEASURE[z.measure] || z.measure}`;
   }
   const name = String(item?.name || "").replace(/^athlete_?session_?/, "").replace(/_+/g, " ").trim();
-  return capitalize(name) || String(item?.name || "");
+  // v80 step A: an event value names the team's event setting beside it ("Acceleration events · above 2.5 m/s² lasting 0.3 s").
+  const setting = thresholds ? eventSettingText(item?.name, thresholds) : null;
+  const plain = capitalize(name) || String(item?.name || "");
+  return setting ? `${plain} · ${setting.replace(/^Events /, "")}` : plain;
 }
 export const QUANTITIES = Object.freeze([
   ["distance", "Distance", ["m"]], ["time", "Time", ["s"]], ["power", "Power", ["W/kg"]], ["energy", "Energy", ["J/kg"]],

@@ -884,3 +884,32 @@ test("Z3 (the Rukovodilac, 2026-11-18): a numbered zone column and the variable 
   await open();
   assert.equal(content.querySelector(".mb-zone-range")?.textContent, "Zone 60–75 W/kg");
 });
+
+test("Z4 (v80 step A): an event column shows the team's event setting; a variable with a condition says what it counts and is never a drop target", async () => {
+  asUser("platform", null);
+  const b = platformBoard();
+  b.columns.push({ ...b.columns[0], fieldId: "f-acc", key: "details.players.acceleration_events", label: "Acceleration events per athlete", placeable: true, reason: null });
+  b.zoneThresholds = { power: null, speed: null, acceleration: { value: 2.5, duration: 0.3 }, deceleration: { value: -2.5, duration: 0.3 } };
+  b.variables.push({ id: "v-acc", ownerScope: "system", key: "accelerations", label: "Accelerations", versionId: "vv-acc", unit: "count",
+    placeable: false, condition: { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" }, filledByFieldIds: [] });
+  platformWorld(b);
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  const col = [...content.querySelectorAll(".mb-col-item")].find((li) => li.textContent.includes("Acceleration events per athlete"));
+  assert.equal(col.querySelector(".mb-zone-range").textContent, "Events above 2.5 m/s² lasting 0.3 s");
+  assert.match(text(), /Zone ranges and event settings come from this session's team settings in GPEXE\./);
+  const slot = [...content.querySelectorAll(".mb-slot")].find((li) => li.textContent.includes("Accelerations"));
+  assert.match(slot.textContent.replace(/\s+/g, " "), /Counts only events at or above 2\.5 m\/s² lasting at least 0\.3 s\. No column fills it yet\./);
+  assert.equal(slot.classList.contains("is-off"), true);
+  assert.equal(slot.hasAttribute("data-mb-drop-variable"), false, "never a drop target");
+  assert.equal(slot.querySelector("[data-action='metric-board-place']"), null, "never a place button");
+  assert.doesNotMatch(slot.textContent, /drag a column here/);
+  // A condition's words are text, never markup.
+  b.variables.push({ id: "v-odd", ownerScope: "system", key: "odd", label: "Odd unit", versionId: "vv-odd", unit: "count", placeable: false,
+    condition: { kind: "zone", operator: ">=", value: "1", unit: "<img src=x onerror=alert(1)>" }, filledByFieldIds: [] });
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  const odd = [...content.querySelectorAll(".mb-slot")].find((li) => li.textContent.includes("Odd unit"));
+  assert.equal(odd.querySelector("img"), null);
+  assert.match(odd.textContent, /<img src=x onerror=alert\(1\)>/);
+});

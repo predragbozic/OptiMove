@@ -1141,8 +1141,32 @@ test("2z (the Rukovodilac, 2026-11-18): the board carries the session's team zon
   const stored = (await one(`select raw_bundle from training_load.gpexe_import_candidates where id = $1`, [W.cA.id])).raw_bundle;
   const { board: forPlatform } = ok(await boardOf(W.paA, W.tA));
   assert.equal(forPlatform.session.candidateId, W.cA.id);
-  assert.deepEqual(forPlatform.zoneThresholds, { power: stored.teamThresholds.power_thresholds, speed: stored.teamThresholds.speed_thresholds });
+  const t = stored.teamThresholds;
+  assert.deepEqual(forPlatform.zoneThresholds, {
+    power: t.power_thresholds, speed: t.speed_thresholds,
+    // v80 step A: the team's event settings of the same set.
+    acceleration: { value: t.acceleration_events_threshold, duration: t.acceleration_events_duration },
+    deceleration: { value: t.deceleration_events_threshold, duration: t.deceleration_events_duration },
+  });
   const { board: forClub } = ok(await boardOf(W.caA, W.tA));
   // The Rukovodilac's decision of 2026-11-18: the club's own team's limits on its own board.
   assert.deepEqual(forClub.zoneThresholds, forPlatform.zoneThresholds, "a club's admin sees its own team's limits on its board");
+});
+
+test("2y (v80 step A): a variable with a condition is never offered as a free target - not placeable, with its condition to say - and a drop on it is still refused; a variable without one is unchanged", async () => {
+  const event = await variable(W.caA, { unit: "count", label: `Accelerations ${uid()}`,
+    condition: { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" } });
+  const zone = await variable(W.caA, { unit: "m", label: `Zone distance ${uid()}`,
+    condition: { kind: "zone", operator: "between", lower: "25", upper: "60", unit: "W/kg" } });
+  const plain = await variable(W.caA, { unit: "min", label: `Plain ${uid()}` });
+  const code = async (f, v) => ok(await placement(W.caA, W.tA, W.cA.id, f, v, 0)).placement;
+  const { board } = ok(await boardOf(W.caA, W.tA));
+  const byId = (v) => board.variables.find((x) => x.id === String(v.id));
+  assert.deepEqual([byId(event).placeable, byId(event).condition],
+    [false, { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" }]);
+  assert.deepEqual([byId(zone).placeable, byId(zone).condition], [false, { kind: "zone", operator: "between", lower: "25", upper: "60", unit: "W/kg" }]);
+  assert.deepEqual([byId(plain).placeable, byId(plain).condition], [true, null]);
+  // The save's refusal is unchanged (the board never offered the drop; a hand-made request still meets it).
+  assert.equal((await code(W.fTime, event)).code, "condition_mismatch");
+  assert.equal(JSON.stringify(board).includes("condition_raw"), false, "the stored condition never leaves the server as it is stored");
 });
