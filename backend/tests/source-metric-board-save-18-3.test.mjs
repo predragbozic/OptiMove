@@ -1528,3 +1528,15 @@ test("V80-6. exact decimals: a variable whose zone limit differs from GPEXE's on
   assert.deepEqual([p.placeable, p.code], [false, "team_setting_mismatch"], JSON.stringify(p));
   assert.equal(ok(await boardOf(caC, t, { candidateId: cand.id })).board.variables.find((x) => x.id === precise.id).placeable, false);
 });
+
+test("V80-7. only a column the board can place makes a variable with a condition placeable: zone 2's column whose unit is not proven matches the setting but is not offered, and its variable stays not placeable", async () => {
+  const fieldId = (await one(`insert into training_load.source_metric_definitions (source_system, api_family, source_metric_key, source_label, created_by_user_id) values ('gpexe','rest_v1',$1,$2,$3) returning id`,
+    ["details.players.athletesessionpowerzone_distance_2", "GPEXE zone two", W.pa.id])).id;
+  await writeRevision(k, { fieldId, by: W.pa.id, valueShape: "unit_value_object", parameterKind: "none", evidenceRef: COMPAT, state: "active" });
+  const { t, cand } = await plantedTeam();
+  const zone2 = await variable(W.caA, { unit: "m", label: `Zone two ${uid()}`, condition: { ...ZONE_25_60, lower: "20", upper: "25" } });
+  const board = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  assert.notEqual(board.columns.find((c) => c.fieldId === fieldId)?.reason ?? null, null, "the column itself is not placeable");
+  const row = board.variables.find((x) => x.id === zone2.id);
+  assert.deepEqual([row.placeable, row.matchingFieldIds], [false, []]);
+});
