@@ -7,6 +7,7 @@ import { formatSrpe } from "./training-load-view.js";
 import { renderActivityRosterHtml, rosterTabLabel } from "./activity-roster-view.js";
 import { pickable, pickerName } from "./metric-picker-visibility.js";
 import { renderSessionImportUndoHtml } from "./training-load-import-undo.js";
+import { CALCULATED_TEXT, isCalculatedFact } from "./calculated-text.js";
 
 // Training Load Frontend 3A — Activities → activity detail → results table. Deliberately
 // its own module, imported by training-load-view.js's own coach root
@@ -482,7 +483,9 @@ function pickedMetricColumns(nav, rows, definitions) {
   return all.filter((c) => selected.has(c.id));
 }
 
-function formatMetricCell(values) {
+function formatMetricCell(values, { calculated = false } = {}) {
+  // J21: an empty cell of a calculated variable says why (the Rukovodilac's condition: never an unexplained blank).
+  if (calculated && (!values || !values.length)) return `<span class="tl-cell-empty" aria-label="${escapeAttr(CALCULATED_TEXT.emptyCell)}" title="${escapeAttr(CALCULATED_TEXT.emptyCell)}">&ndash;</span>`;
   if (!values || !values.length) return `<span class="tl-cell-empty" aria-label="No data">&ndash;</span>`;
   const shown = values[0];
   const value = shown.valueNumeric ?? (shown.valueBoolean != null ? (shown.valueBoolean ? "Yes" : "No") : shown.valueText);
@@ -549,6 +552,9 @@ function renderResultsTableHtml(nav, detail, athleteNamesById) {
   }
   const columns = pickedMetricColumns(nav, rowsMap, resultDefinitionList(nav.metricPicker.definitions, detail));
   const rows = sortRows([...rowsMap.values()], nav.resultsSort, athleteNamesById);
+  // J21: the columns of OptiMove's calculated variables (only a coach's read carries them).
+  const calculatedIds = new Set((detail?.facts || []).filter(isCalculatedFact).map((f) => f.detail.metricDefinitionId));
+  const calculatedShown = columns.filter((c) => calculatedIds.has(c.id));
   const showRpe = !nav.selectedComponentId; // session-level RPE never falsely attributed to a component
   return `
     <div class="tl-results-table-wrap">
@@ -569,12 +575,13 @@ function renderResultsTableHtml(nav, detail, athleteNamesById) {
               ${showRpe ? `<td>${row.rpe != null ? row.rpe : `<span class="tl-cell-empty" aria-label="No data">&ndash;</span>`}</td>` : ""}
               ${showRpe ? `<td>${row.srpe != null ? escapeHtml(formatSrpe(row.srpe)) : `<span class="tl-cell-empty" aria-label="No data">&ndash;</span>`}</td>` : ""}
               ${showRpe ? `<td>${row.duration != null ? `${row.duration} min` : `<span class="tl-cell-empty" aria-label="No data">&ndash;</span>`}</td>` : ""}
-              ${columns.map((c) => `<td>${formatMetricCell(row.metrics.get(c.id))}</td>`).join("")}
+              ${columns.map((c) => `<td>${formatMetricCell(row.metrics.get(c.id), { calculated: calculatedIds.has(c.id) })}</td>`).join("")}
             </tr>
           `).join("")}
         </tbody>
       </table>
     </div>
+    ${calculatedShown.length ? `<p class="muted tl-calculated-note">${escapeHtml(calculatedShown.map((c) => c.shortLabel || c.label).join(", "))} ${calculatedShown.length === 1 ? "is" : "are"} calculated by OptiMove from other variables. ${escapeHtml(CALCULATED_TEXT.fromNow)} An empty cell means the session was imported before it was made and not corrected or imported again since, or one of the variables it adds up has no value or is not switched on for this team.</p>` : ""}
     ${renderPartValuesHintHtml(nav, detail)}
   `;
 }

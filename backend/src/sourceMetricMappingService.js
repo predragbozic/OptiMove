@@ -541,8 +541,33 @@ function revisionOut(r) {
   };
 }
 
+// The plain row of Source fields (the owner's screenshot, the Rukovodilac 2026-11-18): which teams a field is in use for -
+// an open activation of the field on an active team - within the caller's own audience: a club's administrator only its
+// own club's teams, a platform administrator every team. At most IN_USE_NAMES names per field, and the count.
+const IN_USE_NAMES = 3;
+async function inUseByField(client, ctx, fieldIds) {
+  if (!fieldIds.length) return new Map();
+  const clubId = ctx?.owner?.scope === "club" ? ctx.owner.clubId ?? null : null;
+  if (ctx?.owner?.scope !== "system" && !clubId) return new Map();
+  const rows = (await client.query(
+    `select a.source_metric_definition_id as field_id, t.name, count(*) over (partition by a.source_metric_definition_id) as n,
+            row_number() over (partition by a.source_metric_definition_id order by t.name, t.id) as k
+       from (select distinct source_metric_definition_id, team_id from training_load.source_metric_mapping_activations
+              where ended_at is null and source_metric_definition_id = any($1::uuid[])) a
+       join public.teams t on t.id = a.team_id and coalesce(t.is_active, true)
+       join public.clubs c on c.id = t.club_id and coalesce(c.is_active, true)
+      where ($2::uuid is null or t.club_id = $2::uuid)`,
+    [fieldIds, clubId],
+  )).rows;
+  const out = new Map();
+  for (const r of rows) {
+    if (!out.has(r.field_id)) out.set(r.field_id, { teams: [], count: Number(r.n) });
+    if (Number(r.k) <= IN_USE_NAMES) out.get(r.field_id).teams.push(r.name);
+  }
+  return out;
+}
+
 export async function listFields({ ctx, query }) {
-  void ctx;
   for (const key of Object.keys(query ?? {})) if (!["sourceSystem", "apiFamily"].includes(key)) throw refusal(400, "invalid_query", "The query carries a parameter this route does not take.");
   const sourceSystem = query?.sourceSystem ?? null;
   const apiFamily = query?.apiFamily ?? null;
@@ -567,6 +592,7 @@ export async function listFields({ ctx, query }) {
   )).rows;
   const byField = new Map(fields.map((f) => [f.id, []]));
   for (const r of revisions) byField.get(r.source_metric_definition_id).push(r);
+  const inUse = await inUseByField(client, ctx, fields.map((f) => f.id));
   return fields.map((f) => {
     const list = byField.get(f.id);
     if (list.length > LIST_CAPS.revisionsPerField) throw tooLarge(LIST_CAPS.revisionsPerField);
@@ -574,6 +600,7 @@ export async function listFields({ ctx, query }) {
       id: f.id, sourceSystem: f.source_system, apiFamily: f.api_family, key: f.source_metric_key, label: f.source_label, state: f.state,
       extractorAvailable: extractorFor({ sourceSystem: f.source_system, apiFamily: f.api_family, sourceMetricKey: f.source_metric_key }) !== null,
       revisions: list.map(revisionOut),
+      inUse: inUse.get(f.id) ?? { teams: [], count: 0 },
     };
   });
   });

@@ -413,30 +413,48 @@ test("5. an athlete's own reads carry no calculated value, name or unit - the ac
   assert.ok(coachResults.text.includes(H), "the coach's results hold HMLD");
 
   // Her own dashboard, under the widest role policy: the calculated series is empty; the input's is not. The coach's is not.
-  const board = async (who) => {
+  const board = async (who, defs) => {
     const made = await dapi("", { method: "POST", cookie: who.cookie, body: { name: `Board ${key().slice(0, 6)}` } });
     assert.equal(made.status, 201, made.text);
     const widget = await dapi(`/${made.body.dashboard.id}/widgets`, { method: "POST", cookie: who.cookie, body: {
       expectedDashboardRevision: made.body.dashboard.revision, widgetType: "table", title: "t", widgetOrder: 0, x: 0, y: 0, width: 6, height: 4, mobileOrder: 0 } });
     assert.equal(widget.status, 201, widget.text);
+    const addSeries = (def, revision, order) => dapi(`/${made.body.dashboard.id}/widgets/${widget.body.widgetId}/series`, { method: "POST", cookie: who.cookie, body: {
+      expectedWidgetRevision: revision, seriesOrder: order, metricDefinitionId: def, dataScopeLevel: "session", analyticalAggregation: "sum",
+      aggregationRolePolicy: "all_including_derived" } });
     let revision = 1;
-    for (const [i, def] of [[0, H], [1, first]]) {
-      const added = await dapi(`/${made.body.dashboard.id}/widgets/${widget.body.widgetId}/series`, { method: "POST", cookie: who.cookie, body: {
-        expectedWidgetRevision: revision, seriesOrder: i, metricDefinitionId: def, dataScopeLevel: "session", analyticalAggregation: "sum",
-        aggregationRolePolicy: "all_including_derived" } });
+    const refused = {};
+    for (const [i, def] of defs.entries()) {
+      const added = await addSeries(def, revision, i);
+      if (added.status === 404) { refused[def] = added.text; continue; }
       assert.equal(added.status, 201, added.text);
       revision += 1;
     }
     const read = await dapi(`/${made.body.dashboard.id}/query`, { method: "POST", cookie: who.cookie, body: { dateFrom: D1, dateTo: D1 } });
     assert.equal(read.status, 200, read.text);
-    const [hmldSeries, inputSeries] = read.body.widgets[0].series;
-    return { hmld: hmldSeries.data.current, input: inputSeries.data.current };
+    return { series: read.body.widgets[0].series.map((x) => x.data.current), text: read.text, refused, foreign: (await addSeries(crypto.randomUUID(), revision, 9)).text };
   };
-  const hers = await board(athlete);
-  assert.ok(hers.input.length > 0, "her input series has her value");
-  assert.deepEqual(hers.hmld, [], "her calculated series is empty");
-  const coachs = await board(team.coach);
-  assert.ok(coachs.hmld.length > 0, "the coach's calculated series is not");
+  // Her own dashboard cannot take the calculated variable: the same 404 as a variable that does not exist (PR 3); her input
+  // series reads her value, and her answer names nothing of it.
+  const hers = await board(athlete, [H, first]);
+  assert.deepEqual(Object.keys(hers.refused), [H], "the calculated series is refused");
+  assert.equal(hers.refused[H], hers.foreign, "exactly like a variable that does not exist");
+  assert.equal(hers.series.length, 1);
+  assert.ok(hers.series[0].length > 0, "her input series has her value");
+  assert.equal(hers.text.includes(H) || hers.text.includes(hmld.label), false);
+  const coachs = await board(team.coach, [H, first]);
+  assert.deepEqual(coachs.refused, {});
+  assert.ok(coachs.series[0].length > 0, "the coach's calculated series reads it");
+  // And the query itself, should an athlete dashboard ever hold such a series: the athlete workspace drops the values.
+  const { runDashboardBatchQuery } = await import("../src/trainingLoadDashboardQuery.js");
+  const [direct] = await runDashboardBatchQuery(
+    { dataWorkspaceType: "athlete", athleteWorkspaceAthleteId: athleteId, dateFrom: D1, dateTo: D1 },
+    [{ widgetId: "w", seriesId: "s", metricDefinitionId: H, dataScopeLevel: "session", aggregationRolePolicy: "all_including_derived",
+      coveragePolicy: "complete_and_partial", sourcePolicy: "all_with_conflicts", groupBy: "day", analyticalAggregation: "sum" }],
+    { queryRunner: (sql, params) => admin.query(sql, params) },
+  );
+  assert.equal(direct.status, "ok", JSON.stringify(direct));
+  assert.deepEqual(direct.data.current, [], "an athlete workspace's query holds no calculated value");
 });
 
 test("6. an input value in another unit is never added (the Independent's LOW-1): no calculated value is written, and the review names the input as missing", async () => {
@@ -470,4 +488,116 @@ test("6. an input value in another unit is never added (the Independent's LOW-1)
     await client.query("rollback").catch(() => {});
     await client.end();
   }
+});
+
+test("7. an athlete's catalog never lists a calculated variable (no label, no picker entry), and reading it answers like a missing one; the coach's catalog lists it", async () => {
+  const team = await setupTeam();
+  const athlete = await athleteUserOf(team.athleteIds[1]);
+  const H = String(hmld.id);
+  const listed = async (who) => {
+    const all = [];
+    let qs = "limit=100";
+    for (let page = 0; page < 20; page += 1) {
+      const r = await mapi(`/definitions?${qs}`, { cookie: who.cookie });
+      assert.equal(r.status, 200, r.text);
+      all.push(...r.body.rows);
+      if (!r.body.nextCursor) break;
+      qs = `limit=100&cursorLabel=${encodeURIComponent(r.body.nextCursor.label)}&cursorId=${r.body.nextCursor.id}`;
+    }
+    return all;
+  };
+  const coachRows = await listed(team.coach);
+  assert.ok(coachRows.some((r) => String(r.id) === H), "the coach's catalog lists HMLD");
+  // ... and says it is calculated (a dashboard says from when it has values); an ordinary variable is not.
+  assert.equal(coachRows.find((r) => String(r.id) === H).calculated, true);
+  assert.equal(coachRows.find((r) => String(r.id) === String(world[ZONES[0]].variableId)).calculated, false);
+  const herRows = await listed(athlete);
+  assert.ok(herRows.some((r) => String(r.id) === String(world[ZONES[0]].variableId)), "her catalog lists the system inputs");
+  assert.equal(herRows.some((r) => String(r.id) === H || r.label === hmld.label), false, "no calculated variable in her catalog");
+  const series = await mapi(`/definitions?limit=100&purpose=dashboardSeries&search=${encodeURIComponent("High metabolic")}`, { cookie: athlete.cookie });
+  assert.equal(series.status, 200);
+  assert.deepEqual(series.body.rows, [], "nor in her dashboard picker");
+  const missing = crypto.randomUUID();
+  for (const suffix of ["", "/versions"]) {
+    const one = await mapi(`/definitions/${H}${suffix}`, { cookie: athlete.cookie });
+    const none = await mapi(`/definitions/${missing}${suffix}`, { cookie: athlete.cookie });
+    assert.equal(one.status, 404, one.text);
+    assert.equal(one.text, none.text, `reading it${suffix} answers exactly like a missing one`);
+    assert.equal((await mapi(`/definitions/${H}${suffix}`, { cookie: team.coach.cookie })).status, 200, "the coach reads it");
+  }
+});
+
+test("8. Source fields' plain row: each field says which teams it is in use for, within the caller's audience - a platform admin every team, a club's admin its own club's teams only, another club's admin none", async () => {
+  const team = await setupTeam();
+  const teamName = (await admin.query(`select name from public.teams where id = $1`, [team.teamId])).rows[0].name;
+  const clubAdmin = async (clubId) => {
+    const id = await makeUser("club admin");
+    await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [id, clubId]);
+    await setWorkspace(id, "club", clubId);
+    return { id, cookie: `optimove_session=${await createSession(id)}` };
+  };
+  const own = await clubAdmin(team.clubId);
+  const otherClub = (await admin.query(`insert into public.clubs (name) values ($1) returning id`, [`Other club ${key().slice(0, 6)}`])).rows[0].id;
+  const other = await clubAdmin(otherClub);
+  const fieldsOf = async (who) => {
+    const r = await call("/api/training-load/sources/metrics", "/fields", { cookie: who.cookie });
+    assert.equal(r.status, 200, r.text);
+    return r.body.fields;
+  };
+  const zoneField = String((await admin.query(`select source_metric_definition_id as id from training_load.source_metric_mapping_activations where team_id = $1 and ended_at is null limit 1`, [team.teamId])).rows[0].id);
+  const used = (fields) => fields.find((f) => String(f.id) === zoneField).inUse;
+  const platformView = used(await fieldsOf(team.padmin));
+  assert.ok(platformView.count >= 1 && platformView.teams.includes(teamName), JSON.stringify(platformView));
+  const ownView = used(await fieldsOf(own));
+  assert.ok(ownView.teams.includes(teamName), "the team's own club admin sees it");
+  assert.ok(ownView.count <= platformView.count);
+  const otherView = await fieldsOf(other);
+  assert.deepEqual(used(otherView), { teams: [], count: 0 }, "another club's admin learns nothing of this team");
+  assert.equal(JSON.stringify(otherView).includes(teamName), false);
+});
+
+test("9. nothing else tells an athlete a calculated variable exists (the security review of PR 3): hiding or unhiding it answers like a missing one and writes nothing, a structure link to it is left out of her links, and a template cloned into her workspace leaves its series unresolved instead of binding it (the clone's batch resolution)", async () => {
+  const team = await setupTeam();
+  const athlete = await athleteUserOf(team.athleteIds[2]);
+  const H = String(hmld.id);
+  const missing = crypto.randomUUID();
+  for (const method of ["POST", "DELETE"]) {
+    const one = await mapi(`/definitions/${H}/hide`, { method, cookie: athlete.cookie });
+    const none = await mapi(`/definitions/${missing}/hide`, { method, cookie: athlete.cookie });
+    assert.equal(one.status, 404, one.text);
+    assert.equal(one.text, none.text, `${method} hide answers exactly like a missing one`);
+  }
+  assert.equal((await admin.query(`select count(*)::int as n from training_load.metric_definition_hidden where user_id = $1`, [athlete.id])).rows[0].n, 0, "no hidden row");
+  // The coach may still hide it (and show it again).
+  assert.equal((await mapi(`/definitions/${H}/hide`, { method: "POST", cookie: team.coach.cookie })).status, 200);
+  assert.equal((await mapi(`/definitions/${H}/hide`, { method: "DELETE", cookie: team.coach.cookie })).status, 200);
+
+  // A system category holding HMLD and one of its inputs.
+  const pa = await platformAdmin();
+  const sapi = (path, opts) => call("/api/training-load/sources/metrics", path, opts);
+  const cat = await sapi("/classification/categories", { method: "POST", cookie: pa.cookie, body: { requestKey: key(), name: `Load ${key().slice(0, 6)}` } });
+  assert.equal(cat.status, 201, cat.text);
+  const categoryId = cat.body.category?.id ?? cat.body.node?.id ?? cat.body.id;
+  assert.ok(categoryId, cat.text);
+  for (const variableId of [H, String(world[ZONES[0]].variableId)]) {
+    const made = await sapi("/classification/links", { method: "POST", cookie: pa.cookie, body: { requestKey: key(), variableId, categoryId } });
+    assert.equal(made.status, 201, made.text);
+  }
+  const links = async (who) => (await mapi(`/structure-links?categoryId=${categoryId}`, { cookie: who.cookie })).body.rows.map((r) => String(r.metric_definition_id));
+  assert.deepEqual((await links(athlete)).sort(), [String(world[ZONES[0]].variableId)], "her links leave the calculated variable out");
+  assert.deepEqual((await links(team.coach)).sort(), [H, String(world[ZONES[0]].variableId)].sort(), "the coach's hold both");
+
+  // A template cloned into her workspace: the clone resolves each portable series by its key hints in one batch
+  // (cloneDashboard); HMLD's hint stays unresolved in her workspace, the input's resolves; a team's resolves both. (The
+  // clone route itself needs v71, outside this suite's migrations; the batch is the part PR 3 changed.)
+  const { resolveTemplateSeriesBatchForWorkspace } = await import("../src/trainingLoadDashboardWidgets.js");
+  const keys = Object.fromEntries((await admin.query(`select id::text, key from training_load.metric_definitions where id = any($1::uuid[])`,
+    [[H, String(world[ZONES[0]].variableId)]])).rows.map((r) => [r.id, r.key]));
+  const specs = [{ sourceSeriesId: "calc", hints: [{ key: keys[H] }] }, { sourceSeriesId: "input", hints: [{ key: keys[String(world[ZONES[0]].variableId)] }] }];
+  const runner = (sql, params) => admin.query(sql, params);
+  const hers = await resolveTemplateSeriesBatchForWorkspace(runner, specs, { dataWorkspaceType: "athlete", dataWorkspaceScopeId: team.athleteIds[2], ownerUserId: athlete.id });
+  assert.equal(hers.get("calc").status, "unresolved", "her clone never binds HMLD");
+  assert.deepEqual(hers.get("input"), { status: "resolved", candidateIds: [String(world[ZONES[0]].variableId)] });
+  const coachs = await resolveTemplateSeriesBatchForWorkspace(runner, specs, { dataWorkspaceType: "team", dataWorkspaceScopeId: team.teamId, ownerUserId: team.coach.id });
+  assert.deepEqual(coachs.get("calc"), { status: "resolved", candidateIds: [H] }, "a team's clone binds it");
 });
