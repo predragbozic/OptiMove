@@ -152,7 +152,8 @@ export function loadAthleteQuestions({ render } = {}) {
 export function athleteQuestionsAnswered(formId) {
   if (g()?.status === "idle") return;
   const rows = g().rows || [];
-  if (!rows.length) return;
+  // A read on its way is still replaced (it may list the answered question).
+  if (!rows.length && !inFlight) return;
   if (formId) g().rows = rows.filter((row) => row.formId !== String(formId));
   inFlight = null;
   return loadAthleteQuestions({ render: lastRender });

@@ -505,6 +505,33 @@ test("Q14b. a submit with no open calendar question sends no read; with one, of 
   assert.equal(state.athleteQuestions.rows.length, 0);
 });
 
+test("Q14c. with no question on screen but a read on its way, a submit still replaces that read (it may list the answered question)", async () => {
+  const gate = deferred();
+  let reads = 0;
+  const calls = installFetchMock(async (call) => {
+    if (call.url === "/api/calendar/questions/mine") {
+      reads += 1;
+      // 1: the first read, nothing open; 2: a re-read on its way (held) that still lists the question about to be
+      // answered; 3: the read after the answer.
+      const list = reads === 2 ? [question({ id: "q-new", formId: "ext-new" })] : [];
+      if (reads === 2) await gate.promise;
+      return { status: 200, body: { questions: list.map((q) => ({ questionId: q.id, kind: q.kind, eventId: `event-of-${q.id}`, eventTitle: q.title, eventDay: q.day, eventStart: q.start, window: { opensAt: q.opens, closesAt: q.closes }, form: { kind: "rpe", externalAssignmentId: q.formId }, later: false })) } };
+    }
+    return { status: 404, body: { error: "notFound" } };
+  });
+  await loadAthleteQuestions({ render });
+  assert.equal(state.athleteQuestions.status, "ready");
+  assert.equal(state.athleteQuestions.rows.length, 0);
+  const reading = loadAthleteQuestions({ render });
+  await settle();
+  const answered = athleteQuestionsAnswered("ext-new");
+  gate.resolve();
+  await reading;
+  await answered;
+  assert.equal(mineCalls(calls).length, 3, "the read on its way is replaced by a new one");
+  assert.deepEqual(state.athleteQuestions.rows.map((r) => r.questionId), [], "the answered question is not shown");
+});
+
 test("Q14. the card: at the top of Home with one Answer per open question; gone after the answer (the row dropped at once, then the read)", async () => {
   world.questions = [question({ id: "q-1", formId: "ext-1", later: true }), question({ id: "q-2", kind: "wellness", formId: "ta-2", later: true })];
   const calls = server();

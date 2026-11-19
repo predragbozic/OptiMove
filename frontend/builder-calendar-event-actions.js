@@ -30,6 +30,7 @@ import {
   REREAD_AFTER,
 } from "./builder-calendar-event.js";
 import { builderSavesPending, builderSavesSettled } from "./builder-actions.js";
+import { findBuilderNode, findBuilderSession } from "./builder-helpers.js";
 import { centralCalendarUncertainWrites, rememberCentralCalendarCreate } from "./central-calendar-actions.js";
 import {
   centralCalendarErrorInfo,
@@ -229,10 +230,14 @@ function releaseIfGone() {
   if (rec && !builderCalendarDraftHoldsSession(state.builder.draft, rec.sessionId)) state.builder.calendarEvent = null;
 }
 
-// A Builder modal (builder-modals.js) drawn over the panel: Escape is its.
+// A Builder dialog drawn over the panel: Escape is its. The same conditions
+// as builder-view.js draws them with (the structure modal, the section editor
+// with its custom exercise dialog inside, and the modals of builder-modals.js).
 function builderModalOpen() {
   const b = state.builder;
-  return Boolean(b.athletePickerOpen || b.infoOpen || b.copyPlanId || b.overwriteDayConfirm || b.blockPicker?.open);
+  if (b.athletePickerOpen || b.infoOpen || b.copyPlanId || b.overwriteDayConfirm || b.blockPicker?.open) return true;
+  if (b.structureModalOpen && findBuilderSession(b.draft, b.selectedSessionId)) return true;
+  return findBuilderNode(b.draft, b.selectedNodeId)?.type === "section";
 }
 
 // Escape (app.js): the open panel closes, unless a create is on its way or
