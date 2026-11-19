@@ -193,7 +193,11 @@ try {
 
   Test-Case 'names: the backup file name and the time read back from it' {
     $when = New-Object datetime 2026, 11, 19, 2, 5, 59
-    Assert-Equal (New-OmDumpFileName -Now $when) 'optimove-2026-11-19-0205.dump'
+    Assert-Equal (New-OmDumpFileName -Now $when) 'optimove-2026-11-19-020559.dump'
+    Assert-Equal (Get-OmDumpTimeFromName -Name 'optimove-2026-11-19-020559.dump') $when
+    Assert-Equal (Get-OmDumpTimeFromName -Name 'optimove-2026-11-19-020559.dump.failed') $when
+    Assert-True ($null -eq (Get-OmDumpTimeFromName -Name 'optimove-2026-11-19-02055.dump')) 'five digits is not a time'
+    Assert-True ($null -eq (Get-OmDumpTimeFromName -Name 'optimove-2026-11-19-0205599.dump')) 'seven digits is not a time'
     Assert-Equal (Get-OmDumpTimeFromName -Name 'optimove-2026-11-19-0205.dump') (New-Object datetime 2026, 11, 19, 2, 5, 0)
     Assert-Equal (Get-OmDumpTimeFromName -Name 'optimove-2026-11-19-0205.dump.sha256') (New-Object datetime 2026, 11, 19, 2, 5, 0)
     Assert-Equal (Get-OmDumpTimeFromName -Name 'optimove-2026-11-19-0205.dump.failed') (New-Object datetime 2026, 11, 19, 2, 5, 0)
@@ -281,6 +285,108 @@ try {
     Assert-Equal (ConvertTo-OmArgument -Value 'say "hi"') '"say \"hi\""'
     Assert-Equal (ConvertTo-OmArgument -Value '') '""'
   }
+  Test-Case 'lock: one holder at a time; a lock file nobody holds open blocks nobody' {
+    $folder = New-TempFolder 'lock'
+    Set-Content -LiteralPath (Join-Path $folder 'optimove-backup.lock') -Value 'left behind by a crash'
+    $first = Enter-OmBackupLock -Folder $folder
+    Assert-True ($null -ne $first) 'a stale lock file blocked the run'
+    try {
+      Assert-True ($null -eq (Enter-OmBackupLock -Folder $folder)) 'a second holder got the lock'
+      Assert-True ($null -eq (Enter-OmBackupLock -Folder $folder)) 'a third holder got the lock'
+    } finally { Exit-OmBackupLock -Lock $first }
+    $again = Enter-OmBackupLock -Folder $folder
+    Assert-True ($null -ne $again) 'the lock was not free after its holder let go'
+    Exit-OmBackupLock -Lock $again
+    Exit-OmBackupLock -Lock $null
+    $other = Enter-OmBackupLock -Folder (New-TempFolder 'lock-other')
+    Assert-True ($null -ne $other) 'the lock is per folder'
+    Exit-OmBackupLock -Lock $other
+  }
+  Test-Case 'lock: a second PROCESS cannot take a lock the first one holds' {
+    $folder = New-TempFolder 'lock-process'
+    $first = Enter-OmBackupLock -Folder $folder
+    try {
+      $probe = "Set-StrictMode -Version 2.0; . '$(Join-Path $backupDir 'OptimoveBackup.Common.ps1')'; `$l = Enter-OmBackupLock -Folder '$folder'; if (`$null -eq `$l) { 'held' } else { 'free'; `$l.Dispose() }"
+      $shellPath = (Get-Process -Id $PID).Path
+      Assert-Equal ((& $shellPath -NoProfile -NonInteractive -Command $probe | Out-String).Trim()) 'held'
+      Exit-OmBackupLock -Lock $first; $first = $null
+      Assert-Equal ((& $shellPath -NoProfile -NonInteractive -Command $probe | Out-String).Trim()) 'free'
+    } finally { Exit-OmBackupLock -Lock $first }
+  }
+  Test-Case 'names: a new backup file is reserved only when the name is free, and a taken name is left untouched' {
+    $folder = New-TempFolder 'reserve'
+    $when = New-Object datetime 2026, 11, 19, 12, 20, 51
+    $path = New-OmDumpFile -Folder $folder -Now $when
+    Assert-Equal ([System.IO.Path]::GetFileName($path)) 'optimove-2026-11-19-122051.dump'
+    Assert-True (Test-Path -LiteralPath $path -PathType Leaf)
+    Set-Content -LiteralPath $path -Value 'the first run is writing this' -NoNewline
+    Assert-Throws { New-OmDumpFile -Folder $folder -Now $when } 'optimove-2026-11-19-122051\.dump already exists'
+    Assert-Equal (Get-Content -LiteralPath $path -Raw) 'the first run is writing this' 'the file of the first run was changed:'
+    $next = New-OmDumpFile -Folder $folder -Now $when.AddSeconds(1)
+    Assert-Equal ([System.IO.Path]::GetFileName($next)) 'optimove-2026-11-19-122052.dump'
+    Set-Content -LiteralPath (Join-Path $folder 'optimove-2026-11-19-122053.dump.failed') -Value 'x'
+    Assert-Throws { New-OmDumpFile -Folder $folder -Now $when.AddSeconds(2) } '\.failed already exists'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $folder 'optimove-2026-11-19-122053.dump'))) 'a file was created next to a .failed one'
+  }
+  Test-Case 'retention: file names with and without seconds are both this script''s backups' {
+    $folder = New-TempFolder 'retention3'
+    foreach ($name in @('optimove-2026-11-01-0200.dump', 'optimove-2026-11-01-020030.dump', 'optimove-2026-11-01-020030.dump.sha256', 'optimove-2026-11-18-020030.dump', 'optimove-2026-11-19-020030.dump')) { Set-Content -LiteralPath (Join-Path $folder $name) -Value 'x' }
+    $expired = Get-OmExpiredBackupFiles -Folder $folder -RetentionDays 14 -Now (New-Object datetime 2026, 11, 19, 2, 0, 30) -KeepName 'optimove-2026-11-19-020030.dump'
+    Assert-Equal (@($expired | ForEach-Object { $_.Name } | Sort-Object) -join '|') 'optimove-2026-11-01-0200.dump|optimove-2026-11-01-020030.dump|optimove-2026-11-01-020030.dump.sha256'
+  }
+  Test-Case 'log reason: the first line of the error, without the host, the user, the folder, quoted text, addresses or a password' {
+    $hide = @('aws-0-eu-west-1.pooler.supabase.com', 'postgres.abcdefghijklmnop', 'postgres', 'C:\Users\Jane Doe\OptiMove backups', 'Jane Doe')
+    $cases = @(
+      @('pg_dump: error: connection to server at "aws-0-eu-west-1.pooler.supabase.com" (52.209.1.17), port 5432 failed: FATAL:  password authentication failed for user "postgres.abcdefghijklmnop"',
+        'pg_dump: error: connection to server at <hidden> (<hidden>), port 5432 failed: FATAL: password authentication failed for user <hidden>'),
+      @("`r`n`r`npg_dump: error: could not open output file `"C:\Users\Jane Doe\OptiMove backups\optimove-2026-11-19-122051.dump`": Permission denied`r`nsecond line with secret hunter2",
+        'pg_dump: error: could not open output file <hidden>: Permission denied'),
+      @('pg_dump: error: could not open output file C:\Users\Jane Doe\OptiMove backups\x.dump: Permission denied', 'pg_dump: error: could not open output file <hidden>: Permission denied'),
+      @('psql: error: connection to server at aws-0-eu-west-1.pooler.supabase.com (2a05:d018:135e:16::1), port 5432 failed: timeout expired', 'psql: error: connection to server at <hidden> (<hidden>), port 5432 failed: timeout expired'),
+      @('psql: error: could not translate host name db.other-project.supabase.co to address: Name or service not known', 'psql: error: could not translate host name <hidden> to address: Name or service not known'),
+      @('error: invalid connection option host=evil.example.test password=hunter2 user=someone PGPASSWORD=hunter3', 'error: invalid connection option <hidden>'),
+      @('error: postgresql://postgres.abcdefghijklmnop:hunter2@aws-0-eu-west-1.pooler.supabase.com:5432/postgres refused', 'error: <hidden> refused'),
+      @('FATAL: Tenant or user not found (postgres.zyxwvutsrqponm)', 'FATAL: Tenant or user not found (<hidden>)'),
+      @('pg_restore: error: could not read /home/jane/backups/optimove.dump | injected | OK | line', 'pg_restore: error: could not read <hidden> injected OK line'),
+      @('PostgreSQL 17 says: database postgres is not accepting connections', 'PostgreSQL 17 says: database <hidden> is not accepting connections')
+    )
+    foreach ($case in $cases) { Assert-Equal (Get-OmSafeReason -Text $case[0] -Hide $hide) $case[1] }
+    foreach ($case in $cases) {
+      $got = Get-OmSafeReason -Text $case[0] -Hide $hide
+      Assert-True ($got -notmatch 'hunter|supabase|abcdefgh|Jane|52\.209|2a05|\|') "leak in: $got"
+    }
+    # Localized quote marks and letters, built from code points: the test file stays ASCII.
+    $lowDouble = [string][char]0x201E; $highDouble = [string][char]0x201C; $rightDouble = [string][char]0x201D
+    $leftGuillemet = [string][char]0x00AB; $rightGuillemet = [string][char]0x00BB
+    $lowSingle = [string][char]0x201A; $leftSingle = [string][char]0x2018; $rightSingle = [string][char]0x2019
+    $oe = [string][char]0x00F6; $ee = [string][char]0x00E9
+    $localized = @(
+      @("pg_dump: Fehler: konnte Ausgabedatei ${lowDouble}C:\Users\Jana Doe\Sicherung\x.dump${highDouble} nicht ${oe}ffnen: Zugriff verweigert", "pg_dump: Fehler: konnte Ausgabedatei <hidden> nicht ${oe}ffnen: Zugriff verweigert"),
+      @("pg_dump: erreur : n'a pas pu ouvrir ${leftGuillemet} C:\Users\Jean Dupont\x.dump ${rightGuillemet} : Permission refus${ee}e", "pg_dump: erreur: n'a pas pu ouvrir <hidden>: Permission refus${ee}e"),
+      @("pg_dump: error: user ${leftSingle}postgres.abcdefghijklmnopqrst${rightSingle} has no access", 'pg_dump: error: user <hidden> has no access'),
+      @("pg_dump: greska: datoteka ${lowSingle}tajna${rightSingle} ne postoji", 'pg_dump: greska: datoteka <hidden> ne postoji'),
+      @("pg_dump: error: ${highDouble}aws-0-eu-west-1.pooler.supabase.com${rightDouble} refused", 'pg_dump: error: <hidden> refused'),
+      @("pg_dump: error: a stray mark${rightSingle}s here", 'pg_dump: error: a stray mark s here'),
+      @('pg_dump: error: could not open output file C:\Users\Jane Doe\OptiMove backups\x.dump: Permission denied', 'pg_dump: error: could not open output file <hidden>: Permission denied'),
+      @('pg_restore: error: could not read D:\Backups\Old Ones\optimove-2026-11-19-0200.dump', 'pg_restore: error: could not read <hidden>'),
+      @('FATAL: Tenant or user not found: abcdefghijklmnopqrst', 'FATAL: Tenant or user not found: <hidden>'),
+      @('FATAL: project abcdefghijklmnopqrst is paused (ref abcdefghijklmnopqrst)', 'FATAL: project <hidden> is paused (ref <hidden>)')
+    )
+    foreach ($case in $localized) {
+      $got = Get-OmSafeReason -Text $case[0] -Hide @('postgres')
+      Assert-Equal $got $case[1]
+      Assert-True ($got -notmatch 'Jana|Jean|Jane|Doe|Dupont|abcdefghijklmnopqrst|supabase|tajna|Sicherung|Old Ones') "leak in: $got"
+      Assert-True ($got -notmatch ('[' + $lowDouble + $highDouble + $rightDouble + $leftGuillemet + $rightGuillemet + $lowSingle + $leftSingle + $rightSingle + ']')) "a quote mark is left in: $got"
+    }
+    # Twenty letters, not more and not fewer, on their own.
+    Assert-Equal (Get-OmSafeReason -Text 'error: abcdefghijklmnopqrs and abcdefghijklmnopqrstu') 'error: abcdefghijklmnopqrs and abcdefghijklmnopqrstu'
+    $long = Get-OmSafeReason -Text ('pg_dump: error: ' + ('x' * 500))
+    Assert-Equal $long.Length 160
+    Assert-True ($long.EndsWith('...'))
+    Assert-Equal (Get-OmSafeReason -Text '') ''
+    Assert-Equal (Get-OmSafeReason -Text $null) ''
+    Assert-Equal (Get-OmSafeReason -Text "`r`n  `r`n") ''
+  }
   Test-Case 'log: one line, with no host, user or password in it' {
     $line = Format-OmLogLine -Now (New-Object datetime 2026, 11, 19, 2, 0, 9) -Outcome 'OK' -FileName 'optimove-2026-11-19-0200.dump' -SizeBytes 123456 -TableCount 143 -Note 'sha256 abc'
     Assert-Equal $line '2026-11-19 02:00:09 | OK | optimove-2026-11-19-0200.dump | 123456 bytes | 143 tables | sha256 abc'
@@ -359,7 +465,8 @@ try {
       $output = & $shell -NoProfile -NonInteractive -File (Join-Path $backupDir $Name) @Arguments 2>&1 | Out-String
       return @{ ExitCode = $LASTEXITCODE; Output = $output }
     }
-    function Get-BackupFiles { return @(Get-ChildItem -LiteralPath $backups -File | ForEach-Object { $_.Name } | Sort-Object) }
+    # The lock file stays in the folder between runs (only an open handle on it is a lock); it is checked by its own tests.
+    function Get-BackupFiles { return @(Get-ChildItem -LiteralPath $backups -File | ForEach-Object { $_.Name } | Where-Object { $_ -ne 'optimove-backup.lock' } | Sort-Object) }
     function Get-RestoreDatabases { return (Invoke-TestSql -Database 'postgres' -Sql "select count(*) from pg_database where datname like 'optimove\_restore\_test\_%'") }
     function Clear-Backups { Get-ChildItem -LiteralPath $backups -File | Remove-Item -Force }
     # A folder of tools where one of them is replaced by a stand-in.
@@ -407,7 +514,7 @@ try {
         Assert-True ($run.Output -match "database:\s+$sourceDb") 'the database is printed'
         Assert-True ($run.Output -notmatch [regex]::Escape($testPassword)) 'the password is printed'
         $files = Get-BackupFiles
-        $dump = @($files | Where-Object { $_ -match '^optimove-\d{4}-\d{2}-\d{2}-\d{4}\.dump$' -and $_ -ne $recent })
+        $dump = @($files | Where-Object { $_ -match '^optimove-\d{4}-\d{2}-\d{2}-\d{6}\.dump$' -and $_ -ne $recent })
         Assert-Equal $dump.Count 1 "files: $($files -join ', ')"
         $script:goodDump = Join-Path $backups $dump[0]
         Assert-Equal ($files -join '|') ((@($dump[0], "$($dump[0]).sha256", $recent, 'keep.txt', 'optimove-backup.log', 'optimove-production-2020-01-01.dump') | Sort-Object) -join '|')
@@ -442,7 +549,8 @@ try {
         Assert-True ($run.Output -notmatch 'certainly-not-the-password-4711') 'the password is printed'
         Assert-Equal ((Get-BackupFiles) -join '|') 'optimove-2020-01-01-0200.dump|optimove-backup.log'
         $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
-        Assert-True ($log[-1] -match '\| FAILED \| - \| 0 bytes \| 0 tables \| while connecting to the database$') "log line: $($log[-1])"
+        Assert-True ($log[-1] -match '\| FAILED \| - \| 0 bytes \| 0 tables \| while connecting to the database: psql: error: connection to server at <hidden> \(<hidden>\), port \d+ failed: FATAL: password authentication failed for user <hidden>$') "log line: $($log[-1])"
+        Assert-True ($log[-1] -notmatch [regex]::Escape($PgUser) -and $log[-1] -notmatch 'localhost|127\.0\.0\.1|certainly-not') "the log line names the server or the user: $($log[-1])"
       }
       Test-Case 'backup: without a pgpass line -NoPrompt fails instead of waiting for a password' {
         Clear-Backups
@@ -509,10 +617,10 @@ try {
           Assert-Equal $run.ExitCode 1 "output: $($run.Output)"
           $files = Get-BackupFiles
           Assert-True ($files -contains 'optimove-2020-01-01-0200.dump') 'the old backup was deleted after a failed run'
-          Assert-Equal (@($files | Where-Object { $_ -match '^optimove-\d{4}-\d{2}-\d{2}-\d{4}\.dump\.failed$' }).Count) 1 "files: $($files -join ', ')"
+          Assert-Equal (@($files | Where-Object { $_ -match '^optimove-\d{4}-\d{2}-\d{2}-\d{6}\.dump\.failed$' }).Count) 1 "files: $($files -join ', ')"
           Assert-Equal (@($files | Where-Object { $_ -match '\.dump$' -and $_ -ne 'optimove-2020-01-01-0200.dump' }).Count) 0 'a file that failed its check still carries the .dump name'
           Assert-Equal (@($files | Where-Object { $_ -match '\.sha256$' }).Count) 0
-          Assert-True (@(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))[-1] -match '\| FAILED \| optimove-.*\.dump \| 0 bytes \| 0 tables \| while pg_restore --list$')
+          Assert-True (@(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))[-1] -match '\| FAILED \| optimove-.*\.dump \| 0 bytes \| 0 tables \| while pg_restore --list: pg_restore: error: input file does not appear to be a valid archive$')
         }
         Test-Case 'backup: a dump with an empty table of contents is FAILED' {
           Clear-Backups
@@ -606,6 +714,111 @@ try {
           finally { foreach ($v in @('PGHOST', 'PGHOSTADDR', 'PGDATABASE', 'PGSERVICE', 'PGPASSWORD')) { Remove-Item -Path "Env:$v" -ErrorAction SilentlyContinue } }
           Assert-Equal $run.ExitCode 0 "output: $($run.Output)"
         }
+      }
+      Test-Case 'backup: a second run started while the first is running stops with exit code 2, says so, logs it, and the first ends OK untouched' {
+        if ($env:OS -eq 'Windows_NT') { Write-Host '       (not run on Windows: it uses an sh stand-in)'; return }
+        Clear-Backups
+        $marker = Join-Path (New-TempFolder 'slow') 'dump-started'
+        $folder = New-ToolFolder 'slow' @{ pg_dump = "case `"`$1`" in --version) ;; *) touch `"$marker`"; sleep 6;; esac; exec `"$(Join-Path $tools.Folder 'pg_dump')`" `"`$@`"" }
+        (Get-Content -LiteralPath $configPath) -replace '^pg_bin = .*$', "pg_bin = $folder" | Set-Content -LiteralPath $configPath -Encoding ASCII
+        $firstOut = Join-Path $tempRoot 'first-run.txt'
+        try {
+          $first = Start-Process -FilePath $shell -ArgumentList @('-NoProfile', '-NonInteractive', '-File', (Join-Path $backupDir 'optimove-backup.ps1'), '-NoPrompt') -RedirectStandardOutput $firstOut -PassThru
+          $waited = 0
+          while (-not (Test-Path -LiteralPath $marker) -and $waited -lt 300) { Start-Sleep -Milliseconds 100; $waited++ }
+          Assert-True (Test-Path -LiteralPath $marker) 'the first run never reached pg_dump'
+          $during = Get-BackupFiles
+          $second = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt')
+          $third = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt')
+          Assert-True (-not $first.HasExited) 'the first run had already ended; the test proved nothing'
+          Assert-Equal $second.ExitCode 2 "output: $($second.Output)"
+          Assert-Equal $third.ExitCode 2
+          Assert-True ($second.Output -match 'Another backup is already running; this one stops\.')
+          Assert-True ($second.Output -notmatch 'FAILED|renamed|Dumping') "the second run went on: $($second.Output)"
+          Assert-Equal ((Get-BackupFiles) -join '|') ((@($during) + 'optimove-backup.log' | Sort-Object -Unique) -join '|') 'the second run created, renamed or removed a file:'
+          $first.WaitForExit()
+          Assert-Equal $first.ExitCode 0 "first run: $(Get-Content -LiteralPath $firstOut -Raw)"
+        } finally { Set-TestConfig; if ($first -and -not $first.HasExited) { $first.Kill() } }
+        $files = Get-BackupFiles
+        Assert-Equal (@($files | Where-Object { $_ -match '\.dump$' }).Count) 1 "files: $($files -join ', ')"
+        Assert-Equal (@($files | Where-Object { $_ -match '\.failed$' }).Count) 0 "files: $($files -join ', ')"
+        $dump = Join-Path $backups (@($files | Where-Object { $_ -match '\.dump$' })[0])
+        Assert-Equal ((Get-Content -LiteralPath "$dump.sha256" -TotalCount 1) -split '\s+')[0] (Get-OmSha256 -Path $dump)
+        $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
+        Assert-Equal $log.Count 3 "log: $($log -join ' / ')"
+        Assert-True ($log[0] -match '\| SKIPPED \| - \| 0 bytes \| 0 tables \| Another backup is already running; this one stops\.$') "log: $($log[0])"
+        Assert-True ($log[1] -match '\| SKIPPED \|')
+        Assert-True ($log[2] -match '\| OK \| optimove-') "log: $($log[2])"
+        $after = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt')
+        Assert-Equal $after.ExitCode 0 "the lock was not released: $($after.Output)"
+      }
+      Test-Case 'backup: an old backup that cannot be deleted is a WARNING; the new backup stays a verified OK backup' {
+        if ($env:OS -eq 'Windows_NT') { Write-Host '       (not run on Windows: it uses chattr)'; return }
+        Clear-Backups
+        $stuck = Join-Path $backups 'optimove-2020-01-01-020000.dump'
+        $gone = Join-Path $backups 'optimove-2020-01-02-020000.dump'
+        Set-Content -LiteralPath $stuck -Value 'old'
+        Set-Content -LiteralPath $gone -Value 'old'
+        & chattr +i $stuck
+        try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { & chattr -i $stuck }
+        Assert-Equal $run.ExitCode 0 "output: $($run.Output)"
+        Assert-True ($run.Output -match 'WARNING: old backup file optimove-2020-01-01-020000\.dump could not be deleted') "output: $($run.Output)"
+        Assert-True ($run.Output -match 'OK: optimove-')
+        Assert-True ($run.Output -notmatch 'FAILED|renamed') "output: $($run.Output)"
+        $files = Get-BackupFiles
+        Assert-True ($files -contains 'optimove-2020-01-01-020000.dump') 'the stuck file is gone after all'
+        Assert-True (-not ($files -contains 'optimove-2020-01-02-020000.dump')) 'retention stopped at the first stuck file'
+        $dump = @($files | Where-Object { $_ -match '^optimove-\d{4}-\d{2}-\d{2}-\d{6}\.dump$' -and $_ -ne 'optimove-2020-01-01-020000.dump' })
+        Assert-Equal $dump.Count 1 "files: $($files -join ', ')"
+        Assert-True ($files -contains "$($dump[0]).sha256") 'the new backup lost its .sha256'
+        Assert-Equal (@($files | Where-Object { $_ -match '\.failed$' }).Count) 0 "the new backup was renamed: $($files -join ', ')"
+        $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
+        Assert-Equal $log.Count 2 "log: $($log -join ' / ')"
+        Assert-True ($log[0] -match '\| OK \| optimove-')
+        Assert-True ($log[1] -match '\| WARNING \| optimove-\S+ \| 0 bytes \| 0 tables \| old backup file optimove-2020-01-01-020000\.dump could not be deleted: ') "log: $($log[1])"
+        Assert-True ($log[1] -notmatch [regex]::Escape($backups)) "the folder path is in the log: $($log[1])"
+        Remove-Item -LiteralPath $stuck -Force
+      }
+      Test-Case 'backup: a second run whose SKIPPED line cannot be written still stops with exit code 2' {
+        if ($env:OS -eq 'Windows_NT') { Write-Host '       (not run on Windows: it uses chattr)'; return }
+        Clear-Backups
+        $logFile = Join-Path $backups 'optimove-backup.log'
+        Set-Content -LiteralPath $logFile -Value 'earlier line'
+        $lockFile = Join-Path $backups 'optimove-backup.lock'
+        $held = [System.IO.File]::Open($lockFile, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        & chattr +i $logFile
+        try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') }
+        finally { & chattr -i $logFile; $held.Dispose() }
+        Assert-Equal $run.ExitCode 2 "output: $($run.Output)"
+        Assert-True ($run.Output -match 'Another backup is already running; this one stops\.')
+        Assert-True ($run.Output -notmatch 'FAILED') "output: $($run.Output)"
+        Assert-Equal ((Get-Content -LiteralPath $logFile) -join '|') 'earlier line'
+      }
+      Test-Case 'backup: a lock file left behind by a crash does not block the next run' {
+        Clear-Backups
+        Set-Content -LiteralPath (Join-Path $backups 'optimove-backup.lock') -Value 'stale'
+        $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt')
+        Assert-Equal $run.ExitCode 0 "output: $($run.Output)"
+      }
+      Test-Case 'backup: a pg_dump failure is logged with its own first error line, sanitized' {
+        if ($env:OS -eq 'Windows_NT') { Write-Host '       (not run on Windows: it uses an sh stand-in)'; return }
+        Clear-Backups
+        $folder = New-ToolFolder 'dump-says-why' @{ pg_dump = "case `"`$1`" in --version) exec `"$(Join-Path $tools.Folder 'pg_dump')`" --version;; esac; echo 'pg_dump: error: connection to server at `"$PgHost`" (127.0.0.1), port $PgPort failed: FATAL:  remaining connection slots are reserved for user `"$PgUser`"' >&2; echo 'pg_dump: detail: second line password=hunter2' >&2; exit 1" }
+        (Get-Content -LiteralPath $configPath) -replace '^pg_bin = .*$', "pg_bin = $folder" | Set-Content -LiteralPath $configPath -Encoding ASCII
+        try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { Set-TestConfig }
+        Assert-Equal $run.ExitCode 1
+        $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
+        Assert-True ($log[-1] -match '\| FAILED \| optimove-\d{4}-\d{2}-\d{2}-\d{6}\.dump \| 0 bytes \| 0 tables \| while pg_dump: pg_dump: error: connection to server at <hidden> \(<hidden>\), port \d+ failed: FATAL: remaining connection slots are reserved for user <hidden>$') "log: $($log[-1])"
+        Assert-True ($log[-1] -notmatch [regex]::Escape($PgUser) -and $log[-1] -notmatch 'hunter2|127\.0\.0\.1|localhost') "log: $($log[-1])"
+      }
+      Test-Case 'backup: a refusal of the script itself is logged with its reason, without the folder path' {
+        Clear-Backups
+        Invoke-TestSql -Database $sourceDb -Sql 'create schema new_module' | Out-Null
+        try { $run = Invoke-Script 'optimove-backup.ps1' @('-NoPrompt') } finally { Invoke-TestSql -Database $sourceDb -Sql 'drop schema new_module' | Out-Null }
+        Assert-Equal $run.ExitCode 1
+        $log = @(Get-Content -LiteralPath (Join-Path $backups 'optimove-backup.log'))
+        Assert-True ($log[-1] -match '\| FAILED \| - \| 0 bytes \| 0 tables \| while checking the schemas: refusing: the database has schema new_module, which this backup does not know\.') "log: $($log[-1])"
+        Assert-True ($log[-1] -notmatch [regex]::Escape($backups)) 'the folder is in the log'
       }
       Test-Case 'backup: a backup folder inside a git repository is refused' {
         $repo = New-TempFolder 'repo-with-backups'

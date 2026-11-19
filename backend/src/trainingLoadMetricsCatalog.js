@@ -167,17 +167,67 @@ function validateVersionInput(body) {
   };
 }
 
-export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null, teamClubId = null, hideCalculated = false } = {}) {
-  const params = [];
-  let visSql = catalogVisibilitySql(req, "d", params);
+// The list's visibility rule, for the rows and (v79) for the inputs a calculated row names.
+function definitionVisibilitySql(req, alias, params, teamClubId) {
+  const visSql = catalogVisibilitySql(req, alias, params);
   // v55 (O7): for the dashboard series picker in a team's workspace the list also offers the variables of the team's
   // own, active club - the club the route resolved from the ACTIVE team workspace (never from the caller's roles).
   // Only a read of the list; the dashboard write is checked again by isMetricVisibleToDashboard and the trigger.
-  if (teamClubId) {
-    params.push(teamClubId);
-    visSql = `(${visSql} or (d.owner_scope = 'club' and d.owner_club_id = $${params.length}::uuid
-      and exists (select 1 from public.clubs tc where tc.id = d.owner_club_id and coalesce(tc.is_active, true))))`;
+  if (!teamClubId) return visSql;
+  params.push(teamClubId);
+  return `(${visSql} or (${alias}.owner_scope = 'club' and ${alias}.owner_club_id = $${params.length}::uuid
+      and exists (select 1 from public.clubs tc where tc.id = ${alias}.owner_club_id and coalesce(tc.is_active, true))))`;
+}
+
+// How a dashboard series may combine a variable's values (the database's rule, v16 and v79's
+// dashboard_widget_series_validate_aggregation_type_compat): text and yes/no only as the last value or none; a ratio as a
+// ratio, its highest or its latest value - never totalled or averaged; any other number (a sum and a difference included,
+// they are amounts) as sum, avg, max, last or none.
+export function allowedAggregations(valueType, calculationKind) {
+  if (valueType === "text" || valueType === "boolean") return ["last", "none"];
+  if (calculationKind === "ratio") return ["ratio", "max", "last", "none"];
+  return ["sum", "avg", "max", "last", "none"];
+}
+
+// v79 (the dashboard stream's questions, the Rukovodilac's ruling 1): a definition row says how it is calculated -
+// `calculation` { kind, scale (a ratio only), inputs: [{ definitionId, name, shortName, unit }] in the formula's order }
+// or null for a measured variable - and `allowedAggregations`. An input is named only where the same visibility rule shows
+// it to this viewer; one it may not read keeps its place (the role is the place) with every field null: no id, name or unit
+// of something it cannot see. `rows` carry the raw version column as `calculation`; one statement for the whole page.
+async function withCalculations(req, rows, teamClubId = null) {
+  const ids = [...new Set(rows.flatMap((r) => (Array.isArray(r.calculation?.inputs) ? r.calculation.inputs : [])))];
+  const visible = new Map();
+  if (ids.length) {
+    const params = [ids];
+    const visSql = definitionVisibilitySql(req, "d", params, teamClubId);
+    const result = await query(
+      `select d.id::text as id, d.label, d.short_label, dv.unit
+         from training_load.metric_definitions d
+         join training_load.metric_definition_versions dv on dv.id = d.current_version_id
+        where d.id = any($1::uuid[]) and ${visSql}`,
+      params,
+    );
+    for (const r of result.rows) visible.set(r.id, r);
   }
+  return rows.map(({ calculation: raw, ...row }) => {
+    const kind = typeof raw?.kind === "string" ? raw.kind : null;
+    const calculation = kind ? {
+      kind,
+      ...(kind === "ratio" ? { scale: Number(raw.scale) } : {}),
+      inputs: (Array.isArray(raw.inputs) ? raw.inputs : []).map((id) => {
+        const input = visible.get(String(id));
+        return input
+          ? { definitionId: input.id, name: input.label, shortName: input.short_label ?? null, unit: input.unit ?? null }
+          : { definitionId: null, name: null, shortName: null, unit: null };
+      }),
+    } : null;
+    return { ...row, calculation, allowedAggregations: allowedAggregations(row.value_type, kind) };
+  });
+}
+
+export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null, teamClubId = null, hideCalculated = false } = {}) {
+  const params = [];
+  const visSql = definitionVisibilitySql(req, "d", params, teamClubId);
   // §6 fix: hideDefinitionForUser() wrote a real row to
   // metric_definition_hidden, but this default listing never read it back
   // — a hidden definition kept appearing for the very user who hid it.
@@ -232,6 +282,7 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
        d.owner_scope as "ownerScope",
        -- J21: whether OptiMove calculates it (a dashboard says from when its values exist); an athlete never gets one.
        (coalesce(to_jsonb(dv.*) -> 'calculation', 'null'::jsonb) <> 'null'::jsonb) as calculated,
+       to_jsonb(dv.*) -> 'calculation' as calculation,
        (d.owner_scope = 'system' and $${hideClubIdx}::uuid is not null
           and exists (select 1 from training_load.metric_definition_club_hides ch
                        where ch.club_id = $${hideClubIdx}::uuid and ch.metric_definition_id = d.id and ch.shown_at is null)) as "hiddenInClub"
@@ -242,7 +293,7 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
      limit $${params.length}`,
     params,
   );
-  const rows = result.rows.slice(0, pageSize);
+  const rows = await withCalculations(req, result.rows.slice(0, pageSize), teamClubId);
   const hasMore = result.rows.length > pageSize;
   const nextCursor = hasMore ? { label: rows[rows.length - 1].label, id: rows[rows.length - 1].id } : null;
   return { rows, nextCursor };
@@ -250,7 +301,8 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
 
 export async function getDefinition(req, id, { hideCalculated = false } = {}) {
   const result = await query(
-    `select d.*, dv.unit, dv.value_type, dv.min_value, dv.max_value, dv.condition_description, dv.daily_aggregation_method, dv.version_number
+    `select d.*, dv.unit, dv.value_type, dv.min_value, dv.max_value, dv.condition_description, dv.daily_aggregation_method, dv.version_number,
+       to_jsonb(dv.*) -> 'calculation' as calculation
      from training_load.metric_definitions d
      join training_load.metric_definition_versions dv on dv.id = d.current_version_id
      where d.id = $1`,
@@ -269,7 +321,8 @@ export async function getDefinition(req, id, { hideCalculated = false } = {}) {
   // J21: in an athlete's workspace a calculated variable reads exactly like a missing one.
   if (hideCalculated && (await query(`select 1 from training_load.metric_definitions d where d.id = $1 and ${calculatedDefinitionSql("d")}`, [id])).rowCount) return null;
   const capsResult = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level`, [id]);
-  return { ...row, scope_capabilities: capsResult.rows.map((r) => r.scope_level) };
+  const [shaped] = await withCalculations(req, [row]);
+  return { ...shaped, scope_capabilities: capsResult.rows.map((r) => r.scope_level) };
 }
 
 export async function createDefinition(req, body) {
@@ -670,3 +723,7 @@ export async function deleteStructureLink(req, id) {
 }
 
 export { DEFAULT_ICON_URL };
+
+// For the route suite's test of an input the viewer may not read (unreachable through a route today: an input is its
+// calculation's owner's or OptiMove's).
+export const withCalculationsForTest = withCalculations;
