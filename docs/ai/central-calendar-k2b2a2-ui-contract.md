@@ -95,8 +95,10 @@ A section **"Questions for athletes"** at the top of the tab (before *Event type
 - Off: "○ Off — questions to athletes are not turned on for this club. A platform administrator can turn them on."
 - State shown with a glyph and the word, never with colour alone.
 
-**A platform admin** (the client knows it from `state.organization.data.isPlatformAdmin`, the fact Settings → Storage
-and App health already use; the server decides again on the write): the same line, then one form:
+**A platform admin in the club's workspace** (which today means also the club's admin: a platform admin reaches a club
+workspace only through that club's `club_admin` role, `loadAvailableWorkspaces`). The client knows the platform role
+from `state.organization.data.isPlatformAdmin`, the fact Settings → Storage and App health already use; the server
+decides again on every write. The same line, then one form:
 - **Reason** (`textarea`, required, ≤ 500 characters, 16 px): label "Why are you turning it on?" / "…off?";
 - one button: **Turn on for this club** or **Turn off for this club** (the opposite of the state);
 - empty reason → the button stays enabled; on press, the field's error "Write a reason." and nothing is sent;
@@ -459,3 +461,20 @@ GO on the contract at `3c04ca7c`, with these decisions (the calendar manager's m
 with `git merge --no-edit origin/claude/central-calendar-k2b2a-1` (no rebase). The browser check and the Frontend PR
 gate run after that merge. `styles.css` and `state.js` are shared: calendar- or tests-prefixed selectors only, and any
 shared part of `state.js` touched is named. The executor does not open the PR.
+
+**During 2a-2b (the manager's GOs of 2026-11-19):**
+- **4.1, deviation:** the panel learns B1 from the shared, per-workspace cached `/events/types` read. It is the event form's
+  own cache, read on the first open of a manager's event panel in a club or team workspace. It is dropped on a workspace
+  change and after every Settings → Calendar write, the switch's included. A failed or lost read is not kept: that panel
+  shows no section and no message, and the next panel open reads it again. It is never read per card, for a reader, or
+  in the athlete workspace.
+- **4.2 and 4.3, decided:** on an answered question the button reads **Stop question**, as its step does; an unanswered one
+  keeps **Remove question**. A command's result or refusal is drawn in the row that sent it (`role="status"` for a
+  result, `role="alert"` for a refusal), and beside that kind's *Ask* when no row holds it (an *Ask* refused, a question
+  removed). Only a section-wide read ("The questions could not be read.") stays under the section's title. The coach UI
+  keeps **WELLNESS**, the name the coach sees in Tests.
+- **Known limit:** turning the club's switch off hides the questions in the panel; live questions keep their window, and
+  a coach who must stop one turns the switch back on first.
+- **7, the TL screen:** in `frontend/training-load-actions.js`, only the external-schedule form's save and the Pause /
+  Resume / Cancel call read `409 schedule_managed_by_calendar` as "This RPE request belongs to a calendar event. Change it
+  on the event."; every other refusal keeps today's handling.

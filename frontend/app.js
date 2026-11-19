@@ -45,7 +45,7 @@ import { handleMappingsAction, handleMappingsInput } from "./metric-mappings-act
 import { closeBoardOverlay, dropFieldOnVariable, handleBoardAction, handleBoardInput, boardBeforeSwitch, boardSwitchFailed, metricBoardParkedToggled } from "./metric-board-actions.js";
 import { endSourceFieldDrag, dropSourceFieldDrag, leaveSourceFieldDrag, overSourceFieldDrag, startSourceFieldDrag } from "./metric-board-drag.js";
 import { enterSourceConnectionsSection, loadSourceConnections, sourceConnectionsNeedLoad } from "./source-connections-data.js";
-import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
+import { endTestsCalendarDrag, extendTestsCalendarDrag, handleTestsAction, handleTestsScheduleAthleteSearchInput, handleTestsScheduleFormField, handleTestsSliderInput, isTestsCalendarDragging, openAssignment as openTestAssignmentForm, resetTestsScheduleFormForWorkspaceChange, startTestsCalendarDrag, submitTestsForm } from "./tests-actions.js";
 import { loadPendingCount as loadTestsPendingCount, loadTests, reportDeviceTimezone } from "./tests-data.js";
 import { handleTestsLibraryInput, renderTests, renderTestsBadge } from "./tests-view.js";
 import {
@@ -3443,6 +3443,7 @@ async function onWorkspaceChanged() {
   invalidateCentralCalendarCache();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
+  resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;
   // a create not confirmed stays in the calendar's memory under it.
   resetBuilderCalendarEventForWorkspaceChange();
