@@ -319,6 +319,30 @@ export function clearCentralCalendarUncertainWrites() {
   uncertainWrites.clear();
 }
 
+// K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.6): a create sent from
+// the Builder's "Make an event" joins this memory as a create from its send
+// until its answer settles, so the calendar's guards count it and its line
+// offers Check result (the same body and key). Returns the function that
+// forgets it once settled.
+export function rememberCentralCalendarCreate({ sentBody, requestKey }) {
+  rememberUncertainWrite({ mode: "create", sentBody, requestKey });
+  return () => forgetUncertainWrite(requestKey);
+}
+
+// K2c-2-F (2.1.8): "Open in calendar" from the Builder - the calendar on that
+// day, with the event's panel open when a key is given (and no form is open).
+export function openCentralCalendarAt({ date, key = "" } = {}) {
+  const cal = state.centralCalendar;
+  if (!cal || !date) return;
+  cal.anchor = date;
+  cal.selectedDate = date;
+  if (key && !cal.form) {
+    cal.panelEvent = null;
+    cal.panel = { ...closedPanel(), open: true, key, date };
+  }
+  invalidateCentralCalendarCache();
+}
+
 // Leaving the form (another item, Escape / Back, a workspace switch through
 // app.js): a save in flight, a result not confirmed or unsaved values are
 // asked about first. A move to another menu keeps the form (the slice stays).

@@ -83,7 +83,8 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
-import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
+import { handleBuilderCalendarEventAction, handleBuilderCalendarEventInput, resetBuilderCalendarEventForWorkspaceChange } from "./builder-calendar-event-actions.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
@@ -1284,6 +1285,7 @@ function handleBuilderSearchKeydown(event) {
 }
 
 function handleContentInput(event) {
+  if (handleBuilderCalendarEventInput(event.target)) return;
   if (event.target.matches("[data-athlete-filter]")) {
     handleAthleteFilter(event.target);
     return;
@@ -3439,6 +3441,9 @@ async function onWorkspaceChanged() {
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
   resetTestsScheduleFormForWorkspaceChange();
+  // The Builder's Make an event panel and badges belong to the old workspace;
+  // a create not confirmed stays in the calendar's memory under it.
+  resetBuilderCalendarEventForWorkspaceChange();
   state.athletes = [];
   state.selectedAthleteId = null;
   // The new workspace's roster is on its way: the list stays blank, never "No athletes here".
@@ -4123,6 +4128,8 @@ async function handleBuilderAction(action) {
     document.querySelector(".builder-workspace")?.setAttribute("inert", "");
   }
   try {
+    // K2c-2-F: "Make an event" from a weekly session (builder-calendar-event-actions.js).
+    if (await handleBuilderCalendarEventAction(action, { renderBuilder, openCalendarAt: openCentralCalendarFromBuilder })) return;
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
     if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
@@ -4133,6 +4140,18 @@ async function handleBuilderAction(action) {
       document.querySelector(".builder-workspace")?.removeAttribute("inert");
     }
   }
+}
+
+// K2c-2-F: "Open in calendar" from the Builder - the calendar on that day,
+// with the event's panel when the Builder knows it.
+// The calendar moves to the day; if the leave guard keeps the coach where
+// they are, its day, selection and panel go back as they were (code review LOW).
+function openCentralCalendarFromBuilder(target) {
+  const cal = state.centralCalendar;
+  const before = cal ? { anchor: cal.anchor, selectedDate: cal.selectedDate, panel: cal.panel, panelEvent: cal.panelEvent } : null;
+  openCentralCalendarAt(target);
+  openCentralCalendarFromRail();
+  if (state.activeTab !== "central-calendar" && cal && before) Object.assign(cal, before);
 }
 
 function renderBuilderError(error) {
