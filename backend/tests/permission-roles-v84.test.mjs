@@ -661,3 +661,22 @@ test("15b. the request record: it names its acting user and the basis the databa
   await refused(request(w.coach), "42501", /permission request: the acting user may not write this request/);
   await refused(request(w.admin), "23514", /permission request: the request must follow its own operation in the same transaction/);
 });
+
+test("14b. assignments: an archived role, a role not assignable for the scope type (club), a revocation that also changes another column", async () => {
+  const w = await world();
+  const teamOnly = await clubRole(w.admin, w.club, { items: ["org.view"], club_: false, team_: true });
+  const insert = (roleId, scopeType, scopeId) => asActor(db.url, w.admin, (c) => c.query(`insert into public.user_role_assignments (user_id, role_id, scope_type, scope_id, granted_by_user_id, grant_basis, grant_reason)
+      values ($1, $2, $3, $4, $5, 'club_admin', 'x')`, [w.other, roleId, scopeType, scopeId, w.admin]), { rollback: true });
+  await refused(insert(teamOnly, "club", w.club), "23514", /role assignment: the role cannot be assigned for this scope/);
+  const archived = await clubRole(w.admin, w.club, { items: ["org.view"] });
+  await k.query(`set session_replication_role = replica`);
+  await k.query(`update public.permission_roles set archived_at = now(), archived_by_user_id = $2 where id = $1`, [archived, w.admin]);
+  await k.query(`reset session_replication_role`);
+  await refused(insert(archived, "team", w.team), "23514", /role assignment: the role cannot be assigned for this scope/);
+  const role = await clubRole(w.admin, w.club, { items: ["org.view"] });
+  const a = await assign(w.admin, { userId: w.other, roleId: role, scopeType: "club", scopeId: w.club, club: w.club });
+  for (const extra of ["display_title = 'Changed'", "grant_reason = 'Changed'", "expires_at = now() + interval '1 day'"]) {
+    await refused(asActor(db.url, w.admin, (c) => c.query(`update public.user_role_assignments set revoked_at = now(), revoked_by_user_id = $2, revoke_kind = 'revoked', revoke_reason = 'x', ${extra} where id = $1`, [a, w.admin]), { rollback: true }),
+      "23514", /role assignment: only a revocation may change the row/);
+  }
+});

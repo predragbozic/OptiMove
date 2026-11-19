@@ -31,6 +31,7 @@ before(async () => {
 afterEach(() => {
   svc?.setRolesCommitForTests();
   svc?.setRolesBeforeLocksHoldForTests(null);
+  svc?.setRolesAfterBeginHoldForTests(null);
   svc?.setRolesWriteHoldForTests(null);
   svc?.setRolesStatementRecorderForTests(null);
 });
@@ -558,4 +559,16 @@ test("25 (API). a new grant of the same (user, role, scope) first stamps the lap
   assert.notEqual(second.id, first.id);
   assert.equal((await one(`select revoke_kind, revoked_by_user_id from public.user_role_assignments where id = $1`, [first.id])).revoke_kind, "expired");
   code(await grant(w.adminA, { userId: w.target.id, roleId: role.id, scopeType: "club", scopeId: w.A, expiresAt: "2020-01-01T00:00:00Z" }), 400, "invalid_request");
+});
+
+test("30b. a replay re-evaluates the caller's standing inside its transaction: the right lost after the route's gate and before the replay check answers 404", async () => {
+  const w = await world();
+  const second = await F.user("second"); await F.grantClub(second, w.A);
+  const body = { requestKey: key(), clubId: w.A, name: `Replay ${hex()}`, scopeTypes: ["club"], items: ["org.view"] };
+  ok(await srv.api(w.adminA.cookie, R, { method: "POST", body }));
+  svc.setRolesAfterBeginHoldForTests(async () => {
+    svc.setRolesAfterBeginHoldForTests(null);
+    await k.query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [w.adminA.id, w.A]);
+  });
+  code(await srv.api(w.adminA.cookie, R, { method: "POST", body }), 404, "notFound");
 });

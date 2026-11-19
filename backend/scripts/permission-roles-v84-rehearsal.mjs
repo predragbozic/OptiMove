@@ -165,10 +165,9 @@ export async function rehearse(args, password) {
     await c.connect();
     try {
       const u = (await c.query(`insert into public.users (email, first_name, last_name, full_name) values ('rehearsal@test.local','R','2','R 2') returning id`)).rows[0].id;
-      const club = (await c.query(`insert into public.clubs (name) values ('Rehearsal') returning id`)).rows[0].id;
-      const team = (await c.query(`insert into public.teams (club_id, name) values ($1, 'T') returning id`, [club])).rows[0].id;
-      await c.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [u, club]);
-      await c.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',false)`, [u, team]);
+      // A platform admin row, so the fingerprint and the twin's spot row have a row to read. The club and team role
+      // tables stay as the snapshot leaves them: R1's source scan (permissions-r1 c1) allows organization.js alone to
+      // write them; test 1 of permission-roles-v84 proves the unchanged rows of all three tables on PostgreSQL 16.
       await c.query(`insert into public.user_global_roles (user_id, role) values ($1,'platform_admin')`, [u]);
       report("1. a disposable database through the migration before v84", true, name);
 

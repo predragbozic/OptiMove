@@ -130,11 +130,14 @@ let uncertainCheckFault = null;
 let commitTimeoutMs = COMMIT_ANSWER_TIMEOUT_MS;
 let uncertainCheckTimeoutMs = UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS;
 let beforeLocksHold = null;
+let afterBeginHold = null;
 let writeHold = null;
 let statementRecorder = null;
 export function setRolesCommitForTests({ fault = null, timeoutMs = COMMIT_ANSWER_TIMEOUT_MS, checkFault = null, checkTimeoutMs = UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS } = {}) {
   commitFault = fault; commitTimeoutMs = timeoutMs; uncertainCheckFault = checkFault; uncertainCheckTimeoutMs = checkTimeoutMs;
 }
+// Runs inside a write's transaction right after its bounds, before the replay check.
+export function setRolesAfterBeginHoldForTests(fn) { afterBeginHold = fn ?? null; }
 // Runs inside a write's transaction after the replay check, before the first lock.
 export function setRolesBeforeLocksHoldForTests(fn) { beforeLocksHold = fn ?? null; }
 // Runs inside a write's transaction after every lock and check, before the first write.
@@ -444,6 +447,7 @@ async function runWrite(ctx, { operation, requestKey, requestHash, prepare, writ
     await client.query(`set local lock_timeout = '${LOCK_TIMEOUT_MS}ms'`);
     await client.query(`set local statement_timeout = '${STATEMENT_TIMEOUT_MS}ms'`);
     await client.query(`set local idle_in_transaction_session_timeout = '${IDLE_TIMEOUT_MS}ms'`);
+    if (afterBeginHold) await afterBeginHold();
     // 1. Replay: a request record of this caller and key.
     const earlier = (await client.query(`select id, operation, request_hash, role_change_id, assignment_id, owner_club_id
         from public.permission_requests where requested_by_user_id = $1 and request_key = $2`, [ctx.userId, requestKey])).rows[0];
