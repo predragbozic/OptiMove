@@ -224,7 +224,11 @@ test("0c. GET /events/types: the types as before (T2), additively each type's co
   const { roles } = m;
   const c1 = await typesOf(roles.clubAdmin.cookie);
   assert.equal(c1.status, 200, c1.text);
-  assert.deepEqual(Object.keys(c1.body).sort(), ["fields", "locations", "teamDefaults", "types"]);
+  // K2b-2a-1 B1 (additive): `questions` carries the club's switch for the forms; no switch row here, so it is off and no
+  // type carries defaultQuestions.
+  assert.deepEqual(Object.keys(c1.body).sort(), ["fields", "locations", "questions", "teamDefaults", "types"]);
+  assert.deepEqual(c1.body.questions, { enabled: false });
+  assert.ok(c1.body.types.every((t) => !("defaultQuestions" in t)));
   assert.deepEqual(c1.body.types.map((t) => t.key), SEEDED_KEYS);
   assert.ok(c1.body.types.every((t) => t.ownerScope === "club" && "colorKey" in t && Array.isArray(t.defaultFieldIds)));
   const fieldIds = new Set(c1.body.fields.map((f) => f.id));

@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { insertExternalSchedule, insertExternalTargets, insertNotificationRules } from "../externalScheduleWriter.js";
+import { MANAGED_BY_CALENDAR, scheduleManagedByCalendar } from "../calendarQuestions.js";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
@@ -1837,21 +1839,6 @@ async function resolveValidExternalTargets(scope, rawTargets) {
   return { ok: true, targets };
 }
 
-async function insertExternalTargets(client, scheduleId, targets) {
-  for (const target of targets) {
-    await client.query(
-      `insert into training_load.external_schedule_targets (schedule_id, target_kind, target_athlete_id, target_team_id, target_club_id)
-       values ($1, $2, $3, $4, $5)`,
-      [
-        scheduleId,
-        target.kind,
-        target.kind === "athlete" ? target.id : null,
-        target.kind === "team" ? target.id : null,
-        target.kind === "club" ? target.id : null,
-      ],
-    );
-  }
-}
 
 // Optional label only - never referenced by scheduling/timezone/occurrence
 // logic (see migrations_v2/202609011200_training_load_v6...).
@@ -1919,14 +1906,6 @@ function resolveValidNotificationRules(rawRules) {
   return { ok: true, rules };
 }
 
-async function insertNotificationRules(client, scheduleId, rules) {
-  for (const rule of rules) {
-    await client.query(
-      `insert into training_load.external_schedule_notification_rules (schedule_id, kind, enabled, reminder_offset_minutes) values ($1,$2,$3,$4)`,
-      [scheduleId, rule.kind, rule.enabled, rule.reminderOffsetMinutes],
-    );
-  }
-}
 
 function formatNotificationRuleRow(row) {
   return { kind: row.kind, enabled: row.enabled, reminderOffsetMinutes: row.reminder_offset_minutes };
@@ -2018,16 +1997,6 @@ function resolveExternalScheduleKindAndDates(body) {
   return { scheduleKind: "one_time", recurrenceRule: null, startDate, endDate: null, dates: null };
 }
 
-async function insertExternalSchedule(client, { scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner }) {
-  const result = await client.query(
-    `insert into training_load.external_schedules
-       (schedule_kind, timezone, start_date, end_date, recurrence_rule, recurrence_rule_version, opens_time, due_time, closes_time, status, event_name, event_type, event_note, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
-     values ($1,$2,$3,$4,$5,1,$6,$7,$8,'active',$9,$10,$11,$12,$13,$14,$15,$16)
-     returning *`,
-    [scheduleKind, timezone, startDate, endDate, recurrenceRule, opensTime, dueTime, closesTime, eventName, eventType, eventNote, userId, owner.ownerScope, owner.ownerUserId, owner.ownerClubId, owner.ownerTeamId],
-  );
-  return result.rows[0];
-}
 
 async function insertExternalScheduleDates(client, scheduleId, dates) {
   for (const scheduledDate of dates) {
@@ -2225,6 +2194,11 @@ router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
+    // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
+    if (await scheduleManagedByCalendar(client, "external", schedule.id)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "schedule_managed_by_calendar", message: MANAGED_BY_CALENDAR });
+    }
     const body = req.body || {};
     // Hardening correction (item 2): startDate/dates/scheduleKind are
     // identity, fixed at creation - Schedule again is the only way to
@@ -2407,6 +2381,11 @@ async function setExternalScheduleStatus(req, res, next, newStatus) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
+    // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
+    if (await scheduleManagedByCalendar(client, "external", schedule.id)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "schedule_managed_by_calendar", message: MANAGED_BY_CALENDAR });
+    }
     if (schedule.status === "cancelled") {
       await client.query("rollback");
       return res.status(400).json({ error: "This schedule was already cancelled." });
@@ -2461,6 +2440,10 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
     const sourceResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
     const source = sourceResult.rows[0];
     if (!source || !canManageExternalScheduleInScope(scope, source)) return res.status(404).json({ error: "Schedule not found." });
+    // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names is scheduled again on its event.
+    if (await scheduleManagedByCalendar(pool, "external", source.id)) {
+      return res.status(409).json({ error: "schedule_managed_by_calendar", message: MANAGED_BY_CALENDAR });
+    }
 
     const body = req.body || {};
     const validated = resolveAndValidateExternalScheduleBody(body, source);

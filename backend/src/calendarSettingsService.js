@@ -26,6 +26,8 @@ import { isCalendarColorKey } from "./calendarColors.js";
 import { EventError, eventWriteBasis, forbidden, notFound } from "./calendarEventAccess.js";
 import { EVENT_EXPECTS, eventCatalogOwner, expectsField, isUuid, listEventTypes, requestKeyOf, revisionField, textField } from "./calendarEventService.js";
 import { hashOf, runCalendarCommand } from "./calendarCommandRunner.js";
+import { isPlatformAdministrator } from "./authz.js";
+import { questionsOff, typeQuestions, validateDefaultQuestions } from "./calendarQuestions.js";
 
 export const EVENT_KINDS = Object.freeze(["training", "match", "travel", "meeting", "day_off", "camp", "test"]);
 export const VALUE_KINDS = Object.freeze(["choice", "number", "scale_1_5", "yes_no", "short_text"]);
@@ -177,7 +179,7 @@ export function validateTypeCreate(body) {
 
 export function validateTypeUpdate(body) {
   plainObject(body);
-  only(body, ["requestKey", "expectedRevision", "label", "iconKey", "colorKey", "defaultExpects", "fieldIds"]);
+  only(body, ["requestKey", "expectedRevision", "label", "iconKey", "colorKey", "defaultExpects", "fieldIds", "defaultQuestions"]);
   const requestKey = requestKeyOf(body);
   const expectedRevision = revisionField(body);
   const fields = {};
@@ -188,6 +190,9 @@ export function validateTypeUpdate(body) {
   put("colorKey", colorField(body));
   if ("defaultExpects" in body) fields.defaultExpects = expectsList({ expects: body.defaultExpects });
   put("fieldIds", orderedIds(body, "fieldIds", "invalid_fields", LIMITS.typeFields));
+  // K2b-2a-1: the type's questions for athletes (only while the club's
+  // switch is on; plan 3.2).
+  if ("defaultQuestions" in body) fields.defaultQuestions = validateDefaultQuestions(body.defaultQuestions);
   if (!Object.keys(fields).length) throw bad("nothing_to_change", "Send at least one field to change.");
   return { requestKey, canonical: { operation: "type_update", expectedRevision, fields } };
 }
@@ -352,7 +357,7 @@ const CLUB_EVENT_SQL = `(e.owner_club_id = $1 or exists (select 1 from public.te
 
 const TYPE_VIEW_SQL = `
   select t.id, t.key, t.kind, t.label, t.icon_key, t.color_key, t.default_expects, t.sort_order, t.seed_key,
-         t.archived_at, t.revision,
+         t.archived_at, t.revision, to_jsonb(t) -> 'default_questions' as default_questions,
          (select coalesce(array_agg(l.field_id order by l.position, l.field_id), '{}') from calendar.event_type_fields l
            where l.event_type_id = t.id) as field_ids,
          (select count(*)::int from calendar.events e where e.event_type_id = t.id and ${CLUB_EVENT_SQL}) as event_count
@@ -365,6 +370,8 @@ function typeView(r) {
     defaultExpects: EVENT_EXPECTS.filter((e) => (r.default_expects || []).includes(e)),
     fieldIds: (r.field_ids || []).map(String), sortOrder: r.sort_order, seeded: r.seed_key !== null,
     archived: r.archived_at !== null, archivedAt: iso(r.archived_at), revision: r.revision, eventCount: r.event_count, canEdit: true,
+    // K2b-2a-1: only while the club's switch is on (plan 3.1).
+    ...(r.questions_on ? { defaultQuestions: typeQuestions(r) } : {}),
   };
 }
 
@@ -423,7 +430,9 @@ function teamView(r) {
 async function readTypes(queryable, clubId, ids = null) {
   const rows = (await queryable.query(`${TYPE_VIEW_SQL}${ids ? " and t.id = any($2::uuid[])" : ""} order by t.archived_at is not null, t.sort_order, t.label, t.id`,
     ids ? [clubId, ids] : [clubId])).rows;
-  return rows.map(typeView);
+  // K2b-2a-1: the switch read on its own (the table exists only with v81).
+  const on = (await readQuestionsSwitch(queryable, clubId))?.enabled === true;
+  return rows.map((r) => typeView({ ...r, questions_on: on }));
 }
 async function readFields(queryable, clubId, ids = null) {
   const rows = (await queryable.query(`${FIELD_VIEW_SQL}${ids ? " and f.id = any($2::uuid[])" : ""} order by f.archived_at is not null, f.sort_order, f.label, f.id`,
@@ -444,10 +453,10 @@ async function readTeams(queryable, clubId, ids = null) {
 // GET /api/calendar/settings — the active club's whole catalog.
 export async function getSettings(ctx) {
   const { clubId } = settingsClub(ctx);
-  const [types, fields, locations, teams] = await Promise.all([
-    readTypes(pool, clubId), readFields(pool, clubId), readLocations(pool, clubId), readTeams(pool, clubId),
+  const [types, fields, locations, teams, questions] = await Promise.all([
+    readTypes(pool, clubId), readFields(pool, clubId), readLocations(pool, clubId), readTeams(pool, clubId), readQuestionsSwitch(pool, clubId),
   ]);
-  return { clubId, types, fields, locations, teams };
+  return { clubId, types, fields, locations, teams, ...(questions ? { questions } : {}) };
 }
 
 // One subject as the caller may see it now (a write's answer, a replay).
@@ -665,12 +674,16 @@ export async function updateType(ctx, typeId, body) {
     if (row.archived_at) throw conflict("type_archived", "This type is archived. Restore it first.", { current: (await subjectView(client, clubId, "type", id)).type });
     const before = (await subjectView(client, clubId, "type", id)).type;
     if (f.fieldIds) await lockLiveFieldsKeepingListed(client, clubId, f.fieldIds, before.fieldIds);
+    if (f.defaultQuestions) {
+      const on = (await readQuestionsSwitch(client, clubId, { lock: true }))?.enabled === true;
+      if (!on) throw questionsOff();
+    }
     await client.query(
       `update calendar.event_types
-          set label = $2, icon_key = $3, color_key = $4, default_expects = $5, revision = revision + 1
+          set label = $2, icon_key = $3, color_key = $4, default_expects = $5, revision = revision + 1${f.defaultQuestions ? ", default_questions = $6::text[]" : ""}
         where id = $1`,
       [id, f.label ?? before.label, "iconKey" in f ? f.iconKey : before.iconKey, "colorKey" in f ? f.colorKey : before.colorKey,
-        f.defaultExpects ?? before.defaultExpects],
+        f.defaultExpects ?? before.defaultExpects, ...(f.defaultQuestions ? [f.defaultQuestions] : [])],
     );
     if (f.fieldIds && !sameList(f.fieldIds, before.fieldIds)) await writeTypeFields(client, id, f.fieldIds);
     const after = (await subjectView(client, clubId, "type", id)).type;
@@ -680,6 +693,9 @@ export async function updateType(ctx, typeId, body) {
     if (after.colorKey !== before.colorKey) details.colorKey = pair(before.colorKey, after.colorKey);
     if (!sameList(after.defaultExpects, before.defaultExpects)) { details.defaultExpectsBefore = before.defaultExpects; details.defaultExpectsAfter = after.defaultExpects; }
     if (!sameList(after.fieldIds, before.fieldIds)) { details.fieldIdsBefore = before.fieldIds; details.fieldIdsAfter = after.fieldIds; }
+    if (f.defaultQuestions && !sameList(after.defaultQuestions ?? [], before.defaultQuestions ?? [])) {
+      details.defaultQuestionsBefore = before.defaultQuestions ?? []; details.defaultQuestionsAfter = after.defaultQuestions ?? [];
+    }
     return { httpStatus: 200, body: { type: after }, subjectKind: "type", subjectId: id, changes: [{ kind: "type", id, details }] };
   });
 }
@@ -999,5 +1015,111 @@ export async function eventFormOptions(ctx) {
     club = owner.teamClubId;
     teamIds = [owner.teamId];
   }
-  return { types, ...(await formCatalog(pool, { club, teamIds })) };
+  // K2b-2a-1, B1 (additive): the club's switch, and each type's default
+  // questions only while it is on (the value a create without `questions`
+  // asks, typeQuestions). No club (a private coach, the platform) is off;
+  // nothing else of the switch leaves the server.
+  const questionsOn = club ? (await readQuestionsSwitch(pool, club))?.enabled === true : false;
+  let formTypes = types;
+  if (questionsOn && types.length) {
+    const rows = (await pool.query(
+      `select t.id, t.default_expects, to_jsonb(t) -> 'default_questions' as default_questions
+         from calendar.event_types t where t.id = any($1::uuid[])`,
+      [types.map((t) => t.id)],
+    )).rows;
+    const byId = new Map(rows.map((r) => [String(r.id), r]));
+    formTypes = types.map((t) => ({ ...t, defaultQuestions: typeQuestions(byId.get(String(t.id))) }));
+  }
+  return { types: formTypes, ...(await formCatalog(pool, { club, teamIds })), questions: { enabled: questionsOn } };
+}
+
+// ---------------------------------------------------------------------------
+// K2b-2a-1: the club's switch for *Ask athletes* (plan 3.1, Q7, 9.1.3)
+// ---------------------------------------------------------------------------
+// The switch's state (no row = off); null without migration v81.
+async function readQuestionsSwitch(queryable, clubId, { lock = false } = {}) {
+  const installed = (await queryable.query(`select to_regclass('calendar.club_question_settings') is not null as ok`)).rows[0].ok;
+  if (!installed) return null;
+  const row = (await queryable.query(
+    `select enabled, revision, updated_at from calendar.club_question_settings where club_id = $1${lock ? " for share" : ""}`, [clubId],
+  )).rows[0];
+  return { enabled: Boolean(row?.enabled), revision: row?.revision ?? 0, updatedAt: iso(row?.updated_at) };
+}
+
+export function validateQuestionsSwitch(body) {
+  plainObject(body);
+  only(body, ["requestKey", "enabled", "reason"]);
+  const requestKey = requestKeyOf(body);
+  if (typeof body.enabled !== "boolean") throw bad("invalid_enabled", "enabled must be true or false.");
+  const reason = textField(body, "reason", 500, "invalid_reason", { multiline: true, required: true });
+  return { requestKey, canonical: { operation: "questions_switch", enabled: body.enabled, reason } };
+}
+
+// PUT /api/calendar/settings/questions — an active platform admin in the
+// club's workspace; everyone else (the club's admin included) the 404.
+export async function setQuestionsSwitch(ctx, body) {
+  const refuse = () => notFound();
+  if (ctx.type !== "coach" || ctx.workspace?.type !== "club" || !isPlatformAdministrator(ctx.authz)) throw refuse();
+  const clubId = String(ctx.workspace.scopeId);
+  const { requestKey, canonical } = validateQuestionsSwitch(body);
+  const basis = "platform_admin";
+  return runCalendarCommand({
+    userId: ctx.userId, requestKey, operation: "questions_switch", label: "calendar-settings", subject: `questions_switch in club ${clubId}`,
+    requestsTable: "calendar.settings_requests", requestKeyConstraint: "settings_requests_one_per_key",
+    busyMessage: BUSY, hooks: testHooks,
+    async prepare(client) {
+      const installed = (await client.query(`select to_regclass('calendar.club_question_settings') is not null as ok`)).rows[0].ok;
+      if (!installed) throw refuse();
+      const hash = hashOf({ canonical, club: clubId, subject: `club:${clubId}` });
+      try {
+        await client.query(`select calendar.lock_event_writer($1, 'club', $2, $3)`, [ctx.userId, clubId, basis]);
+      } catch (error) {
+        if (error?.code === "42501") throw refuse();
+        throw error;
+      }
+      const row = (await client.query(`select club_id, enabled, revision from calendar.club_question_settings where club_id = $1 for update`, [clubId])).rows[0] ?? null;
+      return { hash, row };
+    },
+    sameRequest: (prior, prepared) => prior.request_hash === prepared.hash && String(prior.club_id) === clubId,
+    answer: async (queryable, stored, extra) => {
+      if (String(stored.clubId) !== clubId) throw refuse();
+      return { status: stored.httpStatus || 200, body: { questions: await readQuestionsSwitch(queryable, clubId), ...extra } };
+    },
+    async apply({ client, row }) {
+      if (row) {
+        await client.query(
+          `update calendar.club_question_settings set enabled = $2, reason = $3, updated_by_user_id = $4, revision = revision + 1 where club_id = $1`,
+          [clubId, canonical.enabled, canonical.reason, ctx.userId],
+        );
+      } else {
+        await client.query(
+          `insert into calendar.club_question_settings (club_id, enabled, reason, updated_by_user_id) values ($1, $2, $3, $4)`,
+          [clubId, canonical.enabled, canonical.reason, ctx.userId],
+        );
+      }
+      return {
+        httpStatus: 200, body: { questions: await readQuestionsSwitch(client, clubId) },
+        details: { enabledBefore: row ? row.enabled : false, enabledAfter: canonical.enabled },
+      };
+    },
+    async writeRecord({ client, requestId, out, hash }) {
+      await client.query(
+        `insert into calendar.settings_requests (id, request_key, request_hash, operation, performed_by_user_id, club_id, result)
+         values ($1, $2, $3, 'questions_switch', $4, $5, $6)`,
+        [requestId, requestKey, hash, ctx.userId, clubId, JSON.stringify({ httpStatus: out.httpStatus, clubId, subjectKind: "club", subjectId: clubId })],
+      );
+      const revision = (await client.query(`select revision from calendar.club_question_settings where club_id = $1`, [clubId])).rows[0].revision;
+      await client.query(
+        `insert into calendar.settings_changes (request_id, subject_kind, subject_club_id, revision, kind, basis, performed_by_user_id, details)
+         values ($1, 'club', $2, $3, 'questions_switch', $4, $5, $6)`,
+        [requestId, clubId, revision, basis, ctx.userId, JSON.stringify(out.details)],
+      );
+    },
+    respond: (out) => ({ status: out.httpStatus, body: out.body }),
+    mapError(error) {
+      if (error?.code === "23505" && error.constraint === "settings_changes_club_revision_key") return conflict("try_again", BUSY);
+      if (error?.code === "23505" && error.constraint === "club_question_settings_pkey") return conflict("try_again", BUSY);
+      return null;
+    },
+  });
 }
