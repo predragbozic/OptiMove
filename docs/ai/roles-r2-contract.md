@@ -8,7 +8,7 @@ written into the sections below.
 
 | | |
 |---|---|
-| Status | **Proposed.** Not accepted; nothing is built, and no code is written before the GO. The owner decided O1-O10 and the plan's D4 on 2026-11-19 (section 10.0); the *Rukovodilac* of OptiMove decided M1-M15 (section 10.2). Reviews: the three internal reviews (database, security, consistency) ended READY on `ab38f76`. The external review (the *Nezavisni revizor*, relayed by the *Rukovodilac*) was NO-GO at `2e5324c` with two MEDIUM findings: the lock order against the login switch-off (4.3.1) and the drift of the twin against `can()` (test 31a). Both were written in at `014614b`, and the narrow external re-review of that head was **GO**: the contract may be implemented. Its two LOW notes are in this head (10.3). Still owed: the owner's acceptance; then the implementation as a ★★ package (v84), whose migration is merged only on the owner's word to the *Rukovodilac* of OptiMove. |
+| Status | **Accepted** by the owner on 2026-11-19 (in the chat of this stream's manager, relayed: „ugovor prihvatam, rukovodilac optimove spaja bez moje posebne reci”), at head `d176d79` plus this status commit. Nothing is built yet. The owner decided O1-O10 and the plan's D4 (section 10.0); the *Rukovodilac* of OptiMove decided M1-M15 (section 10.2). Reviews: the three internal reviews ended READY on `ab38f76`; the external review (the *Nezavisni revizor*, relayed by the *Rukovodilac*) was NO-GO at `2e5324c` with two MEDIUM findings, written in at `014614b`, and its narrow re-review of that head was GO (10.3). Next: the implementation as a ★★ package (v84). The *Rukovodilac* of OptiMove merges it on its own decision after the *Nezavisni revizor*'s review and its gate (section 7). |
 | Mark | ★★: external-review triggers 1 (a migration), 2 (auth, roles, info hiding) and 4 (transactions, lock order, idempotency) of `CLAUDE.md`. |
 | Written against | The plan at `3a6723a` and the R1 code at `f4dd289`. Both are merged: `origin/main` at `b08cfb7` (2026-11-19) holds them and is merged into this branch. `backend/src/permissions.js`, `routes/organization.js`, `authz.js`, `auth.js`, `server.js` and `backend/tests/permissions-r1.test.mjs` are byte-identical at `f4dd289` and at `b08cfb7` (`git diff`), so every `file:line` below holds at both. R2's implementation re-checks each at its own base. |
 | Depends on | R1 merged (`backend/src/permissions.js`, `can()`), and the read-only production count of the plan's section 2.1 rule 2 (rows of `user_club_roles` / `user_team_roles` with another word; expected 0). The manager of this stream relays that the *Rukovodilac* of OptiMove read 0 rows on 2026-11-19 at 07:57 UTC; the database was not read for this document, and the preflight counts again (7.1 block 3). |
@@ -810,9 +810,18 @@ controls the shared database credentials (`…v35…:38-47`).
 
 ## 7. The migration procedure
 
-Runbook `docs/runbooks/permission-roles-vN.md`, with the three SQL files below, as v48, v50 and v58 have. Applying
-vN to any persistent database needs the owner's order naming the file (`database-safety.md`); under the standing
-order of the Metrics Core plan the *Rukovodilac* runs the preflight and the post-check, read-only.
+Runbook `docs/runbooks/permission-roles-vN.md`, with the three SQL files below, as v48, v50 and v58 have. **Who merges v84** (the owner, 2026-11-19, to this stream's manager, relayed): the *Rukovodilac* of OptiMove merges
+it on its own decision, after the *Nezavisni revizor*'s review and its own gate, without a separate word of the
+owner. The *Rukovodilac* also relays a standing permission the owner gave it the same day to merge migration pull
+requests on its risk assessment. The *Rukovodilac* runs the preflight and the post-check, read-only.
+
+**A merge to `main` is the deploy** (relayed by the *Rukovodilac* of OptiMove, 2026-11-19; not read here): Render
+Auto-Deploy is on ("On Commit"), so the migration runs at once, at the start of the server the merge triggers.
+Consequences:
+
+- the preflight is run right before the merge, not before a separate deploy step;
+- nothing of R2 is merged that is not production-ready: there is no merged-but-not-deployed state;
+- the quiet moment of 7.4 is chosen at the merge.
 
 ### 7.1 Preflight (read-only, each block in `begin transaction read only; … rollback;`)
 
@@ -864,13 +873,13 @@ no longer passes `roles.manage`, which only the Roles API checks.
   (`SHARE ROW EXCLUSIVE` on each for the moment of the statement).
 - The two `ADD CONSTRAINT … CHECK` take `ACCESS EXCLUSIVE` on `user_club_roles` and `user_team_roles` until the
   migration's COMMIT. Every signed-in request reads both (`authz.js:45-51`), so they are the last statements of the
-  file, after `set local lock_timeout`, and the deploy is made at a quiet moment. They are plain `ADD CONSTRAINT`, not `NOT VALID` plus
+  file, after `set local lock_timeout`, and the merge, which is the deploy (section 7), is made at a quiet moment. They are plain `ADD CONSTRAINT`, not `NOT VALID` plus
   `VALIDATE`: both tables are small, and production held 0 rows of another word on 2026-11-19 at 07:57 UTC (read by
   the *Rukovodilac* of OptiMove, as relayed; the preflight counts again).
 - **If an `ADD CONSTRAINT` times out under `lock_timeout`:** the statement fails, the whole migration rolls back
   (one transaction, `backend/src/migrate.js:780-791`), nothing of vN remains, and `npm start` stops, so the new
-  deploy does not start and the previous instance keeps serving. The remedy is to deploy again at a quiet moment;
-  the runbook says so, and the preflight's block 7 is read right before the deploy.
+  deploy does not start and the previous instance keeps serving. The remedy is to start the deploy again at a quiet moment;
+  the runbook says so, and the preflight's block 7 is read right before the merge.
 - A request of the old instance that meets the lock waits for the COMMIT; nothing it writes is refused by vN.
 - **Conditions of the *Rukovodilac* of OptiMove for R2** (production runs 17.6, `docs/ai/CURRENT_STATE.md`;
   everything so far ran on 16):
@@ -1083,6 +1092,10 @@ development database, so it needs the owner's approval for that session or is re
 - **`import.approve` and `import.undo` are team-only** in the catalog, so the Club admin role (assignable for a
   club) cannot carry them under the coverage rule of 2.4, although the plan's 4.1 gives a club's admin "Approve".
   R6 decides it (a scope row added, or the rule changed).
+- **A merge is the deploy** (section 7). With Render Auto-Deploy on, v84 runs as soon as R2's pull request is
+  merged. A failed migration stops the new instance from starting while the previous one keeps serving; a
+  migration that passes cannot be held back from production. So the rehearsals and the preflight come before the
+  merge, and R2 is merged whole or not at all.
 - **R2 changes the locking of the existing login switch-off** (4.3.1). It is a change to a route that works
   today, made so that the Roles API cannot deadlock with it. The risk is a regression in the last-admin rules;
   the route's existing suites and tests 28 and 29a are the proof. The deadlock itself is concluded from the code,
@@ -1128,6 +1141,8 @@ not ready, no blocker), for the decisions of section 10.3. The plan at `3a6723a`
 D6e and D6f this document cites are in the tree.
 
 ## 10. Decided points
+
+The contract as a whole was **accepted by the owner on 2026-11-19** (relayed by this stream's manager).
 
 ### 10.1 For the owner
 
@@ -1196,8 +1211,10 @@ was **GO**: the contract may be implemented. Its two LOW notes are written into 
 statements of the switch-off lock only the rows the decision counts; 4.3.1, test 29a) and LOW-B (locking the union
 is deliberate, and the login route has no bounded lock wait; 4.3.1). No further document review follows.
 
-Still owed: the owner's acceptance. After it the implementation goes as a ★★ package (v84); merging the migration
-needs the owner's word to the *Rukovodilac* of OptiMove.
+**Accepted.** The owner accepted the contract on 2026-11-19, in the chat of this stream's manager (relayed:
+„ugovor prihvatam, rukovodilac optimove spaja bez moje posebne reci”), at head `d176d79` plus the status commit.
+The implementation goes as a ★★ package (v84). The *Rukovodilac* of OptiMove merges it on its own decision after
+the *Nezavisni revizor*'s review and its gate; with Auto-Deploy on, that merge is the deploy (section 7).
 
 **Notes for the review packet of R2's implementation.** The packet names, first, the change of existing locking
 in `organization.js` (4.3.1) as a change to working code outside the new files, with its before / after table and
