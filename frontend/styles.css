@@ -12050,6 +12050,47 @@ button.tests-assignment-card {
   display: none;
 }
 
+/* K2b-2a-2a: "Skip days off" (a daily schedule's option). The whole row is
+   the label, at least 44 px tall, so the checkbox and its text are one
+   touch target at every width. */
+.tests-skip-days-off {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+.tests-skip-days-off input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin: 1px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.tests-skip-days-off:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.tests-skip-days-off-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tests-skip-days-off-label {
+  font-weight: 600;
+}
+
+.tests-skip-days-off-hint {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 /* Item 3 (mobile scheduling hotfix): Opens/Closes as two equal columns in
    one row by default, everywhere - minmax(0, 1fr) (not a bare 1fr) so a
    narrow <input type="time"> never forces the row wider than its

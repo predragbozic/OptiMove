@@ -3,8 +3,66 @@ import { isAthleteMode } from "./access.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
-import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, remindableAthletesFor, reminderSelectedSet, renderTestsBadge, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
-import { loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadTestsWeekly, loadWellnessForm } from "./tests-data.js";
+import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, remindableAthletesFor, reminderSelectedSet, renderTestsBadge, testsSkipDaysOffShown, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
+import { fetchTestsQuestionsEnabled, loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadTestsWeekly, loadWellnessForm } from "./tests-data.js";
+
+// ------------------------------------------------------------
+// K2b-2a-2a: "Skip days off" (docs/ai/central-calendar-k2b2a2-ui-contract.md
+// section 1). The option exists only for a daily schedule of the WELLNESS
+// test while the club's Ask athletes switch is on (testsSkipDaysOffShown,
+// tests-view.js). The
+// switch is read once per opened form (and again after a refusal); only the
+// newest read writes, and an answer for a closed form is dropped.
+// ------------------------------------------------------------
+// One read sequence per form: only the newest read of the switch writes
+// questionsEnabled, so an older, slower answer never overwrites a newer one.
+const questionsReadSeq = new WeakMap();
+
+async function loadScheduleFormQuestionsSwitch(renderTests) {
+  const form = state.tests.scheduleForm;
+  const seq = (questionsReadSeq.get(form) || 0) + 1;
+  questionsReadSeq.set(form, seq);
+  const enabled = await fetchTestsQuestionsEnabled();
+  if (state.tests.scheduleForm !== form || !form.open || questionsReadSeq.get(form) !== seq) return enabled;
+  form.questionsEnabled = enabled;
+  renderTests();
+  return enabled;
+}
+
+// A create's test: the library's schedulable test (the one submit sends).
+async function loadScheduleFormTestName(renderTests) {
+  const form = state.tests.scheduleForm;
+  let name = "";
+  try {
+    const library = await api("/api/tests/library");
+    name = library?.tests?.find((t) => t.schedulable)?.name || "";
+  } catch {
+    name = "";
+  }
+  if (state.tests.scheduleForm !== form || !form.open) return;
+  form.testName = name;
+  renderTests();
+}
+
+// The skipDaysOff part of a create or edit body: a create sends the box while
+// it is shown; an edit sends it only when the coach changed it.
+function skipDaysOffBodyPart(form, isEdit) {
+  if (!testsSkipDaysOffShown(form)) return {};
+  if (isEdit && form.skipDaysOff === Boolean(form.skipDaysOffInitial)) return {};
+  return { skipDaysOff: form.skipDaysOff === true };
+}
+
+// One plain sentence for the two calendar-made refusals of the schedule
+// routes; every other error keeps the module's existing text.
+const SCHEDULE_REFUSALS = Object.freeze({
+  skip_days_off_unavailable: "Skipping days off isn't available for this schedule now. Untick Skip days off and save again.",
+  schedule_managed_by_calendar: "This check-in belongs to a calendar event. Change it on the event.",
+});
+export function testsScheduleErrorText(error, fallback) {
+  const code = typeof error?.data?.error === "string" ? error.data.error : "";
+  if (Object.hasOwn(SCHEDULE_REFUSALS, code)) return SCHEDULE_REFUSALS[code];
+  return error?.message || fallback;
+}
 
 // Every data-action="tests-*" click/change and data-tests-form submit in the
 // Tests tab routes through here, mirroring the per-feature dispatch
@@ -178,6 +236,8 @@ export async function handleTestsAction(action, { renderTests }) {
     state.tests.bulkResult = null;
     renderTests();
     void loadOrgPickerData().then(renderTests).catch(() => {});
+    void loadScheduleFormTestName(renderTests);
+    void loadScheduleFormQuestionsSwitch(renderTests);
     return true;
   }
   if (type === "tests-dismiss-bulk-result") {
@@ -243,6 +303,13 @@ export async function handleTestsAction(action, { renderTests }) {
   // present in notificationRules (an unconfigured existing schedule, or a
   // kind the coach hasn't touched yet) is created on first interaction
   // rather than requiring every kind to already have a row.
+  if (type === "tests-schedule-skip-days-off") {
+    const form = state.tests.scheduleForm;
+    if (!testsSkipDaysOffShown(form) || form.submitting) return true;
+    form.skipDaysOff = action.checked === true;
+    renderTests();
+    return true;
+  }
   if (type === "tests-notification-rule-toggle") {
     const kind = action.dataset.kind;
     const form = state.tests.scheduleForm;
@@ -423,7 +490,7 @@ export async function handleTestsAction(action, { renderTests }) {
       if (row) row.status = action.dataset.status;
       refreshTestsWeeklyAfterMutation(renderTests);
     } catch (error) {
-      state.tests.error = error.message || "Could not update the schedule.";
+      state.tests.error = testsScheduleErrorText(error, "Could not update the schedule.");
     }
     renderTests();
     return true;
@@ -1056,12 +1123,16 @@ async function openEditSchedule(scheduleId, renderTests) {
       // form renders that as a visible unconfigured state, never silently
       // treating it as either all-enabled or all-disabled.
       notificationRules: detail.notificationRules || [],
+      testName: detail.schedule.testName || "",
+      skipDaysOff: detail.schedule.skipDaysOff === true,
+      skipDaysOffInitial: detail.schedule.skipDaysOff === true,
     });
   } catch (error) {
     state.tests.error = error.message || "Could not open this schedule for editing.";
   }
   renderTests();
   void loadOrgPickerData().then(renderTests).catch(() => {});
+  if (state.tests.scheduleForm.open) void loadScheduleFormQuestionsSwitch(renderTests);
 }
 
 // Item 4: "Schedule again" - loads the ORIGINAL schedule read-only (the
@@ -1110,6 +1181,10 @@ async function openScheduleAgain(scheduleId, renderTests) {
       clubIds: targets.filter((t) => t.kind === "club").map((t) => t.id),
       notificationsSectionOpen: !mobile,
       notificationRules: (detail.notificationRules || []).map((rule) => ({ ...rule })),
+      // A new schedule: the original's choice when it has one, else the
+      // create default (ticked).
+      testName: detail.schedule.testName || "",
+      skipDaysOff: typeof detail.schedule.skipDaysOff === "boolean" ? detail.schedule.skipDaysOff : true,
     });
     // Round 2 correction: "Schedule again" is reachable from the result-
     // detail view too (state.tests.form set, via openResult), where
@@ -1128,6 +1203,7 @@ async function openScheduleAgain(scheduleId, renderTests) {
   }
   renderTests();
   void loadOrgPickerData().then(renderTests).catch(() => {});
+  if (state.tests.scheduleForm.open) void loadScheduleFormQuestionsSwitch(renderTests);
 }
 
 async function deleteSchedule(action, renderTests) {
@@ -1152,7 +1228,7 @@ async function deleteSchedule(action, renderTests) {
     if (state.tests.scheduleDetail?.schedule.id === scheduleId) state.tests.scheduleDetail = null;
     refreshTestsWeeklyAfterMutation(renderTests);
   } catch (error) {
-    state.tests.error = error.message || "Could not delete this schedule.";
+    state.tests.error = testsScheduleErrorText(error, "Could not delete this schedule.");
   } finally {
     state.tests.deletingScheduleId = "";
     renderTests();
@@ -1259,6 +1335,7 @@ async function submitScheduleForm(renderTests) {
       closesTime: scheduleForm.closesTime,
       targets,
       notificationRules: notificationRulesForSubmit(scheduleForm),
+      ...skipDaysOffBodyPart(scheduleForm, isEdit),
     };
     let result;
     if (isEdit) {
@@ -1280,9 +1357,19 @@ async function submitScheduleForm(renderTests) {
     state.tests.scheduleForm = emptyScheduleForm();
     refreshTestsWeeklyAfterMutation(renderTests);
   } catch (error) {
-    scheduleForm.error = error.message || (isEdit ? "Could not save this schedule." : "Could not create this schedule.");
+    scheduleForm.error = testsScheduleErrorText(error, isEdit ? "Could not save this schedule." : "Could not create this schedule.");
     scheduleForm.submitting = false;
     renderTests();
+    // The switch may have been turned off meanwhile: read it again, so the
+    // option disappears when it is no longer offered.
+    if (error?.data?.error === "skip_days_off_unavailable") {
+      // Hidden and unticked when the switch is off now (contract 1.3).
+      const enabled = await loadScheduleFormQuestionsSwitch(renderTests);
+      if (enabled === false && state.tests.scheduleForm === scheduleForm) {
+        scheduleForm.skipDaysOff = false;
+        renderTests();
+      }
+    }
     return;
   }
   renderTests();
