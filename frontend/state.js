@@ -132,10 +132,10 @@ export const emptyCentralCalendarState = () => ({
   // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,
   // error, retry, hidden, stale, read }), the open inline step of Ask / Move
   // time / Remove ({ act, kind, questionId, window, eventKey, revision,
-  // error }), and a failed catalog read that stops the panel asking for it.
+  // error }), and the panel open whose catalog read failed (that open only).
   panelQuestions: null,
   questionStep: null,
-  questionsCatalogFailed: false,
+  questionsCatalogFailedFor: null,
 });
 
 export const emptyExerciseOptions = () => ({

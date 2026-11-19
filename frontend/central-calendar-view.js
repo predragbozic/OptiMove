@@ -24,7 +24,7 @@ import {
   centralCalendarResultsQuestion,
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
-import { renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
+import { CC_WAITING_SENTENCE, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -1088,7 +1088,9 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
   if (!item) return "";
   const teams = cal.data.teams || [];
   const when = centralCalendarWhenLabel(item);
-  const sentence = centralCalendarStatusSentence(item);
+  const ownSentence = centralCalendarStatusSentence(item);
+  // K2b-2a-2b: a live question is something expected after the event.
+  const sentence = ownSentence === "Nothing is expected after this event." && item.canManage === true && ccPanelQuestionsWaiting(cal.panelQuestions, item) ? CC_WAITING_SENTENCE : ownSentence;
   const count = centralCalendarCountLabel(item);
   const activityIds = item.links?.activityIds || [];
   const thing = item.kind === "event" ? "event" : item.kind === "external" ? "RPE request" : "training";

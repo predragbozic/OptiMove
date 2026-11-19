@@ -461,3 +461,13 @@ GO on the contract at `3c04ca7c`, with these decisions (the calendar manager's m
 with `git merge --no-edit origin/claude/central-calendar-k2b2a-1` (no rebase). The browser check and the Frontend PR
 gate run after that merge. `styles.css` and `state.js` are shared: calendar- or tests-prefixed selectors only, and any
 shared part of `state.js` touched is named. The executor does not open the PR.
+
+**During 2a-2b (the manager's GOs of 2026-11-19):**
+- **4.1, deviation:** the panel learns B1 from the shared, per-workspace cached `/events/types` read. It is the event form's
+  own cache, read on the first open of a manager's event panel in a club or team workspace. It is dropped on a workspace
+  change and after every Settings → Calendar write, the switch's included. A failed or lost read is not kept: that panel
+  shows no section and no message, and the next panel open reads it again. It is never read per card, for a reader, or
+  in the athlete workspace.
+- **7, the TL screen:** in `frontend/training-load-actions.js`, only the external-schedule form's save and the Pause /
+  Resume / Cancel call read `409 schedule_managed_by_calendar` as "This RPE request belongs to a calendar event. Change it
+  on the event."; every other refusal keeps today's handling.

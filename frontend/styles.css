@@ -22407,9 +22407,27 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .cc-question-list summary {
   display: flex;
   align-items: center;
+  gap: 6px;
   min-height: 44px;
   font-size: 14px;
   cursor: pointer;
+  list-style: none;
+}
+
+/* A flex summary loses the native marker: the glyph says it opens. */
+.cc-question-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.cc-question-list summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--muted);
+}
+
+.cc-question-list[open] > summary::before {
+  content: "▾";
 }
 
 .cc-question-names {
@@ -22437,6 +22455,15 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   display: grid;
   gap: 6px;
   min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.cc-question-custom input {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .cc-question-step input:not([type="radio"]) {

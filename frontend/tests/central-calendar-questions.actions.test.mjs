@@ -538,6 +538,8 @@ test("P2. counts, the window in words, three folded lists with names (Not answer
   assert.match(rows[1].querySelector(".cc-question-window").textContent, /^\w{3} \d\d\.\d\d\., 09:00–11:00$/);
   assert.equal(rows[1].querySelector('[data-act="remove-open"]'), null, "no buttons on an ended question");
   assert.equal(rows[1].querySelectorAll("details")[2].textContent.includes("Nobody."), true);
+  assert.equal(rows[1].querySelectorAll("summary")[2].textContent, "Did not answer (0)", "an ended question: nobody can still answer");
+  assert.equal(rows[1].querySelectorAll("details")[2].open, false);
   assert.ok(doc.querySelector('[data-act="ask-open"][data-kind="wellness"]'), "WELLNESS can be asked again");
   assert.doesNotMatch(doc.querySelector(".cc-main").textContent, /Athlete 3/, "names only in the panel");
 });
@@ -571,6 +573,7 @@ test("P4. Ask WELLNESS: an inline When to ask, then one POST with requestKey, ex
   const calls = await openQuestionsPanel();
   await qact("ask-open", { kind: "wellness" });
   assert.equal(questionWrites(calls).length, 0, "opening the step sends nothing");
+  assert.deepEqual([...section().querySelectorAll(".cc-question-step .cc-form-actions button")].map((b) => b.textContent), ["Ask athletes", "Not now"], "never a second Cancel next to Cancel event");
   input2({ ccQstepWindow: "1" }, "next_morning");
   const before = calls.length;
   await qact("send");
@@ -744,4 +747,102 @@ test("P13. leaving with a question in flight asks first, in the question's words
   assert.ok(centralCalendarUncertainWrites().some((entry) => entry.mode === "question"));
   release();
   await sending;
+});
+
+// --- B1: the switch learnt from the shared, per-workspace catalog read ---------------------
+const E_OTHER = "e0000000-0000-4000-8000-000000000002";
+const typesReadsOf = (calls) => calls.filter((call) => call.method === "GET" && call.url === "/api/calendar/events/types");
+const twoEvents = () => [eventItem(E_MATCH, DAY(1)), eventItem(E_OTHER, DAY(2), { title: "Second match" })];
+async function openPanelOf(key, date) {
+  await act({ action: "central-calendar-open-item", key, date });
+  await tick();
+}
+
+test("B1a. one catalog read across several panels and the event form (the form's cache is the panel's)", async () => {
+  const calls = await openQuestionsPanel({ items: twoEvents() });
+  assert.equal(typesReadsOf(calls).length, 1);
+  await openPanelOf(`event:${E_OTHER}:${DAY(2)}`, DAY(2));
+  await openPanelOf(PANEL_KEY, DAY(1));
+  await act({ action: "central-calendar-new-event" });
+  await tick();
+  assert.equal(typesReadsOf(calls).length, 1, "several panels and the form: one read");
+  assert.ok(state.centralCalendar.form.questions, "the form knows the switch from the same read");
+});
+
+test("B1b. a workspace change reads the catalog again", async () => {
+  let calls = await openQuestionsPanel();
+  assert.equal(typesReadsOf(calls).length, 1);
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  calls = await openQuestionsPanel();
+  assert.equal(typesReadsOf(calls).length, 1, "read again in the new workspace's calendar");
+  assert.ok(section());
+});
+
+test("B1c. a Settings -> Calendar write drops the catalog: the switch turned off shows at once (the section goes)", async () => {
+  const { centralCalendarCatalogChanged } = await import("../central-calendar-data.js");
+  let enabled = true;
+  const responder = panelServer();
+  const calls = installFetchMock((call) => {
+    if (call.url === "/api/calendar/events/types") return { status: 200, body: catalogOf(enabled) };
+    if (call.method === "GET" && call.url.endsWith("/questions") && !enabled) return NOT_FOUND;
+    return responder(call);
+  });
+  await loadCentralCalendar({ render });
+  await tick();
+  await openPanelOf(PANEL_KEY, DAY(1));
+  assert.ok(section());
+  enabled = false;
+  centralCalendarCatalogChanged(); // what Settings calls after every confirmed write, the switch's included
+  await loadCentralCalendar({ render, forceRefresh: true });
+  await tick();
+  assert.equal(typesReadsOf(calls).length, 2, "read again after the write");
+  render();
+  assert.equal(section(), null);
+});
+
+test("B1d. a failed catalog read is not kept: no section and no word for that panel; the next open reads again", async () => {
+  let fail = true;
+  const responder = panelServer();
+  const calls = installFetchMock((call) => (call.url === "/api/calendar/events/types" && fail ? { status: 503, body: { error: "try_again" } } : responder(call)));
+  await loadCentralCalendar({ render });
+  await tick();
+  await openPanelOf(PANEL_KEY, DAY(1));
+  assert.equal(section(), null);
+  assert.doesNotMatch(rendered, /could not be read/);
+  assert.equal(questionReads(calls).length, 0);
+  // A repaint or a calendar answer for the same open does not read it again.
+  await loadCentralCalendar({ render, forceRefresh: true });
+  await tick();
+  assert.equal(typesReadsOf(calls).length, 1);
+  fail = false;
+  await act({ action: "central-calendar-close-panel" });
+  await openPanelOf(PANEL_KEY, DAY(1));
+  assert.equal(typesReadsOf(calls).length, 2, "the next open reads it again");
+  assert.ok(section());
+});
+
+test("B1e. never in the athlete workspace, even for a card that says canManage", async () => {
+  state.currentUser.activeWorkspace = { type: "athlete", scopeId: null, label: "Me" };
+  const responder = panelServer();
+  const calls = installFetchMock((call) => {
+    if (call.url.startsWith("/api/calendar?")) {
+      const answer = responder(call);
+      answer.body.workspace = { type: "athlete", scopeId: null };
+      return answer;
+    }
+    return responder(call);
+  });
+  await loadCentralCalendar({ render });
+  await tick();
+  await openPanelOf(PANEL_KEY, DAY(1));
+  assert.equal(typesReadsOf(calls).length, 0);
+  assert.equal(questionReads(calls).length, 0);
+});
+
+test("P14. while a question is live, the panel's status line says answers are awaited (never 'Nothing is expected')", async () => {
+  await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())], items: [eventItem(E_MATCH, DAY(1), { status: "none", expects: [] })] });
+  const panelText = dom().querySelector(".cc-panel").textContent;
+  assert.match(panelText, /Waiting for athletes' answers: see Questions for athletes\./);
+  assert.doesNotMatch(panelText, /Nothing is expected after this event\./);
 });

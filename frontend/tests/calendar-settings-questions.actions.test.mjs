@@ -281,7 +281,7 @@ test("10. per type: shown only while the switch is on; the list row says what it
   page = doc();
   const boxes = [...page.querySelectorAll("[data-cs-question]")];
   assert.deepEqual(boxes.map((b) => [b.dataset.csQuestion, b.checked]), [["rpe", true], ["wellness", false]]);
-  assert.match(text(page), /New events of this type start with these questions ticked\. Coaches can change them per event\./);
+  assert.match(text(page), /Athletes are asked these questions on new events of this type\. Coaches can change them per event\./);
 });
 
 test("11. per type: sent only when changed, on the type's Save, with no extra step", async () => {

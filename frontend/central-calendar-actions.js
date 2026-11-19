@@ -502,8 +502,12 @@ function syncPanelEventOnly(cal, render) {
 setCentralCalendarAppliedHook(syncPanelEvent);
 
 // K2b-2a-2b (contract 4.1): the open panel of a manager's event reads its
-// questions once, only while the club's switch is on (B1, from the catalog:
-// one read per workspace, never per card), and again when the card's
+// questions once, only while the club's switch is on (B1, from the catalog
+// the event form reads too: one shared read per workspace, dropped by a
+// workspace change and by every Settings -> Calendar write, never per card,
+// for a reader or in the athlete workspace). A failed or lost catalog read is
+// not kept: that panel shows no section and no word, and the next panel open
+// reads it again. The questions are read again when the card's
 // revision moves or a question write was confirmed (`stale`). A 404 hides the
 // section without a word; a failure waits for Try again.
 let questionsCatalogRead = null;
@@ -520,13 +524,15 @@ function syncPanelQuestions(cal, render, { force = false } = {}) {
     return null;
   }
   if (!cal.eventCatalog) {
-    if (cal.questionsCatalogFailed) return null;
+    // The panel object is new on every open: a failure belongs to this open only.
+    if (cal.questionsCatalogFailedFor === cal.panel) return null;
     if (!questionsCatalogRead) {
+      const panel = cal.panel;
       questionsCatalogRead = ensureEventTypes(cal).then((result) => {
         questionsCatalogRead = null;
         if (state.centralCalendar !== cal) return null;
-        if (result?.error) {
-          cal.questionsCatalogFailed = true;
+        if (result?.error || !cal.eventCatalog) {
+          cal.questionsCatalogFailedFor = panel;
           return null;
         }
         return syncPanelQuestions(cal, render);

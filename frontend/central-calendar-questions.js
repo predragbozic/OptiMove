@@ -302,10 +302,10 @@ function stepHtml(step, { ev, today, busy, question = null }) {
       </div>`;
   }
   const send = step.act === "ask" ? "Ask athletes" : "Save time";
-  return `<div class="cc-question-step" data-cc-question-step>
+  return `<div class="cc-question-step" data-cc-question-step role="group" aria-label="${escapeAttr(step.act === "ask" ? `Ask ${CC_QUESTION_WORDS[step.kind]}` : "Move time")}">
       ${step.act === "ask" ? `<p class="cc-panel-note"><strong>${escapeHtml(CC_QUESTION_WORDS[step.kind])}</strong> — ${escapeHtml(CC_QUESTION_PROMPTS[step.kind])}</p>` : ""}
       ${windowChoiceHtml(step, ev, today)}${error}
-      <div class="cc-form-actions">${qButton("send", busy ? "Saving…" : send, { off, primary: true })}${qButton("step-cancel", "Cancel", { off })}</div>
+      <div class="cc-form-actions">${qButton("send", busy ? "Saving…" : send, { off, primary: true })}${qButton("step-cancel", "Not now", { off })}</div>
     </div>`;
 }
 
@@ -319,6 +319,13 @@ function namesHtml(label, people, open) {
 // `step`: the open inline step; `busy`: a write of this panel in flight;
 // `off`: every control off (a write in flight or not confirmed anywhere);
 // `feedback`: this section's line and its Check result (rendered by the view).
+// The panel's status line while a question waits for answers (the type's own
+// "nothing is expected" would contradict it - the UX review).
+export function ccPanelQuestionsWaiting(pq, item) {
+  return Boolean(pq && pq.key === item?.key && !pq.hidden && ccPanelQuestionList(pq.read).some((q) => q.status === "live"));
+}
+export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions for athletes.";
+
 export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", rpeFromSessions = false, today = "" } = {}) {
   if (!pq || pq.key !== item.key || pq.hidden) return "";
   const head = `<h4 class="cc-panel-subtitle" id="ccQuestionsTitle" tabindex="-1">Questions for athletes</h4>`;
@@ -346,7 +353,7 @@ export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy
         ${status}
         ${namesHtml("Answered", q.answered, false)}
         ${namesHtml("Later", q.later, false)}
-        ${namesHtml("Not answered yet", notAnswered, notAnswered.length > 0)}
+        ${q.status === "live" ? namesHtml("Not answered yet", notAnswered, notAnswered.length > 0) : namesHtml("Did not answer", notAnswered, false)}
         ${q.status === "live" && answered > 0 && !own ? `<p class="cc-field-hint">Athletes have already answered, so the time can't move.</p>` : ""}
         ${buttons}
         ${own ? stepHtml(own, { ev, today, busy, question: q }) : ""}

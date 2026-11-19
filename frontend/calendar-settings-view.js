@@ -409,7 +409,7 @@ function typeFormHtml(form, d) {
   const questions = Array.isArray(draft.defaultQuestions)
     ? `<fieldset class="cs-fieldset">
       <legend>Questions for athletes</legend>
-      <span class="cs-field-hint">New events of this type start with these questions ticked. Coaches can change them per event.</span>
+      <span class="cs-field-hint">Athletes are asked these questions on new events of this type. Coaches can change them per event.</span>
       ${CALENDAR_QUESTION_KINDS.map((kind) => `<label class="cs-check"><input type="checkbox" data-cs-question="${kind}"${draft.defaultQuestions.includes(kind) ? " checked" : ""}> <span>${QUESTION_WORDS[kind]}</span></label>`).join("")}
     </fieldset>`
     : "";
