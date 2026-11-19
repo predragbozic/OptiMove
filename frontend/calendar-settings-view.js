@@ -195,7 +195,7 @@ function questionsSwitchFormHtml(d, on) {
   const confirm = qf.confirming && !cmd
     ? `<div class="cs-inline-confirm" role="group" aria-labelledby="cs-questions-confirm-text">
         <p id="cs-questions-confirm-text">${on
-          ? "Turn off questions for athletes for this club? Coaches can't ask new questions; the answers given stay."
+          ? "Turn off questions for athletes for this club? Coaches can't ask new questions; the answers given stay. Questions already asked keep running; to stop one, turn this back on first."
           : "Turn on questions for athletes for this club? Its coaches can then ask athletes after events."}</p>
         <div class="data-sources-form-actions">
           <button class="plain-button data-sources-primary" type="button" data-action="calendar-settings-questions-confirm">${verb}</button>

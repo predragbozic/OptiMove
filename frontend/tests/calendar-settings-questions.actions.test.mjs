@@ -193,7 +193,7 @@ test("5. turn off: its own question and words; a new key for every press", async
   const page = doc();
   typeIn(page, "[data-cs-questions-reason]", "End of the pilot.");
   await click('[data-action="calendar-settings-questions-request"]');
-  assert.match(text(doc()), /Turn off questions for athletes for this club\? Coaches can't ask new questions; the answers given stay\./);
+  assert.match(text(doc()), /Turn off questions for athletes for this club\? Coaches can't ask new questions; the answers given stay\. Questions already asked keep running; to stop one, turn this back on first\./);
   await click('[data-action="calendar-settings-questions-confirm"]');
   assert.equal(writes()[0].body.enabled, false);
   assert.equal(cs().notice, "Questions for athletes are now off for this club.");

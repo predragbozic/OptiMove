@@ -122,7 +122,7 @@ export const CC_FORM_QUESTION_TEXT = Object.freeze({
 });
 
 export const CC_PANEL_QUESTION_TEXT = Object.freeze({
-  questions_answered: "Athletes have already answered, so this time can't change. Remove the question to stop it.",
+  questions_answered: "Athletes have already answered, so this time can't change. Use Stop question to end it.",
   rpe_from_sessions: "RPE comes from the linked trainings, so it can't be asked here.",
   rpe_already_linked: "This event already collects RPE through another request.",
   rpe_from_question: "This event already asks athletes for RPE.",
@@ -229,6 +229,15 @@ export function ccQuestionEventOfCard(item) {
   return ccQuestionEventOf({ day: item?.span?.from || item?.date, endDay: item?.span?.to || "", startTime: item?.startTime, endTime: item?.endTime });
 }
 
+// Whether the section offers Ask for a kind now: its read done (not loading,
+// failed or hidden), the event not cancelled, the kind not live, and for RPE no
+// other channel (linked trainings, or the event's own RPE request).
+export function ccPanelAskOffered(item, pq, kind, { rpeFromSessions = false, rpeFromRequest = false } = {}) {
+  if (!pq || pq.key !== item?.key || pq.loading || pq.error || pq.hidden || !pq.read || item.cancelled) return false;
+  if (ccPanelQuestionList(pq.read).some((q) => q.kind === kind && q.status === "live")) return false;
+  return kind !== "rpe" || (!rpeFromSessions && !rpeFromRequest);
+}
+
 // The questions in their order (RPE first), the live and the ended ones the
 // read names.
 export function ccPanelQuestionList(read) {
@@ -246,7 +255,8 @@ export function ccRemoveStepText(question) {
 export function ccQuestionDoneText(act, { kind = "", closed = false } = {}) {
   if (act === "question-ask") return `${CC_QUESTION_WORDS[kind] || "The question"} asked. Athletes will be notified.`;
   if (act === "question-move") return "Time moved. Athletes will be notified.";
-  return closed ? "Closed. The answers given stay." : "Removed.";
+  const word = CC_QUESTION_WORDS[kind] || "The";
+  return closed ? `${word} question stopped.` : `${word} question removed.`;
 }
 
 export function ccPanelRefusalText(info, act = "") {
@@ -329,7 +339,7 @@ export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions
 // `feedbackAt` ({ kind, questionId }): the command the line belongs to - drawn
 // in that question's row, else in the row of its kind's live question, else
 // beside that kind's Ask; only a line with no such place stays at the top.
-export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", feedbackAt = null, rpeFromSessions = false, today = "" } = {}) {
+export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", feedbackAt = null, rpeFromSessions = false, rpeFromRequest = false, today = "" } = {}) {
   const head = `<h4 class="cc-panel-subtitle" id="ccQuestionsTitle" tabindex="-1">Questions for athletes</h4>`;
   // A command left not confirmed keeps its Check result here, whatever the read says.
   if (!pq || pq.key !== item.key || pq.hidden) return feedback ? `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}</section>` : "";
@@ -362,11 +372,11 @@ export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy
         <p class="cc-question-head"><strong>${escapeHtml(CC_QUESTION_WORDS[q.kind] || "")}</strong> · ${escapeHtml(`${answered}/${asked} answered`)}${all ? ' <span class="cc-question-done" aria-label="all answered">✓</span>' : ""}</p>
         <p class="cc-panel-note cc-question-window">${escapeHtml(ccPanelWindowText(q.window, { today }))}</p>
         ${status}
-        ${atRow === q ? feedback : ""}
         ${namesHtml("Answered", q.answered, false)}
         ${namesHtml("Later", q.later, false)}
         ${q.status === "live" ? namesHtml("Not answered yet", notAnswered, notAnswered.length > 0) : namesHtml("Did not answer", notAnswered, false)}
         ${q.status === "live" && answered > 0 && !own ? `<p class="cc-field-hint">Athletes have already answered, so the time can't move.</p>` : ""}
+        ${atRow === q ? feedback : ""}
         ${buttons}
         ${own ? stepHtml(own, { ev, today, busy, question: q }) : ""}
       </li>`;
@@ -377,6 +387,7 @@ export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy
     const open = step && step.act === "ask" && step.kind === kind;
     let body;
     if (kind === "rpe" && rpeFromSessions) body = `<p class="cc-panel-note">RPE comes from the linked trainings.</p>`;
+    else if (kind === "rpe" && rpeFromRequest) body = `<p class="cc-panel-note">RPE comes from the event's RPE request.</p>`;
     else if (open) body = stepHtml(step, { ev, today, busy });
     else body = qButton("ask-open", `Ask ${CC_QUESTION_WORDS[kind]}`, { attrs: ` data-kind="${kind}"`, off: off || Boolean(step) });
     return `<div class="cc-question-ask${open || line ? " is-wide" : ""}">${line}${body}</div>`;

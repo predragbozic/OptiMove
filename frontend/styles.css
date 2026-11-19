@@ -22468,6 +22468,12 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   overflow-wrap: anywhere;
 }
 
+/* Brought into view after a command, never flush against the window's edge. */
+.cc-panel-questions .cc-link-message,
+.cc-panel-questions .cc-link-unconfirmed {
+  scroll-margin: 16px;
+}
+
 .cc-question-step {
   display: grid;
   gap: 6px;

@@ -24,7 +24,7 @@ import {
   centralCalendarResultsQuestion,
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
-import { CC_WAITING_SENTENCE, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
+import { CC_WAITING_SENTENCE, ccPanelAskOffered, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -1117,7 +1117,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when ? ` · ${escapeHtml(when)}` : ""}</p>
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
-      ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: item.canManage === true && formCtx.catalog?.questionsEnabled === true && !item.cancelled }) : ""}
+      ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: item.canManage === true && formCtx.catalog?.questionsEnabled === true && ccPanelAskOffered(item, cal.panelQuestions, "rpe", questionChannelsOf(item, cal)) }) : ""}
       ${item.kind === "event" ? renderCentralCalendarEventDetailsHtml(item, cal.panelEvent) : ""}
       ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending, pendingQuestion) : ""}
       ${questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : ""}
@@ -1133,15 +1133,24 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
 function renderEventQuestionsHtml(item, cal, pendingQuestion, linkPending, today) {
   const busy = cal.linkWrite?.family === "question";
   const step = cal.questionStep && cal.questionStep.eventKey === item.key ? cal.questionStep : null;
-  const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent.event : null;
   return renderCentralCalendarQuestionsHtml(item, cal.panelQuestions, {
     step, busy, off: Boolean(cal.linkWrite) || Boolean(pendingQuestion) || linkPending || Boolean(cal.alignStep), today,
     feedback: linkFeedbackHtml(cal, item.key, pendingQuestion, "question"),
     // Where that line belongs: the row of the command that sent it.
     feedbackAt: (cal.linkMessage?.family === "question" && cal.linkMessage.panelKey === item.key ? cal.linkMessage.at : null)
       || (pendingQuestion ? { kind: pendingQuestion.kind || "", questionId: pendingQuestion.questionId || "" } : null),
-    rpeFromSessions: (view?.sessionLinks || []).length > 0,
+    ...questionChannelsOf(item, cal),
   });
+}
+
+// RPE's other channels: linked trainings (the manager view), or the event's own
+// RPE request that no live question owns (the server's rpe_already_linked).
+function questionChannelsOf(item, cal) {
+  const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent.event : null;
+  return {
+    rpeFromSessions: (view?.sessionLinks || []).length > 0,
+    rpeFromRequest: Boolean(view?.externalScheduleId ?? item.links?.externalScheduleId),
+  };
 }
 
 // The event saves the coach left while their result was not known (the

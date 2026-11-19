@@ -631,7 +631,7 @@ test("P6. Move time is off once answered; a refusal (busy, or another time neede
   assert.doesNotMatch(rendered, /wellness_already_scheduled|raw/);
 });
 
-test("P7. Remove an unanswered question: an inline step (never a native confirm); Keep it sends nothing; Remove question sends; Removed.", async () => {
+test("P7. Remove an unanswered question: an inline step (never a native confirm); Keep it sends nothing; Remove question sends; RPE question removed.", async () => {
   const calls = await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
   await qact("remove-open", { questionId: Q_RPE });
   let doc = dom();
@@ -645,17 +645,17 @@ test("P7. Remove an unanswered question: an inline step (never a native confirm)
   const write = questionWrites(calls).at(-1);
   assert.equal(write.url, `/api/calendar/events/${E_MATCH}/questions/${Q_RPE}/remove`);
   assert.deepEqual(Object.keys(write.body).sort(), ["expectedRevision", "requestKey"]);
-  assert.equal(dom().querySelector(".cc-panel-questions .cc-link-message").textContent, "Removed.");
+  assert.equal(dom().querySelector(".cc-panel-questions .cc-link-message").textContent, "RPE question removed.");
   assert.equal(nativeConfirms.length, 0);
 });
 
-test("P8. Stop an answered question: its own words; after the read it is closed early - Closed. The answers given stay.", async () => {
+test("P8. Stop an answered question: its own words; after the read it is closed early - RPE question stopped.", async () => {
   await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER(), { answered: 3 })] });
   await qact("remove-open", { questionId: Q_RPE });
   assert.equal(dom().querySelector("#ccQuestionStepText").textContent, "Stop the RPE question? 3 answers are kept; nobody else can answer.");
   assert.equal(dom().querySelector('.cc-inline-confirm [data-act="send"]').textContent, "Stop question");
   await qact("send");
-  assert.equal(dom().querySelector(".cc-panel-questions .cc-link-message").textContent, "Closed. The answers given stay.");
+  assert.equal(dom().querySelector(".cc-panel-questions .cc-link-message").textContent, "RPE question stopped.");
   assert.match(section().textContent, /Closed early — the answers given stay\./);
 });
 
@@ -965,15 +965,17 @@ test("P22. a result or refusal is drawn in the row that sent it (status / alert)
   await qact("remove-open", { questionId: Q_WELL });
   await qact("send");
   line = dom().querySelector(".cc-panel-questions .cc-link-message");
-  assert.equal(line.textContent, "Removed.");
-  assert.ok(line.closest(".cc-question-ask-feedback"), "beside its kind's Ask");
-  assert.ok(line.closest(".cc-question-asks").querySelector('[data-act="ask-open"][data-kind="wellness"]'));
+  assert.equal(line.textContent, "WELLNESS question removed.");
+  assert.ok(line.closest(".cc-question-ask-feedback"), "above its kind's Ask");
+  assert.equal(line.closest(".cc-question-ask")?.querySelector('[data-act="ask-open"]')?.dataset.kind, "wellness", "in that kind's own Ask block");
   // Stop RPE: in the RPE row (closed early).
   await qact("remove-open", { questionId: Q_RPE });
   await qact("send");
   line = dom().querySelector(".cc-panel-questions .cc-link-message");
-  assert.equal(line.textContent, "Closed. The answers given stay.");
+  assert.equal(line.textContent, "RPE question stopped.");
   assert.equal(rowOf(line), "RPE");
+  // In the row, below the lists and the hint, just before the row's buttons.
+  assert.ok(line.closest(".cc-question-row").querySelector("details:last-of-type").compareDocumentPosition(line) & 4, "after the name lists");
   assert.ok(questionWrites(calls).length >= 3);
 });
 
@@ -984,7 +986,7 @@ test("P23. a refused Ask: role alert, beside that kind's Ask; a lost Move: Check
   const line = dom().querySelector(".cc-panel-questions .cc-link-message");
   assert.equal(line.getAttribute("role"), "alert");
   assert.equal(line.textContent, "This event already collects RPE through another request.");
-  assert.ok(line.closest(".cc-question-ask-feedback").nextElementSibling?.matches?.('[data-act="ask-open"][data-kind="rpe"]') || line.closest(".cc-question-asks"));
+  assert.equal(line.closest(".cc-question-ask")?.querySelector('[data-act="ask-open"]')?.dataset.kind, "rpe", "in RPE's own Ask block");
   clearAllViewCache();
   resetCentralCalendarForWorkspaceChange();
   clearCentralCalendarUncertainWrites();
@@ -994,4 +996,42 @@ test("P23. a refused Ask: role alert, beside that kind's Ask; a lost Move: Check
   await qact("send");
   const check = dom().querySelector('.cc-panel-questions [data-action="central-calendar-link-check"]');
   assert.equal(rowOf(check), "WELLNESS", "the not-confirmed box sits in the row that sent it");
+});
+
+test("P24. 'Use Ask RPE below.' only when the section really offers Ask RPE: not while loading, not after a failed read", async () => {
+  const items = [eventItem(E_MATCH, DAY(1), { expects: ["rpe"], gaps: ["rpe"] })];
+  let answer = null;
+  const responder = panelServer({ items });
+  const gated = new Promise((resolve) => { answer = resolve; });
+  installFetchMock((call) => (call.method === "GET" && call.url.endsWith("/questions") ? gated : responder(call)));
+  await loadCentralCalendar({ render });
+  await tick();
+  const opening = act({ action: "central-calendar-open-item", key: PANEL_KEY, date: DAY(1) });
+  await tick();
+  render();
+  assert.equal(state.centralCalendar.panelQuestions?.loading, true, "the read is still loading");
+  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/, "not while loading");
+  answer({ status: 503, body: { error: "try_again" } });
+  await opening;
+  await tick();
+  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/, "not after a failed read");
+  assert.equal(dom().querySelector('[data-act="ask-open"][data-kind="rpe"]'), null);
+});
+
+test("P25. the event's own RPE request (no live RPE question owns it): no Ask RPE, its line instead, and no 'Use Ask RPE below.'", async () => {
+  const items = [eventItem(E_MATCH, DAY(1), { expects: ["rpe"], gaps: ["rpe"], links: { eventId: E_MATCH, planIds: [], logicalSessionIds: [], activityIds: [], externalScheduleId: "ext-1", testScheduleId: null } })];
+  await openQuestionsPanel({ items, event: eventView({ externalScheduleId: "ext-1" }) });
+  const doc = dom();
+  assert.equal(doc.querySelector('[data-act="ask-open"][data-kind="rpe"]'), null);
+  assert.match(section().textContent, /RPE comes from the event's RPE request\./);
+  assert.ok(doc.querySelector('[data-act="ask-open"][data-kind="wellness"]'), "WELLNESS can still be asked");
+  assert.doesNotMatch(doc.querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/);
+});
+
+test("P26. the panel's refusal of a move once answered points to Stop question", async () => {
+  await openQuestionsPanel({ questions: [liveQuestion(Q_WELL, "wellness", AFTER())], refuse: (call) => (call.url.endsWith("/move") ? { status: 409, body: { error: "questions_answered", message: "?" } } : null) });
+  await qact("move-open", { questionId: Q_WELL });
+  input2({ ccQstepWindow: "1" }, "next_morning");
+  await qact("send");
+  assert.match(section().textContent, /Athletes have already answered, so this time can't change\. Use Stop question to end it\./);
 });

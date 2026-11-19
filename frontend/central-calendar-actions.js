@@ -1596,6 +1596,8 @@ async function questionSettled(cal, spec, data, render) {
   const doc = globalThis.document;
   const target = doc?.querySelector?.(".cc-panel-questions .cc-link-message") || doc?.querySelector?.("#ccQuestionsTitle");
   target?.focus?.({ preventScroll: true });
+  // The line sits in its row, below the names: brought into view.
+  target?.scrollIntoView?.({ block: "nearest" });
 }
 
 async function questionRefused(cal, spec, info, render) {
@@ -1616,6 +1618,7 @@ async function questionRefused(cal, spec, info, render) {
   }
   showLinkText(cal, text, { alert: true, family: "question", at: spec });
   render?.();
+  globalThis.document?.querySelector?.(".cc-panel-questions .cc-link-message")?.scrollIntoView?.({ block: "nearest" });
 }
 
 function handleQuestionStepInput(target, render) {
