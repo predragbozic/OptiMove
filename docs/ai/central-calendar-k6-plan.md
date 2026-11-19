@@ -1,7 +1,8 @@
 # Central calendar — K6 plan: moving between teams and athletes quickly
 
-Status: **Direction proposed to the owner** (2026-11-19, written against `main` `920459c0`). This plan contains no
-code. The designer's mockups and the owner's approval come first; then a UI contract and the OptiMove manager's GO.
+Status: **Direction and mockups approved by the owner** (2026-11-19, „Ove slike izgledaju ok”; written against `main`
+`920459c0`). This plan contains no code. The mockups are `docs/design/calendar-k6/` (their own pull request), with the
+designer's open questions F1–F6 taken as recommended. Next: a UI contract and the OptiMove manager's GO.
 
 ## 0. The owner's words (2026-11-19, in the calendar stream's chat)
 
