@@ -89,6 +89,7 @@ import {
   loadTrainingLoadCalendarWeek,
 } from "./training-load-calendar-data.js";
 import { isHiddenInClub } from "./metric-picker-visibility.js";
+import { athleteQuestionsAnswered } from "./athlete-questions-data.js";
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 let analysisLayoutPointer = null;
@@ -2397,7 +2398,15 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (statusAction === "cancel" && !window.confirm("Cancel this RPE session? It can no longer be edited or reactivated - existing results stay available in Athletes.")) {
       return true;
     }
-    await setExternalScheduleStatus(scheduleId, statusAction);
+    try {
+      await setExternalScheduleStatus(scheduleId, statusAction);
+    } catch (error) {
+      // K2b-2a-2b: a request a calendar question owns changes on its event.
+      if (error?.data?.error !== "schedule_managed_by_calendar" || !state.trainingLoad.scheduleDetail) throw error;
+      state.trainingLoad.scheduleDetail = { ...state.trainingLoad.scheduleDetail, error: "This RPE request belongs to a calendar event. Change it on the event." };
+      renderTrainingLoad();
+      return true;
+    }
     // Correction round 2 (gap 1): this used to refresh only the detail
     // overlay, never the weekly cache at all - a paused/resumed/cancelled
     // schedule changes future occurrence generation and actionability
@@ -2602,7 +2611,7 @@ async function submitExternalScheduleForm(renderTrainingLoad) {
     await loadTrainingLoadWeekly(state.trainingLoad.section, renderTrainingLoad);
   } catch (error) {
     form.submitting = false;
-    form.error = error.message || "Could not save this RPE session.";
+    form.error = error?.data?.error === "schedule_managed_by_calendar" ? "This RPE request belongs to a calendar event. Change it on the event." : error.message || "Could not save this RPE session.";
     renderTrainingLoad();
     return;
   }
@@ -2848,6 +2857,7 @@ async function submitRpeForm(renderTrainingLoad) {
     // "can't narrow the blast radius, so don't guess" reasoning as the
     // workspace master toggle above.
     invalidateAllTrainingLoadCalendarGenerations();
+    if (form.externalAssignmentId) athleteQuestionsAnswered(form.externalAssignmentId);
   } catch (error) {
     form.saving = false;
     form.error = error.message || "Could not save this session's feedback.";

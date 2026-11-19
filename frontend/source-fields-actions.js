@@ -261,6 +261,12 @@ export async function handleSourceFieldsAction(action, { render }) {
     await loadInventory(render);
     return true;
   }
+  if (type === "source-fields-technical") {
+    s.technical = !s.technical;
+    render();
+    globalThis.document?.querySelector?.('[data-action="source-fields-technical"]')?.focus?.();
+    return true;
+  }
   if (type === "source-fields-inv-technical") {
     // The plain view or the technical one. Leaving the technical view also clears a source filter chosen there, since
     // its chips are hidden in the plain view (the code review's MEDIUM: never a filter with no visible control).

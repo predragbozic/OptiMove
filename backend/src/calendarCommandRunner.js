@@ -67,6 +67,10 @@ const REQUESTS_TABLES = new Set(["calendar.event_requests", "calendar.settings_r
 //   respond(out) → { status, body }
 //   mapError(error) → EventError | null (constraint names, before COMMIT)
 //   beforeRequestRow(client, out, prepared), beforeCommit(client, out) — seams
+//   afterCommit(out)       optional; called once the COMMIT answered, or the
+//                          request was found after an unconfirmed COMMIT —
+//                          never on a replay or a refusal (K2b-2a-1: the
+//                          realtime event after the in-app notifications)
 export async function runCalendarCommand(spec) {
   const { userId, requestKey, operation, requestsTable, requestKeyConstraint, busyMessage, hooks = {} } = spec;
   if (!REQUESTS_TABLES.has(requestsTable)) throw new Error(`unknown requests table ${requestsTable}`);
@@ -75,6 +79,7 @@ export async function runCalendarCommand(spec) {
   let broken = false;
   let released = false;
   let hash = null;
+  let out = null;
   const onClientError = () => { broken = true; };
   client.on("error", onClientError);
   try {
@@ -101,7 +106,7 @@ export async function runCalendarCommand(spec) {
     }
 
     const requestId = crypto.randomUUID();
-    const out = await spec.apply({ client, requestId, ...prepared });
+    out = await spec.apply({ client, requestId, ...prepared });
     if (spec.beforeRequestRow) await spec.beforeRequestRow(client, out, prepared);
     await spec.writeRecord({ client, requestId, out, prepared, hash });
     if (spec.beforeCommit) await spec.beforeCommit(client, out);
@@ -109,6 +114,7 @@ export async function runCalendarCommand(spec) {
     const committing = Promise.resolve().then(() => (hooks.commit ? hooks.commit(client) : client.query("commit")));
     committing.catch(() => {});
     await withinBound(committing, hooks.commitTimeoutMs ?? COMMIT_ANSWER_TIMEOUT_MS);
+    runAfterCommit(spec, out);
     return spec.respond(out);
   } catch (error) {
     if (!commitSent) {
@@ -144,13 +150,27 @@ export async function runCalendarCommand(spec) {
     } catch (checkError) {
       console.error(`[${spec.label}] checking ${operation} after an unconfirmed COMMIT failed: ${checkError?.message}`);
     }
-    if (found) return { ...(await savedAnswer(spec, pool, found, { verifiedAfterCommitError: true })), verifiedAfterCommitError: true };
+    if (found) {
+      runAfterCommit(spec, out);
+      return { ...(await savedAnswer(spec, pool, found, { verifiedAfterCommitError: true })), verifiedAfterCommitError: true };
+    }
     throw new EventError(503, "outcome_unknown", OUTCOME_UNKNOWN);
   } finally {
     if (!released) {
       client.removeListener("error", onClientError);
       client.release(broken ? true : undefined);
     }
+  }
+}
+
+// A failure of the after-COMMIT step (a realtime push) never changes the
+// answer of a committed request.
+function runAfterCommit(spec, out) {
+  if (!spec.afterCommit || !out) return;
+  try {
+    spec.afterCommit(out);
+  } catch (error) {
+    console.error(`[${spec.label}] after the COMMIT of ${spec.operation}: ${error?.message}`);
   }
 }
 

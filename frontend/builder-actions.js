@@ -104,10 +104,21 @@ function withBatchSyncPayload(payload = {}) {
 // the newer edit. Running them through a single queue keeps requests -- and their
 // responses -- in submission order, so nothing gets clobbered.
 let builderMutationQueue = Promise.resolve();
+let builderMutationsPending = 0;
 function queuedBuilderApi(url, options) {
+  builderMutationsPending += 1;
   const result = builderMutationQueue.then(() => api(url, options));
-  builderMutationQueue = result.then(() => undefined, () => undefined);
+  builderMutationQueue = result.then(() => undefined, () => undefined).finally(() => { builderMutationsPending -= 1; });
   return result;
+}
+
+// K2c-2 (Make an event): whether a Builder save is still on its way, and a
+// promise that settles once every save queued so far has settled.
+export function builderSavesPending() {
+  return builderMutationsPending > 0;
+}
+export function builderSavesSettled() {
+  return builderMutationQueue;
 }
 
 // Shared by the initial "Paste day" click and the overwrite-confirm dialog's

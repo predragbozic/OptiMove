@@ -23,8 +23,16 @@ export const CALENDAR_TESTS_MIGRATIONS = Object.freeze([
   "202608260900_tests_v42_occurrence_generation_lock_fix.sql",
   "202608300900_tests_v42_phase4_assignment_timezone_window.sql",
 ]);
+// v81 (K2b-2a-1) needs the Tests schema, so it is in this list only, never in
+// GPEXE_TEST_MIGRATIONS (whose suites carry no Tests schema; plan 9.1.1, ⚑3).
+export const CALENDAR_QUESTIONS_MIGRATIONS = Object.freeze([
+  "202611191000_calendar_v81_athlete_questions.sql",
+]);
 export const CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS = Object.freeze([
   "202609011200_training_load_v6_external_schedule_event_type.sql",
+  // v7 (the external schedules' notification rules): the calendar's RPE
+  // questions write them (K2b-2a-1), as the module's own create route does.
+  "202609020900_training_load_v7_external_schedule_notification_rules.sql",
   "202609030900_training_load_v8_specific_dates_group.sql",
 ]);
 
@@ -32,7 +40,7 @@ export const CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS = Object.freeze([
 // the list there, so a suite that rehearses a rollback never has a later
 // migration between its rehearsal and its checks.
 export function calendarMigrations({ upTo = null } = {}) {
-  const all = [...CALENDAR_TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS].sort();
+  const all = [...CALENDAR_TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS, ...CALENDAR_QUESTIONS_MIGRATIONS].sort();
   return upTo ? all.filter((m) => m <= upTo) : all;
 }
 

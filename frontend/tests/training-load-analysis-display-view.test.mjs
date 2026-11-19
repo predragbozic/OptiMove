@@ -318,3 +318,39 @@ test("group numbering includes an earlier row omitted from its chart", () => {
   assert.deepEqual(plots[0].option.xAxis.data, ["Session 2"]);
   assert.ok(body.querySelector("tbody tr:nth-child(2)").children[1].textContent.startsWith("Session 2"));
 });
+
+test("J21: a widget of a calculated variable says from when it has values; one of an ordinary variable says nothing new", () => {
+  for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
+    for (const calculated of [true, false]) {
+      const analysis = setup(type, [row(null)]);
+      analysis.widgets[0].series = [{ id: "series-1", metric_definition_id: "def-hmld", resolution_status: "resolved", source_policy: "all_with_conflicts" }];
+      analysis.metricPicker.definitions = [{ id: "def-hmld", label: "HMLD", calculated }];
+      const body = rendered().querySelector(".tl-analysis-widget");
+      const note = /HMLD: Calculated for sessions imported after this variable was made\. A session imported earlier gets it only if it is corrected or imported again with changed data\./;
+      if (calculated) assert.match(body.textContent, note, `${type}: the note`);
+      else assert.doesNotMatch(body.textContent, /Calculated for sessions imported/, `${type}: no note`);
+    }
+  }
+});
+
+test("J21: the note follows the server's flag through the real read of the definitions (code review: the picker kept no flag)", async () => {
+  const { loadAnalysisMetricDefinitions } = await import("../training-load-analysis-data.js");
+  const previousFetch = globalThis.fetch;
+  const json = (body) => ({ ok: true, status: 200, statusText: "OK", json: async () => body });
+  globalThis.fetch = async (url) => String(url).includes("/metrics/definitions")
+    ? json({ rows: [{ id: "def-hmld", label: "HMLD", unit: "m", calculated: true }, { id: "def-z3", label: "Zone 3", unit: "m", calculated: false }], nextCursor: null })
+    : json({ rows: [] });
+  try {
+    for (const [def, label, expected] of [["def-hmld", "HMLD", true], ["def-z3", "Zone 3", false]]) {
+      const analysis = setup("table", [row(null)]);
+      state.currentUser = { id: "u1", activeWorkspace: { type: "team", scopeId: "team-1", label: "First team", role: "coach" } };
+      await loadAnalysisMetricDefinitions();
+      analysis.widgets[0].series = [{ id: "series-1", metric_definition_id: def, resolution_status: "resolved", source_policy: "all_with_conflicts" }];
+      const body = rendered().querySelector(".tl-analysis-widget");
+      if (expected) assert.match(body.textContent, new RegExp(`${label}: Calculated for sessions imported after this variable was made`));
+      else assert.doesNotMatch(body.textContent, /Calculated for sessions imported/);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

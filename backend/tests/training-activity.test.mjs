@@ -1213,6 +1213,23 @@ test("29. a new match suggestion persists policy_version=2 and its full score br
 // §3 — deterministic concurrent accept/dismiss race (Round 2 correction)
 // ============================================================
 
+// The racer that is expected to LOSE, started while the winner still holds its lock. Its rejection can land before
+// the test reaches the assertion on it (the winner's own promise resolves a moment after its commit - under load,
+// after the loser has already been refused), and a rejection nobody is yet listening to fails the test as an
+// "unhandled rejection" although every outcome is the right one. So the loss is listened to from the moment the
+// racer starts; the promise itself is returned unchanged and every assertion on it stays as strict as it was.
+function expectedToLose(promise) {
+  promise.catch(() => {});
+  return promise;
+}
+// The loser's refusal, exactly: the controlled 409 "already resolved" - never a deadlock, never another error.
+function alreadyResolved409(err) {
+  assert.equal(err.httpStatus, 409, `the loser's status (${err.message})`);
+  assert.match(err.message, /already resolved/i);
+  assert.doesNotMatch(err.message, /deadlock/i);
+  return true;
+}
+
 async function waitUntilAnyOtherBlocked(monitorClient, excludePid, timeoutMs = 3000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -1246,7 +1263,7 @@ test("30. concurrent accept vs dismiss on the SAME match suggestion have exactly
     });
     await acceptReachedBarrier;
 
-    dismissPromise = materializeService.dismissMatchSuggestion(scope, { suggestionId, performedBy: coachId });
+    dismissPromise = expectedToLose(materializeService.dismissMatchSuggestion(scope, { suggestionId, performedBy: coachId }));
     const blocked = await waitUntilAnyOtherBlocked(monitor, acceptPid);
     assert.equal(blocked, true, "dismiss must be directly observed Lock-waiting on the SAME suggestion row accept is holding");
 
@@ -1254,13 +1271,57 @@ test("30. concurrent accept vs dismiss on the SAME match suggestion have exactly
     const acceptResult = await acceptPromise;
     assert.ok(acceptResult.canonicalParticipantId, "accept must deterministically win and complete the merge");
 
-    await assert.rejects(dismissPromise, /already resolved/i, "dismiss must lose the race and see the ALREADY-accepted status, never overwrite it");
+    await assert.rejects(dismissPromise, alreadyResolved409, "dismiss must lose the race and see the ALREADY-accepted status, never overwrite it");
 
     const finalStatus = await monitor.query(`select status from training.activity_match_suggestions where id=$1`, [suggestionId]);
     assert.equal(finalStatus.rows[0].status, "accepted", "the suggestion's final status must be 'accepted' — never clobbered back to 'dismissed' by the loser");
+    // The winner's merge is intact: the source participant is merged into the canonical one, and stays so.
+    const merged = await monitor.query(`select merge_status, superseded_by_participant_id from training.activity_participants where id=$1`, [acceptResult.sourceParticipantId]);
+    assert.deepEqual([merged.rows[0].merge_status, merged.rows[0].superseded_by_participant_id], ["superseded", acceptResult.canonicalParticipantId]);
   } finally {
     releaseAccept();
     await Promise.allSettled([acceptPromise, dismissPromise]);
+    monitor.release();
+  }
+});
+
+test("30b. the other order: a dismiss that holds the suggestion first wins; the accept that waited gets exactly the 409 and merges nothing", async () => {
+  const { clubId, coachId, coachCookie } = await makeClubCoach("race30b");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), athleteId, localDate: "2026-09-26", timezone: "UTC", name: "First" } });
+  const b = await api("/api/training-activity/materialize", { method: "POST", cookie: coachCookie, body: { requestKey: uid(), athleteId, localDate: "2026-09-26", timezone: "UTC", name: "Second Different Name" } });
+  const suggestion = (await query(`select id, source_participant_id, candidate_participant_id from training.activity_match_suggestions where activity_id=$1 and status='open'`, [b.body.activityId])).rows[0];
+  const scope = { type: "club", clubId, ownerContext: { ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null } };
+
+  const monitor = await pool.connect();
+  let releaseDismiss = () => {};
+  let dismissPromise = Promise.resolve();
+  let acceptPromise = Promise.resolve();
+  try {
+    let signalDismissReached;
+    const dismissReachedBarrier = new Promise((res) => { signalDismissReached = res; });
+    const dismissBarrier = new Promise((res) => { releaseDismiss = res; });
+    let dismissPid;
+    dismissPromise = materializeService.dismissMatchSuggestion(scope, { suggestionId: suggestion.id, performedBy: coachId }, {
+      onLocked: async (client) => { dismissPid = client.processID; signalDismissReached(); await dismissBarrier; },
+    });
+    await dismissReachedBarrier;
+
+    acceptPromise = expectedToLose(materializeService.acceptMatchSuggestion(scope, { suggestionId: suggestion.id, performedBy: coachId, reason: "race" }));
+    const blocked = await waitUntilAnyOtherBlocked(monitor, dismissPid);
+    assert.equal(blocked, true, "accept must be directly observed Lock-waiting behind the dismiss that holds the suggestion");
+
+    releaseDismiss();
+    assert.deepEqual(await dismissPromise, { ok: true }, "the dismiss wins");
+    await assert.rejects(acceptPromise, alreadyResolved409, "the accept that waited is refused with exactly the 409");
+
+    const finalStatus = await monitor.query(`select status from training.activity_match_suggestions where id=$1`, [suggestion.id]);
+    assert.equal(finalStatus.rows[0].status, "dismissed", "the final status is the winner's - never turned into 'accepted' by the loser");
+    const participants = await monitor.query(`select merge_status, superseded_by_participant_id from training.activity_participants where id in ($1,$2)`, [suggestion.source_participant_id, suggestion.candidate_participant_id]);
+    assert.deepEqual(participants.rows.map((p) => [p.merge_status, p.superseded_by_participant_id]), [["canonical", null], ["canonical", null]], "the loser merged nothing");
+  } finally {
+    releaseDismiss();
+    await Promise.allSettled([dismissPromise, acceptPromise]);
     monitor.release();
   }
 });
@@ -1565,7 +1626,7 @@ test("37. two parallel accept calls on DIFFERENT sibling suggestions of the same
     });
     await firstReachedBarrier;
 
-    secondPromise = materializeService.acceptMatchSuggestion(scope, { suggestionId: s2Id, performedBy: coachId, reason: "race" });
+    secondPromise = expectedToLose(materializeService.acceptMatchSuggestion(scope, { suggestionId: s2Id, performedBy: coachId, reason: "race" }));
     const blocked = await waitUntilAnyOtherBlocked(monitor, firstPid);
     assert.equal(blocked, true, "the second accept must be directly observed Lock-waiting — it shares the SAME source identity as the first, so it must serialize BEFORE ever locking its own suggestion row, never race into a separate merge that could deadlock against the first");
 
@@ -1573,11 +1634,7 @@ test("37. two parallel accept calls on DIFFERENT sibling suggestions of the same
     const firstResult = await firstPromise;
     assert.equal(firstResult.canonicalParticipantId, a1.body.participantId, "the first accept must deterministically win and merge into ITS OWN candidate");
 
-    await assert.rejects(secondPromise, (err) => {
-      assert.match(err.message, /already resolved/i);
-      assert.doesNotMatch(err.message, /deadlock/i);
-      return true;
-    }, "the second accept must lose the race with a controlled 409 — never a raw deadlock error, never a second merge");
+    await assert.rejects(secondPromise, alreadyResolved409, "the second accept must lose the race with a controlled 409 — never a raw deadlock error, never a second merge");
 
     const finalStatuses = await monitor.query(`select id, status from training.activity_match_suggestions where id in ($1,$2)`, [s1Id, s2Id]);
     const byId = Object.fromEntries(finalStatuses.rows.map((r) => [r.id, r.status]));
@@ -1613,7 +1670,7 @@ test("38. accept vs dismiss on DIFFERENT sibling suggestions of the same source 
     });
     await acceptReachedBarrier;
 
-    dismissPromise = materializeService.dismissMatchSuggestion(scope, { suggestionId: s2Id, performedBy: coachId });
+    dismissPromise = expectedToLose(materializeService.dismissMatchSuggestion(scope, { suggestionId: s2Id, performedBy: coachId }));
     const blocked = await waitUntilAnyOtherBlocked(monitor, acceptPid);
     assert.equal(blocked, true, "dismiss(S2) must be directly observed Lock-waiting behind accept(S1)'s shared source-identity lock");
 
@@ -1621,7 +1678,7 @@ test("38. accept vs dismiss on DIFFERENT sibling suggestions of the same source 
     const acceptResult = await acceptPromise;
     assert.equal(acceptResult.canonicalParticipantId, a1.body.participantId);
 
-    await assert.rejects(dismissPromise, /already resolved/i, "dismiss must see S2 already cascade-dismissed by the accept, never re-resolve it or deadlock");
+    await assert.rejects(dismissPromise, alreadyResolved409, "dismiss must see S2 already cascade-dismissed by the accept, never re-resolve it or deadlock");
 
     const finalStatuses = await monitor.query(`select id, status from training.activity_match_suggestions where id in ($1,$2)`, [s1Id, s2Id]);
     const byId = Object.fromEntries(finalStatuses.rows.map((r) => [r.id, r.status]));
@@ -2232,7 +2289,7 @@ test("57. sibling suggestions sharing the SAME source identity still correctly s
     });
     await acceptReachedBarrier;
 
-    dismissPromise = materializeService.dismissMatchSuggestion(scope, { suggestionId: s2Id, performedBy: coachId });
+    dismissPromise = expectedToLose(materializeService.dismissMatchSuggestion(scope, { suggestionId: s2Id, performedBy: coachId }));
     const blocked = await waitUntilAnyOtherBlocked(monitor, acceptPid);
     assert.equal(blocked, true, "the dismiss of the SIBLING suggestion must still be genuinely Lock-waiting — same source identity, serialized via the advisory lock, unaffected by the suggestion-row-lock narrowing");
 
@@ -2240,10 +2297,7 @@ test("57. sibling suggestions sharing the SAME source identity still correctly s
     const acceptResult = await acceptPromise;
     assert.ok(acceptResult.canonicalParticipantId);
 
-    await assert.rejects(dismissPromise, (err) => {
-      assert.match(err.message, /already resolved/i);
-      return true;
-    }, "the sibling dismiss must lose the race with a controlled 409 once accept's own cascade already resolved it");
+    await assert.rejects(dismissPromise, alreadyResolved409, "the sibling dismiss must lose the race with a controlled 409 once accept's own cascade already resolved it");
   } finally {
     releaseAccept();
     await Promise.allSettled([acceptPromise, dismissPromise]);

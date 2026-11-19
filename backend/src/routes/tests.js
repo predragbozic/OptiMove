@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { insertScheduleRow, insertScheduleTargets as insertTargets, replaceNotificationRules, WELLNESS_TEST_VERSION_ID } from "../testsScheduleWriter.js";
+import { MANAGED_BY_CALENDAR, scheduleManagedByCalendar } from "../calendarQuestions.js";
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { canAccessAthlete } from "../access.js";
@@ -19,7 +21,6 @@ const router = Router();
 // restriction (to allow scheduling other tests/batteries once they have
 // their own execution UI) only requires relaxing the one check in
 // POST /schedules below - nothing else in this file hardcodes WELLNESS.
-const WELLNESS_TEST_VERSION_ID = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 const WELLNESS_TOTAL_DERIVED_PARAMETER_ID = "a342af02-52cb-4b39-83d5-3b7861fe2069";
 const WELLNESS_INJURY_PARAMETER_ID = "a98f2afb-b458-40ff-98a7-c6b5108bba9e";
 
@@ -94,17 +95,6 @@ function resolveNotificationRules(rawRules) {
 // /schedules/bulk's per-date loop, PATCH /schedules/:id) - a full
 // delete-then-reinsert of all 4 rows, so a constraint violation on any one
 // of them rolls back the whole write, never a partial rule set.
-async function replaceNotificationRules(client, scheduleId, rules) {
-  await client.query(`delete from tests.test_schedule_notification_rules where schedule_id = $1`, [scheduleId]);
-  for (const rule of rules) {
-    await client.query(
-      `insert into tests.test_schedule_notification_rules
-         (schedule_id, notification_kind, enabled, reminder_offset_minutes, digest_trigger)
-       values ($1, $2, $3, $4, $5)`,
-      [scheduleId, rule.kind, rule.enabled, rule.reminderOffsetMinutes, rule.digestTrigger],
-    );
-  }
-}
 
 async function loadNotificationRules(executor, scheduleId) {
   const result = await executor(
@@ -737,6 +727,22 @@ router.get("/schedules", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// K2b-2a-1 (plan 8, 9.1.3): "Skip days off" is a daily WELLNESS schedule's
+// option, offered only while the owner club's switch for Ask athletes is on.
+// Returns null when allowed, else the 400 body.
+async function skipDaysOffRefusal(queryable, { skipDaysOff, scheduleKind, owner }) {
+  if (skipDaysOff === undefined || skipDaysOff === false) return null;
+  const refusal = { error: "skip_days_off_unavailable", message: "Skipping days off is not available for this schedule." };
+  if (skipDaysOff !== true || scheduleKind !== "recurring") return refusal;
+  const installed = (await queryable.query(`select to_regclass('calendar.club_question_settings') is not null as ok`)).rows[0].ok;
+  if (!installed) return refusal;
+  const on = (await queryable.query(
+    `select calendar.questions_enabled(calendar.owner_club_id($1, $2, $3)) as on`,
+    [owner.ownerScope, owner.ownerClubId, owner.ownerTeamId],
+  )).rows[0].on;
+  return on ? null : refusal;
+}
+
 router.post("/schedules", async (req, res, next) => {
   const client = await pool.connect();
   try {
@@ -765,8 +771,12 @@ router.post("/schedules", async (req, res, next) => {
     if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
     const owner = await resolveScheduleOwnerContext(req);
+    const skipRefusal = await skipDaysOffRefusal(client, { skipDaysOff: body.skipDaysOff, scheduleKind, owner });
+    if (skipRefusal) return res.status(400).json(skipRefusal);
     await client.query("begin");
-    const schedule = await insertScheduleRow(client, { scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId: req.user.id, owner });
+    const schedule = await insertScheduleRow(client, {
+      scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId: req.user.id, owner, skipDaysOff: body.skipDaysOff === true,
+    });
     await insertTargets(client, schedule.id, resolved.targets);
     // Not a hidden backend default: the coach saw and confirmed these
     // values in the create form (see the Notifications section there) - if
@@ -784,34 +794,6 @@ router.post("/schedules", async (req, res, next) => {
   }
 });
 
-// Shared by POST /schedules (create) and POST /schedules/bulk (Specific
-// dates) - the one place that actually inserts a tests.test_schedules row,
-// so both call sites stay byte-for-byte identical in what they write.
-async function insertScheduleRow(client, { scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId, owner }) {
-  const result = await client.query(
-    `insert into tests.test_schedules
-       (test_version_id, schedule_kind, timezone, start_date, end_date, recurrence_rule, recurrence_rule_version, opens_time, due_time, closes_time, status, created_by_user_id, owner_scope, owner_user_id, owner_club_id, owner_team_id)
-     values ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, 'active', $10, $11, $12, $13, $14)
-     returning *`,
-    [
-      WELLNESS_TEST_VERSION_ID,
-      scheduleKind,
-      timezone,
-      startDate,
-      scheduleKind === "one_time" ? (endDate || startDate) : endDate,
-      scheduleKind === "recurring" ? JSON.stringify({ version: 1, freq: "daily" }) : null,
-      opensTime,
-      dueTime,
-      closesTime,
-      userId,
-      owner.ownerScope,
-      owner.ownerUserId,
-      owner.ownerClubId,
-      owner.ownerTeamId,
-    ],
-  );
-  return result.rows[0];
-}
 
 // "Specific dates" scheduling (Phase 2.5): deliberately NOT a new recurrence
 // engine or a new grouping table - a coach picking dates on a calendar just
@@ -939,21 +921,6 @@ async function resolveValidTargets(req, rawTargets) {
   return { ok: true, targets };
 }
 
-async function insertTargets(client, scheduleId, targets) {
-  for (const target of targets) {
-    await client.query(
-      `insert into tests.test_schedule_targets (schedule_id, target_kind, target_athlete_id, target_team_id, target_club_id)
-       values ($1, $2, $3, $4, $5)`,
-      [
-        scheduleId,
-        target.kind,
-        target.kind === "athlete" ? target.id : null,
-        target.kind === "team" ? target.id : null,
-        target.kind === "club" ? target.id : null,
-      ],
-    );
-  }
-}
 
 function formatScheduleRow(row) {
   return {
@@ -974,6 +941,7 @@ function formatScheduleRow(row) {
     clubTargetNames: row.club_target_names || undefined,
     hasOccurrences: typeof row.has_occurrences === "boolean" ? row.has_occurrences : undefined,
     hasActivity: typeof row.has_activity === "boolean" ? row.has_activity : undefined,
+    skipDaysOff: typeof row.skip_days_off === "boolean" ? row.skip_days_off : undefined,
   };
 }
 
@@ -1286,6 +1254,11 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
+    // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
+    if (await scheduleManagedByCalendar(client, "test", schedule.id)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "schedule_managed_by_calendar", message: MANAGED_BY_CALENDAR });
+    }
 
     // cancelled is terminal: no status transition and no full edit is ever
     // allowed out of it - the schedule's access links were already revoked
@@ -1307,6 +1280,29 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     if (!resolvedRules.ok) {
       await client.query("rollback");
       return res.status(resolvedRules.status).json({ error: resolvedRules.error });
+    }
+
+    // K2b-2a-1: "Skip days off" toggled on its own, or with a status or
+    // notification change. A full edit decides it below, from the RESULTING
+    // kind, in the same UPDATE as schedule_kind (the 2a-2a code review: the
+    // CHECK test_schedules_skip_days_off_daily never sees an intermediate row).
+    const fullEditRequested = FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined);
+    if (body.skipDaysOff !== undefined && !fullEditRequested) {
+      const refusal = body.skipDaysOff === false ? null : await skipDaysOffRefusal(client, {
+        skipDaysOff: body.skipDaysOff, scheduleKind: schedule.schedule_kind,
+        owner: { ownerScope: schedule.owner_scope, ownerClubId: schedule.owner_club_id, ownerTeamId: schedule.owner_team_id },
+      });
+      if (refusal || typeof body.skipDaysOff !== "boolean") {
+        await client.query("rollback");
+        return res.status(400).json(refusal || { error: "skip_days_off_unavailable", message: "Skipping days off is not available for this schedule." });
+      }
+      if (body.skipDaysOff !== Boolean(schedule.skip_days_off)) {
+        await client.query(`update tests.test_schedules set skip_days_off = $2, updated_at = now() where id = $1`, [schedule.id, body.skipDaysOff]);
+      }
+      if (body.status === undefined && body.notificationRules === undefined && !FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined)) {
+        await client.query("commit");
+        return res.json({ ok: true, skipDaysOff: body.skipDaysOff });
+      }
     }
 
     const isFullEdit = FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined);
@@ -1393,6 +1389,31 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     }
     const scheduleKind = (body.scheduleKind !== undefined ? text(body.scheduleKind) === "daily" : schedule.schedule_kind === "recurring") ? "recurring" : "one_time";
 
+    // K2b-2a-1: the full edit's "Skip days off", decided from the RESULTING
+    // kind (a recurring schedule is always daily here): true only when the
+    // result is daily and the club's switch is on (400, nothing written);
+    // false when sent false; kept when not sent and the result is daily, else
+    // reset to false (the option cannot apply to a schedule that is not daily).
+    // skip_days_off (v81) is named only where the column exists (the
+    // insert's rule, testsScheduleWriter.js); the locked row is `select *`.
+    const hasSkipColumn = Object.prototype.hasOwnProperty.call(schedule, "skip_days_off");
+    let skipDaysOff;
+    if (body.skipDaysOff === undefined) {
+      skipDaysOff = scheduleKind === "recurring" ? Boolean(schedule.skip_days_off) : false;
+    } else if (body.skipDaysOff === false) {
+      skipDaysOff = false;
+    } else {
+      const refusal = await skipDaysOffRefusal(client, {
+        skipDaysOff: body.skipDaysOff, scheduleKind,
+        owner: { ownerScope: schedule.owner_scope, ownerClubId: schedule.owner_club_id, ownerTeamId: schedule.owner_team_id },
+      });
+      if (refusal || body.skipDaysOff !== true) {
+        await client.query("rollback");
+        return res.status(400).json(refusal || { error: "skip_days_off_unavailable", message: "Skipping days off is not available for this schedule." });
+      }
+      skipDaysOff = true;
+    }
+
     // A daily (recurring) schedule already generates its own occurrences one
     // day at a time, ongoing - converting it to a single one_time schedule
     // has no safe answer for "which occurrence becomes THE one_time
@@ -1453,7 +1474,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       `update tests.test_schedules set
          schedule_kind = $2, timezone = $3, start_date = $4, end_date = $5,
          recurrence_rule = $6, recurrence_rule_version = 1,
-         opens_time = $7, due_time = $8, closes_time = $9, status = $10, updated_at = now()
+         opens_time = $7, due_time = $8, closes_time = $9, status = $10${hasSkipColumn ? ", skip_days_off = $11" : ""}, updated_at = now()
        where id = $1`,
       [
         schedule.id,
@@ -1466,6 +1487,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
         dueTime,
         closesTime,
         status,
+        ...(hasSkipColumn ? [skipDaysOff] : []),
       ],
     );
 
@@ -1532,6 +1554,11 @@ router.delete("/schedules/:scheduleId", async (req, res, next) => {
     if (!schedule || !canManageSchedule(req, schedule)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
+    }
+    // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
+    if (await scheduleManagedByCalendar(client, "test", schedule.id)) {
+      await client.query("rollback");
+      return res.status(409).json({ error: "schedule_managed_by_calendar", message: MANAGED_BY_CALENDAR });
     }
 
     // If this schedule has never generated a single occurrence, it (and its
