@@ -1091,3 +1091,20 @@ test("P29. Escape inside a question step closes the step only; the next Escape c
   assert.equal(state.centralCalendar.panel.open, false);
   assert.equal(state.centralCalendar.panelQuestions, null);
 });
+
+test("P29b. while a link write is in flight, Escape closes the panel and keeps the open question step (#625's INFO)", async () => {
+  const { closeCentralCalendarPanel } = await import("../central-calendar-actions.js");
+  state.activeTab = "central-calendar";
+  await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
+  await qact("remove-open", { questionId: Q_RPE });
+  const step = state.centralCalendar.questionStep;
+  assert.ok(step);
+  state.centralCalendar.linkWrite = { requestKey: "k-in-flight", phase: "sending" };
+  try {
+    assert.equal(closeCentralCalendarPanel(render), true);
+    assert.equal(state.centralCalendar.panel.open, false, "the panel closes");
+    assert.equal(state.centralCalendar.questionStep, step, "the step is kept");
+  } finally {
+    state.centralCalendar.linkWrite = null;
+  }
+});

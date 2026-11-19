@@ -14,20 +14,24 @@ The scripts:
 | `scripts/backup/optimove-backup.ps1` | makes one backup file and checks it |
 | `scripts/backup/optimove-restore-test.ps1` | proves a backup file can really be restored, on your own computer |
 
-## Read this first: what has NOT been tested yet
+## Read this first: what has been proven, and what has NOT been tested yet
 
-The scripts were written and tested on Linux, with PowerShell 7 and a throwaway PostgreSQL 16. These things have
-**not** been run by anyone yet:
+**Proven on 2026-11-19, by the owner's own first runs:** on Windows with Windows PowerShell 5.1 and the
+PostgreSQL 17 tools, against production through the Supabase session pooler (port 5432), with a backup folder whose
+path contains a space:
 
-- on **Windows**, and on **Windows PowerShell 5.1** (the PowerShell that comes with Windows);
-- **Task Scheduler** (step 7 is written from knowledge, not from a run);
-- the **PostgreSQL 17** tools and a PostgreSQL 17 server;
-- the encrypted connection (TLS) to the **Supabase session pooler**, with and without the certificate, and the
-  read-only setting the script asks the pooler for (if the pooler refuses it, the script goes on without it and
-  says so; that fallback was tested only with a stand-in, not with Supabase);
-- the **real production database**: whether its backup restores cleanly into a plain local PostgreSQL.
+- the backup ended `OK` (245 tables), with the password read from `pgpass.conf`;
+- the pooler accepted the read-only setting (no `NOTE` line);
+- the restore test ended `RESTORE TEST OK`, with the same counts as production;
+- the Task Scheduler task was created and ran.
 
-Your first runs are that test. So the rule is:
+**Still not tested by anyone:**
+
+- the connection **with the Supabase certificate** (step 4, `ssl_root_cert`);
+- a **real restore into a new Supabase project** (step 11);
+- the fallback for a pooler that refuses the read-only setting (tested only with a stand-in).
+
+The rule stays, for every new computer and after every change of the set-up:
 
 > **Until the restore test (step 8) has said `RESTORE TEST OK` for a backup of production, do not consider that a
 > backup exists.** A file in the folder and an `OK` from the backup script are not enough.
@@ -203,16 +207,17 @@ OptiMove backup (read only)
 
 After a few minutes it ends with one of two lines:
 
-- `OK: optimove-2026-11-19-0200.dump, 48211234 bytes, 143 tables` — the backup is in the folder.
+- `OK: optimove-2026-11-19-021500.dump, 48211234 bytes, 143 tables` — the backup is in the folder.
 - `FAILED while ...` — there is **no** new backup. Go to step 9.
 
 After an `OK` the folder holds:
 
 | File | What it is |
 |---|---|
-| `optimove-YYYY-MM-DD-HHmm.dump` | the backup |
-| `optimove-YYYY-MM-DD-HHmm.dump.sha256` | the file's fingerprint; the restore test uses it to notice a damaged file |
-| `optimove-backup.log` | one line per run: time, OK or FAILED, file, size, number of tables |
+| `optimove-YYYY-MM-DD-HHmmss.dump` | the backup |
+| `optimove-YYYY-MM-DD-HHmmss.dump.sha256` | the file's fingerprint; the restore test uses it to notice a damaged file |
+| `optimove-backup.log` | one line per run: time, OK or FAILED, file, size, number of tables; after a failure also the reason |
+| `optimove-backup.lock` | a small empty file the script uses to make sure only one backup runs at a time. Leave it there; it is harmless |
 
 What the script does, in order:
 
@@ -250,13 +255,19 @@ Run it at a quiet moment: not during a deploy or a migration. On a quiet databas
 
    `-NoPrompt` means: never wait for someone to type a password. If the password file has no matching line the run
    fails at once instead of hanging all night.
-5. **Settings:** tick **Run task as soon as possible after a scheduled start is missed**, and **Stop the task if it
+5. **Conditions** (on a laptop): untick **Start the task only if the computer is on AC power**, otherwise a
+   laptop on battery makes no backup and says nothing. Tick **Wake the computer to run this task** if the laptop
+   sleeps at night.
+6. **Settings:** tick **Run task as soon as possible after a scheduled start is missed**, and **Stop the task if it
    runs longer than** 1 hour.
-6. Test it: right click the task > **Run**. A new line must appear in `optimove-backup.log`.
+7. Test it: right click the task > **Run**, **once**, and wait a few minutes. A new line must appear in
+   `optimove-backup.log`. Pressing Run a second time while the first is still working does no harm: the second one
+   stops with `Another backup is already running; this one stops.`
 
 **Look at the log once a week.** Open `optimove-backup.log`: the last line must say `OK` and carry yesterday's or
-today's date. In Task Scheduler the column **Last Run Result** reads `0x0` after an OK run and `0x1` after a failed
-one. A computer that is switched off at night makes no backup, and nothing warns you: only the log shows it.
+today's date. In Task Scheduler the column **Last Run Result** reads `0x0` after an OK run, `0x1` after a failed
+one and `0x2` when the run stopped because another backup was already running. Under Task Scheduler there is no
+window to read, so after a failure the log line itself says why (with the host, the user and the folder left out). A computer that is switched off at night makes no backup, and nothing warns you: only the log shows it.
 
 ## 8. The restore test (once now, then every month)
 
@@ -265,7 +276,7 @@ that database again. It works on `localhost` only and refuses any other host. It
 never touches the `OPTIMOVE` development database.
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup\optimove-restore-test.ps1 -DumpPath "C:\Users\<you>\OptiMove-backups\optimove-2026-11-19-0200.dump"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup\optimove-restore-test.ps1 -DumpPath "C:\Users\<you>\OptiMove-backups\optimove-2026-11-19-021500.dump"
 ```
 
 Add `-Port 5433` if the installer chose that port in step 1.
@@ -277,7 +288,7 @@ OptiMove restore test (this computer only)
   host:         localhost
   port:         5432
   new database: optimove_restore_test_20261119_101500 (created now, dropped at the end)
-  backup file:  optimove-2026-11-19-0200.dump
+  backup file:  optimove-2026-11-19-021500.dump
   sha256:       matches
 Restoring ...
   tables: 143 restored, 143 in the backup file
@@ -320,10 +331,12 @@ line of the log say where it stopped.
 | `a schema ... which this backup does not know` | the database has a new part the backup was not told about. **Stop and report the schema's name.** Nothing was dumped. Do not add `skip_schemas` on your own: that would leave data out of every backup from then on |
 | `has no schema ...` | the config file points at the wrong database |
 | `certificate verify failed` | step 4: the certificate file is wrong or the path is wrong. Do not remove the line; report it |
+| `WARNING: old backup file ... could not be deleted`, and then `OK` | not a failure: the new backup is good. An old file was open (in a window, or held by the antivirus) or protected. Close what holds it; the next night's run tries again. If the warning repeats every night, delete that file by hand |
 | a `NOTE` line about the read-only setting, and then `OK` | not a failure: see the note in step 6. Report it once |
 | `pg_dump ended with exit code ...` | the connection broke, the disk is full, or a migration was running. Run it again at a quiet moment |
 | `cannot be read back` or `lists no tables` | the file is damaged. It was renamed to `.failed`. Run again |
-| `already exists; wait a minute` | two runs in the same minute. Wait and run again |
+| `Another backup is already running; this one stops.` (the log says `SKIPPED`, Last Run Result `0x2`) | **Run was pressed twice**, or the nightly run started while you ran one by hand. Nothing is wrong: the second one stopped by itself and touched nothing. Wait for the first to finish and look at its line in the log |
+| `already exists; run again in a moment` | two runs in the very same second. Run again |
 
 A `.failed` file is **not** a backup. It may still hold personal data: the script deletes it with the old backups
 after 14 days, or delete it yourself (and empty the recycle bin).
@@ -368,7 +381,7 @@ The known path, into a **new, empty** Supabase project:
 
    ```
    cd C:\Users\<you>\OptiMove-backups
-   & "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" --list --file=restore-list.txt optimove-YYYY-MM-DD-HHmm.dump
+   & "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" --list --file=restore-list.txt optimove-YYYY-MM-DD-HHmmss.dump
    Get-Content restore-list.txt | Where-Object { $_ -notmatch '^\d+; \d+ \d+ SCHEMA - public ' } | Set-Content -Encoding ASCII restore-list-no-public.txt
    ```
 
@@ -378,7 +391,7 @@ The known path, into a **new, empty** Supabase project:
 
    ```
    $env:PGSSLMODE = "require"
-   & "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" --exit-on-error --no-owner --no-privileges --use-list=restore-list-no-public.txt --no-password --host <NEW-pooler-host> --port 5432 --username postgres.<NEW-project-ref> --dbname postgres optimove-YYYY-MM-DD-HHmm.dump
+   & "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" --exit-on-error --no-owner --no-privileges --use-list=restore-list-no-public.txt --no-password --host <NEW-pooler-host> --port 5432 --username postgres.<NEW-project-ref> --dbname postgres optimove-YYYY-MM-DD-HHmmss.dump
    ```
 
    It must end without any `error` line. The other way around the obstacle is to drop the new project's empty

@@ -378,10 +378,10 @@ async function insertOccasionWithValues(client, { participantId, segmentId, iden
     if (written.rowCount !== values.length) throw new GpexeImportError("provenance_incomplete", "Not every imported value has its provenance row.");
     // J21 (C141-C143): the calculated variables of this occasion, from these values, in this transaction. Every new occasion
     // gets its own (a correction, a supplement or a needs-review occasion included), so no calculated value outlives its inputs.
-    // `calculated` is the import's set of levels at which a calculated variable applies (read once); a caller that does not
+    // `calculated` is the import's map of the levels at which a calculated variable applies to their kinds (read once); a caller that does not
     // pass it fails closed rather than importing without the calculated values.
-    if (!(calculated instanceof Set) || !level || !ownerTeamId) throw new GpexeImportError("calculation_context_missing", "The import did not say which calculated variables apply.");
-    if (calculated.has(level)) await writeCalculatedValues(client, { occasionId, level, ownerTeamId });
+    if (!(calculated instanceof Map) || !level || !ownerTeamId) throw new GpexeImportError("calculation_context_missing", "The import did not say which calculated variables apply.");
+    if (calculated.has(level)) await writeCalculatedValues(client, { occasionId, level, ownerTeamId, kinds: calculated.get(level) });
   }
   return occasionId;
 }

@@ -3,6 +3,7 @@
 // Deliberately not imported/registered by any production route in S2a.
 import { isUuid, validateContract } from './schema.js';
 const TYPES = ['numeric', 'boolean', 'text'];
+// v79: a ratio is never totalled or averaged, and dashboards do not combine it yet: the simple builder neither lists nor loads one.
 const withAggregations = row => ({ ...row, allowed_aggregations: row.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'] });
 export class SimpleContractError extends Error {
   constructor(code, status = 404) { super(code); this.code = code; this.status = status; }
@@ -37,7 +38,7 @@ export function createSimpleCapabilityReader({ query, canManageDashboardRow, dat
     const { rows } = await query(`select d.id, d.key, d.label, d.current_version_id, v.value_type, v.unit, v.daily_aggregation_method,
       coalesce((select json_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id), '[]'::json) as scope_capabilities
       from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id=d.current_version_id
-      where d.state='active' and ${visibleSql('d')} and v.value_type = any($5::text[])
+      where d.state='active' and ${visibleSql('d')} and coalesce(to_jsonb(v.*)->'calculation'->>'kind', '') <> 'ratio' and v.value_type = any($5::text[])
       and ($6::text = '' or d.key ilike '%' || $6 || '%' or d.label ilike '%' || $6 || '%')
       and ($7::uuid is null or d.id > $7::uuid)
       and ($9::text is null or not exists(select 1 from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id)
@@ -57,7 +58,7 @@ export function createSimpleCapabilityReader({ query, canManageDashboardRow, dat
     else metric = (await query(`select d.*, v.value_type, v.unit, v.daily_aggregation_method,
       coalesce((select json_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id), '[]'::json) as scope_capabilities
       from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id=d.current_version_id
-      where d.state='active' and ${visibleSql('d')} and d.id=$5`, [...targetParams(d), metricRef.metricDefinitionId])).rows[0];
+      where d.state='active' and ${visibleSql('d')} and coalesce(to_jsonb(v.*)->'calculation'->>'kind', '') <> 'ratio' and d.id=$5`, [...targetParams(d), metricRef.metricDefinitionId])).rows[0];
     if (!metric || !TYPES.includes(metric.value_type)) throw new SimpleContractError('notFound');
     let retainedPin = null;
     if (existingWidgetId !== null) {

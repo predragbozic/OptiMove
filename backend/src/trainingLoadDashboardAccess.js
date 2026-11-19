@@ -271,7 +271,9 @@ export function canViewDashboardRow(req, row, dataWorkspace) {
 // ------------------------------------------------------------
 export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionId) {
   const r = await query(
-    `select d.owner_scope, d.owner_user_id, d.owner_club_id, d.owner_team_id, d.state, ${calculatedDefinitionSql("d")} as calculated
+    `select d.owner_scope, d.owner_user_id, d.owner_club_id, d.owner_team_id, d.state, ${calculatedDefinitionSql("d")} as calculated,
+            (select to_jsonb(dv.*) -> 'calculation' ->> 'kind' from training_load.metric_definition_versions dv
+              where dv.id = d.current_version_id) as calculation_kind
        from training_load.metric_definitions d where d.id = $1`,
     [metricDefinitionId],
   );
