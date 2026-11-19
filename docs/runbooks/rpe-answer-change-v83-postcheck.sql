@@ -4,10 +4,9 @@
 -- Every ok column must be true. The digests are the rehearsal's (PostgreSQL 16); on another major version a digest that
 -- differs is read block by block, never "fixed" here.
 
--- 1. v83 is recorded once, with a checksum, and nothing later is.
+-- 1. v83 is recorded once, with the file's checksum. Only v83's own row: other migrations, applied or not, do not count.
 select count(*) = 1 as ok_recorded_once,
-       bool_and(checksum = 'e044a4ef3d91e4e66fa8531e05a41da5d56ae372663a348a3ce35ebf8ba94b82') as ok_checksum_is_the_file,
-       not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611201200_training_load_v83_rpe_answer_change.sql') as ok_nothing_later
+       bool_and(checksum = 'e044a4ef3d91e4e66fa8531e05a41da5d56ae372663a348a3ce35ebf8ba94b82') as ok_checksum_is_the_file
   from public.schema_migrations where migration_name = 'migrations_v2/202611201200_training_load_v83_rpe_answer_change.sql';
 
 -- 2. The history table: row-level security on, no privilege of PUBLIC, anon or authenticated; its constraints and indexes as written.

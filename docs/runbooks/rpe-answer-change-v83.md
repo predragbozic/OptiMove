@@ -32,9 +32,11 @@ answer can no longer be changed. The question is closed."
 1. The rehearsal on PostgreSQL 17 by the owner (below) — until then PostgreSQL 17 is **NOT RUN**.
 2. The read-only preflight `docs/runbooks/rpe-answer-change-v83-preflight.sql`, each block as
    `begin transaction read only; <block>; rollback;`. Every `ok_*` column true; block 5 is information.
-   - Block 2 expects nothing recorded after v83. Note: v84 (roles R2) has the prefix `202611201000`, which sorts
-     **before** v83's `202611201200`; whichever is merged second, the runner applies both by name. Once v83 is applied,
-     v84's own rollback refuses ("later migrations are applied"), and the other way round v83's does not care about v84.
+   - Block 2 checks only that v83 itself is not recorded; `last_migration` is information. Whether v80, v84 or any
+     later-named migration is applied does not change any preflight or post-check result. Note: v84 (roles R2) has the
+     prefix `202611201000`, which sorts **before** v83's `202611201200`; the runner applies both by name. Once v83 is
+     applied, v84's own rollback refuses ("later migrations are applied"). v83's rollback keeps its own "later migration"
+     refusal (forward-only, accepted by the OptiMove manager).
 3. The owner's order naming the file: `202611201200_training_load_v83_rpe_answer_change.sql` and its sha256 (the
    post-check's block 1 holds it).
 

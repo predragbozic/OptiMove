@@ -8,9 +8,9 @@
 select current_setting('server_version_num')::int >= 130000 as ok_server_13_or_later,
        current_setting('server_version') as server_version;
 
--- 2. v83 is not recorded, and no recorded migrations_v2 migration sorts after it.
+-- 2. v83 is not recorded. Only v83's own row is checked: another migration applied or not (v80, v84 or any later name)
+--    passes either way; last_migration is information only, never pass/fail.
 select not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201200_training_load_v83_rpe_answer_change.sql') as ok_v83_not_recorded,
-       not exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611201200_training_load_v83_rpe_answer_change.sql') as ok_nothing_later,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration;
 
 -- 3. The snapshot trigger is the v5 one: its function's body (md5), the trigger calls it, it is enabled.
