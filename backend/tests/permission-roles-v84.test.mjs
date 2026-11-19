@@ -114,6 +114,66 @@ test("1. v84 applied by the runner rewrites no existing role row; applied twice 
   }
 });
 
+test("1c. order by application, not by prefix (v80 and v83 sort after v84 but reach production before it): a later-prefixed migration applied BEFORE v84 leaves the rollback possible (it passes); a migration applied AFTER v84, even with an earlier prefix, refuses it (23514, nothing changed); the post-check's block 1 stays true either way; the previous code's runner starts over a recorded v84 and the CHECKs take the old writers' words", async () => {
+  const rollback = fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-rollback.sql"), "utf8");
+  const post = fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-postcheck.sql"), "utf8");
+  const block1 = post.split(/\n(?=-- \d+a?\. )/).find((b) => b.startsWith("-- 1. ")).split("\n").filter((l) => !l.startsWith("--")).join("\n");
+  const dummy = (dir, name) => fs.writeFileSync(path.join(dir, name), "create table public.r2_dummy_" + name.slice(0, 12) + " (id int);\n");
+  // (a) A later prefix applied first, then v84: the rollback passes.
+  const a = await buildDatabase({ label: "v84_order_a", withoutV84: true });
+  const ca = new pg.Client({ connectionString: a.url });
+  await ca.connect();
+  const tmpA = migrationsWithout([V84_FILE]);
+  try {
+    dummy(tmpA.dir, "202611201300_r2_dummy_after_prefix.sql");
+    await runMigrations({ databaseUrl: a.url, migrationsRoot: tmpA.dir });
+    fs.copyFileSync(path.join(MIGRATIONS, V84_FILE), path.join(tmpA.dir, V84_FILE));
+    await runMigrations({ databaseUrl: a.url, migrationsRoot: tmpA.dir });
+    await ca.query("begin transaction read only");
+    const b1 = (await ca.query(block1)).rows[0];
+    await ca.query("rollback");
+    assert.deepEqual([b1.recorded_once, b1.checksum_is_the_file, Number(b1.applied_after_v84)], [true, true, 0]);
+    await ca.query(rollback);
+    assert.equal((await ca.query(`select to_regclass('public.permission_roles') as t`)).rows[0].t, null, "rolled back");
+  } finally {
+    tmpA.cleanup(); await ca.end().catch(() => {}); await a.drop();
+  }
+  // (b) v84, then a migration with an EARLIER prefix applied after it: refused, nothing changed.
+  const b = await buildDatabase({ label: "v84_order_b" });
+  const cb = new pg.Client({ connectionString: b.url });
+  await cb.connect();
+  const tmpB = migrationsWithout([]);
+  try {
+    dummy(tmpB.dir, "202611200900_r2_dummy_before_prefix.sql");
+    await runMigrations({ databaseUrl: b.url, migrationsRoot: tmpB.dir });
+    const catalog = (await cb.query(CATALOG_SQL)).rows[0];
+    await cb.query("begin transaction read only");
+    const b1 = (await cb.query(block1)).rows[0];
+    await cb.query("rollback");
+    assert.deepEqual([b1.recorded_once, b1.checksum_is_the_file, Number(b1.applied_after_v84)], [true, true, 1]);
+    await refused(cb.query(rollback), "23514", /later migrations are applied/);
+    await cb.query("rollback").catch(() => {});
+    assert.deepEqual((await cb.query(CATALOG_SQL)).rows[0], catalog, "nothing changed");
+    // (c) The way back is the previous code with v84 left in place: its runner (a folder without the v84 file) starts
+    // cleanly over the recorded v84 row and changes nothing; the two CHECKs take exactly the words the old writers use.
+    const oldCode = migrationsWithout([V84_FILE, "202611200900_r2_dummy_before_prefix.sql"]);
+    try {
+      fs.copyFileSync(path.join(tmpB.dir, "202611200900_r2_dummy_before_prefix.sql"), path.join(oldCode.dir, "202611200900_r2_dummy_before_prefix.sql"));
+      await runMigrations({ databaseUrl: b.url, migrationsRoot: oldCode.dir });
+    } finally { oldCode.cleanup(); }
+    assert.deepEqual((await cb.query(CATALOG_SQL)).rows[0], catalog, "the old runner changed nothing");
+    const u = (await cb.query(`insert into public.users (email, first_name, last_name, full_name) values ('old@t','a','b','a b') returning id`)).rows[0].id;
+    const club = (await cb.query(`insert into public.clubs (name) values ('Old') returning id`)).rows[0].id;
+    const team = (await cb.query(`insert into public.teams (club_id, name) values ($1, 'T') returning id`, [club])).rows[0].id;
+    await cb.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1, $2, 'club_admin', true)`, [u, club]);
+    await cb.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1, $2, 'team_coach', true)`, [u, team]);
+    await cb.query(`update public.user_club_roles set is_active = false where user_id = $1`, [u]);
+    await refused(cb.query(`insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'club_manager')`, [u, club]), "23514");
+  } finally {
+    tmpB.cleanup(); await cb.end().catch(() => {}); await b.drop();
+  }
+});
+
 test("1b. the rollback refuses (23514, nothing changed) once a role was created, an assignment or a change record exists, or a later migration is recorded", async () => {
   const rollback = fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-rollback.sql"), "utf8");
   const pre = await buildDatabase({ label: "v84_rb" });
@@ -121,7 +181,7 @@ test("1b. the rollback refuses (23514, nothing changed) once a role was created,
   await c.connect();
   try {
     const catalog = (await c.query(CATALOG_SQL)).rows[0];
-    // A later migration recorded.
+    // A migration recorded after v84 (applied_at now(), so after v84's row).
     await c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912310000_later.sql', $1, 'test')`, ["f".repeat(64)]);
     await refused(c.query(rollback), "23514", /later migrations are applied/);
     await c.query("rollback").catch(() => {});

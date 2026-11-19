@@ -63,6 +63,10 @@ test("7a. the preflight before v84: every block's ok columns true, block 3a's fi
   // Block 5 is for the reader; can_create_in_public is still a requirement.
   assert.equal((await run(PRE["5"])).can_create_in_public, true);
   fingerprintBefore = await run(PRE["3a"]);
+  // 1: a migration with a LATER prefix already applied (v80, v83 reach production before v84) keeps block 1 true.
+  await c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/202611201300_later_prefix.sql', $1, 'test')`, ["e".repeat(64)]);
+  allTrue("1 with a later prefix applied", await run(PRE["1"]));
+  await c.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/202611201300_later_prefix.sql'`);
   // 3: a row of another word.
   await c.query(`set session_replication_role = replica`);
   const planted = (await c.query(`insert into public.user_club_roles (user_id, club_id, role) select user_id, club_id, 'club_manager' from public.user_club_roles limit 1 returning id`)).rows[0].id;
@@ -87,7 +91,7 @@ test("7a. the preflight before v84: every block's ok columns true, block 3a's fi
   allTrue("3 again", await run(PRE["3"]));
 });
 
-test("7b. the post-check after v84: every block's ok columns true and block 6a equal to preflight block 3a; flips: a tampered v84 checksum (1, and preflight 1b), a later migration (1), a privilege granted to PUBLIC (2), a disabled trigger (3), a changed seed (4), an assignment (5), a dropped CHECK (6)", async () => {
+test("7b. the post-check after v84: every block's ok columns true and block 6a equal to preflight block 3a; flips: a tampered v84 checksum (1, and preflight 1b), a migration applied after v84 (1 stays true, counted), a privilege granted to PUBLIC (2), a disabled trigger (3), a changed seed (4), an assignment (5), a dropped CHECK (6)", async () => {
   await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
   assert.deepEqual(Object.keys(POST).sort(), ["1", "2", "3", "4", "5", "6", "6a", "7"]);
   for (const [name, sql] of Object.entries(POST)) allTrue(name, await run(sql));
@@ -107,9 +111,11 @@ test("7b. the post-check after v84: every block's ok columns true and block 6a e
   const oneB = await run(checksumSql());
   assert.equal(oneB.no_recorded_checksum_differs, true);
   assert.equal(Number(oneB.recorded_not_in_repo), 0);
-  // 1: a later migration.
+  // 1: a migration applied after v84 does not fail block 1 (v80 / v83 may come before or after it); it is counted.
   await c.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912310000_later.sql', $1, 'test')`, ["f".repeat(64)]);
-  assert.equal((await run(POST["1"])).is_last, false);
+  const later = await run(POST["1"]);
+  allTrue("1 with a later migration", later);
+  assert.equal(Number(later.applied_after_v84), 1);
   await c.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/209912310000_later.sql'`);
   // 2: a privilege for PUBLIC.
   await c.query(`grant select on public.permission_roles to public`);

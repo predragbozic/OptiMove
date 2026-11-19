@@ -10,7 +10,7 @@
 -- and the v84 record. It changes no other row. It refuses (23514, fixed message), changing nothing, once any of these holds
 -- (contract 7.3) - from then on v84 is forward-only:
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v84 is not recorded, or a later migrations_v2 migration is;
+--   * v84 is not recorded, or any migration was applied after it (by applied_at, not by prefix);
 --   * a row of user_role_assignments, permission_role_changes, permission_requests or permission_role_module_display;
 --   * a role without a basic_key;
 --   * a foreign key from outside the nine tables into any of them;
@@ -31,7 +31,12 @@ begin
   if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql') then
     raise exception 'v84 rollback refused: v84 is not recorded on this database' using errcode = '23514';
   end if;
-  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > 'migrations_v2/202611201000_roles_v84_permission_roles.sql') then
+  -- "Later" is decided by the time each migration was APPLIED, not by its prefix: the runner applies every unapplied file
+  -- whatever its prefix, so a migration that sorts after v84 may have been applied before it (and depends on nothing of
+  -- v84), while one applied after v84 may depend on it. Any migration (either folder) applied at or after v84's own row
+  -- refuses the rollback.
+  if exists (select 1 from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611201000_roles_v84_permission_roles.sql'
+              and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql')) then
     raise exception 'v84 rollback refused: later migrations are applied' using errcode = '23514';
   end if;
   if exists (select 1 from public.user_role_assignments) or exists (select 1 from public.permission_role_changes)

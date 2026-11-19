@@ -80,27 +80,38 @@ constraints) and the seed fingerprint of block 4 were taken from the rehearsal o
 
 ## The way back
 
-**The order is fixed: the code first, then (if ever) the database.** The code of R2 reads the role tables on every
-signed-in request (`loadAuthorizationContext`). On a database without them it fails closed: a platform admin still
-passes, and every other request that reaches a `can()` call site answers `503 permissions_unavailable`. So v84 is never
-rolled back while R2's code is live.
+**The plan of return is redeploying the previous code; v84 stays in the database.** v84 is forward-only in practice.
+
+- **Why that is safe** (checked on PR-A's head `e5fe035`, the previous code):
+  - it reads none of the nine tables and calls none of v84's functions (`git grep` finds only a comment in
+    `permissions.js`);
+  - its only writers of the old scoped role tables (`organization.js`: the grant and revoke of `club_admin` and
+    `team_coach`) insert exactly those two literals and update only `is_active` and the revocation columns, which is what
+    the two new CHECKs allow (R1's source scan `permissions-r1` c1 pins it);
+  - its runner walks the files on disk only, so a recorded v84 row without its file is never touched, and the server
+    starts (test 1c (c): the previous code's migration folder over a database with v84; nothing changes).
+- **What a club's admin loses meanwhile:** `roles.manage` (only the Roles API, which the previous code does not have,
+  checks it). Every other `can()` answer is R1's.
+- **The code of R2 with a database without v84 is the one case refused.** R2 reads the role tables on every signed-in
+  request (`loadAuthorizationContext`) and fails closed: a platform admin still passes, every other request that reaches a
+  `can()` call site answers `503 permissions_unavailable`. So v84 is never removed while R2's code is live; the code goes
+  first.
 
 How the deploy behaves (`backend/package.json`: `"start": "node src/migrate.js && node src/server.js"`):
 - the new instance starts the server only after the runner applied every migration; a failed v84 (a refused `DO`
   block, a lock timeout) exits non-zero, the new server never starts, and the previous instance - the previous code,
   which reads nothing of v84 - keeps serving;
 - while v84 runs, a request of the previous instance that reads `user_club_roles` / `user_team_roles` waits for the
-  migration's COMMIT (the `ACCESS EXCLUSIVE` of the two `ADD CONSTRAINT`, at most `lock_timeout` 5 s each);
-- there is no path where R2's code serves requests on a database without v84, except a manual rollback of v84 while R2's
-  code is live (the case refused above) or a database restored from a backup taken before v84.
+  migration's COMMIT (the `ACCESS EXCLUSIVE` of the two `ADD CONSTRAINT`, at most `lock_timeout` 5 s each).
 
-- **The application:** deploy the previous commit. R1's `can()` reads nothing of v84, and the two CHECKs refuse nothing R1
-  writes. A club's admin then no longer passes `roles.manage`, which only the Roles API checks.
-- **The database:** `permission-roles-v84-rollback.sql` (one transaction, `psql -v ON_ERROR_STOP=1 -f ...`), only after
-  the application no longer contains the v84 file (otherwise the runner applies it again) and on the owner's word for
-  that database. It refuses, changing nothing, once a role was created, changed, copied or archived, an assignment or a
-  request exists, a display row exists, another table refers to the nine, the seed differs, or a later migration is
-  recorded. From then on v84 is forward-only.
+**The rollback SQL** (`permission-roles-v84-rollback.sql`, one transaction, `psql -v ON_ERROR_STOP=1 -f ...`) is only for
+a database where nothing was applied after v84, after the previous code is deployed, and on the owner's word for that
+database. "After" is decided by `schema_migrations.applied_at` (each file is applied in its own transaction, so its
+`now()` orders them), never by prefix: v80 (`202611201100`) and the calendar's v83 (`202611201200`) sort after v84 but
+reach production before it, and they do not refuse it; any migration applied at or after v84's own row does (test 1c).
+It also refuses, changing nothing, once a role was created, changed, copied or archived, an assignment or a request
+exists, a display row exists, another table refers to the nine, or the seed differs. Post-check block 1's
+`applied_after_v84` shows the count.
 
 ## Known limits
 

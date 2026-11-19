@@ -4,11 +4,11 @@
 --   begin transaction read only; <block>; rollback;
 -- Blocks 1-7 return ok columns that must all be true; 3a and 5 are also for the reader; block 8 is run in git.
 
--- 1. The server, the last recorded migration, v84 not recorded.
+-- 1. The server, the last recorded migration (for the reader), v84 not recorded. Migrations with a later prefix may
+--    already be applied (the runner applies every unapplied file, whatever its prefix): no check depends on order.
 select current_setting('server_version_num')::int >= 130000 as server_13_or_later,
        current_setting('server_version') as server_version,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration,
-       (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') < 'migrations_v2/202611201000_roles_v84_permission_roles.sql' as v84_sorts_last,
        not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql') as v84_not_recorded,
        not exists (select 1 from public.schema_migrations where checksum is null or checksum !~ '^[0-9a-f]{64}$') as checksums_shaped;
 

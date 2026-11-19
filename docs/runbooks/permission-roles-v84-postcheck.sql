@@ -4,10 +4,12 @@
 -- Every ok column must be true; block 6a is compared by the reader with preflight block 3a.
 
 -- 1. v84 is recorded once, its checksum the file's sha256 (the literal below; the runbook test keeps it equal to the
---    file), and it is the last migration.
+--    file). Other migrations - with a later prefix, or applied before or after v84 - change nothing here; the count of
+--    those applied after v84 is for the reader (the rollback refuses while it is not 0).
 select count(*) = 1 as recorded_once,
        bool_and(checksum = 'dfafb581c762d724d63a8356f93d9422ec96e27dfab75a344746e83b23df2e9c') as checksum_is_the_file,
-       (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') = 'migrations_v2/202611201000_roles_v84_permission_roles.sql' as is_last
+       (select count(*) from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611201000_roles_v84_permission_roles.sql'
+          and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql')) as applied_after_v84
   from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql';
 
 -- 2. The nine tables, row-level security on each, and no privilege of PUBLIC, anon, authenticated or service_role on any table or function of v84.
