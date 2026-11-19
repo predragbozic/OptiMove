@@ -8,7 +8,7 @@ written into the sections below.
 
 | | |
 |---|---|
-| Status | **Proposed.** Not accepted; nothing is built, and no code is written before the GO. The owner decided O1-O10 and the plan's D4 on 2026-11-19 (section 10.0); the *Rukovodilac* of OptiMove decided M1-M15 (section 10.2). Reviews: the three internal reviews (database, security, consistency) ended READY on `ab38f76`. The external review (the *Nezavisni revizor*, relayed by the *Rukovodilac*) was NO-GO at `2e5324c` with two MEDIUM findings: the lock order against the login switch-off (4.3.1) and the drift of the twin against `can()` (test 31a). Both are written into this head. Still owed: the narrow external re-review of those parts, then the owner's acceptance. |
+| Status | **Proposed.** Not accepted; nothing is built, and no code is written before the GO. The owner decided O1-O10 and the plan's D4 on 2026-11-19 (section 10.0); the *Rukovodilac* of OptiMove decided M1-M15 (section 10.2). Reviews: the three internal reviews (database, security, consistency) ended READY on `ab38f76`. The external review (the *Nezavisni revizor*, relayed by the *Rukovodilac*) was NO-GO at `2e5324c` with two MEDIUM findings: the lock order against the login switch-off (4.3.1) and the drift of the twin against `can()` (test 31a). Both were written in at `014614b`, and the narrow external re-review of that head was **GO**: the contract may be implemented. Its two LOW notes are in this head (10.3). Still owed: the owner's acceptance; then the implementation as a ★★ package (v84), whose migration is merged only on the owner's word to the *Rukovodilac* of OptiMove. |
 | Mark | ★★: external-review triggers 1 (a migration), 2 (auth, roles, info hiding) and 4 (transactions, lock order, idempotency) of `CLAUDE.md`. |
 | Written against | The plan at `3a6723a` and the R1 code at `f4dd289`. Both are merged: `origin/main` at `b08cfb7` (2026-11-19) holds them and is merged into this branch. `backend/src/permissions.js`, `routes/organization.js`, `authz.js`, `auth.js`, `server.js` and `backend/tests/permissions-r1.test.mjs` are byte-identical at `f4dd289` and at `b08cfb7` (`git diff`), so every `file:line` below holds at both. R2's implementation re-checks each at its own base. |
 | Depends on | R1 merged (`backend/src/permissions.js`, `can()`), and the read-only production count of the plan's section 2.1 rule 2 (rows of `user_club_roles` / `user_team_roles` with another word; expected 0). The manager of this stream relays that the *Rukovodilac* of OptiMove read 0 rows on 2026-11-19 at 07:57 UTC; the database was not read for this document, and the preflight counts again (7.1 block 3). |
@@ -599,6 +599,13 @@ two can wait for each other:
   A and asks for T. Each waits for the other.
 - The same holds between step 2 and step 3: a platform admin's row locked in step 2 can have a higher id than a
   club admin's row asked for in step 3.
+- A third cycle exists already today, without the Roles API. The switch-off holds a platform admin's row (step 2)
+  and waits for a club's headcount advisory lock (step 3). The old `club_admin` revocation of that club
+  (`:2888-2889`) holds that advisory lock and asks for the `users` row of the same user, when that platform admin
+  is also an admin of the club.
+
+"All advisory locks first (platform, then clubs by `club_id`), then rows" removes all three. **Rule:** the set of
+users to lock (the union below) is read only **after** every advisory lock is held, never before.
 
 The change, in `setUserLoginStatus` and the two helpers it calls:
 
@@ -606,8 +613,14 @@ The change, in `setUserLoginStatus` and the two helpers it calls:
 |---|---|---|
 | Advisory locks | platform headcount; later, inside step 3, each club's headcount in `club_id` order | unchanged locks and keys, all taken first: platform headcount, then each club's headcount in `club_id` order, before any row lock |
 | User rows | step 2 and each club of step 3 lock their own set, `for update of u, g` / `of u, r` | **one statement** locks the `users` rows of the union (the qualifying platform admins if the target is one, and the qualifying admins of every affected club), `order by u.id for update of u` |
-| Role rows | locked together with the user rows, row by row | locked after the user rows: the `user_global_roles` rows, then the `user_club_roles` rows, each in one statement in user id order. Users before role rows, as `.claude/rules/migrations.md` asks |
+| Role rows | locked together with the user rows, row by row | locked after the user rows, and only the rows the decision counts: the `platform_admin` rows of `user_global_roles`, then the `club_admin` rows of `user_club_roles` of the affected clubs, each by user id. Never every role row of the users in the union. Users before role rows, as `.claude/rules/migrations.md` asks |
 | The decision | each set is counted from its own locked read | the qualifying sets are read again under the locks and counted per club and for the platform; the answers `LAST_PLATFORM_ADMIN`, `LAST_CLUB_ADMIN` and their order stay as today |
+
+Locking the whole union before the decision is deliberate. The caller sees no change of status or body; the cost
+is more locked rows and, under contention, a longer wait. That wait is not bounded today and R2 does not bound it:
+the transaction of `setUserLoginStatus` (`:597-631`) sets no `lock_timeout` or `statement_timeout`, and the
+route's handler passes any error to the global handler (`:500-515`). The only `set local lock_timeout` in
+`organization.js` is in another route (`:1292-1293`). A bounded wait with a stable code is a separate change.
 
 What does not change: the two advisory lock keys and their meaning; the old revocations of `platform_admin`
 (`:988-989`) and `club_admin` (`:2888-2889`), each of which locks one set in one statement in id order after its
@@ -863,7 +876,9 @@ no longer passes `roles.manage`, which only the Roles API checks.
   everything so far ran on 16):
   - the rehearsal apply -> rollback -> apply again is run on PostgreSQL 17 as well as 16;
   - and on a database built from the production schema snapshot
-    (`backend/tests/support/legacy-schema.sql`, then the runner);
+    (`backend/tests/support/legacy-schema.sql`, then the runner). That is the accepted basis of the rehearsal. It
+    is not proof that the database equals production: the preflight blocks run on production and the PostgreSQL
+    17 rehearsal cover that;
   - the migration rewrites no existing role row (blocks 3a and 6a, test 1);
   - the preflight counts the rows with another word again (block 3).
 
@@ -890,8 +905,8 @@ no longer passes `roles.manage`, which only the Roles API checks.
    INSERT of a scope row that breaks `platform_only = (only 'global')` fails at COMMIT.
 5a. A later migration's item write (M15): with a `migration` change row and no acting user it passes and
     raises the revision; without the change row, or with an acting user set, it is refused. Applied through the
-    runner it commits; the same statements without a `public.schema_migrations` row of that `migration_name` in the
-    transaction fail at COMMIT.
+    runner it commits. Negative case: the same SQL sent in one transaction without the `public.schema_migrations`
+    row of that `migration_name` fails at COMMIT with `23514`, and nothing remains.
 6. Row-level security and revokes: as a role without ownership, every table and function is refused.
 7. Every preflight and post-check block returns the expected value before and after; each hard value flipped once
    shows the refusal.
@@ -979,7 +994,9 @@ no longer passes `roles.manage`, which only the Roles API checks.
 29a. **The login switch-off against P9 and P10** (4.3.1): switching off an admin of two clubs K1 < K2, while an
     admin of K2 assigns a role to (P9) and revokes an assignment of (P10) an admin of K1; run with the actor's id
     below and above the target's, and in both orders of arrival; no `40P01` logged. The same with a target that is
-    a platform admin and a club's admin. Test 28 also records the switch-off's own SQL order: the advisory locks,
+    a platform admin and a club's admin. Also against the old revocations: switching off an admin of K1 and K2
+    against the old `club_admin` revocation of a club K3, where one admin is in both sets, in both id orders; and
+    the third cycle of 4.3.1 (a platform admin who is also the club's admin). Test 28 also records the switch-off's own SQL order: the advisory locks,
     then one users statement in id order, then the role rows. The existing suites of the login routes pass
     unchanged (`LAST_PLATFORM_ADMIN`, `LAST_CLUB_ADMIN`, self-disable).
 30. COMMIT outcomes through a fault seam, per operation: an error before the COMMIT (nothing written); the COMMIT
@@ -1174,7 +1191,13 @@ and three LOW findings, all written into the next head:
 | LOW-2: `ADD CONSTRAINT` timing out | 7.4 |
 | LOW-3: tie the `migration` kind to the runner | 2.6, test 5a, M15 |
 
-Still owed: the narrow external re-review of those parts, then the owner's acceptance. No code before the GO.
+The narrow external re-review of `014614b` (the *Nezavisni revizor*, relayed by the *Rukovodilac* of OptiMove)
+was **GO**: the contract may be implemented. Its two LOW notes are written into the next head: LOW-A (the role-row
+statements of the switch-off lock only the rows the decision counts; 4.3.1, test 29a) and LOW-B (locking the union
+is deliberate, and the login route has no bounded lock wait; 4.3.1). No further document review follows.
+
+Still owed: the owner's acceptance. After it the implementation goes as a ★★ package (v84); merging the migration
+needs the owner's word to the *Rukovodilac* of OptiMove.
 
 **Notes for the review packet of R2's implementation.** The packet names, first, the change of existing locking
 in `organization.js` (4.3.1) as a change to working code outside the new files, with its before / after table and
