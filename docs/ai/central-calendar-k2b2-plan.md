@@ -961,3 +961,16 @@ Mutations, each must be killed:
   would also block the reduction that helps resolve the state.
 - **O4, the twin:** none; a service guard only. Recommended: no v82 (9.2.5).
 - **O5, the count of existing events (9.2.4):** for the manager to run read-only, if the number matters for the order.
+
+#### 9.2.10 The manager's GO (2026-11-19)
+
+GO on 9.2 at `bbeeb2f3`, every recommendation accepted:
+- **O1:** the live link is the channel, not the flags, consistent with #614 (an RPE question is already refused on any
+  event with a live link, whatever the flags say).
+- **O2:** no new read field.
+- **O3:** only an align that turns RPE on is refused.
+- **O4:** no DB twin and no v82, for the reasons in 9.2.5.
+- **O5:** the OptiMove manager runs the read-only count; it is information only and blocks nothing.
+
+Reviews: `code-reviewer` on a frozen head with the full packet, then the independent review and the OptiMove manager's
+gate (★★, trigger 4). The manager opens the pull request.
