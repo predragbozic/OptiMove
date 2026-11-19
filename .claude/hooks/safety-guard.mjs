@@ -1319,15 +1319,12 @@ export function outputRedirectTargets(segment) {
 
 const DEVICE_TARGETS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"]);
 
-// Where a redirect may write without a question: a NEW file in the system's temporary
-// directory that is not inside a git work tree (an executor's or reviewer's worktree lives
-// under the temporary directory too) and not inside a `.git` directory. Every symbolic link
-// is followed (the target's, or its nearest existing parent's). An existing file asks:
-// overwriting or appending to it may change something that runs later (a scratch script, a
-// hook). EXISTING_FILE_POLICY "strict" asks for every existing file; "plain" lets an existing
-// plain data file through (not executable, no script extension, outside any work tree).
-export const EXISTING_FILE_POLICY = { mode: "plain" };
-const SCRIPT_EXTENSIONS = /\.(sh|bash|zsh|mjs|js|cjs|ts|mts|ps1|psm1|py|rb|pl|sql|bat|cmd)$/i;
+// Where a redirect may write without a question: only a NEW file in the system's temporary
+// directory, not inside a git work tree (an executor's or reviewer's worktree lives under the
+// temporary directory too) and not inside or named `.git`. Every symbolic link is followed
+// (the target's, or its nearest existing parent's). An EXISTING file always asks: whatever it
+// is, rewriting it may change something that runs later (a script, package.json, a SQL file
+// for psql -f, a patch for git apply, a list for xargs, a postgresql.conf).
 
 function tempRoots() {
   const roots = new Set();
@@ -1351,10 +1348,10 @@ function insideGitWorkTreeOrGitDir(realPath, stopAt) {
 }
 
 export function isWritableTempTarget(target) {
-  let existing = null;
-  try { existing = fs.lstatSync(target); } catch { existing = null; }
-  // the real place: the target itself if it exists (links followed), else its nearest existing parent
-  let probe = existing ? target : path.dirname(target);
+  // An existing file, link or folder always asks; so does a dangling link.
+  try { fs.lstatSync(target); return false; } catch { /* does not exist yet: go on */ }
+  // the real place of the new file: its nearest existing parent, every link followed
+  let probe = path.dirname(target);
   let real = null;
   for (let n = 0; n < 64 && real === null; n++) {
     try { real = fs.realpathSync(probe); } catch {
@@ -1364,17 +1361,9 @@ export function isWritableTempTarget(target) {
     }
   }
   if (real === null) return false;
-  if (existing && existing.isSymbolicLink()) {
-    try { existing = fs.statSync(target); } catch { return false; } // a dangling link: unknown
-  }
   const root = [...tempRoots()].find((r) => real === r || real.startsWith(r + path.sep));
-  if (!root || real === root && existing) return false;
-  if (insideGitWorkTreeOrGitDir(existing ? real : path.join(real, path.basename(target)), root)) return false;
-  if (!existing) return true;
-  if (EXISTING_FILE_POLICY.mode !== "plain") return false;
-  if (!existing.isFile()) return false;
-  if (process.platform !== "win32" && (existing.mode & 0o111) !== 0) return false;
-  return !SCRIPT_EXTENSIONS.test(real);
+  if (!root) return false;
+  return !insideGitWorkTreeOrGitDir(path.join(real, path.basename(target)), root);
 }
 
 // A redirect target is harmless when it is a device, or a plain absolute path that

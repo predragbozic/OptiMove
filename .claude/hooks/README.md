@@ -253,13 +253,13 @@ backslashes removed), redirection words are not options.
 **Writing to a file.** An allowed command with an output redirection (`>`, `>>`, `>|`, `&>`,
 `N>`) asks, unless the target is `/dev/null`, `/dev/stdout`, `/dev/stderr`, a descriptor
 (`2>&1`, `>&2`), or a plain absolute path that, with every symbolic link followed, lies inside
-the system's temporary directory (`os.tmpdir()`, `/tmp`) AND is not inside a git work tree (no
-parent folder holds a `.git` file or folder: executors' and reviewers' worktrees live under the
-temporary directory too), not inside or named `.git`, and either does not exist yet or is an
-existing plain data file (not executable, no script extension such as `.sh .mjs .js .cjs .ts
-.ps1 .py .sql`). Overwriting or appending to a scratch script asks: it may be run later. (Measured
-on the replay: asking for every existing file would stop 29 calls, this rule 16 — all of them
-rewrites of scratch scripts.) A target with `..`, `~`, a glob, or a
+the system's temporary directory (`os.tmpdir()`, `/tmp`) AND does not exist yet AND is not inside a
+git work tree (no parent folder holds a `.git` file or folder: executors' and reviewers'
+worktrees live under the temporary directory too) and not inside or named `.git`. **An existing
+file always asks**, whatever it is: rewriting or appending to it may change something that runs
+later — a script, a `package.json` (npm run), a SQL file (psql -f), a patch (git apply), a list
+(xargs), a `postgresql.conf` (pg_ctl start runs its commands). Measured on the replay: 29 of
+1,252 calls write to an existing scratch file and ask for that. A target with `..`, `~`, a glob, or a
 variable whose value is not a plain assignment earlier in the same line (`S=/tmp/x; ... > $S/out`)
 asks. Commands that are not on the allow list (`echo x > file`) are left to Claude Code's own
 redirection check.

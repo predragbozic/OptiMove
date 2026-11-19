@@ -27,7 +27,6 @@ import {
   optionsAreKnown,
   outputRedirectTargets,
   isHarmlessRedirectTarget,
-  EXISTING_FILE_POLICY,
   processSubstitutions,
   extractSubstitutions,
   extractHeredocs,
@@ -1375,38 +1374,45 @@ test("the unit pieces of the review fix: shellWord, optionsAreKnown, redirect ta
 });
 
 // ------------------------------------------------------------------
-// Re-review of #642: a redirect may write only a NEW file (or an existing plain data file)
+// Re-review of #642: a redirect may write only a NEW file
 // in the temporary directory, never into a git work tree or a .git directory there.
 // ------------------------------------------------------------------
 
-test("MEDIUM-1: no silent write into a git work tree or a .git directory under the temp dir; new files and plain data files only", () => {
+test("MEDIUM-1: a redirect writes silently only a NEW file under the temp dir, outside any git work tree or .git", () => {
   const tmp = mkdtempSync(path.join(tmpdir(), "sg-wt-"));
   const worktree = path.join(tmp, "wt");
   mkdirSync(path.join(worktree, "backend", "src"), { recursive: true });
   writeFileSync(path.join(worktree, ".git"), "gitdir: /somewhere/.git/worktrees/wt\n"); // a linked worktree has a .git FILE
-  const bareGit = path.join(tmp, "repo", ".git", "hooks");
-  mkdirSync(bareGit, { recursive: true });
+  mkdirSync(path.join(tmp, "repo", ".git", "hooks"), { recursive: true });
   const scratch = path.join(tmp, "scratch");
   mkdirSync(scratch);
   writeFileSync(path.join(scratch, "run.log"), "old\n");
   writeFileSync(path.join(scratch, "data.json"), "{}\n");
   writeFileSync(path.join(scratch, "build.py"), "print(1)\n");
+  writeFileSync(path.join(scratch, "package.json"), "{}\n");
+  writeFileSync(path.join(scratch, "q.txt"), "select 1;\n");
+  writeFileSync(path.join(scratch, "run"), "echo\n");
+  writeFileSync(path.join(scratch, "x.patch"), "\n");
+  mkdirSync(path.join(scratch, "cluster"));
+  writeFileSync(path.join(scratch, "cluster", "postgresql.conf"), "\n");
   writeFileSync(path.join(scratch, "tool"), "#!/bin/sh\n");
   chmodSync(path.join(scratch, "tool"), 0o755);
   symlinkSync(path.join(worktree, "backend", "src"), path.join(scratch, "link-into-worktree"));
+  symlinkSync(path.join(scratch, "nowhere"), path.join(scratch, "dangling"));
   try {
     expectAll([
       [`cat a > ${worktree}/backend/src/file.js`, ASK], [`cat a > ${worktree}/backend/src/new-file.txt`, ASK], [`cat a > ${worktree}/x`, ASK],
       [`cat a > ${tmp}/repo/.git/hooks/pre-commit`, ASK], [`cat a >> ${tmp}/repo/.git/config`, ASK], [`cat a > ${scratch}/link-into-worktree/f.txt`, ASK],
-      [`cat a > ${scratch}/build.py`, ASK], [`cat a >> ${scratch}/build.py`, ASK], [`cat a > ${scratch}/tool`, ASK], [`cat a > ${scratch}/new-script.sh`, ALLOW],
       [`cat a > ${scratch}/.git`, ASK], // a new file named .git would make the folder a worktree pointer
-      [`cat a > ${scratch}/new.txt`, ALLOW], [`cat a >> ${scratch}/run.log`, ALLOW], [`cat a > ${scratch}/data.json`, ALLOW],
-      [`L=${scratch}/run.log; grep -n x f >> $L`, ALLOW],
+      // every existing file asks, whatever it is
+      [`cat a >> ${scratch}/run.log`, ASK], [`cat a > ${scratch}/data.json`, ASK], [`cat a > ${scratch}/build.py`, ASK], [`cat a > ${scratch}/package.json`, ASK],
+      [`cat a > ${scratch}/q.txt`, ASK], [`cat a > ${scratch}/run`, ASK], [`cat a > ${scratch}/x.patch`, ASK], [`cat a > ${scratch}/tool`, ASK],
+      [`cat x >> ${scratch}/cluster/postgresql.conf`, ASK], [`L=${scratch}/run.log; grep -n x f >> $L`, ASK], [`cat a > ${scratch}/dangling`, ASK], [`cat a > ${scratch}`, ASK],
+      // a new file outside any work tree is silent
+      [`cat a > ${scratch}/new.txt`, ALLOW], [`cat a >> ${scratch}/new.log`, ALLOW], [`cat a > ${scratch}/new-script.sh`, ALLOW],
+      [`L=${scratch}/fresh.log; grep -n x f >> $L`, ALLOW], [`cat a > ${scratch}/cluster/new.conf`, ALLOW],
     ]);
-    EXISTING_FILE_POLICY.mode = "strict";
-    expectAll([[`cat a >> ${scratch}/run.log`, ASK], [`cat a > ${scratch}/new.txt`, ALLOW]]);
   } finally {
-    EXISTING_FILE_POLICY.mode = "plain";
     rmSync(tmp, { recursive: true, force: true });
   }
 });
