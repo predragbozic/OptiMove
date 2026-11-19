@@ -352,6 +352,29 @@ export function openCentralCalendarAt({ date, key = "" } = {}) {
   invalidateCentralCalendarCache();
 }
 
+// Back (app-history.js): the calendar as it was left - its view, week, day
+// and open panel. The panel opens the openCentralCalendarAt way (never over a
+// form); the day's load closes it when its item is no longer in the answer.
+export function restoreCentralCalendarPlace(place) {
+  const cal = state.centralCalendar;
+  if (!cal || !place) return;
+  if (CENTRAL_CALENDAR_VIEWS.includes(place.view)) cal.view = place.view;
+  cal.anchor = place.anchor || "";
+  cal.selectedDate = place.selectedDate || "";
+  if (!cal.form) {
+    if (place.panelKey && place.panelDate) {
+      if (!(cal.panel.open && cal.panel.key === place.panelKey)) {
+        resetPanelReads(cal);
+        cal.panel = { ...closedPanel(), open: true, key: place.panelKey, date: place.panelDate };
+      }
+    } else if (cal.panel.open) {
+      resetPanelReads(cal);
+      cal.panel = closedPanel();
+    }
+  }
+  invalidateCentralCalendarCache();
+}
+
 // Every panel open starts from nothing of an earlier one: its event read, its
 // link and question lines and steps, and its questions read (answers and
 // Later move no revision, so an old read is never trusted).

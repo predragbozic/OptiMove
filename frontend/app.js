@@ -84,7 +84,8 @@ import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { closeBuilderCalendarEventPanel, handleBuilderCalendarEventAction, handleBuilderCalendarEventInput, resetBuilderCalendarEventForWorkspaceChange } from "./builder-calendar-event-actions.js";
-import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
+import { appHistoryEntryOf, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, takeAppBackEntry } from "./app-history.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, restoreCentralCalendarPlace, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
@@ -1787,6 +1788,7 @@ async function signOut() {
     // Explicit even though the reload below tears it down anyway - the
     // athlete Back-button guard must never be nominally active post-logout.
     window.removeEventListener("popstate", handleBrowserBack);
+    clearAppHistoryEntries();
     // A deliberate navigation: the Imports reload/close guard does not ask.
     state.deliberateNavigation = true;
     state.currentUser = null;
@@ -2156,6 +2158,8 @@ function pushAppHistory() {
   ensureBackGuard();
   window.history.pushState({ optimove: true }, "", window.location.href);
   state.appHistoryDepth += 1;
+  // Where the user was, for Back (app-history.js): one entry per history state.
+  pushAppHistoryEntry(appHistoryEntryOf(state));
 }
 
 function ensureBackGuard() {
@@ -2180,11 +2184,19 @@ function handleBrowserBack() {
   if (athleteQuestionsBrowserBack()) return; // K2b-2a-3
   if (state.appHistoryDepth > 0) {
     state.appHistoryDepth -= 1;
-    if (handleAppBack() === BACK_STAYED) {
+    const leftTab = state.activeTab;
+    beginAppBack(popAppHistoryEntry());
+    const result = handleAppBack();
+    const { entry, taken } = endAppBack();
+    // A press that closed an overlay keeps the place it did not use: the
+    // next Back still returns there (an entry of this same tab is used up).
+    const unused = !taken && result && result !== BACK_STAYED && entry && entry.tab !== leftTab;
+    if (result === BACK_STAYED || unused) {
       // The browser has already stepped back one entry - put it back, so the
       // address bar and the next Back press behave as if nothing happened.
       window.history.pushState({ optimove: true }, "", window.location.href);
       state.appHistoryDepth += 1;
+      pushAppHistoryEntry(entry);
     }
     return;
   }
@@ -2208,6 +2220,21 @@ function handleBrowserBack() {
     return;
   }
   window.history.pushState({ optimoveGuard: true }, "", window.location.href);
+}
+
+function restoreAppPlace(place) {
+  state.activeTab = place.tab;
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  state.navStack = [];
+  state.athletesExpanded = false;
+  state.weekSelectorOpen = false;
+  state.openWeekCalendarOnLoad = false;
+  if (place.calendar) restoreCentralCalendarPlace(place.calendar);
+  renderAthleteListState();
+  renderTabs();
+  renderLibraryNav();
+  detached(loadActiveTab(), "open-tab");
 }
 
 function handleAppBack() {
@@ -2292,6 +2319,15 @@ function handleAppBack() {
   // Home nav item exists - see goHome()); the coach shell's is Home (K1b,
   // D1: the rail's Calendar is the central calendar now, and the weekly
   // plan without a picked athlete is only "No athlete selected.").
+  // The place the last in-app step left (app-history.js): the tab, and the
+  // calendar's view, week, day and open panel. Asked the same as a tab click.
+  const backTo = takeAppBackEntry(state.activeTab);
+  if (backTo) {
+    if (!confirmLeaveTrainingLoad(backTo.tab)) return BACK_STAYED;
+    restoreAppPlace(backTo);
+    return true;
+  }
+
   const rootTab = isAthleteMode() ? "athlete-home" : "coach-home";
   if (state.activeTab !== rootTab) {
     if (!confirmLeaveTrainingLoad(rootTab)) return BACK_STAYED;
@@ -3496,6 +3532,8 @@ async function onWorkspaceChanged() {
   // open panel never carry over, nor its cached answers.
   resetCentralCalendarForWorkspaceChange();
   invalidateCentralCalendarCache();
+  // Back never returns into another workspace (app-history.js).
+  clearAppHistoryEntries();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
   resetTestsScheduleFormForWorkspaceChange();
