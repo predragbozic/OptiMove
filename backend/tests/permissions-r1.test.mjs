@@ -1,0 +1,634 @@
+// Roles plan, step R1: the permission catalog, its groups, the basic roles'
+// starting sets and can(). No behaviour change: for every permission
+// routes/organization.js checks, can() answers what the predicate it replaced
+// answered, for every authorization state in the matrix below. No database is
+// reached: can() is a pure function of the authorization context.
+import { after, test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+assert.equal(process.env.DATABASE_URL, undefined, "Run through the unit test runner, which scrubs database targets");
+// permissions.js imports authz.js, which imports db.js, which needs a URL even
+// to construct its lazy pool. This unreachable loopback placeholder is never
+// connected to.
+process.env.DATABASE_URL = "postgresql://permissions_fixture@127.0.0.1:1/permissions_no_database";
+const { pool } = await import("../src/db.js");
+let databaseAttempts = 0;
+const originalQuery = pool.query;
+const originalConnect = pool.connect;
+pool.query = async () => { databaseAttempts++; throw new Error("Unexpected database access in the permissions test"); };
+pool.connect = async () => { databaseAttempts++; throw new Error("Unexpected database checkout in the permissions test"); };
+const {
+  canAssignClubRole,
+  canAssignTeamRole,
+  canManageClub,
+  canManageTeamById,
+  isPlatformAdministrator,
+} = await import("../src/authz.js");
+const {
+  BASIC_ROLE_PERMISSIONS,
+  can,
+  clubScope,
+  GLOBAL_SCOPE,
+  PERMISSION_GROUPS,
+  PERMISSIONS,
+  teamScope,
+} = await import("../src/permissions.js");
+
+after(async () => {
+  try {
+    assert.equal(databaseAttempts, 0, "can() and the catalog never touch the database");
+  } finally {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+    await pool.end();
+    delete process.env.DATABASE_URL;
+  }
+});
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ORGANIZATION_JS = fs.readFileSync(path.join(REPO_ROOT, "backend/src/routes/organization.js"), "utf8");
+
+// ---------------------------------------------------------------------------
+// a. Catalog integrity
+// ---------------------------------------------------------------------------
+
+// The plan's section 3 table, word by word, with where a role carrying the
+// word may be assigned.
+const PLAN_CATALOG = {
+  "org.view": ["club", "team"],
+  "org.teams.manage": ["club"],
+  "athletes.view": ["club", "team"],
+  "athletes.manage": ["club", "team"],
+  "athletes.remove": ["club", "team"],
+  "athletes.logins.manage": ["club", "team"],
+  "athletes.library_access": ["club", "team"],
+  "accounts.manage": ["club"],
+  "staff.assign": ["club"],
+  "roles.manage": ["club"],
+  "join_links.manage": ["club", "team"],
+  "programs.view": ["club", "team"],
+  "programs.edit": ["club", "team"],
+  "programs.assign": ["club", "team"],
+  "programs.publish": ["club", "team"],
+  "programs.rpe_settings": ["club", "team"],
+  "presets.use": ["club", "team"],
+  "presets.manage": ["club", "team"],
+  "exercise_lists.manage": ["club", "team"],
+  "exercises.use": ["club", "team"],
+  "exercises.add": ["club", "team"],
+  "exercises.media.upload": ["club", "team"],
+  "exercises.remove": ["club", "team"],
+  "exercises.blocks.manage": ["global"],
+  "calendar.view": ["club", "team"],
+  "calendar.events.manage": ["club", "team"],
+  "calendar.settings.manage": ["club"],
+  "load.view.team": ["club", "team"],
+  "load.view.athlete": ["club", "team"],
+  "load.schedule.manage": ["club", "team"],
+  "load.roster.decide": ["club", "team"],
+  "load.estimates.manage": ["club", "team"],
+  "load.activities.manage": ["club", "team"],
+  "dashboards.view": ["club", "team"],
+  "dashboards.manage": ["club", "team"],
+  "import.check": ["club", "team"],
+  "import.link": ["club", "team"],
+  "import.approve": ["team"],
+  "import.undo": ["team"],
+  "tests.view": ["club", "team"],
+  "tests.results.view": ["club", "team"],
+  "tests.schedule.manage": ["club", "team"],
+  "tests.library.manage": ["global"],
+  "messages.send": ["club", "team"],
+  "variables.view": ["club", "team"],
+  "variables.rename_archive": ["club", "team"],
+  "variables.manage": ["club"],
+  "mappings.manage": ["club"],
+  "sources.connect": ["club"],
+  "platform.metrics.manage": ["global"],
+  "platform.admin": ["global"],
+};
+const PLATFORM_ONLY = ["exercises.blocks.manage", "platform.admin", "platform.metrics.manage", "tests.library.manage"];
+const SYSTEM_ROLE_ONLY = ["accounts.manage", "roles.manage", "staff.assign"];
+const GROUP_KEYS = [
+  "organization", "athletes", "programs", "exercises", "presets", "calendar",
+  "training_load", "dashboards", "imports", "tests", "messages", "data_configuration",
+];
+const ALL_WORDS = Object.keys(PERMISSIONS);
+
+test("a1. the catalog is exactly the plan's 51 words, each with the plan's scope types", () => {
+  assert.equal(Object.keys(PLAN_CATALOG).length, 51);
+  assert.equal(ALL_WORDS.length, 51);
+  assert.equal(new Set(ALL_WORDS).size, 51);
+  assert.deepEqual([...ALL_WORDS].sort(), Object.keys(PLAN_CATALOG).sort());
+  for (const word of ALL_WORDS) {
+    assert.deepEqual([...PERMISSIONS[word].scopeTypes], PLAN_CATALOG[word], `scope types of ${word}`);
+    assert.match(word, /^[a-z_]+(\.[a-z_]+)+$/, `shape of ${word}`);
+  }
+});
+
+test("a2. platform-only and system-role-only words are exactly the listed ones; a platform-only word is assigned globally and nothing else is", () => {
+  assert.deepEqual(ALL_WORDS.filter((w) => PERMISSIONS[w].platformOnly).sort(), PLATFORM_ONLY);
+  assert.deepEqual(ALL_WORDS.filter((w) => PERMISSIONS[w].systemRoleOnly).sort(), SYSTEM_ROLE_ONLY);
+  for (const word of ALL_WORDS) {
+    const entry = PERMISSIONS[word];
+    assert.equal(entry.scopeTypes.includes("global"), entry.platformOnly, `${word}: global scope if and only if platform-only`);
+    assert.ok(!(entry.platformOnly && entry.systemRoleOnly), `${word}: never both flags`);
+    assert.equal(typeof entry.platformOnly, "boolean");
+    assert.equal(typeof entry.systemRoleOnly, "boolean");
+  }
+});
+
+test("a3. twelve groups; every word belongs to exactly one group, and that group is its module", () => {
+  assert.deepEqual(PERMISSION_GROUPS.map((g) => g.key), GROUP_KEYS);
+  const seen = new Map();
+  for (const group of PERMISSION_GROUPS) {
+    assert.ok(group.label, `label of ${group.key}`);
+    for (const word of group.permissions) {
+      assert.ok(Object.hasOwn(PERMISSIONS, word), `${group.key} names the unknown word ${word}`);
+      assert.ok(!seen.has(word), `${word} is in two groups`);
+      seen.set(word, group.key);
+      assert.equal(PERMISSIONS[word].module, group.key, `module of ${word}`);
+    }
+  }
+  assert.equal(seen.size, 51, "every catalog word is in a group");
+});
+
+test("a4. levels: start with Off, name only the group's own catalog words, are cumulative, and hold no platform-only word", () => {
+  for (const group of PERMISSION_GROUPS) {
+    assert.ok(group.levels.length >= 2, `${group.key} has a level besides Off`);
+    assert.equal(group.levels[0].key, "off");
+    assert.deepEqual([...group.levels[0].permissions], []);
+    assert.equal(new Set(group.levels.map((l) => l.key)).size, group.levels.length, `${group.key}: unique level keys`);
+    for (let i = 1; i < group.levels.length; i++) {
+      const level = group.levels[i];
+      const previous = group.levels[i - 1];
+      assert.ok(level.label, `${group.key}.${level.key} has a label`);
+      assert.equal(new Set(level.permissions).size, level.permissions.length, `${group.key}.${level.key}: no word twice`);
+      assert.ok(level.permissions.length > previous.permissions.length, `${group.key}.${level.key} adds something`);
+      for (const word of previous.permissions) assert.ok(level.permissions.includes(word), `${group.key}.${level.key} includes ${word} of the level before`);
+      for (const word of level.permissions) {
+        assert.ok(group.permissions.includes(word), `${group.key}.${level.key} names ${word}, which is not this group's`);
+        assert.ok(!PERMISSIONS[word].platformOnly, `${group.key}.${level.key} holds the platform-only word ${word}`);
+      }
+    }
+    // The top level is the whole group, except what only the platform holds.
+    const top = group.levels[group.levels.length - 1].permissions;
+    assert.deepEqual([...top].sort(), group.permissions.filter((w) => !PERMISSIONS[w].platformOnly).sort(), `${group.key}: the top level`);
+  }
+});
+
+test("a5. the plan's own notes on the ladders hold", () => {
+  const level = (groupKey, levelKey) => PERMISSION_GROUPS.find((g) => g.key === groupKey).levels.find((l) => l.key === levelKey).permissions;
+  // variables.rename_archive is in no level below Variables.
+  assert.ok(!level("data_configuration", "view").includes("variables.rename_archive"));
+  assert.ok(level("data_configuration", "variables").includes("variables.rename_archive"));
+  // The three non-delegable words sit only at the top of Organization and staff.
+  for (const word of SYSTEM_ROLE_ONLY) {
+    assert.ok(!level("organization", "manage_teams").includes(word));
+    assert.ok(level("organization", "manage_staff").includes(word));
+  }
+  assert.deepEqual([...level("imports", "check_link")], ["import.check", "import.link"]);
+  assert.deepEqual([...level("tests", "results")], ["tests.view", "tests.results.view"]);
+});
+
+test("a6. the catalog, the groups and the basic sets are frozen", () => {
+  assert.ok(Object.isFrozen(PERMISSIONS));
+  for (const word of ALL_WORDS) {
+    assert.ok(Object.isFrozen(PERMISSIONS[word]), word);
+    assert.ok(Object.isFrozen(PERMISSIONS[word].scopeTypes), word);
+  }
+  assert.ok(Object.isFrozen(PERMISSION_GROUPS));
+  for (const group of PERMISSION_GROUPS) {
+    assert.ok(Object.isFrozen(group) && Object.isFrozen(group.permissions) && Object.isFrozen(group.levels), group.key);
+    for (const level of group.levels) assert.ok(Object.isFrozen(level) && Object.isFrozen(level.permissions), `${group.key}.${level.key}`);
+  }
+  assert.ok(Object.isFrozen(BASIC_ROLE_PERMISSIONS));
+  for (const role of Object.keys(BASIC_ROLE_PERMISSIONS)) assert.ok(Object.isFrozen(BASIC_ROLE_PERMISSIONS[role]), role);
+  assert.ok(Object.isFrozen(GLOBAL_SCOPE));
+});
+
+// ---------------------------------------------------------------------------
+// b. Old predicate against can(), for every permission organization.js uses
+// ---------------------------------------------------------------------------
+
+const CLUB_A = "aaaaaaaa-0000-4000-8000-00000000000a";
+const CLUB_B = "bbbbbbbb-0000-4000-8000-00000000000b";
+const TEAM_T1 = "aaaaaaaa-1111-4000-8000-000000000001"; // in club A
+const TEAM_T2 = "bbbbbbbb-2222-4000-8000-000000000002"; // in club B
+const UNKNOWN_ID = "cccccccc-9999-4000-8000-00000000000c";
+
+// The shape loadAuthorizationContext returns. managedTeamIds is what it loads:
+// the teams of the clubs the account holds club_admin in, and nothing else.
+function context({ platform = false, clubRoles = [], teamRoles = [], independentCoach = false, athlete = false, userId = "user" } = {}) {
+  const managedTeamIds = [];
+  for (const row of clubRoles) {
+    if (row.role !== "club_admin") continue;
+    if (row.clubId === CLUB_A) managedTeamIds.push(TEAM_T1);
+    if (row.clubId === CLUB_B) managedTeamIds.push(TEAM_T2);
+  }
+  return {
+    userId,
+    roleHint: null,
+    platformRoles: platform ? ["platform_admin"] : [],
+    clubRoles,
+    teamRoles,
+    managedTeamIds,
+    isIndependentCoach: independentCoach,
+    isAthlete: athlete,
+    athleteId: athlete ? "athlete" : null,
+  };
+}
+
+const CONTEXTS = {
+  "no user": context({ userId: null }),
+  "athlete only": context({ athlete: true }),
+  "independent coach": context({ independentCoach: true }),
+  "platform admin": context({ platform: true }),
+  "club admin of A": context({ clubRoles: [{ clubId: CLUB_A, role: "club_admin" }] }),
+  "club admin of A and B": context({ clubRoles: [{ clubId: CLUB_A, role: "club_admin" }, { clubId: CLUB_B, role: "club_admin" }] }),
+  "team coach of T1": context({ teamRoles: [{ teamId: TEAM_T1, role: "team_coach" }] }),
+  "team coach of T2": context({ teamRoles: [{ teamId: TEAM_T2, role: "team_coach" }] }),
+  "club admin of A and team coach of T2": context({ clubRoles: [{ clubId: CLUB_A, role: "club_admin" }], teamRoles: [{ teamId: TEAM_T2, role: "team_coach" }] }),
+  "club admin of A and team coach of T1": context({ clubRoles: [{ clubId: CLUB_A, role: "club_admin" }], teamRoles: [{ teamId: TEAM_T1, role: "team_coach" }] }),
+  "platform admin and club admin of A": context({ platform: true, clubRoles: [{ clubId: CLUB_A, role: "club_admin" }] }),
+  "platform admin, independent coach and athlete": context({ platform: true, independentCoach: true, athlete: true }),
+  // Rows whose word is not the basic one (old data shown read-only): they give nothing.
+  "other words: club_manager of A, team_trainer of T1": context({ clubRoles: [{ clubId: CLUB_A, role: "club_manager" }], teamRoles: [{ teamId: TEAM_T1, role: "team_trainer" }] }),
+  "other words everywhere, with an athlete profile": context({
+    athlete: true,
+    independentCoach: true,
+    clubRoles: [{ clubId: CLUB_A, role: "team_coach" }, { clubId: CLUB_B, role: "coach" }],
+    teamRoles: [{ teamId: TEAM_T1, role: "club_admin" }, { teamId: TEAM_T2, role: "team_admin" }],
+  }),
+};
+
+const SCOPES = {
+  global: [["global", GLOBAL_SCOPE, null]],
+  club: [CLUB_A, CLUB_B, UNKNOWN_ID, "", undefined, null, "not-a-uuid"].map((id) => [`club ${String(id)}`, clubScope(id), id]),
+  team: [TEAM_T1, TEAM_T2, UNKNOWN_ID, "", undefined, null, "not-a-uuid"].map((id) => [`team ${String(id)}`, teamScope(id), id]),
+};
+
+// permission + scope type -> the predicate each such call site of
+// routes/organization.js used before R1.
+const REPLACED = [
+  { permission: "platform.admin", scopeType: "global", oldName: "isPlatformAdministrator", old: (authz) => isPlatformAdministrator(authz) },
+  { permission: "accounts.manage", scopeType: "global", oldName: "isPlatformAdministrator", old: (authz) => isPlatformAdministrator(authz) },
+  { permission: "athletes.remove", scopeType: "global", oldName: "isPlatformAdministrator", old: (authz) => isPlatformAdministrator(authz) },
+  { permission: "org.view", scopeType: "team", oldName: "canManageTeamById", old: canManageTeamById },
+  { permission: "org.teams.manage", scopeType: "club", oldName: "canManageClub", old: canManageClub },
+  { permission: "athletes.manage", scopeType: "club", oldName: "canManageClub", old: canManageClub },
+  { permission: "athletes.manage", scopeType: "team", oldName: "canManageTeamById", old: canManageTeamById },
+  { permission: "athletes.remove", scopeType: "club", oldName: "canManageClub", old: canManageClub },
+  { permission: "athletes.remove", scopeType: "team", oldName: "canManageTeamById", old: canManageTeamById },
+  { permission: "staff.assign", scopeType: "club", oldName: "canAssignClubRole", old: canAssignClubRole },
+  { permission: "staff.assign", scopeType: "team", oldName: "canAssignTeamRole", old: canAssignTeamRole },
+];
+const USED_WORDS = [...new Set(REPLACED.map((r) => r.permission))].sort();
+
+function scopeTypeOfSourceExpression(expression) {
+  if (expression === "GLOBAL_SCOPE") return "global";
+  if (expression.startsWith("clubScope(")) return "club";
+  if (expression.startsWith("teamScope(")) return "team";
+  return `unrecognised: ${expression}`;
+}
+
+test("b1. the table covers every can() call of routes/organization.js, and nothing else", () => {
+  const calls = [...ORGANIZATION_JS.matchAll(/\bcan\(\s*([^,]+?)\s*,\s*"([^"]+)"\s*,\s*(GLOBAL_SCOPE|clubScope\(|teamScope\()/g)];
+  // Every `can(` in the file's code is one of those recognised calls (no dynamic word, no hand-made scope).
+  const anyCall = [...ORGANIZATION_JS.matchAll(/(?<![\w.])can\(req\.authz\b/g)];
+  assert.equal(calls.length, anyCall.length, "every can() call names a literal permission and one of the three scope helpers");
+  assert.ok(calls.length >= 30, `expected the organization routes' checks, found ${calls.length}`);
+  for (const call of calls) assert.equal(call[1], "req.authz", "can() is always given the request's own authorization context");
+  const inSource = [...new Set(calls.map((c) => `${c[2]} @ ${scopeTypeOfSourceExpression(c[3])}`))].sort();
+  const inTable = REPLACED.map((r) => `${r.permission} @ ${r.scopeType}`).sort();
+  assert.deepEqual(inSource, inTable);
+});
+
+test("b2. can() equals the predicate it replaced, for every context and every resource", () => {
+  let compared = 0;
+  for (const row of REPLACED) {
+    for (const [contextName, authz] of Object.entries(CONTEXTS)) {
+      for (const [scopeName, scope, id] of SCOPES[row.scopeType]) {
+        const expected = row.old(authz, id);
+        assert.equal(typeof expected, "boolean");
+        assert.equal(can(authz, row.permission, scope), expected, `${row.permission} on ${scopeName} for "${contextName}" (was ${row.oldName})`);
+        compared++;
+      }
+    }
+  }
+  assert.equal(compared, (3 * 1 + 8 * 7) * Object.keys(CONTEXTS).length);
+});
+
+test("b3. the expected answers themselves, spelled out for the main cases", () => {
+  const c = CONTEXTS;
+  const yes = (name, permission, scope) => assert.equal(can(c[name], permission, scope), true, `${name}: ${permission}`);
+  const no = (name, permission, scope) => assert.equal(can(c[name], permission, scope), false, `${name}: ${permission}`);
+  // The club's admin: its club and its club's teams, never another club.
+  yes("club admin of A", "org.teams.manage", clubScope(CLUB_A));
+  no("club admin of A", "org.teams.manage", clubScope(CLUB_B));
+  yes("club admin of A", "staff.assign", clubScope(CLUB_A));
+  yes("club admin of A", "staff.assign", teamScope(TEAM_T1));
+  no("club admin of A", "staff.assign", teamScope(TEAM_T2));
+  yes("club admin of A", "athletes.remove", teamScope(TEAM_T1));
+  no("club admin of A", "athletes.remove", teamScope(TEAM_T2));
+  // The team's coach: day-to-day work on its own team, never the club's decisions.
+  yes("team coach of T1", "athletes.manage", teamScope(TEAM_T1));
+  yes("team coach of T1", "athletes.remove", teamScope(TEAM_T1));
+  yes("team coach of T1", "org.view", teamScope(TEAM_T1));
+  no("team coach of T1", "athletes.manage", teamScope(TEAM_T2));
+  no("team coach of T1", "athletes.manage", clubScope(CLUB_A));
+  no("team coach of T1", "staff.assign", teamScope(TEAM_T1));
+  no("team coach of T1", "staff.assign", clubScope(CLUB_A));
+  no("team coach of T1", "org.teams.manage", clubScope(CLUB_A));
+  // Scopes stay apart: a club admin of A who coaches T2 in club B.
+  yes("club admin of A and team coach of T2", "athletes.manage", teamScope(TEAM_T2));
+  no("club admin of A and team coach of T2", "staff.assign", teamScope(TEAM_T2));
+  no("club admin of A and team coach of T2", "org.teams.manage", clubScope(CLUB_B));
+  // Global scope: a platform admin only, whatever else the account holds.
+  for (const name of Object.keys(c)) {
+    const platform = c[name].platformRoles.length > 0;
+    for (const word of ALL_WORDS) assert.equal(can(c[name], word, GLOBAL_SCOPE), platform, `${name}: ${word} globally`);
+  }
+  // A role row with another word gives nothing, anywhere.
+  for (const name of ["other words: club_manager of A, team_trainer of T1", "other words everywhere, with an athlete profile", "no user", "athlete only", "independent coach"]) {
+    for (const word of ALL_WORDS) {
+      for (const type of ["club", "team"]) {
+        for (const [scopeName, scope] of SCOPES[type]) assert.equal(can(c[name], word, scope), false, `${name}: ${word} on ${scopeName}`);
+      }
+    }
+  }
+});
+
+test("b4. a platform admin passes every permission in every scope; a permission no module has moved to passes for nobody else", () => {
+  const notUsed = ALL_WORDS.filter((w) => !USED_WORDS.includes(w));
+  assert.equal(notUsed.length, 51 - USED_WORDS.length);
+  for (const [name, authz] of Object.entries(CONTEXTS)) {
+    const platform = authz.platformRoles.length > 0;
+    for (const type of ["global", "club", "team"]) {
+      for (const [scopeName, scope] of SCOPES[type]) {
+        for (const word of ALL_WORDS) {
+          if (platform) assert.equal(can(authz, word, scope), true, `${name}: ${word} on ${scopeName}`);
+        }
+        for (const word of notUsed) {
+          if (!platform) assert.equal(can(authz, word, scope), false, `${name}: ${word} on ${scopeName} (fail closed)`);
+        }
+      }
+    }
+  }
+});
+
+test("b5. the basic sets: platform admin everything; club admin and team coach hold only words organization.js uses, and exactly the derived ones", () => {
+  assert.deepEqual(Object.keys(BASIC_ROLE_PERMISSIONS).sort(), ["club_admin", "platform_admin", "team_coach"]);
+  assert.deepEqual([...BASIC_ROLE_PERMISSIONS.platform_admin].sort(), [...ALL_WORDS].sort());
+  assert.deepEqual([...BASIC_ROLE_PERMISSIONS.club_admin].sort(), ["athletes.manage", "athletes.remove", "org.teams.manage", "org.view", "staff.assign"]);
+  assert.deepEqual([...BASIC_ROLE_PERMISSIONS.team_coach].sort(), ["athletes.manage", "athletes.remove", "org.view"]);
+  for (const role of ["club_admin", "team_coach"]) {
+    const words = BASIC_ROLE_PERMISSIONS[role];
+    assert.equal(new Set(words).size, words.length, `${role}: no word twice`);
+    for (const word of words) {
+      assert.ok(Object.hasOwn(PERMISSIONS, word), `${role}: ${word} is a catalog word`);
+      assert.ok(USED_WORDS.includes(word), `${role}: ${word} is used by organization.js`);
+      assert.ok(!PERMISSIONS[word].platformOnly, `${role}: ${word} is not platform-only`);
+    }
+  }
+  // Plan 2.1 rule 7: nothing a team coach holds exceeds the club admin; rule 5: a coach never holds a non-delegable word.
+  for (const word of BASIC_ROLE_PERMISSIONS.team_coach) {
+    assert.ok(BASIC_ROLE_PERMISSIONS.club_admin.includes(word), `club admin also holds ${word}`);
+    assert.ok(!PERMISSIONS[word].systemRoleOnly, `team coach does not hold ${word}`);
+    assert.ok(PERMISSIONS[word].scopeTypes.includes("team"), `${word} may be assigned for a team`);
+  }
+  // The derivation's other direction: a word checked for a club or a team is in the Club admin set.
+  for (const row of REPLACED) {
+    if (row.scopeType !== "global") assert.ok(BASIC_ROLE_PERMISSIONS.club_admin.includes(row.permission), row.permission);
+  }
+});
+
+test("b6. an unknown permission or scope is a programming error: can() throws, also for a platform admin", () => {
+  for (const authz of [CONTEXTS["platform admin"], CONTEXTS["club admin of A"], CONTEXTS["no user"]]) {
+    for (const word of ["org.teams.managee", "", undefined, null, "toString", "constructor", "__proto__", "hasOwnProperty", "ORG.VIEW", "org.view "]) {
+      assert.throws(() => can(authz, word, clubScope(CLUB_A)), /Unknown permission/, `word ${String(word)}`);
+    }
+    for (const scope of [undefined, null, {}, { type: "private", id: CLUB_A }, { type: "platform" }, { id: CLUB_A }, "club", { type: "Club", id: CLUB_A }]) {
+      assert.throws(() => can(authz, "org.view", scope), /Unknown permission scope type/, `scope ${JSON.stringify(scope)}`);
+    }
+  }
+});
+
+test("b7. can() reads only the roles of the authorization context: never a workspace, role_hint, or anything else", () => {
+  const ALLOWED = new Set(["platformRoles", "clubRoles", "teamRoles", "managedTeamIds"]);
+  for (const [name, authz] of Object.entries(CONTEXTS)) {
+    const read = new Set();
+    // No workspace field exists on this object at all; reading one (or any other field) throws.
+    const guarded = new Proxy({ platformRoles: authz.platformRoles, clubRoles: authz.clubRoles, teamRoles: authz.teamRoles, managedTeamIds: authz.managedTeamIds }, {
+      get(target, property) {
+        if (typeof property === "string" && !ALLOWED.has(property)) throw new Error(`can() read authz.${property}`);
+        read.add(property);
+        return target[property];
+      },
+      has(target, property) {
+        throw new Error(`can() probed authz for ${String(property)}`);
+      },
+    });
+    for (const row of REPLACED) {
+      for (const [scopeName, scope, id] of SCOPES[row.scopeType]) {
+        assert.equal(can(guarded, row.permission, scope), row.old(authz, id), `${row.permission} on ${scopeName} for "${name}"`);
+      }
+    }
+    assert.ok(read.has("platformRoles"));
+  }
+  // The same account answers the same whatever workspace fields a caller might attach.
+  for (const workspace of [{ type: "club", scopeId: CLUB_B }, { type: "team", scopeId: TEAM_T2 }, { type: "platform", scopeId: null }, { type: "athlete" }]) {
+    const withWorkspace = { ...CONTEXTS["club admin of A"], activeWorkspace: workspace, workspace, activeWorkspaceType: workspace.type, activeWorkspaceScopeId: workspace.scopeId };
+    assert.equal(can(withWorkspace, "org.teams.manage", clubScope(CLUB_A)), true);
+    assert.equal(can(withWorkspace, "org.teams.manage", clubScope(CLUB_B)), false);
+    assert.equal(can(withWorkspace, "staff.assign", teamScope(TEAM_T2)), false);
+    assert.equal(can(withWorkspace, "platform.admin", GLOBAL_SCOPE), false);
+  }
+});
+
+test("b8. ids are compared as text, as the old predicates compare them", () => {
+  const numeric = context({ clubRoles: [{ clubId: 7, role: "club_admin" }], teamRoles: [{ teamId: 9, role: "team_coach" }] });
+  assert.equal(can(numeric, "org.teams.manage", clubScope("7")), canManageClub(numeric, "7"));
+  assert.equal(can(numeric, "org.teams.manage", clubScope("7")), true);
+  assert.equal(can(numeric, "athletes.manage", teamScope("9")), canManageTeamById(numeric, "9"));
+  assert.equal(can(numeric, "athletes.manage", teamScope("9")), true);
+  assert.equal(can(numeric, "athletes.manage", teamScope("7")), false, "a club id is not a team id");
+  assert.equal(can(numeric, "org.teams.manage", clubScope("9")), false, "a team id is not a club id");
+});
+
+test("b9. routes/organization.js no longer imports the predicates can() replaced, and keeps the listed ones", () => {
+  const authzImport = ORGANIZATION_JS.match(/import \{([^}]*)\} from "\.\.\/authz\.js";/);
+  assert.ok(authzImport, "the authz.js import");
+  const names = authzImport[1].split(",").map((s) => s.trim()).filter(Boolean).sort();
+  // canManageClub: PUT /clubs/:clubId only (the catalog has no word for editing a club's own details).
+  // isPlatformAdministrator: the list loaders' SQL branches, the mixed clubRoles.length checks, canManageAthlete(s),
+  // setUserLoginStatus's target rule, the response's isPlatformAdmin fact.
+  assert.deepEqual(names, ["canManageClub as authzCanManageClub", "isPlatformAdministrator", "loadAuthorizationContext"]);
+  assert.equal([...ORGANIZATION_JS.matchAll(/(?<!function )\bcanManageClub\(req,/g)].length, 1, "one remaining canManageClub call: PUT /clubs/:clubId");
+  assert.doesNotMatch(ORGANIZATION_JS, /\bcanManageTeam\(req,/);
+  assert.match(ORGANIZATION_JS, /import \{ can, clubScope, GLOBAL_SCOPE, teamScope \} from "\.\.\/permissions\.js";/);
+});
+
+// ---------------------------------------------------------------------------
+// c. The old role tables keep one word each (plan 2.1, rule 2)
+// ---------------------------------------------------------------------------
+
+const SCANNED_DIRS = ["backend/src", "backend/scripts", "tools", "e2e"];
+const SCANNED_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".ts", ".py", ".sql", ".sh", ".json"]);
+const ROLE_TABLES = { user_club_roles: "club_admin", user_team_roles: "team_coach" };
+
+function sourceFiles(dir) {
+  const out = [];
+  const abs = path.join(REPO_ROOT, dir);
+  if (!fs.existsSync(abs)) return out;
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...sourceFiles(rel));
+    else if (SCANNED_EXTENSIONS.has(path.extname(entry.name)) && entry.name !== "package-lock.json") out.push(rel);
+  }
+  return out;
+}
+
+// Every statement that writes one of the two tables, with the text up to the
+// end of its string (a backtick, or 1500 characters).
+function roleTableWrites(text) {
+  const writes = [];
+  const pattern = /\b(insert\s+into|update|merge\s+into|copy|delete\s+from|truncate(?:\s+table)?)\s+(?:only\s+)?(?:"?public"?\s*\.\s*)?"?(user_club_roles|user_team_roles)"?\b/gi;
+  for (const match of text.matchAll(pattern)) {
+    const rest = text.slice(match.index, match.index + 1500);
+    const end = rest.indexOf("`");
+    writes.push({ verb: match[1].toLowerCase().replace(/\s+/g, " "), table: match[2].toLowerCase(), statement: end === -1 ? rest : rest.slice(0, end), index: match.index });
+  }
+  return writes;
+}
+
+// null when the statement can only leave the table's one word in `role`;
+// otherwise why not.
+function roleWriteProblem({ verb, table, statement }) {
+  const word = ROLE_TABLES[table];
+  if (verb === "delete from" || verb.startsWith("truncate")) return null; // removes rows, writes no word
+  if (verb === "insert into") {
+    const shape = statement.match(/^insert\s+into\s+[\w."]+\s*\(([^)]*)\)\s*values\s*\(([^)]*)\)/i);
+    if (!shape) return "an insert that is not `(columns) values (one row)`";
+    const columns = shape[1].split(",").map((c) => c.trim().replace(/"/g, "").toLowerCase());
+    const values = shape[2].split(",").map((v) => v.trim());
+    const at = columns.indexOf("role");
+    if (at === -1) return "an insert without the role column";
+    if (columns.length !== values.length) return "an insert whose values could not be matched to its columns";
+    if (values[at] !== `'${word}'`) return `an insert whose role is ${values[at]}, not the literal '${word}'`;
+    if (/^insert[\s\S]*\)\s*,\s*\(/i.test(statement.slice(0, shape[0].length + 5))) return "an insert of several rows";
+    const conflict = statement.slice(shape[0].length).match(/do\s+update\s+set([\s\S]*)$/i);
+    if (conflict && /(^|[\s,])"?role"?\s*=/i.test(conflict[1])) return "an upsert that sets role";
+    return null;
+  }
+  if (verb === "update") {
+    const set = statement.match(/\bset\b([\s\S]*?)(\bwhere\b|$)/i);
+    if (!set) return "an update without a readable SET";
+    if (/(^|[\s,(])"?role"?\s*=/i.test(set[1])) return "an update that sets role";
+    return null;
+  }
+  return `a ${verb} statement`;
+}
+
+test("c1. every write of user_club_roles / user_team_roles in the code writes only 'club_admin' / 'team_coach'", () => {
+  const found = [];
+  const problems = [];
+  for (const dir of SCANNED_DIRS) {
+    for (const file of sourceFiles(dir)) {
+      const text = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+      for (const write of roleTableWrites(text)) {
+        const line = text.slice(0, write.index).split("\n").length;
+        found.push(`${file}:${write.verb}:${write.table}`);
+        const problem = roleWriteProblem(write);
+        if (problem) problems.push(`${file}:${line}: ${problem}`);
+      }
+    }
+  }
+  assert.deepEqual(problems, []);
+  // The scan really sees the writers: the grant and revoke of each table in organization.js.
+  for (const expected of [
+    "backend/src/routes/organization.js:insert into:user_club_roles",
+    "backend/src/routes/organization.js:update:user_club_roles",
+    "backend/src/routes/organization.js:insert into:user_team_roles",
+    "backend/src/routes/organization.js:update:user_team_roles",
+  ]) assert.equal(found.filter((f) => f === expected).length, 1, expected);
+  // Nothing else in the application writes them: a new writer is added to this list on purpose.
+  assert.deepEqual([...new Set(found.filter((f) => f.startsWith("backend/")).map((f) => f.split(":")[0]))], ["backend/src/routes/organization.js"]);
+});
+
+test("c2. the scan's own rule: it refuses every other shape of write", () => {
+  const problem = (sql) => {
+    const writes = roleTableWrites(sql);
+    assert.equal(writes.length, 1, sql);
+    return roleWriteProblem(writes[0]);
+  };
+  assert.equal(problem("insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)"), null);
+  assert.equal(problem("insert into public.user_team_roles (user_id, team_id, role) values ($1, $2, 'team_coach') on conflict (user_id, team_id, role) do update set is_active = true`"), null);
+  assert.equal(problem("update public.user_club_roles set is_active = false, revoked_at = now() where user_id = $2 and role = 'club_admin'"), null);
+  assert.equal(problem("delete from public.user_team_roles where user_id = $1"), null);
+  assert.match(problem("insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'director')"), /not the literal 'club_admin'/);
+  assert.match(problem("insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'team_coach')"), /not the literal 'club_admin'/);
+  assert.match(problem("insert into public.user_team_roles (user_id, team_id, role) values ($1, $2, 'club_admin')"), /not the literal 'team_coach'/);
+  assert.match(problem("insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, $3)"), /not the literal/);
+  assert.match(problem("INSERT INTO user_team_roles (user_id, team_id, role) VALUES ($1, $2, $3)"), /not the literal/);
+  assert.match(problem("insert into public.user_club_roles (user_id, club_id) values ($1, $2)"), /without the role column/);
+  assert.match(problem("insert into public.user_club_roles select * from staging"), /not `\(columns\) values/);
+  assert.match(problem("insert into public.user_club_roles (user_id, club_id, role) select $1, $2, 'club_admin'"), /not `\(columns\) values/);
+  assert.match(problem("insert into public.user_club_roles (user_id, club_id, role) values ($1,$2,'club_admin') on conflict (user_id, club_id, role) do update set role = excluded.role"), /upsert that sets role/);
+  assert.match(problem("update public.user_club_roles set role = $1 where user_id = $2"), /update that sets role/);
+  assert.match(problem("update public.user_team_roles set is_active = true, role = 'assistant' where user_id = $2"), /update that sets role/);
+  assert.match(problem("update only public.user_team_roles set \"role\"='x'"), /update that sets role/);
+  assert.match(problem("copy public.user_club_roles from stdin"), /copy statement/);
+});
+
+test("c3. the four :role routes of organization.js refuse any other word before anything else", () => {
+  const routes = [
+    ["put", "/users/:userId/club-roles/:clubId/:role", "club_admin", "Unsupported club role.", "grantClubAdminRole"],
+    ["delete", "/users/:userId/club-roles/:clubId/:role", "club_admin", "Unsupported club role.", "revokeClubAdminRole"],
+    ["put", "/users/:userId/team-roles/:teamId/:role", "team_coach", "Unsupported team role.", "grantTeamCoachRole"],
+    ["delete", "/users/:userId/team-roles/:teamId/:role", "team_coach", "Unsupported team role.", "revokeTeamCoachRole"],
+  ];
+  const squeeze = (text) => text.replace(/\s+/g, " ");
+  const source = squeeze(ORGANIZATION_JS);
+  for (const [method, route, word, error, service] of routes) {
+    const head = `router.${method}("${route}", async (req, res, next) => { try { `
+      + `if (clean(req.params.role) !== "${word}") return res.status(400).json({ error: "${error}" }); `
+      + `const result = await ${service}(req, `;
+    assert.equal(source.split(head).length - 1, 1, `${method.toUpperCase()} ${route}: the word check is the handler's first statement`);
+  }
+  // No other route takes a role word for these two tables.
+  const roleRoutes = [...ORGANIZATION_JS.matchAll(/router\.(\w+)\("([^"]*(?:club-roles|team-roles)[^"]*)"/g)].map((m) => `${m[1]} ${m[2]}`).sort();
+  assert.deepEqual(roleRoutes, [
+    "delete /users/:userId/club-roles/:clubId/:role",
+    "delete /users/:userId/team-roles/:teamId/:role",
+    "post /club-roles",
+    "post /team-roles",
+    "put /users/:userId/club-roles/:clubId/:role",
+    "put /users/:userId/team-roles/:teamId/:role",
+  ]);
+  // The two legacy POST routes read no role word from the request at all.
+  for (const [route, service] of [["/club-roles", "grantClubAdminRole"], ["/team-roles", "grantTeamCoachRole"]]) {
+    const start = ORGANIZATION_JS.indexOf(`router.post("${route}"`);
+    const body = ORGANIZATION_JS.slice(start, ORGANIZATION_JS.indexOf("\n});", start));
+    assert.ok(body.includes(`await ${service}(req, userId, `), `${route} goes through ${service}`);
+    assert.doesNotMatch(body, /\brole\b/i, `${route} reads no role word`);
+  }
+  // The four services write a literal and filter on it (their statements are also covered by c1).
+  for (const [service, table, word] of [
+    ["grantClubAdminRole", "user_club_roles", "club_admin"], ["revokeClubAdminRole", "user_club_roles", "club_admin"],
+    ["grantTeamCoachRole", "user_team_roles", "team_coach"], ["revokeTeamCoachRole", "user_team_roles", "team_coach"],
+  ]) {
+    const start = ORGANIZATION_JS.indexOf(`async function ${service}(`);
+    assert.ok(start > 0, service);
+    const body = ORGANIZATION_JS.slice(start, ORGANIZATION_JS.indexOf("\n}\n", start));
+    const writes = roleTableWrites(body);
+    assert.equal(writes.length, 1, `${service} writes once`);
+    assert.equal(writes[0].table, table);
+    assert.equal(roleWriteProblem(writes[0]), null);
+    assert.ok(writes[0].statement.includes(`'${word}'`), `${service} names '${word}'`);
+  }
+});

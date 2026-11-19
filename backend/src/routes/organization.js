@@ -3,13 +3,11 @@ import { Router } from "express";
 import { pool, query } from "../db.js";
 import { withExerciseReuseTransaction } from "../exerciseAccess.js";
 import {
-  canAssignClubRole as authzCanAssignClubRole,
-  canAssignTeamRole as authzCanAssignTeamRole,
   canManageClub as authzCanManageClub,
-  canManageTeamById as authzCanManageTeam,
   isPlatformAdministrator,
   loadAuthorizationContext,
 } from "../authz.js";
+import { can, clubScope, GLOBAL_SCOPE, teamScope } from "../permissions.js";
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 import { resolveActiveWorkspace } from "../workspace.js";
@@ -367,17 +365,17 @@ router.get("/", async (req, res, next) => {
     res.json({
       scope: req.user?.role_hint || "coach",
       isPlatformAdmin: isPlatformAdministrator(req.authz),
-      canCreateClub: isPlatformAdministrator(req.authz),
+      canCreateClub: can(req.authz, "platform.admin", GLOBAL_SCOPE),
       canCreateTeam: isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0,
       canCreateAthlete: true,
       canCreateUser: isPlatformAdministrator(req.authz) || req.authz.clubRoles.length > 0,
       // The single source of truth for which club_admin/team_coach Add/Remove
       // controls the frontend may offer - computed with the exact same
       // functions the grant/revoke endpoints themselves enforce
-      // (authzCanAssignClubRole/authzCanAssignTeamRole), so the frontend
+      // (can() with "staff.assign" on the club or the team), so the frontend
       // never has to guess or re-derive this from role_hint or anything else.
-      manageableClubIds: scoped.clubs.filter((club) => authzCanAssignClubRole(req.authz, club.id)).map((club) => club.id),
-      manageableTeamIds: scoped.teams.filter((team) => authzCanAssignTeamRole(req.authz, team.id)).map((team) => team.id),
+      manageableClubIds: scoped.clubs.filter((club) => can(req.authz, "staff.assign", clubScope(club.id))).map((club) => club.id),
+      manageableTeamIds: scoped.teams.filter((team) => can(req.authz, "staff.assign", teamScope(team.id))).map((team) => team.id),
       clubs: scoped.clubs,
       teams: scoped.teams,
       archivedTeams: scopedArchivedTeams,
@@ -413,7 +411,7 @@ router.get("/clubs-summary", async (req, res, next) => {
   try {
     // Authorization follows the ACTIVE workspace: a platform role held while another workspace is active changes nothing.
     const { workspace: activeWorkspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    if (!(activeWorkspace?.type === "platform" && isPlatformAdministrator(req.authz))) return res.status(404).json({ error: "Not found", path: `${req.baseUrl}${req.path}` });
+    if (!(activeWorkspace?.type === "platform" && can(req.authz, "platform.admin", GLOBAL_SCOPE))) return res.status(404).json({ error: "Not found", path: `${req.baseUrl}${req.path}` });
     const { rows } = await query(
       `select c.id, c.name,
               (select count(*)::int from public.teams t where t.club_id = c.id and coalesce(t.is_active, true)) as team_count,
@@ -662,7 +660,8 @@ async function setUserLoginStatus(req, targetUserId, active) {
 // including an athlete-only account that never appears in this Users list
 // (no staff role of any kind) - the whole reason this lives in
 // organization.js rather than requiring the target to self-serve. Every
-// endpoint below is gated on isPlatformAdministrator(req.authz) - a real,
+// endpoint below is gated on can(req.authz, "accounts.manage", GLOBAL_SCOPE),
+// which only a platform admin passes (permissions.js) - a real,
 // active public.user_global_roles row, never role_hint - matching every
 // other platform-admin-only action in this file. The admin never sets or
 // even sees the account's password here; only the target address's own
@@ -672,7 +671,7 @@ async function setUserLoginStatus(req, targetUserId, active) {
 // only the confirm endpoint ever writes it.
 router.post("/users/:userId/email-change/request", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can start a login-email change for another account." });
+    if (!can(req.authz, "accounts.manage", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can start a login-email change for another account." });
     const targetUserId = req.params.userId;
     const newEmail = String(req.body?.newEmail || "").trim().toLowerCase();
     if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return res.status(400).json({ error: "INVALID_EMAIL" });
@@ -729,7 +728,7 @@ router.post("/users/:userId/email-change/request", async (req, res, next) => {
 
 router.post("/users/:userId/email-change/resend", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can resend this link." });
+    if (!can(req.authz, "accounts.manage", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can resend this link." });
     const targetUserId = req.params.userId;
     const client = await pool.connect();
     let rawToken;
@@ -784,7 +783,7 @@ router.post("/users/:userId/email-change/resend", async (req, res, next) => {
 
 router.post("/users/:userId/email-change/cancel", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can cancel this request." });
+    if (!can(req.authz, "accounts.manage", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can cancel this request." });
     const targetUserId = req.params.userId;
     const client = await pool.connect();
     try {
@@ -816,7 +815,7 @@ router.post("/users/:userId/email-change/cancel", async (req, res, next) => {
 // same way as every other platform-admin-only endpoint in this file.
 router.get("/users/:userId/account", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can view this." });
+    if (!can(req.authz, "accounts.manage", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can view this." });
     const result = await query(`select id, email, is_active from public.users where id = $1 limit 1`, [req.params.userId]);
     const user = result.rows[0];
     if (!user) return res.status(404).json({ error: "User not found." });
@@ -835,7 +834,7 @@ router.get("/users/:userId/account", async (req, res, next) => {
 
 router.get("/users/:userId/email-change/status", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can view this." });
+    if (!can(req.authz, "accounts.manage", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can view this." });
     const active = await loadActiveAccountEmailChangeRequest(query, req.params.userId);
     if (!active) return res.json({ pending: false });
     res.json({
@@ -879,7 +878,7 @@ async function sendAdminEmailChangeVerificationAndRespond(req, res, { to, recipi
 // return a specific NO_LOGIN error instead).
 router.post("/users/:userId/password-reset/send", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can send a password reset link." });
+    if (!can(req.authz, "accounts.manage", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can send a password reset link." });
     const targetUserId = req.params.userId;
     const target = await query(`select id, email, is_active, display_name, full_name from public.users where id = $1 limit 1`, [targetUserId]);
     const targetUser = target.rows[0];
@@ -930,7 +929,7 @@ const GLOBAL_ROLES = new Set(["platform_admin", "independent_coach"]);
 
 router.put("/users/:userId/global-roles/:role", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can grant global roles." });
+    if (!can(req.authz, "platform.admin", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can grant global roles." });
     const role = clean(req.params.role);
     if (!GLOBAL_ROLES.has(role)) return res.status(400).json({ error: "Unknown global role." });
     const targetUserId = clean(req.params.userId);
@@ -973,7 +972,7 @@ router.put("/users/:userId/global-roles/:role", async (req, res, next) => {
 
 router.delete("/users/:userId/global-roles/:role", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can revoke global roles." });
+    if (!can(req.authz, "platform.admin", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can revoke global roles." });
     const role = clean(req.params.role);
     if (!GLOBAL_ROLES.has(role)) return res.status(400).json({ error: "Unknown global role." });
     const targetUserId = clean(req.params.userId);
@@ -1033,7 +1032,7 @@ async function loadGlobalRoles(userId) {
 router.post("/clubs", async (req, res, next) => {
   let client;
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only platform admin can create clubs." });
+    if (!can(req.authz, "platform.admin", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only platform admin can create clubs." });
     const name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Club name is required." });
     client = await pool.connect();
@@ -1079,7 +1078,7 @@ router.put("/clubs/:clubId", async (req, res, next) => {
 
 router.delete("/clubs/:clubId", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only platform admin can delete clubs." });
+    if (!can(req.authz, "platform.admin", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only platform admin can delete clubs." });
     const result = await query(
       `update public.clubs set is_active = false, updated_at = now() where id = $1 returning id`,
       [req.params.clubId],
@@ -1100,7 +1099,7 @@ router.post("/teams", async (req, res, next) => {
     clubId = clean(req.body?.clubId);
     if (!name) return res.status(400).json({ error: "Team name is required." });
     if (!clubId) return res.status(400).json({ error: "Club is required." });
-    if (!(await canManageClub(req, clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!can(req.authz, "org.teams.manage", clubScope(clubId))) return res.status(403).json({ error: "Club is outside your access." });
     const result = await query(
       `insert into public.teams (club_id, name, short_name, logo_url, is_active)
        values ($1, $2, $3, $4, true)
@@ -1168,14 +1167,14 @@ router.put("/teams/:teamId", async (req, res, next) => {
   let name;
   let team;
   try {
-    if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!can(req.authz, "org.view", teamScope(req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Team name is required." });
     // Only a platform admin gets here with an id that is not a UUID: it is no team.
     if (!UUID_TEXT.test(req.params.teamId)) return res.status(404).json({ error: "Team not found." });
     team = (await query(`select club_id, coalesce(is_active, true) as active from public.teams where id = $1`, [req.params.teamId])).rows[0];
     if (!team) return res.status(404).json({ error: "Team not found." });
-    if (!(await canManageClub(req, String(team.club_id)))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!can(req.authz, "org.teams.manage", clubScope(String(team.club_id)))) return res.status(403).json({ error: "Club is outside your access." });
     // D45: an archived team is restored first, then edited.
     if (!team.active) return res.status(409).json(TEAM_ARCHIVED);
     const clubId = clean(req.body?.clubId);
@@ -1224,11 +1223,11 @@ router.put("/teams/:teamId/restore", async (req, res, next) => {
       [teamId],
     )).rows[0] : null;
     if (!row) {
-      return isPlatformAdministrator(req.authz)
+      return can(req.authz, "platform.admin", GLOBAL_SCOPE)
         ? res.status(404).json({ error: "Team not found." })
         : res.status(403).json({ error: "Team is outside your access." });
     }
-    if (!row.club_id || !(await canManageClub(req, String(row.club_id)))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!row.club_id || !can(req.authz, "org.teams.manage", clubScope(String(row.club_id)))) return res.status(403).json({ error: "Team is outside your access." });
     // One statement restores the team, and only while it is still in the club
     // whose right was checked and that club is active: a club archived after the
     // read above never gets an active team back.
@@ -1277,11 +1276,11 @@ router.delete("/teams/:teamId", async (req, res, next) => {
       [teamId],
     )).rows[0] : null;
     if (!row) {
-      return isPlatformAdministrator(req.authz)
+      return can(req.authz, "platform.admin", GLOBAL_SCOPE)
         ? res.status(404).json({ error: "Team not found." })
         : res.status(403).json({ error: "Team is outside your access." });
     }
-    if (!row.club_id || !(await canManageClub(req, String(row.club_id)))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!row.club_id || !can(req.authz, "org.teams.manage", clubScope(String(row.club_id)))) return res.status(403).json({ error: "Team is outside your access." });
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -1505,7 +1504,7 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
     const teamId = clean(req.params.teamId);
     const athleteId = clean(req.body?.athleteId);
     if (!teamId || !athleteId) return res.status(400).json({ error: "Team and athlete are required." });
-    if (!(await canManageTeam(req, teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!can(req.authz, "athletes.manage", teamScope(teamId))) return res.status(403).json({ error: "Team is outside your access." });
     // An id that is not a UUID answers as an unknown one, never as a database
     // error. The team's state comes before the athlete's right: whoever manages
     // the team may learn that it is archived (its coach included, whose
@@ -1515,7 +1514,7 @@ router.post("/teams/:teamId/athletes", async (req, res, next) => {
     if (!team.rows[0]) return res.status(404).json({ error: "Team not found." });
     if (!team.rows[0].active) return res.status(409).json(TEAM_ARCHIVED);
     if (!UUID_TEXT.test(athleteId)) {
-      return isPlatformAdministrator(req.authz)
+      return can(req.authz, "platform.admin", GLOBAL_SCOPE)
         ? res.status(404).json({ error: "Athlete not found." })
         : res.status(403).json({ error: "Athlete is outside your access." });
     }
@@ -2371,7 +2370,7 @@ router.post("/program-access/:accessId/revoke", async (req, res, next) => {
 // club membership endpoints below instead - those never touch this flag.
 router.delete("/athletes/:athleteId/archive-profile", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can archive an athlete's whole profile." });
+    if (!can(req.authz, "athletes.remove", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can archive an athlete's whole profile." });
     const result = await query(
       `update public.athletes set is_active = false, updated_at = now() where id = $1 returning id`,
       [req.params.athleteId],
@@ -2385,7 +2384,7 @@ router.delete("/athletes/:athleteId/archive-profile", async (req, res, next) => 
 
 router.put("/athletes/:athleteId/restore-profile", async (req, res, next) => {
   try {
-    if (!isPlatformAdministrator(req.authz)) return res.status(403).json({ error: "Only a platform admin can restore an athlete's whole profile." });
+    if (!can(req.authz, "athletes.remove", GLOBAL_SCOPE)) return res.status(403).json({ error: "Only a platform admin can restore an athlete's whole profile." });
     const result = await query(
       `update public.athletes set is_active = true, updated_at = now() where id = $1 returning id`,
       [req.params.athleteId],
@@ -2439,7 +2438,7 @@ router.put("/athletes/:athleteId/coach-relationship/restore", async (req, res, n
 // profile, and the login are all untouched.
 router.delete("/teams/:teamId/athletes/:athleteId", async (req, res, next) => {
   try {
-    if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!can(req.authz, "athletes.remove", teamScope(req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     // An id that is not a UUID is no membership (a platform admin gets here with one).
     if (!UUID_TEXT.test(req.params.teamId) || !UUID_TEXT.test(req.params.athleteId)) {
       return res.status(404).json({ error: "This athlete has no active membership in this team." });
@@ -2470,7 +2469,7 @@ router.delete("/teams/:teamId/athletes/:athleteId", async (req, res, next) => {
 
 router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) => {
   try {
-    if (!(await canManageTeam(req, req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
+    if (!can(req.authz, "athletes.manage", teamScope(req.params.teamId))) return res.status(403).json({ error: "Team is outside your access." });
     // An id that is not a UUID answers as an unknown one (a platform admin gets here with one).
     if (!UUID_TEXT.test(req.params.teamId)) return res.status(404).json({ error: "Team not found." });
     const team = await query(`select id, club_id, coalesce(is_active, true) as active from public.teams where id = $1 limit 1`, [req.params.teamId]);
@@ -2549,7 +2548,7 @@ router.put("/teams/:teamId/athletes/:athleteId/restore", async (req, res, next) 
 // the login are untouched.
 router.delete("/clubs/:clubId/athletes/:athleteId", async (req, res, next) => {
   try {
-    if (!(await canManageClub(req, req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!can(req.authz, "athletes.remove", clubScope(req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
     // An id that is not a UUID is no membership (a platform admin gets here with one).
     if (!UUID_TEXT.test(req.params.clubId) || !UUID_TEXT.test(req.params.athleteId)) {
       return res.status(404).json({ error: "This athlete has no active membership in this club." });
@@ -2596,7 +2595,7 @@ router.delete("/clubs/:clubId/athletes/:athleteId", async (req, res, next) => {
 // own reason); restore those individually via the team endpoint above.
 router.put("/clubs/:clubId/athletes/:athleteId/restore", async (req, res, next) => {
   try {
-    if (!(await canManageClub(req, req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!can(req.authz, "athletes.manage", clubScope(req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
     // An id that is not a UUID is no membership (a platform admin gets here with one).
     if (!UUID_TEXT.test(req.params.clubId) || !UUID_TEXT.test(req.params.athleteId)) {
       return res.status(404).json({ error: "No membership in this club was found." });
@@ -2722,7 +2721,9 @@ router.put("/athletes/:athleteId/login-status", async (req, res, next) => {
 // themselves or anyone else more team_coach access. Assigning either
 // scoped role is always a CLUB-level decision (platform admin, or the
 // club_admin of the club that owns the club/team in question) - see
-// authz.js's canAssignClubRole/canAssignTeamRole.
+// authz.js's canAssignClubRole/canAssignTeamRole, which can() with
+// "staff.assign" answers exactly (permissions.js: the word is in the Club
+// admin set and not in the Team coach set).
 
 // Shared lock namespace for the "does this club still have an active
 // admin" invariant, scoped per-club via hashtext(clubId) as the second
@@ -2820,7 +2821,7 @@ async function loadTeamRolesForUser(userId) {
 }
 
 async function grantClubAdminRole(req, targetUserId, clubId) {
-  if (!authzCanAssignClubRole(req.authz, clubId)) {
+  if (!can(req.authz, "staff.assign", clubScope(clubId))) {
     return { status: 403, body: { error: "Only a platform admin, or this club's own admin, can grant club administrator access." } };
   }
   const client = await pool.connect();
@@ -2863,7 +2864,7 @@ async function grantClubAdminRole(req, targetUserId, clubId) {
 }
 
 async function revokeClubAdminRole(req, targetUserId, clubId) {
-  if (!authzCanAssignClubRole(req.authz, clubId)) {
+  if (!can(req.authz, "staff.assign", clubScope(clubId))) {
     return { status: 403, body: { error: "Only a platform admin, or this club's own admin, can remove club administrator access." } };
   }
   const club = await query(`select id, coalesce(is_active, true) as "isActive" from public.clubs where id = $1 limit 1`, [clubId]);
@@ -2909,7 +2910,7 @@ async function revokeClubAdminRole(req, targetUserId, clubId) {
 }
 
 async function grantTeamCoachRole(req, targetUserId, teamId) {
-  if (!authzCanAssignTeamRole(req.authz, teamId)) {
+  if (!can(req.authz, "staff.assign", teamScope(teamId))) {
     return { status: 403, body: { error: "Only a platform admin, or this team's club admin, can grant team coach access." } };
   }
   const client = await pool.connect();
@@ -2952,7 +2953,7 @@ async function grantTeamCoachRole(req, targetUserId, teamId) {
 // legitimately sit without a coach for a while; only a club losing its
 // last administrator is treated as an invariant worth blocking.
 async function revokeTeamCoachRole(req, targetUserId, teamId) {
-  if (!authzCanAssignTeamRole(req.authz, teamId)) {
+  if (!can(req.authz, "staff.assign", teamScope(teamId))) {
     return { status: 403, body: { error: "Only a platform admin, or this team's club admin, can remove team coach access." } };
   }
   const client = await pool.connect();
@@ -3838,12 +3839,8 @@ function canManageClub(req, clubId) {
   return authzCanManageClub(req.authz, clubId);
 }
 
-function canManageTeam(req, teamId) {
-  return authzCanManageTeam(req.authz, teamId);
-}
 
-
-// Takes the full req (not req.user) - canManageClub/canManageTeam read
+// Takes the full req (not req.user) - the can() checks read
 // req.authz, loaded once per request by attachAuthorizationContext. This
 // previously took req.user by mistake, which meant req.authz was undefined
 // inside those checks and any create/edit athlete request that actually
@@ -3852,13 +3849,13 @@ function canManageTeam(req, teamId) {
 async function resolveAthleteClubTeam(req, requestedClubId, requestedTeamId) {
   let clubId = clean(requestedClubId) || null;
   const teamId = clean(requestedTeamId) || null;
-  if (clubId && !(await canManageClub(req, clubId))) {
+  if (clubId && !can(req.authz, "athletes.manage", clubScope(clubId))) {
     const error = new Error("Club is outside your access.");
     error.status = 403;
     throw error;
   }
   if (!teamId) return { clubId, teamId: null };
-  if (!(await canManageTeam(req, teamId))) {
+  if (!can(req.authz, "athletes.manage", teamScope(teamId))) {
     const error = new Error("Team is outside your access.");
     error.status = 403;
     throw error;
