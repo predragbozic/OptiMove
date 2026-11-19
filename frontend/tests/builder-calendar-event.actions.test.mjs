@@ -24,7 +24,7 @@ const pure = await import("../builder-calendar-event.js");
 const eventView = await import("../builder-calendar-event-view.js");
 const helpers = await import("../builder-helpers.js");
 const { renderBuilderBlock } = await import("../builder-structure.js");
-const { centralCalendarUncertainWrites, clearCentralCalendarUncertainWrites, openCentralCalendarAt } = await import("../central-calendar-actions.js");
+const { centralCalendarMayBeLeft, centralCalendarUncertainWrites, clearCentralCalendarUncertainWrites, handleCentralCalendarBeforeUnload, openCentralCalendarAt } = await import("../central-calendar-actions.js");
 const { addDaysIso, localDateIso } = await import("../utils.js");
 
 const D = addDaysIso(localDateIso(), 2);
@@ -467,10 +467,10 @@ test("8. one control at a time: a double click sends one POST; while a write is 
 });
 
 // --- 9. Leaving --------------------------------------------------------------------------
-test("9. leaving: an event being made asks once and, on a yes, is kept in the calendar's memory with the same key and body; a no keeps the Builder; beforeunload while sending", async () => {
+test("9. leaving: an event being made is in the calendar's memory from the send, so the calendar's own guards ask (sign-out, a reload, beforeunload) and a switch between workspaces keeps it to check; a settled answer forgets it", async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  const fake = server({ lose: ["notSaved"] });
+  const fake = server();
   const calls = installFetchMock(async (call) => {
     if (call.method === "POST") await gate;
     return fake(call);
@@ -479,47 +479,48 @@ test("9. leaving: an event being made asks once and, on a yes, is kept in the ca
   await press("open");
   const sending = press("send");
   await new Promise((resolve) => setTimeout(resolve, 5));
-  const event = { preventDefault() { this.prevented = true; }, returnValue: undefined };
-  assert.equal(actions.handleBuilderCalendarEventBeforeUnload(event), true);
-  assert.equal(event.prevented, true);
-  confirmAnswer = false;
-  assert.equal(actions.builderCalendarEventMayBeLeft({ final: "switch" }), false);
-  assert.equal(centralCalendarUncertainWrites().length, 0);
-  confirmAnswer = true;
-  assert.equal(actions.builderCalendarEventMayBeLeft({ final: "switch" }), true);
-  assert.match(questions.at(-1), /An event is still being made\. Switch anyway\?/);
   const kept = centralCalendarUncertainWrites();
-  assert.equal(kept.length, 1);
+  assert.equal(kept.length, 1, "kept from the send");
+  assert.equal(kept[0].mode, "create");
   assert.equal(kept[0].requestKey, posts(calls)[0].body.requestKey);
+  assert.deepEqual(kept[0].sentBody, posts(calls)[0].body);
+  // The calendar's guards, unchanged, count it.
+  confirmAnswer = false;
+  assert.equal(centralCalendarMayBeLeft({ final: "sign-out" }), false, "a sign-out asks");
+  assert.match(questions.at(-1), /Sign out anyway\?/);
+  assert.equal(centralCalendarMayBeLeft({ final: false }), true, "a switch between clubs keeps it, unasked");
+  const unload = { preventDefault() { this.prevented = true; }, returnValue: undefined, isTrusted: true };
+  assert.equal(handleCentralCalendarBeforeUnload(unload), true);
+  assert.equal(unload.prevented, true);
   release();
   await sending;
-  assert.equal(centralCalendarUncertainWrites().length, 1, "the lost answer stays kept once (no second entry)");
-  // Nothing in flight: no question.
-  state.builder = emptyBuilderState();
+  assert.equal(state.builder.calendarEvent.phase, "done");
+  assert.equal(centralCalendarUncertainWrites().length, 0, "made: forgotten");
   questions.length = 0;
-  assert.equal(actions.builderCalendarEventMayBeLeft({ final: "sign-out" }), true);
-  assert.equal(questions.length, 0);
-  assert.equal(actions.handleBuilderCalendarEventBeforeUnload({ preventDefault() {} }), false);
+  assert.equal(centralCalendarMayBeLeft({ final: "sign-out" }), true);
+  assert.equal(questions.length, 0, "nothing left to ask about");
 });
 
-test("9b. a write whose answer lands after the Builder was left still settles the calendar's memory", async () => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const fake = server();
-  installFetchMock(async (call) => {
-    if (call.method === "POST") await gate;
-    return fake(call);
-  });
-  state.builder.draft = draftWith();
-  await press("open");
-  const sending = press("send");
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(actions.builderCalendarEventMayBeLeft({ final: false }), true);
-  assert.equal(centralCalendarUncertainWrites().length, 1);
-  state.builder = emptyBuilderState();
-  release();
-  await sending;
-  assert.equal(centralCalendarUncertainWrites().length, 0, "made: forgotten");
+test("9b. a write whose answer lands after the Builder was left still settles the calendar's memory; a lost one stays there to check", async () => {
+  for (const outcome of ["made", "lost"]) {
+    clearCentralCalendarUncertainWrites();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const fake = server({ lose: outcome === "lost" ? ["notSaved"] : [] });
+    installFetchMock(async (call) => {
+      if (call.method === "POST") await gate;
+      return fake(call);
+    });
+    state.builder = emptyBuilderState();
+    state.builder.draft = draftWith();
+    await press("open");
+    const sending = press("send");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    state.builder = emptyBuilderState();
+    release();
+    await sending;
+    assert.equal(centralCalendarUncertainWrites().length, outcome === "made" ? 0 : 1, outcome);
+  }
 });
 
 // --- 10. Open in calendar -----------------------------------------------------------------

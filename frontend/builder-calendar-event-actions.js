@@ -6,8 +6,13 @@
 //   { sessionId, date, phase: "reading" | "read_error" | "ready" | "sending" | "unconfirmed" | "done",
 //     match, types, form, message, requestKey, sentBody, checking, checkNote, doneText, doneNotes, event, forget }
 // and state.builder.calendarEventsMade, the in-memory "In calendar" badges.
-// A write whose answer is lost joins the calendar's memory of unconfirmed saves
-// (rememberCentralCalendarCreate), so it can be checked from the calendar too.
+// A create joins the calendar's memory of unconfirmed saves the moment it is
+// sent (rememberCentralCalendarCreate) and leaves it once its answer settles.
+// So the calendar's own guards cover it with no question of their own here:
+// a sign-out, a reload or a switch into or out of the athlete workspace asks
+// (centralCalendarMayBeLeft, its beforeunload and the app-update probe), and a
+// switch between clubs or teams keeps it to check later in the calendar, with
+// the same body and key. A lost answer stays there.
 import { api } from "./api.js";
 import {
   builderCalendarEventBody,
@@ -135,6 +140,7 @@ async function send(rec, render) {
   rec.sentBody = builderCalendarEventBody({ form: rec.form, card: rec.match.card, type, day: rec.date, requestKey: rec.requestKey, timezone: timezone() });
   rec.message = "";
   rec.phase = "sending";
+  rec.forget = rememberCentralCalendarCreate({ sentBody: rec.sentBody, requestKey: rec.requestKey });
   render?.();
   await deliver(rec, render, { check: false });
 }
@@ -150,7 +156,7 @@ async function deliver(rec, render, { check }) {
     if (centralCalendarOutcomeUnknown(info) || (check && !builderCalendarEventCheckSettles(info))) {
       rec.phase = "unconfirmed";
       rec.checkNote = check ? CHECK_STILL_NOT_CONFIRMED : "";
-      if (!rec.forget) rec.forget = rememberCentralCalendarCreate({ sentBody: rec.sentBody, requestKey: rec.requestKey });
+      // Still kept in the calendar's memory (since the send).
       if (current(rec)) {
         render?.();
         focusPanel();
@@ -251,30 +257,6 @@ export async function handleBuilderCalendarEventAction(action, { renderBuilder, 
     openCalendarAt?.(target);
     return true;
   }
-  return true;
-}
-
-// Leaving with an event being made (a workspace switch, signing out, the
-// app's update): asked once; on a yes the write is kept in the calendar's
-// memory to check there. A result not confirmed is already kept there (and
-// the calendar's own question counts it).
-export function builderCalendarEventMayBeLeft({ final = false } = {}) {
-  const rec = state.builder.calendarEvent;
-  if (rec?.phase !== "sending") return true;
-  const verb = final === "sign-out" ? "Sign out" : final ? "Switch" : "Leave";
-  const later = final === "sign-out" ? "It cannot be checked after signing out." : "You can check it later in the calendar.";
-  const leave = typeof globalThis.confirm === "function" ? globalThis.confirm(`An event is still being made. ${verb} anyway? ${later}`) : true;
-  if (leave && !rec.forget) rec.forget = rememberCentralCalendarCreate({ sentBody: rec.sentBody, requestKey: rec.requestKey });
-  return leave;
-}
-
-// app.js's "beforeunload": an event still being made would lose the only
-// view of its result.
-export function handleBuilderCalendarEventBeforeUnload(event) {
-  if (state.deliberateNavigation) return false;
-  if (state.builder.calendarEvent?.phase !== "sending") return false;
-  event?.preventDefault?.();
-  if (event) event.returnValue = "";
   return true;
 }
 

@@ -1,6 +1,6 @@
 # Central calendar — K2c plan: the calendar and the Builder, one click apart
 
-Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract K2c-2-B (2.3) has the manager's GO (2.4) and is built (2.5); K3 is named only. The owner: „Radi redosledom koji
+Status: **K2c-1 built, its review rounds fixed (sections 1.2.1 and 1.2.2)**; K2c-2's UI contract has the manager's GO (sections 2.1, 2.2), its backend contract K2c-2-B (2.3) has the manager's GO (2.4) and is built (2.5); the frontend K2c-2-F is built (2.6); K3 is named only. The owner: „Radi redosledom koji
 je optimalan" (2026-11-18). Written against `main` `9351bcc0` plus PR #611's head `88b60dde` (K2b-1d3), on which this
 branch is stacked because both change the calendar's panel.
 
@@ -1146,6 +1146,59 @@ NON-BLOCKING NOTES on the code, no BLOCKER or HIGH):
 | security LOW-4: a replay after a revoked right | the runner takes the writer lock before the replay (unchanged); covered by the K2a suites' right-lost test | — |
 
 21 tests; 18 mutations, all killed (M18: a multi-day event judged on its first day only).
+
+### 2.6 K2c-2-F as built (2026-11-19)
+
+Frontend only; no backend file, no migration. Built on 2.1 with the GO of 2.2, on K2c-2-B (PR #616) as merged.
+
+- **`frontend/builder-calendar-event.js`** (new, pure): who is offered the button, the live plan id
+  (`editSourcePlanId` of an edit draft), the match on the day read (`builderCalendarMatch`: the live plan, the slot
+  and the trimmed, case-insensitive name; more than one fitting card is `ambiguous`, nothing made), the form's
+  pre-fill, the local checks, `expects` following the training, the one create body (`alignSessions: false`, the
+  group's athletes as targets, the group's sessions), and every sentence; which refusals read the day again and which
+  settle a Check result.
+- **`frontend/builder-calendar-event-view.js`** (new): the button in `.builder-session-actions` and the inline panel
+  under the session row (reading, read error with *Try again*, the match's sentence with *Open in calendar* when the
+  session is already in an event, the form, *Result not confirmed* · *Check result*, the done notice with *Open in
+  calendar*).
+- **`frontend/builder-calendar-event-actions.js`** (new): the press (one fresh day read of `GET /api/calendar` with
+  `include=athletes`, the workspace's catalog through `readCentralCalendarCatalog`, a generation counter), the input
+  mirror, the send, Check result with the same body and key, *Open in calendar*.
+- **`central-calendar-actions.js`**: the two exports of 2.1.11 only (`rememberCentralCalendarCreate`,
+  `openCentralCalendarAt`), in one block after `clearCentralCalendarUncertainWrites`.
+- **`builder-structure.js` / `builder-view.js`**: the button and the panel through the Builder's view context.
+- **`app.js`**: the action handler, the input mirror and *Open in calendar* (`openCentralCalendarAt`, then the rail's
+  calendar). No guard line of `app.js` changed.
+- **`state.js`**: `calendarEvent` and `calendarEventsMade` on the Builder slice only. **`styles.css`**:
+  `.cc-builder-event*` only, at the end of the file.
+
+**Deviations from 2.1:**
+- **Leaving (2.1.7).** No question of the Builder's own. A create joins the calendar's memory of unconfirmed saves the
+  moment it is sent and leaves it when its answer settles. So the calendar's own guards cover it unchanged: a sign-out,
+  a reload or a switch into or out of the athlete workspace asks (`centralCalendarMayBeLeft`, its `beforeunload`, the
+  app-update probe), and a switch between clubs or teams keeps it to check later in the calendar with the same body and
+  key. A navigation inside the app does not ask: the request goes on, and a lost answer stays in that memory. The first
+  form (a guard of the Builder's own, chained into three guard lines of `app.js`) broke three source pins of other
+  suites (`app-update` 8, `central-calendar-events` 11g and 11l, `training-load-dashboards-h4`); the Frontend PR gate
+  caught it, and this form needs no change to them.
+- **No training type (2.1.4):** one sentence for everyone; no *Open Settings → Calendar* button for a club admin.
+
+**Tests:** `frontend/tests/builder-calendar-event.actions.test.mjs`, 16 tests through the real handlers, data module
+and templates with a fake fetch that keeps the create route's contract (replay, `request_key_reused`, the fold): who
+sees the button, the match (one card, another plan / slot / name, a saved plan absent, two cards, linked), the read's
+failure and the generation, the exact body, the local checks and `expects`, success with *Open in calendar* and the
+badge, every refusal's sentence with no id or code, a lost answer and Check result, a check that stays not confirmed
+or settles, one control at a time, leaving, `openCentralCalendarAt`. 15 mutations of 2.1.12 (the RPE one left out by
+decision 5) and of the new guards; 14 killed. F9 (no generation check on the read) survives and is equivalent: each
+press gets its own record object, so an older answer can only write into a record that is no longer on screen.
+
+**Browser check** (Chromium through the e2e world, a disposable database with invented people; the club's event types
+seeded as the calendar suites do, since the e2e seed makes its clubs after the migrations), at 1280, 390, 375 and
+360 px: a saved weekly plan with one session opened in the Builder (its edit draft), Make an event, the form, Make
+the event, the notice, the event on the calendar with the training under *Linked trainings*, *Open in calendar* on the
+event's panel, and the same session again answering "This training is in the calendar as “Morning session”." At
+every width: the button and every control 44 px, every input 16 px, no horizontal scroll, no page error; the console
+showed only two 403s of `/api/tests/athlete/timezone`, as before this change.
 
 ## 3. K3 — "New training" from an event (named only)
 
