@@ -325,9 +325,9 @@ function assertNoLeak(level, text, where) {
 const athleteOf = (preview, gpexeAthleteId) => preview.athletes.find((a) => a.gpexeAthleteId === gpexeAthleteId);
 
 // ---------------------------------------------------------------------------
-test("1. the matrix: for each of the eight blocking codes, every viewer reads exactly its level on every surface - the platform admin the precise code and sentence and the stored hash; the club's admin the precise code, with mapping_not_usable for the three instance codes; everyone else data_setup_incomplete and the coach sentence, no hash, and no code or sentence anywhere; the approval and the batch name no code; a missing or unknown level reads as other", async () => {
-  // The closed set: the eight codes are exactly the codes with a sentence.
-  assert.equal(ALL_CODES.length, 8);
+test("1. the matrix: for each of the nine blocking codes, every viewer reads exactly its level on every surface - the platform admin the precise code and sentence and the stored hash; the club's admin the precise code, with mapping_not_usable for the three instance codes; everyone else data_setup_incomplete and the coach sentence, no hash, and no code or sentence anywhere; the approval and the batch name no code; a missing or unknown level reads as other", async () => {
+  // The closed set: the nine codes (v80 added team_setting_changed) are exactly the codes with a sentence.
+  assert.equal(ALL_CODES.length, 9);
   assert.deepEqual(Object.keys(BLOCK_MESSAGES).sort(), [...ALL_CODES].sort());
   assert.deepEqual(INSTANCE_CODES.sort(), ["session_imported_under_another_instance", "source_instance_changed", "source_instance_held"]);
   // Unit level: a missing or unknown level is other.

@@ -34,6 +34,7 @@ import * as fieldInventory from "../sourceFieldInventoryRead.js";
 import * as board from "../sourceMetricBoardService.js";
 import * as boardSave from "../sourceMetricBoardSaveService.js";
 import * as confirmationAdmin from "../sourceMetricConfirmationAdminService.js";
+import * as eventSetting from "../sourceEventSettingService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 
 const router = Router();
@@ -562,6 +563,23 @@ router.post("/fields/:fieldId/revisions/:revisionId/observed-confirmation", hand
   if (!fieldObservation.mayObserve(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await fieldObservation.confirmObserved({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body }), 201);
+}));
+
+// v80: the owner's confirmation of the team's event setting GPEXE shows for a details event column (201; a replay 200).
+router.post("/fields/:fieldId/revisions/:revisionId/event-setting-confirmation", handle(async (req, res) => {
+  const ctx = await adminContext(req, res);
+  if (!ctx) return;
+  if (!fields.mayVerify(ctx)) return notFound(res);
+  if (!jsonObjectBody(req, res)) return;
+  try {
+    const { status, ...answer } = await eventSetting.confirmEventSetting({ ctx, fieldId: req.params.fieldId, revisionId: req.params.revisionId, body: req.body });
+    res.status(status).json(answer);
+  } catch (error) {
+    if (!(error instanceof eventSetting.EventSettingError)) throw error;
+    if (error.status === 404) return notFound(res);
+    if (error.code === "try_again") res.setHeader("Retry-After", "5");
+    res.status(error.status).json({ error: error.code, message: error.message });
+  }
 }));
 
 // The source-field revision lifecycle (J5): L1 creates a draft revision (201);
