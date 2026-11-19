@@ -255,7 +255,11 @@ backslashes removed), redirection words are not options.
 (`2>&1`, `>&2`), or a plain absolute path that, with every symbolic link followed, lies inside
 the system's temporary directory (`os.tmpdir()`, `/tmp`) AND does not exist yet AND is not inside a
 git work tree (no parent folder holds a `.git` file or folder: executors' and reviewers'
-worktrees live under the temporary directory too) and not inside or named `.git`. **An existing
+worktrees live under the temporary directory too; the search for a `.git` goes up to the root
+of the file system, so a TMPDIR inside a repository counts too) and no part of its path, existing
+or not yet, is `.git`. A line that creates a work tree (`git init`, `git clone`,
+`git worktree add`) gets no temporary-directory exemption at all: the folder it creates is not a
+work tree yet when the hook looks. **An existing
 file always asks**, whatever it is: rewriting or appending to it may change something that runs
 later — a script, a `package.json` (npm run), a SQL file (psql -f), a patch (git apply), a list
 (xargs), a `postgresql.conf` (pg_ctl start runs its commands). Measured on the replay: 29 of

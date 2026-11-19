@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K4a · The athlete's Calendar</title>
+<!-- A STATIC DESIGN MOCKUP, not the app. Invented data only. See README.md. -->
+<link rel="stylesheet" href="../../../frontend/styles.css">
+<link rel="stylesheet" href="./mockup.css">
+</head>
+<body class="k4-doc">
+<p class="k4-step">1 · The athlete's Calendar<small>a week by days; an event linked to training is ONE card; Open training and Rate RPE</small></p>
+<div class="k4-shell">
+  <nav class="k4-rail" aria-label="Main"><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></svg></span><span class="on"><svg class="" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.2.2 3.8 1.8 4.5 4.8"/></svg></span></nav>
+  <main class="k4-main athlete-home-events">
+    <header class="k4-topbar"><span class="k4-menu"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span><div><p class="eyebrow">Athlete</p><h1>Calendar</h1></div></header>
+    <div class="k4-ath-tabs" role="tablist"><span class="">Home</span><span class="on">Calendar</span><span class="">Weekly plan</span></div>
+
+  <div class="k4-nav"><span class="k4-period">12 – 18 Oct</span><button class="plain-button k4-btn" aria-label="Previous week"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button><button class="plain-button k4-btn">Today</button><button class="plain-button k4-btn" aria-label="Next week"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button></div>
+  <div class="k4-strip k4-hide-desk"><button class="is-today is-on"><small>Mon</small><b>12</b><i></i></button><button class=""><small>Tue</small><b>13</b><i></i></button><button class=""><small>Wed</small><b>14</b><span style='height:6px'></span></button><button class=""><small>Thu</small><b>15</b><i></i></button><button class=""><small>Fri</small><b>16</b><span style='height:6px'></span></button><button class=""><small>Sat</small><b>17</b><i></i></button><button class=""><small>Sun</small><b>18</b><span style='height:6px'></span></button></div>
+  <div class="k4-days">
+    <section><p class="k4-day-label"><b>Monday 12.10</b> · today</p>
+      <article class="k4-acard" style="--k4-c:#1f6f68"><span class="k4-acard-bar"></span><div class="k4-acard-body">
+  <p class="k4-acard-top"><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="14" cy="4.5" r="1.8"/><path d="M6 20l4-5 3 2 2-5-4-2-3 3"/><path d="M15 12l3 2 2-1"/></svg></span><span class="k4-when">10:00–11:30</span><span>Training</span></p>
+  <p class="k4-acard-title">Team training</p>
+  <p class="k4-acard-place"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/></svg> North field <a href="#">Open in maps</a></p>
+  <ul class="k4-acard-sessions"><li><span class="k4-slot">Before</span><span><b>Mobility & activation</b> <span class="k4-muted">· 15 min</span></span></li><li><span class="k4-slot">Training</span><span><b>Main session</b> <span class="k4-muted">· 10:30 · 60 min</span></span></li></ul>
+
+  <div class="k4-acard-actions"><button class="plain-button k4-btn k4-callout" data-callout="opens Weekly plan"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Open training</button><button class="plain-button cc-primary k4-btn"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4-5"/></svg> Rate RPE</button></div>
+</div></article>
+    </section>
+    <section><p class="k4-day-label"><b>Tuesday 13.10</b></p>
+      <article class="k4-acard" style="--k4-c:#1f6f68"><span class="k4-acard-bar"></span><div class="k4-acard-body">
+  <p class="k4-acard-top"><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="14" cy="4.5" r="1.8"/><path d="M6 20l4-5 3 2 2-5-4-2-3 3"/><path d="M15 12l3 2 2-1"/></svg></span><span class="k4-when">17:30</span><span>Training</span></p>
+  <p class="k4-acard-title">Speed & agility</p>
+  <p class="k4-acard-place"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/></svg> Indoor hall <a href="#">Open in maps</a></p>
+  <ul class="k4-acard-sessions"><li><span class="k4-slot">Training</span><span><b>Sprint drills</b></span></li></ul>
+
+  <div class="k4-acard-actions"><button class="plain-button k4-btn"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Open training</button></div>
+</div></article>
+      <article class="k4-acard" style="--k4-c:#8a4c8f"><span class="k4-acard-bar"></span><div class="k4-acard-body">
+  <p class="k4-acard-top"><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18M6 8v8M9 6v12M15 6v12M18 8v8"/></svg></span><span class="k4-when">AM</span><span>My training</span></p>
+  <p class="k4-acard-title">Gym · upper body</p>
+
+  <div class="k4-acard-actions"><button class="plain-button k4-btn"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Open training</button></div>
+</div></article>
+    </section>
+    <section><p class="k4-day-label"><b>Thursday 15.10</b></p>
+      <article class="k4-acard is-cancelled" style="--k4-c:#1f6f68"><span class="k4-acard-bar"></span><div class="k4-acard-body">
+  <p class="k4-acard-top"><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="14" cy="4.5" r="1.8"/><path d="M6 20l4-5 3 2 2-5-4-2-3 3"/><path d="M15 12l3 2 2-1"/></svg></span><span class="k4-when">10:00</span><span>Training</span><span class="cc-badge cc-badge-cancelled">✕ Cancelled</span></p>
+  <p class="k4-acard-title">Tactical session</p>
+
+</div></article>
+    </section>
+    <section><p class="k4-day-label"><b>Saturday 17.10</b></p>
+      <article class="k4-acard" style="--k4-c:#4a5fc1"><span class="k4-acard-bar"></span><div class="k4-acard-body">
+  <p class="k4-acard-top"><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="13" rx="2"/><path d="M4 11h16M7 20v-3M17 20v-3"/></svg></span><span class="k4-when">12:30</span><span>Travel</span></p>
+  <p class="k4-acard-title">Bus to City stadium</p>
+  <p class="k4-acard-place"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/></svg> Club car park <a href="#">Open in maps</a></p>
+
+</div></article>
+      <article class="k4-acard" style="--k4-c:#b5542b"><span class="k4-acard-bar"></span><div class="k4-acard-body">
+  <p class="k4-acard-top"><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 20h8"/></svg></span><span class="k4-when">15:00</span><span>Match</span></p>
+  <p class="k4-acard-title">U19 vs Lakeside</p>
+  <p class="k4-acard-place"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/></svg> City stadium <a href="#">Open in maps</a></p>
+
+</div></article>
+    </section>
+  </div>
+  </main>
+</div>
+<p class="k4-step">2 · Open training → the Weekly plan on that day<small>a visible Back to calendar</small></p>
+<div class="k4-shell">
+  <nav class="k4-rail" aria-label="Main"><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg></span><span class="on"><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.2.2 3.8 1.8 4.5 4.8"/></svg></span></nav>
+  <main class="k4-main athlete-home-events">
+    <header class="k4-topbar"><span class="k4-menu"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span><div><p class="eyebrow">Athlete</p><h1>Weekly plan</h1></div></header>
+    <div class="k4-ath-tabs" role="tablist"><span class="">Home</span><span class="">Calendar</span><span class="on">Weekly plan</span></div>
+
+  <div class="k4-backbar k4-callout" data-callout="NEW"><button class="plain-button k4-btn"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> Back to calendar</button><span class="k4-muted" style="font-size:14px">Monday 12.10 · Team training</span></div>
+  <div class="k4-day" style="--k4-c:#1f6f68">
+    <div class="k4-day-head"><span class="k4-day-name">Monday 12.10</span><span class="k4-muted" style="font-size:14px">Team training · 10:00–11:30 · North field</span></div>
+    <div class="k4-session"><div class="k4-session-top"><span class="k4-slot">Before training</span><span class="k4-session-name">Mobility & activation</span><span class="k4-session-time">10:00</span></div><div class="k4-session-body">Hip openers 2×10 · Band walks 2×12 · Leg swings 2×10 · Activation sprints 4×20 m</div></div>
+    <div class="k4-session" style="box-shadow:inset 0 0 0 2px var(--accent-soft)"><div class="k4-session-top"><span class="k4-slot">Training</span><span class="k4-session-name">Main session</span><span class="k4-session-time">10:30</span></div><div class="k4-session-body">Rondo 5v2 · Small-sided games 4×4 · Finishing</div></div>
+  </div>
+  <p class="k4-note">The phone's Back and this button both return to the same week, day and scroll position.</p>
+  </main>
+</div>
+</body>
+</html>
