@@ -1414,8 +1414,18 @@ function batchEditOutcomeUnknown(error) {
 }
 
 export async function handleBuilderDraftAction(action, handlers) {
-  const type = action.dataset.action;
+  // A batch-edit choice ("All athletes", "Only {name}", "Apply to the
+  // others") is the Save itself, with who gets the changes.
+  const batchExtra = BATCH_EDIT_ACTIONS[action.dataset.action] && isBatchEditDraft()
+    ? BATCH_EDIT_ACTIONS[action.dataset.action]() : null;
+  if (BATCH_EDIT_ACTIONS[action.dataset.action] && !batchExtra) return true;
+  const type = batchExtra ? "builder-submit-plan" : action.dataset.action;
   if (state.builder.discardingDraftId) return true;
+  if (type === "builder-batch-edit-again") {
+    state.builder.batchEditChoice = { stage: "scope" };
+    handlers.renderBuilder();
+    return true;
+  }
   if (type === "builder-batch-edit-cancel") {
     state.builder.batchEditChoice = null;
     handlers.renderBuilder();
@@ -1435,7 +1445,8 @@ export async function handleBuilderDraftAction(action, handlers) {
     action.disabled = true;
     try {
       await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}`);
-      state.builder.batchEditChoice = null;
+      // The draft is still open: nothing was saved.
+      state.builder.batchEditChoice = { stage: "notSaved" };
       handlers.renderBuilder();
     } catch (error) {
       if (error?.status === 404) {
@@ -1449,7 +1460,7 @@ export async function handleBuilderDraftAction(action, handlers) {
     }
     return true;
   }
-  if (type === "builder-submit-plan" && isBatchEditDraft()) {
+  if (type === "builder-submit-plan" && !batchExtra && isBatchEditDraft()) {
     // Save opens the question; it never sends by itself (and sends nothing
     // while a question is open or a result is not confirmed).
     if (!state.builder.batchEditChoice) {
@@ -1458,11 +1469,9 @@ export async function handleBuilderDraftAction(action, handlers) {
     }
     return true;
   }
-  if (type === "builder-submit-plan" || BATCH_EDIT_ACTIONS[type]) {
+  if (type === "builder-submit-plan") {
     const draft = state.builder.draft;
     if (!draft) return true;
-    if (BATCH_EDIT_ACTIONS[type] && !isBatchEditDraft(draft)) return true;
-    const batchExtra = BATCH_EDIT_ACTIONS[type] ? BATCH_EDIT_ACTIONS[type]() : null;
     // action.disabled = true happens synchronously, before any await - a
     // real <button> refuses further clicks once disabled, so a rapid
     // double-click can never fire a second, parallel submit for the same
@@ -1521,7 +1530,13 @@ export async function handleBuilderDraftAction(action, handlers) {
           handlers.renderBuilder();
           return true;
         }
-        if (error?.status === 409 && error.data?.code === "edit_draft_already_applied") {
+        if (error?.status === 409 && (error.data?.code === "try_again" || error.data?.code === "source_changed")) {
+          state.builder.batchEditChoice = { stage: error.data.code === "try_again" ? "busy" : "sourceChanged" };
+          handlers.renderBuilder();
+          return true;
+        }
+        // The draft is gone (saved, maybe from another tab, or discarded).
+        if ((error?.status === 409 && error.data?.code === "edit_draft_already_applied") || error?.status === 404) {
           invalidateBuilderDraftsCache();
           state.builder.batchEditChoice = { stage: "closed" };
           handlers.renderBuilder();

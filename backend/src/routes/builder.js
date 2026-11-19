@@ -517,6 +517,10 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
         return res.status(409).json({ error: "This draft was already saved or discarded.", code: "edit_draft_already_applied" });
       }
       if (updated?.needsChoice) return res.status(409).json(updated.needsChoice);
+      if (updated?.sourceChanged) {
+        return res.status(409).json({ error: "This plan was saved by someone else after you opened it.", code: "source_changed" });
+      }
+      if (updated?.tryAgain) return res.status(409).json({ error: "The plans are busy. Nothing was saved. Try again.", code: "try_again" });
       const response = await timing.measure("response", () => buildSubmitResponse(req, updated));
       if (updated.batchEdit) response.batchEdit = updated.batchEdit;
       return timing.json(response);
@@ -2165,9 +2169,12 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
   const nameOf = (planId) => (visible.has(String(planId)) ? names.get(String(planId)) || null : null);
   const members = [];
   for (const row of [...siblingRows].sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1))) {
+    // Rights first, on this transaction's own connection: a member the coach
+    // may not change says nothing more about itself (not even that its
+    // athlete is archived).
+    if (!(await getEditablePlan(req, row.id, client.query.bind(client)))) { members.push({ planId: row.id, outcome: "skip", reasons: ["not_editable"] }); continue; }
     const tree = await loadWeeklyTree(client, row.id);
     if (!tree.plan.athlete_active) { members.push({ planId: row.id, outcome: "skip", reasons: ["archived"] }); continue; }
-    if (!(await getEditablePlan(req, row.id))) { members.push({ planId: row.id, outcome: "skip", reasons: ["not_editable"] }); continue; }
     const facts = await readSiblingFacts(client, before, after, tree);
     if (facts.openDraft) { members.push({ planId: row.id, outcome: "ask", reasons: ["being_edited"] }); continue; }
     const change = planSiblingChange(before, after, tree, facts);
@@ -2182,25 +2189,27 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
     named: list.filter((m) => nameOf(m.planId)).map((m) => ({ name: nameOf(m.planId), reasons: m.reasons })),
     unnamedCount: list.filter((m) => !nameOf(m.planId)).length,
   });
-  if (ask.length) {
-    const choiceToken = choiceTokenOf(members);
-    const applyTo = Array.isArray(req.body?.applyTo) ? req.body.applyTo.map(String).sort() : null;
-    const applyIds = apply.map((m) => String(m.planId)).sort();
-    const accepted = applyTo && req.body?.choiceToken === choiceToken
-      && applyTo.length === applyIds.length && applyTo.every((id, i) => id === applyIds[i]);
-    if (!accepted) {
-      return {
-        needsChoice: {
-          error: "Some athletes can't take these changes.",
-          code: "batch_members_need_choice",
-          choiceToken,
-          applyTo: applyIds,
-          applyCount: apply.length,
-          cannot: describe(ask),
-          notChanged: describe(skip),
-        },
-      };
-    }
+  // The token is compared whenever the coach resends a choice, even if nobody
+  // is asked any more (condition 10.2.2): a member shown as "won't get the
+  // changes" is never written behind the coach's back.
+  const choiceToken = choiceTokenOf(members);
+  const applyIds = apply.map((m) => String(m.planId)).sort();
+  const resent = req.body?.choiceToken !== undefined || req.body?.applyTo !== undefined;
+  const applyTo = Array.isArray(req.body?.applyTo) ? req.body.applyTo.map(String).sort() : null;
+  const accepted = Boolean(applyTo) && req.body?.choiceToken === choiceToken
+    && applyTo.length === applyIds.length && applyTo.every((id, i) => id === applyIds[i]);
+  if ((ask.length && !accepted) || (resent && !accepted)) {
+    return {
+      needsChoice: {
+        error: "Some athletes can't take these changes.",
+        code: "batch_members_need_choice",
+        choiceToken,
+        applyTo: applyIds,
+        applyCount: apply.length,
+        cannot: describe(ask),
+        notChanged: describe(skip),
+      },
+    };
   }
   return {
     apply,
@@ -2210,6 +2219,7 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
 
 async function applyEditDraft(req, draftPlan, timing) {
   let client;
+  let committed = false;
   try {
     client = await pool.connect();
     await client.query("begin");
@@ -2228,7 +2238,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     // anything it writes.
     const freshDraftResult = await client.query(
       `select id, plan_type, week_start, name, note, icon_url, color, visibility, is_template,
-              is_edit_draft, edit_source_plan_id, track_training_load_default, request_rpe_default
+              is_edit_draft, edit_source_plan_id, track_training_load_default, request_rpe_default, created_at
        from plans.plans where id = $1 for update`,
       [draftPlan.id],
     );
@@ -2256,6 +2266,19 @@ async function applyEditDraft(req, draftPlan, timing) {
     if (wantsAll) {
       const locked = await lockBatchPlansForUpdate(client, source.id, req.user, { members: "live" });
       if (!locked.sourceRow) throw new Error("Original program not found or not editable.");
+      // The change is computed against the source as it is now; if the source
+      // was saved since this draft was opened (another coach's draft of the
+      // same plan), the "change" would carry the older content to everyone.
+      const moved = await client.query(
+        "select (updated_at > $2::timestamptz) as moved from plans.plans where id = $1",
+        [source.id, freshDraft.created_at],
+      );
+      if (moved.rows[0]?.moved) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return { sourceChanged: true };
+      }
       batch = await prepareBatchEdit(req, client, source, freshDraft, locked.siblingRows);
       if (batch.needsChoice) {
         await client.query("rollback");
@@ -2314,9 +2337,18 @@ async function applyEditDraft(req, draftPlan, timing) {
     await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, freshDraft.id));
     await client.query("delete from plans.plans where id = $1", [freshDraft.id]);
     await client.query("commit");
+    committed = true;
     client.release();
     client = null;
-    const updated = await getEditablePlan(req, source.id);
+    // After the COMMIT nothing may turn the answer into a failure: a read that
+    // fails or finds nothing answers with what is already known.
+    let updated = null;
+    try { updated = await getEditablePlan(req, source.id); } catch { updated = null; }
+    if (!updated) {
+      updated = { id: source.id, plan_type: freshDraft.plan_type, week_start: freshDraft.week_start, name: freshDraft.name,
+        is_template: freshDraft.is_template, athlete_id: source.athlete_id, athlete_source_external_id: source.athlete_source_external_id,
+        status: "active", is_edit_draft: false, readError: true };
+    }
     if (batch) updated.batchEdit = batch.summary;
     return updated;
   } catch (error) {
@@ -2324,6 +2356,9 @@ async function applyEditDraft(req, draftPlan, timing) {
       try { await client.query("rollback"); } catch {}
       client.release();
     }
+    // A lock wait that ran out (lock_timeout of the exercise-reuse lock) or a
+    // deadlock victim wrote nothing: answered as try_again, never a 500.
+    if (!committed && (error?.code === "55P03" || error?.code === "40P01")) return { tryAgain: true };
     throw error;
   }
 }
@@ -2890,8 +2925,8 @@ async function deleteNodeTree(nodeId) {
   await query("delete from plans.plan_nodes where id = $1", [nodeId]);
 }
 
-async function getEditablePlan(req, planId) {
-  const result = await query(
+async function getEditablePlan(req, planId, runQuery = query) {
+  const result = await runQuery(
     `select p.id, p.plan_type, p.week_start, p.name, p.note, p.icon_url, p.color, p.cover_image_url, p.visibility, p.is_template, p.status,
             p.source_type, p.start_date, p.duration_days, p.athlete_id as athlete_uuid, p.is_edit_draft, p.edit_source_plan_id,
             p.builder_batch_id, p.track_training_load_default, p.request_rpe_default,

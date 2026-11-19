@@ -366,7 +366,9 @@ test("8. an archived athlete and a plan the coach may no longer change are skipp
   const [a, b, c] = await publishedBatch(s);
   await q(`update public.athletes set is_active = false where id = $1`, [s.athletes[1].athleteId]);
   // The second coach (not the plan's creator, who always keeps its own plans) loses C: C's memberships end.
+  // C's athlete is archived too: a member the coach may not change says only that (security review, MEDIUM).
   await q(`update public.athlete_memberships set status = 'archived', archived_at = now() where athlete_id = $1`, [s.athletes[2].athleteId]);
+  await q(`update public.athletes set is_active = false where id = $1`, [s.athletes[2].athleteId]);
   const draft = await reopen(s.coach2.cookie, a);
   ok(await api(`/api/builder/blocks/${draft.blocks[1].id}/sessions`, { method: "POST", cookie: s.coach2.cookie, body: { bta: "T", name: "Added" } }), 201);
   const beforeBC = await digestOf([b, c]);
@@ -651,4 +653,90 @@ test("15. Only this athlete keeps today's behaviour; a program batch and a save 
   ok(await api(`/api/builder/blocks/${draft2.blocks[2].id}/sessions`, { method: "POST", cookie: s.coach.cookie, body: { bta: "T", name: "Mine too" } }), 201);
   ok(await save(s.coach.cookie, draft2.plan.id, { syncBatch: true }));
   assert.equal(await digestOf([b, c]), before, "syncBatch on an edit draft is still ignored");
+});
+
+test("16. lock waits that run out and a source saved since the draft was opened: 409 try_again / source_changed, nothing written", async () => {
+  const s = await squad("busy");
+  const [a, b, c] = await publishedBatch(s);
+  // A member row held past the 2 s lock_timeout of the exercise-reuse lock.
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    const draft = await reopen(s.coach.cookie, a);
+    ok(await api(`/api/builder/blocks/${draft.blocks[1].id}/sessions`, { method: "POST", cookie: s.coach.cookie, body: { bta: "T", name: "Busy" } }), 201);
+    const before = await digestOf([a, b, c]);
+    await holder.query("begin");
+    await holder.query(`select id from plans.plans where id = $1 for share`, [c]);
+    const busy = await save(s.coach.cookie, draft.plan.id, { batchScope: "all" });
+    await holder.query("rollback");
+    assert.equal(busy.status, 409, busy.text);
+    assert.equal(busy.body.code, "try_again");
+    assert.equal(await digestOf([a, b, c]), before, "nothing written");
+    ok(await save(s.coach.cookie, draft.plan.id, { batchScope: "all" }));
+  } finally {
+    await holder.end();
+  }
+  // Two coaches open the same plan; one saves it for this athlete only; the other's "all" would carry the older content.
+  const d1 = await reopen(s.coach.cookie, a);
+  const d2 = await reopen(s.coach2.cookie, a);
+  ok(await api(`/api/builder/blocks/${d1.blocks[3].id}/sessions`, { method: "POST", cookie: s.coach.cookie, body: { bta: "T", name: "First saved" } }), 201);
+  ok(await save(s.coach.cookie, d1.plan.id, { batchScope: "this" }));
+  ok(await api(`/api/builder/blocks/${d2.blocks[4].id}/sessions`, { method: "POST", cookie: s.coach2.cookie, body: { bta: "T", name: "Second" } }), 201);
+  const before = await digestOf([a, b, c]);
+  const moved = await save(s.coach2.cookie, d2.plan.id, { batchScope: "all" });
+  assert.equal(moved.status, 409, moved.text);
+  assert.equal(moved.body.code, "source_changed");
+  assert.equal(await digestOf([a, b, c]), before, "nothing written");
+});
+
+test("17. the token is compared whenever a choice is resent: a reason that disappears between the 409 and the resend answers the 409 again (code review MEDIUM, condition 10.2.2)", async () => {
+  const s = await squad("gone");
+  const [a, b, c] = await publishedBatch(s);
+  const otherDraft = await reopen(s.coach2.cookie, b);
+  const draft = await reopen(s.coach.cookie, a);
+  ok(await api(`/api/builder/blocks/${draft.blocks[1].id}/sessions`, { method: "POST", cookie: s.coach.cookie, body: { bta: "T", name: "Tuesday" } }), 201);
+  const asked = await save(s.coach.cookie, draft.plan.id, { batchScope: "all" });
+  assert.equal(asked.status, 409, asked.text);
+  ok(await api(`/api/builder/plans/${otherDraft.plan.id}`, { method: "DELETE", cookie: s.coach2.cookie }));
+  const before = await digestOf([a, b, c]);
+  const again = await save(s.coach.cookie, draft.plan.id, { batchScope: "all", applyTo: asked.body.applyTo, choiceToken: asked.body.choiceToken });
+  assert.equal(again.status, 409, again.text);
+  assert.equal(again.body.code, "batch_members_need_choice");
+  assert.deepEqual(again.body.cannot, { named: [], unnamedCount: 0 });
+  assert.equal(await digestOf([a, b, c]), before, "B is not written behind the coach's back");
+  const done = ok(await save(s.coach.cookie, draft.plan.id, { batchScope: "all", applyTo: again.body.applyTo, choiceToken: again.body.choiceToken }));
+  assert.equal(done.batchEdit.applied, 3);
+});
+
+test("18. the writes: a move keeps each athlete's row and logical id; a day's note and the plan's name follow three-way (code review MEDIUM)", async () => {
+  const s = await squad("write");
+  const [a, b, c] = await publishedBatch(s);
+  // B's Monday note set for B alone (B's own save rebuilds B's tree, as it does today for the athlete on screen).
+  const draftB = await reopen(s.coach.cookie, b);
+  ok(await api(`/api/builder/blocks/${draftB.blocks[0].id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: null, note: "B only" } }));
+  ok(await save(s.coach.cookie, draftB.plan.id, { batchScope: "this" }));
+  const was = { b: byName(await treeOf(b), "Main"), c: byName(await treeOf(c), "Main") };
+  // The coach moves Main to the afternoon, notes Tuesday and renames the plan, for everyone.
+  const draft = await reopen(s.coach.cookie, a);
+  ok(await api(`/api/builder/sessions/${sessionsOf(draft).find((x) => x.name === "Main").id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }));
+  ok(await api(`/api/builder/blocks/${draft.blocks[1].id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: null, note: "Recovery" } }));
+  ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: "Group week v2" } }));
+  const saved = ok(await save(s.coach.cookie, draft.plan.id, { batchScope: "all" }));
+  assert.equal(saved.batchEdit.applied, 3);
+  for (const [key, id] of [["b", b], ["c", c]]) {
+    const t = await treeOf(id);
+    const main = byName(t, "Main");
+    assert.equal(String(main.id), String(was[key].id), `${key}: same row`);
+    assert.equal(String(main.logical_session_id), String(was[key].logical_session_id), `${key}: same logical id`);
+    assert.equal(main.am_pm, "PM", `${key}: moved`);
+    assert.equal(t.days.find((d) => d.weekday === 2).day_note, "Recovery", `${key}: the day's note`);
+    assert.equal(t.plan.name, "Group week v2", `${key}: the plan's name`);
+  }
+  assert.equal((await treeOf(b)).days.find((d) => d.weekday === 1).day_note, "B only", "B's own note stays");
+  // Now the coach changes Monday's note too: B's own note is diverged, so B is asked about.
+  const draft2 = await reopen(s.coach.cookie, a);
+  ok(await api(`/api/builder/blocks/${draft2.blocks[0].id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: null, note: "Everyone" } }));
+  const asked = await save(s.coach.cookie, draft2.plan.id, { batchScope: "all" });
+  assert.equal(asked.status, 409, asked.text);
+  assert.deepEqual(asked.body.cannot.named, [{ name: s.athletes[1].name, reasons: ["changed_separately"] }]);
 });

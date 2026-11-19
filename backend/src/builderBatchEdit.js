@@ -21,7 +21,7 @@ export const batchEditTestHooks = {
   // Condition 10.2.1: replaces the set of member plan ids whose athlete name
   // the coach already sees in the batch switcher. Tests only.
   visibleMemberIds: null,
-  // Runs after the plan and session locks, before the classification is read.
+  // Runs after the plan and session locks and the classification, before the token check and any write.
   afterLocks: null,
 };
 
@@ -251,6 +251,9 @@ export function planSiblingChange(before, after, sibling, facts = { results: new
       if (Object.keys(merge.set).length) ops.update.push({ sessionId: s.id, set: merge.set });
     }
     if (moved) {
+      // A move carries the athlete's session only while it is still as before
+      // (content and fields); a session tailored for this athlete is asked about.
+      if (s.fingerprint !== b.fingerprint || fieldsChanged(b, s, SESSION_FIELDS).length) { reasons.add("changed_separately"); continue; }
       if (results) reasons.add("has_results");
       if (linked) reasons.add("linked_to_event");
       if (results || linked) continue;

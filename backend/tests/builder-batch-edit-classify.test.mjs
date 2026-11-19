@@ -122,3 +122,14 @@ test("8. the choice token follows the classification, not the order of the membe
   assert.notEqual(choiceTokenOf(m), choiceTokenOf([{ ...m[0], reasons: ["has_results", "linked_to_event"] }, m[1]]));
   assert.notEqual(choiceTokenOf(m), choiceTokenOf([m[0], { planId: "a", outcome: "skip", reasons: ["archived"] }]));
 });
+
+test("9. a move carries a sibling's session only while it is still as before; a tailored one is asked about (code review HIGH)", () => {
+  const before = plan([{ weekday: 3, name: "Wed", logical_session_id: "L2", fingerprint: A }]);
+  const after = plan([{ weekday: 3, name: "Wed", logical_session_id: "L2", fingerprint: A, am_pm: "PM" }]);
+  const tailored = planSiblingChange(before, after, plan([{ weekday: 3, name: "Wed", logical_session_id: "S2", fingerprint: B }]));
+  assert.deepEqual(tailored.reasons, ["changed_separately"]);
+  assert.equal(tailored.ops.move.length, 0);
+  const renamed = planSiblingChange(before, after, plan([{ weekday: 3, name: "Wed (own)", logical_session_id: "S2", fingerprint: A }]));
+  assert.deepEqual(renamed.reasons, ["changed_separately"]);
+  assert.equal(planSiblingChange(before, after, plan([{ weekday: 3, name: "Wed", logical_session_id: "S2", fingerprint: A }])).ops.move.length, 1);
+});

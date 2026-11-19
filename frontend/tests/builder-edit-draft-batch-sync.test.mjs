@@ -25,7 +25,7 @@ const freshDraft = () => ({ plan: { id: "A", status: "draft", planType: "weekly"
 // A reopened plan is an edit draft with its own id; the batch lists the
 // published plans only (loadBuilderBatch leaves edit drafts out).
 const editDraft = (planType = "weekly") => ({
-  plan: { id: "A-edit", status: "draft", planType, isEditDraft: true, editSourcePlanId: "A", batchId: "batch-1", athleteName: "Athlete One", athleteId: "1", weekStart: "2026-12-07" },
+  plan: { id: "A-edit", name: "Group week", status: "draft", planType, isEditDraft: true, editSourcePlanId: "A", batchId: "batch-1", athleteName: "Athlete One", athleteId: "1", weekStart: "2026-12-07" },
   batch: { id: "batch-1", plans },
   blocks: [],
 });
@@ -120,10 +120,11 @@ test("409 batch_members_need_choice: names what the coach may see, counts the re
   await handleBuilderDraftAction(button("builder-submit-plan"), handlers);
   await handleBuilderDraftAction(button("builder-batch-edit-all"), handlers);
   const text = content().querySelector("[data-builder-batch-edit]").textContent;
-  assert.match(text, /2 athletes can't take these changes/);
+  assert.match(text, /These athletes won't get the changes:/);
   assert.match(text, /Athlete Two/);
-  assert.match(text, /has results on a session this would remove or move/);
-  assert.match(text, /1 other athlete/);
+  assert.match(text, /a session with results would be removed or moved/);
+  assert.match(text, /1 other athlete you can't edit/);
+  assert.match(content().querySelector('[data-action="builder-batch-edit-others"]').textContent, /^Apply to Athlete One and 1 other athlete$/);
   assert.doesNotMatch(text, /has_results|tok-1/, "no codes or tokens on screen");
   await handleBuilderDraftAction(button("builder-batch-edit-others"), handlers);
   const resend = posts()[1];
@@ -148,16 +149,44 @@ test("a lost answer is not confirmed; Check result only reads, and a closed draf
   assert.equal(calls.at(-1).method, "GET");
   assert.equal(calls.at(-1).url, "/api/builder/plans/A-edit");
   assert.equal(state.builder.batchEditChoice.stage, "closed");
-  assert.match(content().querySelector("[data-builder-batch-edit]").textContent, /no longer open/);
+  assert.match(content().querySelector("[data-builder-batch-edit]").textContent, /Your changes may already be saved\. We can't tell which athletes got them\./);
 });
 
-test("Check result with the draft still open lets the coach save again", async () => {
+test("Check result with the draft still open says Not saved, and Save again asks the question again", async () => {
   state.builder.draft = editDraft();
   state.builder.batchEditChoice = { stage: "unconfirmed" };
   answer = () => ({ ok: true, status: 200, json: async () => editDraft() });
   await handleBuilderDraftAction(button("builder-batch-edit-check"), handlers);
-  assert.equal(state.builder.batchEditChoice, null);
+  assert.equal(state.builder.batchEditChoice.stage, "notSaved");
+  assert.match(content().querySelector("[data-builder-batch-edit]").textContent, /Not saved\. Your changes are still here\./);
+  await handleBuilderDraftAction(button("builder-batch-edit-again"), handlers);
+  assert.equal(state.builder.batchEditChoice.stage, "scope");
   assert.equal(posts().length, 0);
+});
+
+test("nobody else can take the changes: no group button, only this athlete or cancel", async () => {
+  state.builder.draft = editDraft();
+  state.builder.batchEditChoice = { stage: "ask", data: { applyTo: [], applyCount: 0, choiceToken: "t", cannot: { named: [{ name: "Athlete Two", reasons: ["being_edited"] }, { name: "Athlete Three", reasons: ["changed_separately"] }], unnamedCount: 0 }, notChanged: { named: [], unnamedCount: 0 } } };
+  renderBuilder();
+  const panel = content().querySelector("[data-builder-batch-edit]");
+  assert.match(panel.textContent, /None of the other athletes can take these changes:/);
+  assert.equal(panel.querySelector('[data-action="builder-batch-edit-others"]'), null);
+  assert.ok(panel.querySelector('[data-action="builder-batch-edit-only"]'));
+});
+
+test("busy (try_again) and a source saved meanwhile (source_changed) are told apart; nothing is resent by itself", async () => {
+  for (const [code, stage, text] of [["try_again", "busy", /Nothing was saved\./], ["source_changed", "sourceChanged", /saved by someone else after you opened it/]]) {
+    state.builder.draft = editDraft();
+    state.builder.batchEditChoice = null;
+    calls = [];
+    answer = () => ({ ok: false, status: 409, statusText: "Conflict", json: async () => ({ error: "x", code }) });
+    await handleBuilderDraftAction(button("builder-submit-plan"), handlers);
+    await handleBuilderDraftAction(button("builder-batch-edit-all"), handlers);
+    assert.equal(state.builder.batchEditChoice.stage, stage, code);
+    assert.match(content().querySelector("[data-builder-batch-edit]").textContent, text);
+    assert.equal(posts().length, 1, code);
+  }
+  assert.equal(content().querySelector('[data-action="builder-batch-edit-all"]'), null, "after source_changed only this athlete or cancel");
 });
 
 test("409 edit_draft_already_applied reads as closed", async () => {
@@ -175,7 +204,7 @@ test("saved for the group: the count and who was not changed, then Done", async 
   await handleBuilderDraftAction(button("builder-batch-edit-all"), handlers);
   assert.equal(state.builder.batchEditChoice.stage, "done");
   const text = content().textContent;
-  assert.match(text, /Saved for 2 athletes\./);
+  assert.match(text, /Group week saved for 2 athletes\./);
   assert.match(text, /Athlete Three: archived/);
   assert.equal(content().querySelector('[data-action="builder-submit-plan"]'), null, "the deleted draft's editor is not drawn");
 });
