@@ -528,14 +528,6 @@ export function renderBuilderAddFeedback() {
 
 function renderBuilderInner() {
   const draft = state.builder.draft;
-  const k3 = state.builder.k3 || null;
-  // K2c-3: the week's events are read once per plan, week and athletes.
-  ensureBuilderEvents();
-  // K3: after Save and link the draft is gone; the band and the outcome stay.
-  if (k3?.saved) {
-    els.content.innerHTML = renderK3SavedHtml(k3);
-    return;
-  }
   const draftBatchPlans = Array.isArray(draft?.batch?.plans) ? draft.batch.plans : [];
   els.context.textContent = "Program builder";
   els.title.textContent = draft
@@ -553,6 +545,14 @@ function renderBuilderInner() {
     `;
     return;
   }
+  const k3 = state.builder.k3 || null;
+  // K3: after Save and link the draft is gone; the band and the outcome stay.
+  if (k3?.saved) {
+    els.content.innerHTML = renderK3SavedHtml(k3);
+    return;
+  }
+  // K2c-3: the week's events are read once per plan, week and athletes.
+  ensureBuilderEvents();
   if (!draft) {
     const selectedAthleteIds = new Set((state.builder.createAthleteIds || []).map(String));
     const assignedAthletes = state.athletes.filter((athlete) => selectedAthleteIds.has(String(athlete.athlete_id)));

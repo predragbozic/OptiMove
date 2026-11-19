@@ -11,7 +11,6 @@
 // - "linked" is never said without a confirmed attach answer: every attach of
 //   up to 200 sessions has its own key and outcome, a partial success is said.
 import { api } from "./api.js";
-import { invalidateBuilderDraftsCache } from "./builder-data.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { invalidateCoachHomeCache } from "./coach-home-data.js";
 import { rememberCentralCalendarLink } from "./central-calendar-actions.js";
@@ -393,7 +392,6 @@ async function k3Go(cal, target, how, handlers, render) {
         method: "POST",
         body: JSON.stringify({ planType: "weekly", weekStart, athleteIds: builderIds, name: `${String(item.title || "Training").trim() || "Training"} · ${shortDay(item.date)}` }),
       });
-      invalidateBuilderDraftsCache();
     } else {
       const { openPlanId, planId, status } = how.open;
       draft = await openPlanDraft({ openPlanId, planId, status });
@@ -673,7 +671,6 @@ export async function k3SaveAndLink({ submit, render }) {
     render?.();
     return;
   }
-  invalidateBuilderDraftsCache();
   invalidateCoachHomeCache();
   invalidateAthleteHomeCache();
   invalidateCentralCalendarCache();

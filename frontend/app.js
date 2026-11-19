@@ -72,7 +72,7 @@ import {
   submitBuilderPlanForK3,
 } from "./builder-actions.js";
 import { clearK3Memory, k3CheckResult, k3Context, k3KeepEditing, k3SaveAndLink, k3ToggleSession, k3TryLinking, setK3BuilderRender } from "./central-calendar-k3-actions.js";
-import { ensureBuilderExercises, loadBuilderDrafts, loadBuilderExercises, loadBuilderExercisesDetached, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
+import { ensureBuilderExercises, invalidateBuilderDraftsCache, loadBuilderDrafts, loadBuilderExercises, loadBuilderExercisesDetached, loadBuilderNodePresets, refreshBuilderDraft } from "./builder-data.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderBuilder, renderBuilderAddFeedback, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderDiscardProgress, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress } from "./builder-view.js";
 import { clearBuilderItemEdits, rememberBuilderItemEdit } from "./builder-item-edits.js";
@@ -4281,6 +4281,8 @@ setK3BuilderRender(() => {
 });
 
 async function openBuilderForK3(draft, context) {
+  // A new draft may have been made for the event: the drafts list is read again.
+  invalidateBuilderDraftsCache();
   pushAppHistory();
   state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart: String(draft?.plan?.weekStart || "").slice(0, 10), draft });
   state.builder.k3 = context;
