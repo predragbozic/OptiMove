@@ -74,8 +74,24 @@ answer was changed), when another table refers to the history, or when the v5 fu
 over. From the first change on, v83 is forward-only. Before it is run anywhere real: the deployed commit no longer
 contains the v83 file, and the database is named in its own approval.
 
+Deploy a build without v83 **first**, then roll back. The server caches "v83 is installed" once it has seen
+`training_load.change_external_rpe` (`rpeChangeInstalledCache` in `backend/src/routes/trainingLoad.js`) and never resets
+it: a server still running a v83 build after the rollback keeps reading `session_feedback_changes`, and the athlete's
+`GET /athlete/today` and `GET /weekly` answer 500 until that server restarts.
+
 ## What the guards do not stop
 
-They prove that the row, the history and the window agree; they do not stop whoever holds the database credentials (who
-can set the marker and write a well-formed history row, or disable a trigger) — the same statement as v35. The separate
-migration and runtime roles stay the later infrastructure task.
+The marker is not a secret. Any session on the database can set `optimove.rpe_change_tx` for its own transaction (test 14
+of `backend/tests/rpe-answer-change-k4b.test.mjs` does). What then still holds:
+
+- the deferred link refuses a changed answer that has no history row from the same top-level transaction (not a
+  savepoint);
+- the history insert guard bounds the change: the row's actor is the athlete's own active user, the window is open
+  (schedule active, occurrence not cancelled, assignment completed, `clock_timestamp()` inside `opens_at`..`closes_at`,
+  read under share locks), the old values are the answer's current values, and the revision is the next one;
+- only `rpe`, `duration_minutes` and `athlete_note` of a `scheduled_external` answer can change.
+
+So a raw session holding the database credentials can make a change that the athlete could have made, with its history
+row, inside the open window. The guards prove that the row, the history and the window agree; they do not stop a
+credential holder, who can also disable a trigger. This is the v35 limit, stated the same way. The separate migration
+and runtime roles stay the later infrastructure task.
