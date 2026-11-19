@@ -748,6 +748,13 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
             aggregationRolePolicy: spec.aggregationRolePolicy, coveragePolicy: spec.coveragePolicy,
             sourcePolicy: spec.sourcePolicy, sourceConnectionId: spec.sourceConnectionId, athleteIds: effectiveAthleteIds,
           });
+      // v79: a ratio is never totalled or averaged, and its own rule (the sum of numerators over the sum of denominators) is not
+      // computed here yet - so a ratio's series under sum, avg or ratio is an error (the dashboards refuse to save one;
+      // this keeps a direct caller from adding ratios up across athletes). Highest, latest and each value stay themselves.
+      if (["sum", "avg", "ratio"].includes(analyticalAggregation)
+          && rows.some((row) => (row.values || []).some((v) => v.dailyAggregationMethod === "ratio"))) {
+        throw new Error(`a ratio series is not combined as ${analyticalAggregation}`);
+      }
       return reduceRows(rows, { groupBy, analyticalAggregation });
     }
 
