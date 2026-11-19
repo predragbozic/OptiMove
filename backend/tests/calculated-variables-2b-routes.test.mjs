@@ -508,6 +508,9 @@ test("7. an athlete's catalog never lists a calculated variable (no label, no pi
   };
   const coachRows = await listed(team.coach);
   assert.ok(coachRows.some((r) => String(r.id) === H), "the coach's catalog lists HMLD");
+  // ... and says it is calculated (a dashboard says from when it has values); an ordinary variable is not.
+  assert.equal(coachRows.find((r) => String(r.id) === H).calculated, true);
+  assert.equal(coachRows.find((r) => String(r.id) === String(world[ZONES[0]].variableId)).calculated, false);
   const herRows = await listed(athlete);
   assert.ok(herRows.some((r) => String(r.id) === String(world[ZONES[0]].variableId)), "her catalog lists the system inputs");
   assert.equal(herRows.some((r) => String(r.id) === H || r.label === hmld.label), false, "no calculated variable in her catalog");

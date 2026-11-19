@@ -318,3 +318,17 @@ test("group numbering includes an earlier row omitted from its chart", () => {
   assert.deepEqual(plots[0].option.xAxis.data, ["Session 2"]);
   assert.ok(body.querySelector("tbody tr:nth-child(2)").children[1].textContent.startsWith("Session 2"));
 });
+
+test("J21: a widget of a calculated variable says from when it has values; one of an ordinary variable says nothing new", () => {
+  for (const type of ["kpi", "table", "line_chart", "bar_chart"]) {
+    for (const calculated of [true, false]) {
+      const analysis = setup(type, [row(null)]);
+      analysis.widgets[0].series = [{ id: "series-1", metric_definition_id: "def-hmld", resolution_status: "resolved", source_policy: "all_with_conflicts" }];
+      analysis.metricPicker.definitions = [{ id: "def-hmld", label: "HMLD", calculated }];
+      const body = rendered().querySelector(".tl-analysis-widget");
+      const note = /HMLD: Calculated for sessions imported after this variable was made\. Sessions imported earlier stay without it\./;
+      if (calculated) assert.match(body.textContent, note, `${type}: the note`);
+      else assert.doesNotMatch(body.textContent, /Calculated for sessions imported/, `${type}: no note`);
+    }
+  }
+});

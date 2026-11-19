@@ -230,6 +230,8 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
          array[]::varchar[]
        ) as scope_capabilities,
        d.owner_scope as "ownerScope",
+       -- J21: whether OptiMove calculates it (a dashboard says from when its values exist); an athlete never gets one.
+       (coalesce(to_jsonb(dv.*) -> 'calculation', 'null'::jsonb) <> 'null'::jsonb) as calculated,
        (d.owner_scope = 'system' and $${hideClubIdx}::uuid is not null
           and exists (select 1 from training_load.metric_definition_club_hides ch
                        where ch.club_id = $${hideClubIdx}::uuid and ch.metric_definition_id = d.id and ch.shown_at is null)) as "hiddenInClub"
