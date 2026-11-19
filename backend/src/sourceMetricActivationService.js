@@ -280,7 +280,8 @@ export async function switchToCopy({ ctx, activationId, body }) {
       )).rows[0];
       const to = (await client.query(
         `select v.id, v.mapping_id, v.status, v.source_metric_definition_id, v.source_metric_version_id, v.metric_definition_id,
-                v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family
+                v.parameter_fingerprint, v.applies_to_session, v.applies_to_drill, m.owner_key, d.source_system, d.api_family,
+                v.condition_rule, v.metric_definition_version_id
            from training_load.source_metric_mapping_versions v
            join training_load.source_metric_mappings m on m.id = v.mapping_id
            join training_load.source_metric_definitions d on d.id = v.source_metric_definition_id

@@ -1872,11 +1872,13 @@ export async function insertCopiedMappings(client, ctx, { clubDefinitionId, club
          (mapping_id, source_metric_definition_id, metric_definition_id, source_metric_version_id, version_number, metric_definition_version_id,
           conversion_kind, scale, scale_divisor, "offset", source_unit, target_unit, conversion_note, parameter_kind,
           source_parameters, canonical_parameters, parameter_scale, parameter_scale_divisor, parameter_offset,
-          applies_to_session, applies_to_drill, created_by_user_id)
+          applies_to_session, applies_to_drill, created_by_user_id, condition_rule)
        select $1, s.source_metric_definition_id, $2, s.source_metric_version_id, 1, $3,
               s.conversion_kind, s.scale, s.scale_divisor, s."offset", s.source_unit, s.target_unit, s.conversion_note, s.parameter_kind,
               s.source_parameters, s.canonical_parameters, s.parameter_scale, s.parameter_scale_divisor, s.parameter_offset,
-              s.applies_to_session, s.applies_to_drill, $4
+              s.applies_to_session, s.applies_to_drill, $4,
+              -- v80: the copy's variable has the system variable's condition, so the rule is copied with it.
+              s.condition_rule
          from training_load.source_metric_mapping_versions s where s.id = $5
        returning id, parameter_fingerprint`,
       [mappingId, clubDefinitionId, clubVersionId, ctx.userId, v.id],
