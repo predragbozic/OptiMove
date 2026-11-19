@@ -11,6 +11,7 @@ code. The designer's mockups and the owner's approval come first; then a UI cont
 | **S2** | „Po timu takodje unutar kluba" | The same switcher for the teams of a club. |
 | **S3** | „To već imamo vrv" | The team filter already exists in the calendar: the *Groups* chips in Filters. K6 reuses it and builds no second team control; it only brings it next to the athlete strip, so a team can be chosen in one tap. |
 | **S4** | „U suštini jedan admin kluba bi mogao da vidi sve timove i sve sportiste da filtrira i lako pronalazi sve" | A club admin sees every team and every athlete of the club, filters by them, and finds anyone quickly. |
+| **S5** | „Timski trener sve to samo za svoj tim" | A team coach gets the same strip, arrows and search, but only for their own team. |
 
 ## 1. What exists today (`920459c0`)
 
@@ -39,6 +40,8 @@ anyone the coach may not see in the workspace.
     name, each pill carrying its team's colour. The **search** finds any athlete of the club in a few letters,
     whatever team they are in, and choosing one sets their team too. For a large club (100+ athletes) the search is
     the main way in, and the strip stays as the quick ‹ › within a team.
+  - **The team coach (S5).** The same strip, arrows and search, but only with the athletes of the team of the active
+    workspace. There is no team row and no *All teams*, and the search finds no one outside that team.
 
 - **K6-2, the Weekly plan** (frontend only).
   - The plan's header carries the switcher: "‹ Ana K. ›", with the athletes of her team.
@@ -53,7 +56,8 @@ anyone the coach may not see in the workspace.
 ## 3. Rules
 
 - **Who appears.** The lists come from what the workspace already shows the coach: the roster and the calendar's
-  teams. Nothing new is read about athletes the coach may not see. A team coach sees no team row.
+  teams. Nothing new is read about athletes the coach may not see. A team coach sees only their own team (S5):
+  no team row, and neither the strip nor the search lists anyone outside it.
 - **No migration and no new backend** is expected. The contract confirms it, and names any small read the switcher
   needs.
 - **The look and the controls** are shared with the Builder's switcher, so it is one component, not three copies.
