@@ -365,6 +365,10 @@ test("K17. Rate RPE on a past week opens the Training Load form for that session
   assert.deepEqual(weeklyReads, [lastWeek], "her session's own week, not this week");
   assert.equal(state.trainingLoad.rpeForm?.sessionId, "ps-old");
   assert.equal(state.trainingLoad.rpeForm?.date, day);
+  assert.equal(state.trainingLoad.athleteWeekly.weekStart, "", "the weekly overlay keeps its own week");
+  // A form left open from elsewhere (saved on Home) is not the one asked for: false, never "opened".
+  state.trainingLoad.rpeForm = { sessionId: "other", savedFeedback: {} };
+  assert.equal(await openRpeFormOnDate("ps-gone", day), false);
   state.trainingLoad.rpeForm = null;
 });
 

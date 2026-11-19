@@ -2792,29 +2792,30 @@ function openRpeFormForSessionId(id) {
 // straight after login), so this always fetches fresh first - today, then
 // (only if not found there) the athlete's own weekly overlay, for a
 // slightly stale notification pointing at an earlier day.
-// K4a (contract 2.3, Q4): the RPE form for a session or an RPE request of a known day - the athlete's Calendar shows any
-// week, so the weekly read is of that day's week (the overlay's last week could be another one), and the form opens
-// exactly as from a notification. False when nothing to rate was found (rated already, or no longer hers).
-export async function openRpeFormOnDate(id, date) {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(date || "")) {
-    const nav = state.trainingLoad.athleteWeekly;
-    const weekStart = weekMondayIso(date);
-    if (nav.weekStart !== weekStart) {
-      nav.weekStart = weekStart;
-      nav.selectedDate = date;
-      nav.data = null;
-    }
-  }
-  await openExternalAssignmentFromNotification(id);
-  return Boolean(state.trainingLoad.rpeForm);
-}
-
 export async function openExternalAssignmentFromNotification(assignmentId) {
   await loadTrainingLoadAthleteToday();
   if (!findAthleteSessionById(assignmentId)) {
     await loadTrainingLoadAthleteWeekly();
   }
   openRpeFormForSessionId(assignmentId);
+}
+
+// K4a (contract 2.3, Q4): the RPE form for a session or an RPE request of a known day. The athlete's Calendar shows any
+// week, so the lookup reads that day's week; the weekly overlay's own week (shared state) is put back afterwards. True
+// only when the form now open is the one asked for (a form left from elsewhere does not count).
+export async function openRpeFormOnDate(id, date) {
+  const nav = state.trainingLoad.athleteWeekly;
+  const kept = { weekStart: nav.weekStart, selectedDate: nav.selectedDate, data: nav.data };
+  const weekStart = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? weekMondayIso(date) : "";
+  const moved = Boolean(weekStart) && nav.weekStart !== weekStart;
+  if (moved) Object.assign(nav, { weekStart, selectedDate: date, data: null });
+  try {
+    await openExternalAssignmentFromNotification(id);
+  } finally {
+    if (moved) Object.assign(nav, kept);
+  }
+  const form = state.trainingLoad.rpeForm;
+  return Boolean(form) && (String(form.sessionId || "") === String(id) || String(form.externalAssignmentId || "") === String(id));
 }
 
 function patchSrpePreview(form) {

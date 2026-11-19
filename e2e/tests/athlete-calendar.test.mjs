@@ -155,6 +155,31 @@ for (const width of [1280, 390, 375, 360]) {
         assert.equal(look.strip, null, "no day strip on a computer (Q5)");
       }
       await a.page.screenshot({ path: `${process.env.E2E_SHOTS || "/tmp"}/k4a-calendar-${width}.png`, fullPage: true }).catch(() => {});
+      if (a.phone) {
+        // The longest label (a week across two years, "28 Dec 2026 – 3 Jan 2027") keeps the head one 56 px row, so the
+        // sticky strip under it never covers it.
+        const yearEnd = `${TODAY.slice(0, 4)}-12-31`;
+        const crossMonday = (() => { const d = new Date(`${yearEnd}T12:00:00`); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return iso(d); })();
+        if (crossMonday > MONDAY && addDays(crossMonday, 6) > yearEnd) {
+          const weeks = Math.round((new Date(`${crossMonday}T12:00:00`) - new Date(`${MONDAY}T12:00:00`)) / (7 * 864e5));
+          for (let i = 0; i < weeks; i += 1) {
+            const before = await a.page.textContent(".ac-period");
+            await a.page.click('[data-action="athlete-calendar-week"][data-delta="1"]');
+            await a.page.waitForFunction((p) => document.querySelector(".ac-period")?.textContent !== p, before);
+          }
+          const head = await a.page.evaluate(() => {
+            const h = document.querySelector(".ac-head").getBoundingClientRect();
+            const strip = document.querySelector(".ac-strip").getBoundingClientRect();
+            return { label: document.querySelector(".ac-period").textContent, height: Math.round(h.height), gap: Math.round(strip.top - h.bottom), clipped: document.querySelector(".ac-period").scrollWidth > document.querySelector(".ac-period").clientWidth + 1 };
+          });
+          assert.match(head.label, /\d{4} – .*\d{4}$/, "a week across two years");
+          assert.ok(head.height <= 57, `the head stays one row (${head.height} px)`);
+          assert.ok(head.gap >= -1, `the strip starts under the head (${head.gap})`);
+          assert.equal(head.clipped, false, "the label is not clipped");
+          await a.page.click('[data-action="athlete-calendar-today"]');
+          await a.page.locator(".ac-card").first().waitFor({ timeout: 10_000 });
+        }
+      }
       // The next week: one read, an empty week says so with Today.
       await a.page.click('[data-action="athlete-calendar-week"][data-delta="1"]');
       await a.page.locator(".ac-empty").waitFor({ timeout: 10_000 });

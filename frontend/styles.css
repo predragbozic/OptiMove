@@ -29071,6 +29071,10 @@ body.athlete-questions-prompt-open {
   /* Under the athlete's sticky topbar (the Weekly plan's .week-nav-panel offset), then the head, then the strip. */
   .athlete-calendar { --ac-under-topbar: calc(var(--athlete-topbar-height, 61px) + env(safe-area-inset-top, 0px)); --ac-head-height: 56px; --ac-strip-height: 62px; }
   .ac-head { position: sticky; top: var(--ac-under-topbar); z-index: 30; min-height: var(--ac-head-height); box-sizing: border-box; padding: 6px 0; background: var(--bg, #eef1f4); }
+  /* One row whatever the week's label: a long one ("28 Dec 2026 – 3 Jan 2027") wraps inside its own cell, two lines
+     of 15 px fit the 44 px row, so the head stays --ac-head-height and the strip under it never covers it. */
+  .ac-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px auto; align-items: center; height: var(--ac-head-height); }
+  .ac-period { margin: 0; min-width: 0; font-size: 15px; line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
   .ac-strip { position: sticky; top: calc(var(--ac-under-topbar) + var(--ac-head-height)); z-index: 30; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; padding-bottom: 6px; background: var(--bg, #eef1f4); }
   .ac-strip-day { min-height: 56px; min-width: 0; display: grid; place-items: center; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font: inherit; padding: 4px 0; color: var(--text); }
   .ac-strip-day small { font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase; }
@@ -29078,7 +29082,7 @@ body.athlete-questions-prompt-open {
   .ac-strip-dot { width: 6px; height: 6px; border-radius: 50%; }
   .ac-strip-dot.is-busy { background: var(--accent); }
   /* Today is the strongest state (filled); a tapped day is only outlined (the tap scrolls the list). */
-  .ac-strip-day.is-selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .ac-strip-day.is-selected { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
   .ac-strip-day.is-today { background: var(--accent); color: #fff; border-color: var(--accent); }
   .ac-strip-day.is-today small { color: #fff; }
   .ac-strip-day.is-today .ac-strip-dot.is-busy { background: #fff; }
