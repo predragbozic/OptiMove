@@ -1,6 +1,6 @@
 -- Rollback of migration v84 (roles and permissions, step R2; migrations_v2/202611201000_roles_v84_permission_roles.sql).
 --
--- Not a migration and never run automatically. Rehearsed on disposable databases (backend/tests/permission-roles-v84-migration.test.mjs:
+-- Not a migration and never run automatically. Rehearsed on disposable databases (backend/tests/permission-roles-v84.test.mjs test 1, and backend/scripts/permission-roles-v84-rehearsal.mjs:
 -- apply -> rollback -> the catalog identical to before -> apply again), on PostgreSQL 16 and, by the command in
 -- docs/runbooks/permission-roles-v84.md, on 17. Before it is run anywhere real: the deployed commit no longer contains the v84
 -- file (otherwise the migrator applies v84 again at the next start) and runs R1's can() (the previous commit; it reads nothing

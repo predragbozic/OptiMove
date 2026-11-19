@@ -608,3 +608,56 @@ test("16. a multi-row VALUES, an INSERT ... SELECT and a data-modifying CTE cann
                           (gen_random_uuid(), $1, 'assignment_grant', repeat('b',64), 'club', $2, 'club_admin', $3)`, [w.admin, w.club, a]);
   }), (e) => e.code === "23505" && e.constraint === "permission_requests_assignment_operation_key");
 });
+
+test("10b. a scope type removed from a role that was assigned (the role's own row): 23514", async () => {
+  const w = await world();
+  const role = await clubRole(w.admin, w.club, { items: ["org.view"] });
+  await assign(w.admin, { userId: w.other, roleId: role, scopeType: "club", scopeId: w.club, club: w.club });
+  await refused(asActor(db.url, w.admin, async (c) => {
+    await c.query(`update public.permission_roles set revision = revision + 1, assignable_team = false where id = $1`, [role]);
+  }, { rollback: true }), "23514", /permission role: a scope type cannot be removed once the role was assigned/);
+});
+
+test("11b. ceiling and dominance in the database: a club's admin adds a word it does not hold; edits a role that holds a word it lacks (42501)", async () => {
+  const w = await world();
+  const paRole = await asActor(db.url, w.pa, async (c) => {
+    const id = (await c.query(`insert into public.permission_roles (owner_scope, owner_club_id, name, assignable_club, created_by_user_id) values ('club', $1, $2, true, $3) returning id`, [w.club, `Dom ${crypto.randomBytes(2).toString("hex")}`, w.pa])).rows[0].id;
+    await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'org.club.edit', $2)`, [id, w.pa]);
+    await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, items_added) values ($1, 1, 'create', $2, 'platform_admin', array['org.club.edit'])`, [id, w.pa]);
+    return id;
+  });
+  const own = await clubRole(w.admin, w.club, { items: ["org.view"], team_: false });
+  const setClubAdmin = async (add) => asActor(db.url, w.pa, async (c) => {
+    await c.query(`update public.permission_roles set revision = revision + 1 where id = $1`, [ROLE_IDS.club_admin]);
+    if (add) await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'org.club.edit', $2)`, [ROLE_IDS.club_admin, w.pa]);
+    else await c.query(`delete from public.permission_role_items where role_id = $1 and permission_word = 'org.club.edit'`, [ROLE_IDS.club_admin]);
+    await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_added, items_removed)
+                   select id, revision, 'change', $2, 'platform_admin', 'Ceiling', $3, $4 from public.permission_roles where id = $1`,
+    [ROLE_IDS.club_admin, w.pa, add ? ["org.club.edit"] : [], add ? [] : ["org.club.edit"]]);
+  });
+  await setClubAdmin(false);
+  try {
+    await refused(asActor(db.url, w.admin, async (c) => {
+      await c.query(`update public.permission_roles set revision = revision + 1 where id = $1`, [own]);
+      await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'org.club.edit', $2)`, [own, w.admin]);
+    }, { rollback: true }), "42501", /permission role item: the acting user does not hold this permission/);
+    await refused(asActor(db.url, w.admin, async (c) => {
+      await c.query(`update public.permission_roles set revision = revision + 1 where id = $1`, [paRole]);
+      await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'org.view', $2)`, [paRole, w.admin]);
+    }, { rollback: true }), "42501", /permission role item: the acting user does not hold every permission of this role/);
+  } finally {
+    await setClubAdmin(true);
+  }
+});
+
+test("15b. the request record: it names its acting user and the basis the database derives (42501), and follows its own operation in the same transaction (23514)", async () => {
+  const w = await world();
+  const role = await clubRole(w.admin, w.club);
+  const a = await assign(w.admin, { userId: w.other, roleId: role, scopeType: "club", scopeId: w.club, club: w.club });
+  const request = (actor, { by = actor, basis = "club_admin", assignment = a } = {}) => asActor(db.url, actor, (c) => c.query(`insert into public.permission_requests (request_key, requested_by_user_id, operation, request_hash, owner_scope, owner_club_id, basis, assignment_id)
+      values (gen_random_uuid(), $1, 'assignment_revoke', repeat('9',64), 'club', $2, $3, $4)`, [by, w.club, basis, assignment]), { rollback: true });
+  await refused(request(w.admin, { by: w.pa }), "42501", /permission request: the acting user may not write this request/);
+  await refused(request(w.admin, { basis: "platform_admin" }), "42501", /permission request: the acting user may not write this request/);
+  await refused(request(w.coach), "42501", /permission request: the acting user may not write this request/);
+  await refused(request(w.admin), "23514", /permission request: the request must follow its own operation in the same transaction/);
+});
