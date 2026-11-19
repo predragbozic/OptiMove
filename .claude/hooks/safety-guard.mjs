@@ -1334,12 +1334,13 @@ function tempRoots() {
   return roots;
 }
 
-function insideGitWorkTreeOrGitDir(realPath, stopAt) {
-  if (realPath.split(path.sep).includes(".git")) return true;
+// The walk goes up to the root of the file system, not only to the temporary directory: a
+// TMPDIR that itself lies inside a repository is a work tree too.
+function insideGitWorkTreeOrGitDir(realPath) {
+  if (realPath.split(/[\\/]/).some((part) => part.toLowerCase() === ".git")) return true;
   let dir = realPath;
-  for (let n = 0; n < 128; n++) {
+  for (let n = 0; n < 256; n++) {
     try { if (fs.existsSync(path.join(dir, ".git"))) return true; } catch { return true; }
-    if (dir === stopAt) break;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -1351,19 +1352,23 @@ export function isWritableTempTarget(target) {
   // An existing file, link or folder always asks; so does a dangling link.
   try { fs.lstatSync(target); return false; } catch { /* does not exist yet: go on */ }
   // the real place of the new file: its nearest existing parent, every link followed
+  // The parts of the path that do not exist yet are kept: /tmp/x/.git/hooks/f with only /tmp/x
+  // existing is still a path through a .git.
   let probe = path.dirname(target);
+  const missing = [path.basename(target)];
   let real = null;
   for (let n = 0; n < 64 && real === null; n++) {
     try { real = fs.realpathSync(probe); } catch {
       const parent = path.dirname(probe);
       if (parent === probe) return false;
+      missing.unshift(path.basename(probe));
       probe = parent;
     }
   }
   if (real === null) return false;
   const root = [...tempRoots()].find((r) => real === r || real.startsWith(r + path.sep));
   if (!root) return false;
-  return !insideGitWorkTreeOrGitDir(path.join(real, path.basename(target)), root);
+  return !insideGitWorkTreeOrGitDir(path.join(real, ...missing));
 }
 
 // A redirect target is harmless when it is a device, or a plain absolute path that
@@ -1401,13 +1406,28 @@ export function plainAssignments(segments) {
 
 // The judgement for one segment: an allowed command with an unknown option, or writing
 // to a file outside the temporary directory, asks.
-export function allowedCommandNeedsQuestion(segment, variables = new Map()) {
+// A line that creates a git work tree (git init, git clone, git worktree add) gets no
+// temporary-directory exemption for its redirects: the folder it creates is checked by the
+// hook before the line runs, when it is not a work tree yet.
+export function createsGitWorkTree(segment) {
+  const words = commandWords(segment);
+  if (words[0] !== "git") return false;
+  let i = 1;
+  while (i < words.length && words[i].startsWith("-")) i += ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(words[i]) ? 2 : 1;
+  const sub = words[i];
+  return sub === "init" || sub === "clone" || (sub === "worktree" && words[i + 1] === "add");
+}
+
+export function allowedCommandNeedsQuestion(segment, variables = new Map(), { noTempExemption = false } = {}) {
   const words = commandWords(segment);
   const known = allowedCommandOptionsAreKnown(words);
   if (known === null) return false;
   if (!known) return true;
   if (!sedRawScriptsAreReadOnly(segment)) return true;
-  return outputRedirectTargets(segment).some((t) => !isHarmlessRedirectTarget(t, variables));
+  return outputRedirectTargets(segment).some((t) => {
+    if (noTempExemption && !/^(\/dev\/(null|stdout|stderr|tty|fd\/\d+))$/.test(shellWord(t))) return true;
+    return !isHarmlessRedirectTarget(t, variables);
+  });
 }
 
 // A database URL (or PGHOST) set for this command that is not this machine. The test
@@ -1716,6 +1736,7 @@ export function classifyShellCommand(cmd, cwd) {
   const segments = expandSegments(topLevel);
   const variables = plainAssignments(topLevel);
   const background = hasBackgroundJob(text);
+  const createsWorkTree = segments.some(createsGitWorkTree);
   for (const body of shellBodies) segments.push(...expandSegments(splitCommandSegments(body)));
 
   for (const segment of segments) {
@@ -1746,7 +1767,7 @@ export function classifyShellCommand(cmd, cwd) {
     if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     // `cat >(sh)`, `x <(bash)`: a shell inside a process substitution reads what it is fed
     if (processSubstitutions(segment).some((inner) => isUnreadableShellInput(inner, true))) return { decision: "ask", reason: ASK_REASONS.unreadable };
-    if (allowedCommandNeedsQuestion(segment, variables)) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (allowedCommandNeedsQuestion(segment, variables, { noTempExemption: createsWorkTree })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
     if (setsDangerousEnvironment(segment)) return { decision: "ask", reason: ASK_REASONS.dangerousEnv };
     if (definesAlias(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isGitConfigOverride(segment)) return { decision: "ask", reason: ASK_REASONS.gitConfigOverride };

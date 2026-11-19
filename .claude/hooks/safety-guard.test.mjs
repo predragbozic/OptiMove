@@ -1448,3 +1448,36 @@ test("LOW-4: ls-remote and fetch reach a remote by NAME only; a URL or a path as
     ["git ls-remote", ALLOW], ["git fetch", ALLOW],
   ]);
 });
+
+// ------------------------------------------------------------------
+// Follow-up of #642 (independent reviewer's LOW-1 and LOW-2).
+// ------------------------------------------------------------------
+
+test("LOW-1: path parts that do not exist yet are checked for .git; a line that creates a work tree gets no temp exemption", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-low1-"));
+  try {
+    expectAll([
+      [`cat a > ${tmp}/x/.git/hooks/pre-commit`, ASK], [`cat a > ${tmp}/x/.GIT/config`, ASK], [`cat a > ${tmp}/.git/f`, ASK],
+      [`cat a > ${tmp}/x/y/new.txt`, ALLOW], [`cat a > ${tmp}/new.txt`, ALLOW],
+      [`git worktree add ${tmp}/w2 && cat a > ${tmp}/w2/README.md`, ASK], [`git clone origin ${tmp}/c; cat a > ${tmp}/c/f`, ASK],
+      [`git init ${tmp}/i && cat a > ${tmp}/i/f`, ASK], [`git -C ${tmp} init -q && grep -n x f > ${tmp}/out.txt`, ASK],
+      [`git init ${tmp}/i && cat a > /dev/null`, ALLOW], [`git worktree list && cat a > ${tmp}/new.txt`, ALLOW],
+      [`git status && cat a > ${tmp}/new.txt`, ALLOW],
+    ]);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("LOW-2: a temporary directory that lies inside a repository is a work tree", () => {
+  const repo = makeRepo("sg-low2-", "feature/tmpdir");
+  const scratch = path.join(repo, "scratch");
+  mkdirSync(scratch);
+  const saved = process.env.TMPDIR;
+  process.env.TMPDIR = scratch;
+  try {
+    assert.equal(tmpdir(), scratch, "the test needs os.tmpdir() to follow TMPDIR");
+    expectAll([[`cat a > ${scratch}/new.txt`, ASK], [`cat a > ${scratch}/sub/new.txt`, ASK]]);
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
