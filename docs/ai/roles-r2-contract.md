@@ -795,9 +795,10 @@ development database, so it needs the owner's approval for that session or is re
 | O2 | Editing a club's own details is done by the platform admin and the club's admin: the 52nd word `org.club.edit` (club scope), added to R1's catalog and to the Club admin set before the seed is written. Every "51" of this contract reads 52, and section 3's seed gains that row. |
 | O3 | As recommended, (b): an archive is refused while an active assignment exists. |
 | O6 | As recommended, (b): module switches are their own later migration; R2 ships without section 2.8 and the points that depend on it. |
+| O4 | (a), with a display rule (plan D6f): the platform admin still sees a module it closed for a club; the club's admin sees it locked; coaches and everyone else of the club do not see it. It takes effect with the module-switch migration (O6), not in R2. |
 | O8 | As recommended, (a): non-basic assignments act on the organization routes from R2, with the per-call-site review as a merge condition. |
 
-Still open: O4 (asked again in plain words), O7, O9, O10 and the manager's M1-M14. The sections above are
+Still open: O7, O9, O10 and the manager's M1-M14. The sections above are
 not yet rewritten for these decisions; that is done when the contract is revised for acceptance.
 
 ## 10. Open points
