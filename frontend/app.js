@@ -83,7 +83,8 @@ import {
 import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
-import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
+import { builderCalendarEventMayBeLeft, handleBuilderCalendarEventAction, handleBuilderCalendarEventBeforeUnload, handleBuilderCalendarEventInput } from "./builder-calendar-event-actions.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
@@ -335,7 +336,7 @@ async function init() {
   // Refresh and Later (the app installed on an iPhone keeps an old version
   // until iOS restarts it). Never refreshes by itself; an unsaved Training
   // Load draft (a dashboard layout, Advanced settings) is asked about first.
-  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() && calendarSettingsMayBeLeft() });
+  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && builderCalendarEventMayBeLeft() && centralCalendarMayBeLeft() && calendarSettingsMayBeLeft() });
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
@@ -464,7 +465,7 @@ function bindEvents() {
   // The central calendar's event form (K2a-2) is asked before the logout
   // request, never after it: a "No" keeps the session and the form.
   els.signOut?.addEventListener("click", () => {
-    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" })) void signOut();
+    if (builderCalendarEventMayBeLeft({ final: "sign-out" }) && centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" })) void signOut();
   });
   els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
   // The central calendar draws itself again when a layout breakpoint is
@@ -753,6 +754,7 @@ function bindEvents() {
   window.addEventListener("beforeunload", handleDriveImportBeforeUnload);
   // Central calendar (K2a-2): an event save in flight, not confirmed or not made.
   window.addEventListener("beforeunload", handleCentralCalendarBeforeUnload);
+  window.addEventListener("beforeunload", handleBuilderCalendarEventBeforeUnload);
   // Settings -> Calendar (K2b-1c): a setting being saved, not confirmed or not saved.
   window.addEventListener("beforeunload", handleCalendarSettingsBeforeUnload);
   // Import from Google Drive: an opened <details> of its card survives the
@@ -1284,6 +1286,7 @@ function handleBuilderSearchKeydown(event) {
 }
 
 function handleContentInput(event) {
+  if (handleBuilderCalendarEventInput(event.target)) return;
   if (event.target.matches("[data-athlete-filter]")) {
     handleAthleteFilter(event.target);
     return;
@@ -2007,7 +2010,7 @@ async function handleGlobalClick(event) {
     return;
   }
   // A workspace switch resets the central calendar too: its event form asks first (K2a-2).
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) })) {
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && builderCalendarEventMayBeLeft({ final: leave?.reload ? "switch" : false }) && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
@@ -4122,6 +4125,8 @@ async function handleBuilderAction(action) {
     document.querySelector(".builder-workspace")?.setAttribute("inert", "");
   }
   try {
+    // K2c-2-F: "Make an event" from a weekly session (builder-calendar-event-actions.js).
+    if (await handleBuilderCalendarEventAction(action, { renderBuilder, openCalendarAt: openCentralCalendarFromBuilder })) return;
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
     if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
@@ -4132,6 +4137,13 @@ async function handleBuilderAction(action) {
       document.querySelector(".builder-workspace")?.removeAttribute("inert");
     }
   }
+}
+
+// K2c-2-F: "Open in calendar" from the Builder - the calendar on that day,
+// with the event's panel when the Builder knows it.
+function openCentralCalendarFromBuilder(target) {
+  openCentralCalendarAt(target);
+  openCentralCalendarFromRail();
 }
 
 function renderBuilderError(error) {

@@ -327,6 +327,12 @@ export const emptyBuilderState = (overrides = {}) => ({
   addConfirmation: null, // { itemId, title } - transient inline "<title> added" banner + Edit now, cleared on next navigation/add.
   editItemId: "", // set while a single item's Sets/Reps/Load/Instruction is open in Added-exercises mode.
   editItemInstructionOpen: false, // Instruction starts collapsed per item; resets whenever editItemId changes.
+  // K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.1): the open "Make an
+  // event" panel of one weekly session (builder-calendar-event-actions.js),
+  // and the sessions made into an event from this Builder (the in-memory
+  // "In calendar" badge; never stored).
+  calendarEvent: null,
+  calendarEventsMade: [],
   ...overrides,
 });
 
