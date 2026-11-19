@@ -1472,6 +1472,13 @@ test("V80-4c. the owner's confirmation, the COMMIT's answer: lost after the COMM
     const lost = await post(url, W.pa, { requestKey: lostKey, thresholdValue: "2.5", durationSeconds: "0.3" });
     assert.equal(lost.status, 200, lost.text);
     assert.equal(lost.body.verified_after_commit_error, true);
+    // The verify read's bound is transaction-local: no idle pooled connection keeps it (the DB re-review of v80).
+    const idle = await Promise.all(Array.from({ length: appPool.idleCount }, () => appPool.connect()));
+    try {
+      for (const c of idle) assert.notEqual((await c.query("show statement_timeout")).rows[0].statement_timeout, "5s");
+    } finally {
+      for (const c of idle) c.release();
+    }
     assert.equal(Number((await one(`select count(*) as n from training_load.source_metric_event_setting_confirmations where request_key = $1`, [lostKey])).n), 1);
   } finally {
     eventSetting.setEventSettingBeforeCommitForTests(null);
@@ -1539,4 +1546,13 @@ test("V80-7. only a column the board can place makes a variable with a condition
   assert.notEqual(board.columns.find((c) => c.fieldId === fieldId)?.reason ?? null, null, "the column itself is not placeable");
   const row = board.variables.find((x) => x.id === zone2.id);
   assert.deepEqual([row.placeable, row.matchingFieldIds], [false, []]);
+});
+
+test("V80-8. a variable whose stored condition is not an object (a raw or legacy write) never breaks the board: it reads as unsupported and not placeable", async () => {
+  const { t, cand } = await plantedTeam();
+  const odd = await variable(W.caA, { unit: "m", label: `Odd condition ${uid()}`, condition: ZONE_25_60 });
+  await planted(() => k.query(`update training_load.metric_definition_versions set condition_description = '"25-60 W/kg"'::jsonb
+    where id = (select current_version_id from training_load.metric_definitions where id = $1)`, [odd.id]));
+  const row = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board.variables.find((x) => x.id === odd.id);
+  assert.deepEqual([row.condition?.kind, row.placeable, row.matchingFieldIds], ["unsupported", false, []]);
 });

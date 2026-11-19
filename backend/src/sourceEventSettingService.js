@@ -86,12 +86,19 @@ async function savedAnswer(queryable, input, requestHash, ctx) {
 // After a COMMIT whose answer is lost or late: look the row up by its key on a new connection, bounded.
 async function verifyAfterCommit(input, requestHash, ctx) {
   const client = await pool.connect();
+  let broken = null;
   try {
-    await client.query(`set statement_timeout = '${VERIFY_TIMEOUT_MS}ms'`);
+    // A transaction-local bound: the pooled connection goes back without it (the DB re-review of v80).
+    await client.query("begin read only");
+    await client.query(`set local statement_timeout = '${VERIFY_TIMEOUT_MS}ms'`);
     const saved = await savedAnswer(client, input, requestHash, ctx);
+    await client.query("rollback");
     return saved ? { status: 200, verified_after_commit_error: true, ...answerOf(saved) } : null;
+  } catch (error) {
+    await client.query("rollback").catch((e) => { broken = e; });
+    throw error;
   } finally {
-    client.release();
+    client.release(broken ?? undefined);
   }
 }
 
