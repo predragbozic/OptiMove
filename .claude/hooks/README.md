@@ -113,7 +113,10 @@ the opposite of what a safety layer should do.
 
 ### ASK (Bash + PowerShell)
 
-- `git merge` / `git rebase`.
+- `git merge` / `git rebase` — except a plain `git merge [--no-edit|--no-ff|--no-commit|-q] origin/main`
+  (or `origin/master`) while the current branch is known and is not `main`/`master`, alone or after
+  read-only commands (`git status/fetch/rev-parse/log/diff/show/merge-base`, `wc/head/tail`) in the
+  same line; every other segment of that line is still judged and the strictest verdict wins.
 - `gh pr merge`.
 - A push that targets `main` explicitly, or a bare `git push`/`git push origin` while the
   hook can determine (via a fast, read-only `git rev-parse --abbrev-ref HEAD` in the

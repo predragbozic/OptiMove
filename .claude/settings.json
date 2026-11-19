@@ -68,7 +68,8 @@
       "Bash(/usr/lib/postgresql/16/bin/pg_ctl:*)",
       "Bash(pg_ctlcluster 16 main start)",
       "Bash(pg_ctlcluster 16 main status)",
-      "Bash(pg_isready:*)"
+      "Bash(pg_isready:*)",
+      "mcp__claude-code-remote__send_message"
     ],
     "deny": [
       "Bash(git push origin main:*)",

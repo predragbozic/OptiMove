@@ -372,6 +372,92 @@ export function isGitMergeOrRebase(segment) {
   return extractGitSubcommandArgs(segment, "merge|rebase") !== null;
 }
 
+// ---------------------------------------------------------------------------
+// The one merge that does not ask: bringing the remote default branch INTO one's own
+// working branch (`git merge --no-edit origin/main`), the routine step before a review.
+// Everything about it is fail-closed: the segment must be EXACTLY that command and
+// nothing else, the current branch must be known and must not be main/master, and
+// nothing that ran earlier in the same command line may have been able to change the
+// directory, the branch or what `origin/main` points at.
+// ---------------------------------------------------------------------------
+
+const SAFE_MERGE_FLAGS = new Set(["--no-edit", "--no-ff", "--no-commit", "-q"]);
+const SAFE_MERGE_SOURCES = new Set(["origin/main", "origin/master"]);
+const PROTECTED_BRANCHES = new Set(["main", "master"]);
+
+// Only plain words separated by single spaces or tabs: no quotes, no `$`, no backticks,
+// no parentheses or braces, no redirections, no `&`, no newline, no `=`, no `:`.
+// Anything else is not "exactly that command", whatever it would turn out to do.
+const PLAIN_WORDS_RE = /^[A-Za-z0-9_.\/@^~-]+(?:[ \t]+[A-Za-z0-9_.\/@^~-]+)*$/;
+
+function plainTokens(segment) {
+  if (typeof segment !== "string" || !PLAIN_WORDS_RE.test(segment)) return null;
+  return segment.split(/[ \t]+/);
+}
+
+// `git merge [--no-edit|--no-ff|--no-commit|-q]... origin/main` (or origin/master), the
+// flags before or after the source — and nothing else: no env prefix, no git global
+// option (`-C`, `-c`, `--git-dir`...), no second source, no other flag, no `--abort`.
+export function isPlainMergeOfRemoteDefault(segment) {
+  const tokens = plainTokens(segment);
+  if (!tokens || tokens.length < 3 || tokens[0] !== "git" || tokens[1] !== "merge") return false;
+  let sources = 0;
+  for (const token of tokens.slice(2)) {
+    if (SAFE_MERGE_FLAGS.has(token)) continue;
+    if (SAFE_MERGE_SOURCES.has(token)) { sources++; continue; }
+    return false;
+  }
+  return sources === 1;
+}
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set(["status", "rev-parse", "log", "diff", "show", "merge-base"]);
+const PLAIN_FETCH_FLAGS = new Set(["-q", "--quiet", "--prune"]);
+const PLAIN_FILTERS = new Set(["wc", "head", "tail"]);
+
+// What may run BEFORE the merge in the same command line without taking the exemption
+// away: commands that only read, written as plain words. A `cd`, a `git checkout`, a
+// `git -C`, an `echo ... > .git/HEAD`, a fetch with a refspec that redirects origin/main,
+// a `bash -c "..."` wrapper — none of them is on this list, so after any of them the
+// merge asks exactly as before.
+export function isHarmlessBeforeMerge(segment) {
+  const tokens = plainTokens(segment);
+  if (!tokens) return false;
+  if (PLAIN_FILTERS.has(tokens[0])) {
+    // `wc -l`, `head -5`, `tail -n 3`: reading a pipe only, never a file argument.
+    return tokens.slice(1).every((t) => /^-[A-Za-z0-9]+$/.test(t) || /^[0-9]+$/.test(t));
+  }
+  if (tokens[0] !== "git" || tokens.length < 2) return false;
+  const sub = tokens[1];
+  const rest = tokens.slice(2);
+  if (sub === "fetch") {
+    // `git fetch [-q|--quiet|--prune] [origin [main|master]]`: no refspec, no other remote.
+    const words = rest.filter((t) => !PLAIN_FETCH_FLAGS.has(t));
+    if (words.some((t) => t.startsWith("-"))) return false;
+    if (words.length === 0) return true;
+    if (words[0] !== "origin") return false;
+    return words.length === 1 || (words.length === 2 && PROTECTED_BRANCHES.has(words[1]));
+  }
+  if (sub === "branch") return rest.length === 1 && rest[0] === "--show-current";
+  if (!READ_ONLY_GIT_SUBCOMMANDS.has(sub)) return false;
+  // A read command that writes a file is not a read (`git diff --output ...`).
+  return !rest.some((t) => /^--output/i.test(t) || t === "-o");
+}
+
+// `git rev-parse --abbrev-ref HEAD` answers "HEAD" for a detached HEAD: that is "unknown",
+// never "not main".
+function isKnownWorkingBranch(branch) {
+  if (typeof branch !== "string") return false;
+  const name = branch.trim();
+  if (!name || name === "HEAD") return false;
+  return !PROTECTED_BRANCHES.has(name.toLowerCase());
+}
+
+export function isMergeOfRemoteDefaultIntoWorkingBranch(segment, earlierSegments, cwd, currentBranchOf = getCurrentBranch) {
+  if (!isPlainMergeOfRemoteDefault(segment)) return false;
+  if (!earlierSegments.every(isHarmlessBeforeMerge)) return false;
+  return isKnownWorkingBranch(currentBranchOf(cwd));
+}
+
 export function isGhPrMerge(segment) {
   return /^gh\s+pr\s+merge\b/i.test(segment);
 }
@@ -474,7 +560,7 @@ const DENY_REASONS = {
 
 const ASK_REASONS = {
   mergeRebase:
-    "'git merge'/'git rebase' rewrites branch history or state — needs your explicit confirmation.",
+    "'git merge'/'git rebase' rewrites branch history or state — needs your explicit confirmation. (Only a plain 'git merge origin/main' into a working branch that is not main/master goes without one.)",
   ghPrMerge: "'gh pr merge' merges a pull request — needs your explicit confirmation.",
   pushMain: "This push targets 'main' — needs your explicit confirmation.",
   commitMain: "This commit would land directly on 'main' — needs your explicit confirmation.",
@@ -535,8 +621,15 @@ export function classifyShellCommand(cmd, cwd) {
     if (isGitStashDestructive(segment)) return { decision: "deny", reason: DENY_REASONS.gitStashDestructive };
   }
 
-  for (const segment of segments) {
-    if (isGitMergeOrRebase(segment)) return { decision: "ask", reason: ASK_REASONS.mergeRebase };
+  // Every segment is judged on its own and the strictest verdict wins: any deny above
+  // already ended the call, and here the first segment that needs a confirmation ends it,
+  // wherever in the chain it stands. The one merge that does not ask only removes ITS OWN
+  // question; every other segment of the same command line is still checked.
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    if (isGitMergeOrRebase(segment) && !isMergeOfRemoteDefaultIntoWorkingBranch(segment, segments.slice(0, index), cwd)) {
+      return { decision: "ask", reason: ASK_REASONS.mergeRebase };
+    }
     if (isGhPrMerge(segment)) return { decision: "ask", reason: ASK_REASONS.ghPrMerge };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };
     if (isCommitOnMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };

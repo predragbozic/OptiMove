@@ -27,7 +27,10 @@ git diff --staged   # if there are staged changes
 - `git add .` or any equivalent that stages everything — stage explicitly, file by file,
   so unrelated dirty/untracked files never get swept in.
 - `git clean`, `git reset --hard`, anything that discards uncommitted work.
-- `git merge`, `git rebase` over existing history, `git push --force`.
+- `git merge`, `git rebase` over existing history, `git push --force`. The one exception: merging
+  `origin/main` into one's own feature branch (`git merge [--no-edit] origin/main`, never while on
+  `main`/`master`) needs no confirmation; merges INTO `main` are done only by the Rukovodilac,
+  through GitHub.
 - Commit and push without the user's explicit confirmation for that specific set of
   changes — even when the work is done, stop and ask before committing/pushing, never
   assume standing consent.

@@ -19,6 +19,9 @@ import {
   isGitRestoreDiscardingWork,
   isGitStashDestructive,
   runCli,
+  isPlainMergeOfRemoteDefault,
+  isHarmlessBeforeMerge,
+  isMergeOfRemoteDefaultIntoWorkingBranch,
 } from "./safety-guard.mjs";
 
 // ------------------------------------------------------------------
@@ -674,4 +677,301 @@ test("subprocess: real invocation fails closed (ask) on malformed JSON", () => {
   const out = runHookSubprocess("{not valid json");
   const parsed = JSON.parse(out);
   assert.equal(parsed.hookSpecificOutput.permissionDecision, "ask");
+});
+
+// ------------------------------------------------------------------
+// The one merge that does not ask: `git merge origin/main` into a working branch.
+// Real repositories, because "which branch is checked out" is the whole point.
+// ------------------------------------------------------------------
+
+function makeRepo(prefix, branch) {
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  execFileSync("git", ["init", "-q", "-b", branch], { cwd: dir });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
+  return dir;
+}
+
+let featureRepo;
+let mainRepo;
+let masterRepo;
+let detachedRepo;
+let notARepo;
+
+before(() => {
+  featureRepo = makeRepo("safety-guard-feature-", "feature/x");
+  mainRepo = makeRepo("safety-guard-main-", "main");
+  masterRepo = makeRepo("safety-guard-master-", "master");
+  detachedRepo = makeRepo("safety-guard-detached-", "feature/y");
+  execFileSync("git", ["checkout", "-q", "--detach"], { cwd: detachedRepo });
+  notARepo = mkdtempSync(path.join(tmpdir(), "safety-guard-no-repo-"));
+});
+
+after(() => {
+  for (const dir of [featureRepo, mainRepo, masterRepo, detachedRepo, notARepo]) {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const verdict = (command, cwd) => classifyToolCall(bash(command, cwd))?.decision ?? null;
+
+const ALLOWED_MERGES = [
+  "git merge origin/main",
+  "git merge origin/master",
+  "git merge --no-edit origin/main",
+  "git merge --no-ff origin/main",
+  "git merge --no-commit origin/main",
+  "git merge -q origin/main",
+  "git merge --no-edit --no-ff -q origin/main",
+  "git merge origin/main --no-edit",
+  "git  merge\t--no-edit   origin/main",
+  "  git merge --no-edit origin/main  ",
+  // inside a chain whose other parts are themselves harmless
+  "git fetch -q origin main && git merge --no-edit origin/main",
+  "git status --short | wc -l && git fetch -q origin main && git rev-parse origin/main && git merge --no-edit origin/main",
+  "git fetch origin; git merge origin/main",
+  "git branch --show-current && git log --oneline -3 && git diff --stat origin/main...HEAD && git merge-base HEAD origin/main && git merge origin/main",
+  "git merge --no-edit origin/main && git status --short",
+  "git merge --no-edit origin/main && node scripts/test-runner.mjs --preset backend-fast",
+  "git merge --no-edit origin/main; git log --oneline -1 | head -1",
+];
+
+test("merge of origin/main into a working branch: every allowed form passes without a question", () => {
+  for (const command of ALLOWED_MERGES) {
+    assert.equal(verdict(command, featureRepo), ALLOW, `should not ask: ${command}`);
+  }
+});
+
+test("merge of origin/main: the same forms ask on main, on master, on a detached HEAD and outside a repository", () => {
+  for (const command of ALLOWED_MERGES) {
+    for (const [where, dir] of [["main", mainRepo], ["master", masterRepo], ["detached HEAD", detachedRepo], ["no repository", notARepo]]) {
+      assert.equal(verdict(command, dir), ASK, `must ask on ${where}: ${command}`);
+    }
+  }
+});
+
+test("merge of origin/main: the PowerShell tool gets the same two verdicts", () => {
+  assert.equal(classifyToolCall(pwsh("git merge --no-edit origin/main", featureRepo))?.decision ?? null, ALLOW);
+  assert.equal(classifyToolCall(pwsh("git merge --no-edit origin/main", mainRepo))?.decision, ASK);
+});
+
+// Everything here asks (or is denied) on a working branch exactly as it did before.
+const STILL_REFUSED_ON_A_WORKING_BRANCH = [
+  // a merge of anything else
+  ["git merge feature/x", ASK],
+  ["git merge main", ASK],
+  ["git merge master", ASK],
+  ["git merge origin/feature/x", ASK],
+  ["git merge origin/main-old", ASK],
+  ["git merge origin/mainline", ASK],
+  ["git merge upstream/main", ASK],
+  ["git merge refs/remotes/origin/main", ASK],
+  ["git merge origin/main feature/x", ASK],
+  ["git merge origin/main origin/master", ASK],
+  ["git merge origin/main origin/main", ASK],
+  ["git merge", ASK],
+  ["git merge --no-edit", ASK],
+  ["git merge FETCH_HEAD", ASK],
+  ["git merge origin/main~1", ASK],
+  ["git merge origin/main^", ASK],
+  ["git merge 'origin/main'", ASK],
+  ['git merge "origin/main"', ASK],
+  // any other flag
+  ["git merge --abort", ASK],
+  ["git merge --continue", ASK],
+  ["git merge --quit", ASK],
+  ["git merge --squash origin/main", ASK],
+  ["git merge -X theirs origin/main", ASK],
+  ["git merge -s ours origin/main", ASK],
+  ["git merge --strategy=ours origin/main", ASK],
+  ["git merge --allow-unrelated-histories origin/main", ASK],
+  ["git merge --no-verify origin/main", ASK],
+  ["git merge -m msg origin/main", ASK],
+  ["git merge --ff-only origin/main", ASK],
+  ["git merge --quiet origin/main", ASK],
+  ["git merge --no-edit --abort origin/main", ASK],
+  // another repository, another configuration, another environment
+  ["git -C ../other merge origin/main", ASK],
+  ["git -C . merge origin/main", ASK],
+  ["git -c merge.ff=false merge origin/main", ASK],
+  ["git --git-dir=../other/.git merge origin/main", ASK],
+  ["git --work-tree=.. merge origin/main", ASK],
+  ["git --no-pager merge origin/main", ASK],
+  ["GIT_DIR=../other/.git git merge origin/main", ASK],
+  ["GIT_WORK_TREE=/tmp git merge --no-edit origin/main", ASK],
+  ["FOO=bar git merge origin/main", ASK],
+  // something earlier in the line could have moved the directory, the branch or origin/main
+  ["cd ../other && git merge origin/main", ASK],
+  ["cd .. ; git merge origin/main", ASK],
+  ["pushd ../other && git merge origin/main", ASK],
+  ["git checkout main && git merge origin/main", DENY], // deny, as before: the checkout check ends it first
+  ["git switch main && git merge origin/main", ASK],
+  ["git switch -c main2 && git merge origin/main", ASK],
+  ["git checkout -B main && git merge origin/main", ASK],
+  ["git symbolic-ref HEAD refs/heads/main && git merge origin/main", ASK],
+  ["git branch -m main && git merge origin/main", ASK],
+  ["git worktree add ../w main && git merge origin/main", ASK],
+  ["echo ref: refs/heads/main > .git/HEAD && git merge origin/main", ASK],
+  ["git fetch origin feature/x:refs/remotes/origin/main && git merge origin/main", ASK],
+  ["git fetch origin +refs/heads/evil:refs/remotes/origin/main && git merge origin/main", ASK],
+  ["git fetch upstream && git merge origin/main", ASK],
+  ["git fetch origin evil && git merge origin/main", ASK],
+  ["git fetch --upload-pack=./x origin && git merge origin/main", ASK],
+  ["git update-ref refs/remotes/origin/main HEAD~3 && git merge origin/main", ASK],
+  ["git remote set-url origin ../evil && git fetch origin && git merge origin/main", ASK],
+  ["git diff --output=.git/HEAD && git merge origin/main", ASK],
+  ["git diff --output .git/HEAD && git merge origin/main", ASK],
+  ["git log -1 --format=%H && git merge origin/main", ASK],
+  ["npm test && git merge origin/main", ASK],
+  ["true && git merge origin/main", ASK],
+  ["wc -l README.md && git merge origin/main", ASK],
+  ["echo hi && git merge origin/main", ASK],
+  // shell constructs: never "exactly that command"
+  ["git merge origin/main & git push", ASK],
+  ["git merge origin/main &", ASK],
+  ["git merge origin/main > /dev/null", ASK],
+  ["git merge origin/main 2>&1", ASK],
+  ["git merge $(echo origin/main)", ASK],
+  ["git merge `echo origin/main`", ASK],
+  ["git merge $BRANCH", ASK],
+  ["git merge origin/main$(git push)", ASK],
+  ["git merge origin/{main,evil}", ASK],
+  ["git merge origin/main\\", ASK],
+  ['bash -c "git merge origin/main"', ASK],
+  ['bash -c "cd ../other && git merge origin/main"', ASK],
+  ['sh -c "git checkout main && git merge origin/main"', DENY],
+  ['powershell -Command "git merge origin/main"', ASK],
+  ["GIT MERGE origin/main", ASK],
+  ["git Merge origin/main", ASK],
+  ["git merge ORIGIN/MAIN", ASK],
+  // the strictest verdict wins across the chain
+  ["git merge origin/main; git push -f", DENY],
+  ["git merge origin/main && git push --force", DENY],
+  ["git merge origin/main && git push --force-with-lease", DENY],
+  ["git merge origin/main && git reset --hard origin/main", DENY],
+  ["git merge origin/main && git clean -fd", DENY],
+  ["git merge origin/main && git checkout -- .", DENY],
+  ["git merge origin/main && git add .", DENY],
+  ["git push -f; git merge origin/main", DENY],
+  ["git merge origin/main && git rebase origin/main", ASK],
+  ["git merge origin/main && git rebase --continue", ASK],
+  ["git merge origin/main && git merge feature/x", ASK],
+  ["git merge origin/main && git merge --abort", ASK],
+  ["git merge origin/main && gh pr merge 12", ASK],
+  ["git merge origin/main && git push origin main", ASK],
+  ["git merge origin/main && git push origin HEAD:main", ASK],
+  ["git merge origin/main && npm run migrate", ASK],
+  ["git merge origin/main || git merge --abort", ASK],
+  ["git merge --no-edit origin/main && git merge --no-edit origin/main && git rebase -i HEAD~2", ASK],
+  // rebase in every form, alone
+  ["git rebase origin/main", ASK],
+  ["git rebase -i HEAD~3", ASK],
+  ["git rebase --onto origin/main a b", ASK],
+  ["git rebase --abort", ASK],
+  ["git rebase --continue", ASK],
+  ["git -C . rebase origin/main", ASK],
+  // the destructive ones
+  ["git push --force", DENY],
+  ["git push -f origin feature/x", DENY],
+  ["git push --force-with-lease", DENY],
+  ["git reset --hard", DENY],
+  ["git reset --hard origin/main", DENY],
+  ["git clean -fd", DENY],
+  ["git checkout -- .", DENY],
+];
+
+test("merge exemption: every form that is not exactly it keeps its verdict on a working branch", () => {
+  const wrong = [];
+  for (const [command, expected] of STILL_REFUSED_ON_A_WORKING_BRANCH) {
+    const got = verdict(command, featureRepo);
+    if (got !== expected) wrong.push(`${JSON.stringify(command)}: expected ${expected}, got ${got}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test("merge exemption: verdicts the change must not move (identical to the guard before it)", () => {
+  // Recorded from the guard as it was before this change, on a working branch.
+  const unchanged = [
+    ["git stash", ALLOW], ["git stash pop", ALLOW], ["git stash drop", DENY], ["git stash clear", DENY],
+    ["git branch -D feature/old", ALLOW], ["git branch -d feature/old", ALLOW], ["git push origin --delete feature/old", ALLOW],
+    ["git pull", ALLOW], ["git fetch origin main", ALLOW], ["git status", ALLOW],
+    ["git commit -m wip", ALLOW], ["git push -u origin feature/x", ALLOW],
+  ];
+  for (const [command, expected] of unchanged) {
+    assert.equal(verdict(command, featureRepo), expected, `expected ${expected} for: ${command}`);
+  }
+});
+
+test("merge exemption: forms the guard did not see before are still not seen, and no differently (known gaps, not widened)", () => {
+  // The guard has never recognised these: a command spread over several lines, a group or
+  // subshell, `git pull --rebase`. This change neither closes nor widens them: the verdict
+  // on a working branch is the same silence as before, and identical on main.
+  const blind = [
+    "git merge origin/main\ngit rebase origin/main", "git status\ngit merge feature/x", "(git merge origin/main)", "$(git merge origin/main)",
+    "`git merge origin/main`", "{ git merge origin/main; }", "if true; then git merge origin/main; fi", "git pull --rebase", "git pull -r",
+  ];
+  for (const command of blind) {
+    assert.equal(verdict(command, featureRepo), ALLOW, JSON.stringify(command));
+    assert.equal(verdict(command, mainRepo), ALLOW, `on main: ${JSON.stringify(command)}`);
+  }
+  // A trailing newline is not a second command.
+  assert.equal(verdict("git merge --no-edit origin/main\n", featureRepo), ALLOW);
+  assert.equal(verdict("git merge --no-edit origin/main\n", mainRepo), ASK);
+});
+
+test("merge exemption: the branch check fails closed whatever the branch reader answers", () => {
+  const merge = "git merge --no-edit origin/main";
+  const withBranch = (answer) => isMergeOfRemoteDefaultIntoWorkingBranch(merge, [], "/nowhere", () => answer);
+  assert.equal(withBranch("feature/x"), true);
+  assert.equal(withBranch("fix/main"), true);
+  assert.equal(withBranch("mainline"), true);
+  for (const unknownOrProtected of [null, undefined, "", "   ", "HEAD", "main", "master", "Main", "MASTER", " main\n", 42, {}, []]) {
+    assert.equal(withBranch(unknownOrProtected), false, `must not pass for branch answer ${JSON.stringify(unknownOrProtected)}`);
+  }
+  assert.throws(() => isMergeOfRemoteDefaultIntoWorkingBranch(merge, [], "/nowhere", () => { throw new Error("git is gone"); }));
+});
+
+test("merge exemption: a branch reader that throws ends in a question, never in silence", () => {
+  // classifyToolCall's caller (runCli) turns any exception into "ask".
+  const out = runHookSubprocess(JSON.stringify(bash("git merge --no-edit origin/main", path.join(notARepo, "does-not-exist"))));
+  assert.equal(JSON.parse(out).hookSpecificOutput.permissionDecision, "ask");
+});
+
+test("merge exemption: the two building blocks, token by token", () => {
+  for (const yes of ["git merge origin/main", "git merge --no-edit origin/master", "git merge -q --no-ff --no-commit --no-edit origin/main"]) {
+    assert.equal(isPlainMergeOfRemoteDefault(yes), true, yes);
+  }
+  for (const no of ["", "git", "git merge", "git merge --no-edit", "merge origin/main", "sudo git merge origin/main", "git merge origin/main x", "git merge -q", "git merge origin/main;", null, undefined, 7]) {
+    assert.equal(isPlainMergeOfRemoteDefault(no), false, String(no));
+  }
+  for (const yes of ["git status", "git status --short", "wc -l", "head -5", "tail -n 3", "git fetch", "git fetch -q origin main", "git fetch --prune origin", "git fetch origin master",
+    "git rev-parse origin/main", "git rev-parse --abbrev-ref HEAD", "git log --oneline -5", "git diff --stat origin/main...HEAD", "git show --stat HEAD", "git merge-base HEAD origin/main", "git branch --show-current"]) {
+    assert.equal(isHarmlessBeforeMerge(yes), true, yes);
+  }
+  for (const no of ["cd ..", "git checkout main", "git switch main", "git branch", "git branch -m main", "git branch --show-current x", "git fetch upstream", "git fetch origin a:b", "git fetch origin feature/x",
+    "git fetch --all", "git fetch origin main extra", "git -C .. status", "git diff --output=x", "git diff --output x", "git log -o x", "wc -l file", "head file", "cat x", "echo hi", "true", "git pull",
+    "git stash", "git commit -m x", "git remote set-url origin x", "git config user.name x", "git status > x", "git status $(x)", "GIT_DIR=x git status", "", null]) {
+    assert.equal(isHarmlessBeforeMerge(no), false, String(no));
+  }
+});
+
+test("settings.json allows the session-message tool by its exact name, and no other MCP tool", () => {
+  const settingsPath = fileURLToPath(new URL("./settings.json", new URL("../", import.meta.url)));
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const mcpAllowed = settings.permissions.allow.filter((entry) => /mcp/i.test(entry));
+  assert.deepEqual(mcpAllowed, ["mcp__claude-code-remote__send_message"]);
+  assert.ok(!settings.permissions.allow.some((entry) => /\*/.test(entry) && /mcp/i.test(entry)), "no wildcard MCP entry");
+  assert.ok(!settings.permissions.allow.some((entry) => /^Bash\(git (merge|rebase|pull)[ :)]/.test(entry)), "no merge, rebase or pull in the allow list");
+  // the deny list is as it was
+  assert.deepEqual(settings.permissions.deny, [
+    "Bash(git push origin main:*)", "Bash(git push -u origin main:*)", "Bash(git push --force:*)", "Bash(git push -f:*)",
+    "Bash(git reset --hard:*)", "Bash(git clean:*)", "Bash(gh pr merge:*)",
+  ]);
+});
+
+test("the guard itself has no opinion on the session-message tool, and still asks for the Supabase ones", () => {
+  assert.equal(classifyToolCall({ tool_name: "mcp__claude-code-remote__send_message", tool_input: { message: "packet" } }), null);
+  assert.equal(classifyToolCall({ tool_name: "mcp__abc__merge_branch", tool_input: {} })?.decision, "ask");
+  assert.equal(classifyToolCall({ tool_name: "mcp__abc__apply_migration", tool_input: {} })?.decision, "ask");
 });
