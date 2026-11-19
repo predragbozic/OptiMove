@@ -8,6 +8,8 @@ import {
   builderCalendarMadeKey,
   builderCalendarMatchSentence,
   builderCalendarTrainingTypes,
+  CHECK_NEVER_TWICE,
+  FINISH_FIRST,
   formatDay,
   NO_TRAINING_TYPE,
   RESULT_NOT_CONFIRMED,
@@ -24,25 +26,40 @@ export function renderBuilderCalendarEventButton({ draft, block, session, worksp
   const open = Boolean(panel && panel.sessionId === session.id);
   const disabled = Boolean(blocked) || busyElsewhere;
   const inCalendar = (made || []).includes(builderCalendarMadeKey(draft, block, session));
+  // The reason a button is off sits next to it (ux review): a plan never
+  // saved, or another session's event still being made.
+  const note = blocked || (busyElsewhere ? FINISH_FIRST : "");
   return `
     <span class="cc-builder-event-trigger">
-      <button class="plain-button cc-builder-event-button" type="button" data-action="builder-calendar-event-open" data-session-id="${escapeAttr(session.id)}" aria-expanded="${open ? "true" : "false"}" ${disabled ? "disabled" : ""}>${ICON_CALENDAR}<span>Make an event</span></button>
+      <button class="plain-button cc-builder-event-button" type="button" data-action="builder-calendar-event-open" data-session-id="${escapeAttr(session.id)}" aria-expanded="${open ? "true" : "false"}"${open ? ` aria-controls="${panelId(session)}"` : ""} ${disabled ? "disabled" : ""}>${ICON_CALENDAR}<span>Make an event</span></button>
       ${inCalendar ? `<span class="cc-builder-event-badge" title="Made into an event from this Builder">✓ In calendar</span>` : ""}
-      ${blocked ? `<span class="cc-builder-event-note" role="status">${escapeHtml(blocked)}</span>` : ""}
+      ${note ? `<span class="cc-builder-event-note">${escapeHtml(note)}</span>` : ""}
     </span>`;
+}
+
+const panelId = (session) => `cc-builder-event-${escapeAttr(session.id)}`;
+
+// The panel's heading: what it does now (ux review: a made or found event is
+// "In the calendar", never an invitation to make a second one).
+function headingOf(panel) {
+  if (panel.phase === "done") return "In the calendar";
+  if (panel.phase === "ready" && (panel.match?.kind === "linked" || panel.match?.kind === "linked_many")) return "In the calendar";
+  return "Make an event";
 }
 
 // The inline panel under the session row, while it is open for that session.
 export function renderBuilderCalendarEventPanel({ session, block, panel, types }) {
   if (!panel || panel.sessionId !== session.id) return "";
-  const id = `cc-builder-event-${escapeAttr(session.id)}`;
+  const id = panelId(session);
   const busy = panel.phase === "sending";
   const body = renderBody({ session, block, panel, types, busy });
+  // The form has its own Cancel next to its primary: no second Close there.
+  const formShown = panel.phase === "sending" || (panel.phase === "ready" && panel.match?.kind === "planned" && builderCalendarTrainingTypes(types).length > 0);
   return `
     <section class="cc-builder-event" id="${id}" aria-labelledby="${id}-title" ${busy ? 'aria-busy="true"' : ""}>
       <div class="cc-builder-event-head">
-        <h4 class="cc-builder-event-title" id="${id}-title">Make an event</h4>
-        <button class="plain-button cc-builder-event-close" type="button" data-action="builder-calendar-event-close" ${busy || panel.phase === "unconfirmed" ? "disabled" : ""}>Close</button>
+        <h4 class="cc-builder-event-title" id="${id}-title" tabindex="-1" data-cc-builder-event-heading>${escapeHtml(headingOf(panel))}</h4>
+        ${formShown ? "" : `<button class="plain-button cc-builder-event-close" type="button" data-action="builder-calendar-event-close" ${busy || panel.phase === "unconfirmed" ? "disabled" : ""}>Close</button>`}
       </div>
       ${body}
     </section>`;
@@ -60,15 +77,15 @@ function renderBody({ block, panel, types, busy }) {
       <div class="cc-builder-event-actions"><button class="plain-button cc-builder-event-primary" type="button" data-action="builder-calendar-event-open-calendar">Open in calendar</button></div>`;
   }
   if (panel.phase === "unconfirmed") {
-    return `<p class="cc-builder-event-line" role="alert" tabindex="-1" data-cc-builder-event-focus>${escapeHtml(RESULT_NOT_CONFIRMED)}</p>
-      <p class="cc-builder-event-quiet">Check result sends the same request again; it never makes a second event.${panel.checkNote ? ` ${escapeHtml(panel.checkNote)}` : ""}</p>
-      <div class="cc-builder-event-actions"><button class="plain-button cc-builder-event-primary" type="button" data-action="builder-calendar-event-check" ${panel.checking ? "disabled" : ""}>${panel.checking ? "Checking…" : "Check result"}</button></div>`;
+    return `<p class="cc-builder-event-line" role="alert" tabindex="-1" data-cc-builder-event-focus>${escapeHtml(RESULT_NOT_CONFIRMED)}${panel.checkNote ? ` ${escapeHtml(panel.checkNote)}` : ""}</p>
+      <div class="cc-builder-event-actions"><button class="plain-button cc-builder-event-primary" type="button" data-action="builder-calendar-event-check" ${panel.checking ? "disabled" : ""}>${panel.checking ? "Checking…" : "Check result"}</button></div>
+      <p class="cc-builder-event-quiet">${escapeHtml(CHECK_NEVER_TWICE)}</p>`;
   }
   const message = panel.message ? `<p class="cc-builder-event-line" role="alert" tabindex="-1" data-cc-builder-event-focus>${escapeHtml(panel.message)}</p>` : "";
   const match = panel.match;
   if (!match || match.kind !== "planned") {
     const sentence = match ? builderCalendarMatchSentence(match) : "";
-    const calendarButton = match && (match.kind === "linked" || match.kind === "linked_many" || panel.offerCalendar)
+    const calendarButton = match && (match.kind === "linked" || match.kind === "linked_many" || match.kind === "none" || panel.offerCalendar)
       ? `<div class="cc-builder-event-actions"><button class="plain-button cc-builder-event-primary" type="button" data-action="builder-calendar-event-open-calendar">Open in calendar</button></div>` : "";
     return `${message}${sentence && sentence !== panel.message ? `<p class="cc-builder-event-line" role="status">${escapeHtml(sentence)}</p>` : ""}${calendarButton}`;
   }
@@ -93,9 +110,9 @@ function renderBody({ block, panel, types, busy }) {
         <label class="cc-builder-event-field"><span>End (optional)</span><input type="time" value="${escapeAttr(form.endTime || "")}" data-builder-event-field="endTime" ${off}></label>
       </div>
       ${names.length
-        ? `<details class="cc-builder-event-who"><summary>${count === 1 ? "1 athlete" : `${count} athletes`}</summary><p class="cc-builder-event-quiet">${names.map(escapeHtml).join(", ")}</p></details>`
-        : `<p class="cc-builder-event-quiet">${count === 1 ? "1 athlete" : `${count} athletes`}</p>`}
-      <p class="cc-builder-event-quiet">${card.rpe ? "The event asks for RPE, as this training does." : "The event does not ask for RPE, as this training does not."}</p>
+        ? `<details class="cc-builder-event-who"><summary>For ${count === 1 ? "1 athlete" : `${count} athletes`}</summary><p class="cc-builder-event-quiet">${names.map(escapeHtml).join(", ")}</p></details>`
+        : `<p class="cc-builder-event-quiet">For ${count === 1 ? "1 athlete" : `${count} athletes`}</p>`}
+      <p class="cc-builder-event-quiet">${card.rpe ? "Asks for RPE (same as this training)." : "No RPE request (same as this training)."}</p>
       <div class="cc-builder-event-actions">
         <button class="plain-button cc-builder-event-primary" type="button" data-action="builder-calendar-event-send" ${off}>${busy ? "Making the event…" : "Make the event"}</button>
         <button class="plain-button cc-builder-event-secondary" type="button" data-action="builder-calendar-event-close" ${off}>Cancel</button>

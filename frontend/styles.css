@@ -28461,7 +28461,12 @@ body:not(.athlete-mode):not(.login-mode) .cc-builder-event-button {
   margin: 0;
   overflow-wrap: anywhere;
 }
-.cc-builder-event-line:focus {
+.cc-builder-event-line:focus,
+.cc-builder-event-title:focus {
+  outline: none;
+}
+.cc-builder-event-line:focus-visible,
+.cc-builder-event-title:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -28487,9 +28492,11 @@ body:not(.athlete-mode):not(.login-mode) .cc-builder-event-field select {
   font-size: 16px;
   box-sizing: border-box;
 }
+/* One column at every width: the panel sits in a Builder day column, which is
+   narrow on a computer too (ux review: the End input overflowed at 1280 px). */
 .cc-builder-event-times {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 .cc-builder-event-who summary {
@@ -28519,10 +28526,7 @@ body:not(.athlete-mode):not(.login-mode) .cc-builder-event .plain-button {
   opacity: 0.6;
   cursor: default;
 }
-@media (max-width: 390px) {
-  .cc-builder-event-times {
-    grid-template-columns: minmax(0, 1fr);
-  }
+@media (max-width: 430px) {
   body:not(.athlete-mode):not(.login-mode) .cc-builder-event-actions .plain-button {
     width: 100%;
     justify-content: center;

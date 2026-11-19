@@ -41,9 +41,12 @@ export function builderCalendarEventBlockedReason(draft) {
 // ---------------------------------------------------------------------------
 // The match on the day read (2.1.3, decision 2 of 2.2)
 // ---------------------------------------------------------------------------
+// No card of this session (ux review MEDIUM-1 and -2): the edit draft cannot
+// tell which cause it is, so the sentence names both with their next steps;
+// the panel also offers Open in calendar (the day) to see what is there.
 export const MATCH_SENTENCES = Object.freeze({
-  apply: "Apply your changes first, then make the event.",
-  absent: "This training is not on the calendar of this workspace.",
+  apply: "This training isn't on the calendar yet. Apply your changes to the plan, or check that the plan is for athletes of this workspace on this day.",
+  absent: "This training isn't on this workspace's calendar. Check that the plan is for athletes of this workspace on this day.",
   ambiguous: "This training matches more than one training on the calendar, so no event was made. Make it from the calendar instead.",
   linkedMany: "This training is already in the calendar. Open the calendar to see it.",
 });
@@ -144,7 +147,9 @@ export function builderCalendarEventBody({ form, card, type, day, requestKey, ti
 // ---------------------------------------------------------------------------
 // The outcomes (2.1.6)
 // ---------------------------------------------------------------------------
-export const RESULT_NOT_CONFIRMED = "The result is not confirmed.";
+export const RESULT_NOT_CONFIRMED = "We couldn't confirm the event was made.";
+export const CHECK_NEVER_TWICE = "Checking never makes a second event.";
+export const FINISH_FIRST = "Finish the event being made first.";
 export const CHECK_STILL_NOT_CONFIRMED = "Still not confirmed. Check again in a moment.";
 
 export function builderCalendarEventDoneText(title, day) {

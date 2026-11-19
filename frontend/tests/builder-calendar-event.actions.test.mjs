@@ -10,6 +10,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { installFetchMock } from "./support/fetch-mock.mjs";
 import { fakeAction } from "./support/dom.mjs";
+import { escapeHtml } from "../utils.js";
 
 const questions = [];
 let confirmAnswer = true;
@@ -202,7 +203,10 @@ test("2. one planned card of the live plan, slot and name: the form with the gro
   assert.match(html, /Ana Example, Ben Example/);
   assert.match(html, /Type: Training/, "one training type: no select");
   assert.doesNotMatch(html, /<select/);
-  assert.match(html, /asks for RPE, as this training does/);
+  assert.match(html, /Asks for RPE \(same as this training\)\./);
+  assert.match(html, /For \d+ athletes?/);
+  // The form has its own Cancel: no second Close in its header.
+  assert.doesNotMatch(html, /cc-builder-event-close/);
   assert.doesNotMatch(html, /type="checkbox"/, "no RPE checkbox (decision 5)");
   noIdsOrCodes(html);
 });
@@ -222,7 +226,12 @@ test("2b. no guess: another plan's card, another slot, another name, two fitting
     const rec = state.builder.calendarEvent;
     assert.notEqual(rec.match.kind, "planned", c.label);
     const html = panelHtml();
-    assert.ok(html.includes(c.sentence.replace(/“/g, "&ldquo;").replace(/”/g, "&rdquo;")) || html.includes(c.sentence), `${c.label}: ${html}`);
+    assert.ok(html.includes(escapeHtml(c.sentence)) || html.includes(c.sentence), `${c.label}: ${html}`);
+    // A sentence without a form always has a next step (ux review MEDIUM-2).
+    if (c.sentence === pure.MATCH_SENTENCES.apply || c.sentence === pure.MATCH_SENTENCES.absent) {
+      assert.match(html, /builder-calendar-event-open-calendar/, `${c.label}: Open in calendar`);
+    }
+    if (c.label === "linked") assert.match(html, /In the calendar<\/h4>/);
     assert.doesNotMatch(html, /builder-calendar-event-send/, `${c.label}: nothing to make`);
     assert.equal(posts(calls).length, 0);
     noIdsOrCodes(html);
@@ -305,7 +314,7 @@ test("4. one POST with the exact body: the group's athletes as targets, the grou
 
 test("4b. a training that does not ask for RPE makes an event without RPE; the local checks send nothing", async () => {
   const { calls } = await open({ items: () => [plannedCard({ rpe: null, expects: [] })] });
-  assert.match(panelHtml(), /does not ask for RPE, as this training does not/);
+  assert.match(panelHtml(), /No RPE request \(same as this training\)\./);
   actions.handleBuilderCalendarEventInput({ dataset: { builderEventField: "title" }, value: "   " });
   await press("send");
   assert.equal(posts(calls).length, 0);
@@ -391,7 +400,8 @@ test("7. a lost answer: Result not confirmed, kept in the calendar's memory; Che
   await press("send");
   const rec = state.builder.calendarEvent;
   assert.equal(rec.phase, "unconfirmed");
-  assert.match(panelHtml(), /The result is not confirmed\./);
+  assert.ok(panelHtml().includes(escapeHtml(pure.RESULT_NOT_CONFIRMED)));
+  assert.ok(panelHtml().includes(escapeHtml(pure.CHECK_NEVER_TWICE)));
   assert.match(panelHtml(), /Check result/);
   assert.doesNotMatch(panelHtml(), /builder-calendar-event-send/, "no second create from the form");
   assert.match(rowHtml(), /data-action="builder-calendar-event-close"[^>]*disabled/);
@@ -457,6 +467,8 @@ test("8. one control at a time: a double click sends one POST; while a write is 
   assert.equal(state.builder.calendarEvent.phase, "sending");
   const html = rowHtml();
   assert.match(html, /data-session-id="s2"[^>]*disabled/, "another session's button is off");
+  assert.ok(html.includes(escapeHtml(pure.FINISH_FIRST)), "the reason is next to it");
+  assert.match(html, /data-session-id="s1"[^>]*aria-controls="cc-builder-event-s1"/, "the open button names its panel");
   await press("close");
   assert.ok(state.builder.calendarEvent, "the panel stays while sending");
   await press("open", { sessionId: "s2" });

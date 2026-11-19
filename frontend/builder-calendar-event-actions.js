@@ -58,8 +58,11 @@ function findSession(sessionId) {
 const current = (rec) => state.builder.calendarEvent === rec;
 const locked = (rec) => Boolean(rec && (rec.phase === "sending" || rec.phase === "unconfirmed"));
 
+// After a step, focus goes to the panel's message, else its heading, so a
+// phone scrolls to it and a screen reader reads it (mobile review LOW-3).
 function focusPanel() {
-  const node = globalThis.document?.querySelector?.("[data-cc-builder-event-focus]");
+  const doc = globalThis.document;
+  const node = doc?.querySelector?.("[data-cc-builder-event-focus]") || doc?.querySelector?.("[data-cc-builder-event-heading]");
   node?.focus?.({ preventScroll: false });
 }
 
@@ -106,6 +109,7 @@ async function readDay(rec, render) {
   }
   rec.phase = "ready";
   render?.();
+  focusPanel();
 }
 
 // The inputs of the open panel, mirrored into its form (a re-render keeps
