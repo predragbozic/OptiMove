@@ -17,7 +17,9 @@ $script:OmHostingSchemas = @(
 
 $script:OmConfigFileName = 'optimove-backup.local.conf'
 $script:OmConfigKeys = @('host', 'port', 'database', 'user', 'backup_folder', 'retention_days', 'ssl_root_cert', 'skip_schemas', 'pg_bin')
-$script:OmDumpNamePattern = '^optimove-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})\.dump(\.sha256|\.failed)?$'
+# Seconds are part of the name; a name without them (the first version of the script) is still recognised.
+$script:OmDumpNamePattern = '^optimove-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})?\.dump(\.sha256|\.failed)?$'
+$script:OmLockFileName = 'optimove-backup.lock'
 $script:OmRestoreDbPattern = '^optimove_restore_test_\d{8}_\d{6}$'
 
 function Get-OmAppSchemas { return $script:OmAppSchemas }
@@ -204,7 +206,76 @@ function Test-OmPgPassEntry {
 
 function New-OmDumpFileName {
   param([datetime]$Now = (Get-Date))
-  return ('optimove-' + $Now.ToString('yyyy-MM-dd-HHmm', [System.Globalization.CultureInfo]::InvariantCulture) + '.dump')
+  return ('optimove-' + $Now.ToString('yyyy-MM-dd-HHmmss', [System.Globalization.CultureInfo]::InvariantCulture) + '.dump')
+}
+
+# Reserves the name of a new backup: the file is created only if no file of that name exists (one atomic step,
+# so two runs can never share a name), and neither may a .failed file of that name. Returns the full path;
+# throws without touching anything when the name is taken.
+function New-OmDumpFile {
+  param([Parameter(Mandatory = $true)][string]$Folder, [datetime]$Now = (Get-Date))
+  $name = New-OmDumpFileName -Now $Now
+  $path = Join-Path $Folder $name
+  if (Test-Path -LiteralPath "$path.failed") { throw "refusing: $name.failed already exists; run again in a moment" }
+  try {
+    $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    $stream.Dispose()
+  } catch [System.IO.IOException] {
+    throw "refusing: $name already exists; run again in a moment"
+  }
+  return $path
+}
+
+# One backup at a time per folder. The lock is an open handle on a small file in the backup folder: while a run
+# holds it, a second run gets $null. Only the handle counts: a lock file left behind by a crash or a power cut
+# blocks nobody, because nothing holds it open. The file itself is never deleted (deleting it could hand the
+# "same" lock to two runs).
+function Enter-OmBackupLock {
+  param([Parameter(Mandatory = $true)][string]$Folder)
+  $path = Join-Path $Folder $script:OmLockFileName
+  try {
+    return [System.IO.File]::Open($path, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+  } catch [System.IO.IOException] {
+    return $null
+  }
+}
+
+function Exit-OmBackupLock {
+  param($Lock)
+  if ($null -ne $Lock) { $Lock.Dispose() }
+}
+
+# A short reason for the log, from a tool's error output or from one of this script's own messages: the first
+# line that says something, with everything that could identify the server or the person removed (the given
+# values such as host, user and folder, any quoted text, addresses, paths, key=value pairs that look like a
+# password or a connection setting), no log separator, and a length cap.
+function Get-OmSafeReason {
+  param([AllowNull()][AllowEmptyString()][string]$Text, [string[]]$Hide = @(), [int]$MaxLength = 160)
+  if (-not $Text) { return '' }
+  $line = ''
+  foreach ($candidate in ($Text -split "`r?`n")) { if ($candidate.Trim() -ne '') { $line = $candidate.Trim(); break } }
+  if ($line -eq '') { return '' }
+  # The pooler's user name (postgres.<project reference>) goes first, before the shorter values could split it.
+  $line = [regex]::Replace($line, '(?i)\bpostgres\.[a-z0-9]{6,}\b', '<hidden>')
+  foreach ($value in (@($Hide) | Where-Object { $_ -and $_.Length -ge 3 } | Sort-Object { $_.Length } -Descending)) {
+    $line = [regex]::Replace($line, ('(?<![A-Za-z0-9_])' + [regex]::Escape($value) + '(?![A-Za-z0-9_])'), '<hidden>', 'IgnoreCase')
+  }
+  $line = [regex]::Replace($line, '"[^"]*"', '<hidden>')
+  $line = [regex]::Replace($line, "'[^']*'", '<hidden>')
+  $line = [regex]::Replace($line, '(?i)\b[a-z][a-z0-9+.-]*://\S+', '<hidden>')
+  $line = [regex]::Replace($line, '(?i)\b(pg)?(password|passwd|pwd|passfile|user|username|host|hostaddr|dbname|options|service)\s*=\s*\S+', '<hidden>')
+  $line = [regex]::Replace($line, '(?i)\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|co|net|org|io|dev|app|cloud|internal|local|test|invalid)\b', '<hidden>')
+  $line = [regex]::Replace($line, '\b\d{1,3}(\.\d{1,3}){3}\b', '<hidden>')
+  $line = [regex]::Replace($line, '(?i)\b[0-9a-f]{0,4}(:[0-9a-f]{0,4}){3,7}\b', '<hidden>')
+  $line = [regex]::Replace($line, '(?i)\b[a-z]:\\[^\s,;]*', '<hidden>')
+  $line = [regex]::Replace($line, '(?<![\w<])/[^\s,;:]+/[^\s,;:]*', '<hidden>')
+  $line = [regex]::Replace($line, '(<hidden>\s*)+', '<hidden> ')
+  $line = [regex]::Replace($line, '[|\x00-\x1F\x7F]', ' ')
+  $line = [regex]::Replace($line, '\s+', ' ').Trim()
+  $line = [regex]::Replace($line, '\(\s+', '(')
+  $line = [regex]::Replace($line, '\s+([),:])', '$1')
+  if ($line.Length -gt $MaxLength) { $line = $line.Substring(0, $MaxLength - 3).TrimEnd() + '...' }
+  return $line
 }
 
 # The time written in a backup file's own name, or $null for any other file.
@@ -212,7 +283,9 @@ function Get-OmDumpTimeFromName {
   param([string]$Name)
   if ($Name -notmatch $script:OmDumpNamePattern) { return $null }
   try {
-    return (New-Object datetime ([int]$Matches[1]), ([int]$Matches[2]), ([int]$Matches[3]), ([int]$Matches[4]), ([int]$Matches[5]), 0)
+    $seconds = 0
+    if ($Matches[6]) { $seconds = [int]$Matches[6] }
+    return (New-Object datetime ([int]$Matches[1]), ([int]$Matches[2]), ([int]$Matches[3]), ([int]$Matches[4]), ([int]$Matches[5]), $seconds)
   } catch { return $null }
 }
 
