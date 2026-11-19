@@ -5,8 +5,9 @@
 // The prompt lives in its own host at the end of <body>, outside Home's content, so a repaint of Home (the parallel
 // reads that land after it) never rebuilds it or takes its focus. It never locks the app: Escape, Later and the
 // backdrop close it.
+import { detached } from "./app-errors-capture.js";
 import {
-  athleteOpenQuestionRows, athleteQuestionsNow, athleteQuestionsPromptable, findAthleteQuestion, markAthleteQuestionsPrompted,
+  athleteOpenQuestionRows, athleteQuestionsNow, athleteQuestionsReady, athleteQuestionsPromptable, findAthleteQuestion, markAthleteQuestionsPrompted,
   postponeAthleteQuestions, registerAthleteQuestionsPainter, setAthleteQuestionsNotice,
 } from "./athlete-questions-data.js";
 import { ATHLETE_QUESTIONS_PROMPT_LIMIT, ATHLETE_QUESTIONS_TITLE_ID, renderAthleteQuestionsPromptHtml } from "./athlete-questions-view.js";
@@ -17,6 +18,8 @@ export const ATHLETE_QUESTION_NOT_OPEN = "This question isn't open right now. Op
 export const ATHLETE_QUESTION_CLOSED = "This question has closed.";
 // The form did not open, but the question is still listed (a failed read of the form's side, for example).
 export const ATHLETE_QUESTION_NOT_OPENED = "The question couldn't be opened. Try Answer again.";
+// The form did not open and the list could not be read either (an outage): nothing is claimed about the question.
+export const ATHLETE_QUESTION_UNREACHABLE = "The question couldn't be opened right now. Try again in a moment.";
 const HOST_ID = "athleteQuestionsPromptHost";
 const BODY_CLASS = "athlete-questions-prompt-open";
 const FOCUSABLE = "button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])";
@@ -76,7 +79,8 @@ export function maybeShowAthleteQuestionsPrompt({ doc = globalThis.document, ath
       // The prompt is modal: its clicks go nowhere else.
       event.preventDefault();
       event.stopPropagation();
-      void handleAthleteQuestionsAction(action, promptHandlers());
+      // Not awaited by anyone: a rejection is reported (App health), never left unhandled.
+      detached(handleAthleteQuestionsAction(action, promptHandlers()), action.dataset.action || "");
     });
     doc.body.appendChild(host);
   }
@@ -138,7 +142,10 @@ export async function answerAthleteQuestion(questionId, handlers = {}) {
   await handlers.openRpe?.(row.formId);
   if (handlers.rpeFormOpenFor && !handlers.rpeFormOpenFor(row.formId)) {
     await handlers.reload?.();
-    setAthleteQuestionsNotice(findAthleteQuestion(questionId) ? ATHLETE_QUESTION_NOT_OPENED : ATHLETE_QUESTION_CLOSED);
+    // "Closed" only from a read that succeeded (the re-review: a failed read must never claim it).
+    const notice = !athleteQuestionsReady() ? ATHLETE_QUESTION_UNREACHABLE
+      : findAthleteQuestion(questionId) ? ATHLETE_QUESTION_NOT_OPENED : ATHLETE_QUESTION_CLOSED;
+    setAthleteQuestionsNotice(notice);
     handlers.render?.();
     return false;
   }
@@ -190,7 +197,8 @@ export function handleAthleteQuestionsKeydown(event, handlers = {}) {
   return false;
 }
 
-// The phone's Back while the prompt is open (app.js handleAppBack): the same as Escape, Later. Answers true only when
+// The phone's Back while the prompt is open (app.js handleBrowserBack, through athleteQuestionsBrowserBack): the same as
+// Escape, Later. Answers true only when
 // the prompt was open, so Back otherwise keeps its own meaning (the exit question would else open hidden behind it).
 export function athleteQuestionsBack(handlers = {}) {
   if (!athleteQuestionsPromptOpen()) return false;
@@ -211,7 +219,8 @@ export async function openCalendarQuestion(questionId, handlers = {}) {
   return answerAthleteQuestion(questionId, handlers);
 }
 
-// The minute's tick: a prompt whose questions have all closed closes by itself (the focus to Home's heading).
+// The minute's tick: a prompt whose questions have all closed closes by itself (the focus to the card's title, or Home's
+// heading when the card has gone).
 registerAthleteQuestionsPainter(() => {
   if (!athleteQuestionsPromptOpen()) return;
   const open = new Set(athleteOpenQuestionRows(state.athleteQuestions?.rows, athleteQuestionsNow()).map((row) => row.questionId));

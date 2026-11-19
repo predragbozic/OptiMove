@@ -475,9 +475,17 @@ decision 9).
 - the sheet's last row flush against the actions when three rows scroll;
 - iOS scroll chaining behind `body { overflow: hidden }` (needs a device).
 
+**The narrow code re-review (on `9b0b710d`): READY WITH NON-BLOCKING NOTES.** Every round-1 finding is closed. Its notes,
+all applied:
+- LOW: after a failed reread (an outage), "has closed" was still claimed. Now "closed" is said only from a read that
+  succeeded. Otherwise: "The question couldn't be opened right now. Try again in a moment." Q13c, M21.
+- LOW: the prompt's async click listener left a rejection unhandled. It now goes through `detached`, so App health
+  records it. Q22, M22.
+- NIT: two stale comments.
+
 **Evidence after the round:**
-- the suite: 22 + 4 tests;
-- 20 mutations, all killed (M1–M20);
+- the suite: 24 + 4 tests;
+- 22 mutations, all killed (M1–M22);
 - the browser check: 58 checks, all passing. It now has real mouse clicks on the prompt's *Later* and *Answer now*, the
   phone's Back on the prompt (*Later* for each question shown, no exit question), and one `/mine` read on the
   notification path.

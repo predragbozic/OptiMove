@@ -20,7 +20,7 @@ const {
   ATHLETE_QUESTION_ROW_KEYS, athleteQuestionsAnswered, athleteQuestionsTick, loadAthleteQuestions, resetAthleteQuestions, setAthleteQuestionsClock,
 } = data;
 const {
-  ATHLETE_QUESTION_CLOSED, ATHLETE_QUESTION_NOT_OPEN, ATHLETE_QUESTION_NOT_OPENED, athleteQuestionsBack, athleteQuestionsPromptOpen, beginAthleteHomeLoad,
+  ATHLETE_QUESTION_CLOSED, ATHLETE_QUESTION_NOT_OPEN, ATHLETE_QUESTION_NOT_OPENED, ATHLETE_QUESTION_UNREACHABLE, athleteQuestionsBack, athleteQuestionsPromptOpen, beginAthleteHomeLoad,
   closeAthleteQuestionsPrompt, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion,
   setAthleteQuestionsPromptHandlers,
 } = actions;
@@ -430,6 +430,18 @@ test("Q13. an RPE form not found after Answer now: 'This question has closed.' w
   assert.equal($(".athlete-questions-notice"), null, "cleared by the next read");
 });
 
+test("Q13c. the form did not open and the reread fails (an outage): never 'has closed', a neutral line instead", async () => {
+  world.questions = [question({ id: "q-1" })];
+  server();
+  await enterHome();
+  // Now every read of the list fails.
+  server({ failMine: () => ({ status: 503, body: { error: "database_busy", message: "busy" } }) });
+  await handleAthleteQuestionsAction(fakeAction({ action: "athlete-questions-answer", questionId: "q-1" }), handlers({ rpeFormOpenFor: () => false }));
+  assert.equal(state.athleteQuestions.status, "hidden");
+  assert.equal($(".athlete-questions-notice").textContent, ATHLETE_QUESTION_UNREACHABLE);
+  assert.notEqual($(".athlete-questions-notice").textContent, ATHLETE_QUESTION_CLOSED);
+});
+
 test("Q14. the card: at the top of Home with one Answer per open question; gone after the answer (the row dropped at once, then the read)", async () => {
   world.questions = [question({ id: "q-1", formId: "ext-1", later: true }), question({ id: "q-2", kind: "wellness", formId: "ta-2", later: true })];
   const calls = server();
@@ -548,6 +560,23 @@ test("Q20. real clicks on the prompt (it lives outside #content, with its own li
   assert.equal(reachedDocument, 0, "the prompt's clicks go nowhere else");
   doc().removeEventListener("click", onDoc);
   setAthleteQuestionsPromptHandlers(null);
+});
+
+test("Q22. a rejecting handler behind the prompt is reported, never left unhandled", async () => {
+  let unhandled = 0;
+  const onUnhandled = () => { unhandled += 1; };
+  process.on("unhandledRejection", onUnhandled);
+  setAthleteQuestionsPromptHandlers(() => ({ ...handlers(), openRpe: async () => { throw new Error("form failed"); } }));
+  world.questions = [question({ id: "q-1" })];
+  server();
+  await enterHome();
+  $("#athleteQuestionsPromptHost [data-action='athlete-questions-answer']").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await settle();
+  await settle();
+  await new Promise((r) => setTimeout(r, 20));
+  process.off("unhandledRejection", onUnhandled);
+  setAthleteQuestionsPromptHandlers(null);
+  assert.equal(unhandled, 0);
 });
 
 test("Q21. only the latest Home load may show the prompt: an older load settling after a deep link started shows nothing", async () => {
