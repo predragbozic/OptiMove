@@ -250,6 +250,10 @@ test("6. no query per session: the athlete's fold reads the links in ONE stateme
     assert.match(reads[0].sql, /l\.plan_id in \(select p\.id from plans\.plans p where p\.athlete_id = \$2::uuid\)/);
   }
   assert.deepEqual(linkReads(seenThree)[0].params[1], three.ana.athleteId);
+  // No activity link is read for the athlete (contract 1.1; the Independent's LOW-1 on #660).
+  for (const seen of [seenOne, seenThree]) {
+    assert.deepEqual(seen.filter((x) => /calendar\.event_activity_links/.test(x.sql)).map((x) => x.sql.slice(0, 60)), [], "no activity-link read in the athlete's request");
+  }
   // Order: Before, Training, After (the Weekly plan's order).
   assert.deepEqual(eventCard(res, items(res).find((i) => i.kind === "event").links.eventId).sessions.map((x) => x.title), ["Before", "Main", "After"]);
 });
