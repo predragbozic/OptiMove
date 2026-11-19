@@ -20,7 +20,7 @@ const {
   ATHLETE_QUESTION_ROW_KEYS, athleteQuestionsAnswered, athleteQuestionsTick, loadAthleteQuestions, resetAthleteQuestions, setAthleteQuestionsClock,
 } = data;
 const {
-  ATHLETE_QUESTION_CLOSED, ATHLETE_QUESTION_NOT_OPEN, athleteQuestionsPromptOpen, closeAthleteQuestionsPrompt, handleAthleteQuestionsAction,
+  ATHLETE_QUESTION_CLOSED, ATHLETE_QUESTION_NOT_OPEN, ATHLETE_QUESTION_NOT_OPENED, athleteQuestionsBack, athleteQuestionsPromptOpen, closeAthleteQuestionsPrompt, handleAthleteQuestionsAction,
   handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion,
 } = actions;
 
@@ -411,10 +411,14 @@ test("Q12. Answer now: RPE opens the external assignment's form, WELLNESS the Te
   assert.equal(prompt(), null);
 });
 
-test("Q13. an RPE form not found after Answer now: 'This question has closed.' at the top of Home, after a new read", async () => {
+test("Q13. an RPE form not found after Answer now: 'This question has closed.' when the new read no longer lists it; a neutral line while it is still listed", async () => {
   world.questions = [question({ id: "q-1" })];
   const calls = server();
   await enterHome();
+  await handleAthleteQuestionsAction(fakeAction({ action: "athlete-questions-answer", questionId: "q-1" }), handlers({ rpeFormOpenFor: () => false }));
+  assert.equal($(".athlete-questions-notice").textContent, ATHLETE_QUESTION_NOT_OPENED, "still listed: never 'has closed'");
+  assert.ok($("section.athlete-questions-card [data-question-id='q-1']"), "its Answer stays");
+  world.questions[0].answered = true;
   const before = mineCalls(calls).length;
   await handleAthleteQuestionsAction(fakeAction({ action: "athlete-questions-answer", questionId: "q-1" }), handlers({ rpeFormOpenFor: () => false }));
   assert.equal(mineCalls(calls).length, before + 1);
@@ -478,6 +482,19 @@ test("Q16. the minute's tick: a closed window leaves the card with no request an
   now = new Date(2026, 10, 19, 0, 1).getTime();
   athleteQuestionsTick();
   assert.equal(card(), null);
+});
+
+test("Q19. the phone's Back on the prompt is its Later; with no prompt open Back is not ours (answers false, sends nothing)", async () => {
+  world.questions = [question({ id: "q-1" })];
+  const calls = server();
+  assert.equal(athleteQuestionsBack(handlers()), false, "no prompt: Back keeps its own meaning");
+  await enterHome();
+  assert.equal(athleteQuestionsBack(handlers()), true);
+  assert.equal(prompt(), null);
+  await settle();
+  assert.equal(laterCalls(calls).length, 1);
+  assert.equal(athleteQuestionsBack(handlers()), false);
+  assert.equal(laterCalls(calls).length, 1);
 });
 
 // ---------------------------------------------------------------------------

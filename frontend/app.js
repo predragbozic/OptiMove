@@ -97,7 +97,7 @@ import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } fr
 import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
 import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
 import { loadAthleteQuestions, resetAthleteQuestions } from "./athlete-questions-data.js";
-import { closeAthleteQuestionsPrompt, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
+import { athleteQuestionsBack, closeAthleteQuestionsPrompt, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
@@ -2210,6 +2210,8 @@ function handleAppBack() {
     closeMedia();
     return true;
   }
+  // K2b-2a-3: Back on the questions' prompt is its Later (as Escape).
+  if (athleteQuestionsBack(athleteQuestionHandlers())) return true;
 
   // feature/mobile-messages-fullscreen: menu -> Hide-confirm -> thread-to-
   // list -> close-Messages, in that exact priority order - see

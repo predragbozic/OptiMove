@@ -12,8 +12,11 @@ import {
 import { ATHLETE_QUESTIONS_PROMPT_LIMIT, ATHLETE_QUESTIONS_TITLE_ID, renderAthleteQuestionsPromptHtml } from "./athlete-questions-view.js";
 import { state } from "./state.js";
 
-export const ATHLETE_QUESTION_NOT_OPEN = "This question isn't open right now.";
+// The GO's sentence (decision 3), then its next step (the UX review: one sentence and one step).
+export const ATHLETE_QUESTION_NOT_OPEN = "This question isn't open right now. Open questions show here at the top of Home.";
 export const ATHLETE_QUESTION_CLOSED = "This question has closed.";
+// The form did not open, but the question is still listed (a failed read of the form's side, for example).
+export const ATHLETE_QUESTION_NOT_OPENED = "The question couldn't be opened. Try Answer again.";
 const HOST_ID = "athleteQuestionsPromptHost";
 const BODY_CLASS = "athlete-questions-prompt-open";
 const FOCUSABLE = "button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])";
@@ -120,7 +123,7 @@ export async function answerAthleteQuestion(questionId, handlers = {}) {
   await handlers.openRpe?.(row.formId);
   if (handlers.rpeFormOpenFor && !handlers.rpeFormOpenFor(row.formId)) {
     await handlers.reload?.();
-    setAthleteQuestionsNotice(ATHLETE_QUESTION_CLOSED);
+    setAthleteQuestionsNotice(findAthleteQuestion(questionId) ? ATHLETE_QUESTION_NOT_OPENED : ATHLETE_QUESTION_CLOSED);
     handlers.render?.();
     return false;
   }
@@ -170,6 +173,14 @@ export function handleAthleteQuestionsKeydown(event, handlers = {}) {
     return true;
   }
   return false;
+}
+
+// The phone's Back while the prompt is open (app.js handleAppBack): the same as Escape, Later. Answers true only when
+// the prompt was open, so Back otherwise keeps its own meaning (the exit question would else open hidden behind it).
+export function athleteQuestionsBack(handlers = {}) {
+  if (!athleteQuestionsPromptOpen()) return false;
+  laterFromPrompt(handlers);
+  return true;
 }
 
 // A question notification's click (section 5): Home, read without the prompt (handlers.loadHome), then the question's
