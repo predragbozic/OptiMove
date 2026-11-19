@@ -242,8 +242,32 @@ export function validateCreateBody(body) {
   // defaults while the club's switch is on).
   const questions = Q.validateQuestionsField(body);
   if (questions !== undefined) canonical.questions = questions;
+  // K2c-2-B (docs/ai/central-calendar-k2c-plan.md 2.3, 2.4): the planned
+  // sessions linked in the same transaction, only when sent (absent: the hash
+  // of every earlier body is unchanged).
+  const sessions = createSessionsField(body);
+  if (sessions !== undefined) canonical.sessions = sessions;
   checkDaysAndTimes(canonical);
   return { requestKey, canonical };
+}
+
+// `sessions` on create: { logicalSessionIds } with the attach's validator
+// (sorted, deduplicated). A create never aligns (the manager's GO, 2.4 Q3):
+// `alignSessions: true` and any `confirmDisableWithResults` are refused, so
+// the canonical body is the ids alone.
+export const CREATE_ALIGN_REFUSED = "Create the event first, then align its trainings.";
+function createSessionsField(body) {
+  if (!body || !Object.prototype.hasOwnProperty.call(body, "sessions") || body.sessions === undefined) return undefined;
+  const raw = body.sessions;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw bad("invalid_sessions", "sessions must be an object with logicalSessionIds.");
+  const logicalSessionIds = uuidListField(raw, "logicalSessionIds", "invalid_sessions", { max: MAX_LINKED_SESSIONS });
+  if (Object.prototype.hasOwnProperty.call(raw, "alignSessions") && raw.alignSessions !== undefined && raw.alignSessions !== false) {
+    throw bad("invalid_align", CREATE_ALIGN_REFUSED);
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, "confirmDisableWithResults") && raw.confirmDisableWithResults !== undefined) {
+    throw bad("invalid_align", CREATE_ALIGN_REFUSED);
+  }
+  return { logicalSessionIds };
 }
 
 export function validateUpdateBody(body) {
@@ -836,6 +860,20 @@ export async function createEvent(ctx, body) {
     // is on) and a Day off's effect — every lock before the first write.
     const ev = { title: canonical.title, day: canonical.day, endDay: canonical.endDay, startTime: canonical.startTime, endTime: canonical.endTime, timezone: canonical.timezone };
     const state = await lockQuestionState(client, { eventId: null, clubId: club });
+    // K2c-2-B (2.3.3 step 6): the sessions, as the attach takes them - decided
+    // on an unlocked read over the targets just resolved (no event row yet),
+    // the plans FOR SHARE in ascending id, read and judged again under them.
+    // Every check before the first write: a refusal leaves nothing.
+    let linkSessions = null;
+    if (canonical.sessions) {
+      const ids = canonical.sessions.logicalSessionIds;
+      const unlocked = await readLinkableSessions(client, ctx, null, ids, { targets });
+      if (!allLinkable(owner, unlocked, ids)) throw sessionNotAvailable();
+      await lockPlansForShare(client, unlocked.map((x) => x.plan_id));
+      linkSessions = await readLinkableSessions(client, ctx, null, ids, { targets });
+      judgeSessionsForLink(owner, { day: canonical.day, end_day: canonical.endDay }, linkSessions, ids, null);
+      if (testHooks.afterSessionLocks) await testHooks.afterSessionLocks({ client, operation: "create" });
+    }
     let plan = null;
     let dayOffCandidates = [];
     if (!state.installed && canonical.questions) throw Q.questionsOff();
@@ -847,6 +885,7 @@ export async function createEvent(ctx, body) {
       plan = await planQuestions(client, {
         state, ev, desired, explicit, moved: false, eventId: null,
         extIdNow: canonical.externalScheduleId, extIdSentInBody: Boolean(canonical.externalScheduleId),
+        sessionsLinked: Boolean(linkSessions),
       });
       const dayOffSpan = type.kind === "day_off" ? { from: canonical.day, to: canonical.endDay || canonical.day } : null;
       dayOffCandidates = await lockDaysAndDayOff(client, { clubId: club, enabled: state.enabled, wellnessDays: plan.wellnessDays, dayOffSpan });
@@ -864,10 +903,13 @@ export async function createEvent(ctx, body) {
     const eventId = inserted.rows[0].id;
     await insertTargets(client, eventId, targets);
     await writeEventFields(client, eventId, fieldIds);
+    if (linkSessions) await insertSessionLinks(client, eventId, ctx.userId, linkSessions);
     const questions = plan ? await applyQuestionsAfterEventWrite(client, ctx, plan, qev, eventId, club) : null;
     const dayOffCancelled = await Q.cancelReachedByDayOff(client, eventId, dayOffCandidates);
     const view = await readEventView(client, ctx, eventId);
-    const counts = questions ? { questionsAsked: questions.asked, questionsSkipped: questions.skipped, dayOffCancelled } : null;
+    const questionCounts = questions ? { questionsAsked: questions.asked, questionsSkipped: questions.skipped, dayOffCancelled } : null;
+    const linkCounts = linkSessions ? { attached: linkSessions.length, alreadyAttached: 0, alignment: null } : null;
+    const counts = questionCounts || linkCounts ? { ...(linkCounts || {}), ...(questionCounts || {}) } : null;
     return {
       eventId, httpStatus: 201, body: { event: view, ...(counts || {}) }, ...(counts ? { counts } : {}),
       notifyUserIds: questions?.notifyUserIds || [],
@@ -876,6 +918,7 @@ export async function createEvent(ctx, body) {
         timezone: canonical.timezone, expects, targetIds: targets.map((t) => t.id), targetKinds: targets.map((t) => t.kind),
         externalScheduleId, testScheduleId: canonical.testScheduleId,
         locationId, fieldIds, ...questionDetails(questions, dayOffCancelled),
+        ...(linkSessions ? { sessions: linkSessions.length, planIds: [...new Set(linkSessions.map((x) => String(x.plan_id)))].sort() } : {}),
       },
     };
   });
@@ -1364,7 +1407,16 @@ const linkNotAvailable = () => bad("link_not_available", "One of these links is 
 // `dayExpr`: directly, or a member of a target team or club that day — the
 // calendar's one membership rule (readScheduleTargetAthletes).
 function eventTargetsAthleteSql(eventParam, athleteExpr, dayExpr) {
-  return `exists (select 1 from calendar.event_targets tg where tg.event_id = ${eventParam} and (
+  return targetsAthleteSql(`calendar.event_targets tg where tg.event_id = ${eventParam}`, athleteExpr, dayExpr);
+}
+
+// K2c-2-B (2.3.4): the one rule of "this athlete is a target of the event on
+// that day", over a source of target rows `tg(target_kind, target_athlete_id,
+// target_team_id, target_club_id)` - the stored event's (the attach), or the
+// targets a create resolved before its INSERT (`unnest`). `source` ends in
+// its own `where` clause.
+function targetsAthleteSql(source, athleteExpr, dayExpr) {
+  return `exists (select 1 from ${source} and (
             (tg.target_kind = 'athlete' and tg.target_athlete_id = ${athleteExpr})
          or (tg.target_kind = 'team' and ${membershipOnDaySql(athleteExpr, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = tg.target_team_id)`, dayExpr)})
          or (tg.target_kind = 'club' and ${membershipOnDaySql(athleteExpr, (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, dayExpr)})))`;
@@ -1408,10 +1460,23 @@ async function lockPlansForShare(client, planIds) {
 // the workspace switch, and the event a live link of the slot already names.
 // `lockSessions` takes the rows FOR UPDATE in ascending id (the alignment's
 // write).
-async function readLinkableSessions(client, ctx, eventId, logicalSessionIds, { lockSessions = false } = {}) {
-  const params = [logicalSessionIds, eventId];
+// `targets` (a create, K2c-2-B): the resolved targets `[{ kind, id }]` judge
+// "targeted" instead of a stored event (`eventId` is then null).
+async function readLinkableSessions(client, ctx, eventId, logicalSessionIds, { lockSessions = false, targets = null } = {}) {
+  const params = [logicalSessionIds, targets ? targets.map((t) => t.kind) : eventId];
   const scope = calendarAthleteScopeSql(ctx, "ath", params, "pd.date");
-  const targeted = eventTargetsAthleteSql("$2::uuid", "ath.id", "pd.date");
+  let targeted;
+  if (targets) {
+    const of = (kind) => targets.map((t) => (t.kind === kind ? String(t.id) : null));
+    params.push(of("athlete"), of("team"), of("club"));
+    const n = params.length;
+    targeted = targetsAthleteSql(
+      `unnest($2::text[], $${n - 2}::uuid[], $${n - 1}::uuid[], $${n}::uuid[]) as tg(target_kind, target_athlete_id, target_team_id, target_club_id) where true`,
+      "ath.id", "pd.date",
+    );
+  } else {
+    targeted = eventTargetsAthleteSql("$2::uuid", "ath.id", "pd.date");
+  }
   const result = await client.query(
     `select ps.logical_session_id, ps.id as session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_order,
             ps.rpe_enabled, ps.training_load_enabled, pd.date as day, p.id as plan_id, p.athlete_id,
@@ -1440,6 +1505,35 @@ async function readLinkableSessions(client, ctx, eventId, logicalSessionIds, { l
 function allLinkable(owner, sessions, logicalSessionIds) {
   const found = new Set(sessions.filter((x) => x.in_scope === true && withinEventOwner(owner, x)).map((x) => String(x.logical_session_id)));
   return sessions.length === logicalSessionIds.length && logicalSessionIds.every((id) => found.has(id));
+}
+
+// The checks of a link under the plan locks, in one order for the attach and
+// a create (K2c-2-B): available, on the event's days, every athlete a target
+// that day, no live link of the slot to another event (`eventId` null: a new
+// event, so any live link is another event's).
+function judgeSessionsForLink(owner, days, sessions, logicalSessionIds, eventId) {
+  if (!allLinkable(owner, sessions, logicalSessionIds)) throw sessionNotAvailable();
+  if (sessions.some((x) => !inEventDays(days, dateStr(x.day)))) {
+    throw conflict("session_outside_event", "A session must be on one of the event's days.");
+  }
+  const notTargeted = sessions.filter((x) => x.targeted !== true).length;
+  if (notTargeted) throw conflict("athlete_not_targeted", "An athlete of these sessions is not a target of this event on that day.", { count: notTargeted });
+  if (sessions.some((x) => x.linked_event_id && (!eventId || String(x.linked_event_id) !== String(eventId)))) {
+    throw conflict("session_already_attached", "One of these sessions is already attached to another event.");
+  }
+}
+
+// One multi-row INSERT of the slot-key links (K2a-1b; the attach and a create).
+async function insertSessionLinks(client, eventId, userId, fresh) {
+  await client.query(
+    `insert into calendar.event_session_links (event_id, plan_id, day, am_pm, bta, session_order, logical_session_id_at_link, session_name_at_link, linked_by_user_id)
+     select $1, x.plan_id, x.day, x.am_pm, x.bta, x.session_order, x.logical_session_id, x.session_name, $2
+       from unnest($3::uuid[], $4::date[], $5::text[], $6::text[], $7::int[], $8::uuid[], $9::text[])
+            as x(plan_id, day, am_pm, bta, session_order, logical_session_id, session_name)`,
+    [eventId, userId, fresh.map((x) => x.plan_id), fresh.map((x) => dateStr(x.day)), fresh.map((x) => x.am_pm),
+      fresh.map((x) => x.bta), fresh.map((x) => Number(x.session_order) || 0), fresh.map((x) => x.logical_session_id),
+      fresh.map((x) => linkName(x.session_name))],
+  );
 }
 
 async function bumpRevision(client, eventId) {
@@ -1536,27 +1630,9 @@ export async function attachSessions(ctx, eventId, body) {
     if (!allLinkable(owner, unlocked, canonical.logicalSessionIds)) throw sessionNotAvailable();
     await lockPlansForShare(client, unlocked.map((x) => x.plan_id));
     const sessions = await readLinkableSessions(client, ctx, row.id, canonical.logicalSessionIds, { lockSessions: canonical.alignSessions });
-    if (!allLinkable(owner, sessions, canonical.logicalSessionIds)) throw sessionNotAvailable();
-    if (sessions.some((x) => !inEventDays(row, dateStr(x.day)))) {
-      throw conflict("session_outside_event", "A session must be on one of the event's days.");
-    }
-    const notTargeted = sessions.filter((x) => x.targeted !== true).length;
-    if (notTargeted) throw conflict("athlete_not_targeted", "An athlete of these sessions is not a target of this event on that day.", { count: notTargeted });
-    if (sessions.some((x) => x.linked_event_id && String(x.linked_event_id) !== String(row.id))) {
-      throw conflict("session_already_attached", "One of these sessions is already attached to another event.");
-    }
+    judgeSessionsForLink(owner, row, sessions, canonical.logicalSessionIds, row.id);
     const fresh = sessions.filter((x) => !x.linked_event_id);
-    if (fresh.length) {
-      await client.query(
-        `insert into calendar.event_session_links (event_id, plan_id, day, am_pm, bta, session_order, logical_session_id_at_link, session_name_at_link, linked_by_user_id)
-         select $1, x.plan_id, x.day, x.am_pm, x.bta, x.session_order, x.logical_session_id, x.session_name, $2
-           from unnest($3::uuid[], $4::date[], $5::text[], $6::text[], $7::int[], $8::uuid[], $9::text[])
-                as x(plan_id, day, am_pm, bta, session_order, logical_session_id, session_name)`,
-        [row.id, ctx.userId, fresh.map((x) => x.plan_id), fresh.map((x) => dateStr(x.day)), fresh.map((x) => x.am_pm),
-          fresh.map((x) => x.bta), fresh.map((x) => Number(x.session_order) || 0), fresh.map((x) => x.logical_session_id),
-          fresh.map((x) => linkName(x.session_name))],
-      );
-    }
+    if (fresh.length) await insertSessionLinks(client, row.id, ctx.userId, fresh);
     const alignment = canonical.alignSessions ? await alignLinkedSessions(client, ctx, row, sessions, canonical.confirmDisableWithResults) : null;
     if (liveRpe) {
       await Q.endQuestion(client, liveRpe, ctx.userId, "replaced_by_sessions");
@@ -1797,7 +1873,7 @@ const wellnessNotAvailable = () => conflict("wellness_not_available", "The WELLN
 //   desired   [{ kind, window }] the event's questions after the command;
 //             null keeps the live ones (moved with the event when `moved`)
 //   explicit  the desired list was sent (a refusal is an error, not a skip)
-async function planQuestions(client, { state, ev, desired, explicit, moved, eventId, extIdNow, extIdSentInBody }) {
+async function planQuestions(client, { state, ev, desired, explicit, moved, eventId, extIdNow, extIdSentInBody, sessionsLinked = false }) {
   const plan = { end: [], ask: [], skipped: [] };
   const live = state.live;
   const wanted = desired ?? live.map((q) => ({ kind: q.kind, window: Q.windowOfRow(q) }));
@@ -1835,7 +1911,9 @@ async function planQuestions(client, { state, ev, desired, explicit, moved, even
     }
     if (want.kind === "rpe") {
       let refusal = null;
-      if (await Q.hasLiveSessionLinks(client, eventId)) refusal = rpeFromSessions();
+      // `sessionsLinked`: a create that links sessions (K2c-2-B, 2.3.7) - the
+      // link is the event's RPE channel before its row exists.
+      if (sessionsLinked || await Q.hasLiveSessionLinks(client, eventId)) refusal = rpeFromSessions();
       else if (extIdSentInBody || (extIdNow && !live.some((q) => q.kind === "rpe" && String(q.external_schedule_id) === String(extIdNow)))) refusal = rpeAlreadyLinked();
       if (refusal) {
         if (explicit) throw refusal;

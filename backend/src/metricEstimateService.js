@@ -159,7 +159,9 @@ export async function loadEstimateContext(client, { canonicalId, activity, team,
        from training_load.metric_event_participants p
        join training_load.metric_measurement_occasions o on o.event_participant_id = p.id
        join training_load.metric_values v on v.occasion_id = o.id
-      where p.event_id = $1 and o.entry_method in ('api_import', 'csv_import') and ${EFFECTIVE} and v.value_numeric is not null`,
+      where p.event_id = $1 and o.entry_method in ('api_import', 'csv_import') and ${EFFECTIVE} and v.value_numeric is not null
+        -- J21: a calculated variable is OptiMove's sum of others, never estimated (and never a basis); it is left out.
+        and not v.is_derived`,
     [event.id],
   )).rows.map((r) => ({ athleteId: String(r.athlete_id), def: String(r.metric_definition_id), value: Number(r.value), unit: r.unit_at_capture ?? null }));
   // The athlete's own real values (M2): manual counts too.
