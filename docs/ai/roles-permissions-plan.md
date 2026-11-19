@@ -122,9 +122,8 @@ athletes and programs.
    section 5. Nobody assigns themselves a role they do not already hold.
 4. **Effective permission** = the union of the person's roles for the resource's scope, minus the
    modules closed for that club or coach. In `can()` and in the SQL twin, not only in the editor.
-   Recommended, open for the owner: a platform admin is exempt from a club's module switch (support
-   must be able to look), with the basis on the audit row; "nobody there has it" of section 3.3
-   then means nobody of the club.
+   A platform admin is exempt from a club's module switch (the owner, 2026-11-19, D6f), with the
+   basis on the audit row; "nobody there has it" of section 3.3 means nobody of the club.
 5. **Three permissions are not delegable:** `staff.assign`, `accounts.manage` and `roles.manage`
    exist only in system roles; the database refuses them in a club's role. (The recommendation for D5.)
 6. **Account actions have a target rule.** An e-mail change, a password reset or a login switch on
@@ -376,7 +375,9 @@ A whole section (Training Load, Tests, Builder, Calendar, ...) can be closed in 
    lever for the later subscription levels of section 3.1.
 2. **For a role** - the role has none of the section's permissions (section 3.2).
 
-A closed section is shown in one of two ways, chosen per module by whoever closes it:
+**A module the platform closed for a club** (D6f) is shown locked to the club's admin, who then
+knows it exists and whom to ask, and is invisible to the club's coaches and everyone else. A
+section closed for a role by the club's admin is shown in one of two ways, chosen per module:
 
 - **Invisible** (the default): not in the navigation, nowhere mentioned; its routes answer the 404.
 - **Locked** ("blurred"): the section stays in the navigation with a lock; opening it shows a fixed
@@ -619,6 +620,7 @@ access there (fail closed).
 | D6c | Groups with levels as the way a role is made, fine-tuning behind it; basic roles first | **Decided (2026-11-18), section 3.0.** Open: the group list and the ladders of that table. |
 | D6d | Basic roles: start as today; a platform admin adjusts them and adds new ones; a club's admin does the same in its club up to its own level | **Decided (2026-11-18), section 4.** Recommended on top of it: Platform admin stays not editable. |
 | D6e | Account actions and the club's own details | **Decided (2026-11-19):** changing another account's e-mail or password stays with the platform admin for now; a club's admin keeps adding athletes, inviting them and sending join links; a club's own details are edited by the platform admin and the club's admin (`org.club.edit`). So `accounts.manage` is not in the Club admin role yet, and rule 7 of section 2.1 lists `staff.assign` and `roles.manage` until account actions move with their target rule (rule 6). |
+| D6f | A module the platform switched off for a club: who sees what | **Decided (2026-11-19), the owner adding "maybe so" to the second and third part:** the platform admin still sees and opens the module in that club (the entry is recorded); the club's admin sees it **locked**, with the padlock; the coaches and everyone else of the club do not see it at all. So for a module closed by the platform the display depends on the audience, and is not one choice per module. |
 | D7 | The catalog of section 3: anything missing, or too fine? | - |
 | D8 | The three proposed roles of section 4: the ticks for each. | As in the table. |
 | D9 | Order after R3: Director first (R4) or Builder first (R5)? | Director first. |
