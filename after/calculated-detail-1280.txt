@@ -1,0 +1,45 @@
+Training load
+
+Training load
+Platform administration
+Notifications
+Messages
+Sign out
+Online
+Schedule
+Data & Analysis
+Data configuration
+← All variables
+HMLD 1280
+Rename
+New version
+Change icon
+Archive
+
+The variable HMLD 1280 was created.
+
+Unit
+m
+Recorded for
+Session
+Calculated
+Adds up Power zone 3 distance + Power zone 4 distance + Power zone 5 distance.
+Calculated for sessions imported after this variable was made. Sessions imported earlier stay without it. OptiMove calculates it for a team once every variable it adds up is switched on for that team. Athletes do not see calculated variables.
+Condition
+None
+Mapping
+Calculated by OptiMove from other variables, so no mapping can use it.
+Domains and categories
+
+In no domain or category yet.
+
+To add it to a domain or category, first create one.
+
+Open Categories
+Versions
+
+Version 1 Current 19.11.2026
+
+m · adds up Power zone 3 distance + Power zone 4 distance + Power zone 5 distance
+
+Technical details

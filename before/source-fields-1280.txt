@@ -1,0 +1,57 @@
+Training load
+
+Training load
+Platform administration
+Notifications
+Messages
+Sign out
+Online
+Schedule
+Data & Analysis
+Data configuration
+← Data configuration
+Source fields
+
+The fields each data source delivers, and how far each one's unit and meaning are proven.
+
+What the evidence badges mean
+GPEXE
+SPEEDmax
+Expected unit m/s (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+TotDist
+Expected unit m (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+TIME
+Expected unit s (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+Brake events
+Expected unit count (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+Burst events
+Expected unit count (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+Power zone distance
+Expected unit m (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+Power zone distance (open top zone)
+Expected unit m (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+Speed zone distance
+Expected unit m (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+Acceleration events
+Expected unit count (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+Deceleration events
+Expected unit count (not proven) · Meaning not confirmed · Session and Drill
+Evidence: Observed
+More values GPEXE sends
+
+GPEXE also sends these values in the clubs' sessions. OptiMove does not import them yet. Use this value adds it to OptiMove; once new sessions bring it and you have checked it against GPEXE, you can put it on a variable.
+
+Search the values
+Also show the ones OptiMove already uses
+Show technical details
+
+Nothing yet. Values appear after the next Find new sessions in Imports.

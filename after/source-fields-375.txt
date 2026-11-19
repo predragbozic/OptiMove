@@ -1,0 +1,61 @@
+Training load
+
+Training load
+Platform
+Notifications
+Messages
+Sign out
+Online
+Schedule
+Data & Analysis
+Data configuration
+← Data configuration
+Source fields
+
+The values each data source sends, and whether you can use them yet.
+
+Show technical details
+GPEXE
+Top speed (m/s) GPEXE: SPEEDmax
+Not available yet
+Open it to confirm its unit and meaning.
+Total distance (m) GPEXE: TotDist
+Not available yet
+Open it to confirm its unit and meaning.
+Duration (s) GPEXE: TIME
+Not available yet
+Open it to confirm its unit and meaning.
+Brake events (count)
+Not available yet
+Open it to confirm its unit and meaning.
+Burst events (count)
+Not available yet
+Open it to confirm its unit and meaning.
+Zone sets and threshold events: not available yet (5)
+
+OptiMove cannot yet choose which zone or threshold to use for these. To use one zone, create its numbered GPEXE field under More values GPEXE sends and confirm it. Events above a threshold cannot be added yet.
+
+Distance in each power zone (m) GPEXE: Power zone distance
+Not available yet
+Open it to confirm its unit and meaning.
+Distance in the top power zone (m) GPEXE: Power zone distance (open top zone)
+Not available yet
+Open it to confirm its unit and meaning.
+Distance in each speed zone (m) GPEXE: Speed zone distance
+Not available yet
+Open it to confirm its unit and meaning.
+Accelerations above a threshold (count) GPEXE: Acceleration events
+Not available yet
+Open it to confirm its unit and meaning.
+Decelerations above a threshold (count) GPEXE: Deceleration events
+Not available yet
+Open it to confirm its unit and meaning.
+More values GPEXE sends
+
+GPEXE also sends these values in the clubs' sessions. OptiMove does not import them yet. Use this value adds it to OptiMove; once new sessions bring it and you have checked it against GPEXE, you can put it on a variable.
+
+Search the values
+Also show the ones OptiMove already uses
+Show technical details
+
+Nothing yet. Values appear after the next Find new sessions in Imports.

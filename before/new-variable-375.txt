@@ -1,0 +1,59 @@
+Training load
+
+Training load
+Platform
+Notifications
+Messages
+Sign out
+Online
+Schedule
+Data & Analysis
+Data configuration
+New system variable
+
+Do not enter athlete names, ids, dates of birth or measured values.
+
+Name
+Name
+Short name (optional)
+Shown where space is short, for example TotDist.
+Description (optional)
+Icon (optional)
+No icon
+Choose icon
+Shown beside the variable in lists. You can change it later.
+Measurement
+Unit
+A short unit without spaces, for example m, km/h or count.
+Combine a day's values
+Choose...
+Sum
+Average
+Highest
+Latest
+Keep each value (no day value)
+When an athlete has several values on one day: Sum for distance, time and counts; Highest for top speed.
+Lowest allowed value (optional)
+Highest allowed value (optional)
+
+A value outside the allowed values is refused. Leave them empty for no limit.
+
+Recorded for
+Session
+Drill
+Session: one value for the whole session. Drill: one value for each drill; choose it if drill values will be mapped to it.
+Condition
+
+Optional: a zone the value is measured in, or an effort the variable counts.
+
+Type
+No condition
+Zone between two levels
+Zone above or below one level
+Effort past a threshold (event)
+Technical details
+
+After you create it, the name, short name, description, key and Recorded for cannot be changed, and the variable cannot be deleted. Unit, how a day's values are combined, allowed values and condition can be changed later with a new version.
+
+Create variable
+Cancel

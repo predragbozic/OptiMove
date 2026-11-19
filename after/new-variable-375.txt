@@ -1,0 +1,76 @@
+Training load
+
+Training load
+Platform
+Notifications
+Messages
+Sign out
+Online
+Schedule
+Data & Analysis
+Data configuration
+New system variable
+
+Do not enter athlete names, ids, dates of birth or measured values.
+
+Name
+Name
+Short name (optional)
+Shown where space is short, for example TotDist.
+Description (optional)
+Icon (optional)
+No icon
+Choose icon
+Shown beside the variable in lists. You can change it later.
+What fills it
+Measured
+A data source or a coach records its values.
+Calculated by OptiMove
+OptiMove adds up other variables of the same unit, for example the distance in three power zones.
+Measurement
+Unit
+The unit of every variable it adds up, for example m.
+
+A day's values are added up (Sum). A calculated variable has no allowed values.
+
+Recorded for
+Session
+Drill
+Session: one value for the whole session. Drill: one value for each drill; choose it if drill values will be mapped to it.
+Adds up
+
+Choose 2 to 10 variables, by name. If one of them has no value in a session, this variable has no value there either (zero is a value; missing is not).
+
+Power zone 3 distance
+m
+1
+Power zone 4 distance
+m
+2
+Power zone 5 distance
+m
+3
+Cannot be added up (2)
+HMLD 1280 Calculated itself; a calculated variable adds up ordinary variables only.
+Longest run It is a highest value, not an amount, so it cannot be added up.
+
+OptiMove does not check whether two of them count the same thing (for example zone 3 and "above 25 W/kg"): choose variables that do not overlap.
+
+Condition
+
+Optional: a zone the value is measured in, or an effort the variable counts. Usually none for a calculated variable.
+
+Type
+No condition
+Zone between two levels
+Zone above or below one level
+Effort past a threshold (event)
+
+Calculated for sessions imported after this variable was made. Sessions imported earlier stay without it. OptiMove calculates it for a team once every variable it adds up is switched on for that team. Athletes do not see calculated variables.
+
+Technical details
+
+After you create it, the name, short name, description, key and Recorded for cannot be changed, and the variable cannot be deleted. It stays calculated. The variables it adds up and its condition can be changed later with a new version.
+
+Create variable
+Cancel
