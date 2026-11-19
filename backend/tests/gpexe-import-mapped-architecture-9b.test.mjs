@@ -290,9 +290,21 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   // 6b-B: the estimate save writes estimated values; they come from no source, so T6 does not apply - each has its own
   // provenance row in metric_value_estimates (v63), checked below.
   const ESTIMATE = "metricEstimateService.js";
+  // J21: OptiMove's calculated values are no source value either: each is derived, a derived_rollup naming its formula
+  // version and input values (v77's value guard), with no T6 row - checked below.
+  const CALCULATED = "calculatedValues.js";
   const files = all();
-  assert.deepEqual(files.filter((f) => count(f.text, VALUES) > 0).map((f) => f.rel).sort(), ["gpexeImportWriter.js", ESTIMATE, MANUAL],
-    "the import writer, the estimate save and the manual-entry module are the only modules that insert metric_values");
+  assert.deepEqual(files.filter((f) => count(f.text, VALUES) > 0).map((f) => f.rel).sort(), [CALCULATED, "gpexeImportWriter.js", ESTIMATE, MANUAL],
+    "the import writer, the calculated values, the estimate save and the manual-entry module are the only modules that insert metric_values");
+  {
+    const calc = files.find((f) => f.rel === CALCULATED);
+    assert.equal(count(calc.text, VALUES), 1, "one calculated-value insert");
+    const at = calc.text.search(VALUES);
+    const stmt = calc.text.slice(at, calc.text.indexOf("returning", at));
+    assert.match(stmt, /is_derived[\s\S]*computed_by_ref/, "it names is_derived and computed_by_ref");
+    assert.match(stmt, /true, 'derived_rollup', 'complete'/, "a derived derived_rollup");
+    assert.equal(count(calc.text, PROVENANCE), 0, "a calculated value writes no T6 row");
+  }
   {
     const est = files.find((f) => f.rel === ESTIMATE);
     const ESTIMATES = /\binsert\s+into\s+training_load\.metric_value_estimates\b/gi;
@@ -324,7 +336,7 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   const failures = [];
   const checked = [];
   for (const f of files) {
-    if (f.rel === MANUAL || f.rel === ESTIMATE) continue;
+    if (f.rel === MANUAL || f.rel === ESTIMATE || f.rel === CALCULATED) continue;
     for (const m of f.text.matchAll(VALUES)) {
       const fn = enclosing(f, m.index);
       if (!fn) { failures.push(`${where(f, m.index)}: a metric_values insert outside any function`); continue; }

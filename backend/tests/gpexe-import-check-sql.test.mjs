@@ -59,7 +59,7 @@ const COLUMNS = {
   8: ["approvals_total", "approvals_last_14_days", "checked_first_imports_last_14_days", "approvals_into_existing_events_last_14_days", "undone_candidates", "imported_without_approval", "approvals_without_event", "newest_approval_utc", "checked_approval_id"],
   9: ["checked_approvals", "team_bindings", "bound_to", "open_activations", "requirements", "approval_id", "approved_by_user_id", "approved_by_name", "approved_utc", "approval_basis", "no_grant", "changes_to_imported", "changes_accepted", "results_imported", "import_count_keys", "import_ids_recorded"],
   10: ["gpexe_session_id", "candidate_status", "imported_in_the_approval", "same_content", "stored_preview_is_the_approved_one", "preview_version", "preview_status", "drill_parameter_effect", "live_imported_of_the_session"],
-  11: ["preview_results", "approval_results", "preview_results_created", "batch_occasions", "event_occasions", "preview_values", "written_values", "event_values", "t6_rows_of_the_import", "t6_rows_of_the_event", "preview_left_out", "preview_left_out_entries", "imported_athletes", "event_participants", "preview_changes_to_imported"],
+  11: ["preview_results", "approval_results", "preview_results_created", "batch_occasions", "event_occasions", "preview_values", "written_values", "event_values", "calculated_values", "t6_rows_of_the_import", "t6_rows_of_the_event", "preview_left_out", "preview_left_out_entries", "imported_athletes", "event_participants", "preview_changes_to_imported"],
   12: ["preview_values", "stored_values", "unmatched", "differing"],
   13: ["team_bindings", "team_instances", "values_of_the_import", "t6_rows", "values_without_t6", "t6_other_binding", "t6_other_instance", "t6_not_an_open_activation", "t6_not_the_pinned_version", "t6_outside_the_approval", "values_not_on_a_system_variable", "role_or_coverage_wrong", "activations_used", "open_activations"],
   14: ["instance_state", "source_host_key", "source_instance_key", "keys_are_the_bindings", "is_the_event_instance", "is_the_event_binding_instance", "identities_elsewhere", "rows_with_these_keys", "created_in_the_approval"],
@@ -401,7 +401,7 @@ async function expectChecked(approval, candidate, eventId, { identitiesPlusOne =
   assert.deepEqual(all[11], [{
     preview_results: n.results, approval_results: n.results, preview_results_created: String(n.results), batch_occasions: String(n.results),
     event_occasions: String(n.results), preview_values: String(n.values), written_values: String(n.values), event_values: String(n.values),
-    t6_rows_of_the_import: String(n.values), t6_rows_of_the_event: String(n.values), preview_left_out: n.leftOut,
+    calculated_values: "0", t6_rows_of_the_import: String(n.values), t6_rows_of_the_event: String(n.values), preview_left_out: n.leftOut,
     preview_left_out_entries: String(n.leftOut), imported_athletes: String(n.athletes), event_participants: String(n.athletes),
     preview_changes_to_imported: 0 }]);
   assert.deepEqual(all[12], [{ preview_values: String(n.values), stored_values: String(n.values), unmatched: "0", differing: "0" }]);
@@ -623,4 +623,25 @@ test("5. the file stops on what it must stop on, planted one at a time and rolle
   });
   assert.equal(definition[16][0].gpexe_team_definitions, "1");
   assert.equal(definition[16][0].definitions_written_by_the_approval, "1");
+});
+
+test("6. a calculated value of the import (J21: OptiMove's own, derived, no T6 row) is shown in block 11 and changes nothing else of blocks 11-13", async () => {
+  const t = S.t;
+  const base = await blocksOf(admin, [11, 12, 13]);
+  const variables = await import("../src/canonicalVariableAdminService.js");
+  const plain = (await variables.createVariable({
+    ctx: { userId: String(t.padmin.id), basis: "platform_admin", owner: { scope: "system", clubId: null } },
+    body: { requestKey: crypto.randomUUID(), label: "A derived total", unit: "m", levels: ["session", "drill"], dailyAggregationMethod: "sum" },
+  })).variable;
+  const withCalculated = await planted(async () => {
+    await admin.query(
+      `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, is_derived, aggregation_role, coverage, computed_by_ref)
+       select o.id, $2, $3, 1, 'm', true, 'derived_rollup', 'complete', '{"rollup":"planted"}'::jsonb
+         from training_load.metric_measurement_occasions o join training_load.gpexe_import_approvals a on a.import_batch_id = o.import_batch_id
+        where a.id = $1 order by o.id limit 1`, [S.first.approval.id, plain.id, plain.currentVersion.id]);
+    return blocksOf(admin, [11, 12, 13]);
+  });
+  assert.deepEqual(withCalculated[11], [{ ...base[11][0], calculated_values: "1" }]);
+  assert.deepEqual(withCalculated[12], base[12]);
+  assert.deepEqual(withCalculated[13], base[13]);
 });

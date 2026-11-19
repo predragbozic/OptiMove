@@ -5,6 +5,7 @@
 // isAthleteSelf/scope split as trainingLoadMetrics.js's own
 // resolveReadContext).
 import crypto from "node:crypto";
+import { calculationVersionIds } from "./calculatedValues.js";
 import { estimateLabelFor, readEstimateLabels } from "./estimateLabels.js";
 import { query } from "./db.js";
 import { activityReadScopeSqlForWorkspace, athleteOwnParticipationSql, canReadActivityInScope, isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
@@ -80,9 +81,19 @@ export async function getCanonicalActivityResults(readContext, activityId, { clu
   // measured; there are no estimates on the athlete's side"): dropped here, on the server, before anything is built
   // from her facts - no value, no label, no name of its variable, no trace that one exists. A value a coach entered by
   // hand as a measurement (entry method manual) is a measured value and stays.
-  const scoped = readContext.isAthleteSelf
+  let scoped = readContext.isAthleteSelf
     ? facts.filter((f) => f.athleteId !== null && String(f.athleteId) === String(readContext.athleteId) && !isEstimateFact(f))
     : facts;
+  // Nor is a calculated value hers (J21: OptiMove's sum of measured values, not a measurement; the Rukovodilac's step-1
+  // decision): dropped here too, by the database's own facts (derived, of a version with a calculation), so no value, name
+  // or unit of a calculated variable reaches her answer.
+  if (readContext.isAthleteSelf) {
+    const derived = scoped.filter((f) => f.factKind === "metric_value" && f.detail?.isDerived === true);
+    if (derived.length) {
+      const calculated = await calculationVersionIds(query, derived.map((f) => f.detail?.metricDefinitionVersionId));
+      if (calculated.size) scoped = scoped.filter((f) => !(f.factKind === "metric_value" && f.detail?.isDerived === true && calculated.has(String(f.detail?.metricDefinitionVersionId))));
+    }
+  }
   const canonicalActivityId = results.rows[0]?.canonical_activity_id || (await query(`select training.resolve_canonical_activity_id($1) as id`, [activityId])).rows[0].id;
 
   // Training Load Frontend 3A — compatible, additive extension: the
