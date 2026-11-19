@@ -252,6 +252,10 @@ const REFUSALS = Object.freeze({
   activity_outside_event: "This activity is not on the event's day. Nothing was saved.",
   activity_not_targeted: "No athlete of this activity is part of this event. Nothing was saved.",
   activity_already_attached: "This activity is already linked to another event you can't open here. Ask that event's organiser to unlink it. Nothing was saved.",
+  // RPE channels (K2b-2a-1, RPE-1): the event's RPE comes from one place only.
+  rpe_already_linked: "This event already collects RPE through another schedule; remove it first. Nothing was saved.",
+  rpe_already_answered: "Athletes have already answered this event's own RPE question, so trainings can't take it over. Keep the event's RPE, or link the training to another event. Nothing was saved.",
+  rpe_from_question: "This event already asks athletes for RPE; remove that question first. Nothing was saved.",
   try_again: "The calendar is busy. Nothing was saved; try again in a moment.",
   request_key_reused: "This could not be sent. Nothing was saved; try again.",
 });
@@ -285,6 +289,7 @@ const SETTLED_ON_CHECK = new Set([
   "event_changed", "event_cancelled", "session_not_available", "session_outside_event", "athlete_not_targeted",
   "session_already_attached", "link_not_available", "nothing_to_align", "has_existing_results", "activity_not_available",
   "activity_superseded", "activity_outside_event", "activity_not_targeted", "activity_already_attached",
+  "rpe_already_linked", "rpe_already_answered", "rpe_from_question",
 ]);
 export const centralCalendarLinkCheckSettles = (info) => info.status >= 400 && info.status < 500
   && (SETTLED_ON_CHECK.has(info.code) || String(info.code).startsWith("invalid_"));

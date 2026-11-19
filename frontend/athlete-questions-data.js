@@ -147,10 +147,14 @@ export function loadAthleteQuestions({ render } = {}) {
 }
 
 // A form's successful submit (the RPE form, the WELLNESS form): the answered question leaves the rows at once, and the
-// list is read again.
+// list is read again - only when she had an open calendar question (#633's LOW (c)): an answer of a form that is no
+// question's, with none open, sends nothing.
 export function athleteQuestionsAnswered(formId) {
   if (g()?.status === "idle") return;
-  if (formId) g().rows = g().rows.filter((row) => row.formId !== String(formId));
+  const rows = g().rows || [];
+  // A read on its way is still replaced (it may list the answered question).
+  if (!rows.length && !inFlight) return;
+  if (formId) g().rows = rows.filter((row) => row.formId !== String(formId));
   inFlight = null;
   return loadAthleteQuestions({ render: lastRender });
 }

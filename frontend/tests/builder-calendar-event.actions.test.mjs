@@ -673,6 +673,35 @@ test("14. Escape closes the open panel, never while a create is on its way or no
   assert.match(appJs.slice(start, start + 2000), /if \(state\.activeTab === "builder" && !state\.workspaceSwitcher\.open && closeBuilderCalendarEventPanel\(renderBuilder\)\) return;/);
 });
 
+test("14b. Escape leaves the panel (and what was typed) while a Builder modal is open over it", async () => {
+  const modals = [
+    ["the athlete picker", (b) => { b.athletePickerOpen = true; }],
+    ["the info modal", (b) => { b.infoOpen = "weekly"; }],
+    ["copy plan", (b) => { b.copyPlanId = "p-copy"; }],
+    ["overwrite day", (b) => { b.overwriteDayConfirm = { dayId: "d1" }; }],
+    ["the block picker", (b) => { b.blockPicker = { ...b.blockPicker, open: true }; }],
+    ["the structure modal", (b) => { b.structureModalOpen = true; b.selectedSessionId = "s1"; }],
+    ["the section editor", (b) => {
+      b.draft.blocks[0].sessions[0].nodes = [{ id: "n-sec", type: "section", name: "Lower body", children: [] }];
+      b.selectedNodeId = "n-sec";
+    }],
+  ];
+  for (const [label, openModal] of modals) {
+    state.builder = emptyBuilderState();
+    await open();
+    state.builder.calendarEvent.form.title = "Typed title";
+    openModal(state.builder);
+    assert.equal(actions.closeBuilderCalendarEventPanel(render), false, label);
+    assert.equal(state.builder.calendarEvent?.form?.title, "Typed title", `${label}: kept`);
+  }
+  // A structure flag with no session to draw is no dialog: Escape closes the panel.
+  state.builder = emptyBuilderState();
+  await open();
+  state.builder.structureModalOpen = true;
+  state.builder.selectedSessionId = "gone";
+  assert.equal(actions.closeBuilderCalendarEventPanel(render), true);
+});
+
 test("15. a Builder save on its way: the panel says so and reads the day only once the save has landed", async () => {
   const fake = server();
   let release;
