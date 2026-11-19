@@ -17,7 +17,7 @@ needs a UI contract and a GO. K4b has the OptiMove manager's approval of its dir
 | **O7** | „make event treba da bude na vrhu sesije odmah pored sesije i da bude vidljivo da se moze kreirati. Osim toga dve sesije mogu biti unutar jednog eventa, npr aktivnosti pre tokom i posle trneinga. zar ne" · „sada ne znam kako to sada srediti" | *Make an event* moves to the session's top line, beside its name, and is clearly visible. One event can hold several sessions of its day (Before, Training, After). The owner leaves the shape to the stream; section 5 is the package. |
 | **O8** | „mozda ga skroz izdvojiti kreriati evnets pa onda birati unutar sesije da li prpada kome. daj neko userfrientdly resenje" | The events stand on their own in the Builder's day. Each session chooses the event it belongs to. Section 5 is that design, and it replaces the per-session *Make an event* button. |
 | **O9** | „ostali predlozi su dobri i slazem se" · „samo ovo treba na neki bolji nacin resiti" · „na primer iz glavnog kalendara je lako kada ulazimo iz dogadjaa u builder pa kreiramo aktivnosti unutar tog dogadjaja" | The owner agrees with the rest of the plan. The main way is **from the calendar**: open an event, go into the Builder, and create its sessions inside that event (K3, now the main path, section 5.1). The Builder's own events row (5.2) is the way back for a coach who starts in the Builder. |
-| **O10** | „ako iz buildera krenemo mi mozemo na primer da imamo dugme kreiranje dogadjaj i da nas odmah odvede u kalendar i da kreiramo dogadjaj kao sto se i sada kreira i da se odmah iz tog dogajdaja ili back dugmetom ako necemo da ga kreiramo vratimo u bulder" · „pa da dole onda biramo dogajdaj za tu sesiju" | From the Builder, **Create event** opens the calendar's own event form. After *Save*, or after Back with nothing made, the coach is back in the Builder, and the session chooses its event below. There is one event form in the app. Section 5.2. |
+| **O10** | „ako iz buildera krenemo mi mozemo na primer da imamo dugme kreiranje dogadjaj i da nas odmah odvede u kalendar i da kreiramo dogadjaj kao sto se i sada kreira i da se odmah iz tog dogajdaja ili back dugmetom ako necemo da ga kreiramo vratimo u bulder" · „pa da dole onda biramo dogajdaj za tu sesiju" · „ili taj dan" | From the Builder, **Create event** opens the calendar's own event form. After *Save*, or after Back with nothing made, the coach is back in the Builder, and the session (or the whole day) chooses its event below. There is one event form in the app. Section 5.2. |
 
 The Weekly plan screen does not change (K0 D5). It stays its own tab beside Calendar until the pilot shows whether it
 is still needed (section 2, decision K4a-1). The Builder's side (O6, O7) is section 5.
@@ -250,7 +250,9 @@ After training · Recovery                Event: [ No event     ▾]
    - choosing an event links the session (`POST /api/calendar/events/:eventId/sessions`);
    - choosing *No event* ends the link (the calendar's existing *Unlink*);
    - the chosen event's colour shows on the session's line.
-4. **Several sessions in one event (O7).** Before, Training and After simply choose the same event.
+4. **Several sessions in one event (O7), or the whole day (O10, „ili taj dan“).** Before, Training and After choose
+   the same event. Or the day's row has **Whole day: [ … ▾ ]**, which puts every session of that day into one event
+   at once; a session can still choose differently afterwards.
 5. **No dead end before Save.**
    - If the plan is not saved, *Create event →* and the selector ask once: "This plan isn't saved yet. Save it (the
      athlete will see it) and continue?", with [Save and continue] and [Cancel].
