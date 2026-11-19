@@ -281,7 +281,8 @@ export function readinessText(target) {
 // ---------------------------------------------------------------------------
 // Display
 // ---------------------------------------------------------------------------
-export const aggregationLabel = (value) => AGGREGATIONS.find((a) => a.value === value)?.label || value || "";
+// v79: a ratio's own day rule is never offered in the form (the server sets it), but it reads in plain words.
+export const aggregationLabel = (value) => (value === "ratio" ? "Ratio (the day's totals divided)" : AGGREGATIONS.find((a) => a.value === value)?.label || value || "");
 export const levelLabel = (value) => LEVELS.find((l) => l.value === value)?.label || value;
 const OPERATOR_SIGN = { ">=": "≥", ">": ">", "<=": "≤", "<": "<" };
 

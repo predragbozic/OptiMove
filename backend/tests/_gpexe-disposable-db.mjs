@@ -98,6 +98,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611171000_training_load_v76_undo_by_importer.sql",
   "202611181000_training_load_v77_calculated_variables.sql",
   "202611181100_training_load_v78_calculated_variables_additive.sql",
+  "202611191200_training_load_v79_calculated_ratio_difference.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

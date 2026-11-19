@@ -444,6 +444,11 @@ function reduceTyped(items, method, valueType) {
   if (effectiveMethod === "none") {
     return items.length === 1 ? items[0].value : items.map((i) => i.value);
   }
+  // v79: a ratio is never totalled or averaged; its day and period rule (the sum of numerators over the sum of denominators,
+  // the dashboard contract) is not computed here yet, so combining several ratio values is an error, never a sum or a mean.
+  if (effectiveMethod === "ratio") {
+    throw new Error("reduceTyped: a ratio is combined as the sum of its numerators over the sum of its denominators, which this query does not compute yet");
+  }
   if (effectiveMethod === "last") {
     const sorted = [...items].sort(compareForLast);
     return sorted[sorted.length - 1].value;

@@ -53,11 +53,12 @@ async function applyV77(url) {
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V77), "v77 is a test migration");
-  // v78 (PR 2a) follows it: the behaviour database carries both, so tests 7 and 16-18 meet v78's guards too.
-  assert.deepEqual(GPEXE_TEST_MIGRATIONS.slice(GPEXE_TEST_MIGRATIONS.indexOf(V77)), [V77, "202611181100_training_load_v78_calculated_variables_additive.sql"], "only v78 follows v77");
+  // v78 (PR 2a) follows it: the behaviour database carries both, so tests 7 and 16-18 meet v78's guards too. It stops at
+  // v78 (v79's kinds have their own suite, calculated-variables-v79.test.mjs).
+  assert.deepEqual(GPEXE_TEST_MIGRATIONS.slice(GPEXE_TEST_MIGRATIONS.indexOf(V77), GPEXE_TEST_MIGRATIONS.indexOf(V77) + 2), [V77, "202611181100_training_load_v78_calculated_variables_additive.sql"], "v78 follows v77");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v77rb", migrations: UP_TO_PREV }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc77" }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc77", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V77) + 2) }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

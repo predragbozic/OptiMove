@@ -108,7 +108,7 @@ function renderListItemHtml(item, ctx) {
   const facts = [
     current.unit ? escapeHtml(current.unit) : "",
     (item.levels || []).map(levelLabel).map(escapeHtml).join(" and "),
-    current.calculation ? `adds up ${escapeHtml(calculationNames(current.calculation))}` : current.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}` : "",
+    current.calculation ? escapeHtml(calculationText(current.calculation)) : current.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}` : "",
     current.condition ? escapeHtml(conditionSummary(current.condition)) + (conditionNoteFor(current) ? " (stated, not checked)" : "") : "",
     current.versionNumber ? `version ${escapeHtml(String(current.versionNumber))}` : "",
   ].filter(Boolean).join(" · ");
@@ -135,7 +135,9 @@ function renderDetailHtml(s, ctx) {
   const current = item.currentVersion || {};
   // What this caller may do now is the server's answer (`actions`, J3b.2),
   // never worked out here from a role.
-  const actions = item.actions || [];
+  // v79: the form makes and versions a sum only; a ratio's or a difference's new version waits for its own screen.
+  const kind = item.currentVersion?.calculation?.kind;
+  const actions = (item.actions || []).filter((a) => a !== "newVersion" || !kind || kind === "sum");
   const reduced = ctx.view === "coach";
   // OptiMove's own variable seen from a club's administrator: its acts are the
   // server's `club` block and `actions` (7i-B2), not the platform's.
@@ -165,7 +167,7 @@ function renderDetailHtml(s, ctx) {
       <div><dt>Unit</dt><dd>${escapeHtml(current.unit || "")}</dd></div>
       <div><dt>Recorded for</dt><dd>${(item.levels || []).map(levelLabel).map(escapeHtml).join(" and ")}</dd></div>
       ${current.calculation ? `
-      <div><dt>Calculated</dt><dd>Adds up ${escapeHtml(calculationNames(current.calculation))}.<br><span class="muted">${escapeHtml(CALCULATED_TEXT.fromNow)} ${escapeHtml(CALCULATED_TEXT.perTeam)} ${escapeHtml(CALCULATED_TEXT.athletes)}</span></dd></div>` : `
+      <div><dt>Calculated</dt><dd>${escapeHtml(capitalized(calculationText(current.calculation)))}.<br><span class="muted">${escapeHtml(CALCULATED_TEXT.fromNow)} ${escapeHtml(CALCULATED_TEXT.perTeam)} ${escapeHtml(CALCULATED_TEXT.athletes)}</span></dd></div>` : `
       <div><dt>Per day</dt><dd>${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}</dd></div>
       <div><dt>Allowed values</dt><dd>${escapeHtml(rangeSummary(current))}</dd></div>`}
       <div><dt>Condition</dt><dd>${escapeHtml(conditionSummary(current.condition))}${conditionNoteFor(current) ? `<br><span class="muted">${escapeHtml(conditionNoteFor(current))}</span>` : ""}</dd></div>
@@ -237,7 +239,7 @@ function renderVersionHtml(version) {
       <p><strong>Version ${escapeHtml(String(version.versionNumber))}</strong>${version.current ? ` <span class="item-badge">Current</span>` : ""} <span class="muted">${escapeHtml(fmtDate(version.createdAt))}</span></p>
       <p class="muted">${[
         escapeHtml(version.unit || ""),
-        version.calculation ? `adds up ${escapeHtml(calculationNames(version.calculation))}` : version.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(version.dailyAggregationMethod))}` : "",
+        version.calculation ? escapeHtml(calculationText(version.calculation)) : version.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(version.dailyAggregationMethod))}` : "",
         version.calculation ? "" : escapeHtml(rangeSummary(version)),
         version.condition ? escapeHtml(conditionSummary(version.condition)) : "",
       ].filter(Boolean).join(" · ")}</p>
@@ -342,10 +344,15 @@ function renderConditionHtml(form) {
   return `<fieldset class="metric-variables-fieldset"><legend>Condition</legend><p class="muted">Optional: a zone the value is measured in, or an effort the variable counts.${d.kind === "calculated" ? " Usually none for a calculated variable." : ""}</p><div class="metric-variables-grid">${parts.join("")}</div></fieldset>`;
 }
 
-// The names a calculation adds up, in its order ("A + B + C").
-function calculationNames(calculation) {
-  return (calculation?.inputs || []).map((i) => i?.label || i?.key || "").filter(Boolean).join(" + ");
+// What a calculation does, in its order: "adds up A + B + C"; since v79 "divides A by B" (", as a percentage") and
+// "A minus B". The screen that makes a ratio or a difference is the next pull request; these read one correctly meanwhile.
+function calculationText(calculation) {
+  const names = (calculation?.inputs || []).map((i) => i?.label || i?.key || "");
+  if (calculation?.kind === "ratio") return `divides ${names[0]} by ${names[1]}${calculation.scale === 100 ? ", as a percentage" : ""}`;
+  if (calculation?.kind === "difference") return `${names[0]} minus ${names[1]}`;
+  return `adds up ${names.filter(Boolean).join(" + ")}`;
 }
+const capitalized = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 // J21 (C150): what fills a new variable - a source, or OptiMove's sum of other variables. No formula syntax.
 function renderKindHtml(form) {
