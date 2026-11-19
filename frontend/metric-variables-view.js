@@ -2,8 +2,8 @@
 // came from the server or the coach is escaped; ids live only in data-
 // attributes and under Technical details.
 import {
-  AGGREGATIONS, CHANGE_MODES, CONDITION_KINDS, LEVELS, LIMITS, OPERATORS, UNIT_SUGGESTIONS,
-  aggregationLabel, conditionNoteFor, conditionSummary, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
+  AGGREGATIONS, CALCULATED_TEXT, CALCULATION_MAX, CALCULATION_MIN, CHANGE_MODES, CONDITION_KINDS, LEVELS, LIMITS, OPERATORS, UNIT_SUGGESTIONS,
+  aggregationLabel, conditionNoteFor, conditionSummary, inputCandidates, levelLabel, rangeSummary, readinessText, variablesContext, variablesState,
 } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { isSystemMode } from "./system-variables-data.js";
@@ -108,7 +108,7 @@ function renderListItemHtml(item, ctx) {
   const facts = [
     current.unit ? escapeHtml(current.unit) : "",
     (item.levels || []).map(levelLabel).map(escapeHtml).join(" and "),
-    current.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}` : "",
+    current.calculation ? `adds up ${escapeHtml(calculationNames(current.calculation))}` : current.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}` : "",
     current.condition ? escapeHtml(conditionSummary(current.condition)) + (conditionNoteFor(current) ? " (stated, not checked)" : "") : "",
     current.versionNumber ? `version ${escapeHtml(String(current.versionNumber))}` : "",
   ].filter(Boolean).join(" · ");
@@ -164,8 +164,10 @@ function renderDetailHtml(s, ctx) {
     <dl class="metric-variables-facts">
       <div><dt>Unit</dt><dd>${escapeHtml(current.unit || "")}</dd></div>
       <div><dt>Recorded for</dt><dd>${(item.levels || []).map(levelLabel).map(escapeHtml).join(" and ")}</dd></div>
+      ${current.calculation ? `
+      <div><dt>Calculated</dt><dd>Adds up ${escapeHtml(calculationNames(current.calculation))}.<br><span class="muted">${escapeHtml(CALCULATED_TEXT.fromNow)} ${escapeHtml(CALCULATED_TEXT.perTeam)} ${escapeHtml(CALCULATED_TEXT.athletes)}</span></dd></div>` : `
       <div><dt>Per day</dt><dd>${escapeHtml(aggregationLabel(current.dailyAggregationMethod))}</dd></div>
-      <div><dt>Allowed values</dt><dd>${escapeHtml(rangeSummary(current))}</dd></div>
+      <div><dt>Allowed values</dt><dd>${escapeHtml(rangeSummary(current))}</dd></div>`}
       <div><dt>Condition</dt><dd>${escapeHtml(conditionSummary(current.condition))}${conditionNoteFor(current) ? `<br><span class="muted">${escapeHtml(conditionNoteFor(current))}</span>` : ""}</dd></div>
       <div><dt>Mapping</dt><dd>${escapeHtml(readinessText(item.mappingTarget))}</dd></div>
     </dl>
@@ -221,7 +223,7 @@ function actionsNoteHtml(item, actions, ctx) {
 // The reduced view of a team workspace (Q7): no versions, levels or mapping
 // readiness, which the server does not send there.
 function renderReducedTechHtml(item) {
-  return `
+  return `${item.calculated ? `<p class="muted">Calculated by OptiMove from other variables. ${escapeHtml(CALCULATED_TEXT.fromNow)}</p>` : ""}
     <details class="data-sources-tech"><summary>Technical details</summary><dl>
       <div><dt>Key</dt><dd>${escapeHtml(item.key || "")}</dd></div>
       <div><dt>Owner</dt><dd>${escapeHtml(item.ownerScope || "")}</dd></div>
@@ -235,8 +237,8 @@ function renderVersionHtml(version) {
       <p><strong>Version ${escapeHtml(String(version.versionNumber))}</strong>${version.current ? ` <span class="item-badge">Current</span>` : ""} <span class="muted">${escapeHtml(fmtDate(version.createdAt))}</span></p>
       <p class="muted">${[
         escapeHtml(version.unit || ""),
-        version.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(version.dailyAggregationMethod))}` : "",
-        escapeHtml(rangeSummary(version)),
+        version.calculation ? `adds up ${escapeHtml(calculationNames(version.calculation))}` : version.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(version.dailyAggregationMethod))}` : "",
+        version.calculation ? "" : escapeHtml(rangeSummary(version)),
         escapeHtml(conditionSummary(version.condition)),
       ].filter(Boolean).join(" · ")}</p>
       ${conditionNoteFor(version) ? `<p class="muted">${escapeHtml(conditionNoteFor(version))}</p>` : ""}
@@ -340,11 +342,58 @@ function renderConditionHtml(form) {
   return `<fieldset class="metric-variables-fieldset"><legend>Condition</legend><p class="muted">Optional: a zone the value is measured in, or an effort the variable counts.</p><div class="metric-variables-grid">${parts.join("")}</div></fieldset>`;
 }
 
+// The names a calculation adds up, in its order ("A + B + C").
+function calculationNames(calculation) {
+  return (calculation?.inputs || []).map((i) => i?.label || i?.key || "").filter(Boolean).join(" + ");
+}
+
+// J21 (C150): what fills a new variable - a source, or OptiMove's sum of other variables. No formula syntax.
+function renderKindHtml(form) {
+  const locked = form.busy || form.unconfirmed;
+  const option = (value, label, hint) => `
+    <label class="checkbox-row"><input type="radio" name="mv-kind" value="${value}" data-mv-kind ${form.draft.kind === value ? "checked" : ""} ${locked ? "disabled" : ""}>
+      <span><strong>${label}</strong><br><span class="muted">${hint}</span></span></label>`;
+  return `<fieldset class="metric-variables-fieldset"><legend>What fills it</legend>
+    ${option("measured", "Measured", "A data source or a coach records its values.")}
+    ${option("calculated", "Calculated by OptiMove", "OptiMove adds up other variables of the same unit, for example the distance in three power zones.")}
+  </fieldset>`;
+}
+
+// The variables a calculated one adds up: those that can be, ticked by name; the rest listed with the reason.
+function renderInputsHtml(form) {
+  const locked = form.busy || form.unconfirmed;
+  const c = form.candidates || { state: "idle" };
+  let body;
+  if (c.state === "loading" || c.state === "idle") body = `<p class="muted" role="status">Reading the variables...</p>`;
+  else if (c.state === "error") body = `<p class="error" role="alert">${escapeHtml(c.error)}</p>`;
+  else {
+    const { available, unavailable } = inputCandidates(form);
+    const chosen = form.draft.inputs || [];
+    const order = (id) => chosen.indexOf(id) + 1;
+    const row = (a) => `<label class="checkbox-row"><input type="checkbox" data-mv-input="${escapeAttr(a.id)}" ${chosen.includes(a.id) ? "checked" : ""} ${locked ? "disabled" : ""}> ${escapeHtml(a.label)} <span class="muted">${escapeHtml(a.unit)}${a.ownerScope === "system" && form.candidates.rows.some((r) => r.ownerScope === "club") ? " · OptiMove" : ""}</span>${chosen.includes(a.id) ? ` <span class="item-badge">${order(a.id)}</span>` : ""}</label>`;
+    const stale = chosen.filter((id) => !available.some((a) => a.id === id));
+    body = `
+      ${available.length ? `<div class="metric-variables-inputs" role="group" aria-labelledby="mv-inputs-label"${form.errors.inputs ? ` aria-describedby="mv-err-inputs"` : ""}>${available.map(row).join("")}</div>`
+        : `<p class="muted">${form.draft.unit ? "No variable can be added up with this unit and these levels yet." : "Enter the unit above: the variables of that unit are offered here."}</p>`}
+      ${stale.length ? `<p class="error">${stale.length === 1 ? "One chosen variable" : `${stale.length} chosen variables`} cannot be added up now (see why below).</p>` : ""}
+      ${fieldError(form, "inputs")}
+      ${unavailable.length ? `<details class="metric-variables-unavailable"><summary>Cannot be added up (${unavailable.length})</summary>
+        <ul>${unavailable.map((u) => `<li>${escapeHtml(u.label)}${chosen.includes(u.id) ? ` <label class="checkbox-row"><input type="checkbox" data-mv-input="${escapeAttr(u.id)}" checked ${locked ? "disabled" : ""}> chosen</label>` : ""} <span class="muted">${escapeHtml(u.reason)}</span></li>`).join("")}</ul>
+      </details>` : ""}`;
+  }
+  return `<fieldset class="metric-variables-fieldset"><legend id="mv-inputs-label">Adds up</legend>
+    <p class="muted">Choose ${CALCULATION_MIN} to ${CALCULATION_MAX} variables, by name. ${escapeHtml(CALCULATED_TEXT.missing)}</p>
+    ${body}
+    <p class="muted">${escapeHtml(CALCULATED_TEXT.overlap)}</p>
+  </fieldset>`;
+}
+
 function renderFormHtml(s, ctx) {
   const form = s.form;
   if (isSystemMode(form.mode)) return renderSystemFormHtml(form);
   if (CHANGE_MODES.includes(form.mode)) return renderChangeFormHtml(form, ctx);
   const create = form.mode === "create";
+  const calculated = form.draft.kind === "calculated";
   const locked = form.busy || form.unconfirmed;
   const title = create ? (ctx.owner === "system" ? "New system variable" : "New variable for this club") : `New version of ${escapeHtml(form.variableLabel)}`;
   const hint = form.keyHint;
@@ -362,14 +411,16 @@ function renderFormHtml(s, ctx) {
           ${textInput(form, "shortLabel", "Short name", { max: LIMITS.shortLabel, hint: "Shown where space is short, for example TotDist." })}
           ${textInput(form, "description", "Description", { max: LIMITS.description })}
         </div></fieldset>
-        ${renderIconFieldHtml(form)}` : ""}
+        ${renderIconFieldHtml(form)}
+        ${renderKindHtml(form)}` : ""}
       <fieldset class="metric-variables-fieldset"><legend>Measurement</legend><div class="metric-variables-grid">
-        ${textInput(form, "unit", "Unit", { max: LIMITS.unit, required: true, list: "mv-unit-suggestions", token: true, hint: "A short unit without spaces, for example m, km/h or count." })}
+        ${textInput(form, "unit", "Unit", { max: LIMITS.unit, required: true, list: "mv-unit-suggestions", token: true, hint: calculated ? "The unit of every variable it adds up, for example m." : "A short unit without spaces, for example m, km/h or count." })}
+        ${calculated ? "" : `
         ${selectInput(form, "dailyAggregationMethod", "Combine a day's values", AGGREGATIONS, { placeholder: "Choose...", hint: "When an athlete has several values on one day: Sum for distance, time and counts; Highest for top speed." })}
         ${decimalInput(form, "minValue", "Lowest allowed value")}
-        ${decimalInput(form, "maxValue", "Highest allowed value")}
+        ${decimalInput(form, "maxValue", "Highest allowed value")}`}
       </div>
-      <p class="muted">A value outside the allowed values is refused. Leave them empty for no limit.</p>
+      <p class="muted">${calculated ? escapeHtml(CALCULATED_TEXT.dayRule) : "A value outside the allowed values is refused. Leave them empty for no limit."}</p>
       ${create ? `
         <div class="metric-variables-levels" role="group" aria-labelledby="mv-levels-label"${form.errors.levels ? ` aria-describedby="mv-err-levels"` : ""}>
           <span id="mv-levels-label">Recorded for</span>
@@ -378,14 +429,18 @@ function renderFormHtml(s, ctx) {
           <span class="muted">Session: one value for the whole session. Drill: one value for each drill; choose it if drill values will be mapped to it.</span>
         </div>` : ""}
       </fieldset>
+      ${calculated ? renderInputsHtml(form) : ""}
       ${renderConditionHtml(form)}
+      ${calculated ? `<p class="muted">${escapeHtml(CALCULATED_TEXT.fromNow)} ${escapeHtml(CALCULATED_TEXT.perTeam)} ${escapeHtml(CALCULATED_TEXT.athletes)}</p>` : ""}
       ${create ? "" : textInput(form, "reason", "Reason for the new version", { max: LIMITS.reason })}
       ${create ? `
         <details class="data-sources-tech" ${form.errors.key || hint.required || hint.taken ? "open" : ""}><summary>Technical details</summary>
           <p class="muted" data-mv-key-hint aria-live="polite">${keyLine}</p>
           ${textInput(form, "key", "Custom key", { max: LIMITS.key, token: true, hint: "Leave empty to use the key made from the name. It cannot be changed later." })}
         </details>` : ""}
-      ${create && !form.unconfirmed ? `<p class="muted">After you create it, the name, short name, description, key and Recorded for cannot be changed, and the variable cannot be deleted. Unit, how a day's values are combined, allowed values and condition can be changed later with a new version.</p>` : ""}
+      ${create && !form.unconfirmed ? `<p class="muted">After you create it, the name, short name, description, key and Recorded for cannot be changed, and the variable cannot be deleted. ${calculated
+        ? "It stays calculated. The variables it adds up and its condition can be changed later with a new version."
+        : "Unit, how a day's values are combined, allowed values and condition can be changed later with a new version."}</p>` : ""}
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? `
         <div class="metric-variables-unconfirmed" role="alert">

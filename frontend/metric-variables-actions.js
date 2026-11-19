@@ -253,6 +253,7 @@ export async function handleVariablesAction(action, { render }) {
     if (s.form || !s.detail.variable) return true;
     s.notice = "";
     s.form = openForm("version", { variable: s.detail.variable });
+    if (s.form.draft.kind === "calculated") void loadInputCandidates(s.form, render);
     render();
     focusFirstField();
     return true;
@@ -496,6 +497,35 @@ export function handleVariablesInput(target, { render }) {
   // Only the Variables screen's own forms (data-metric-variables-form): another
   // form that shares their look (Source fields) handles its own typing.
   if (!form || form.busy || form.unconfirmed) return Boolean(target.closest?.("[data-metric-variables-form]"));
+  // J21 (C150): Measured or Calculated, chosen on a new variable only (a variable keeps its kind).
+  const kind = target.closest?.("[data-mv-kind]");
+  if (kind) {
+    if (form.mode !== "create" || !kind.checked) return true;
+    const next = kind.value === "calculated" ? "calculated" : "measured";
+    if (next === form.draft.kind) return true;
+    form.draft.kind = next;
+    form.dirty = true;
+    for (const field of ["dailyAggregationMethod", "minValue", "maxValue", "inputs"]) delete form.errors[field];
+    clearFormError(form);
+    if (next === "calculated") void loadInputCandidates(form, render);
+    render();
+    globalThis.document?.querySelector?.(`.metric-variables-form [data-mv-kind][value="${next}"]`)?.focus?.();
+    return true;
+  }
+  // The variables a calculated one adds up, in the order they are ticked.
+  const input = target.closest?.("[data-mv-input]");
+  if (input) {
+    const id = input.dataset.mvInput;
+    const inputs = form.draft.inputs.filter((x) => x !== id);
+    if (input.checked) inputs.push(id);
+    form.draft.inputs = inputs;
+    form.dirty = true;
+    delete form.errors.inputs;
+    clearFormError(form);
+    render();
+    globalThis.document?.querySelector?.(`.metric-variables-form [data-mv-input="${id}"]`)?.focus?.();
+    return true;
+  }
   const level = target.closest?.("[data-mv-level]");
   if (level) {
     const value = level.dataset.mvLevel;
@@ -506,6 +536,11 @@ export function handleVariablesInput(target, { render }) {
     delete form.errors.levels;
     globalThis.document?.getElementById?.("mv-err-levels")?.remove?.();
     clearFormError(form);
+    // Which variables can be added up depends on the levels (J21).
+    if (form.draft.kind === "calculated") {
+      render();
+      globalThis.document?.querySelector?.(`.metric-variables-form [data-mv-level="${value}"]`)?.focus?.();
+    }
     return true;
   }
   const field = target.closest?.("[data-mv-field]");
@@ -526,7 +561,45 @@ export function handleVariablesInput(target, { render }) {
     globalThis.document?.querySelector?.(`.metric-variables-form [data-mv-field="${name}"]`)?.focus?.();
   }
   if (name === "label" && form.mode === "create") scheduleKeySuggestion(form);
+  // And on the unit (J21): the list of what can be added up is drawn again, the typing kept where it was.
+  if (name === "unit" && form.draft.kind === "calculated") {
+    const at = field.selectionStart ?? null;
+    render();
+    const again = globalThis.document?.querySelector?.('.metric-variables-form [data-mv-field="unit"]');
+    again?.focus?.();
+    if (again && at !== null) again.setSelectionRange?.(at, at);
+  }
   return true;
+}
+
+// J21: the variables a calculated one may add up - every active variable of this workspace and, in a club, OptiMove's
+// own - read once per form, page by page (bounded). The rules are applied when drawn (inputCandidates); the server checks
+// again on Save.
+const CANDIDATE_PAGES = 10;
+export async function loadInputCandidates(form, render) {
+  if (!form || form.candidates.state === "loading" || form.candidates.state === "loaded") return;
+  const s = state.trainingLoad.variables;
+  const ctx = variablesContext();
+  form.candidates = { state: "loading", rows: [], error: "" };
+  const scopes = ctx?.owner === "club" ? ["own", "system"] : ["own"];
+  try {
+    const rows = [];
+    for (const scope of scopes) {
+      let cursor = null;
+      for (let page = 0; page < CANDIDATE_PAGES; page += 1) {
+        const data = await fetchVariables({ scope, stateFilter: "active", hidden: "include", cursor });
+        rows.push(...(data?.items || data?.variables || []));
+        cursor = data?.nextCursor || null;
+        if (!cursor) break;
+      }
+    }
+    if (s?.form !== form) return;
+    form.candidates = { state: "loaded", rows, error: "" };
+  } catch {
+    if (s?.form !== form) return;
+    form.candidates = { state: "error", rows: [], error: "The variables to add up could not be read." };
+  }
+  render();
 }
 
 // A changed value answers the form-level message ("Check the marked fields.",
