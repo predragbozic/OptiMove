@@ -8,6 +8,7 @@ import {
   EVIDENCE_EXAMPLE, EVIDENCE_LABEL, EVIDENCE_REF_MAX, OPERATORS, OPERATOR_LABEL, PARAMETER_KIND_LABEL, STATE_LABEL, VALUE_SHAPE_LABEL,
   ZONE_OPERATORS, ZONE_OPERATOR_LABEL,
   ENDPOINT_LABEL, INVENTORY_ENDPOINTS, KIND_LABEL,
+  fieldHumanName, fieldNextStep, fieldPlainState, fieldStateText, parameterized,
   currentRevision, hasBound, inventoryGroups, inventoryState, inventoryMatches, levelsText, readableName, zoneLimitsNote, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
   unitActOffered, createOffered, createNextStep, FIELD_LABEL_MAX,
   DURATION_HOURS_NOTE, observationLines, observationReasonText, observationWordText, observeOffered,
@@ -77,8 +78,8 @@ export function renderSourceFieldsHtml() {
 // One sentence (the language pass): how to confirm is said in the forms.
 function intro(ctx) {
   return ctx.mayVerify
-    ? "The fields each data source delivers, and how far each one's unit and meaning are proven."
-    : "The fields each data source delivers; a platform administrator confirms their units and meanings.";
+    ? "The values each data source sends, and whether you can use them yet."
+    : "The values each data source sends, and whether you can use them yet. A platform administrator confirms what they mean.";
 }
 // G1 (8.4): a source_stated revision is never "confirmed" - its unit is GPEXE's own word and its meaning GPEXE's own
 // label, each checked by an administrator on the board.
@@ -116,9 +117,10 @@ function renderListHtml(s, ctx) {
       <div>
         <h2 id="source-fields-title">Source fields</h2>
         <p class="muted">${intro(ctx)}</p>
-        ${legendHtml()}
+        ${s.technical ? legendHtml() : ""}
       </div>
     </div>
+    <label class="source-fields-choice"><input type="checkbox" data-action="source-fields-technical" ${s.technical ? "checked" : ""}><span>Show technical details</span></label>
     ${noticeHtml(s)}
     ${list.loading && !list.loaded ? `<p class="muted" role="status">Loading source fields...</p>` : ""}
     ${list.error ? `<div class="error" role="alert"><p>${escapeHtml(list.error)}</p><button class="plain-button" type="button" data-action="source-fields-reload">Try again</button></div>` : ""}
@@ -126,23 +128,58 @@ function renderListHtml(s, ctx) {
     ${[...groups.values()].map((fields) => `
       <section class="metric-classification-section" aria-labelledby="sf-group-${escapeAttr(`${fields[0].sourceSystem}-${fields[0].apiFamily}`)}">
         <h3 id="sf-group-${escapeAttr(`${fields[0].sourceSystem}-${fields[0].apiFamily}`)}">${sourceName(fields[0], twoFamilies(s, fields[0].sourceSystem))}</h3>
-        <ul class="metric-variables-list">
-          ${fields.map((field) => {
-            const revision = currentRevision(field);
-            return `
-            <li>
-              <button type="button" class="metric-variables-item dc-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
-                ${fieldTileHtml(revision)}
-                <span class="metric-variables-item-name">${fieldName(field)} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</span>
-                <span class="metric-variables-item-facts muted">${unitSummary(revision, field)} · ${revision ? `${meaningSummary(revision)} · ` : ""}${escapeHtml(levelsText(revision))}</span>
-                ${evidenceBadge(revision)}
-              </button>
-            </li>`;
-          }).join("")}
-        </ul>
+        ${s.technical ? `<ul class="metric-variables-list">${fields.map((field) => technicalRowHtml(field)).join("")}</ul>` : plainRowsHtml(fields, ctx)}
       </section>`).join("")}
     ${renderInventoryHtml(s, ctx)}
   `;
+}
+
+// The technical view: the proof words of each field, as before the plain row.
+function technicalRowHtml(field) {
+  const revision = currentRevision(field);
+  return `
+    <li>
+      <button type="button" class="metric-variables-item dc-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
+        ${fieldTileHtml(revision)}
+        <span class="metric-variables-item-name">${fieldName(field)} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}</span>
+        <span class="metric-variables-item-facts muted">${unitSummary(revision, field)} · ${revision ? `${meaningSummary(revision)} · ` : ""}${escapeHtml(levelsText(revision))}</span>
+        ${evidenceBadge(revision)}
+      </button>
+    </li>`;
+}
+// The plain row (the owner's screenshot; the same list, one style as "More values GPEXE sends"): the human name with
+// GPEXE's own small under it, the unit as people write it, one state and one next step. The zone sets and threshold
+// events go into one closed group, as on the board.
+function plainRowHtml(field, ctx, { parked = false } = {}) {
+  const revision = currentRevision(field);
+  const state = fieldPlainState(field, revision);
+  const unit = revision?.sourceUnit || revision?.expectedSourceUnit || "";
+  const own = field.label && field.label !== fieldHumanName(field) ? `<small class="muted source-fields-own-name">GPEXE: ${escapeHtml(field.label)}</small>` : "";
+  const next = parked ? "" : fieldNextStep(ctx, revision, state);
+  return `
+    <li>
+      <button type="button" class="metric-variables-item dc-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
+        ${fieldTileHtml(revision)}
+        <span class="metric-variables-item-name">${escapeHtml(fieldHumanName(field))}${unit ? ` <span class="source-fields-inventory-unit">(${escapeHtml(unit)})</span>` : ""} ${field.state === "retired" ? `<span class="item-badge">Retired</span>` : ""}${own}</span>
+        <span class="source-fields-inventory-state"><span class="item-badge${state === "in_use" ? " is-active" : ""}">${escapeHtml(fieldStateText(field, state))}</span></span>
+        ${next ? `<span class="metric-variables-item-facts muted">${escapeHtml(next)}</span>` : ""}
+      </button>
+    </li>`;
+}
+const PARKED_SENTENCE = {
+  platform: "OptiMove cannot yet choose which zone or threshold to use for these. To use one zone, create its numbered GPEXE field under More values GPEXE sends and confirm it. Events above a threshold cannot be added yet.",
+  club: "OptiMove cannot yet choose which zone or threshold to use for these. To use one zone, ask OptiMove support to add it as a field of its own. Events above a threshold cannot be added yet.",
+};
+function plainRowsHtml(fields, ctx) {
+  const parked = fields.filter((f) => parameterized(currentRevision(f)) && !(f.inUse?.count > 0));
+  const rest = fields.filter((f) => !parked.includes(f));
+  return `
+    <ul class="metric-variables-list">${rest.map((f) => plainRowHtml(f, ctx)).join("")}</ul>
+    ${parked.length ? `<details class="source-fields-parked">
+      <summary>Zone sets and threshold events: not available yet (${parked.length})</summary>
+      <p class="muted">${escapeHtml(ctx.mayVerify ? PARKED_SENTENCE.platform : PARKED_SENTENCE.club)}</p>
+      <ul class="metric-variables-list">${parked.map((f) => plainRowHtml(f, ctx, { parked: true })).join("")}</ul>
+    </details>` : ""}`;
 }
 
 // ---------------------------------------------------------------------------

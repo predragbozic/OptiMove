@@ -225,7 +225,19 @@ const CODE_TEXT = {
   variable_active: "This variable is active (perhaps restored in the meantime), so there is nothing to restore.",
   restore_by_admin: "An administrator archived this variable, so only an administrator can restore it.",
   icon_unchanged: "Nothing changed: this icon is the one already saved.",
+  // v77 (J21).
+  calculation_input_unavailable: "One of the chosen variables can no longer be added up here (archived, or not available to this workspace). Choose again.",
+  calculation_input_calculated: "One of the chosen variables is calculated itself. Choose ordinary variables.",
+  calculation_unit_mismatch: "Every chosen variable must have this variable's unit.",
+  calculation_level_mismatch: "Every chosen variable must be recorded for each level this variable is recorded for.",
+  calculation_kind_fixed: "A variable stays calculated, or not, from its first version.",
+  variable_used_by_calculation: "A calculated variable adds this one up, so its unit cannot change.",
 };
+// v78 (J21): the server's sentence names the variable in plain words; it is shown as it is.
+const SERVER_SENTENCE = new Set([
+  "calculation_input_not_additive", "calculated_day_rule_fixed", "calculation_input_day_rule_in_use",
+  "calculation_input_archive_in_use", "calculation_input_not_active",
+]);
 // The same code means a different thing in each form (R2, J3b.2).
 const MODE_TEXT = {
   rename: {
@@ -248,6 +260,7 @@ const MODE_TEXT = {
 export function codeText(info, mode = "") {
   // The server's own sentence names API fields; the form says it in its words.
   if (info.code === "invalid_body") return "Not saved: the server refused a value. Check the fields and save again.";
+  if (SERVER_SENTENCE.has(info.code) && info.message) return `${info.message} Nothing was saved.`;
   return MODE_TEXT[mode]?.[info.code] || CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
 }
 
@@ -276,6 +289,44 @@ const OPERATOR_SIGN = { ">=": "≥", ">": ">", "<=": "≤", "<": "<" };
 // variables it adds up yet (the Rukovodilac, 2026-11-18).
 export const CALCULATED_CONDITION_NOTE = "Stated by the person who made this variable. OptiMove does not check it against the variables it adds up yet.";
 export const conditionNoteFor = (version) => (version?.calculation && version?.condition ? CALCULATED_CONDITION_NOTE : "");
+
+export { CALCULATED_TEXT } from "./calculated-text.js";
+// The variables a calculated variable may add up, from the lists the workspace reads (its own and, in a club, OptiMove's):
+// every active variable but the one being edited, each with the reason it cannot be added, if any - listed, never hidden
+// (the Rukovodilac, 2026-11-18). The server checks again on Save.
+const NOT_AN_AMOUNT = {
+  max: "a highest value, not an amount",
+  avg: "an average, not an amount",
+  last: "the last value, not an amount",
+  none: "not combined by day, not an amount",
+};
+export function inputCandidates(form) {
+  const d = form.draft;
+  const unit = String(d.unit ?? "").trim();
+  const rows = form.candidates?.rows || [];
+  const available = [];
+  const unavailable = [];
+  for (const row of rows) {
+    if (row.id === form.variableId || row.state !== "active") continue;
+    const v = row.currentVersion || {};
+    const levels = row.levels || [];
+    let reason = "";
+    if (v.calculation) reason = "Calculated itself; a calculated variable adds up ordinary variables only.";
+    else if (v.valueType && v.valueType !== "numeric") reason = "Not a number.";
+    else if (v.dailyAggregationMethod !== "sum") reason = `It is ${NOT_AN_AMOUNT[v.dailyAggregationMethod] || "not an amount"}, so it cannot be added up.`;
+    else if (!unit) reason = "Enter the unit first.";
+    else if (v.unit !== unit) reason = `In ${v.unit || "no unit"}, not ${unit}.`;
+    else {
+      const lacking = (d.levels || []).filter((level) => !levels.includes(level));
+      if (lacking.length) reason = `Not recorded for ${lacking.map(levelLabel).map((l) => l.toLowerCase()).join(" and ")}.`;
+    }
+    (reason ? unavailable : available).push({ id: row.id, label: row.label, unit: v.unit || "", ownerScope: row.ownerScope, reason });
+  }
+  const byLabel = (a, b) => String(a.label).localeCompare(String(b.label));
+  return { available: available.sort(byLabel), unavailable: unavailable.sort(byLabel) };
+}
+export const CALCULATION_MIN = 2;
+export const CALCULATION_MAX = 10;
 export function conditionSummary(condition) {
   if (!condition) return "None";
   if (condition.kind === "zone" && condition.operator === "between") return `Zone ${condition.lower}–${condition.upper} ${condition.unit}`;
@@ -307,6 +358,8 @@ export function emptyDraft() {
     minValue: "", maxValue: "",
     conditionKind: "none", conditionOperator: ">=", conditionLower: "", conditionUpper: "", conditionValue: "", conditionDuration: "", conditionUnit: "",
     reason: "",
+    // J21 (C150): "measured" (a source fills it) or "calculated" (OptiMove adds up `inputs`, ids in the order chosen).
+    kind: "measured", inputs: [],
   };
 }
 
@@ -326,6 +379,12 @@ export function draftFromVersion(version) {
   // A condition stored in another shape: the coach chooses it again, it is
   // never cleared silently.
   else draft.conditionKind = "unsupported";
+  // A calculated variable stays calculated (calculation_kind_fixed): a new version starts from its inputs.
+  if (version?.calculation) {
+    draft.kind = "calculated";
+    draft.inputs = (version.calculation.inputs || []).map((i) => String(i.id ?? i));
+    draft.dailyAggregationMethod = "sum";
+  }
   return draft;
 }
 
@@ -379,7 +438,7 @@ export function openForm(mode, { variable = null } = {}) {
     replacing: read ? { label: false, shortLabel: false, description: false } : null,
     // Set by a 409 variable_changed: the names someone else saved meanwhile.
     conflict: null,
-    draft: mode === "version" ? draftFromVersion(current) : read ? { ...emptyDraft(), ...read.names }
+    draft: mode === "version" ? { ...draftFromVersion(current), levels: [...(variable?.levels || ["session"])] } : read ? { ...emptyDraft(), ...read.names }
       : mode === "icon" ? { ...emptyDraft(), iconKey: variable?.icon || "" } : emptyDraft(),
     dirty: false,
     requestKey: newRequestKey(),
@@ -390,6 +449,8 @@ export function openForm(mode, { variable = null } = {}) {
     errors: {},
     error: "",
     keyHint: { key: "", taken: false, required: false, loading: false, label: "" },
+    // J21: the variables a calculated one may add up, read when the form needs them.
+    candidates: { state: "idle", rows: [], error: "" },
   };
 }
 
@@ -539,10 +600,23 @@ export function buildRequest(form) {
   }
   const unitMessage = unitError(unit);
   if (unitMessage) errors.unit = unitMessage;
-  if (!AGGREGATIONS.some((a) => a.value === d.dailyAggregationMethod)) errors.dailyAggregationMethod = "Choose one.";
-  if (decimalError(minValue)) errors.minValue = decimalError(minValue);
-  if (decimalError(maxValue)) errors.maxValue = decimalError(maxValue);
-  if (!errors.minValue && !errors.maxValue && minValue && maxValue && decimalCompare(minValue, maxValue) > 0) errors.maxValue = "Not below the minimum.";
+  const calculated = d.kind === "calculated";
+  let calculation = null;
+  if (calculated) {
+    // J21: a day's values are added up and there are no allowed values; the inputs are chosen by name.
+    const { available } = inputCandidates(form);
+    const offered = new Set(available.map((a) => a.id));
+    const inputs = (d.inputs || []).filter((id, i, all) => all.indexOf(id) === i);
+    if (inputs.length < CALCULATION_MIN) errors.inputs = `Choose at least ${CALCULATION_MIN} variables to add up.`;
+    else if (inputs.length > CALCULATION_MAX) errors.inputs = `Choose at most ${CALCULATION_MAX}.`;
+    else if (inputs.some((id) => !offered.has(id))) errors.inputs = "One of the chosen variables cannot be added up now (see why below). Untick it.";
+    calculation = { kind: "sum", inputs };
+  } else {
+    if (!AGGREGATIONS.some((a) => a.value === d.dailyAggregationMethod)) errors.dailyAggregationMethod = "Choose one.";
+    if (decimalError(minValue)) errors.minValue = decimalError(minValue);
+    if (decimalError(maxValue)) errors.maxValue = decimalError(maxValue);
+    if (!errors.minValue && !errors.maxValue && minValue && maxValue && decimalCompare(minValue, maxValue) > 0) errors.maxValue = "Not below the minimum.";
+  }
 
   let condition = null;
   const cUnit = String(d.conditionUnit ?? "").trim();
@@ -577,7 +651,9 @@ export function buildRequest(form) {
   }
   if (Object.keys(errors).length) return { body: null, errors };
 
-  const semantics = { unit, dailyAggregationMethod: d.dailyAggregationMethod, ...(minValue ? { minValue } : {}), ...(maxValue ? { maxValue } : {}), ...(condition ? { condition } : {}) };
+  const semantics = calculated
+    ? { unit, dailyAggregationMethod: "sum", ...(condition ? { condition } : {}), calculation }
+    : { unit, dailyAggregationMethod: d.dailyAggregationMethod, ...(minValue ? { minValue } : {}), ...(maxValue ? { maxValue } : {}), ...(condition ? { condition } : {}) };
   if (isCreate) {
     return {
       errors,

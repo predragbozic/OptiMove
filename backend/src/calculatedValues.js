@@ -161,3 +161,11 @@ export async function calculationVersionIds(run, versionIds) {
   )).rows;
   return new Set(rows.map((r) => r.id));
 }
+
+// A SQL condition that is true for a calculated variable `d` (alias of training_load.metric_definitions): its current version
+// carries a calculation. The athlete's catalog never lists one (the Rukovodilac, 2026-11-19: no label, no picker entry).
+export function calculatedDefinitionSql(alias = "d") {
+  return `exists (select 1 from training_load.metric_definition_versions calc_d
+                   where calc_d.id = ${alias}.current_version_id
+                     and coalesce(to_jsonb(calc_d.*) -> 'calculation', 'null'::jsonb) <> 'null'::jsonb)`;
+}

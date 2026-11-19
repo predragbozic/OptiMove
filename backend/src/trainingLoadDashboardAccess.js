@@ -35,6 +35,7 @@ import {
 import { resolveActiveWorkspace } from "./workspace.js";
 import { isAthleteInWorkspaceScope } from "./trainingLoadAccess.js";
 import { query } from "./db.js";
+import { calculatedDefinitionSql } from "./calculatedValues.js";
 
 export { isAthleteInWorkspaceScope };
 
@@ -270,11 +271,14 @@ export function canViewDashboardRow(req, row, dataWorkspace) {
 // ------------------------------------------------------------
 export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionId) {
   const r = await query(
-    `select owner_scope, owner_user_id, owner_club_id, owner_team_id, state from training_load.metric_definitions where id = $1`,
+    `select d.owner_scope, d.owner_user_id, d.owner_club_id, d.owner_team_id, d.state, ${calculatedDefinitionSql("d")} as calculated
+       from training_load.metric_definitions d where d.id = $1`,
     [metricDefinitionId],
   );
   const def = r.rows[0];
   if (!def) return { visible: false, def: null };
+  // J21: an athlete's own dashboards never take a calculated variable; it answers like a foreign one.
+  if (def.calculated && dashboardRow.data_workspace_type === "athlete") return { visible: false, def: null };
   if (def.owner_scope === "system") return { visible: true, def };
   if (dashboardRow.owner_scope === "user" && def.owner_scope === "user" && String(def.owner_user_id) === String(dashboardRow.owner_user_id)) return { visible: true, def };
   if (def.owner_scope === "club" && dashboardRow.data_workspace_type === "club" && String(def.owner_club_id) === String(dashboardRow.data_workspace_scope_id)) return { visible: true, def };
