@@ -1170,3 +1170,22 @@ test("2y (v80 step A): a variable with a condition is never offered as a free ta
   assert.equal((await code(W.fTime, event)).code, "condition_mismatch");
   assert.equal(JSON.stringify(board).includes("condition_raw"), false, "the stored condition never leaves the server as it is stored");
 });
+
+test("2x (v80 step A, the independent review's UNKNOWN): a variable with a condition that a zone column already fills keeps its state on the board - the activation is listed as on, while the variable stays no free target", async () => {
+  const zoneVar = await variable(W.caA, { unit: "m", label: `Zone 3 distance ${uid()}`,
+    condition: { kind: "zone", operator: "between", lower: "25", upper: "60", unit: "W/kg" } });
+  const m = ok(await post("/mappings", W.caA, { requestKey: key(), sourceMetricId: W.fZone.fieldId, metricDefinitionId: zoneVar.id }), 201).mapping;
+  const v = ok(await post(`/mappings/${m.id}/versions`, W.caA, { requestKey: key(), sourceRevisionId: W.fZone.revId, appliesToSession: true, appliesToDrill: true,
+    sourceParameters: { lower: "25", upper: "60" } }), 201).version;
+  ok(await post(`/mappings/${m.id}/versions/${v.id}/submit`, W.caA, { requestKey: key() }));
+  ok(await post(`/mappings/${m.id}/versions/${v.id}/activate`, await activatorOf(W.caA), { requestKey: key(), expectedActiveVersionId: null }));
+  const started = await start(W.caA, { mappingId: m.id, versionId: v.id }, W.tA);
+  assert.ok([200, 201].includes(started.status), started.text);
+  const activation = await openOn({ versionId: v.id }, W.tA);
+  assert.ok(activation, "the activation is open");
+  const { board } = ok(await boardOf(W.caA, W.tA));
+  const row = board.variables.find((x) => x.id === String(zoneVar.id));
+  assert.deepEqual([row.placeable, row.condition], [false, { kind: "zone", operator: "between", lower: "25", upper: "60", unit: "W/kg" }]);
+  assert.deepEqual(board.on.filter((o) => o.variableId === String(zoneVar.id)).map((o) => [o.activationId, o.mappingVersionId, o.fieldId]),
+    [[String(activation.id), String(v.id), String(W.fZone.fieldId)]]);
+});
