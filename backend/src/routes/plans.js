@@ -5,6 +5,7 @@ import { query } from "../db.js";
 import { buildProgramData, buildWeeks } from "../utils/grouping.js";
 import { canAccessPlan } from "../access.js";
 import { hasTemplateAccessRecord, needsTemplateApproval } from "../programAccessPolicy.js";
+import { linkedSessionTimes } from "../linkedSessionTimes.js";
 
 const router = Router();
 
@@ -28,6 +29,8 @@ router.get("/:planId/weekly", async (req, res, next) => {
     );
     await decorateMediaRows(result.rows,'plan_item',query);
     await decoratePlanItemEnglish(result.rows, query);
+    // K3 / K2c-3: a session without its own time shows its linked event's time.
+    await linkedSessionTimes({ query }, result.rows);
     res.json({
       mode: "date",
       weeks: buildWeeks(result.rows),

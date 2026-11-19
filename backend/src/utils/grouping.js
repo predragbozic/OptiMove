@@ -23,7 +23,13 @@ export function toPlanItem(row) {
     amPm: row.am_pm || "",
     bta: row.bta || "",
     sessionName: row.session_name || "",
-    sessionTime: row.session_time ? String(row.session_time).slice(0, 5) : "",
+    // K3 / K2c-3 (O14): the session's own time, else its linked event's
+    // start and end (linkedSessionTimes.js). sessionTimeFromEvent: the times
+    // shown (start, end or both; a multi-day event's last day has only its
+    // end) come from the event.
+    sessionTime: row.session_time ? String(row.session_time).slice(0, 5) : (row.linked_event_start_time || ""),
+    sessionTimeFromEvent: !row.session_time && Boolean(row.linked_event_start_time || row.linked_event_end_time),
+    sessionEndTime: !row.session_time && row.linked_event_end_time ? row.linked_event_end_time : "",
     athlete_id: row.athlete_source_external_id || row.athlete_id || "",
     athlete: row.athlete_name || "",
     athlete_image_url: row.athlete_image_url || "",
