@@ -124,7 +124,8 @@ function refused(res, code, pattern) {
 }
 
 before(async () => {
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V80, "v80 is the last test migration");
+  // Later migrations may follow v80; the rehearsal database stops before v80 and applies the files up to v80 only.
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V80), "v80 is a test migration");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v80rb", migrations: UP_TO_PREV }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "cond80" }),
@@ -200,10 +201,22 @@ test("2. the rollback refuses, changing nothing, without v80, while the migrator
   await r.query(`delete from training_load.source_metric_event_setting_confirmations`);
   await r.query("commit");
   assert.deepEqual(await catalog(r), atStart);
+  // A later Metrics Core (training_load) migration recorded: refused, nothing changed; a later migration of another track
+  // (the calendar's) does not stop it.
+  const later = (name) => r.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ($1, $2, 'test')`, [name, "f".repeat(64)]);
+  const unrecord = (name) => r.query(`delete from public.schema_migrations where migration_name = $1`, [name]);
+  await later("migrations_v2/209912311000_training_load_vx_test_only.sql");
+  const withLater = await catalog(r);
+  await assert.rejects(r.query(await fsp.readFile(ROLLBACK_PATH, "utf8")), /v80 rollback refused: a later training_load migration is recorded/);
+  await r.query("rollback").catch(() => {});
+  assert.deepEqual(await catalog(r), withLater, "the refused rollback changed nothing");
+  await unrecord("migrations_v2/209912311000_training_load_vx_test_only.sql");
+  await later("migrations_v2/209912311000_calendar_vx_test_only.sql");
   // Without v80 recorded: refused.
   await r.query(await fsp.readFile(ROLLBACK_PATH, "utf8"));
   await assert.rejects(r.query(await fsp.readFile(ROLLBACK_PATH, "utf8")), /v80 is not recorded/);
   await r.query("rollback").catch(() => {});
+  await unrecord("migrations_v2/209912311000_calendar_vx_test_only.sql");
   await applyUpTo(rdb.url, [...UP_TO_PREV, V80]);
 });
 
@@ -259,8 +272,10 @@ test("4. v80 refuses to apply, changing nothing, when a version without paramete
 test("5. the legacy schema snapshot (the production dump's structure) and every migration before v80: v80 applies, the rollback restores that catalog exactly, and it applies again", async () => {
   const snapshotSql = fs.readFileSync(path.join(__dirname, "support/legacy-schema.sql"), "utf8");
   const last = snapshotSql.match(/^-- Last migration contained in the dump: (\S+)\.$/m)[1];
-  const all = fs.readdirSync(MIGRATIONS).filter((f) => /^\d{12}_.*\.sql$/.test(f)).sort();
-  assert.equal(all.at(-1), V80, "v80 is the last migration of the repository");
+  // The repository's migrations up to v80 (later ones, of any track, are left out: this rehearsal is v80's own).
+  const files = fs.readdirSync(MIGRATIONS).filter((f) => /^\d{12}_.*\.sql$/.test(f)).sort();
+  assert.ok(files.includes(V80), "v80 is a migration of the repository");
+  const all = files.slice(0, files.indexOf(V80) + 1);
   const before80 = all.slice(0, -1);
   const legacy = await createDisposableDatabase({ prefix: "gpexe", label: "v80_legacy", baseDatabaseUrl: ORIGINAL_DATABASE_URL });
   const c = new pg.Client({ connectionString: legacy.url });

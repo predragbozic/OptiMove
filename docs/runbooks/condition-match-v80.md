@@ -78,8 +78,8 @@ screen for it is step C.
 * **Rollback** (`condition-match-v80-rollback.sql`; it locks the three tables `ACCESS EXCLUSIVE` before its row checks; rehearsed apply -> rollback -> the catalog before v80 exactly -> re-apply,
   on a migrated database and on one built from the legacy schema snapshot): refuses while the migrator runs, without v80, and
   once a version carries a rule, an activation records a match or a confirmation exists. It drops what v80 added and the v80
-  record; it changes no row of another table. It does not refuse because a later migration is recorded (v81, the calendar's,
-  touches none of v80's objects); a later migration that uses v80's columns must add that refusal to this file.
+  record; it changes no row of another table. It refuses once a later training_load (Metrics Core) migration is recorded, which may build on v80's columns;
+  a later migration of another track (the calendar's v81 and v83) does not stop it.
 * **What the database does not bind** (the v35 limit: the guards keep accidents out, not code that sets the actor): that a
   rule belongs to the field's key (a zone rule on any column without parameters passes the shape and fit checks), and that a
   confirmation's `event_kind`, `observation_confirmation_id` and `threshold_set_id` belong to its revision. The service sets

@@ -12,6 +12,7 @@
 -- other table. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026, taken without waiting);
 --   * v80 is not recorded;
+--   * a later training_load (Metrics Core) migration is recorded (it may build on v80's columns; another track's does not count);
 --   * a mapping version carries a condition rule, an activation records a match, or a confirmation of an event setting exists
 --     (dropping them would lose what an import was matched with; end and remove them through the service first, or keep v80).
 -- One transaction. Run it at a quiet moment as
@@ -30,6 +31,12 @@ do $$
 begin
   if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201100_training_load_v80_condition_match.sql') then
     raise exception 'v80 rollback refused: v80 is not recorded';
+  end if;
+  -- A later Metrics Core migration may build on v80's columns: roll it back first. Another track's (the calendar's) does not.
+  if exists (select 1 from public.schema_migrations
+              where migration_name > 'migrations_v2/202611201100_training_load_v80_condition_match.sql'
+                and migration_name like 'migrations_v2/%training_load%') then
+    raise exception 'v80 rollback refused: a later training_load migration is recorded';
   end if;
 end $$;
 
