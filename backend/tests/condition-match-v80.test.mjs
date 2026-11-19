@@ -201,8 +201,9 @@ test("2. the rollback refuses, changing nothing, without v80, while the migrator
   await r.query(`delete from training_load.source_metric_event_setting_confirmations`);
   await r.query("commit");
   assert.deepEqual(await catalog(r), atStart);
-  // A later Metrics Core (training_load) migration recorded: refused, nothing changed; a later migration of another track
-  // (the calendar's) does not stop it.
+  // Any later migration whose name contains training_load recorded - a made-up Metrics Core one and the real name of the
+  // calendar's v83 - is refused, nothing changed (v80 is forward-only once v83 is applied); a later name without
+  // training_load does not stop it (the Independent's MEDIUM-1 on PR #661).
   const later = (name) => r.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ($1, $2, 'test')`, [name, "f".repeat(64)]);
   const unrecord = (name) => r.query(`delete from public.schema_migrations where migration_name = $1`, [name]);
   await later("migrations_v2/209912311000_training_load_vx_test_only.sql");
@@ -211,6 +212,13 @@ test("2. the rollback refuses, changing nothing, without v80, while the migrator
   await r.query("rollback").catch(() => {});
   assert.deepEqual(await catalog(r), withLater, "the refused rollback changed nothing");
   await unrecord("migrations_v2/209912311000_training_load_vx_test_only.sql");
+  const V83_REAL = "migrations_v2/202611201200_training_load_v83_rpe_answer_change.sql";
+  await later(V83_REAL);
+  const withV83 = await catalog(r);
+  await assert.rejects(r.query(await fsp.readFile(ROLLBACK_PATH, "utf8")), /v80 rollback refused: a later training_load migration is recorded/);
+  await r.query("rollback").catch(() => {});
+  assert.deepEqual(await catalog(r), withV83, "the refused rollback changed nothing");
+  await unrecord(V83_REAL);
   await later("migrations_v2/209912311000_calendar_vx_test_only.sql");
   // Without v80 recorded: refused.
   await r.query(await fsp.readFile(ROLLBACK_PATH, "utf8"));
