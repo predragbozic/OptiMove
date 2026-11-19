@@ -1,3 +1,4 @@
+import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
@@ -17,12 +18,12 @@ const WIDGET_TYPES = [
   { key: "bar_chart", label: "Bar", hint: "Compare buckets" },
 ];
 const GROUP_BY = ["day", "week", "session", "component", "athlete", "cohort"];
-const AGGREGATIONS = ["sum", "avg", "max", "last", "none"];
+const AGGREGATIONS = ["sum", "avg", "max", "last", "none", "ratio"];
 const SCOPE_LEVELS = ["day", "session", "component"];
 // Dashboards UX H1: coach-facing labels for the guided panel's basic
 // settings (H4: the advanced editor uses them too).
 const GROUP_BY_LABELS = { day: "Per day", week: "Per week", session: "Per session", component: "Per component", athlete: "Per athlete", cohort: "Whole group" };
-const AGGREGATION_LABELS = { sum: "Total", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values" };
+const AGGREGATION_LABELS = { ratio: "Ratio", sum: "Total", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values" };
 const SCOPE_LABELS = { day: "Day", session: "Session", component: "Component" };
 const SOURCE_POLICIES = ["all_with_conflicts", "source_connection", "manual", "api_import", "csv_import", "derived", "estimate", "not_applicable"];
 const COVERAGE_POLICIES = ["complete_only", "complete_and_partial", "any"];
@@ -420,6 +421,7 @@ function seriesLabel(series) {
 }
 
 function displayStatusLabel(status, reasons = []) {
+  for (const reason of reasons) if (calculationErrors[reason]) return calculationErrors[reason];
   if (status === "loading") return "Loading...";
   if (status === "unresolved") return "Choose a metric";
   if (status === "ambiguous") return "Ambiguous metric";
@@ -511,19 +513,26 @@ function renderChartHtml(model) {
 function renderWidgetBodyHtml(widget, results) {
   const analysis = state.trainingLoad.analysis;
   const querySkipped = analysis.queryResult === null && (analysis.dashboard?.is_template || analysis.dashboard?.status === "archived");
-  const model = buildDashboardWidgetDisplayModel(widget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
+  const catalog = state.trainingLoad.analysis.metricPicker.definitions ?? [];
+  const displayWidget = { ...widget, series: widget.series.map(series => { const definition = catalog.find(d => d.id === series.metric_definition_id); return { ...series, ...(definition ? { calculation: definition.calculation } : {}) }; }) };
+  const model = buildDashboardWidgetDisplayModel(displayWidget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
   if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
-  if (widget.widget_type === "kpi") return renderKpiHtml(model) + calculatedNoteHtml(widget);
+  const definitions = state.trainingLoad.analysis.metricPicker.definitions ?? [];
+  const unavailable = widget.series.some(series => definitions.find(d => d.id === series.metric_definition_id)?.calculation?.inputs?.some(input => input.definitionId === null));
+  if (unavailable) return '<p role="status">An input you cannot see is needed. Choose another metric.</p>';
+  const ratioNotes = model.series.map(series => (series.calculation && !definitions.find(d => d.id === series.definition.metric_definition_id)?.calculated ? renderCalculationFormula({ calculation: series.calculation }) : '') + renderRatioCoverage(series, series.definition.data_scope_level)).join('');
+  if (model.series.length === 1 && model.series[0].calculation?.kind === 'ratio' && model.series[0].coverage?.includedOccasions === 0) return ratioNotes + calculatedNoteHtml(widget);
+  if (widget.widget_type === "kpi") return renderKpiHtml(model) + calculatedNoteHtml(widget) + ratioNotes;
   if (widget.widget_type === "table") {
     if (model.series.length === 1 && model.series[0].status === "ready" && ["day", "athlete"].includes(model.groupBy)) {
-      return renderDashboardMetricTable(model, state.trainingLoad.orgPickerData?.athletes ?? [], seriesLabel(model.series[0].definition)) + calculatedNoteHtml(widget);
+      return renderDashboardMetricTable(model, state.trainingLoad.orgPickerData?.athletes ?? [], seriesLabel(model.series[0].definition)) + calculatedNoteHtml(widget) + ratioNotes;
     }
-    return renderTableHtml(model) + calculatedNoteHtml(widget);
+    return renderTableHtml(model) + calculatedNoteHtml(widget) + ratioNotes;
   }
-  return renderChartHtml(model) + calculatedNoteHtml(widget);
+  return renderChartHtml(model) + calculatedNoteHtml(widget) + ratioNotes;
 }
 
 // J21: a widget that shows a calculated variable says from when it has values, so an earlier period with none is never an
@@ -534,7 +543,7 @@ function calculatedNoteHtml(widget) {
     .map((series) => series.metric_definition_id && definitions.find((d) => d.id === series.metric_definition_id && d.calculated === true))
     .filter(Boolean).map((d) => d.label);
   if (!names.length) return "";
-  return `<p class="muted tl-calculated-note">${escapeHtml([...new Set(names)].join(", "))}: ${escapeHtml(CALCULATED_TEXT.fromNow)}</p>`;
+  return names.length ? `<p class="muted tl-calculated-note">${escapeHtml([...new Set(names)].join(", "))}: ${escapeHtml(CALCULATED_TEXT.fromNow)}</p>${widget.series.map(series => renderCalculationFormula(definitions.find(d => d.id === series.metric_definition_id))).join('')}` : "";
 }
 
 function renderWidgetHtml(widget, position) {
@@ -722,7 +731,7 @@ function renderMetricPanelHtml() {
             <div class="tl-analysis-editor-grid">
               <label>Title<input type="text" data-action="training-load-analysis-panel-title" value="${escapeAttr(panel.title)}" maxlength="200" placeholder="${escapeAttr(panel.metric?.label || "Widget title")}"></label>
               <label>Show<select data-action="training-load-analysis-panel-field" data-field="groupBy">${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g], panel.groupBy)).join("")}</select></label>
-              <label>Calculate<select data-action="training-load-analysis-panel-field" data-field="aggregation">${AGGREGATIONS.map((v) => optionHtml(v, AGGREGATION_LABELS[v], panel.aggregation)).join("")}</select></label>
+              <label>Calculate<select data-action="training-load-analysis-panel-field" data-field="aggregation">${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === panel.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], panel.aggregation)).join("")}</select></label>
               ${renderScopeSelectHtml({ action: "training-load-analysis-panel-field", attrs: 'data-field="scope"', value: panel.scope, metric: panel.metric, label: "Data level" })}
             </div>
             ${editing ? `<div class="tl-metric-panel-advanced"><span class="muted">Source, coverage, comparison and extra series:</span> <button type="button" class="plain-button compact-button" data-action="training-load-analysis-open-advanced" data-widget-id="${escapeAttr(panel.widgetId)}">Advanced settings</button></div>` : ""}
@@ -874,7 +883,7 @@ function renderEditorHtml() {
               <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
               <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>
               ${saving ? `<label>Scope<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Scope" })}
-              <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${AGGREGATIONS.map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
+              <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === entry.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
               ${analysisWidgetSupportsComparison(draft.widgetType) ? `<label>Comparison<select data-action="training-load-analysis-series-comparison" ${key} ${off}>${COMPARISONS.map((v) => optionHtml(v, COMPARISON_LABELS[v], entry.fields.comparisonPeriod || "")).join("")}</select></label>` : ""}
               <label class="tl-editor-wide">Source<select data-action="training-load-analysis-series-source" ${key} ${policyOff}>${sourceChoices.map((v) => optionHtml(v, SOURCE_LABELS[v], entry.fields.sourcePolicy)).join("")}</select></label>
               <label class="tl-editor-wide">Values included<select data-action="training-load-analysis-series-role" ${key} ${policyOff}>${ROLE_POLICIES.map((v) => optionHtml(v, ROLE_POLICY_LABELS[v], entry.fields.aggregationRolePolicy)).join("")}</select></label>

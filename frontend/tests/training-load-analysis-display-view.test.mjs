@@ -354,3 +354,24 @@ test("J21: the note follows the server's flag through the real read of the defin
     globalThis.fetch = previousFetch;
   }
 });
+
+test('ratio shows independent coverage, friendly errors and no provenance', () => {
+  const a=setup('table',[row(5,{bucketKey:'2026-10-01'})]);a.widgets[0].group_by='day';
+  const s=a.queryResult.widgets[0].series[0];s.calculation={kind:'ratio',scale:1,unit:'m/min'};s.coverage={includedOccasions:3,leftOutOccasions:5};
+  assert.match(rendered().querySelector('.tl-analysis-widget').textContent,/5 sessions without a value/);
+  s.data.current=[];s.coverage.includedOccasions=0;assert.match(rendered().querySelector('.tl-analysis-widget').textContent,/No sessions with a value/);
+  s.status='error';s.error='calculation_changed_in_period';assert.match(rendered().querySelector('.tl-analysis-widget').textContent,/The calculation changed during this period. Choose a shorter period/);
+});
+
+test('Each measurement keeps ratio occasion rows separate in the shared table',()=>{
+  const a=setup('table',[row(10,{athleteId:'athlete-a',bucketKey:'2026-10-01'}),row(5,{athleteId:'athlete-a',bucketKey:'2026-10-01'})]);
+  a.widgets[0].group_by='day';a.widgets[0].series[0].analytical_aggregation='none';
+  const rows=[...rendered().querySelectorAll('tbody tr')];assert.equal(rows.length,2);assert.deepEqual(rows.map(r=>r.lastElementChild.textContent),['10','5']);
+});
+
+test('Ratio on an ordinary metric uses its own refusal sentence',()=>{
+  const a=setup('table',[]);a.widgets[0].series[0].metric_definition_id='ordinary';a.widgets[0].series[0].analytical_aggregation='ratio';
+  a.metricPicker.definitions=[{id:'ordinary',label:'Distance',calculation:null}];
+  Object.assign(a.queryResult.widgets[0].series[0],{status:'error',error:'aggregation_not_allowed'});
+  assert.match(rendered().querySelector('.tl-analysis-widget').textContent,/Ratio is only for a calculated ratio. Choose another way to combine values/);
+});

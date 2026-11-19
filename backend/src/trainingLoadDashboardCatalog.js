@@ -346,7 +346,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     // series (finding #6). resolveTemplateSeriesBatchForWorkspace() itself
     // issues at most 2 SQL statements total for the WHOLE batch, however
     // many series/hints it holds.
-    const hintBearingSpecs = series.rows.filter((s) => s.template_metric_key_hints).map((s) => ({ sourceSeriesId: s.id, hints: s.template_metric_key_hints }));
+    const hintBearingSpecs = series.rows.filter((s) => s.template_metric_key_hints).map((s) => ({ sourceSeriesId: s.id, hints: s.template_metric_key_hints, analyticalAggregation: s.analytical_aggregation, aggregationRolePolicy: s.aggregation_role_policy }));
     const batchResolved = hintBearingSpecs.length
       ? await resolveTemplateSeriesBatchForWorkspace(c, hintBearingSpecs, { dataWorkspaceType: ctx.dataWorkspaceType, dataWorkspaceScopeId: ctx.dataWorkspaceScopeId, ownerUserId: ctx.ownerUserId })
       : new Map();

@@ -38,7 +38,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
         const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
         if (options.metricDefinitionId) {
           const { metric } = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: { kind: 'metric', metricDefinitionId: options.metricDefinitionId } });
-          return { metrics: [{ ...metric, allowed_aggregations: metric.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'] }], nextCursor: null };
+          return { metrics: [{ ...metric, allowed_aggregations: metric.allowedAggregations ?? (metric.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none']) }], nextCursor: null };
         }
         return reader.listMetrics({ req: target.req, dataWorkspace: target.workspace, dashboardId, ...options });
       }
@@ -81,6 +81,8 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
         ? await queryDashboard(target.workspace, [queryWidget], compiled.resolvedPeriod, { queryRunner })
         : [{ widgetId: queryWidget.id, series: [{ widgetId: queryWidget.id, seriesId: queryWidget.series[0].id, status: 'ok', data: { current: [], comparison: null, comparisonRange: null } }] }];
       const widgetResult = results[0] && { ...results[0], presentation_config: compiled.widget.presentation_config ?? null };
+      const contractError = widgetResult?.series?.find(series => ['calculation_changed_in_period', 'aggregation_not_allowed'].includes(series.error));
+      if (contractError) return issueResult('invalid', contractError.error, '$.draft.view.analyticalAggregation');
       if (!widgetResult || widgetResult.series?.length !== 1 || widgetResult.series.some(series => series.status !== 'ok')) throw previewError('previewQueryFailed');
       const current = widgetResult.series[0].data?.current;
       const comparison = widgetResult.series[0].data?.comparison;

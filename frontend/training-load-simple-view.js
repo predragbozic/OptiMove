@@ -1,3 +1,4 @@
+import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
 import { renderDashboardMetricTable } from "./training-load-dashboard-table.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { escapeHtml, escapeAttr } from "./utils.js";
@@ -20,11 +21,12 @@ const statusLabels = { ok: "Ready", valid: "Ready", invalid: "Needs attention", 
 const lookup = (labels, value) => Object.hasOwn(labels, value) ? labels[value] : text(value);
 const friendlyStatus = (value) => statusLabels[value] ?? "Needs attention";
 
-function issueText(issue) {
+function issueText(issue, metric) {
+  if (issue?.code === "aggregation_not_allowed" && metric?.calculation === null) return calculationErrors.ratioOnAmount;
   if (!issue || typeof issue !== "object") return "Review your settings and preview again.";
   const known = {
     conflict: "Some measurements disagree. Try a different selection.", unitConflict: "Returned observations have conflicting units.",
-    requiresChoice: "Choose the required setting before previewing again.", notFound: "The selected metric or filter is no longer available.",
+    ...calculationErrors, requiresChoice: "Choose the required setting before previewing again.", notFound: "The selected metric or filter is no longer available.",
     advancedRequired: "These settings require the advanced editor.", unsupportedDisplay: "This display configuration requires the advanced editor.",
     unsupportedComposition: "This grouping cannot be used with the chart settings. Open advanced settings.",
     unsupportedCapability: "This setting is currently unavailable.", inactiveWidgetType: "This display type is currently unavailable.",
@@ -78,6 +80,7 @@ function metricCards(model, locked) {
       return `<button type="button" class="tl-simple-metric" ${action("metric")} data-kind="${kind}" data-id="${escapeAttr(id)}" aria-pressed="${selected}"${disabled(locked)}>
         <strong>${escapeHtml(metric.label ?? metric.name ?? metric.key ?? id)}</strong>
         <span>${escapeHtml(metric.unit ?? "no unit specified")}</span>
+        ${metric.calculation ? '<span>Calculated</span>' : ''}
         ${metric.description ? `<span>${escapeHtml(metric.description)}</span>` : ""}
       </button>`;
     }).join("")}</div>
@@ -118,7 +121,8 @@ function displayChoices(model, locked) {
     }).join("")}</fieldset>
     ${model.widgetId ? message("To use a different display type, add a new widget.") : ""}
     ${selectField("group", "Group results by", [["day", "Day"], ["week", "Week"], ["athlete", "Athlete"], ["session", "Session"], ["component", "Component"], ["cohort", "Whole group"]], view.groupBy ?? "day", locked)}
-    ${custom ? selectField("aggregation", "How to combine measurements", (metric.allowed_aggregations ?? []).map((value) => [value, ({ sum: "Total (sum)", avg: "Average", max: "Maximum", last: "Latest value", none: "Each measurement" })[value]]).filter(([, label]) => label), view.analyticalAggregation, locked, "Choose how to combine measurements") : ""}
+    ${renderCalculationFormula(metric)}
+    ${custom ? selectField("aggregation", "How to combine measurements", (metric.allowedAggregations ?? metric.allowed_aggregations ?? []).map((value) => [value, ({ ratio: "Ratio", sum: "Total (sum)", avg: "Average", max: "Highest", last: "Latest", none: "Each measurement" })[value]]).filter(([, label]) => label), view.analyticalAggregation, locked, "Choose how to combine measurements") : ""}
     ${custom && scopes.length > 1 ? selectField("scope", "Use measurements from", scopes.map((value) => [value, ({ day: "Day", session: "Session", component: "Component" })[value]]).filter(([, label]) => label), view.dataScopeLevel, locked, "Choose which measurements to use") : ""}`;
 }
 
@@ -145,11 +149,11 @@ function previewHtml(model, technical) {
   const preview = model.preview ?? model.previousPreview;
   if (!preview) return message(model.previewLoading ? "Loading preview…" : "Preview shows the numbers; the chart appears on the dashboard after saving.");
   const result = preview.widgetResult;
-  const tables = [];
+  const tables = (result?.series ?? []).map(series => renderRatioCoverage(series, preview.normalizedWidget?.series?.find(s => s.id === series.seriesId)?.data_scope_level));
   const sharedTable = preview.normalizedWidget?.widget_type === "table" && ["day", "athlete"].includes(preview.normalizedWidget.group_by) && result?.series?.length === 1;
   if (sharedTable) {
     const display = buildDashboardWidgetDisplayModel(preview.normalizedWidget, result, { period: preview.resolvedPeriod });
-    tables.push(renderDashboardMetricTable(display, model.athletes, preview.normalizedWidget.series?.[0]?.display_label || model.selectedMetric?.label || model.selectedMetric?.name || "Metric"));
+    if (!(display.series[0]?.calculation?.kind === "ratio" && display.series[0]?.coverage?.includedOccasions === 0)) tables.push(renderDashboardMetricTable(display, model.athletes, preview.normalizedWidget.series?.[0]?.display_label || model.selectedMetric?.label || model.selectedMetric?.name || "Metric"));
   }
   function visit(value, path) {
     if (Array.isArray(value)) tables.push(resultTable(value, path, model.athletes ?? [], technical));
@@ -158,14 +162,14 @@ function previewHtml(model, technical) {
   for (const [index, series] of (sharedTable ? [] : result?.series ?? []).entries()) {
     const label = model.selectedMetric?.label ?? model.selectedMetric?.name ?? series.label ?? series.displayLabel ?? (technical ? `Series ${index + 1}` : "Metric");
     tables.push(message(`${label}: ${friendlyStatus(series.status ?? "status not specified")}`));
-    visit(series.data, label);
+    if (!(series.calculation?.kind === "ratio" && series.coverage?.includedOccasions === 0)) visit(series.data, label);
   }
   if (result && !result.series?.length) visit(result, "Result");
   return `${model.previewLoading ? message("Loading preview… Previous results are shown below.") : ""}
     <p class="tl-simple-preview-status" data-ready="${preview.status === "valid"}"><span aria-hidden="true">${preview.status === "valid" ? "✓" : "!"}</span> ${escapeHtml(friendlyStatus(preview.status ?? "not specified"))}${technical ? ` · ${(preview.issues ?? []).length} issues` : ""}</p>
     ${technical && result?.status ? message(`Result status: ${friendlyStatus(result.status)}`) : ""}
     ${preview.resolvedPeriod ? message(`Showing: ${[preview.resolvedPeriod.dateFrom, preview.resolvedPeriod.dateTo].map(date => date?.split("-").reverse().join(".")).join(" – ")}`) : ""}
-    ${(technical ? preview.issues ?? [] : (preview.issues ?? []).slice(0, 1)).map((issue) => message(issueText(issue), "alert")).join("")}
+    ${(technical ? preview.issues ?? [] : (preview.issues ?? []).slice(0, 1)).map((issue) => message(issueText(issue, model.selectedMetric), "alert")).join("")}
     ${(technical ? preview.warnings ?? [] : []).map((warning) => message(issueText(warning))).join("")}
     ${message("Preview shows the numbers; the chart appears on the dashboard after saving.")}
     ${(preview.issues ?? []).some(issue => issue.reason === "maxChartAthletes") ? button("choose-athletes", "Choose athletes") : ""}

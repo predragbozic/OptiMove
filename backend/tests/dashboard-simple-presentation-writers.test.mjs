@@ -53,6 +53,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     queryHandler = async sql => {
       if (sql.includes("select is_active")) return { rowCount: 1, rows: [{ is_active: true }] };
       if (sql.includes("from training_load.dashboards")) return { rowCount: 1, rows: [dashboard] };
+      if (sql.includes("select metric_definition_id, analytical_aggregation")) return { rows: [{ metric_definition_id: null, analytical_aggregation: "sum", aggregation_role_policy: "standalone_and_source_rollup" }] };
       if (sql.startsWith("select 1")) return { rowCount: 1, rows: [{}] };
       if (sql.includes("training_load.create_widget")) return { rows: [{ widget_id: widgetId, dashboard_revision: 8 }] };
       if (sql.includes("training_load.update_widget_content")) return { rows: [{ widget_id: widgetId, widget_revision: 4, dashboard_id: dashboardId }] };
