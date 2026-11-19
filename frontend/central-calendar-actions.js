@@ -207,6 +207,7 @@ export function closeCentralCalendarPanel(render) {
   if (!cal.panel.open) return false;
   const key = cal.panel.key;
   cal.panel = closedPanel();
+  cal.panelQuestions = null;
   render?.();
   if (render) focusCard(key);
   return true;
@@ -337,10 +338,22 @@ export function openCentralCalendarAt({ date, key = "" } = {}) {
   cal.anchor = date;
   cal.selectedDate = date;
   if (key && !cal.form) {
-    cal.panelEvent = null;
+    // The same reset as an ordinary open: nothing of an earlier panel stays.
+    resetPanelReads(cal);
     cal.panel = { ...closedPanel(), open: true, key, date };
   }
   invalidateCentralCalendarCache();
+}
+
+// Every panel open starts from nothing of an earlier one: its event read, its
+// link and question lines and steps, and its questions read (answers and
+// Later move no revision, so an old read is never trusted).
+function resetPanelReads(cal) {
+  cal.panelEvent = null;
+  cal.linkMessage = null;
+  cal.alignStep = null;
+  cal.questionStep = null;
+  cal.panelQuestions = null;
 }
 
 // Leaving the form (another item, Escape / Back, a workspace switch through
@@ -1800,16 +1813,12 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     // The open item again folds the panel.
     if (cal.panel.open && cal.panel.key === key) {
       cal.panel = closedPanel();
+      cal.panelQuestions = null;
       render?.();
       return true;
     }
     cal.panel = { open: true, key, date, athletes: null, loading: true, error: "" };
-    cal.panelEvent = null;
-    cal.linkMessage = null;
-    cal.alignStep = null;
-    cal.questionStep = null;
-    // Answers and Later move no revision: every open reads the questions afresh.
-    cal.panelQuestions = null;
+    resetPanelReads(cal);
     render?.();
     // The sheet is modal below 1024 px: the focus moves to its Close.
     globalThis.document?.querySelector?.(".cc-sheet .cc-panel-close")?.focus?.();
@@ -1830,6 +1839,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     const key = cal.panel.key;
     if (!cal.linkWrite) cal.questionStep = null;
     cal.panel = closedPanel();
+    cal.panelQuestions = null;
     render?.();
     focusCard(key);
     return true;

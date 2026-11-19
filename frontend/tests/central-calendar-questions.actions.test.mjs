@@ -1035,3 +1035,44 @@ test("P26. the panel's refusal of a move once answered points to Stop question",
   await qact("send");
   assert.match(section().textContent, /Athletes have already answered, so this time can't change\. Use Stop question to end it\./);
 });
+
+test("P27. Open in calendar (the Builder) on an event whose panel was open before: the questions are read afresh", async () => {
+  const { openCentralCalendarAt } = await import("../central-calendar-actions.js");
+  const calls = await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
+  assert.match(section().textContent, /RPE · 0\/18 answered/);
+  await act({ action: "central-calendar-close-panel" });
+  const q = currentServer.list()[0];
+  q.counts = { asked: 18, answered: 1, later: 0, notAnswered: 17 };
+  q.answered = [athlete(1)];
+  openCentralCalendarAt({ date: DAY(1), key: PANEL_KEY });
+  await loadCentralCalendar({ render, forceRefresh: true });
+  await tick();
+  render();
+  assert.equal(questionReads(calls).length, 2, "read afresh");
+  assert.match(section().textContent, /RPE · 1\/18 answered/);
+  assert.equal(section().querySelector('[data-act="move-open"]').disabled, true, "Move time off once answered");
+});
+
+test("P28. athletes' names in the lists are text: <, & and quotes never become markup", async () => {
+  const rpe = liveQuestion(Q_RPE, "rpe", AFTER(), { asked: 2, answered: 1 });
+  rpe.answered = [{ athleteId: "a1", name: '<b>Bold</b> & "Quoted"' }];
+  rpe.notAnswered = [{ athleteId: "a2", name: "<img src=x onerror=1>" }];
+  await openQuestionsPanel({ questions: [rpe] });
+  const names = [...section().querySelectorAll(".cc-question-names li")].map((li) => li.textContent);
+  assert.deepEqual(names, ['<b>Bold</b> & "Quoted"', "<img src=x onerror=1>"]);
+  assert.equal(section().querySelector(".cc-question-names b, .cc-question-names img"), null);
+});
+
+test("P27b. Open in calendar while that event's panel was left open (the coach went to the Builder): read afresh too", async () => {
+  const { openCentralCalendarAt } = await import("../central-calendar-actions.js");
+  const calls = await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
+  const q = currentServer.list()[0];
+  q.counts = { asked: 18, answered: 1, later: 0, notAnswered: 17 };
+  q.answered = [athlete(1)];
+  openCentralCalendarAt({ date: DAY(1), key: PANEL_KEY });
+  await loadCentralCalendar({ render, forceRefresh: true });
+  await tick();
+  render();
+  assert.equal(questionReads(calls).length, 2, "read afresh");
+  assert.match(section().textContent, /RPE · 1\/18 answered/);
+});

@@ -486,3 +486,13 @@ test("17. a workspace change closes the schedule form; a read still on its way i
   await submit("create-schedule");
   assert.equal("skipDaysOff" in lastWrite().body, false, "nothing of club A's switch is sent");
 });
+
+test("18. a workspace change closes the Tests schedule form: app.js's onWorkspaceChanged resets it", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  const start = app.indexOf("function onWorkspaceChanged");
+  assert.ok(start >= 0, "onWorkspaceChanged exists");
+  const body = app.slice(start, app.indexOf("\n}\n", start));
+  assert.match(body, /\n\s*resetTestsScheduleFormForWorkspaceChange\(\);/, "the reset is called on a workspace change");
+  assert.match(app, /import \{[^}]*\bresetTestsScheduleFormForWorkspaceChange\b[^}]*\} from "\.\/tests-actions\.js";/);
+});
