@@ -273,7 +273,7 @@ router.get("/definitions", async (req, res, next) => {
     const { rows, nextCursor } = await listDefinitions(req, {
       search: req.query.search, ownerScope: req.query.ownerScope, state: req.query.state, cursor, limit: req.query.limit, hideClubId,
       teamClubId: req.query.purpose === "dashboardSeries" && workspace?.type === "team" ? workspace.clubId ?? null : null,
-      athleteWorkspace: workspace?.type === "athlete",
+      hideCalculated: hidesCalculated(workspace),
     });
     res.json({ rows, nextCursor });
   } catch (error) {
@@ -281,11 +281,18 @@ router.get("/definitions", async (req, res, next) => {
   }
 });
 
+// A calculated variable (J21) is shown only in a known staff workspace: an athlete sees only really measured data, and
+// any other or unresolved workspace is treated the same way (fail closed). Its id answers like a missing one.
+const STAFF_WORKSPACES = new Set(["platform", "private_coach", "club", "team"]);
+function hidesCalculated(workspace) {
+  return !STAFF_WORKSPACES.has(workspace?.type);
+}
+
 router.get("/definitions/:id", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
     const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const row = await getDefinition(req, req.params.id, { athleteWorkspace: workspace?.type === "athlete" });
+    const row = await getDefinition(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
     if (!row) return res.status(404).json({ error: "Metric definition not found." });
     res.json({ row });
   } catch (error) {
@@ -354,7 +361,7 @@ router.get("/definitions/:id/versions", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
     const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const rows = await listDefinitionVersions(req, req.params.id, { athleteWorkspace: workspace?.type === "athlete" });
+    const rows = await listDefinitionVersions(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
     if (rows === null) return res.status(404).json({ error: "Metric definition not found." });
     res.json({ rows });
   } catch (error) {
@@ -381,7 +388,8 @@ router.post("/definitions/:id/versions", async (req, res, next) => {
 router.post("/definitions/:id/hide", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const result = await hideDefinitionForUser(req, req.params.id);
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const result = await hideDefinitionForUser(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
     sendServiceResult(res, result);
   } catch (error) {
     next(error);
@@ -391,7 +399,8 @@ router.post("/definitions/:id/hide", async (req, res, next) => {
 router.delete("/definitions/:id/hide", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const result = await unhideDefinitionForUser(req, req.params.id);
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const result = await unhideDefinitionForUser(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
     sendServiceResult(res, result);
   } catch (error) {
     next(error);
@@ -407,7 +416,8 @@ router.get("/structure-links", async (req, res, next) => {
     if (req.query.domainId !== undefined && !validUuid(req.query.domainId)) return res.status(400).json({ error: "Invalid domainId." });
     if (req.query.categoryId !== undefined && !validUuid(req.query.categoryId)) return res.status(400).json({ error: "Invalid categoryId." });
     if (req.query.definitionId !== undefined && !validUuid(req.query.definitionId)) return res.status(400).json({ error: "Invalid definitionId." });
-    const rows = await listStructureLinks(req, { domainId: req.query.domainId, categoryId: req.query.categoryId, definitionId: req.query.definitionId });
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const rows = await listStructureLinks(req, { domainId: req.query.domainId, categoryId: req.query.categoryId, definitionId: req.query.definitionId, hideCalculated: hidesCalculated(workspace) });
     res.json({ rows });
   } catch (error) {
     next(error);

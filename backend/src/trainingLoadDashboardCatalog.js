@@ -19,6 +19,7 @@ import {
 } from "./trainingLoadDashboardAccess.js";
 import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardWidgets.js";
 import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
+import { calculatedDefinitionSql } from "./calculatedValues.js";
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -406,6 +407,13 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
           ],
         );
         cloneReport.push({ sourceSeriesId: s.id, resolution: resolved.status });
+        continue;
+      }
+      // J21: an athlete's clone never binds a calculated variable (she sees only really measured data). A hint-bearing
+      // series lands 'unresolved' through the batch above; a legacy hint-less one cannot, so it is not copied.
+      if (ctx.dataWorkspaceType === "athlete" && s.metric_definition_id
+        && (await c.query(`select 1 from training_load.metric_definitions d where d.id = $1 and ${calculatedDefinitionSql("d")}`, [s.metric_definition_id])).rowCount) {
+        cloneReport.push({ sourceSeriesId: s.id, resolution: "omitted" });
         continue;
       }
       // A plain resolved series with no hints at all — defensive fallback

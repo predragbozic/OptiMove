@@ -555,3 +555,49 @@ test("8. Source fields' plain row: each field says which teams it is in use for,
   assert.deepEqual(used(otherView), { teams: [], count: 0 }, "another club's admin learns nothing of this team");
   assert.equal(JSON.stringify(otherView).includes(teamName), false);
 });
+
+test("9. nothing else tells an athlete a calculated variable exists (the security review of PR 3): hiding or unhiding it answers like a missing one and writes nothing, a structure link to it is left out of her links, and a template cloned into her workspace leaves its series unresolved instead of binding it (the clone's batch resolution)", async () => {
+  const team = await setupTeam();
+  const athlete = await athleteUserOf(team.athleteIds[2]);
+  const H = String(hmld.id);
+  const missing = crypto.randomUUID();
+  for (const method of ["POST", "DELETE"]) {
+    const one = await mapi(`/definitions/${H}/hide`, { method, cookie: athlete.cookie });
+    const none = await mapi(`/definitions/${missing}/hide`, { method, cookie: athlete.cookie });
+    assert.equal(one.status, 404, one.text);
+    assert.equal(one.text, none.text, `${method} hide answers exactly like a missing one`);
+  }
+  assert.equal((await admin.query(`select count(*)::int as n from training_load.metric_definition_hidden where user_id = $1`, [athlete.id])).rows[0].n, 0, "no hidden row");
+  // The coach may still hide it (and show it again).
+  assert.equal((await mapi(`/definitions/${H}/hide`, { method: "POST", cookie: team.coach.cookie })).status, 200);
+  assert.equal((await mapi(`/definitions/${H}/hide`, { method: "DELETE", cookie: team.coach.cookie })).status, 200);
+
+  // A system category holding HMLD and one of its inputs.
+  const pa = await platformAdmin();
+  const sapi = (path, opts) => call("/api/training-load/sources/metrics", path, opts);
+  const cat = await sapi("/classification/categories", { method: "POST", cookie: pa.cookie, body: { requestKey: key(), name: `Load ${key().slice(0, 6)}` } });
+  assert.equal(cat.status, 201, cat.text);
+  const categoryId = cat.body.category?.id ?? cat.body.node?.id ?? cat.body.id;
+  assert.ok(categoryId, cat.text);
+  for (const variableId of [H, String(world[ZONES[0]].variableId)]) {
+    const made = await sapi("/classification/links", { method: "POST", cookie: pa.cookie, body: { requestKey: key(), variableId, categoryId } });
+    assert.equal(made.status, 201, made.text);
+  }
+  const links = async (who) => (await mapi(`/structure-links?categoryId=${categoryId}`, { cookie: who.cookie })).body.rows.map((r) => String(r.metric_definition_id));
+  assert.deepEqual((await links(athlete)).sort(), [String(world[ZONES[0]].variableId)], "her links leave the calculated variable out");
+  assert.deepEqual((await links(team.coach)).sort(), [H, String(world[ZONES[0]].variableId)].sort(), "the coach's hold both");
+
+  // A template cloned into her workspace: the clone resolves each portable series by its key hints in one batch
+  // (cloneDashboard); HMLD's hint stays unresolved in her workspace, the input's resolves; a team's resolves both. (The
+  // clone route itself needs v71, outside this suite's migrations; the batch is the part PR 3 changed.)
+  const { resolveTemplateSeriesBatchForWorkspace } = await import("../src/trainingLoadDashboardWidgets.js");
+  const keys = Object.fromEntries((await admin.query(`select id::text, key from training_load.metric_definitions where id = any($1::uuid[])`,
+    [[H, String(world[ZONES[0]].variableId)]])).rows.map((r) => [r.id, r.key]));
+  const specs = [{ sourceSeriesId: "calc", hints: [{ key: keys[H] }] }, { sourceSeriesId: "input", hints: [{ key: keys[String(world[ZONES[0]].variableId)] }] }];
+  const runner = (sql, params) => admin.query(sql, params);
+  const hers = await resolveTemplateSeriesBatchForWorkspace(runner, specs, { dataWorkspaceType: "athlete", dataWorkspaceScopeId: team.athleteIds[2], ownerUserId: athlete.id });
+  assert.equal(hers.get("calc").status, "unresolved", "her clone never binds HMLD");
+  assert.deepEqual(hers.get("input"), { status: "resolved", candidateIds: [String(world[ZONES[0]].variableId)] });
+  const coachs = await resolveTemplateSeriesBatchForWorkspace(runner, specs, { dataWorkspaceType: "team", dataWorkspaceScopeId: team.teamId, ownerUserId: team.coach.id });
+  assert.deepEqual(coachs.get("calc"), { status: "resolved", candidateIds: [H] }, "a team's clone binds it");
+});

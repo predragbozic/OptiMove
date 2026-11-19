@@ -167,7 +167,7 @@ function validateVersionInput(body) {
   };
 }
 
-export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null, teamClubId = null, athleteWorkspace = false } = {}) {
+export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null, teamClubId = null, hideCalculated = false } = {}) {
   const params = [];
   let visSql = catalogVisibilitySql(req, "d", params);
   // v55 (O7): for the dashboard series picker in a team's workspace the list also offers the variables of the team's
@@ -189,7 +189,7 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
   const conditions = [visSql, hiddenSql];
   // J21: an athlete's workspace never lists a calculated variable (OptiMove's sum of measured values; she sees only what
   // was measured) - no label, no picker entry.
-  if (athleteWorkspace) conditions.push(`not ${calculatedDefinitionSql("d")}`);
+  if (hideCalculated) conditions.push(`not ${calculatedDefinitionSql("d")}`);
   if (state) {
     params.push(state);
     conditions.push(`d.state = $${params.length}`);
@@ -248,7 +248,7 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
   return { rows, nextCursor };
 }
 
-export async function getDefinition(req, id, { athleteWorkspace = false } = {}) {
+export async function getDefinition(req, id, { hideCalculated = false } = {}) {
   const result = await query(
     `select d.*, dv.unit, dv.value_type, dv.min_value, dv.max_value, dv.condition_description, dv.daily_aggregation_method, dv.version_number
      from training_load.metric_definitions d
@@ -267,7 +267,7 @@ export async function getDefinition(req, id, { athleteWorkspace = false } = {}) 
   );
   if (!visibleCheck.rowCount) return null;
   // J21: in an athlete's workspace a calculated variable reads exactly like a missing one.
-  if (athleteWorkspace && (await query(`select 1 from training_load.metric_definitions d where d.id = $1 and ${calculatedDefinitionSql("d")}`, [id])).rowCount) return null;
+  if (hideCalculated && (await query(`select 1 from training_load.metric_definitions d where d.id = $1 and ${calculatedDefinitionSql("d")}`, [id])).rowCount) return null;
   const capsResult = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level`, [id]);
   return { ...row, scope_capabilities: capsResult.rows.map((r) => r.scope_level) };
 }
@@ -537,8 +537,8 @@ export async function createDefinitionVersion(req, id, body, { onLocked } = {}) 
   }
 }
 
-export async function listDefinitionVersions(req, id, { athleteWorkspace = false } = {}) {
-  const visible = await getDefinition(req, id, { athleteWorkspace });
+export async function listDefinitionVersions(req, id, { hideCalculated = false } = {}) {
+  const visible = await getDefinition(req, id, { hideCalculated });
   if (!visible) return null;
   const result = await query(`select * from training_load.metric_definition_versions where metric_definition_id = $1 order by version_number`, [id]);
   return result.rows;
@@ -558,8 +558,8 @@ export async function listDefinitionVersions(req, id, { athleteWorkspace = false
 // "not yours" non-distinction getDefinition already applies elsewhere in
 // this file governs here too). Both now reuse getDefinition's own
 // existence+visibility check first, with the SAME 404 either way.
-export async function hideDefinitionForUser(req, definitionId) {
-  const visible = await getDefinition(req, definitionId);
+export async function hideDefinitionForUser(req, definitionId, { hideCalculated = false } = {}) {
+  const visible = await getDefinition(req, definitionId, { hideCalculated });
   if (!visible) return { error: "Metric definition not found.", status: 404 };
   await query(
     `insert into training_load.metric_definition_hidden (user_id, definition_id) values ($1,$2) on conflict (user_id, definition_id) do nothing`,
@@ -568,8 +568,8 @@ export async function hideDefinitionForUser(req, definitionId) {
   return { hidden: true };
 }
 
-export async function unhideDefinitionForUser(req, definitionId) {
-  const visible = await getDefinition(req, definitionId);
+export async function unhideDefinitionForUser(req, definitionId, { hideCalculated = false } = {}) {
+  const visible = await getDefinition(req, definitionId, { hideCalculated });
   if (!visible) return { error: "Metric definition not found.", status: 404 };
   await query(`delete from training_load.metric_definition_hidden where user_id = $1 and definition_id = $2`, [req.user.id, definitionId]);
   return { hidden: false };
@@ -582,7 +582,7 @@ export async function unhideDefinitionForUser(req, definitionId) {
 // with metric_definition_id NULL is never silently dropped.
 // ---------------------------------------------------------------
 
-export async function listStructureLinks(req, { domainId, categoryId, definitionId } = {}) {
+export async function listStructureLinks(req, { domainId, categoryId, definitionId, hideCalculated = false } = {}) {
   const params = [];
   const linkVis = catalogVisibilitySql(req, "l", params);
   const domainVis = catalogVisibilitySql(req, "d", params);
@@ -594,6 +594,8 @@ export async function listStructureLinks(req, { domainId, categoryId, definition
     `(c.id is null or (${categoryVis}))`,
     `(df.id is null or (${defVis}))`,
   ];
+  // A link to a calculated variable is left out where calculated variables are (its id would confirm one exists).
+  if (hideCalculated) conditions.push(`(df.id is null or not ${calculatedDefinitionSql("df")})`);
   if (domainId) {
     params.push(domainId);
     conditions.push(`l.domain_id = $${params.length}`);
