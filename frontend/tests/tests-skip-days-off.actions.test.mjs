@@ -24,7 +24,7 @@ globalThis.document = {
 };
 globalThis.window = { confirm: () => true };
 
-const { handleTestsAction, submitTestsForm, testsScheduleErrorText } = await import("../tests-actions.js");
+const { handleTestsAction, resetTestsScheduleFormForWorkspaceChange, submitTestsForm, testsScheduleErrorText } = await import("../tests-actions.js");
 const { renderTestsSkipDaysOffHtml } = await import("../tests-view.js");
 const { emptyScheduleForm, state } = await import("../state.js");
 
@@ -417,4 +417,72 @@ test("15. a schedulable test other than WELLNESS: the box is hidden and nothing 
   assert.equal(form.skipDaysOff, true, "the hidden box cannot be changed");
   await submit("create-schedule");
   assert.equal("skipDaysOff" in lastWrite().body, false);
+});
+
+// ------------------------------------------------------------
+// Folded into 2a-2b (the narrow re-review and the independent review of #618)
+// ------------------------------------------------------------
+
+test("13b. a superseded re-read answering off never unticks the box after a newer one answered on", async () => {
+  resetState();
+  installServer();
+  await openCreate();
+  await chooseDaily();
+  server.switchOn = false; // both saves are refused
+  let releaseFirst;
+  server.holdNextTypes = { gate: new Promise((resolve) => { releaseFirst = resolve; }), enabled: false };
+  const first = submit("create-schedule"); // refused; its re-read is held and will answer off
+  await settle();
+  const form = state.tests.scheduleForm;
+  form.skipDaysOff = true;
+  server.holdNextTypes = { gate: Promise.resolve(), enabled: true };
+  await submit("create-schedule"); // refused again; its re-read answers on at once
+  assert.equal(form.questionsEnabled, true);
+  assert.equal(form.skipDaysOff, true);
+  releaseFirst();
+  await first;
+  await settle();
+  assert.equal(form.questionsEnabled, true, "the older read (off) does not overwrite the newer one");
+  assert.equal(form.skipDaysOff, true, "and does not untick the box");
+  assert.match(renderTestsSkipDaysOffHtml(form), /type="checkbox"[^>]*checked/);
+});
+
+test("16. the library is read only once the switch answers on", async () => {
+  resetState();
+  installServer({ switchOn: false });
+  await openCreate();
+  assert.equal(calls.filter((c) => c.url === "/api/calendar/events/types").length, 1);
+  assert.equal(calls.filter((c) => c.url === "/api/tests/library").length, 0, "switch off: no library read at open");
+
+  resetState();
+  installServer({ switchOn: true });
+  await openCreate();
+  await settle();
+  assert.equal(calls.filter((c) => c.url === "/api/tests/library").length, 1, "switch on: one library read");
+  assert.equal(state.tests.scheduleForm.testName, "WELLNESS");
+});
+
+test("17. a workspace change closes the schedule form; a read still on its way is dropped and nothing stale is sent", async () => {
+  resetState();
+  let release;
+  installServer({ switchOn: true, typesGate: new Promise((resolve) => { release = resolve; }) });
+  const opening = handleTestsAction(action({ action: "tests-open-schedule-form" }), { renderTests: render });
+  await opening;
+  const clubAForm = state.tests.scheduleForm;
+  assert.equal(clubAForm.open, true);
+  resetTestsScheduleFormForWorkspaceChange(); // app.js onWorkspaceChanged
+  assert.equal(state.tests.scheduleForm.open, false, "the old workspace's form is closed");
+  assert.equal(state.tests.scheduleForm.questionsEnabled, null);
+  release();
+  await settle();
+  assert.equal(clubAForm.questionsEnabled, null, "club A's answer is not written");
+  assert.equal(state.tests.scheduleForm.questionsEnabled, null);
+
+  // Club B (switch off): a new form reads its own switch.
+  installServer({ switchOn: false });
+  await openCreate();
+  await chooseDaily();
+  assert.equal(state.tests.scheduleForm.questionsEnabled, false);
+  await submit("create-schedule");
+  assert.equal("skipDaysOff" in lastWrite().body, false, "nothing of club A's switch is sent");
 });

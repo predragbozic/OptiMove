@@ -95,8 +95,10 @@ A section **"Questions for athletes"** at the top of the tab (before *Event type
 - Off: "○ Off — questions to athletes are not turned on for this club. A platform administrator can turn them on."
 - State shown with a glyph and the word, never with colour alone.
 
-**A platform admin** (the client knows it from `state.organization.data.isPlatformAdmin`, the fact Settings → Storage
-and App health already use; the server decides again on the write): the same line, then one form:
+**A platform admin in the club's workspace** (which today means also the club's admin: a platform admin reaches a club
+workspace only through that club's `club_admin` role, `loadAvailableWorkspaces`). The client knows the platform role
+from `state.organization.data.isPlatformAdmin`, the fact Settings → Storage and App health already use; the server
+decides again on every write. The same line, then one form:
 - **Reason** (`textarea`, required, ≤ 500 characters, 16 px): label "Why are you turning it on?" / "…off?";
 - one button: **Turn on for this club** or **Turn off for this club** (the opposite of the state);
 - empty reason → the button stays enabled; on press, the field's error "Write a reason." and nothing is sent;

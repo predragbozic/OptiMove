@@ -10,9 +10,10 @@ import { fetchTestsQuestionsEnabled, loadOrgPickerData, loadPendingCount, loadSc
 // K2b-2a-2a: "Skip days off" (docs/ai/central-calendar-k2b2a2-ui-contract.md
 // section 1). The option exists only for a daily schedule of the WELLNESS
 // test while the club's Ask athletes switch is on (testsSkipDaysOffShown,
-// tests-view.js). The
-// switch is read once per opened form (and again after a refusal); only the
-// newest read writes, and an answer for a closed form is dropped.
+// tests-view.js). The switch is read once per opened form (and again after a
+// refusal); only the newest read writes, and an answer for a closed form is
+// dropped. The library (for a create's test name) is read only once the switch
+// answers on, so a club with the switch off sends one read, not two.
 // ------------------------------------------------------------
 // One read sequence per form: only the newest read of the switch writes
 // questionsEnabled, so an older, slower answer never overwrites a newer one.
@@ -23,10 +24,20 @@ async function loadScheduleFormQuestionsSwitch(renderTests) {
   const seq = (questionsReadSeq.get(form) || 0) + 1;
   questionsReadSeq.set(form, seq);
   const enabled = await fetchTestsQuestionsEnabled();
-  if (state.tests.scheduleForm !== form || !form.open || questionsReadSeq.get(form) !== seq) return enabled;
+  // A superseded or orphaned read decides nothing: undefined, so no caller
+  // acts on an answer that is not the form's current one.
+  if (state.tests.scheduleForm !== form || !form.open || questionsReadSeq.get(form) !== seq) return undefined;
   form.questionsEnabled = enabled;
   renderTests();
+  if (enabled && !form.testName) void loadScheduleFormTestName(renderTests);
   return enabled;
+}
+
+// A workspace change (app.js onWorkspaceChanged): an open schedule form
+// belongs to the old workspace (its switch, its recipients), so it is closed;
+// a read still on its way then finds another form and is dropped.
+export function resetTestsScheduleFormForWorkspaceChange() {
+  state.tests.scheduleForm = emptyScheduleForm();
 }
 
 // A create's test: the library's schedulable test (the one submit sends).
@@ -236,7 +247,6 @@ export async function handleTestsAction(action, { renderTests }) {
     state.tests.bulkResult = null;
     renderTests();
     void loadOrgPickerData().then(renderTests).catch(() => {});
-    void loadScheduleFormTestName(renderTests);
     void loadScheduleFormQuestionsSwitch(renderTests);
     return true;
   }
