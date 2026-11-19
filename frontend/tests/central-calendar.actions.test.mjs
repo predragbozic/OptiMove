@@ -29,6 +29,7 @@ const {
   centralCalendarRosterIndex,
   closeCentralCalendarPanel,
   handleCentralCalendarAction,
+  restoreCentralCalendarPlace,
   restoreCentralCalendarView,
 } = await import("../central-calendar-actions.js");
 const {
@@ -1139,4 +1140,17 @@ test("FE-D16d. a refresh whose kinds read fails over cards on screen says so", a
   assert.equal(kindsCalls, 2);
   assert.match(state.centralCalendar.refreshError, /Could not refresh/);
   assert.ok(dom().querySelector('[data-key="external:sch-fold:d2"]'), "the last kinds answer stays on screen");
+});
+
+test("Back to a calendar place (app-history.js): the remembered panel re-opens when its item is still there, and is not left open when it is gone", async () => {
+  installFetchMock(okResponder());
+  restoreCentralCalendarPlace({ view: "week", anchor: DAY(0), selectedDate: DAY(1), panelKey: "external:sch-1:d1", panelDate: DAY(1) });
+  await loadCentralCalendar({ render });
+  assert.deepEqual([state.centralCalendar.panel.open, state.centralCalendar.panel.key], [true, "external:sch-1:d1"]);
+  assert.equal(state.centralCalendar.selectedDate, DAY(1));
+  restoreCentralCalendarPlace({ view: "week", anchor: DAY(0), selectedDate: DAY(1), panelKey: "event:gone", panelDate: DAY(1) });
+  await loadCentralCalendar({ render });
+  assert.equal(state.centralCalendar.panel.open, false);
+  assert.match(state.centralCalendar.notice, /no longer on this day/);
+  assert.equal(dom().querySelector('[data-action="central-calendar-close-panel"]'), null, "no empty panel drawn");
 });

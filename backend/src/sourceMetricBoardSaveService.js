@@ -165,6 +165,7 @@ function evaluate(world, pairIndex, rows) {
       item = {
         kind: "new", row, fieldId: row.fieldId, variableId: row.targetId, revisionId: out.revisionId, targetVersionId: out.expectedTargetVersionId,
         sourceUnit: out.sourceUnit, targetUnit: out.targetUnit, conversion: out.conversion, levels: out.levels,
+        conditionRule: out.conditionRule ?? null, conditionMatch: out.conditionMatch ?? null,
         displayRule: out.displayRule, displayUnit: row.displayUnit, values: out.values, reusesVersionId: out.reusesVersionId, collisions: out.collisions, system: false,
       };
     } else {
@@ -173,6 +174,7 @@ function evaluate(world, pairIndex, rows) {
       item = {
         kind: "preplaced", row, fieldId: out.v.field_id, variableId: out.v.variable_id, revisionId: out.v.revision_id, targetVersionId: out.v.target_version_id,
         versionId: out.v.id, mappingId: out.v.mapping_id, levels: out.row.levels, collisions: out.row.collisions, system: out.v.owner_key === "system",
+        conditionMatch: out.match ?? null,
       };
     }
     if (fields.has(item.fieldId) || variables.has(item.variableId)) throw invalid("A column and a variable appear in one row only.");
@@ -468,14 +470,15 @@ export async function saveConfirmation({ ctx, body }) {
              (mapping_id, source_metric_definition_id, metric_definition_id, source_metric_version_id, version_number, metric_definition_version_id,
               conversion_kind, scale, scale_divisor, "offset", source_unit, target_unit, conversion_note, parameter_kind,
               source_parameters, canonical_parameters, parameter_scale, parameter_scale_divisor, parameter_offset,
-              applies_to_session, applies_to_drill, created_by_user_id)
+              applies_to_session, applies_to_drill, created_by_user_id${world.matchInstalled ? ", condition_rule" : ""})
            select $1, $2, $3, $4,
                   (select coalesce(max(version_number), 0) + 1 from training_load.source_metric_mapping_versions where mapping_id = $1),
                   $5, 'numeric_linear', $6::numeric, $7::numeric, $8::numeric, $9, $10, $11, 'none',
-                  '{}'::jsonb, '{}'::jsonb, 1, 1, 0, $12, $13, $14
+                  '{}'::jsonb, '{}'::jsonb, 1, 1, 0, $12, $13, $14${world.matchInstalled ? ", $15::jsonb" : ""}
            returning id`,
           [p.mappingId, p.fieldId, p.variableId, p.revisionId, p.targetVersionId, factors.scale, factors.divisor, factors.offset,
-            p.sourceUnit, p.targetUnit, p.sourceUnit === p.targetUnit ? null : CONVERSION_NOTE, p.levels.session, p.levels.drill, ctx.userId],
+            p.sourceUnit, p.targetUnit, p.sourceUnit === p.targetUnit ? null : CONVERSION_NOTE, p.levels.session, p.levels.drill, ctx.userId,
+            ...(world.matchInstalled ? [p.conditionRule ? JSON.stringify(p.conditionRule) : null] : [])],
         )).rows[0].id;
         await audit("mapping_version_create", ["mapping_id", "mapping_version_id", "to_status"], [p.mappingId, p.versionId, "draft"]);
         await client.query(
@@ -557,11 +560,16 @@ export async function saveConfirmation({ ctx, body }) {
         const activationId = (await client.query(
           `insert into training_load.source_metric_mapping_activations
              (mapping_version_id, mapping_id, source_metric_definition_id, metric_definition_id, parameter_fingerprint,
-              source_team_binding_id, team_id, applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason)
+              source_team_binding_id, team_id, applies_to_session, applies_to_drill, requirement, activated_by_user_id, activated_basis, reason${world.matchInstalled ? `,
+              matched_condition, matched_source_range, matched_threshold_set_id, matched_at` : ""})
            select v.id, v.mapping_id, v.source_metric_definition_id, v.metric_definition_id, v.parameter_fingerprint,
-                  $2, $3, v.applies_to_session, v.applies_to_drill, $4, $5, $6, $7
+                  $2, $3, v.applies_to_session, v.applies_to_drill, $4, $5, $6, $7${world.matchInstalled ? `,
+                  case when $8::boolean then (select dv.condition_description from training_load.metric_definition_versions dv where dv.id = v.metric_definition_version_id) end,
+                  $9::jsonb, $10, case when $8::boolean then now() end` : ""}
              from training_load.source_metric_mapping_versions v where v.id = $1 returning id`,
-          [p.versionId, world.team.binding_id, world.team.id, p.row.requirement, ...actor, reason],
+          [p.versionId, world.team.binding_id, world.team.id, p.row.requirement, ...actor, reason,
+            ...(world.matchInstalled ? [p.conditionMatch !== null && p.conditionMatch !== undefined, p.conditionMatch ? JSON.stringify(p.conditionMatch.sourceRange) : null,
+              p.conditionMatch ? p.conditionMatch.setId : null] : [])],
         )).rows[0].id;
         // On the platform board the last start is the keyed request record (as S1's start is), since no confirmation is stored.
         if (system && index === starting.length - 1) {
