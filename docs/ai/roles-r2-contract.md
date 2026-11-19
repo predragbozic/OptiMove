@@ -787,6 +787,19 @@ development database, so it needs the owner's approval for that session or is re
   Today's grant answers 404 "User not found." for an unknown id and accepts an inactive one (`organization.js:2833-2845`).
 - **Not exercised:** PostgreSQL 17 by the executor; `test:backend:shared` without the owner's approval.
 
+## 10.0 Decided by the owner (2026-11-19)
+
+| Point | Decision |
+|---|---|
+| O1, O5 | E-mail change and password reset of an account stay with the platform admin for now. A club's admin keeps what it does today: adding athletes, inviting them to sign in, join links. So option (b) of O1: the Club admin role is seeded with `staff.assign` and `roles.manage`; `accounts.manage` stays outside it and the rule-7 list grows by a migration when account actions move with their target rule. |
+| O2 | Editing a club's own details is done by the platform admin and the club's admin: the 52nd word `org.club.edit` (club scope), added to R1's catalog and to the Club admin set before the seed is written. Every "51" of this contract reads 52, and section 3's seed gains that row. |
+| O3 | As recommended, (b): an archive is refused while an active assignment exists. |
+| O6 | As recommended, (b): module switches are their own later migration; R2 ships without section 2.8 and the points that depend on it. |
+| O8 | As recommended, (a): non-basic assignments act on the organization routes from R2, with the per-call-site review as a merge condition. |
+
+Still open: O4 (asked again in plain words), O7, O9, O10 and the manager's M1-M14. The sections above are
+not yet rewritten for these decisions; that is done when the contract is revised for acceptance.
+
 ## 10. Open points
 
 ### 10.1 For the owner
