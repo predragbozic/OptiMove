@@ -298,10 +298,11 @@ export function clearCentralCalendarUncertainWrites() {
   uncertainWrites.clear();
 }
 
-// K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.1.7): a create sent from
-// the Builder's "Make an event" whose result is not confirmed joins this
-// memory as a create, so the calendar's line offers its Check result (the same
-// body and key). Returns the function that forgets it once settled.
+// K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.6): a create sent from
+// the Builder's "Make an event" joins this memory as a create from its send
+// until its answer settles, so the calendar's guards count it and its line
+// offers Check result (the same body and key). Returns the function that
+// forgets it once settled.
 export function rememberCentralCalendarCreate({ sentBody, requestKey }) {
   rememberUncertainWrite({ mode: "create", sentBody, requestKey });
   return () => forgetUncertainWrite(requestKey);
