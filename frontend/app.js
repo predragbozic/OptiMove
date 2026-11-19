@@ -110,7 +110,7 @@ import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { handleTimezoneInput } from "./gpexe-timezone-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, openRpeFormOnDate, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteHomeWeek, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import "./training-load-analysis-echarts.js";
@@ -2627,13 +2627,15 @@ async function loadAthleteCalendarTab({ weekStart = "" } = {}) {
   return enterAthleteCalendar({ render: renderAthleteCalendar, weekStart, loadQuestions: () => loadAthleteQuestions() });
 }
 
-// A confirmed RPE answer given from the Calendar (the Training Load form over it): the week is read again once.
+// A confirmed RPE answer given from the Calendar (the Training Load form it opened over itself): the week is read
+// again once. Only a form the Calendar opened counts - one saved on Home and left open does not.
+const athleteCalendarOpenedForms = new WeakSet();
 const athleteCalendarSavedForms = new WeakSet();
 function renderAthleteCalendar() {
   if (state.activeTab !== "athlete-calendar") return;
   const form = state.trainingLoad.rpeForm;
   els.content.innerHTML = `${renderAthleteCalendarHtml(athleteCalendarState(), { questions: state.athleteQuestions?.rows || [] })}${renderTrainingLoadAthleteOverlaysHtml()}`;
-  if (form?.savedFeedback && !athleteCalendarSavedForms.has(form)) {
+  if (form?.savedFeedback && athleteCalendarOpenedForms.has(form) && !athleteCalendarSavedForms.has(form)) {
     athleteCalendarSavedForms.add(form);
     detached(athleteCalendarAnswered({ render: renderAthleteCalendar, loadQuestions: () => loadAthleteQuestions() }), "athlete-calendar-answered");
   }
@@ -2643,15 +2645,22 @@ function renderAthleteCalendar() {
 // the Calendar (the form Home opens, Q4); an event question opens its form as Home's list does; a test opens Tests.
 // Open training waits for K4-0 and K4a-B (the manager's order): until then it opens nothing.
 function athleteCalendarHandlers() {
-  const rateById = async (id) => {
-    await openExternalAssignmentFromNotification(id);
-    if (!state.trainingLoad.rpeForm) athleteCalendarState().notice = "This session can't be rated right now.";
+  const opened = () => {
+    if (state.trainingLoad.rpeForm) athleteCalendarOpenedForms.add(state.trainingLoad.rpeForm);
+  };
+  const rateById = async (id, date) => {
+    if (await openRpeFormOnDate(id, date)) opened();
+    else athleteCalendarState().notice = "This session can't be rated right now.";
     renderAthleteCalendar();
   };
   return {
     render: renderAthleteCalendar,
     loadQuestions: () => loadAthleteQuestions(),
-    rateQuestion: (questionId) => answerAthleteQuestion(questionId, { ...athleteQuestionHandlers(), render: renderAthleteCalendar, reload: () => loadAthleteQuestions() }),
+    rateQuestion: async (questionId) => {
+      const answered = await answerAthleteQuestion(questionId, { ...athleteQuestionHandlers(), render: renderAthleteCalendar, reload: () => loadAthleteQuestions() });
+      if (answered) opened();
+      return answered;
+    },
     rateSession: rateById,
     rateAssignment: rateById,
     openTest: async (assignmentId) => {

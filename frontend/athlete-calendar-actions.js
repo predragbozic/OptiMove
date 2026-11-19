@@ -1,6 +1,7 @@
 // The athlete's Calendar (K4a, docs/ai/central-calendar-k4a-contract.md sections 2.2-2.4): the week's arrows, Today, a
 // phone's day strip, Try again, and the cards' buttons. What a button opens is app.js's (the handlers): an event
 // question's form as Home opens it, a planned session's RPE in the Training Load form, a test, and the Weekly plan.
+import { state } from "./state.js";
 import { addDaysIso, localDateIso } from "./utils.js";
 import { athleteCalendarState, athleteCalendarWeek, loadAthleteCalendar } from "./athlete-calendar-data.js";
 
@@ -25,7 +26,7 @@ export function scrollAthleteCalendarToDay(date, doc = globalThis.document) {
   return Boolean(section);
 }
 
-// handlers: { render, loadQuestions, rateQuestion(questionId), rateSession(sessionId), rateAssignment(assignmentId),
+// handlers: { render, loadQuestions, rateQuestion(questionId), rateSession(sessionId, date), rateAssignment(assignmentId, date),
 //   openTest(assignmentId), openTraining({ sessionId, date }) }. Answers true when the action was the Calendar's.
 export async function handleAthleteCalendarAction(action, handlers = {}) {
   const type = action?.dataset?.action;
@@ -63,9 +64,17 @@ export async function handleAthleteCalendarAction(action, handlers = {}) {
   }
   if (type === "athlete-calendar-card") {
     const what = action.dataset.acAction || "";
-    if (what === "rate-question" && action.dataset.questionId) await handlers.rateQuestion?.(action.dataset.questionId);
-    else if (what === "rate-session" && action.dataset.sessionId) await handlers.rateSession?.(action.dataset.sessionId);
-    else if (what === "rate-assignment" && action.dataset.assignmentId) await handlers.rateAssignment?.(action.dataset.assignmentId);
+    if (what === "rate-question" && action.dataset.questionId) {
+      const answered = await handlers.rateQuestion?.(action.dataset.questionId);
+      // The question's own sentence (closed, not opened, unreachable) is written for Home; the Calendar says it too.
+      if (answered === false) {
+        const notice = state.athleteQuestions?.notice || "";
+        if (notice) slice.notice = notice;
+        render?.();
+      }
+    }
+    else if (what === "rate-session" && action.dataset.sessionId) await handlers.rateSession?.(action.dataset.sessionId, action.dataset.date || "");
+    else if (what === "rate-assignment" && action.dataset.assignmentId) await handlers.rateAssignment?.(action.dataset.assignmentId, action.dataset.date || "");
     else if (what === "open-test" && action.dataset.assignmentId) await handlers.openTest?.(action.dataset.assignmentId);
     else if (what === "open-training" && action.dataset.sessionId) await handlers.openTraining?.({ sessionId: action.dataset.sessionId, date: action.dataset.date || "" });
     return true;

@@ -29065,20 +29065,24 @@ body.athlete-questions-prompt-open {
 .ac-state { display: grid; gap: 8px; justify-items: start; padding: 16px; border: 1px dashed var(--line); border-radius: var(--radius); }
 .ac-state p { margin: 0; }
 .ac-notice { margin: 0; padding: 8px 12px; border-radius: var(--radius); background: var(--surface-soft); font-size: 14px; }
+.ac-notice.is-saved { background: #e4f3e6; color: #1f5a28; font-weight: 800; }
 
 @media (max-width: 760px) {
-  .ac-head { position: sticky; top: 0; z-index: 3; padding: 6px 0; background: var(--bg, #eef1f4); }
-  .ac-strip { position: sticky; top: 56px; z-index: 3; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; padding-bottom: 6px; background: var(--bg, #eef1f4); }
+  /* Under the athlete's sticky topbar (the Weekly plan's .week-nav-panel offset), then the head, then the strip. */
+  .athlete-calendar { --ac-under-topbar: calc(var(--athlete-topbar-height, 61px) + env(safe-area-inset-top, 0px)); --ac-head-height: 56px; --ac-strip-height: 62px; }
+  .ac-head { position: sticky; top: var(--ac-under-topbar); z-index: 30; min-height: var(--ac-head-height); box-sizing: border-box; padding: 6px 0; background: var(--bg, #eef1f4); }
+  .ac-strip { position: sticky; top: calc(var(--ac-under-topbar) + var(--ac-head-height)); z-index: 30; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; padding-bottom: 6px; background: var(--bg, #eef1f4); }
   .ac-strip-day { min-height: 56px; min-width: 0; display: grid; place-items: center; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font: inherit; padding: 4px 0; color: var(--text); }
   .ac-strip-day small { font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase; }
   .ac-strip-day b { font-size: 17px; }
   .ac-strip-dot { width: 6px; height: 6px; border-radius: 50%; }
   .ac-strip-dot.is-busy { background: var(--accent); }
-  .ac-strip-day.is-today { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
-  .ac-strip-day.is-selected { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .ac-strip-day.is-selected small { color: #dff; }
-  .ac-strip-day.is-selected .ac-strip-dot.is-busy { background: #fff; }
-  .ac-day { scroll-margin-top: 132px; }
+  /* Today is the strongest state (filled); a tapped day is only outlined (the tap scrolls the list). */
+  .ac-strip-day.is-selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .ac-strip-day.is-today { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .ac-strip-day.is-today small { color: #fff; }
+  .ac-strip-day.is-today .ac-strip-dot.is-busy { background: #fff; }
+  .ac-day { scroll-margin-top: calc(var(--ac-under-topbar) + var(--ac-head-height) + var(--ac-strip-height) + 8px); }
   .ac-card-actions { flex-direction: column; }
   .ac-card-actions .ac-button { width: 100%; }
 }

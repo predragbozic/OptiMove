@@ -279,15 +279,15 @@ test("K13. the buttons call their handler with the ids the card carries; nothing
   const handlers = {
     render,
     rateQuestion: async (q) => seen.push(["rateQuestion", q]),
-    rateSession: async (s) => seen.push(["rateSession", s]),
-    rateAssignment: async (a) => seen.push(["rateAssignment", a]),
+    rateSession: async (s, d) => seen.push(["rateSession", s, d]),
+    rateAssignment: async (a, d) => seen.push(["rateAssignment", a, d]),
     openTest: async (a) => seen.push(["openTest", a]),
     openTraining: async (t) => seen.push(["openTraining", t.sessionId, t.date]),
   };
   for (const [acAction, extra] of [["rate-question", { questionId: "q-1" }], ["rate-session", { sessionId: "ps-1" }], ["rate-assignment", { assignmentId: "asg-1" }], ["open-test", { assignmentId: "tasg-1" }], ["open-training", { sessionId: "ps-2" }]]) {
     assert.equal(await handleAthleteCalendarAction(fakeAction({ action: "athlete-calendar-card", acAction, date: TODAY, ...extra }), handlers), true);
   }
-  assert.deepEqual(seen, [["rateQuestion", "q-1"], ["rateSession", "ps-1"], ["rateAssignment", "asg-1"], ["openTest", "tasg-1"], ["openTraining", "ps-2", TODAY]]);
+  assert.deepEqual(seen, [["rateQuestion", "q-1"], ["rateSession", "ps-1", TODAY], ["rateAssignment", "asg-1", TODAY], ["openTest", "tasg-1"], ["openTraining", "ps-2", TODAY]]);
   assert.equal(await handleAthleteCalendarAction(fakeAction({ action: "something-else" }), handlers), false);
 });
 
@@ -299,7 +299,9 @@ test("K14. after a confirmed answer: Your answer was saved. and the week is read
   cards = [plannedCard({ rpe: "submitted" })];
   await athleteCalendarAnswered({ render, loadQuestions });
   assert.equal(calendarCalls(calls).length, 2);
-  assert.equal(dom().querySelector(".ac-notice").textContent, "Your answer was saved.");
+  const notice = dom().querySelector(".ac-notice");
+  assert.equal(notice.textContent.replace(/\s+/g, " ").trim(), "✓ Your answer was saved.", "a glyph and the words");
+  assert.ok(notice.classList.contains("is-saved"), "and the success colour");
   assert.ok(![...dom().querySelectorAll(".ac-button")].some((b) => b.textContent === "Rate RPE"));
   assert.match(dom().querySelector("[data-ac-answer]").textContent, /RPE given/);
 });
@@ -324,4 +326,60 @@ test("K16. nothing of the answer beyond the card model reaches the page: no id, 
   await enterAthleteCalendar({ render, loadQuestions });
   const text = dom().body.textContent;
   for (const word of ["hidden-thing-42", "ls-ps-1", "plan-1", "Ana Example", "Europe/Sarajevo", "team-1"]) assert.ok(!text.includes(word), word);
+});
+
+test("K12b. the arrow to a week whose read fails: The calendar could not be read. with Try again - never the last week as that week, never an endless Loading", async () => {
+  cards = [eventCard({})];
+  installFetchMock((call) => {
+    if (call.url.startsWith("/api/calendar/questions/mine")) return { status: 200, body: { questions: [] } };
+    const from = new URL(call.url, "http://x").searchParams.get("from");
+    if (from === DAY(7)) return { status: 500, body: { error: "internal_error" } };
+    return { status: 200, body: weekAnswer(cards.filter((c) => c.date >= from && c.date <= addDaysIso(from, 6)), from) };
+  });
+  await enterAthleteCalendar({ render, loadQuestions });
+  await handleAthleteCalendarAction(fakeAction({ action: "athlete-calendar-week", delta: "1" }), { render });
+  assert.equal(dom().querySelector('.ac-state[role="alert"] p').textContent, "The calendar could not be read.");
+  assert.ok(dom().querySelector('[data-action="athlete-calendar-retry"]'));
+  assert.doesNotMatch(dom().body.textContent, /Loading calendar|Showing the last loaded calendar/);
+  assert.equal(dom().querySelector(".ac-card"), null, "the earlier week's cards are not shown as this week's");
+});
+
+test("K17. Rate RPE on a past week opens the Training Load form for that session: the weekly read is of that day's week", async () => {
+  const { openRpeFormOnDate } = await import("../training-load-actions.js");
+  const lastWeek = addDaysIso(MONDAY, -7);
+  const day = addDaysIso(lastWeek, 2);
+  state.trainingLoad.rpeForm = null;
+  state.trainingLoad.athleteWeekly = { weekStart: "", selectedDate: "", data: null, loading: false, error: "" };
+  const weeklyReads = [];
+  installFetchMock((call) => {
+    if (call.url.startsWith("/api/training-load/athlete/today")) return { status: 200, body: { date: TODAY, sessions: [] } };
+    if (call.url.startsWith("/api/training-load/weekly")) {
+      const weekStart = new URL(call.url, "http://x").searchParams.get("weekStart");
+      weeklyReads.push(weekStart);
+      const sessions = weekStart === lastWeek ? [{ sessionId: "ps-old", sessionName: "Recovery run", amPm: "AM", bta: "T", sessionTime: null, rated: false, source: "planned" }] : [];
+      return { status: 200, body: { weekStart, weekEnd: addDaysIso(weekStart, 6), days: Array.from({ length: 7 }, (_, i) => ({ date: addDaysIso(weekStart, i), sessions: addDaysIso(weekStart, i) === day ? sessions : [] })) } };
+    }
+    return { status: 404, body: { error: "not found" } };
+  });
+  assert.equal(await openRpeFormOnDate("ps-old", day), true);
+  assert.deepEqual(weeklyReads, [lastWeek], "her session's own week, not this week");
+  assert.equal(state.trainingLoad.rpeForm?.sessionId, "ps-old");
+  assert.equal(state.trainingLoad.rpeForm?.date, day);
+  state.trainingLoad.rpeForm = null;
+});
+
+test("K18. Rate RPE on a question that has just closed: the question's own sentence shows on the Calendar", async () => {
+  cards = [eventCard({})];
+  server();
+  await enterAthleteCalendar({ render, loadQuestions });
+  const handlers = {
+    render,
+    rateQuestion: async () => {
+      state.athleteQuestions.notice = "This question has closed.";
+      return false;
+    },
+  };
+  await handleAthleteCalendarAction(fakeAction({ action: "athlete-calendar-card", acAction: "rate-question", questionId: "q-1", date: TODAY }), handlers);
+  assert.equal(dom().querySelector(".ac-notice").textContent.trim(), "This question has closed.");
+  state.athleteQuestions.notice = "";
 });

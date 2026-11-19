@@ -254,7 +254,8 @@ function describeError(error) {
 export async function loadAthleteCalendar({ render, weekStart, forceRefresh = false } = {}) {
   const today = localDateIso();
   const week = athleteCalendarWeek(weekStart || slice.weekStart || today);
-  if (slice.weekStart !== week.from) {
+  // An answer of another week is never "the last loaded calendar" of this one (its error shows the error state).
+  if (slice.data && slice.data.from !== week.from) {
     slice.data = null;
     slice.status = "idle";
   }

@@ -116,6 +116,7 @@ for (const width of [1280, 390, 375, 360]) {
       assert.equal(Object.keys(look.labels).length, PAST ? 3 : 2, "only days that have something");
       assert.equal(look.overflow, 0, "no horizontal scroll");
       assert.deepEqual(look.small, [], "44 px targets");
+      assert.ok(await a.page.$$eval(".athlete-calendar a.cc-maps", (links) => links.every((l) => l.getBoundingClientRect().height >= 43.5)), "Open in maps is a 44 px target");
       assert.equal(look.clipped, 0, "long names wrap, never clip");
       if (a.phone) {
         assert.equal(look.strip.length, 7);
@@ -123,6 +124,30 @@ for (const width of [1280, 390, 375, 360]) {
         // A tap on a day with something scrolls the list to it.
         await a.page.click(`.ac-strip-day[data-date="${OTHER}"]`);
         await a.page.waitForFunction((d) => document.querySelector(`.ac-strip-day[data-date="${d}"]`)?.getAttribute("aria-pressed") === "true", OTHER);
+        // After a scroll the head and the strip stay reachable under the athlete's sticky topbar: what is at their
+        // centre is themselves, never the topbar. Each strip day is at least 44 px wide and tall.
+        await a.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await a.page.waitForTimeout(400);
+        const sticky = await a.page.evaluate(() => {
+          const hit = (el) => { const r = el.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return Boolean(top && (top === el || el.contains(top))); };
+          const topbar = document.querySelector(".athlete-topbar")?.getBoundingClientRect();
+          const head = document.querySelector('.ac-head [data-action="athlete-calendar-week"][data-delta="1"]');
+          const days = [...document.querySelectorAll(".ac-strip-day")];
+          return {
+            headReachable: hit(head), stripReachable: days.every(hit),
+            belowTopbar: topbar ? document.querySelector(".ac-head").getBoundingClientRect().top >= topbar.bottom - 1 : true,
+            dayBoxes: days.map((d) => { const r = d.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }),
+          };
+        });
+        assert.ok(sticky.headReachable, "the week's arrows stay reachable after a scroll");
+        assert.ok(sticky.stripReachable, "the strip stays reachable after a scroll");
+        assert.ok(sticky.belowTopbar, "the head sits under the topbar, not behind it");
+        assert.ok(sticky.dayBoxes.every(([w, h]) => w >= 44 && h >= 44), `strip days ${JSON.stringify(sticky.dayBoxes)}`);
+        // A tapped day lands below the strip, not under it.
+        await a.page.click(`.ac-strip-day[data-date="${TODAY}"]`);
+        await a.page.waitForTimeout(800);
+        const landed = await a.page.evaluate((d) => document.querySelector(`.ac-day[data-ac-day="${d}"]`).getBoundingClientRect().top - document.querySelector(".ac-strip").getBoundingClientRect().bottom, TODAY);
+        assert.ok(landed >= -1, `the day's section starts below the strip (${landed})`);
         // Each card's buttons are full width, the primary first.
         const widths = await a.page.$$eval(".ac-card-actions", (rows) => rows.map((r) => [...r.querySelectorAll("button")].map((b) => Math.round(b.getBoundingClientRect().width - r.getBoundingClientRect().width))));
         assert.ok(widths.flat().every((w) => Math.abs(w) <= 1), `full-width buttons ${JSON.stringify(widths)}`);

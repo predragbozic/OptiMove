@@ -174,7 +174,8 @@ without one is byte-for-byte today's card):
   Home uses, Q4); after its confirmed answer: "Your answer was saved." and the week read again. An event question opens
   its form as Home's list does; a test opens Tests.
 - *Open training* and *Back to calendar* wait for K4-0 (#657) and K4a-B (#660): the button is drawn and calls no
-  handler yet.
+  handler yet. **Deploy condition** (`ux-design-reviewer`, MEDIUM): K4a-F is not deployed to athletes before both are
+  wired - the most common primary button would do nothing.
 - Home's *See all* (under the list and in the empty state) opens the Calendar on the current week.
 
 ## 3. What K4b adds later (the card leaves room)

@@ -107,7 +107,9 @@ export function renderAthleteCalendarHtml(slice, { questions = [], today = local
   return `<section class="athlete-calendar" aria-label="Calendar">
       ${headHtml(slice, today)}
       ${stripHtml(slice, days, today)}
-      ${slice?.notice ? `<p class="ac-notice" role="status">${escapeHtml(slice.notice)}</p>` : ""}
+      ${slice?.notice ? (slice.notice === "Your answer was saved."
+        ? `<p class="ac-notice is-saved" role="status"><span aria-hidden="true">✓</span> ${escapeHtml(slice.notice)}</p>`
+        : `<p class="ac-notice" role="status">${escapeHtml(slice.notice)}</p>`) : ""}
       ${bodyHtml(slice, days, today)}
     </section>`;
 }
