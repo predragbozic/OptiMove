@@ -696,7 +696,9 @@ begin
      or new.revision is distinct from old.revision + 1
      or old.basic_key = 'platform_admin'
      or old.archived_at is not null
-     or (new.assignable_private and not old.assignable_private and new.basic_key is distinct from 'independent_coach') then
+     or (new.assignable_private and not old.assignable_private and new.basic_key is distinct from 'independent_coach')
+     or (old.is_basic and (new.assignable_club is distinct from old.assignable_club or new.assignable_team is distinct from old.assignable_team
+                           or new.assignable_private is distinct from old.assignable_private or new.assignable_global is distinct from old.assignable_global)) then
     raise exception 'permission role: this change is not allowed' using errcode = '23514';
   end if;
   if ((old.assignable_club and not new.assignable_club) or (old.assignable_team and not new.assignable_team)
@@ -1159,6 +1161,9 @@ begin
     if exists (select 1 from pg_roles where rolname = 'authenticated') then
       execute format('revoke all on public.%I from authenticated', t);
     end if;
+    if exists (select 1 from pg_roles where rolname = 'service_role') then
+      execute format('revoke all on public.%I from service_role', t);
+    end if;
   end loop;
   for f in
     select p.oid::regprocedure from pg_proc p
@@ -1179,6 +1184,9 @@ begin
     end if;
     if exists (select 1 from pg_roles where rolname = 'authenticated') then
       execute format('revoke execute on function %s from authenticated', f);
+    end if;
+    if exists (select 1 from pg_roles where rolname = 'service_role') then
+      execute format('revoke execute on function %s from service_role', f);
     end if;
   end loop;
 end $$;

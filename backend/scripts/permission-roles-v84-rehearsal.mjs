@@ -7,12 +7,16 @@
 //      every migration before v84; old role rows planted;
 //   2. the read-only preflight (every ok column true);
 //   3. v84 applied by the real runner;
+//  3b. a guarded write as the service writes it (the acting user, a club role,
+//      an item, its change row and request record, every deferred guard fired),
+//      rolled back; the same write without the acting user refused (42501);
 //   4. the read-only post-check (every ok column true, the old role tables'
 //      fingerprint equal to the preflight's);
 //   5. the runner again: v84 skipped by its checksum;
 //   6. the rollback (docs/runbooks/permission-roles-v84-rollback.sql): the
 //      catalog equal to the one before v84, the old rows untouched;
 //   7. v84 applied again, the post-check again;
+//  7b. the guarded write of 3b again, committed this time;
 //   8. (M7) pg_dump -Fc of that database, pg_restore into a second disposable
 //      database, and the catalog of v84's objects compared (constraints read
 //      back by pg_get_constraintdef, the stored generated columns, triggers,
@@ -126,7 +130,8 @@ function blocks(text) {
 }
 async function readOnly(client, sql) {
   await client.query("begin transaction read only");
-  try { return (await client.query(sql)).rows[0]; } finally { await client.query("rollback"); }
+  // A block may start with `set local ...` (block 3): the last statement's row is the answer.
+  try { const r = await client.query(sql); return (Array.isArray(r) ? r[r.length - 1] : r).rows[0]; } finally { await client.query("rollback"); }
 }
 const falseColumns = (row) => Object.entries(row).filter(([, v]) => v === false).map(([k]) => k);
 
@@ -193,6 +198,49 @@ export async function rehearse(args, password) {
       const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V84_FILE))).digest("hex");
       report("3. v84 applied by the runner, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha);
 
+      // 3b. (The review's D1) a real guarded write: every write guard reads xmin in plpgsql and
+      // pg_current_xact_id() % 2^32 (permission_current_xmin) - the most version-sensitive part. One
+      // transaction as the service writes it (the acting user set, a club role, one item, its change row and its
+      // request record), every deferred guard fired by SET CONSTRAINTS ALL IMMEDIATE, then COMMIT (or, before the
+      // rollback step, ROLLBACK: the rollback refuses once a role exists); the same write without the acting user
+      // must be refused with 42501.
+      const guardedWrite = async (label, { commit }) => {
+        const roleName = `Rehearsal role ${label}`;
+        let wrote = false; let detail = "";
+        try {
+          await c.query("begin");
+          await c.query(`select set_config('optimove.permission_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [u]);
+          const roleId = (await c.query(`insert into public.permission_roles (owner_scope, owner_club_id, name, assignable_club, assignable_team, created_by_user_id)
+              values ('club', $1, $2, true, false, $3) returning id`, [club, roleName, u])).rows[0].id;
+          await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'org.view', $2)`, [roleId, u]);
+          const changeId = (await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, items_added, scope_types_added)
+              values ($1, 1, 'create', $2, public.permission_actor_basis($2, 'roles.manage', 'club', $3), array['org.view'], array['club']) returning id`, [roleId, u, club])).rows[0].id;
+          await c.query(`insert into public.permission_requests (request_key, requested_by_user_id, operation, request_hash, owner_scope, owner_club_id, basis, role_change_id)
+              values (gen_random_uuid(), $1, 'role_create', $2, 'club', $3, public.permission_actor_basis($1, 'roles.manage', 'club', $3), $4)`, [u, "b".repeat(64), club, changeId]);
+          await c.query("set constraints all immediate");
+          await c.query(commit ? "commit" : "rollback");
+          wrote = commit ? (await c.query(`select count(*)::int as n from public.permission_roles where name = $1`, [roleName])).rows[0].n === 1 : true;
+        } catch (error) {
+          await c.query("rollback").catch(() => {});
+          detail = `${error?.code ?? ""} ${String(error?.message ?? "").slice(0, 120)}`;
+        }
+        let refused = false;
+        try {
+          await c.query("begin");
+          await c.query(`insert into public.permission_roles (owner_scope, owner_club_id, name, assignable_club, assignable_team, created_by_user_id)
+              values ('club', $1, $2, true, false, $3)`, [club, `${roleName} without actor`, u]);
+          await c.query("set constraints all immediate");
+        } catch (error) {
+          refused = error?.code === "42501";
+          if (!refused) detail += ` without actor: ${error?.code ?? ""}`;
+        } finally {
+          await c.query("rollback").catch(() => {});
+        }
+        return { ok: wrote && refused, detail: detail.trim() };
+      };
+      const gw1 = await guardedWrite("after apply", { commit: false });
+      report("3b. a guarded write as the service writes it passes every guard (rolled back before the rollback step); without the acting user it is refused (42501)", gw1.ok, gw1.detail);
+
       // 4. Post-check.
       const post = blocks(fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-postcheck.sql"), "utf8"));
       const postCheck = async () => {
@@ -222,6 +270,8 @@ export async function rehearse(args, password) {
       await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
       const bad2 = await postCheck();
       report("7. v84 applied again; the post-check again", bad2.length === 0, bad2.join(", "));
+      const gw2 = await guardedWrite("after re-apply", { commit: true });
+      report("7b. the guarded write again, COMMITTED; without the acting user refused (42501)", gw2.ok, gw2.detail);
 
       // 8. M7: pg_dump -Fc and pg_restore into a second database, v84's catalog compared.
       const source = (await c.query(V84_CATALOG_SQL)).rows[0];

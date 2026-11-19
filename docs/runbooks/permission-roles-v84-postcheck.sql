@@ -6,18 +6,18 @@
 -- 1. v84 is recorded once, its checksum the file's sha256 (the literal below; the runbook test keeps it equal to the
 --    file), and it is the last migration.
 select count(*) = 1 as recorded_once,
-       bool_and(checksum = 'ab7a6daca62af0ebd18eb3f2f0e0b97e86f7774d001a28f2d6be9fa1e518a624') as checksum_is_the_file,
+       bool_and(checksum = 'dfafb581c762d724d63a8356f93d9422ec96e27dfab75a344746e83b23df2e9c') as checksum_is_the_file,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') = 'migrations_v2/202611201000_roles_v84_permission_roles.sql' as is_last
   from public.schema_migrations where migration_name = 'migrations_v2/202611201000_roles_v84_permission_roles.sql';
 
--- 2. The nine tables, row-level security on each, and no privilege of PUBLIC, anon or authenticated on any table or function of v84.
+-- 2. The nine tables, row-level security on each, and no privilege of PUBLIC, anon, authenticated or service_role on any table or function of v84.
 with t as (select c.oid, c.relname, c.relrowsecurity, c.relacl, c.relowner from pg_class c
             where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
               and c.relname in ('permission_modules', 'permissions', 'permission_scope_types', 'permission_roles', 'permission_role_items',
                                 'permission_role_module_display', 'permission_role_changes', 'user_role_assignments', 'permission_requests')),
      f as (select p.oid, p.proacl, p.proowner from pg_proc p where p.pronamespace = 'public'::regnamespace
             and (p.proname like 'permission\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user\_role\_assignments\_%')),
-     grantees as (select oid from pg_roles where rolname in ('anon', 'authenticated') union all select 0::oid)
+     grantees as (select oid from pg_roles where rolname in ('anon', 'authenticated', 'service_role') union all select 0::oid)
 select (select count(*) from t) = 9 as nine_tables,
        (select bool_and(relrowsecurity) from t) as rls_on_every_table,
        not exists (select 1 from t, aclexplode(coalesce(t.relacl, acldefault('r', t.relowner))) a where a.grantee in (select oid from grantees)) as tables_not_granted,
@@ -26,6 +26,8 @@ select (select count(*) from t) = 9 as nine_tables,
 
 -- 3. The triggers (present, enabled, deferral as written), the functions (body md5, not security definer, volatility, search_path),
 --    every foreign key ON DELETE RESTRICT, and every CHECK read back as written (one digest each, from the rehearsal).
+--    The search_path is fixed first: regclass / regprocedure text and pg_get_constraintdef name a schema by visibility.
+set local search_path = pg_catalog, public;
 with tables as (select oid from pg_class where relnamespace = 'public'::regnamespace and relname in ('permission_modules', 'permissions', 'permission_scope_types',
                   'permission_roles', 'permission_role_items', 'permission_role_module_display', 'permission_role_changes', 'user_role_assignments', 'permission_requests'))
 select (select md5(string_agg(c.relname || '.' || g.tgname || ':' || g.tgenabled::text || ':' || g.tgdeferrable::text || ':' || g.tginitdeferred::text, ',' order by c.relname, g.tgname))
@@ -33,7 +35,7 @@ select (select md5(string_agg(c.relname || '.' || g.tgname || ':' || g.tgenabled
        not exists (select 1 from pg_trigger g where g.tgrelid in (select oid from tables) and not g.tgisinternal and g.tgenabled <> 'O') as every_trigger_enabled,
        (select md5(string_agg(p.oid::regprocedure::text || '=' || md5(p.prosrc) || ':' || p.prosecdef::text || ':' || p.provolatile::text || ':' || coalesce(array_to_string(p.proconfig, ';'), ''), ',' order by p.oid::regprocedure::text))
           from pg_proc p where p.pronamespace = 'public'::regnamespace
-           and (p.proname like 'permission\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user\_role\_assignments\_%')) = '639eaff140bac893282f6b7e6f2cd2a7' as functions_as_written,
+           and (p.proname like 'permission\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user\_role\_assignments\_%')) = '3140c03e91e730cf532d32d9a7a6d43f' as functions_as_written,
        not exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef
                     and (p.proname like 'permission\_%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor'))) as no_security_definer,
        not exists (select 1 from pg_constraint k where k.conrelid in (select oid from tables) and k.contype = 'f' and k.confdeltype <> 'r') as every_fk_restrict,

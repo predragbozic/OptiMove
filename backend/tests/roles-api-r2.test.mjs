@@ -106,10 +106,21 @@ test("17. ceiling: a club's admin adds a word it does not hold, a platform-only 
     await clubAdminItems(w.pa, CLUB_ADMIN_SEED);
   }
   code(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), items: ["org.view", "athletes.manage", "athletes.remove", "programs.view"] }), 409, "permission_not_honoured");
+  // A club's own role holding athletes.remove, held by one person: the narrowing does not reach it (S4).
+  const own = ok(await createRole(w.adminA, { clubId: w.A, items: ["athletes.remove"] })).role;
+  ok(await grant(w.adminA, { userId: w.target.id, roleId: own.id, scopeType: "club", scopeId: w.A }));
+  const expected = await one(`select count(distinct r.id)::int as roles, count(distinct r.owner_club_id)::int as clubs,
+      count(distinct a.user_id) filter (where a.id is not null)::int as people
+    from public.permission_roles r join public.permission_role_items i on i.role_id = r.id and i.permission_word = 'athletes.remove'
+    left join public.user_role_assignments a on a.role_id = r.id and a.revoked_at is null and (a.expires_at is null or a.expires_at > now())
+    where r.owner_scope = 'club' and r.archived_at is null`);
+  assert.ok(expected.roles >= 1 && expected.people >= 1);
   const rev = await revision(ROLE_IDS.team_coach);
   const removed = ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev, items: ["org.view", "athletes.manage"] }));
   assert.deepEqual(removed.role.items, ["athletes.manage", "org.view"]);
   assert.ok(removed.affected.people >= 1 && removed.affected.clubs >= 1, JSON.stringify(removed.affected));
+  assert.deepEqual(removed.affected.clubRolesKeepingRemovedWords, expected);
+  assert.deepEqual((await one(`select array_agg(permission_word) as w from public.permission_role_items where role_id = $1`, [own.id])).w, ["athletes.remove"], "the club's own role keeps the word");
   const record = await one(`select kind, basis, items_removed, reason from public.permission_role_changes where role_id = $1 and revision_after = $2`, [ROLE_IDS.team_coach, rev + 1]);
   assert.deepEqual(record, { kind: "change", basis: "platform_admin", items_removed: ["athletes.remove"], reason: "Change" });
   ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev + 1, items: ["org.view", "athletes.manage", "athletes.remove"] }));
@@ -234,6 +245,15 @@ test("21. narrowing Club admin below a system role is refused (rule 7)", async (
   code(await change(w.pa, ROLE_IDS.club_admin, { expectedRevision: await revision(ROLE_IDS.club_admin), items: CLUB_ADMIN_SEED.filter((x) => x !== "roles.manage") }), 409, "club_admin_requires");
 });
 
+test("21b. a basic role's scope types are fixed: P5 with other scope types is 409 role_not_editable; the same types in any order pass with a name change", async () => {
+  const w = await world();
+  code(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), scopeTypes: ["club", "team"] }), 409, "role_not_editable");
+  code(await change(w.pa, ROLE_IDS.club_admin, { expectedRevision: await revision(ROLE_IDS.club_admin), scopeTypes: ["team"] }), 409, "role_not_editable");
+  const name = (await one(`select name from public.permission_roles where id = $1`, [ROLE_IDS.team_coach])).name;
+  ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), scopeTypes: ["team"], name: `${name} 2` }));
+  ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), name }));
+});
+
 // ---------------------------------------------------------------------------
 // Cross-club and info hiding
 // ---------------------------------------------------------------------------
@@ -335,6 +355,28 @@ test("22c. P7 without a name: \"<source name> (copy)\"; a second copy without a 
   assert.equal([...long.role.name].length, 80);
 });
 
+test("22d. P3's history of a SYSTEM role, read by a club's admin, carries only revision, kind, itemsAdded, itemsRemoved, at and byMigration (no reason, basis or name); a platform admin reads all of it; a club's own role keeps its full history for its admin", async () => {
+  const w = await world();
+  const sys = ok(await createRole(w.pa, { name: `System ${hex()}`, scopeTypes: ["club"], items: ["org.view"] })).role;
+  ok(await change(w.pa, sys.id, { expectedRevision: 1, name: `Renamed ${hex()}`, items: ["org.view", "athletes.manage"], reason: "Platform secret reason" }));
+  const clubView = ok(await srv.api(w.adminA.cookie, `${R}/${sys.id}?clubId=${w.A}`));
+  assert.equal(clubView.history.length, 2);
+  for (const h of clubView.history) assert.deepEqual(Object.keys(h).sort(), ["at", "byMigration", "itemsAdded", "itemsRemoved", "kind", "revision"]);
+  assert.deepEqual(clubView.history[1].itemsAdded, ["athletes.manage"]);
+  assert.ok(!JSON.stringify(clubView.history).includes("Platform secret reason"));
+  const paView = ok(await srv.api(w.pa.cookie, `${R}/${sys.id}`));
+  assert.equal(paView.history[1].reason, "Platform secret reason");
+  assert.equal(paView.history[1].basis, "platform_admin");
+  // A seeded basic role read by a club's admin: the same reduced shape.
+  for (const h of ok(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.club_admin}?clubId=${w.A}`)).history) {
+    assert.deepEqual(Object.keys(h).sort(), ["at", "byMigration", "itemsAdded", "itemsRemoved", "kind", "revision"]);
+  }
+  const own = ok(await createRole(w.adminA, { clubId: w.A })).role;
+  ok(await change(w.adminA, own.id, { expectedRevision: 1, name: `Own ${hex()}`, reason: "Club reason" }));
+  const ownView = ok(await srv.api(w.adminA.cookie, `${R}/${own.id}`));
+  assert.equal(ownView.history[1].reason, "Club reason");
+});
+
 test("23. P2, P3 and P8 never return a role, a holder or a count of another club; holderCount for a club caller counts that club only", async () => {
   const w = await world();
   const sys = ok(await createRole(w.pa, { scopeTypes: ["club", "team"], items: ["org.view"] })).role;
@@ -406,6 +448,24 @@ test("28. the recorded SQL order of every write route: every lock before the fir
       assert.ok(!/is_active/.test(seen[pair]));
     }
   }
+});
+
+test("28b. P5 and P6 on a SYSTEM role by a club's admin (with and without clubId): the identical 404 before the write runner opens - no statement of runWrite, so no lock on the system role row; a platform admin's change of it runs", async () => {
+  const w = await world();
+  const sys = ok(await createRole(w.pa, { name: `System ${hex()}`, scopeTypes: ["club"], items: ["org.view"] })).role;
+  for (const [label, send] of [
+    ["P5 with clubId", () => change(w.adminA, sys.id, { clubId: w.A, expectedRevision: 1, name: `N ${hex()}` })],
+    ["P5 without clubId", () => change(w.adminA, sys.id, { expectedRevision: 1, name: `N ${hex()}` })],
+    ["P6 with clubId", () => srv.api(w.adminA.cookie, `${R}/${sys.id}/archive`, { method: "POST", body: { requestKey: key(), clubId: w.A, expectedRevision: 1, reason: "x" } })],
+    ["P5 on Club admin", () => change(w.adminA, ROLE_IDS.club_admin, { clubId: w.A, expectedRevision: 1, name: "Boss" })],
+  ]) {
+    const r = await recorded(send);
+    assert.deepEqual([r.res.status, r.res.body], [404, { error: "notFound" }], label);
+    assert.deepEqual(r.seen, [], `${label}: runWrite never opened`);
+  }
+  const p = await recorded(() => change(w.pa, sys.id, { expectedRevision: 1, name: `PA ${hex()}` }));
+  ok(p.res);
+  assert.ok(p.seen.some((t) => /lock_permission_actor/.test(t)));
 });
 
 test("29. races, both orders, no 40P01: old club-admin revocation against that admin's role save; the old revocation against a new assignment by the same granter, the target's id below and above the actor's; two saves of one role; two grants of one key and of one (user, role, scope); grant against archive; grant against the target's login switched off", async () => {

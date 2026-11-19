@@ -325,6 +325,38 @@ delete from public.permission_role_items where role_id = '${ROLE_IDS.team_coach}
   }
 });
 
+test("6b. the platform's roles (anon, authenticated, service_role), granted everything by default privileges as the platform does, hold no privilege on any table or function of v84 once it is applied", async () => {
+  const roles = ["anon", "authenticated", "service_role"];
+  const created = [];
+  for (const r of roles) {
+    if (!(await one(`select exists (select 1 from pg_roles where rolname = $1) as e`, [r])).e) { await k.query(`create role ${r} nologin`); created.push(r); }
+  }
+  const pre = await buildDatabase({ label: "v84_platform_roles", withoutV84: true });
+  const c = new pg.Client({ connectionString: pre.url });
+  await c.connect();
+  try {
+    for (const r of roles) {
+      await c.query(`alter default privileges in schema public grant all on tables to ${r}`);
+      await c.query(`alter default privileges in schema public grant execute on functions to ${r}`);
+    }
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    const fns = (await c.query(`select p.oid::regprocedure::text as f from pg_proc p where p.pronamespace = 'public'::regnamespace
+        and (p.proname like 'permission%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user_role_assignments%')`)).rows.map((r) => r.f);
+    assert.ok(fns.length >= 29);
+    const tables = ["permission_modules", "permissions", "permission_scope_types", "permission_roles", "permission_role_items", "permission_role_module_display", "permission_role_changes", "user_role_assignments", "permission_requests"];
+    for (const r of roles) {
+      for (const t of tables) for (const priv of ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"]) {
+        assert.equal((await c.query(`select has_table_privilege($1, $2, $3) as ok`, [r, `public.${t}`, priv])).rows[0].ok, false, `${r} ${t} ${priv}`);
+      }
+      for (const f of fns) assert.equal((await c.query(`select has_function_privilege($1, $2, 'EXECUTE') as ok`, [r, f])).rows[0].ok, false, `${r} ${f}`);
+    }
+  } finally {
+    await c.end().catch(() => {});
+    await pre.drop();
+    for (const r of created) await k.query(`drop role ${r}`).catch(() => {});
+  }
+});
+
 test("6. row-level security and the revokes: as a role without ownership, every table and every function of v84 is refused", async () => {
   const role = `optimove_test_r2_${crypto.randomBytes(4).toString("hex")}`;
   await k.query(`create role ${role} nologin`);
@@ -395,7 +427,7 @@ test("9. a role naming another user; a club's role by another club's admin, by a
   await refused(asActor(db.url, w.admin, (c) => c.query(`insert into public.permission_roles (owner_scope, name, assignable_club, created_by_user_id) values ('system', 'Sys9', true, $1)`, [w.admin])), "42501", MSG);
 });
 
-test("10. every immutable column of a role, a skipped revision, the Platform admin row, an archived role, un-archive, an archive while an active assignment exists (and it passes once revoked or lapsed)", async () => {
+test("10. every immutable column of a role, a basic role's assignable_* flags, a skipped revision, the Platform admin row, an archived role, un-archive, an archive while an active assignment exists (and it passes once revoked or lapsed)", async () => {
   const w = await world();
   const role = await clubRole(w.admin, w.club, { items: ["org.view"] });
   const NOT_ALLOWED = /permission role: this change is not allowed/;
@@ -407,6 +439,13 @@ test("10. every immutable column of a role, a skipped revision, the Platform adm
   await refused(update(w.admin, `update public.permission_roles set revision = revision + 1, created_by_user_id = $2 where id = $1`, [role, w.pa]), "23514", NOT_ALLOWED);
   await refused(update(w.admin, `update public.permission_roles set revision = revision + 2 where id = $1`, [role]), "23514", NOT_ALLOWED);
   await refused(update(w.pa, `update public.permission_roles set revision = revision + 1, name = 'PA' where id = $1`, [ROLE_IDS.platform_admin]), "23514", NOT_ALLOWED);
+  // A basic role's assignable_* flags are fixed (the review's D3; the service's role_not_editable): each of the three
+  // editable basic roles, each flag flipped, refused even for a platform admin; its name may still change.
+  for (const key of ["club_admin", "team_coach", "independent_coach"]) {
+    for (const flag of ["assignable_club", "assignable_team", "assignable_private"]) {
+      await refused(update(w.pa, `update public.permission_roles set revision = revision + 1, ${flag} = not ${flag} where id = $1`, [ROLE_IDS[key]]), "23514", NOT_ALLOWED);
+    }
+  }
   // An assignment of the role blocks its archive; revoked, it does not.
   const assignment = await assign(w.admin, { userId: w.other, roleId: role, scopeType: "club", scopeId: w.club, club: w.club });
   const archive = (actor) => asActor(db.url, actor, async (c) => {

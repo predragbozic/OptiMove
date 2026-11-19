@@ -46,7 +46,8 @@ function blocks(text) {
 }
 async function run(sql) {
   await c.query("begin transaction read only");
-  try { return (await c.query(sql)).rows[0]; } finally { await c.query("rollback"); }
+  // A block may start with `set local ...` (block 3): the last statement's row is the answer.
+  try { const r = await c.query(sql); return (Array.isArray(r) ? r[r.length - 1] : r).rows[0]; } finally { await c.query("rollback"); }
 }
 const oks = (row) => Object.entries(row).filter(([, v]) => typeof v === "boolean");
 function allTrue(name, row) {
@@ -91,6 +92,9 @@ test("7b. the post-check after v84: every block's ok columns true and block 6a e
   assert.deepEqual(Object.keys(POST).sort(), ["1", "2", "3", "4", "5", "6", "6a", "7"]);
   for (const [name, sql] of Object.entries(POST)) allTrue(name, await run(sql));
   assert.deepEqual(await run(POST["6a"]), fingerprintBefore, "v84 rewrote no row of the old role tables");
+  // Block 3's digests do not depend on the session's search_path (the block fixes it itself).
+  await c.query("set search_path = pg_catalog");
+  try { allTrue("3 under search_path pg_catalog", await run(POST["3"])); } finally { await c.query("reset search_path"); }
   // 1: post-check block 1's literal is the file's sha256 (the runner's checksum); a tampered recorded checksum flips it.
   const fileSum = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, "202611201000_roles_v84_permission_roles.sql"))).digest("hex");
   assert.ok(POSTCHECK.includes(`checksum = '${fileSum}'`), "post-check block 1 names the file's sha256");

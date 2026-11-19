@@ -402,11 +402,16 @@ async function readRole(client, roleId, clubId, standing, { history = false } = 
   if (history) {
     view.history = (await client.query(`select revision_after, kind, basis, reason, name_before, name_after, description_changed, items_added, items_removed,
         scope_types_added, display_after, created_at, (performed_by_user_id is null) as by_migration
-      from public.permission_role_changes where role_id = $1 order by revision_after`, [roleId])).rows.map((h) => ({
-      revision: h.revision_after, kind: h.kind, basis: h.basis, reason: h.reason, nameBefore: h.name_before, nameAfter: h.name_after,
-      descriptionChanged: h.description_changed, itemsAdded: h.items_added, itemsRemoved: h.items_removed, scopeTypesAdded: h.scope_types_added,
-      moduleDisplay: h.display_after, at: h.created_at, byMigration: h.by_migration,
-    }));
+      from public.permission_role_changes where role_id = $1 order by revision_after`, [roleId])).rows.map((h) => (
+      // A system role's history, read by anyone but a platform admin, carries only what changed and when: a platform
+      // admin's free-text reason, the basis and the names never reach the clubs (the security review's S1).
+      r.owner_scope === "system" && !standing?.platform
+        ? { revision: h.revision_after, kind: h.kind, itemsAdded: h.items_added, itemsRemoved: h.items_removed, at: h.created_at, byMigration: h.by_migration }
+        : {
+          revision: h.revision_after, kind: h.kind, basis: h.basis, reason: h.reason, nameBefore: h.name_before, nameAfter: h.name_after,
+          descriptionChanged: h.description_changed, itemsAdded: h.items_added, itemsRemoved: h.items_removed, scopeTypesAdded: h.scope_types_added,
+          moduleDisplay: h.display_after, at: h.created_at, byMigration: h.by_migration,
+        }));
   }
   return view;
 }
@@ -684,6 +689,9 @@ export async function createRole(ctx, body) {
 // ---------------------------------------------------------------------------
 export async function changeRole(ctx, roleIdRaw, body) {
   const gate = await gateRole(ctx, roleIdRaw, body?.clubId, "roles");
+  // Only a platform admin changes or archives a system role: anyone else gets the identical 404 here, before
+  // runWrite, so no lock is ever taken on a system role row for them (the security review's S3).
+  if (gate.role.owner_scope === "system" && !isPlatform(ctx)) throw NOT_FOUND();
   const requestKey = requireUuid(body?.requestKey, "requestKey");
   if (!Number.isInteger(body.expectedRevision) || body.expectedRevision < 1) throw bad("expectedRevision must be a revision.");
   const reason = requireText(body.reason, "reason", 500);
@@ -711,7 +719,7 @@ export async function changeRole(ctx, roleIdRaw, body) {
       if (role.revision !== body.expectedRevision) throw refuse("staleRevision", { current: await readRole(client, roleId, ownerClubId, standingAt(ctx, ownerClubId)) });
       const oldTypes = scopeTypesOf(role);
       const newTypes = scopeTypes ?? oldTypes;
-      if (scopeTypes && role.is_basic && scopeTypes.join() !== oldTypes.join()) throw refuse("role_not_editable");
+      if (scopeTypes && role.is_basic && [...scopeTypes].sort().join() !== [...oldTypes].sort().join()) throw refuse("role_not_editable");
       if (newTypes.some((t) => t === "private" || t === "global") && !role.is_basic) throw refuse("role_not_assignable_here");
       const removedTypes = oldTypes.filter((t) => !newTypes.includes(t));
       if (removedTypes.length && (await client.query(`select 1 from public.user_role_assignments where role_id = $1 limit 1`, [roleId])).rowCount) throw refuse("scope_types_narrowed");
@@ -732,7 +740,7 @@ export async function changeRole(ctx, roleIdRaw, body) {
       const nameChanged = name !== undefined && name !== role.name;
       const addedTypes = newTypes.filter((t) => !oldTypes.includes(t));
       if (!nameChanged && !descriptionChanged && !add.length && !remove.length && !addedTypes.length && !removedTypes.length && display === undefined) throw bad("Nothing to change.");
-      const affected = await affectedBy(client, role);
+      const affected = await affectedBy(client, role, remove);
       return { basis, role, add, remove, newTypes, addedTypes, nameChanged, descriptionChanged, affected };
     },
     write: async (client, p) => {
@@ -754,7 +762,7 @@ export async function changeRole(ctx, roleIdRaw, body) {
 }
 
 // The people and clubs a change of the role reaches (P5's `affected`).
-async function affectedBy(client, role) {
+async function affectedBy(client, role, removed = []) {
   let row;
   if (role.basic_key === "club_admin") {
     row = (await client.query(`select count(distinct r.user_id)::int as people, count(distinct r.club_id)::int as clubs
@@ -768,11 +776,26 @@ async function affectedBy(client, role) {
       from public.user_role_assignments a left join public.teams t on a.scope_type = 'team' and t.id = a.scope_id
       where a.role_id = $1 and a.revoked_at is null and (a.expires_at is null or a.expires_at > now())`, [role.id])).rows[0];
   }
-  return { people: Number(row.people), clubs: Number(row.clubs) };
+  const affected = { people: Number(row.people), clubs: Number(row.clubs) };
+  // Narrowing a system role is not retroactive for clubs' own roles: a club role that holds a removed word keeps it
+  // (the security review's S4). The answer counts them, so the platform admin sees what the change does not reach.
+  if (role.owner_scope === "system" && removed.length) {
+    const kept = (await client.query(`select count(distinct r.id)::int as roles, count(distinct r.owner_club_id)::int as clubs,
+        count(distinct a.user_id) filter (where a.id is not null)::int as people
+      from public.permission_roles r
+      join public.permission_role_items i on i.role_id = r.id and i.permission_word = any($1::text[])
+      left join public.user_role_assignments a on a.role_id = r.id and a.revoked_at is null and (a.expires_at is null or a.expires_at > now())
+      where r.owner_scope = 'club' and r.archived_at is null`, [removed])).rows[0];
+    affected.clubRolesKeepingRemovedWords = { roles: Number(kept.roles), clubs: Number(kept.clubs), people: Number(kept.people) };
+  }
+  return affected;
 }
 
 export async function archiveRole(ctx, roleIdRaw, body) {
   const gate = await gateRole(ctx, roleIdRaw, body?.clubId, "roles");
+  // Only a platform admin changes or archives a system role: anyone else gets the identical 404 here, before
+  // runWrite, so no lock is ever taken on a system role row for them (the security review's S3).
+  if (gate.role.owner_scope === "system" && !isPlatform(ctx)) throw NOT_FOUND();
   const requestKey = requireUuid(body?.requestKey, "requestKey");
   if (!Number.isInteger(body.expectedRevision) || body.expectedRevision < 1) throw bad("expectedRevision must be a revision.");
   const reason = requireText(body.reason, "reason", 500);

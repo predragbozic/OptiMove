@@ -41,12 +41,18 @@ Roles API (`/api/organization/roles`) exists. For every existing account every `
    It asks for the password once (hidden; or takes `PGPASSWORD`), creates and drops its own
    `optimove_tests_r2rehearsal_*` databases, refuses any other host, and prints PASS / FAIL per step: the build through
    the migration before v84, the preflight, the apply, the post-check, the runner's checksum skip, the rollback (the
-   catalog back to the one before v84), the second apply, and the `pg_dump` / `pg_restore` read-back of v84's
+   catalog back to the one before v84), the second apply, a real guarded write after each apply (steps 3b and 7b: the
+   acting user's same-transaction check reads `xmin` and `pg_current_xact_id()`, the most version-sensitive part; the
+   write without the acting user must be refused with 42501), and the `pg_dump` / `pg_restore` read-back of v84's
    constraints, generated columns, triggers, indexes and functions (M7). Exit code 0 only when every step passed.
    The user needs the right to create databases and a superuser for the legacy seed replay.
-   **State: PostgreSQL 16.15: PASS (the executor's container, 2026-11-19). PostgreSQL 17: NOT RUN.** If the post-check's
-   `constraints_as_written` or step 8 fails on 17 only, a CHECK reads back differently there: that is a finding for the
-   migration, not a reason to edit the post-check's digest.
+   **State: PostgreSQL 16.15: PASS (the executor's container, 2026-11-19). PostgreSQL 17: NOT RUN.** How to read a
+   failure on 17 only:
+   - step 3b / 7b (the guarded write) or step 8 (a CHECK, a trigger or a function that does not read back the same after
+     `pg_dump` / `pg_restore`): a finding for the migration;
+   - every other step green, and only a digest of post-check block 3 (`triggers_as_written`, `functions_as_written`,
+     `constraints_as_written`) differs: 17 renders that catalog text differently. Re-take that digest from the 17
+     rehearsal (block 3 fixes its own `search_path`), record both values, and do not treat it as a migration fault.
 2. **The preflight**, read-only, each block in `begin transaction read only; ... rollback;`, right before the merge:
    every `ok` column true; keep block 3a's row for post-check block 6a; block 7 read at the moment of the merge; block 8
    (the unique 12-digit prefix on the merge tree) in git; block 1b (no recorded checksum differs from the merge tree's
@@ -114,3 +120,17 @@ How the deploy behaves (`backend/package.json`: `"start": "node src/migrate.js &
 - A grant that commits at the same moment as an archive of its club or team can leave an active assignment in an
   archived scope (club and team rows are not locked); it gives nothing there.
 - The cap of 50 roles per club is best-effort under concurrency.
+- The migration branch of the change guard (a `migration` change row needs its `schema_migrations` row in the same
+  transaction) does not stop whoever can also write `schema_migrations`; it keeps an accidental write out, like v35's
+  guards. A later migration that changes a basic role writes `migration_name` exactly as `migrations_v2/<file>`.
+- `permission_requests_guard` does not compare a request record's `owner_club_id` with the assignment or role it names;
+  the service writes it (from the checked club).
+- The revokes cover `PUBLIC`, `anon`, `authenticated` and `service_role` where they exist (post-check block 2). Like
+  every v84 table, `service_role` also meets row-level security without a policy.
+- Narrowing a system role (a platform admin's P5) is not retroactive for clubs' own roles: a club role that holds a
+  removed word keeps it, and its holders keep the right. The answer's `affected.clubRolesKeepingRemovedWords` counts
+  those roles, their clubs and their holders; removing the word from a club's role is that club's own P5.
+- `org.teams.manage` also empties a team: `DELETE /api/organization/teams/:teamId` (archive) ends every membership of the
+  team (D45). R3's description of the word and R4 must say so (the security review's S5).
+- A system role's change history, read by anyone but a platform admin, carries only `revision`, `kind`, `itemsAdded`,
+  `itemsRemoved`, `at` and `byMigration` (no reason, basis or name; the security review's S1).
