@@ -16,6 +16,8 @@ const LIST_ID = "athleteHomeEventsList";
 // row's control again by its event, not by an id on screen.
 let paintedRowIds = [];
 const TITLE_ID = "athleteHomeEventsTitle";
+// K4a (contract 2.5): the Calendar on the current week, under the list and in its empty state.
+const SEE_ALL = `<button type="button" class="plain-button compact-button athlete-home-events-button athlete-home-events-see-all" data-action="athlete-home-events-see-all">See all</button>`;
 
 // "Today", "Tomorrow", else the weekday and the date ("Thu 19 Nov").
 export function athleteHomeEventDayWord(iso, today) {
@@ -80,7 +82,7 @@ function bodyHtml(slice) {
   if (slice.status !== "ready") return `<p class="muted athlete-home-events-state" role="status">Loading events…</p>`;
   // K2b-1d3: an event that has ended is left out (filtered at every paint and at the minute's tick).
   const rows = athleteHomeVisibleEventRows(slice.rows, athleteHomeEventsNow());
-  if (!rows.length) return `<div class="empty-state athlete-home-events-state">No events in the next ${ATHLETE_HOME_EVENTS_DAYS} days.</div>`;
+  if (!rows.length) return `<div class="empty-state athlete-home-events-state">No events in the next ${ATHLETE_HOME_EVENTS_DAYS} days.</div>${SEE_ALL}`;
   const shown = slice.expanded ? rows : rows.slice(0, ATHLETE_HOME_EVENTS_LIMIT);
   const more = rows.length - ATHLETE_HOME_EVENTS_LIMIT;
   const toggle = more > 0
@@ -91,7 +93,7 @@ function bodyHtml(slice) {
   // midnight never calls today "Tomorrow").
   const today = localDateIso(new Date(athleteHomeEventsNow()));
   paintedRowIds = shown.map((row) => row.eventId);
-  return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, today)).join("")}</ul>${toggle}`;
+  return `<ul class="athlete-home-events-list" id="${LIST_ID}" role="list">${shown.map((row) => rowHtml(row, today)).join("")}</ul>${toggle}${SEE_ALL}`;
 }
 
 export function renderAthleteHomeEventsHtml(slice) {

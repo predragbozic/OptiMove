@@ -17,7 +17,7 @@ import { buildContextKey } from "./view-cache.js";
 export const ATHLETE_QUESTIONS_URL = "/api/calendar/questions/mine";
 export const athleteQuestionLaterUrl = (questionId) => `/api/calendar/questions/${encodeURIComponent(questionId)}/later`;
 export const ATHLETE_QUESTION_ROW_KEYS = Object.freeze([
-  "questionId", "kind", "eventTitle", "eventDay", "eventStart", "opensAt", "closesAt", "formKind", "formId", "later",
+  "questionId", "kind", "eventId", "eventTitle", "eventDay", "eventStart", "opensAt", "closesAt", "formKind", "formId", "later",
 ]);
 export const ATHLETE_QUESTIONS_TICK_MS = 60_000;
 
@@ -60,7 +60,8 @@ export function athleteQuestionRows(answer) {
     const closesAt = instant(q?.window?.closesAt);
     if (!questionId || !kind || formKind !== kind || !formId || !opensAt || !closesAt) continue;
     rows.push({
-      questionId, kind, eventTitle: text(q.eventTitle), eventDay: isoDay(q.eventDay), eventStart: hhmm(q.eventStart),
+      // K4a: the event's id, so the athlete's Calendar puts Rate RPE on the event's card.
+      questionId, kind, eventId: q?.eventId ? String(q.eventId) : null, eventTitle: text(q.eventTitle), eventDay: isoDay(q.eventDay), eventStart: hhmm(q.eventStart),
       opensAt, closesAt, formKind, formId, later: q.later === true,
     });
   }

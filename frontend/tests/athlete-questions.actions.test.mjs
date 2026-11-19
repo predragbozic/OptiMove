@@ -153,7 +153,7 @@ test("Q1. one GET /questions/mine per Home entry; the pick is the literal key li
   await enterHome();
   assert.equal(mineCalls(calls).length, 1);
   assert.equal(mineCalls(calls)[0].method, "GET");
-  const literal = ["questionId", "kind", "eventTitle", "eventDay", "eventStart", "opensAt", "closesAt", "formKind", "formId", "later"];
+  const literal = ["questionId", "kind", "eventId", "eventTitle", "eventDay", "eventStart", "opensAt", "closesAt", "formKind", "formId", "later"];
   assert.deepEqual([...ATHLETE_QUESTION_ROW_KEYS], literal);
   assert.deepEqual(Object.keys(state.athleteQuestions.rows[0]), literal);
   const visible = [doc().body.textContent, ...$$("[aria-label]").map((el) => el.getAttribute("aria-label")), ...$$("[title]").map((el) => el.getAttribute("title"))].join(" ");

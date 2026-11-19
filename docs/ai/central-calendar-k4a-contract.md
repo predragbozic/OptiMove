@@ -163,6 +163,20 @@ without one is byte-for-byte today's card):
 "Rate RPE" · "Wellness" · "Open in maps" · "Cancelled" · "Back to calendar" · "See all" · "Before" / "Training" /
 "After" · "The calendar could not be read." with *Try again* · "Your answer was saved." (after a confirmed RPE answer).
 
+### 2.8 As built (K4a-F, branch `claude/central-calendar-k4a-ui`; prepared, not yet wired to Open training)
+
+- Modules `athlete-calendar-{data,view,actions}.js`; the slice lives in `athlete-calendar-data.js`, not `state.js`. The
+  card model is an explicit pick (`athleteCalendarCard`): event (with or without `sessions`), her planned card (her row
+  under `include=athletes`), her RPE request, her test, her activity ("Recorded session", no button).
+- The week is read again on every entry of the tab (one read); the arrows read each week once within the TTL.
+- `questions/mine` rows now carry `eventId` (`athlete-questions-data.js`), so *Rate RPE* sits on its event's card.
+- *Rate RPE* of a planned session or an RPE request opens the Training Load form **over the Calendar** (the overlay
+  Home uses, Q4); after its confirmed answer: "Your answer was saved." and the week read again. An event question opens
+  its form as Home's list does; a test opens Tests.
+- *Open training* and *Back to calendar* wait for K4-0 (#657) and K4a-B (#660): the button is drawn and calls no
+  handler yet.
+- Home's *See all* (under the list and in the empty state) opens the Calendar on the current week.
+
 ## 3. What K4b adds later (the card leaves room)
 
 - K4b (changing an RPE answer while the question is open) adds one line on the card, under the sessions: **"Your RPE: 7
