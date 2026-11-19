@@ -20,6 +20,7 @@
 //      place, srpe followed, one history row; a raw update without the function
 //      refused; then the rollback REFUSED (a history row exists) and v83 still
 //      in place;
+//   8c. any migration named after v83 applied on top (none rolls back after it), the post-check again;
 //   9. pg_dump -Fc of that database, pg_restore into a second disposable
 //      database, and v83's catalog compared (constraints read back by
 //      pg_get_constraintdef, triggers with their deferral, indexes, function
@@ -194,9 +195,20 @@ export async function rehearse(args, password) {
     const last = snapshotSql.match(/^-- Last migration contained in the dump: (\S+)\.$/m)[1];
     await bootstrapLegacySnapshot({ databaseUrl: url, snapshotSql, migrationsRoot: MIGRATIONS, lastMigration: last });
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-k4b-rehearsal-"));
-    const before = path.join(tmp, "migrations_v2");
-    fs.mkdirSync(before);
-    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V83_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
+    // By NAME: "before" holds the migrations that sort before v83, "upTo" those up to v83. A migration named after v83
+    // (v84 sorts before it; a later one may not) is applied only in step 8c, after the last rollback, so the rollback
+    // never meets it ("later migrations are applied").
+    const all = fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort();
+    // The runner records a migration as "<folder name>/<file>", so each set lives in a folder named migrations_v2.
+    const folder = (name, files) => {
+      const dir = path.join(tmp, name, "migrations_v2");
+      fs.mkdirSync(dir, { recursive: true });
+      for (const f of files) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(dir, f));
+      return dir;
+    };
+    const before = folder("before", all.filter((f) => f < V83_FILE));
+    const upTo = folder("up-to-v83", all.filter((f) => f <= V83_FILE));
+    const later = all.filter((f) => f > V83_FILE);
     await runMigrations({ databaseUrl: url, migrationsRoot: before });
     const c = new pg.Client({ connectionString: url });
     await c.connect();
@@ -211,7 +223,7 @@ export async function rehearse(args, password) {
       report("2. preflight: every ok column true", preFalse.length === 0, preFalse.join(", "));
 
       // 3. Apply.
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upTo });
       const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V83_NAME])).rows;
       const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V83_FILE))).digest("hex");
       report("3. v83 applied by the runner, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha);
@@ -228,7 +240,7 @@ export async function rehearse(args, password) {
 
       // 5. The runner again.
       const count = Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count);
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upTo });
       report("5. the runner again: v83 skipped by its checksum", Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count) === count);
 
       // 6. Rollback.
@@ -239,7 +251,7 @@ export async function rehearse(args, password) {
         rolled.ok ? (sameCatalog ? "" : Object.keys(catalogBefore).filter((k) => catalogBefore[k] !== catalogAfter[k]).join(", ")) : String(rolled.error?.message));
 
       // 7. Apply again.
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upTo });
       const bad2 = await postCheck();
       report("7. v83 applied again; the post-check again", bad2.length === 0, bad2.join(", "));
 
@@ -260,6 +272,16 @@ export async function rehearse(args, password) {
           exists (select 1 from public.schema_migrations where migration_name = $1) as m`, [V83_NAME])).rows[0];
       report("8b. the rollback refused once a history row exists; v83 still in place",
         !refused.ok && /an answer was changed/.test(String(refused.error?.message)) && stillThere.t && stillThere.m, String(refused.error?.message || "the rollback ran"));
+
+      // 8c. The migrations named after v83, if any, on top (no rollback follows); the post-check still passes.
+      if (later.length) {
+        await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+        // Block 5 says "no change yet", which step 8a made false on purpose; every other block must still pass.
+        const bad3 = (await postCheck()).filter((k) => !k.startsWith("5."));
+        report("8c. the migrations named after v83 applied on top; the post-check still passes (but block 5: step 8a changed an answer)", bad3.length === 0, `${later.join(", ")}${bad3.length ? ` - ${bad3.join(", ")}` : ""}`);
+      } else {
+        report("8c. no migration is named after v83 in this checkout", true);
+      }
 
       // 9. pg_dump -Fc and pg_restore into a second database, v83's catalog compared.
       const source = (await c.query(V83_CATALOG_SQL)).rows[0];

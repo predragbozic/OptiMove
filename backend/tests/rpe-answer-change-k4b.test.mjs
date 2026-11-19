@@ -137,7 +137,10 @@ async function readOnly(c, sql) {
 // The migration
 // ---------------------------------------------------------------------------
 test("1. migration v83: preflight clean before it; applied by the runner; post-check clean; the rollback restores the catalog exactly; v83 applies again; a changed v5 body refuses v83; the rollback is refused once a history row exists", async () => {
-  const before = calendarMigrations().filter((x) => x !== V83);
+  // By NAME, never "every migration but v83": a migration named after v83 (a future one) would make the rollback refuse
+  // ("later migrations are applied"), so this test applies only what sorts up to v83.
+  const before = calendarMigrations().filter((x) => x < V83);
+  const upToV83 = calendarMigrations().filter((x) => x <= V83);
   const db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k4bmig", migrations: before });
   const c = new pg.Client({ connectionString: db.url });
   await c.connect();
@@ -147,7 +150,7 @@ test("1. migration v83: preflight clean before it; applied by the runner; post-c
     for (const [b, sql] of Object.entries(pre)) assert.deepEqual(falseOk(await readOnly(c, sql)), [], `preflight block ${b}`);
     const catalogBefore = (await c.query(CATALOG_SQL)).rows[0];
 
-    await applyGpexeTestMigrations(db.url, calendarMigrations());
+    await applyGpexeTestMigrations(db.url, upToV83);
     const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(REPO_ROOT, "migrations_v2", V83))).digest("hex");
     assert.deepEqual((await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V83_NAME])).rows, [{ checksum: sha }]);
     const post = blocks(fs.readFileSync(RUNBOOK("rpe-answer-change-v83-postcheck.sql"), "utf8"));
@@ -169,11 +172,11 @@ test("1. migration v83: preflight clean before it; applied by the runner; post-c
     const body = (await c.query(`select pg_get_functiondef('training_load.protect_session_feedback_snapshot()'::regprocedure) as d`)).rows[0].d;
     await c.query(body.replace("begin\n", "begin\n  -- changed\n"));
     // The runner reports the refusal by its SQLSTATE (23514, the precondition's).
-    await assert.rejects(applyGpexeTestMigrations(db.url, calendarMigrations()), /v83_rpe_answer_change\.sql" \(SQLSTATE 23514\)/);
+    await assert.rejects(applyGpexeTestMigrations(db.url, upToV83), /v83_rpe_answer_change\.sql" \(SQLSTATE 23514\)/);
     assert.equal((await c.query(`select to_regclass('training_load.session_feedback_changes') is null as gone`)).rows[0].gone, true);
     await c.query(body);
 
-    await applyGpexeTestMigrations(db.url, calendarMigrations());
+    await applyGpexeTestMigrations(db.url, upToV83);
     await postCheck();
     // One history row: the rollback refuses and changes nothing.
     const u = (await c.query(`insert into public.users (email, full_name) values ($1, 'mig athlete') returning id`, [`mig-${uid()}@test.local`])).rows[0].id;
