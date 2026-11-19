@@ -28533,3 +28533,194 @@ body:not(.athlete-mode):not(.login-mode) .cc-builder-event .plain-button {
     text-align: center;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   K2b-2a-3: the athlete's questions of Ask athletes - the soft prompt and the card at the top of Home
+   (docs/ai/central-calendar-k2b2a3-ui-contract.md sections 2, 6 and 8). Its own block, its own prefix.
+   --------------------------------------------------------------------------- */
+body.athlete-questions-prompt-open {
+  overflow: hidden;
+}
+
+.athlete-questions-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 1240;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.athlete-questions-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(16, 24, 32, 0.45);
+}
+
+.athlete-questions-sheet {
+  position: relative;
+  width: min(480px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  padding: 24px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+
+.athlete-questions-title {
+  margin: 0 0 12px;
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+.athlete-questions-sheet p,
+.athlete-questions-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.athlete-questions-ask {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.athlete-questions-event,
+.athlete-questions-due,
+.athlete-questions-more,
+.athlete-questions-lead {
+  font-size: 1rem;
+  color: var(--muted);
+}
+
+.athlete-questions-sheet > .athlete-questions-due {
+  margin-top: 4px;
+}
+
+.athlete-questions-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.athlete-questions-primary,
+.athlete-questions-answer,
+.athlete-questions-later {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.athlete-questions-primary,
+.athlete-questions-answer {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.athlete-questions-later {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.athlete-questions-primary:focus-visible,
+.athlete-questions-answer:focus-visible,
+.athlete-questions-later:focus-visible,
+.athlete-questions-card-title:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.athlete-questions-list {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.athlete-questions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.athlete-questions-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.athlete-questions-row-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The row's Answer never shrinks under its text (the 480 px sheet squeezed it). */
+.athlete-questions-answer {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.athlete-questions-card {
+  padding: 14px;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, white);
+}
+
+.athlete-questions-card-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.athlete-questions-notice {
+  font-size: 1rem;
+}
+
+.athlete-questions-notice + .athlete-questions-card-title {
+  margin-top: 10px;
+}
+
+@media (max-width: 760px) {
+  .athlete-questions-prompt {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .athlete-questions-sheet {
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  }
+
+  .athlete-questions-sheet .athlete-questions-actions {
+    margin-top: auto;
+    padding: 16px 0 max(16px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 390px) {
+  .athlete-questions-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .athlete-questions-answer {
+    width: 100%;
+  }
+}

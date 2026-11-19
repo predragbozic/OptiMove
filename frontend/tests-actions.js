@@ -4,6 +4,7 @@ import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
 import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, remindableAthletesFor, reminderSelectedSet, renderTestsBadge, testsSkipDaysOffShown, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
+import { athleteQuestionsAnswered } from "./athlete-questions-data.js";
 import { fetchTestsQuestionsEnabled, loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadTestsWeekly, loadWellnessForm } from "./tests-data.js";
 
 // ------------------------------------------------------------
@@ -1293,6 +1294,7 @@ async function submitWellnessForm(renderTests) {
     // next Home visit re-fetches instead of serving the cached snapshot
     // from before this submit (same pattern Builder mutations already use).
     invalidateAthleteHomeCache();
+    athleteQuestionsAnswered(wellnessForm.assignmentId);
   } catch (error) {
     wellnessForm.error = error.message || "Could not save this check-in.";
   } finally {

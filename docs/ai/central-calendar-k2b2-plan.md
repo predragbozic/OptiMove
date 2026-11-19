@@ -205,6 +205,8 @@ The migration, in the `calendar` schema:
 
 **K2b-2a-3 (athlete screens):** the soft prompt on opening the app, the top of Athlete Home, and the notification's
 link.
+- Its UI contract, the manager's GO (2026-11-19) and what was built: `docs/ai/central-calendar-k2b2a3-ui-contract.md`
+  (sections 12 and 13). Frontend only, no backend change.
 
 **Reviews:**
 - `code-reviewer`, `db-reviewer` and `security-reviewer` for 2a-1;

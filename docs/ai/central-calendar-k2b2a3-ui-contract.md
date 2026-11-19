@@ -364,3 +364,84 @@ the Imports / Source fields / mapping-board screens.
 9. **A Playwright scenario in `e2e/`?** Recommend the manual browser check of section 9 for this slice, and a scenario
    (switch on → coach asks → athlete prompt → Later → card → Answer) as its own small follow-up, since the e2e seed has
    no club with the switch on yet.
+
+---
+
+## 12. GO (2026-11-19)
+
+The calendar stream manager gave the GO on this contract at `d1a3d3cd`, with all nine recommendations of section 11
+accepted:
+1. Several open questions: one sheet, one row and *Answer* per question, one *Later* for all; a single question keeps
+   *Answer now* / *Later*.
+2. The prompt shows once per question per app session; a window that opens while the app is open is prompted at the
+   next return to Home; `later: true` never prompts.
+3. A notification click on a question that is not listed: "This question isn't open right now."; "This question has
+   closed." only for a form not found after *Answer now*.
+4. Daily Tests WELLNESS: no prompt; it keeps its own card.
+5. The duplicate on Home: the existing WELLNESS card is hidden only when it holds exactly one assignment and that
+   assignment is a question's; otherwise it stays. Session feedback is untouched.
+6. The prompt only on Home with nothing on top, never after a deep link.
+7. "Opens at …": a follow-up.
+8. No backend change.
+9. The e2e scenario: a follow-up; this slice gets a manual `e2e:demo` check, with the switch turned on through the API.
+
+Order: K2b-2a-2b (the coach screens) is ahead and touches `tests-actions.js`, `training-load-actions.js`, `app.js`,
+`state.js` and `styles.css`. The hooks in those files stay the one-line calls named in section 10; this slice's CSS is
+its own block at the end of `styles.css` with the `athlete-questions-` prefix; `main` is merged in before the head is
+frozen.
+
+---
+
+## 13. As built (the executor, 2026-11-19): what differs from sections 1–10, and what was found
+
+- **Hidden dialogs are not "on top".** The athlete page always carries the media viewer and the exit question, each an
+  `aria-modal` dialog inside a `[hidden]` parent (`athlete.html`). The first browser run showed the prompt never
+  appearing, because 2.1's check counted them. The check now ignores a dialog inside a `[hidden]` parent; the suite's
+  page carries both, as `athlete.html` does (Q6), and mutation M13 (the old check) fails nine tests.
+- **The focus after Later.** Later's read again repaints the whole of Home, which drops the focus to the page. Once
+  that read has settled, the card's title takes the focus again, unless she has moved on meanwhile (Q8, mutation M14).
+- **The day word** has "Yesterday" too, for a *Next morning* question whose event was the day before.
+- **The time to answer** is shown in the device's time from `closesAt`. The browser check found that an assignment's
+  window follows the **athlete's own time zone** (`public.athletes.device_timezone`), not the event's. So with an event
+  in UTC asked 00:00–23:59 and an athlete in Europe/Sarajevo, the athlete is shown "Answer by 22:59 today" on a UTC
+  device. The screen shows the stored instant faithfully; whether the window should follow the event's zone or the
+  athlete's is a backend question for the manager (Tests and Training Load behaviour), not changed here.
+- **The prompt's host** is `#athleteQuestionsPromptHost`, created at the end of `<body>` the first time it is shown, so
+  Home's repaints never rebuild it. The page's scroll is locked by the class `athlete-questions-prompt-open` on `<body>`.
+- **The keyboard**: the prompt's own `keydown` listener is registered before the app's Escape handler and stops it when
+  it handled Escape (`stopImmediatePropagation`). It is a named function (`handleAthleteQuestionsKeys`) because
+  `athlete-home-mvp-integration.test.mjs` pins the first inline `keydown` listener of `app.js` as the Escape handler.
+- **The read after an answer**: `athleteQuestionsAnswered(formId)` is called from `submitRpeForm` (RPE of an external
+  assignment only) and from the WELLNESS submit. It drops the answered row at once, then reads again.
+- **`loadAthleteHome({ deepLink })`**: `openTrainingLoadAssignment` (the RPE notification and *Answer now*) and the
+  question notification pass `deepLink: true`, so no prompt is put over the form they open.
+- **The Session feedback card** keeps listing an event's RPE assignment, as decided (GO decision 5).
+
+**Evidence (on the head named in the report):**
+- the two new suites, 18 + 4 tests;
+- 14 mutations, all killed: the 12 of section 9 plus M13 and M14;
+- `--preset frontend-fast` on the head and on a clean `origin/main`: the same three files fail with the same counts
+  on both (`exercise-editor-thumbnail` 11/4, `exercise-media-thumbnail` 2/8, `training-load.actions` 115/2);
+- the production build and `git diff --check`.
+
+**The browser check** (a disposable `e2e` world, Chromium, the athlete at 360 / 375 / 390 / 1280 px), 44 checks, all
+passing:
+- **Setup:** the switch turned on through the API by a platform admin in the club's workspace; the coach's questions
+  asked through the API.
+- **The prompt:** shown on open, focus on the first *Answer*, no horizontal scroll, every button ≥ 44 px and not
+  clipped. Tab stays inside it. Escape sends two *Later* POSTs with distinct keys, and the focus goes to the card's
+  title.
+- **The card:** shown at every width. After a reload, *Later* does not bring the prompt back.
+- **Answer now:** RPE opens the RPE form, whose Save is inside the 390 px viewport; WELLNESS opens the Tests form and
+  submits; the card is gone after both answers.
+- **The notification click:** a question that is not open yet shows "This question isn't open right now." with no
+  prompt; an open one opens its RPE form with no prompt.
+- **No JS error.**
+
+The browser check also caught the *Answer* button clipped in the 1280 px sheet; it no longer shrinks under its text.
+The script is a scratch file of this session, not in the repository (a Playwright scenario is a follow-up, GO
+decision 9).
+
+**Not run:**
+- a physical iOS device (the keyboard over the RPE form, the safe areas on a notched phone);
+- a screen reader.
