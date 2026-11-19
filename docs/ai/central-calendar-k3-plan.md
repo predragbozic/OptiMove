@@ -1,8 +1,8 @@
 # Central calendar — K3 and K2c-3 plan: the Builder and the event, both ways
 
 Status: **Proposed** (2026-11-19, written against `main` `f406ee2d`; K2c-3 and section 7 added on the K4 plan at
-`ae82e2fb`). Discovery and UI contract only: no code, no migration. It needs the manager's GO, and the owner's
-answers to sections 4 and 6.9, before any code.
+`ae82e2fb`, O14 (7.1) on `5231db4d`; Q1, Q2, Q4–Q7 decided by the stream manager). Discovery and UI contract only: no code, no migration. It needs the manager's GO, and the owner's
+answers to Q3 and the stream manager's to 6.9, before any code.
 
 The owner's goal (O9 of `docs/ai/central-calendar-k4-plan.md`, 2026-11-19): „iz glavnog kalendara je lako kada
 ulazimo iz dogadjaja u builder pa kreiramo aktivnosti unutar tog dogadjaja". The coach opens an event, presses
@@ -51,8 +51,16 @@ the K2c plan, sections 1 (K2c-1), 2 (K2c-2) and 3 (K3, named only).
   `wantsBatchSync` is false when `is_edit_draft` (`builder.js:1846-1851`), and `syncBatchFromPlan` returns at once
   for one (`:2041`). So **a published batch is edited one athlete at a time**: the switcher and the checkbox are drawn
   for an edit draft (the edit draft keeps `builder_batch_id`, `:894`; `loadBuilderBatch`, `:3073-3099`), but a change
-  reaches only the athlete on screen. This is read from the code, not run; the first K3 test pins it (or the owner
-  decides it is a bug to fix first, Q3).
+  reaches only the athlete on screen.
+
+  **Confirmed by a real run** (2026-11-19, investigation only, not committed: the e2e world on a disposable PostgreSQL
+  16 database migrated to v81, the seeded team coach, the real routes over HTTP). Steps and statuses:
+  `POST /api/builder/plans` (weekly, 3 athletes) 201 → `POST /blocks/:id/sessions` "Main" (syncBatch) 201 →
+  `POST /sessions/:id/nodes` (syncBatch) 201 → `POST /plans/:id/submit` (syncBatch) 200 → `POST /plans/:id/edit` 200
+  (an edit draft, `isEditDraft: true`, the switcher showing the 3 plans) → `POST /blocks/:id/sessions` "Added in edit"
+  (syncBatch) 201 → `POST /sessions/:id/nodes` (syncBatch) 201 → `POST /plans/:draftId/submit` (syncBatch) 200. Then
+  the three plans read from the database: athlete 1 (edited) active, sessions [Main, Added in edit]; athletes 2 and 3
+  active, sessions [Main] only. **Athletes 2 and 3 did not get the session.** The open decision is Q3.
 - **Logical session ids.** A batch's siblings get **their own** logical ids (a batch sync is "a genuinely different
   logical session", `:2175-2181`). So linking a batch's training means one logical id **per athlete**.
 
@@ -188,9 +196,8 @@ Builder's own `POST /plans`); its `409` (someone made a plan meanwhile) reads th
 - Sessions on other days of the week show nothing.
 - The choice is kept per session by its slot and name (AM/PM, B/T/A, trimmed lower-case name: the D16b key), not by
   the draft's row id, because an edit draft's ids change on Save (1.1).
-- **No time of its own (O12).** A session in the event shows "10:00 · from the event" in place of its time field; the
-  field comes back when the session is taken out. The stored `session_time` is left as it is (section 7 decides
-  which time is read).
+- **Time (O12, amended by O14).** A session in the event needs no time: with none it shows "10:00 · from the event".
+  It may have its own time, but only inside the event's start–end (section 7.1).
 
 ### 2.5 Save and link
 
@@ -288,7 +295,16 @@ batchId, mine, editable, openDraftId } }`.
   try/catch, ids and slot keys only, no names) so a reload into the same draft shows the band again after the event is
   read back (`GET /api/calendar/events/:id`); a 404 there drops it silently.
 
-## 4. Open questions (each with a recommendation)
+## 4. Questions: decided by the stream manager (2026-11-19), and Q3 open for the owner
+
+The stream manager decided Q1, Q2 and Q4–Q7 as recommended; the owner decides Q3 only. The text below keeps each
+question with its options for the record.
+
+- **Decided:** Q1 the read route is added; Q2 training-kind events only; Q4 RPE is aligned on link; Q5 accepted, with
+  the band line "This plan belongs to the club."; Q6 sessions are in the event by default; Q7 one button, *Save and
+  link*.
+- **Open (the owner): Q3.** The fact is now proven by a run (1.1): an edit of a published batch reaches only the
+  athlete on screen, although the Builder shows the batch switcher and *Apply changes to all athletes*.
 
 - **Q1 — The read of 3.1.** Add the small read route (recommended), or open the Builder for case (b) only and send
   every other case to the existing Builder with a sentence. Recommend the route: cases (a) and (c) are the coach's
@@ -415,9 +431,8 @@ After training · Recovery                Event: [ No event     ▾]
 
 - Only that day's events are listed (the server refuses another day anyway: `session_outside_event`). A multi-day
   event (a camp) is listed on each of its days.
-- A linked session hides its time field and shows "10:00 · from the event" (the same as 2.4). When a session that had
-  its own time is linked, the line says once: "The event's time 10:00 is used." Changing the time = changing the
-  event: the chip opens it in the calendar.
+- The time follows section 7.1 (O14): no time = the event's time ("10:00 · from the event"); an own time only inside
+  the event's start–end. Changing the event's time is done on the event: the chip opens it in the calendar.
 - Before / Training / After stay the order inside the event.
 
 ### 6.6 Phones (360 / 375 / 390 px)
@@ -449,6 +464,12 @@ None. The create (with `sessions`), attach, detach and the two reads exist. **No
 - **Q10 — Save and continue stays in the Builder.** Recommended: a flag on the Builder's own submit so it reloads the
   saved plan (`POST /plans/:id/edit` on the live id) instead of exiting. The alternative (exit, then the coach reopens
   the plan) breaks the flow the owner asked for.
+- **Q12 — O14 with an event that has no end.** "Inside the start" read as: the session's time is not before the
+  event's start (recommended; a session after the start, e.g. the recovery at 11:30, is allowed), or the session's
+  time must equal the start. The owner's words name only the start; the stream manager decides.
+- **Q13 — The calendar's panel mark.** The manager event view (`linkFacts`) would carry each link's session time so the
+  panel can show "Outside the event's time" there too (a small backend read change, no migration), or the mark is in
+  the Builder only (recommended for the first step: nothing on the server).
 - **Q11 — K2c-2's per-session panel.** Removed when K2c-3 lands (recommended: one form in the app, O10). Its pure
   match (`builderCalendarMatch`) and its tests are reused.
 
@@ -463,12 +484,13 @@ None. The create (with `sessions`), attach, detach and the two reads exist. **No
 - the athlete's calendar folds nothing today (`coachView`, `calendarQuery.js:875-888`); K4a folds it, and then the
   event's time is shown.
 
-**Recommendation: for a linked session, every reader shows the event's start time (and its end time, when set), never
-a copy.**
+**The rule (O14, the owner, amending O12): a linked session shows its own time when it has one, otherwise the event's
+start time (and end time, when set). Never a copy.**
 - **How:** one shared helper in the backend, `linkedSessionTimes(queryable, rows)`: one query of the live
   `calendar.event_session_links` of the rows' plans and days, joined to `calendar.events` (planned, not cancelled),
   matched by the slot key (plan, day, AM/PM, B/T/A, order), returning the event's time per row; the four routes call
-  it after their `select` and before `buildWeeks`, which then prefers it. **No migration** (the view is not changed).
+  it after their `select` and before `buildWeeks`, which uses it only for a row without its own `session_time`.
+  **No migration** (the view is not changed).
 - **Rights:** the time of an event is shown only on a session the reader may already see, and only while the
   session's athlete is still a target of the event that day (the same `targetsAthleteSql` rule as the link,
   `calendarEventService.js:1426-1431`); otherwise the session's own time is shown. A cancelled event's time is never
@@ -479,7 +501,45 @@ a copy.**
 - **The alternative, a copy** (writing the event's time into `session_time` on link and on every event time change):
   no reader change, but two sources that drift (an event edited while a link is being made, an edit draft that still
   holds the old time and writes it back on Save, `applyEditDraft`). Not recommended.
-- **What the Builder shows:** 2.4 / 6.5 ("10:00 · from the event"), from the week's read it already has.
+- **What the Builder shows:** 2.4 / 6.5 / 7.1, from the week's read it already has.
+
+### 7.1 O14: a session's own time inside the event (the owner, 2026-11-19, K4 plan `5231db4d`, 5.2 point 9)
+
+The window is the event's `startTime`–`endTime` on that day. When the event has no end, only its start bounds it: the
+session's time is not before the start (Q12 records the reading). An event without a start time (a whole-day event)
+sets no window.
+
+- **The Builder refuses a time outside the event.** The session's time input, while the session is in an event (or
+  chosen for one), checks the window on change: "The training is 10:00–11:30, so this session's time must be in it."
+  The field keeps the old value; nothing is sent.
+- **A session with an outside time can't join.** The selector (6.4), *Whole day* and K3's *Save and link* refuse it
+  before any request: "Main session is at 08:00, outside the event (10:00–11:30). Change its time first." with
+  **Use the event's time** (clears the session's own time, one Builder PATCH) and Cancel. *Whole day* links the others
+  and names the one left out.
+- **The event moves later.** When the day's read shows a linked session whose own time is outside the event's
+  window, its line shows "Outside the event's time" (a glyph and the words, never colour alone) with **Use the
+  event's time**. Nothing is changed by itself. The calendar's event panel shows the same mark on that linked session
+  (from the manager view, which then needs the session's time: Q13).
+- **Use the event's time** clears the session's own time (`PATCH /api/builder/sessions/:id` with an empty time), so it
+  follows the event from then on; it does not copy the start into the session.
+- **Readers:** the session's own time when set, else the event's (section 7). The Weekly plan and the athlete's
+  calendar therefore never show a time the coach did not see in the Builder.
+
+**Cost.**
+- **Frontend (Builder):** one pure check `sessionTimeFitsEvent(time, event)` with its sentence, wired into the time
+  input, the selector, *Whole day* and K3's *Save and link*; the "Outside the event's time" mark and *Use the event's
+  time* (one PATCH through the existing queued Builder write). The event windows come from the week's read K2c-3
+  already makes. About half a day with tests (in / out / no end / no start / exactly the start or end / an edit draft
+  of a live session).
+- **Backend:** none beyond section 7's helper, which becomes simpler (only rows without their own time ask for the
+  event's).
+- **Not enforced by the server.** The attach and the session PATCH do not check the window; another device, an old
+  tab or a direct API call can store an outside time. That is the case the "Outside the event's time" mark shows, so
+  nothing wrong is hidden; a server check would be a change of the attach and of the Builder's session PATCH (their
+  locks and refusals), not recommended for now (O13).
+- **Time zones:** a session time is a wall-clock time without a zone; the event carries its own zone (K2b-1d3). The
+  check compares wall-clock times on the event's day; an event whose zone differs from the coach's is rare and is
+  shown with the event's zone in the sentence. Recorded, not solved.
 
 ## 8. Reviews and order
 
