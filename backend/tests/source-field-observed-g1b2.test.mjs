@@ -516,7 +516,9 @@ test("11. the club board after a tick (the Rukovodilac's addition): before route
   // The board chooses its pair over every column that can be placed: the session carries a value of every created
   // details field (the earlier tests proved some of them).
   const names = (await rows(`select substring(source_metric_key from 'details\\.players\\.(.*)') as n from training_load.source_metric_definitions where source_metric_key like 'details.players.g1b2%'`)).map((r) => r.n);
-  const own = { [ATHLETE(1)]: 7412.5, [ATHLETE(2)]: 7455.25, [ATHLETE(3)]: 7300 };
+  // Each planted value carries a decimal point, so it can never be found inside a random UUID of the answer (a bare 7300
+  // was: the flake of the 2b runs, the same class as the resolver's test 38).
+  const own = { [ATHLETE(1)]: 7412.5, [ATHLETE(2)]: 7455.25, [ATHLETE(3)]: 7300.375 };
   const cand = await candidate(W.tA, (id) => Object.assign({}, ...names.map((n) => energyOf(n)(id)), { [f.name]: { unit: "energy", value: own[id] ?? 7000 } }));
   const board = async () => {
     const res = await get(`/board?${qs({ teamId: W.tA.teamId, candidateId: cand.id })}`, W.caA);
@@ -526,7 +528,7 @@ test("11. the club board after a tick (the Rukovodilac's addition): before route
   const before = await board();
   assert.ok(before.col, "the column is listed");
   assert.deepEqual([before.col.rawA, before.col.rawB, before.col.placeable, before.col.reason], [null, null, false, "field_not_confirmed"]);
-  for (const v of ["7412.5", "7455.25", "7300"]) assert.ok(!before.text.includes(v), `${v} does not leave the server before the tick`);
+  for (const v of ["7412.5", "7455.25", "7300.375"]) assert.ok(!before.text.includes(v), `${v} does not leave the server before the tick`);
   const o = ok(await observationOf(W.pa, f, { candidateId: cand.id })).observation;
   ok(await tick(W.pa, f, tickBody(o)), 201);
   const after = await board();
