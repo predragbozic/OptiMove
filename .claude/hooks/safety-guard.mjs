@@ -372,6 +372,28 @@ export function isGitMergeOrRebase(segment) {
   return extractGitSubcommandArgs(segment, "merge|rebase") !== null;
 }
 
+// The owner's standing permission (2026-11-19): bringing `origin/main` into a work
+// branch is routine (every stacked or long-lived branch does it before a freeze), so it
+// needs no confirmation. Deliberately narrow: exactly `git merge origin/main` or
+// `git merge --no-edit origin/main` — no other flag (no strategy option, no --abort,
+// no --squash), no other ref, and only while the current branch is KNOWN and is not
+// main/master (an unknown or detached HEAD fails closed to the ASK below). Every other
+// merge, every rebase, and this same merge on main still ask.
+const MERGE_ORIGIN_MAIN_ALLOWED_FLAGS = new Set(["--no-edit"]);
+const PROTECTED_BRANCHES = new Set(["main", "master", "HEAD"]);
+
+export function isMergeOriginMainIntoWorkBranch(segment, cwd) {
+  const parsed = extractGitSubcommandArgs(segment, "merge");
+  if (!parsed) return false;
+  const tokens = tokenizeWords(parsed.rest).map(stripQuotes);
+  const flags = tokens.filter((t) => t.startsWith("-"));
+  const refs = tokens.filter((t) => !t.startsWith("-"));
+  if (!flags.every((f) => MERGE_ORIGIN_MAIN_ALLOWED_FLAGS.has(f))) return false;
+  if (refs.length !== 1 || refs[0] !== "origin/main") return false;
+  const branch = getCurrentBranch(parsed.dir || cwd);
+  return Boolean(branch) && !PROTECTED_BRANCHES.has(branch);
+}
+
 export function isGhPrMerge(segment) {
   return /^gh\s+pr\s+merge\b/i.test(segment);
 }
@@ -536,7 +558,9 @@ export function classifyShellCommand(cmd, cwd) {
   }
 
   for (const segment of segments) {
-    if (isGitMergeOrRebase(segment)) return { decision: "ask", reason: ASK_REASONS.mergeRebase };
+    if (isGitMergeOrRebase(segment) && !isMergeOriginMainIntoWorkBranch(segment, cwd)) {
+      return { decision: "ask", reason: ASK_REASONS.mergeRebase };
+    }
     if (isGhPrMerge(segment)) return { decision: "ask", reason: ASK_REASONS.ghPrMerge };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };
     if (isCommitOnMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };

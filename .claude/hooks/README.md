@@ -113,7 +113,13 @@ the opposite of what a safety layer should do.
 
 ### ASK (Bash + PowerShell)
 
-- `git merge` / `git rebase`.
+- `git merge` / `git rebase`. **One exception**, by the owner's standing permission of
+  2026-11-19: exactly `git merge origin/main` or `git merge --no-edit origin/main`, with
+  no other flag and no other ref, while the current branch is known and is not
+  `main`/`master` (`isMergeOriginMainIntoWorkBranch`). That merge gets no decision from
+  the hook, and `.claude/settings.json` allows those two exact commands. Every other merge,
+  every rebase, the same merge on `main`, a detached HEAD, and an unknown branch still
+  ask. A dangerous command chained after the merge is still caught on its own.
 - `gh pr merge`.
 - A push that targets `main` explicitly, or a bare `git push`/`git push origin` while the
   hook can determine (via a fast, read-only `git rev-parse --abbrev-ref HEAD` in the
