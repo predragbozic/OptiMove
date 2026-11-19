@@ -526,3 +526,32 @@ test("7. an athlete's catalog never lists a calculated variable (no label, no pi
     assert.equal((await mapi(`/definitions/${H}${suffix}`, { cookie: team.coach.cookie })).status, 200, "the coach reads it");
   }
 });
+
+test("8. Source fields' plain row: each field says which teams it is in use for, within the caller's audience - a platform admin every team, a club's admin its own club's teams only, another club's admin none", async () => {
+  const team = await setupTeam();
+  const teamName = (await admin.query(`select name from public.teams where id = $1`, [team.teamId])).rows[0].name;
+  const clubAdmin = async (clubId) => {
+    const id = await makeUser("club admin");
+    await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [id, clubId]);
+    await setWorkspace(id, "club", clubId);
+    return { id, cookie: `optimove_session=${await createSession(id)}` };
+  };
+  const own = await clubAdmin(team.clubId);
+  const otherClub = (await admin.query(`insert into public.clubs (name) values ($1) returning id`, [`Other club ${key().slice(0, 6)}`])).rows[0].id;
+  const other = await clubAdmin(otherClub);
+  const fieldsOf = async (who) => {
+    const r = await call("/api/training-load/sources/metrics", "/fields", { cookie: who.cookie });
+    assert.equal(r.status, 200, r.text);
+    return r.body.fields;
+  };
+  const zoneField = String((await admin.query(`select source_metric_definition_id as id from training_load.source_metric_mapping_activations where team_id = $1 and ended_at is null limit 1`, [team.teamId])).rows[0].id);
+  const used = (fields) => fields.find((f) => String(f.id) === zoneField).inUse;
+  const platformView = used(await fieldsOf(team.padmin));
+  assert.ok(platformView.count >= 1 && platformView.teams.includes(teamName), JSON.stringify(platformView));
+  const ownView = used(await fieldsOf(own));
+  assert.ok(ownView.teams.includes(teamName), "the team's own club admin sees it");
+  assert.ok(ownView.count <= platformView.count);
+  const otherView = await fieldsOf(other);
+  assert.deepEqual(used(otherView), { teams: [], count: 0 }, "another club's admin learns nothing of this team");
+  assert.equal(JSON.stringify(otherView).includes(teamName), false);
+});

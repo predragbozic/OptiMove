@@ -176,7 +176,7 @@ test("2. GET /fields and GET /fields/:fieldId carry extractorAvailable: true for
   for (const k10 of Object.keys(EXTRACTORS)) assert.equal(byKey.get(k10.replace("gpexe/rest_v1/", "")).extractorAvailable, true, k10);
   const mine = list.find((x) => x.id === f.fieldId);
   assert.equal(mine.extractorAvailable, false);
-  assert.deepEqual(Object.keys(mine).sort(), ["apiFamily", "extractorAvailable", "id", "key", "label", "revisions", "sourceSystem", "state"]);
+  assert.deepEqual(Object.keys(mine).sort(), ["apiFamily", "extractorAvailable", "id", "inUse", "key", "label", "revisions", "sourceSystem", "state"]);
   const seededTime = await seeded("athlete_session.total_time");
   const one1 = ok(await api(`/fields/${seededTime.fieldId}`, { cookie: W.pa.cookie }));
   assert.equal(one1.field.extractorAvailable, true);
