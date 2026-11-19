@@ -18,7 +18,7 @@
 // id (the pair is an index in the server's own order); return a value past
 // its expiry.
 import { conditionRuleFor, storedRule } from "./sourceConditionRules.js";
-import { conditionMatchInstalled, conditionRuleColumn, matchCondition, ruleFits, settingMismatchText } from "./sourceConditionMatch.js";
+import { conditionMatchInstalled, conditionRuleColumn, exactConditionSql, matchCondition, ruleFits, settingMismatchText } from "./sourceConditionMatch.js";
 import { revisionProven } from "./sourceFieldEvidence.js";
 import { bundleZoneThresholds } from "./sourceZoneThresholds.js";
 import { adminWriteKit } from "./sourceMetricMappingService.js";
@@ -258,6 +258,7 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
             coalesce(training_load.source_metric_unit_token_ok(v.unit), false) as unit_is_token,
             trim_scale(v.min_value)::text as min_value, trim_scale(v.max_value)::text as max_value,
             v.condition_description is not null as has_condition, v.condition_description as condition_raw,
+            ${exactConditionSql("v.condition_description")} as condition_exact,
             ((to_jsonb(v.*) ->> 'calculation') is not null) as calculated,
             (select array_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id = d.id) as scopes,
             exists (select 1 from training_load.metric_definition_club_hides h
@@ -376,8 +377,8 @@ async function loadWorld(client, ctx, { teamId, candidateId, onCandidateMissing 
   for (const variable of matchInstalled ? variables.filter((x) => x.has_condition === true && !x.calculated) : []) {
     for (const f of fields) {
       const rule = conditionRuleFor(f.source_metric_key);
-      if (!rule || !ruleFits(rule, variable.condition_raw)) continue;
-      const result = await matchCondition(client, { rule, cd: variable.condition_raw, thresholds, revisionId: f.revision_id });
+      if (!rule || !ruleFits(rule, variable.condition_exact)) continue;
+      const result = await matchCondition(client, { rule, cd: variable.condition_exact, thresholds, revisionId: f.revision_id });
       matches.set(`${f.id}:${variable.id}`, { ...result, rule: storedRule(rule) });
     }
   }
@@ -413,13 +414,17 @@ export function boardCondition(cd) {
 function conditionMatchOf(world, fieldId, variableId) {
   return world.matches?.get(`${fieldId}:${variableId}`) ?? { ok: false, code: "condition_mismatch", range: null, rule: null };
 }
-function matchingFieldIds(world, variableId) {
-  return [...(world.matches ?? new Map()).entries()].filter(([k, m]) => m.ok && k.endsWith(`:${variableId}`)).map(([k]) => k.split(":")[0]);
+// Only columns the board can place (readable, no column reason): a match on any other would promise a drop every placement
+// refuses (the code review of v80).
+function matchingFieldIds(world, variableId, columns) {
+  const placeable = new Set(columns.filter((c) => c.readable && c.reason === null).map((c) => c.field.id));
+  return [...(world.matches ?? new Map()).entries()]
+    .filter(([k, m]) => m.ok && k.endsWith(`:${variableId}`) && placeable.has(k.split(":")[0])).map(([k]) => k.split(":")[0]);
 }
 // A refusal of a match names both settings in plain words (the board's sentence; never an id).
 function matchRefusalExtra(world, m, variable) {
   if (m.code !== "team_setting_mismatch") return {};
-  return { message: settingMismatchText(variable.label, m.range, variable.condition_raw, world.team?.name ?? null) };
+  return { message: settingMismatchText(variable.label, m.range, variable.condition_exact, world.team?.name ?? null) };
 }
 
 function columnsOf(world) {
@@ -638,11 +643,11 @@ function boardOf(world, pairIndex) {
         // v77 (J21): a calculated variable takes no column; its value is its calculation.
         // v80 step A: a variable with a condition takes no column of this board (the save refuses condition_mismatch); it
         // is never shown as a free target, and says its condition instead (until v80 matches a column's team setting).
-        placeable: v.calculated !== true && (v.has_condition !== true || matchingFieldIds(world, v.id).length > 0)
+        placeable: v.calculated !== true && (v.has_condition !== true || matchingFieldIds(world, v.id, columns).length > 0)
           && (v.owner_scope === "club" || world.systemBoard ? v.value_type === "numeric" && v.unit_is_token === true : fedBySystem.has(v.id)),
         condition: v.has_condition === true ? boardCondition(v.condition_raw) : null,
         // v80: the columns whose team setting in this session is the variable's condition.
-        matchingFieldIds: v.has_condition === true ? matchingFieldIds(world, v.id) : [],
+        matchingFieldIds: v.has_condition === true ? matchingFieldIds(world, v.id, columns) : [],
         filledByFieldIds: v.owner_scope === "system" ? fedBySystem.get(v.id) ?? [] : [],
       })),
       on: world.open.map((o) => ({

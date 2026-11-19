@@ -1265,6 +1265,7 @@ async function plantedTeam(opts = {}) {
   await plantSession(cand, opts);
   return { t, cand, name: (await one(`select name from public.teams where id = $1`, [t.teamId])).name };
 }
+const V80 = {};
 const ZONE_25_60 = { kind: "zone", operator: "between", lower: "25", upper: "60", unit: "W/kg" };
 const ACC_03 = { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" };
 const placementRaw = async (who, t, cand, f, target) => ok(await placement(who, t, cand.id, f, target)).placement;
@@ -1295,6 +1296,7 @@ test("V80-1. a numbered zone column on a club variable with that zone: offered, 
   assert.equal(refusedOther.message, `This column counts the zone 25–60 W/kg (${name}'s setting in GPEXE); ${other.label} counts the zone 20–60 W/kg. Choose a variable with the same setting, or change the team's setting in GPEXE.`);
   // The save.
   const saved = ok(await save(W.caA, t, cand, [await newRow(W.caA, t, cand, fZone, zone)]));
+  V80.zone = { mappingId: saved.confirmation.rows[0].mappingId, versionId: saved.confirmation.rows[0].versionId, variable: zone };
   const a = await activationRow(saved.confirmation.rows[0].activationId);
   assert.deepEqual(a, {
     matched_condition: { operator: "between", min: 25, max: 60, unit: "W/kg" },
@@ -1321,6 +1323,8 @@ test("V80-2. two teams of one club with different settings: the club's version i
   const before = await counts();
   const res = await start(paB, v, second.t);
   assert.deepEqual([res.status, res.body.error, res.body.current?.bindingId], [409, "team_setting_mismatch", second.t.bindingId], res.text);
+  // The refusal names both settings (the code review of v80).
+  assert.equal(res.body.message, `This column counts the zone 25–65 W/kg (${second.name}'s setting in GPEXE); ${zone.label} counts the zone 25–60 W/kg. Choose a variable with the same setting, or change the team's setting in GPEXE.`);
   assert.deepEqual(await counts(), before, "nothing written");
   const p = await placementRaw(W.caB, second.t, second.cand, fZone, zone);
   assert.deepEqual([p.placeable, p.code], [false, "team_setting_mismatch"]);
@@ -1378,6 +1382,13 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   const before = await placementRaw(W.caA, t, cand, fAcc, acc);
   assert.deepEqual([before.placeable, before.code], [false, "event_setting_not_confirmed"]);
   assert.equal(ok(await boardOf(W.caA, t, { candidateId: cand.id })).board.variables.find((x) => x.id === acc.id).placeable, false);
+  // A club version of the events column made through the routes, then S1 before the owner's confirmation: refused.
+  const accMapping = ok(await post("/mappings", W.caA, { requestKey: key(), sourceMetricId: fAcc.fieldId, metricDefinitionId: acc.id }), 201).mapping;
+  const accVersion = ok(await post(`/mappings/${accMapping.id}/versions`, W.caA, { requestKey: key(), sourceRevisionId: fAcc.revId, appliesToSession: true, appliesToDrill: true }), 201).version;
+  ok(await post(`/mappings/${accMapping.id}/versions/${accVersion.id}/submit`, W.caA, { requestKey: key() }));
+  ok(await post(`/mappings/${accMapping.id}/versions/${accVersion.id}/activate`, W.paA, { requestKey: key(), expectedActiveVersionId: null }));
+  const early = await start(W.paA, { mappingId: accMapping.id, versionId: accVersion.id }, t);
+  assert.deepEqual([early.status, early.body.error, early.body.current?.bindingId], [409, "event_setting_not_confirmed", t.bindingId], early.text);
   const url = `/fields/${fAcc.fieldId}/revisions/${fAcc.revId}/event-setting-confirmation`;
   const body = (thresholdValue, durationSeconds, requestKey = key()) => ({ requestKey, thresholdValue, durationSeconds });
   // The audience: only a platform administrator in the platform workspace; everyone else the identical 404.
@@ -1415,10 +1426,105 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   const p05 = await placementRaw(W.caA, t, cand, fAcc, slow);
   assert.deepEqual([p05.placeable, p05.code], [false, "team_setting_mismatch"]);
   assert.equal(p05.message, `This column counts events at or above 2.5 m/s² lasting 0.3 s (${name}'s setting in GPEXE); ${slow.label} counts events at or above 2.5 m/s² lasting 0.5 s. Choose a variable with the same setting, or change the team's setting in GPEXE.`);
-  const saved = ok(await save(W.caA, t, cand, [await newRow(W.caA, t, cand, fAcc, acc)]));
+  // The club's version made above is switched on for the team (S1) now that the setting is confirmed.
+  const started = await start(W.paA, { mappingId: accMapping.id, versionId: accVersion.id }, t);
+  assert.ok([200, 201].includes(started.status), started.text);
+  const opened = await openOn({ versionId: accVersion.id }, t);
+  const saved = { confirmation: { rows: [{ activationId: opened.id }] } };
   assert.deepEqual(await activationRow(saved.confirmation.rows[0].activationId), {
     matched_condition: { operator: ">=", value: 2.5, duration_seconds: 0.3, unit: "m/s2" },
     matched_source_range: { duration_seconds: "0.3", operator: ">=", unit: "m/s2", value: "2.5" },
     matched_threshold_set_id: "1473", at: true, condition_rule: { event: "acceleration", kind: "event" },
   });
+  V80.acc = { url, compared, fAcc };
+  // The compared session no longer kept: a new confirmation is refused (session_not_kept).
+  await planted(() => k.query(`update training_load.gpexe_import_candidates set raw_expires_at = now() - interval '1 minute' where id = $1`, [cand.id]));
+  try {
+    refused(await post(url, W.pa, body("2.5", "0.3")), 409, "session_not_kept");
+  } finally {
+    await planted(() => k.query(`update training_load.gpexe_import_candidates set raw_expires_at = now() + interval '30 days' where id = $1`, [cand.id]));
+  }
+});
+
+test("V80-4b. the owner's confirmation, the same key sent twice at once: both answer the one saved row (201 and a 200 replay), never request_key_reused; one row", async () => {
+  const { url } = V80.acc;
+  const requestKey = key();
+  const both = await Promise.all([0, 1].map(() => post(url, W.pa, { requestKey, thresholdValue: "2.5", durationSeconds: "0.3" })));
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 201], both.map((r) => r.text).join(" | "));
+  assert.equal(both[0].body.confirmation.id, both[1].body.confirmation.id);
+  assert.equal(Number((await one(`select count(*) as n from training_load.source_metric_event_setting_confirmations where request_key = $1`, [requestKey])).n), 1);
+});
+
+test("V80-4c. the owner's confirmation, the COMMIT's answer: lost after the COMMIT reached the database is 200 verified_after_commit_error; a COMMIT that never reached it is 503 outcome_unknown and the same key then saves; never a bare 500", async () => {
+  const { url } = V80.acc;
+  const eventSetting = await import("../src/sourceEventSettingService.js");
+  // The answer lost after the COMMIT was applied.
+  eventSetting.setEventSettingBeforeCommitForTests((client) => {
+    const original = client.query.bind(client);
+    client.query = async (sql, ...rest) => {
+      const out = await original(sql, ...rest);
+      if (sql === "commit") throw Object.assign(new Error("connection lost after commit"), { code: "08006" });
+      return out;
+    };
+  });
+  const lostKey = key();
+  try {
+    const lost = await post(url, W.pa, { requestKey: lostKey, thresholdValue: "2.5", durationSeconds: "0.3" });
+    assert.equal(lost.status, 200, lost.text);
+    assert.equal(lost.body.verified_after_commit_error, true);
+    assert.equal(Number((await one(`select count(*) as n from training_load.source_metric_event_setting_confirmations where request_key = $1`, [lostKey])).n), 1);
+  } finally {
+    eventSetting.setEventSettingBeforeCommitForTests(null);
+  }
+  // The COMMIT never sent: nothing saved, outcome_unknown; the same key then saves.
+  eventSetting.setEventSettingBeforeCommitForTests((client) => {
+    const original = client.query.bind(client);
+    client.query = async (sql, ...rest) => {
+      if (sql === "commit") throw Object.assign(new Error("connection lost before commit"), { code: "08006" });
+      return original(sql, ...rest);
+    };
+  });
+  const neverKey = key();
+  try {
+    const never = await post(url, W.pa, { requestKey: neverKey, thresholdValue: "2.5", durationSeconds: "0.3" });
+    assert.deepEqual([never.status, never.body.error], [503, "outcome_unknown"], never.text);
+  } finally {
+    eventSetting.setEventSettingBeforeCommitForTests(null);
+  }
+  assert.equal(Number((await one(`select count(*) as n from training_load.source_metric_event_setting_confirmations where request_key = $1`, [neverKey])).n), 0);
+  ok(await post(url, W.pa, { requestKey: neverKey, thresholdValue: "2.5", durationSeconds: "0.3" }), 201);
+});
+
+test("V80-5. the importer through its real activation read: a team's next session whose zone 3 is 25-65 W/kg is blocked whole (team_setting_changed) by the candidate preview, while a session with the matched setting is not; the club's version is switched on for the team from the board as a pre-placed row", async () => {
+  const { t, cand } = await plantedTeam();
+  // The club's version of V80-1, pre-placed on this team's board and saved: the activation records its match.
+  const saved = ok(await save(W.caA, t, cand, [await preplacedRow(W.caA, t, cand, V80.zone)]));
+  assert.deepEqual((await activationRow(saved.confirmation.rows[0].activationId)).matched_source_range, { max: "60", min: "25", operator: "between", unit: "W/kg" });
+  const changed = await candidate(t, { startedAt: "2026-09-15T18:08:12Z" });
+  await plantSession(changed, { thresholds: { power_thresholds: [20, 25, 65, 75] } });
+  const recompute = async (c) => {
+    const res = await fetch(`${apiBase}/api/training-load/gpexe/teams/${t.teamId}/candidates/${c.id}/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: W.paA.cookie }, body: "{}",
+    });
+    const text = await res.text();
+    return { status: res.status, body: JSON.parse(text), text };
+  };
+  const blocked = await recompute(changed);
+  assert.equal(blocked.status, 200, blocked.text);
+  assert.equal(blocked.body.candidate.preview.blocked?.code, "team_setting_changed", blocked.text);
+  const fine = await recompute(cand);
+  assert.equal(fine.status, 200, fine.text);
+  assert.notEqual(fine.body.candidate.preview.blocked?.code, "team_setting_changed", fine.text);
+});
+
+test("V80-6. exact decimals: a variable whose zone limit differs from GPEXE's only past a double's precision (123456789012.000000001 W/kg against 123456789012) is refused, not matched", async () => {
+  // A club of its own (clubs A and B already map the zone column: one active target per owner and field).
+  const fZone = await realField(ZONE3_KEY, "m");
+  const clubC = await club("Club C");
+  const caC = await clubAdmin(clubC, "Club C Admin");
+  const { t, cand } = await plantedTeam({ clubId: clubC, thresholds: { power_thresholds: [20, 25, 123456789012, 123456789013] } });
+  const precise = await variable(caC, { unit: "m", label: `Precise zone ${uid()}`, condition: { kind: "zone", operator: "between", lower: "25", upper: "123456789012.000000001", unit: "W/kg" } });
+  const p = await placementRaw(caC, t, cand, fZone, precise);
+  assert.deepEqual([p.placeable, p.code], [false, "team_setting_mismatch"], JSON.stringify(p));
+  assert.equal(ok(await boardOf(caC, t, { candidateId: cand.id })).board.variables.find((x) => x.id === precise.id).placeable, false);
 });

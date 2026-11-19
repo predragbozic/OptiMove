@@ -564,10 +564,11 @@ export async function saveConfirmation({ ctx, body }) {
               matched_condition, matched_source_range, matched_threshold_set_id, matched_at` : ""})
            select v.id, v.mapping_id, v.source_metric_definition_id, v.metric_definition_id, v.parameter_fingerprint,
                   $2, $3, v.applies_to_session, v.applies_to_drill, $4, $5, $6, $7${world.matchInstalled ? `,
-                  $8::jsonb, $9::jsonb, $10, case when $8::jsonb is null then null else now() end` : ""}
+                  case when $8::boolean then (select dv.condition_description from training_load.metric_definition_versions dv where dv.id = v.metric_definition_version_id) end,
+                  $9::jsonb, $10, case when $8::boolean then now() end` : ""}
              from training_load.source_metric_mapping_versions v where v.id = $1 returning id`,
           [p.versionId, world.team.binding_id, world.team.id, p.row.requirement, ...actor, reason,
-            ...(world.matchInstalled ? [p.conditionMatch ? JSON.stringify(p.conditionMatch.condition) : null, p.conditionMatch ? JSON.stringify(p.conditionMatch.sourceRange) : null,
+            ...(world.matchInstalled ? [p.conditionMatch !== null && p.conditionMatch !== undefined, p.conditionMatch ? JSON.stringify(p.conditionMatch.sourceRange) : null,
               p.conditionMatch ? p.conditionMatch.setId : null] : [])],
         )).rows[0].id;
         // On the platform board the last start is the keyed request record (as S1's start is), since no confirmation is stored.

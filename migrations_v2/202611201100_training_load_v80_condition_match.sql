@@ -29,6 +29,10 @@
 
 set local lock_timeout = '5s';
 
+-- Both tables first, in the writers' order (versions before activations), so nothing is written between the check below and
+-- the columns.
+lock table training_load.source_metric_mapping_versions, training_load.source_metric_mapping_activations in access exclusive mode;
+
 do $$
 begin
   if exists (
@@ -130,7 +134,7 @@ begin
     join training_load.metric_definition_versions dv on dv.id = mv.metric_definition_version_id
    where mv.id = new.mapping_version_id;
   if v_rule is not null then
-    if new.matched_condition is null or new.matched_condition <> v_cd
+    if new.matched_condition is null or new.matched_condition is distinct from v_cd
        or new.matched_source_range is null or jsonb_typeof(new.matched_source_range) <> 'object'
        or new.matched_threshold_set_id is null or btrim(new.matched_threshold_set_id) = '' or char_length(new.matched_threshold_set_id) > 64
        or new.matched_at is null then

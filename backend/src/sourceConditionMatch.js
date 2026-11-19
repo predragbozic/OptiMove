@@ -11,6 +11,11 @@ import { conditionMatches, needsEventConfirmation, rangeWords, sourceRangeOf } f
 export async function conditionMatchInstalled(queryable) {
   return (await queryable.query(`select to_regclass('training_load.source_metric_event_setting_confirmations') is not null as ok`)).rows[0].ok === true;
 }
+// A stored condition as a select expression with every number as its exact numeric text (the code review of v80: a
+// condition read as a JS double could match a GPEXE limit that the stored decimal does not).
+export const exactConditionSql = (expr) =>
+  `(select jsonb_object_agg(e.key, case when jsonb_typeof(e.value) = 'number' then to_jsonb(e.value #>> '{}') else e.value end) from jsonb_each(${expr}) e)`;
+
 // The version's rule as a select column: the column itself, or null before v80.
 export const conditionRuleColumn = (installed, alias = "v") => (installed ? `${alias}.condition_rule` : "null::jsonb as condition_rule");
 

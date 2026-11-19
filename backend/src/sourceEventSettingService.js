@@ -21,6 +21,14 @@ const DECIMAL = /^-?(0|[1-9][0-9]{0,5})(\.[0-9]{1,6})?$/;
 const CONTRACT = "source-event-setting/v1";
 const STATEMENT_TIMEOUT_MS = 10_000;
 const LOCK_TIMEOUT_MS = 2_000;
+// The COMMIT's answer is awaited at most this long; after an error or that time the connection is closed and the row is
+// looked for by its request key on another connection (the F2 rule of the reviewers' external-effect checks).
+const COMMIT_WAIT_MS = 5_000;
+const VERIFY_TIMEOUT_MS = 5_000;
+
+// Test seam: runs right before the COMMIT is sent (null in production).
+let beforeCommitForTests = null;
+export function setEventSettingBeforeCommitForTests(fn) { beforeCommitForTests = fn ?? null; }
 
 export class EventSettingError extends Error {
   constructor(status, code, message) {
@@ -65,6 +73,28 @@ const answerOf = (row) => ({
 const ROW = `id, source_metric_definition_id, source_metric_version_id, event_kind, trim_scale(threshold_value)::text as threshold_value,
   trim_scale(duration_seconds)::text as duration_seconds, confirmed_at, request_hash, confirmed_by_user_id`;
 
+// The saved row of a request key, read on a connection of its own: a replay (the same writer and body) or a reused key.
+async function savedAnswer(queryable, input, requestHash, ctx) {
+  const saved = (await queryable.query(`select ${ROW} from training_load.source_metric_event_setting_confirmations where request_key = $1`, [input.requestKey])).rows[0];
+  if (!saved) return null;
+  if (saved.request_hash !== requestHash || String(saved.confirmed_by_user_id) !== String(ctx.userId)) {
+    throw refusal(409, "request_key_reused", EVENT_SETTING_TEXT.request_key_reused);
+  }
+  return saved;
+}
+
+// After a COMMIT whose answer is lost or late: look the row up by its key on a new connection, bounded.
+async function verifyAfterCommit(input, requestHash, ctx) {
+  const client = await pool.connect();
+  try {
+    await client.query(`set statement_timeout = '${VERIFY_TIMEOUT_MS}ms'`);
+    const saved = await savedAnswer(client, input, requestHash, ctx);
+    return saved ? { status: 200, verified_after_commit_error: true, ...answerOf(saved) } : null;
+  } finally {
+    client.release();
+  }
+}
+
 export async function confirmEventSetting({ ctx, fieldId: rawField, revisionId: rawRevision, body }) {
   if (!mayVerify(ctx)) throw NOT_FOUND();
   if (typeof rawField !== "string" || !UUID.test(rawField) || typeof rawRevision !== "string" || !UUID.test(rawRevision)) throw NOT_FOUND();
@@ -73,17 +103,16 @@ export async function confirmEventSetting({ ctx, fieldId: rawField, revisionId: 
   const input = readBody(body);
   const requestHash = crypto.createHash("sha256").update(JSON.stringify({ contract: CONTRACT, fieldId, revisionId, thresholdValue: input.thresholdValue, durationSeconds: input.durationSeconds })).digest("hex");
   const client = await pool.connect();
+  let broken = null;
+  let commitSent = false;
   try {
     await client.query("begin");
     await client.query(`set local statement_timeout = '${STATEMENT_TIMEOUT_MS}ms'`);
     await client.query(`set local lock_timeout = '${LOCK_TIMEOUT_MS}ms'`);
     // A replay: the same key answers the saved row (its writer's own), another body with it is refused.
-    const saved = (await client.query(`select ${ROW} from training_load.source_metric_event_setting_confirmations where request_key = $1`, [input.requestKey])).rows[0];
+    const saved = await savedAnswer(client, input, requestHash, ctx);
     if (saved) {
       await client.query("rollback");
-      if (saved.request_hash !== requestHash || String(saved.confirmed_by_user_id) !== String(ctx.userId)) {
-        throw refusal(409, "request_key_reused", EVENT_SETTING_TEXT.request_key_reused);
-      }
       return { status: 200, ...answerOf(saved) };
     }
     await client.query(`select set_config('optimove.source_metric_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [String(ctx.userId)]);
@@ -122,15 +151,39 @@ export async function confirmEventSetting({ ctx, fieldId: rawField, revisionId: 
        returning ${ROW}`,
       [fieldId, revisionId, rule.event, input.thresholdValue, input.durationSeconds, rev.meaning_observation_id, read.setId, ctx.userId, input.requestKey, requestHash],
     )).rows[0];
-    await client.query("commit");
+    if (beforeCommitForTests) await beforeCommitForTests(client);
+    commitSent = true;
+    let timer;
+    try {
+      await Promise.race([
+        client.query("commit"),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("commit_wait_exceeded"), { code: "commit_wait_exceeded" })), COMMIT_WAIT_MS); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
     return { status: 201, ...answerOf(row) };
   } catch (error) {
-    await client.query("rollback").catch(() => {});
+    if (commitSent) {
+      // The COMMIT was sent: never "nothing was written". This connection is not reused; the row is looked for by its key.
+      broken = error;
+      const verified = await verifyAfterCommit(input, requestHash, ctx).catch((e) => (e instanceof EventSettingError ? Promise.reject(e) : null));
+      if (verified) return verified;
+      throw refusal(503, "outcome_unknown", "We could not confirm whether this was saved. Check again with the same request.");
+    }
+    await client.query("rollback").catch((e) => { broken = e; });
     if (error instanceof EventSettingError) throw error;
     if (["55P03", "40P01", "57014"].includes(error?.code)) throw refusal(409, "try_again", "Someone else is changing this field now. Try again.");
-    if (error?.code === "23505") throw refusal(409, "request_key_reused", EVENT_SETTING_TEXT.request_key_reused);
+    // A concurrent request with the same key committed first: its row is the answer (a replay), or the key is reused.
+    if (error?.code === "23505") {
+      const verified = await verifyAfterCommit(input, requestHash, ctx);
+      if (verified) return { status: 200, confirmation: verified.confirmation };
+      throw refusal(409, "request_key_reused", EVENT_SETTING_TEXT.request_key_reused);
+    }
+    // The database's own refusal of the actor (a right lost since the request began): the identical 404.
+    if (error?.code === "42501") throw NOT_FOUND();
     throw error;
   } finally {
-    client.release();
+    client.release(broken ?? undefined);
   }
 }

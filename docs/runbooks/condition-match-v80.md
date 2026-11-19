@@ -50,7 +50,9 @@ confirms, once per field, the setting GPEXE shows for the team:
    `{ requestKey, thresholdValue, durationSeconds }`, a platform administrator in the platform workspace; everyone else the
    identical 404).
 
-OptiMove checks the two numbers against the compared session's team setting. If they differ it says what that session
+OptiMove checks the two numbers against the compared session's team setting. A lost answer is never "not saved": the
+route answers `200` with `verified_after_commit_error` when the COMMIT went through, `503 outcome_unknown` when it cannot
+tell, and the same request key then replays or saves. If they differ it says what that session
 holds ("GPEXE's setting for the session you compared is at or above 2.5 m/s² lasting 0.3 s. Check the team's settings in
 GPEXE and enter what it shows."). The same key answers the saved confirmation again; another body under it is refused. The
 screen for it is step C.
@@ -60,9 +62,12 @@ screen for it is step C.
 * **Preflight** (read-only, each block in a read-only transaction): v79 recorded and v80 not; nothing of v80 exists; v80's
   own refusal counted (`kind_none_on_conditioned` 0: no version without parameters already targets a variable version with a
   condition - the service never wrote one); the v35 actor functions exist; a quiet moment; the role owns both tables.
-* **Locks of the migration**: `ADD COLUMN` (nullable, no default: catalog only, no rewrite, no scan) takes `ACCESS EXCLUSIVE`
-  on `source_metric_mapping_versions`, then on `source_metric_mapping_activations`, under `lock_timeout` 5 s; a busy table
-  fails it with nothing applied. The DO block before it reads both tables (and the variable versions) without a lock.
+* **Locks of the migration**: it first takes `ACCESS EXCLUSIVE` on `source_metric_mapping_versions`, then on
+  `source_metric_mapping_activations` (one `LOCK TABLE`, under `lock_timeout` 5 s), so nothing is written between its own
+  refusal check and the columns; `ADD COLUMN` (nullable, no default) is catalog only, no rewrite, no scan. An activation write
+  takes the activations table and then the versions table through its foreign key, the reverse order: a writer at the same
+  moment can make the migration stop at its 5 s bound (nothing applied) or end itself in `40P01` (nothing written). Run it at
+  the preflight's quiet moment.
 * **Post-check**: v80 recorded once (compare `checksum` with the file's sha256); the five columns, the table and its index;
   the four triggers enabled; no rule, match or confirmation yet; nothing waiting.
 * **Locks at run time**: the guards read immutable rows only (the variable version, the mapping version) without a locking
@@ -73,5 +78,10 @@ screen for it is step C.
 * **Rollback** (`condition-match-v80-rollback.sql`; rehearsed apply -> rollback -> the catalog before v80 exactly -> re-apply,
   on a migrated database and on one built from the legacy schema snapshot): refuses while the migrator runs, without v80, and
   once a version carries a rule, an activation records a match or a confirmation exists. It drops what v80 added and the v80
-  record; it changes no row of another table.
+  record; it changes no row of another table. It does not refuse because a later migration is recorded (v81, the calendar's,
+  touches none of v80's objects); a later migration that uses v80's columns must add that refusal to this file.
+* **What the database does not bind** (the v35 limit: the guards keep accidents out, not code that sets the actor): that a
+  rule belongs to the field's key (a zone rule on any column without parameters passes the shape and fit checks), and that a
+  confirmation's `event_kind`, `observation_confirmation_id` and `threshold_set_id` belong to its revision. The service sets
+  all of them (`conditionRuleFor`, the route's own reads).
 * **Not run on PostgreSQL 17**: every test ran on the container's PostgreSQL 16. Production runs 17.6.
