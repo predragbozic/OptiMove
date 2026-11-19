@@ -198,7 +198,10 @@ export function renderBuilderBatchEditPanel(draft, batchPlans) {
     const data = choice.data || {};
     const others = Number(data.applyCount || 0);
     const list = batchEditMemberLines(data.cannot, data.notChanged);
-    body = others
+    body = !list && others
+      // Only the earlier choice went out of date (nobody is left out now).
+      ? `<p><strong>Something changed since you chose.</strong> Apply these changes to ${escapeHtml(name)} and ${otherAthletes(others)}?</p>${actions(primary("builder-batch-edit-others", `Apply to ${escapeHtml(name)} and ${otherAthletes(others)}`), only, cancel)}`
+      : others
       ? `<p><strong>These athletes won't get the changes:</strong></p>${list}${actions(primary("builder-batch-edit-others", `Apply to ${escapeHtml(name)} and ${otherAthletes(others)}`), only, cancel)}`
       : `<p><strong>None of the other athletes can take these changes:</strong></p>${list}${actions(only, cancel)}`;
   } else if (choice.stage === "unconfirmed") {

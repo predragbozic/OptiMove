@@ -174,6 +174,16 @@ test("nobody else can take the changes: no group button, only this athlete or ca
   assert.ok(panel.querySelector('[data-action="builder-batch-edit-only"]'));
 });
 
+test("a resent choice that only went out of date (nobody left out now) does not show an empty list", () => {
+  state.builder.draft = editDraft();
+  state.builder.batchEditChoice = { stage: "ask", data: { applyTo: ["B", "C"], applyCount: 2, choiceToken: "t2", cannot: { named: [], unnamedCount: 0 }, notChanged: { named: [], unnamedCount: 0 } } };
+  renderBuilder();
+  const text = content().querySelector("[data-builder-batch-edit]").textContent;
+  assert.doesNotMatch(text, /won't get the changes/);
+  assert.match(text, /Something changed since you chose\./);
+  assert.match(content().querySelector('[data-action="builder-batch-edit-others"]').textContent, /^Apply to Athlete One and 2 other athletes$/);
+});
+
 test("busy (try_again) and a source saved meanwhile (source_changed) are told apart; nothing is resent by itself", async () => {
   for (const [code, stage, text] of [["try_again", "busy", /Nothing was saved\./], ["source_changed", "sourceChanged", /saved by someone else after you opened it/]]) {
     state.builder.draft = editDraft();

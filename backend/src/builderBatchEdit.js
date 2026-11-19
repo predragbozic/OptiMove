@@ -366,7 +366,7 @@ export async function writeSiblingChange(client, siblingPlanId, ops, { assertReu
   if (Object.keys(ops.plan).length) {
     const fields = Object.keys(ops.plan);
     await client.query(
-      `update plans.plans set ${fields.map((f, i) => `${f} = $${i + 2}`).join(", ")}, updated_at = now() where id = $1`,
+      `update plans.plans set ${fields.map((f, i) => `${f} = $${i + 2}`).join(", ")}, updated_at = clock_timestamp() where id = $1`,
       [siblingPlanId, ...fields.map((f) => ops.plan[f])],
     );
   }

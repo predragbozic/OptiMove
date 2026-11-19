@@ -740,3 +740,32 @@ test("18. the writes: a move keeps each athlete's row and logical id; a day's no
   assert.equal(asked.status, 409, asked.text);
   assert.deepEqual(asked.body.cannot.named, [{ name: s.athletes[1].name, reasons: ["changed_separately"] }]);
 });
+
+test("19. a Save that started before another coach reopened the plan still marks the source as changed (db re-review: clock_timestamp, not now())", async () => {
+  const s = await squad("clock");
+  const [a, b, c] = await publishedBatch(s);
+  const d1 = await reopen(s.coach.cookie, a);
+  ok(await api(`/api/builder/blocks/${d1.blocks[1].id}/sessions`, { method: "POST", cookie: s.coach.cookie, body: { bta: "T", name: "Coach one" } }), 201);
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  let d2;
+  try {
+    // The Save begins (its transaction time is now) and waits on its own draft row.
+    await holder.query("begin");
+    await holder.query(`select id from plans.plans where id = $1 for update`, [d1.plan.id]);
+    const saving = save(s.coach.cookie, d1.plan.id, { batchScope: "this" });
+    await waitForLockWait((r) => /is_edit_draft, edit_source_plan_id/.test(r.query));
+    // Meanwhile the second coach reopens A: the copy is of A before that Save.
+    d2 = await reopen(s.coach2.cookie, a);
+    await holder.query("commit");
+    ok(await saving);
+  } finally {
+    await holder.end();
+  }
+  ok(await api(`/api/builder/blocks/${d2.blocks[2].id}/sessions`, { method: "POST", cookie: s.coach2.cookie, body: { bta: "T", name: "Coach two" } }), 201);
+  const before = await digestOf([a, b, c]);
+  const moved = await save(s.coach2.cookie, d2.plan.id, { batchScope: "all" });
+  assert.equal(moved.status, 409, moved.text);
+  assert.equal(moved.body.code, "source_changed");
+  assert.equal(await digestOf([a, b, c]), before);
+});

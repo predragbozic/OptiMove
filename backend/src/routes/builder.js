@@ -2307,7 +2307,10 @@ async function applyEditDraft(req, draftPlan, timing) {
            track_training_load_default = $8,
            request_rpe_default = $9,
            status = 'active',
-           updated_at = now()
+           -- clock_timestamp(), not now(): the moment of this write, after the
+           -- locks, so a draft opened while this Save waited is never newer
+           -- than it (the source_changed check compares the two).
+           updated_at = clock_timestamp()
        where id = $1`,
       [source.id, freshDraft.name, freshDraft.note, freshDraft.icon_url, freshDraft.color, freshDraft.visibility || "private", freshDraft.is_template, Boolean(freshDraft.track_training_load_default), Boolean(freshDraft.request_rpe_default)],
     );
