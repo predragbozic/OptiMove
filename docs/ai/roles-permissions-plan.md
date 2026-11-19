@@ -261,7 +261,7 @@ stream's manager.
 system variables, source fields and their confirmations are a platform admin's; a club's variables,
 mappings, activations and its source connection are the club admin's (and a platform admin's); a
 team coach has the reduced Variables view and may rename, archive and restore a club variable (C99).
-The four permissions above split that single "club admin" right, so a club can, for example, let an
+The permissions above split that single "club admin" right, so a club can, for example, let an
 analyst map and create variables without making that person a club admin. The coach's C99 abilities
 become `variables.view` and `variables.rename_archive`, kept exactly as today. The database actor
 guards of these writes (v35, v38, v41, v52, v53 and later) check `club_admin` by name, so this area
@@ -302,6 +302,8 @@ permissions. Fine-tuning opens a group and ticks single permissions.
 
 - A role is stored as its permissions, never as "group X at level Y": a level is a shortcut of
   the editor that ticks a set. A fine-tuned group shows as "Custom" with its ticks.
+- `variables.rename_archive` is in no level of the Data configuration ladder below Variables; a
+  coach's set of today (View plus that one permission) is reached by fine-tuning.
 - A level that is not a simple ladder (Tests: results without scheduling, or the reverse) is made
   by fine-tuning; the ladders above are the common cases.
 - Whole-section closing (section 3.3) is the group at "Off", shown invisible or locked.
@@ -368,7 +370,7 @@ section at all sees Home with Account and their notifications only.
 A whole section (Training Load, Tests, Builder, Calendar, ...) can be closed in two places:
 
 1. **For a club or an independent coach** - a module the platform admin has not switched on for
-   them. Nobody there has it, the club's admin included, and no role of that club can contain its
+   them. Nobody there has it, the club's admin included (for a platform admin see section 2.1 rule 4), and no role of that club can contain its
    permissions (the ceiling rule covers it: the club's admin does not hold them). This is also the
    lever for the later subscription levels of section 3.1.
 2. **For a role** - the role has none of the section's permissions (section 3.2).
@@ -548,7 +550,7 @@ database with an old-vs-new test.
 | Step | What | Files | Review |
 |---|---|---|---|
 | **R0** | This plan and the owner's decisions | docs only | the owner, the *Rukovodilac* |
-| **R1** | A new permissions module (catalog, groups, the basic roles' starting sets for the organization routes as a code constant) and `can(authz, permission, resourceScope)`; the JS role predicates of `routes/organization.js` (`isPlatformAdministrator`, `canManageClub`, `canManageTeamById`, `canAssign*`) replaced by `can()`; the test of section 2.1 rule 2. No behaviour change, proven by old-vs-new tests | a new module, `routes/organization.js`, tests (`authz.js` only if `can()` lives there) | code, security; independent / external (trigger 2) |
+| **R1** | A new permissions module (catalog, groups, the basic roles' starting sets for the organization routes as a code constant) and `can(authz, permission, resourceScope)`; the JS role predicates of `routes/organization.js` (`isPlatformAdministrator`, `canManageClub`, `canManageTeamById`, `canAssign*`) replaced by `can()`; the test of section 2.1 rule 2, and before its merge the read-only production count that rule asks for. No behaviour change, proven by old-vs-new tests | a new module, `routes/organization.js`, tests (`authz.js` only if `can()` lives there) | code, security; independent / external (trigger 2) |
 | **R2** | The migration of section 5, the SQL twin, the Roles API | migration, new service and route | db, security, code; ★★ |
 | **R3** | Settings > Roles, assignment in Users, "My team" | `organization-*` and new frontend files | code, ux, mobile; external (trigger 2) |
 | **R4** | Read / manage split and the first real role, **Director**: a club workspace in read mode, the fixes of section 1 facts 1-4 | `authz.js`, `workspace.js`, then module by module | security; external |
