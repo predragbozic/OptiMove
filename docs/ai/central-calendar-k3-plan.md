@@ -1,8 +1,8 @@
 # Central calendar — K3 and K2c-3 plan: the Builder and the event, both ways
 
 Status: **Proposed** (2026-11-19, written against `main` `f406ee2d`; K2c-3 and section 7 added on the K4 plan at
-`ae82e2fb`, O14 (7.1) on `5231db4d`; Q1, Q2, Q4–Q7 decided by the stream manager). Discovery and UI contract only: no code, no migration. It needs the manager's GO, and the owner's
-answers to Q3 and the stream manager's to 6.9, before any code.
+`ae82e2fb`, O14 (7.1) on `5231db4d`, O15 (7.2) on `dc360d09`; Q1, Q2, Q4–Q11 decided by the stream manager). Discovery and UI contract only: no code, no migration. It needs the manager's GO, and the owner's
+answer to Q3 and the stream manager's to Q12–Q14, before any code.
 
 The owner's goal (O9 of `docs/ai/central-calendar-k4-plan.md`, 2026-11-19): „iz glavnog kalendara je lako kada
 ulazimo iz dogadjaja u builder pa kreiramo aktivnosti unutar tog dogadjaja". The coach opens an event, presses
@@ -189,8 +189,11 @@ Builder's own `POST /plans`); its `409` (someone made a plan meanwhile) reads th
 
 ### 2.4 Sessions in and out of the event
 
-- Every session on the event's day (each of its days for a multi-day event) is **in the event** by default and shows
-  a small chip "● In this event" in the event's colour on its row.
+- Every session on the event's day (each of its days for a multi-day event) **that fits the event's half of the day**
+  (O15, 7.2) is **in the event** by default and shows a small chip "● In this event" in the event's colour on its
+  row. A session of the other half shows "Outside the event (PM)" and is not linked.
+- New sessions added on that day in K3 take the event's half (`amPm`): AM for an event starting before 12:00, PM from
+  12:00; an event running across 12:00, or without a time, leaves the Builder's default.
 - The chip is a toggle: **Not in this event** takes the session out (the chip turns to a grey "Not in this event"
   with *Put back*). One tap, no question (nothing is written until Save).
 - Sessions on other days of the week show nothing.
@@ -404,8 +407,8 @@ After training · Recovery                Event: [ No event     ▾]
 
 ### 6.4 The Event selector
 
-- On each session's top line (O7), right of its name: **Event: [ … ▾ ]** — the day's managed events (title, time), and
-  *No event*. A non-managed event is listed with its lock and is not choosable ("Linked by the club's admin from the
+- On each session's top line (O7), right of its name: **Event: [ … ▾ ]** — the day's managed events of the
+  session's half of the day (O15, 7.2), and *No event*. A non-managed event is listed with its lock and is not choosable ("Linked by the club's admin from the
   calendar.").
 - **Choosing an event** sends one attach (`POST /api/calendar/events/:id/sessions`) with the session's logical ids for
   every athlete of the batch (from the day's planned card) and the event's `expectedRevision`; `alignSessions` as Q4.
@@ -453,7 +456,15 @@ event's time 10:00 is used." · "Events could not be loaded."
 
 None. The create (with `sessions`), attach, detach and the two reads exist. **No migration.**
 
-### 6.9 Open questions (each with a recommendation)
+### 6.9 Questions: Q8–Q11 decided by the stream manager (2026-11-19); Q12, Q13 open
+
+- **Decided:** **Q8** prefill a team target when the batch's athletes are exactly the team's current members,
+  otherwise athlete targets; the coach can edit it in the form. **Q9** a move is two writes (detach, then attach),
+  with the partial outcome shown. **Q10** yes, a Save that stays in the Builder. **Q11** K2c-2's per-session panel is
+  retired (O10: one event form).
+- The time rule of section 7 (read the event's time, the `linkedSessionTimes` helper, no copy) is accepted by the
+  stream manager, with O14 (7.1) and O15 (7.2).
+- The record of each question with its options follows.
 
 - **Q8 — Targets of a created event.** The team when every athlete of the batch is the team's, else the athletes one
   by one (recommended: a team target follows the roster as it changes); or always the athletes. Note: a team target
@@ -540,6 +551,33 @@ sets no window.
 - **Time zones:** a session time is a wall-clock time without a zone; the event carries its own zone (K2b-1d3). The
   check compares wall-clock times on the event's day; an event whose zone differs from the coach's is rare and is
   shown with the event's zone in the sentence. Recorded, not solved.
+
+### 7.2 O15: AM / PM fits the event's half of the day (the owner, 2026-11-19, K4 plan `dc360d09`, 5.2 point 9)
+
+A session keeps Before / Training / After and AM / PM as today. Its AM / PM must fit the event's half:
+
+- **The event's half:** a start before 12:00 is AM; a start from 12:00 is PM; an event whose start is before 12:00 and
+  whose end is after 12:00 covers both. An event with no time sets no limit. A multi-day event is judged per day by
+  the same times (its start on its first day; whole days in between and its last day's end are read as covering
+  both — recorded with Q14).
+- **A session without AM / PM** (the Builder's empty choice) fits any half.
+- **The selector and *Whole day*** list only the events of the session's half; *Whole day* links the sessions that
+  fit and names the others ("After training (PM) stays out: the event is in the morning.").
+- **K3** adds new sessions in the event's half (2.4) and leaves a session of the other half out of *Save and link*,
+  naming it in the outcome.
+- **The "Outside the event" note** covers both checks: "Outside the event's time" (O14) and "Outside the event's half
+  of the day" — with **Use the event's time** for the first, and **Move to AM** / **Move to PM** for the second (one
+  Builder PATCH of `amPm`; on a live plan that is an edit draft and its Save, 1.1). Nothing is changed by itself.
+- **A linked session whose half changes** (an edit draft that moves AM → PM) also moves its slot, so the link would be
+  left on the old slot (1.2, 6.4): the same warning as there, "Saving moves this session out of <event>."
+
+**Cost.** Frontend only: a second pure check `sessionHalfFitsEvent(amPm, event)` beside `sessionTimeFitsEvent`, used by
+the same four places (the selector's list, *Whole day*, K3's default and *Save and link*, the note), and the
+*Move to AM / PM* action. A few hours with tests (before 12:00, exactly 12:00, across 12:00, no time, no half, a
+multi-day event). The server does not check the half; the note shows a session stored otherwise. No migration.
+
+- **Q14 — A multi-day event's half.** The first day by its start, the middle days and the last day as both halves
+  (recommended), or every day by the start time only. The stream manager decides.
 
 ## 8. Reviews and order
 
