@@ -5,7 +5,7 @@ import { athleteCalendarDayLabel, athleteCalendarDays, athleteCalendarShortWeekd
 import { renderCentralCalendarEventPlaceHtml } from "./central-calendar-event-details.js";
 import { centralCalendarItemColorIndex, centralCalendarItemIconKey } from "./central-calendar-view.js";
 import { renderIconSvg } from "./icon-render.js";
-import { escapeAttr, escapeHtml, localDateIso } from "./utils.js";
+import { escapeAttr, escapeHtml, localDateIso, weekMondayIso } from "./utils.js";
 
 // An event wears its type's colour (the calendar's palette); her own plan the plan colour.
 function stripeStyle(card) {
@@ -116,10 +116,10 @@ export function renderAthleteCalendarHtml(slice, { questions = [], today = local
 }
 
 // The Weekly plan opened by Open training (contract 2.3, mockup 04 step 2): Back to calendar, beside the day and the
-// training's title.
-export function renderAthleteCalendarBackBarHtml(marker) {
+// training's title - the title only while the plan shows that day's week (`shownWeekStart`), never over another week.
+export function renderAthleteCalendarBackBarHtml(marker, shownWeekStart = "") {
   if (!marker) return "";
-  const where = [marker.label, marker.title].filter(Boolean).join(" · ");
+  const where = !shownWeekStart || weekMondayIso(marker.date) === shownWeekStart ? [marker.label, marker.title].filter(Boolean).join(" · ") : "";
   return `<div class="ac-backbar">
       <button type="button" class="plain-button ac-button" data-action="athlete-calendar-back"><span aria-hidden="true">‹</span> Back to calendar</button>
       ${where ? `<span class="ac-muted ac-backbar-where">${escapeHtml(where)}</span>` : ""}

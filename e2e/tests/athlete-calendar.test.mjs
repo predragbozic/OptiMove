@@ -219,6 +219,13 @@ for (const width of [1280, 390, 375, 360]) {
       const before1 = await toTraining();
       const bar = (await a.page.textContent(".ac-backbar")).replace(/\s+/g, " ").trim();
       assert.match(bar, /Back to calendar .* · Team training$/, bar);
+      const barLook = await a.page.evaluate(() => {
+        const button = document.querySelector('[data-action="athlete-calendar-back"]').getBoundingClientRect();
+        return { height: Math.round(button.height), overflow: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.ok(barLook.height >= 44, `Back to calendar is a 44 px target (${barLook.height})`);
+      assert.equal(barLook.overflow, 0, "no horizontal scroll on the Weekly plan");
+      await a.page.screenshot({ path: `${process.env.E2E_SHOTS || "/tmp"}/k4a-weekly-back-${width}.png` }).catch(() => {});
       assert.equal((await a.page.textContent("#screenTitle")).trim() !== "Calendar", true, "the Weekly plan");
       await backAt(before1, "button");
       const before2 = await toTraining();

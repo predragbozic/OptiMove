@@ -3895,7 +3895,7 @@ function renderWeeklyRoot(data) {
   const weekSelectorMarkup = state.weekSelectorOpen ? renderWeekCalendarPicker(weeks, activeWeek) : "";
 
   // K4a: Back to calendar, only on the step Open training pushed (athlete-calendar-data.js).
-  const calendarBack = isAthleteMode() ? renderAthleteCalendarBackBarHtml(athleteCalendarReturnFor(appHistoryTopEntry())) : "";
+  const calendarBack = isAthleteMode() ? renderAthleteCalendarBackBarHtml(athleteCalendarReturnFor(appHistoryTopEntry()), activeWeek.weekStart) : "";
   els.content.innerHTML = calendarBack + renderWeeklyRootHtml({
     activeWeek,
     copyPlanModal: renderCopyPlanModal(state),

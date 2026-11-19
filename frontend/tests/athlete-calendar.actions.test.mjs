@@ -442,6 +442,11 @@ test("K20. Back to calendar shows only on the step Open training pushed - its ow
   assert.match(bar.querySelector('[data-action="athlete-calendar-back"]').textContent, /Back to calendar/);
   assert.equal(bar.querySelector(".ac-backbar-where").textContent, `${data.athleteCalendarDayLabel(DAY(1))} · Team training`);
   assert.equal(renderAthleteCalendarBackBarHtml(null), "");
+  // Over another week of the Weekly plan the button stays, the day and title (now stale) do not.
+  const other = new JSDOM(`<!doctype html><body>${renderAthleteCalendarBackBarHtml(marker, DAY(7))}</body>`).window.document;
+  assert.ok(other.querySelector('[data-action="athlete-calendar-back"]'));
+  assert.equal(other.querySelector(".ac-backbar-where"), null);
+  assert.ok(new JSDOM(`<!doctype html><body>${renderAthleteCalendarBackBarHtml(marker, MONDAY)}</body>`).window.document.querySelector(".ac-backbar-where"));
   data.setAthleteCalendarReturn({ date: DAY(1), title: "x" });
   data.claimAthleteCalendarReturn(step);
   data.resetAthleteCalendar();
