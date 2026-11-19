@@ -4414,6 +4414,9 @@ transaction or a v53 copy link (`409 confirmation_required` otherwise). The mapp
 windows over several sessions, nesting, unit conversion between inputs, estimates as inputs, partial sums, recalculating
 history, a switch per team.
 
+**Step 4, ratio and difference (v79): proposed, not built.** The plan and the dashboard contract (period ratio = sum of
+numerators / sum of denominators, the counts, the errors) are in `docs/ai/calculated-variables-v79-plan.md`.
+
 **The database (v77; runbook `docs/runbooks/calculated-variables-v77.md`).**
 - *Version guard* (BEFORE INSERT on `metric_definition_versions`): a variable is calculated from its version 1 or never; a
   calculated version is numeric with no bounds (a condition is allowed as stated data, not checked against the inputs

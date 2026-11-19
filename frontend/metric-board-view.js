@@ -2,7 +2,7 @@
 // strings only: every name from the source or from another person is escaped
 // and cleaned. Built from the om-* components Imports uses (page header,
 // tabs, light cards, badges, buttons); the phone sheet is the roster's.
-import { zoneRangeText } from "./zone-ranges.js";
+import { columnSettingText, conditionSentence } from "./zone-ranges.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import {
   BOARD_ERROR, COLUMN_REASON, MAX_ROWS, columnReasonText, parkedSentence, displayNumber, boardContext, boardErrorText, boardState, cleanName, columnOf, columnUse, conversionWords, newRows, placementRefusal,
@@ -33,9 +33,10 @@ const REQUIRED_HELP = "If a session has no value here, OptiMove imports the rest
 const forSupport = () => boardContext()?.isPlatformAdmin === true;
 // A numbered zone column's range from the session's team limits (every board caller gets them: a club only its own team's).
 // Shown as a fact, on the owner-stated evidence of GPEXE's settings screen (docs/ai/gpexe-field-inventory-plan.md 8.13).
+// v80 step A: an event column's team setting the same way ("Events at or above 2.5 m/s² lasting 0.3 s").
 const zoneRangeLine = (board, key) => {
-  const text = zoneRangeText(key, board?.zoneThresholds);
-  return text ? `<small class="mb-zone-range">Zone ${escapeHtml(text)}</small>` : "";
+  const text = columnSettingText(key, board?.zoneThresholds);
+  return text ? `<small class="mb-zone-range">${escapeHtml(text)}</small>` : "";
 };
 const gpexeTeam = (id) => (forSupport() && id ? ` — linked to GPEXE team ${escapeHtml(id)}` : "");
 
@@ -177,7 +178,7 @@ function slotHtml(s, v, drag) {
   const unit = v.unit ? `<span class="om-badge mb-unit">${escapeHtml(v.unit)}</span>` : "";
   const head = (sub) => `<span class="mb-slot-main"><strong>${name(v.label)}</strong><small>${sub}</small></span>`;
   // A variable filled from a numbered zone names that zone's expected range too (platform only, never a fact).
-  const zoneRange = slot.column ? zoneRangeText(slot.column.key, board?.zoneThresholds) : null;
+  const zoneRange = slot.column ? columnSettingText(slot.column.key, board?.zoneThresholds) : null;
   const col = slot.column ? `${name(slot.column.label)}${zoneRange ? ` (${escapeHtml(zoneRange)})` : ""}` : "a column";
   const off = busy(s) ? "disabled" : "";
   if (slot.kind === "on") {
@@ -213,7 +214,9 @@ function slotHtml(s, v, drag) {
   }
   // Empty.
   if (!v.placeable) {
-    const why = v.ownerScope === "system" ? "OptiMove does not fill this variable from a column of this session." : "A column cannot fill this variable.";
+    // v80 step A: a variable with a condition says what it counts; no column of this board fills it yet.
+    const why = v.condition ? escapeHtml(`${conditionSentence(v.condition)} No column fills it yet.`)
+      : v.ownerScope === "system" ? "OptiMove does not fill this variable from a column of this session." : "A column cannot fill this variable.";
     return `<li class="mb-slot is-off">${head(why)}${unit}</li>`;
   }
   const picked = s.picked ? columnOf(board, s.picked) : null;
@@ -238,7 +241,7 @@ function boardCards(s) {
         <p class="muted mb-note">${escapeHtml(sessionWords(board.session, dateTime))} ${drag ? "Drag a column, or tap it and then tap a variable." : "Tap a column, then a variable."}</p>
         <p class="mb-pair">Showing <strong>${name(board.pair.labels[0])}</strong> and <span><strong>${name(board.pair.labels[1])}</strong>.</span>
           ${board.pair.count > 1 ? `<button type="button" class="om-btn om-btn--ghost" data-action="metric-board-other-athletes" ${busy(s) ? "disabled" : ""}>Other athletes</button>` : ""}</p>
-        ${board.columns.some((c) => zoneRangeText(c.key, board.zoneThresholds)) ? `<p class="muted mb-note">Zone ranges come from this session's team zone limits in GPEXE.</p>` : ""}
+        ${board.columns.some((c) => columnSettingText(c.key, board.zoneThresholds)) ? `<p class="muted mb-note">Zone ranges and event settings come from this session's team settings in GPEXE.</p>` : ""}
         <ul class="mb-list">${board.columns.filter((c) => !parked(s, c)).map((c) => columnHtml(s, c, drag)).join("")}</ul>
         ${parkedHtml(s)}
       </section>
