@@ -1481,3 +1481,45 @@ test("LOW-2: a temporary directory that lies inside a repository is a work tree"
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------------------------------------
+// A false deny from practice (2026-11-19): `git -C <wt> checkout -q --detach <ref> && git diff
+// ... -- path > x.patch` was denied as "checkout -- <path>". The cause was not the later
+// segment's `--`: `--detach <ref>` alone was read as a possible path whenever the ref could
+// not be verified from the hook (no repository there yet). Forms that take a commit or a
+// branch, never a path, are not a discard.
+// ------------------------------------------------------------------
+
+test("checkout: --detach, --orphan and --track take a ref, never a path; the discard forms stay denied", () => {
+  const nowhere = path.join(tmpdir(), "sg-no-such-worktree");
+  expectAll([
+    [`git -C ${nowhere} checkout -q --detach origin/docs/x && git diff 10eeff5 origin/docs/x -- docs/ai/a.md > ${nowhere}/new-r2.patch`, ALLOW], // the line from practice: a new file outside any work tree, and a checkout that cannot discard
+    [`git -C ${nowhere} checkout -q --detach origin/docs/x`, ALLOW], ["git checkout -q --detach origin/docs/x", ALLOW], ["git checkout --detach no-such-ref", ALLOW],
+    ["git checkout --orphan gh-pages", ALLOW], ["git checkout -t origin/feature/x", ALLOW], ["git checkout --track origin/feature/x", ALLOW],
+    ["git checkout --track=direct origin/x", ALLOW], ["git checkout -b x", ALLOW], ["git checkout -q -B x origin/main", ALLOW], ["git checkout -", ALLOW],
+    ["git checkout -q --detach HEAD && git diff -- a.md", ALLOW], ["git checkout -b x && git diff -- y", ALLOW],
+    // still denied, in every position and wrapper
+    ["git checkout -- a.js", DENY], ["git checkout .", DENY], ["git -C dir checkout -- .", DENY], ["git checkout HEAD -- path", DENY],
+    ["cd x && git checkout -- .", DENY], ['bash -c "git checkout -- ."', DENY], ["git status; git checkout -- a.js", DENY], ["git status; git checkout .", DENY],
+    ["git checkout --detach HEAD -- path", DENY], ["git checkout -q -- .", DENY], ["git checkout no-such-file-or-ref", DENY], ["git checkout a b", DENY],
+  ]);
+});
+
+test("rules that look at more than one part of a line: tokens of one part never count for another", () => {
+  expectAll([
+    ["git restore --staged a && git diff -- b", ALLOW], ["git stash list && git diff -- x", ALLOW], ["git clean -n && echo -f", ALLOW],
+    ["git reset HEAD a && echo --hard", ALLOW], ["git push origin feature/x && echo --force", ALLOW], ["git branch -d x && echo -D", ALLOW],
+    ["git restore a && git diff --staged", DENY], ["git stash drop && git status", DENY], ["echo -n && git clean -f", DENY], ["echo x; git reset --hard", DENY],
+  ]);
+});
+
+test("a redirect sees only the assignments made before it in the line", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-order-"));
+  try {
+    expectAll([
+      [`cat x > $S/a; S=${tmp}`, ASK], [`cat x > $S/a && S=${tmp} && cat y > $S/b`, ASK], [`S=${tmp}; cat x > $S/a`, ALLOW],
+      [`S=${tmp} && grep -n y f > $S/b.txt && S=/etc`, ALLOW], [`S=${tmp}; S=/etc; cat x > $S/a`, ASK], [`S=/etc; cat x > $S/a; S=${tmp}`, ASK],
+      [`bash -c "cat x > \\$S/a"; S=${tmp}`, ASK],
+    ]);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});

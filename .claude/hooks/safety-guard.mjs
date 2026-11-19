@@ -316,6 +316,9 @@ export function isGitCheckoutDiscardingWork(segment, cwd) {
   const dashDashIdx = tokens.findIndex((t) => t === "--");
   if (dashDashIdx !== -1) return tokens.length > dashDashIdx + 1; // `-- <path...>` present
   if (tokens.some((t) => /^-[bB]$/.test(t))) return false; // creates a new branch, not a discard
+  // These forms take a commit or a branch, never a path: they cannot discard a file's changes,
+  // even when the ref cannot be verified from here (the worktree does not exist yet).
+  if (tokens.some((t) => /^(--detach|--orphan|--track|-t)$/.test(t) || /^--track=/.test(t))) return false;
   const nonFlag = tokens.filter((t) => !t.startsWith("-"));
   if (nonFlag.length === 0) return false;
   if (nonFlag.length > 1) return true; // ambiguous multi-arg form without `--`, treat as risky
@@ -1734,7 +1737,14 @@ export function classifyShellCommand(cmd, cwd) {
   const { text, shellBodies } = extractHeredocs(cmd);
   const topLevel = splitCommandSegments(text);
   const segments = expandSegments(topLevel);
-  const variables = plainAssignments(topLevel);
+  // A redirect sees only the assignments made BEFORE it in the line (`cat x > $S/a; S=/tmp/y`
+  // writes to "/a"): every segment that comes from top-level part i gets the assignments of
+  // parts 0..i-1. Segments from a shell's heredoc get none.
+  const variablesBefore = new Map();
+  for (let i = 0; i < topLevel.length; i++) {
+    const known = plainAssignments(topLevel.slice(0, i));
+    for (const piece of expandSegments([topLevel[i]])) if (!variablesBefore.has(piece)) variablesBefore.set(piece, known);
+  }
   const background = hasBackgroundJob(text);
   const createsWorkTree = segments.some(createsGitWorkTree);
   for (const body of shellBodies) segments.push(...expandSegments(splitCommandSegments(body)));
@@ -1767,7 +1777,7 @@ export function classifyShellCommand(cmd, cwd) {
     if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     // `cat >(sh)`, `x <(bash)`: a shell inside a process substitution reads what it is fed
     if (processSubstitutions(segment).some((inner) => isUnreadableShellInput(inner, true))) return { decision: "ask", reason: ASK_REASONS.unreadable };
-    if (allowedCommandNeedsQuestion(segment, variables, { noTempExemption: createsWorkTree })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (allowedCommandNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { noTempExemption: createsWorkTree })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
     if (setsDangerousEnvironment(segment)) return { decision: "ask", reason: ASK_REASONS.dangerousEnv };
     if (definesAlias(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isGitConfigOverride(segment)) return { decision: "ask", reason: ASK_REASONS.gitConfigOverride };
