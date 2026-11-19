@@ -93,6 +93,25 @@ export function membershipOnDaySql(athleteIdExpr, cond, fromExpr, toExpr = fromE
              and ${membershipPeriodOnDaySql("mp", athleteIdExpr, fromExpr, toExpr)})`;
 }
 
+// Moved here from calendarEventService.js (K3 plan section 7) so the linked
+// session time (linkedSessionTimes.js) shares the one target rule without
+// loading the event service.
+export function eventTargetsAthleteSql(eventParam, athleteExpr, dayExpr) {
+  return targetsAthleteSql(`calendar.event_targets tg where tg.event_id = ${eventParam}`, athleteExpr, dayExpr);
+}
+
+// K2c-2-B (2.3.4): the one rule of "this athlete is a target of the event on
+// that day", over a source of target rows `tg(target_kind, target_athlete_id,
+// target_team_id, target_club_id)` - the stored event's (the attach), or the
+// targets a create resolved before its INSERT (`unnest`). `source` ends in
+// its own `where` clause.
+export function targetsAthleteSql(source, athleteExpr, dayExpr) {
+  return `exists (select 1 from ${source} and (
+            (tg.target_kind = 'athlete' and tg.target_athlete_id = ${athleteExpr})
+         or (tg.target_kind = 'team' and ${membershipOnDaySql(athleteExpr, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = tg.target_team_id)`, dayExpr)})
+         or (tg.target_kind = 'club' and ${membershipOnDaySql(athleteExpr, (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, dayExpr)})))`;
+}
+
 // The day condition of THE rule above, for one period `mp` of the athlete `athleteIdExpr`: it covers the day(s), or it
 // is open and the day lies before the athlete's first period in the period's club. Shared by membershipOnDaySql and by
 // the athletes' team ids of calendarQuery.js (K2b-1d2: from the athlete's periods to the teams), so the rule exists
