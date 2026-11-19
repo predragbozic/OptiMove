@@ -22451,10 +22451,21 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   flex: 0 0 auto;
 }
 
-/* A command's line beside its kind's Ask (no row to hold it). */
-.cc-question-ask-feedback {
-  flex: 1 1 100%;
+/* One kind's Ask: a line it sent above its button; open or with a line, a full row. */
+.cc-question-ask {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
   min-width: 0;
+}
+
+.cc-question-ask.is-wide {
+  flex: 1 1 100%;
+}
+
+.cc-question-ask-feedback {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cc-question-step {
@@ -22490,6 +22501,14 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 
   .cc-question-button {
     width: 100%;
+  }
+
+  .cc-question-ask {
+    justify-items: stretch;
+  }
+
+  .cc-question-ask.is-wide {
+    flex: 0 0 auto;
   }
 }
 

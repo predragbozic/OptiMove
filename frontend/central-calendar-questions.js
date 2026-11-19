@@ -371,11 +371,15 @@ export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy
         ${own ? stepHtml(own, { ev, today, busy, question: q }) : ""}
       </li>`;
   });
+  // Each kind's Ask is its own block: a line it sent sits above its button.
   const asks = askableKinds.map((kind) => {
     const line = atAsk === kind ? `<div class="cc-question-ask-feedback">${feedback}</div>` : "";
-    if (kind === "rpe" && rpeFromSessions) return `${line}<p class="cc-panel-note">RPE comes from the linked trainings.</p>`;
-    if (step && step.act === "ask" && step.kind === kind) return `${line}${stepHtml(step, { ev, today, busy })}`;
-    return `${line}${qButton("ask-open", `Ask ${CC_QUESTION_WORDS[kind]}`, { attrs: ` data-kind="${kind}"`, off: off || Boolean(step) })}`;
+    const open = step && step.act === "ask" && step.kind === kind;
+    let body;
+    if (kind === "rpe" && rpeFromSessions) body = `<p class="cc-panel-note">RPE comes from the linked trainings.</p>`;
+    else if (open) body = stepHtml(step, { ev, today, busy });
+    else body = qButton("ask-open", `Ask ${CC_QUESTION_WORDS[kind]}`, { attrs: ` data-kind="${kind}"`, off: off || Boolean(step) });
+    return `<div class="cc-question-ask${open || line ? " is-wide" : ""}">${line}${body}</div>`;
   });
   if (!rows.length && !askableKinds.length && !feedback) return "";
   return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle"${busy ? ' aria-busy="true"' : ""}>
