@@ -1818,3 +1818,66 @@ test("36. RPE-1 (plan 9.2): a manual RPE schedule and linked sessions never meet
   const qAlign = await align(qEv, 2);
   assert.equal(qAlign.status, 200, `a question-made event aligns as before: ${qAlign.text}`);
 });
+
+test("36b. RPE-1, the order of the checks (code review LOWs): create answers session_not_available before rpe_from_sessions and refuses before any plan lock; PATCH and align refuse before any lock or write of their own", async () => {
+  const coach = role("teamCoach");
+  const day = addDays(TODAY, 31);
+  const ext = (await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coach.cookie,
+    body: { eventName: "RPE-1 order", scheduleKind: "one_time", startDate: day, timezone: "UTC", opensTime: "18:00", closesTime: "22:00", targets: [{ kind: "team", id: m.teams.t1 }] },
+  })).body.schedules[0].id;
+  const record = () => {
+    const sql = [];
+    eventHooks.beforeLocks = async ({ client }) => {
+      const original = client.query.bind(client);
+      client.query = (...args) => { sql.push(typeof args[0] === "string" ? args[0] : args[0]?.text || ""); return original(...args); };
+    };
+    return sql;
+  };
+  const planLock = (sql) => sql.some((s) => /from plans\.plans[\s\S]*for share/i.test(s));
+  const sessionLock = (sql) => sql.some((s) => /plan_sessions/i.test(s) && /for update/i.test(s));
+  const wrote = (sql) => sql.some((s) => /^\s*(insert|delete)\b/i.test(s) || /^\s*update\s+(calendar|plans)\./i.test(s));
+  // (a) An unavailable session id with a manual schedule: the session's own answer first.
+  const unknown = await createTeamEvent({ day, questions: [], externalScheduleId: ext, sessions: { logicalSessionIds: [crypto.randomUUID()] } });
+  assert.equal(unknown.status, 400, unknown.text);
+  assert.equal(unknown.body.error, "session_not_available");
+  // (b) A valid session with a manual schedule: refused before any plan lock.
+  const s1 = await planSession(m.athletes.athlete, day);
+  let sql = record();
+  let res;
+  try {
+    res = await createTeamEvent({ day, questions: [], externalScheduleId: ext, sessions: { logicalSessionIds: [s1.logicalSessionId] } });
+  } finally {
+    delete eventHooks.beforeLocks;
+  }
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.error, "rpe_from_sessions");
+  assert.ok(sql.length > 0, "the create's SQL was recorded");
+  assert.ok(!planLock(sql), "create: no plan locked before the refusal");
+  assert.ok(!wrote(sql), "create: nothing written");
+  // (c) PATCH and an RPE-on align on an event in both states: no write, no plan or session lock.
+  const ev = (await createTeamEvent({ day, title: "RPE-1 order legacy", questions: [], sessions: { logicalSessionIds: [s1.logicalSessionId] } })).body.event;
+  await q(`begin; set local session_replication_role = replica; update calendar.events set external_schedule_id = '${ext}' where id = '${ev.id}'; commit;`);
+  const other = (await api("/api/training-load/external-schedules", {
+    method: "POST", cookie: coach.cookie,
+    body: { eventName: "RPE-1 order other", scheduleKind: "one_time", startDate: day, timezone: "UTC", opensTime: "18:00", closesTime: "22:00", targets: [{ kind: "team", id: m.teams.t1 }] },
+  })).body.schedules[0].id;
+  sql = record();
+  try {
+    res = await api(`/api/calendar/events/${ev.id}`, { method: "PATCH", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: 1, externalScheduleId: other } });
+  } finally {
+    delete eventHooks.beforeLocks;
+  }
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.error, "rpe_from_sessions");
+  assert.ok(sql.length > 0 && !wrote(sql) && !planLock(sql), "PATCH: no write and no plan lock before the refusal");
+  sql = record();
+  try {
+    res = await api(`/api/calendar/events/${ev.id}/sessions/align`, { method: "POST", cookie: coach.cookie, body: { requestKey: newKey(), expectedRevision: 1 } });
+  } finally {
+    delete eventHooks.beforeLocks;
+  }
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.error, "rpe_already_linked");
+  assert.ok(sql.length > 0 && !wrote(sql) && !planLock(sql) && !sessionLock(sql), "align: no write, no plan or session lock before the refusal");
+});

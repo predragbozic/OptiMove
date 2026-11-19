@@ -825,7 +825,7 @@ taken by the Day off command, the WELLNESS ask / move and the materialization).
   rows changes, and the club-only athlete and the schedule's own athlete target stay identical to the old body. Mutation
   I3 (the test's v81 copy ignores the event's audience in the covered check) fails it.
 
-### 9.2 RPE one channel for manual references (follow-up "RPE-1"; proposed, waiting for the manager's GO)
+### 9.2 RPE one channel for manual references (follow-up "RPE-1"; accepted 2026-11-19, 9.2.10)
 
 **Why.** The independent review of #616 (INFO-1): an event can carry a manually referenced Training Load RPE schedule
 (`calendar.events.external_schedule_id`, set by create or PATCH, not by a question) and, at the same time, live links to
@@ -936,7 +936,9 @@ Tests: one new test file, or tests in `central-calendar-k2b2-questions.test.mjs`
   - an event that is question-made (no manual reference) aligns as before.
 - **#614's paths unchanged:** the question replaced by sessions, `rpe_from_question`, and a create with `sessions` plus
   a type default RPE that is skipped.
-- **The recorded SQL of paths 2–4:** each check comes before the first write, and no locking clause is added.
+- **The recorded SQL of paths 1–4 (test 36b, after the code review's LOWs):** each check comes before the first write
+  and takes no plan or session lock; a create with an unavailable session id still answers `session_not_available`
+  first.
 
 Mutations, each must be killed:
 - each of the four checks removed;
