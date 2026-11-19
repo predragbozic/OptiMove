@@ -976,3 +976,163 @@ GO on 9.2 at `bbeeb2f3`, every recommendation accepted:
 
 Reviews: `code-reviewer` on a frozen head with the full packet, then the independent review and the OptiMove manager's
 gate (★★, trigger 4). The manager opens the pull request.
+
+### 9.3 A question's Tests schedule folds into its event (follow-up "Q-FOLD"; accepted 2026-11-19, 9.3.9)
+
+**Why.** Found in the browser check of #625. When a coach asks WELLNESS on an event, the question's Tests schedule
+appears in the calendar as its own "Scheduled test" card next to the event. An RPE question does not do this: it sets
+`events.external_schedule_id`, and the read folds that schedule's day card into the event card. WELLNESS has no such
+link, because `events.test_schedule_id` belongs to a `test`-kind event (v49) and the question's schedule is named only
+by `calendar.event_questions.test_schedule_id`. Read on `912d669c`.
+
+#### 9.3.1 What the read does today (`backend/src/calendarQuery.js`, `readCalendar`)
+
+- **Test cards** come from two sources:
+  - **Assignments** (`readTestAssignmentRows`), whatever the schedule's status. A cancelled schedule or occurrence
+    gives `cancelled: true`.
+  - **Projection** of schedule days that have no assignment yet (`readTestScheduleRows`), only for
+    `status = 'active'`.
+- **The fold of a referenced schedule** happens in the event-card loop, for `events.external_schedule_id` and
+  `events.test_schedule_id`. The event card takes the schedule card's counts and per-athlete states, and the schedule
+  card is deleted. It folds only:
+  - for a **planned** event;
+  - for a viewer who is **not the athlete** (the athlete's own request stays beside her reduced event card, plan
+    section 5);
+  - when **every** athlete of the schedule card is among the event card's athletes (otherwise `scheduleFold: separate`);
+  - on a **day the event card is emitted for this viewer**: the loop runs over `eventDays` only (D16: a folded thing
+    never disappears into a card that is not shown).
+- **A question's WELLNESS schedule today, by question status.** The schedule is one-time, on `window_date`:
+  - **live:** active. A projected card before the day, an assignment card on it. Shown, and this is the reported card.
+  - **moved / removed / closed early / event cancelled:** the schedule is `cancelled`.
+    - No projected card.
+    - An assignment card only if the day's assignments were already made (on or after `window_date`), shown
+      **cancelled**. For a closed-early question it carries the answers that came in.
+- **`window_date` is not always an event day.** *After the event* is the event's last day, but *Next morning* is the
+  day after and *Custom* may be the day after. On such a day there is **no event card**.
+- **The athlete's calendar test card has no action.** In `frontend/central-calendar-view.js` a `test` card opens the
+  panel only; no button leads to the Tests form. She answers through the Tests module and Home (K2b-2a-3, in progress).
+
+#### 9.3.2 Which schedules fold (recommendation)
+
+Every Tests schedule that **any** row of `calendar.event_questions` names (`kind = 'wellness'`, live or ended, whatever
+`end_reason` is), **on its `window_date`, under the event card of the same event and day**, when that card is emitted
+for this viewer.
+- **Live:** folds. This is the case reported.
+- **Ended** (`removed`, `moved`, `closed_early`, `event_cancelled`): folds too. Their card is a cancelled leftover of
+  the event's own question, and the panel already accounts for it (ended questions are listed with `closed_early` /
+  `event_cancelled`).
+- **The event cancelled:** folds as well, unlike RPE's "a cancelled event folds nothing". The reason given there (the
+  schedule keeps collecting) does not hold: cancelling the event cancels the question's schedule.
+- **No "every athlete is listed" condition.** That rule protects the numbers moved onto the event card, and here no
+  number moves (9.3.4). An athlete the question asked who is not on the card's list is still in the panel (the question
+  lists who was asked).
+- **A `window_date` without an event card** (*Next morning*, a *Custom* day after the event): the card **stays**, as
+  today. Folding it would hide it on a day where the event does not appear (D16). This is open question **Q1**.
+
+#### 9.3.3 Which viewers (recommendation)
+
+Every viewer: managers, readers and the athlete (D21). This differs from RPE, where the athlete keeps her own request
+card, because:
+- her WELLNESS card has no action (9.3.1); she answers on Home and in Tests;
+- one card per event on her day is the goal.
+
+If K2b-2a-3 later makes the calendar card her way to the form, this is revisited (**Q2**).
+
+#### 9.3.4 What the fold changes in the answer
+
+- The test card is not emitted. **Nothing is added to the event card**: no count and no `scheduleFold.test` (which
+  stays the `test`-kind event's own). D14 and contract 4.4 of K2b-2a-2 stand: one count per card, and the panel shows
+  the question's answers as today.
+- **Day summaries and statuses** are computed after the fold from the remaining cards, so a day with only the event
+  plus its folded WELLNESS now counts one card. Its status comes from the event card, as for an RPE fold.
+- **Filters** (club, team, athletes, kinds) are unchanged. With `kinds` without `event`, no event card is emitted, so
+  the test card stays (D16). With `kinds` without `test`, there is nothing to fold.
+
+#### 9.3.5 The SQL
+
+- **One read per request**, in `readCalendar` after the test cards are built and before the event-card loop:
+
+  ```sql
+  select q.test_schedule_id, q.event_id, q.window_date
+    from calendar.event_questions q
+   where q.kind = 'wellness' and q.test_schedule_id = any($1::uuid[])
+  ```
+
+  `$1` is the schedule ids of the test cards already built. It is run only when there is at least one, and behind
+  `select to_regclass('calendar.event_questions') is not null`, as `calendarQuestionService.js` does. Without v81 it
+  returns nothing and the read is unchanged.
+- **In the event-card loop:** for each emitted event day, the test cards whose schedule a question of this event names
+  with `window_date` equal to that day are deleted (`cards.delete(`test:${scheduleId}:${day}`)`). There is no read per
+  card.
+- **Rights:** none involved. The query reads only ids of cards the viewer already gets, and it decides only to remove
+  one of them.
+
+#### 9.3.6 Tests and mutations
+
+Tests (a new test in the k2b2 suite, through `GET /api/calendar`):
+- A WELLNESS question (*After the event*, today) gives **one** card on the day, the event, for a manager, a reader and
+  the athlete. No `test` card, no WELLNESS count on the event card, and its `scheduleFold.test` is `null`.
+- **Ended:** removed, closed early (with an answer) and the event cancelled each give one card, the event (cancelled
+  for the last).
+- ***Next morning*:** the test card stays on the next day (no event card there).
+- **Unchanged:**
+  - an RPE question folds as before;
+  - a `test`-kind event's own `test_schedule_id` folds as before, with `scheduleFold.test`;
+  - a plain Tests schedule with no question keeps its card;
+  - `kinds=test` without `event` keeps the card.
+- **Day summary:** the day counts one item.
+
+Mutations, each must be killed:
+- the fold removed;
+- folding on a day without an event card;
+- folding a schedule no question names;
+- folding only live questions;
+- folding only for coaches.
+
+#### 9.3.7 Scope and reviews
+
+- **No migration and no frontend change.** The frontend renders what the read emits. The panel's question list
+  (K2b-2a-2) is unchanged.
+- **Reviews:** `code-reviewer`. This is not ★★: no lock, write, transaction or rights change, so none of the five
+  external-review triggers applies.
+
+#### 9.3.8 Open questions for the GO (with the executor's recommendation)
+
+- **Q1:** on a `window_date` without an event card (*Next morning*), keep the test card (D16). Recommended: keep. The
+  alternative, hiding it, leaves the coach no card for that day.
+- **Q2:** fold for the athlete too, unlike RPE, because her calendar test card has no action. Recommended: yes.
+- **Q3:** ended questions fold, and a cancelled event folds too. Recommended: yes.
+- **Q4:** no coverage condition, since no number moves. Recommended: yes.
+
+#### 9.3.9 The manager's GO (2026-11-19)
+
+GO on 9.3 at `23d6064e`, all four recommendations accepted:
+- **Q1:** a `window_date` with no event card keeps its test card (D16).
+- **Q2:** the athlete folds too. Her WELLNESS card has no action, and K2b-2a-3 (PR #633) does not make the calendar
+  card her way to the form; she answers through the Home card and the prompt.
+- **Q3:** ended questions and a cancelled event fold as well.
+- **Q4:** no coverage condition. The question's targets are the event's own, copied, and they move with the event.
+
+Added to 9.3.6: one test that a reader's and an athlete's answer gains no new key (the fold only removes a card), and
+that the athlete's card allowlist (D21) is unchanged. Review: `code-reviewer` on a frozen head (not ★★).
+
+#### 9.3.10 As built
+
+- `readQuestionTestFolds` (`calendarQuery.js`) does the one read of 9.3.5. The event-card loop deletes
+  `test:<schedule>:<day>` for the questions of that event and day, for every viewer and every event status.
+- **The read runs only when `kinds` contains `event`.** This is 9.3.4's "with `kinds` without `event` the test card
+  stays", which the loop alone would not give: `kinds` is applied only when the days are assembled, after the loop.
+  Mutation F6 removes the guard and fails test 37.
+- **Observed, not changed:** the existing RPE and `test`-event folds delete the referenced schedule's card in the same
+  loop without that guard. A request with `kinds=external` (no `event`) therefore omits an RPE schedule that a planned
+  event folds, while a linked session stays (`foldsLinks` requires `event`). This predates Q-FOLD and is recorded for
+  the manager.
+- **Test 37:**
+  - one card for a manager (the club's admin), a reader (the team's coach) and the athlete, for a live question, and
+    for removed, closed-early and cancelled-event questions, each on a team of its own (WELLNESS is never asked twice
+    on a day);
+  - with `kinds=test` the card stays;
+  - *Next morning* keeps its card, in a window that also holds the event's day;
+  - no new key on the event card, and the athlete's D21 allowlist exactly as before;
+  - RPE and a plain schedule unchanged. The `test`-event fold stays covered by `central-calendar-k2a-events`.
+- **Mutations:** F1–F5 of 9.3.6 and F6 (the `kinds` guard), all killed.
