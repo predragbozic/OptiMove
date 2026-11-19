@@ -249,9 +249,9 @@ export function ccQuestionDoneText(act, { kind = "", closed = false } = {}) {
   return closed ? "Closed. The answers given stay." : "Removed.";
 }
 
-export function ccPanelRefusalText(info) {
+export function ccPanelRefusalText(info, act = "") {
   if (info.status === 401) return "Please sign in again. Nothing was saved.";
-  if (info.status === 404) return "This question isn't available any more.";
+  if (info.status === 404) return act === "question-ask" ? "Questions can't be asked for this event now. Nothing was saved." : "This question isn't available any more.";
   if (info.status === 403) return "Events cannot be changed in this workspace. Nothing was saved.";
   return CC_PANEL_QUESTION_TEXT[info.code] || "Nothing was saved. Try again.";
 }
@@ -260,7 +260,7 @@ export function ccPanelRefusalText(info) {
 const PANEL_REREAD = new Set(["question_already_asked", "event_changed", "event_cancelled", "questions_off", "questions_answered", "rpe_from_sessions", "rpe_already_linked", "rpe_from_question"]);
 export const ccPanelRefusalRereads = (info) => info.status === 404 || PANEL_REREAD.has(info.code);
 // The refusals that keep the open step, so another time can be chosen.
-const KEEP_STEP = new Set(["window_one_day", "invalid_window", "wellness_already_scheduled", "no_athletes"]);
+const KEEP_STEP = new Set(["window_one_day", "invalid_window", "wellness_already_scheduled", "no_athletes", "try_again", "request_key_reused"]);
 export const ccPanelRefusalKeepsStep = (info) => KEEP_STEP.has(info.code);
 
 // Check result: settled only by an answer the server gives after its request
@@ -327,9 +327,10 @@ export function ccPanelQuestionsWaiting(pq, item) {
 export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions for athletes.";
 
 export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", rpeFromSessions = false, today = "" } = {}) {
-  if (!pq || pq.key !== item.key || pq.hidden) return "";
   const head = `<h4 class="cc-panel-subtitle" id="ccQuestionsTitle" tabindex="-1">Questions for athletes</h4>`;
-  if (pq.loading) return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}<p class="cc-panel-note" role="status">Loading the questions…</p></section>`;
+  // A command left not confirmed keeps its Check result here, whatever the read says.
+  if (!pq || pq.key !== item.key || pq.hidden) return feedback ? `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}</section>` : "";
+  if (pq.loading) return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}<p class="cc-panel-note" role="status">Loading the questions…</p></section>`;
   if (pq.error) {
     return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}<p class="cc-panel-note" role="alert">${escapeHtml(pq.error)}</p>${pq.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-questions-retry">Try again</button>`}</section>`;
   }

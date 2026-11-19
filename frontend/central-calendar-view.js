@@ -970,7 +970,8 @@ function renderAlignHtml(item, cal, off) {
 function renderEventLinksHtml(item, cal, pending, otherPending = null) {
   if (!centralCalendarEventLinkable(item)) return "";
   const busy = Boolean(cal.linkWrite);
-  const off = busy || Boolean(pending) || Boolean(otherPending);
+  // An open question step holds the panel too (one control at a time).
+  const off = busy || Boolean(pending) || Boolean(otherPending) || Boolean(cal.questionStep);
   const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent : null;
   const suggestions = centralCalendarLinkSuggestions(cal.data, item, cal.linkRefused);
   const parts = [];
@@ -1105,8 +1106,9 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
   const pending = uncertainWrites.find((entry) => entry.mode === "link" && (entry.panelKey === item.key || (item.kind === "event" && entry.eventId === item.eventId))) || null;
   // K2b-2a-2b: this event's question command left not confirmed.
   const pendingQuestion = item.kind === "event" ? uncertainWrites.find((entry) => entry.mode === "question" && entry.eventId === item.eventId) || null : null;
-  const linksLocked = Boolean(cal.linkWrite) || Boolean(pending && item.kind === "event") || Boolean(pendingQuestion);
-  const questionsOn = item.kind === "event" && item.canManage === true && formCtx.catalog?.questionsEnabled === true;
+  const linksLocked = Boolean(cal.linkWrite) || Boolean(pending && item.kind === "event") || Boolean(pendingQuestion) || Boolean(cal.questionStep);
+  // The section also stays while one of its commands is not confirmed (its Check result).
+  const questionsOn = item.kind === "event" && item.canManage === true && (formCtx.catalog?.questionsEnabled === true || Boolean(pendingQuestion));
   const body = `<header class="cc-panel-head">
         <h3 class="cc-panel-title" id="ccPanelTitle">${escapeHtml(centralCalendarTitle(item))}</h3>
         <button type="button" class="plain-button icon-button cc-panel-close" data-action="central-calendar-close-panel" aria-label="Close">&times;</button>
@@ -1133,7 +1135,7 @@ function renderEventQuestionsHtml(item, cal, pendingQuestion, linkPending, today
   const step = cal.questionStep && cal.questionStep.eventKey === item.key ? cal.questionStep : null;
   const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent.event : null;
   return renderCentralCalendarQuestionsHtml(item, cal.panelQuestions, {
-    step, busy, off: Boolean(cal.linkWrite) || Boolean(pendingQuestion) || linkPending, today,
+    step, busy, off: Boolean(cal.linkWrite) || Boolean(pendingQuestion) || linkPending || Boolean(cal.alignStep), today,
     feedback: linkFeedbackHtml(cal, item.key, pendingQuestion, "question"),
     rpeFromSessions: (view?.sessionLinks || []).length > 0,
   });

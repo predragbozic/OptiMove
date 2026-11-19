@@ -474,6 +474,7 @@ function panelServer({ enabled = true, questions = [], refuse = null, lose = fal
   const plain = responder;
   const held = (call) => (gate && call.method === "POST" ? gate.then(() => { gate = null; return plain(call); }) : plain(call));
   held.bump = bump;
+  held.list = () => list;
   held.hold = responder.hold;
   return held;
 }
@@ -607,15 +608,20 @@ test("P5. Move time: the current window first; Save time sends the window; quest
   assert.equal(section().querySelector('[data-act="send"]'), null, "the step closed");
 });
 
-test("P6. Move time is off once answered; a refusal keeps the step for another time, and a new press is a new key", async () => {
+test("P6. Move time is off once answered; a refusal (busy, or another time needed) keeps the step and its window, and a new press is a new key", async () => {
+  let busyOnce = false;
   const calls = await openQuestionsPanel({
     questions: [liveQuestion(Q_RPE, "rpe", AFTER(), { answered: 2 }), liveQuestion(Q_WELL, "wellness", AFTER())],
-    refuse: (call) => (call.url.endsWith("/move") ? { status: 409, body: { error: "wellness_already_scheduled", message: "raw" } } : null),
+    refuse: (call) => (call.url.endsWith("/move") ? (busyOnce ? ((busyOnce = false), { status: 503, body: { error: "try_again" } }) : { status: 409, body: { error: "wellness_already_scheduled", message: "raw" } }) : null),
   });
   const rows = [...dom().querySelectorAll(".cc-question-row")];
   assert.equal(rows[0].querySelector('[data-act="move-open"]').disabled, true);
   await qact("move-open", { questionId: Q_WELL });
   input2({ ccQstepWindow: "1" }, "next_morning");
+  busyOnce = true;
+  await qact("send");
+  assert.equal(section().querySelector(".cc-question-step .cc-field-error").textContent, "The calendar is busy. Nothing was saved; try again in a moment.");
+  assert.equal(dom().querySelector('[data-cc-qstep-window][value="next_morning"]').checked, true, "the chosen time stays");
   await qact("send");
   const first = questionWrites(calls).at(-1);
   assert.equal(section().querySelector(".cc-question-step .cc-field-error").textContent, "Today's WELLNESS already covers this day. Choose another day. Nothing was saved.");
@@ -664,14 +670,15 @@ test("P9. a lost answer: not confirmed, every control off (Edit too); Check resu
   assert.equal(doc.querySelector('[data-action="central-calendar-edit-event"]').disabled, true);
   assert.equal(doc.querySelector('[data-act="ask-open"]').disabled, true);
   assert.match(doc.querySelector(".cc-uncertain-line").textContent, /Check the question for “Cup match”/);
-  // A busy server on the check: still not confirmed.
-  const responder = panelServer({ questions: [] });
+  // A busy server on the first check: still not confirmed. The second goes to
+  // the same server, which replays only the same key with the same body.
+  const server = currentServer;
   installFetchMock((call) => {
     if (call.method === "POST") {
       checks += 1;
       if (checks === 1) return { status: 503, body: { error: "try_again" } };
     }
-    return call.method === "POST" ? { status: 200, body: { question: { id: Q_RPE }, event: { id: E_MATCH, revision: 3 } } } : responder(call);
+    return server(call);
   });
   const checkCalls = [];
   const realFetch = globalThis.fetch;
@@ -731,7 +738,7 @@ test("P12. a revision move reads the questions again; the section's HTML names n
   assert.equal(questionReads(calls).length, 2, "the card's revision moved: read again");
   await qact("ask-open", { kind: "wellness" });
   await qact("send");
-  assert.ok(questionReads(calls).length >= 2, "read again after a confirmed write");
+  assert.equal(questionReads(calls).length, 3, "read again once after a confirmed write");
 });
 
 test("P13. leaving with a question in flight asks first, in the question's words; a yes keeps it to check", async () => {
@@ -845,4 +852,66 @@ test("P14. while a question is live, the panel's status line says answers are aw
   const panelText = dom().querySelector(".cc-panel").textContent;
   assert.match(panelText, /Waiting for athletes' answers: see Questions for athletes\./);
   assert.doesNotMatch(panelText, /Nothing is expected after this event\./);
+});
+
+test("P1b. a panel opened again reads the questions again: answers and Later move no revision", async () => {
+  const calls = await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
+  assert.match(section().textContent, /RPE · 0\/18 answered/);
+  await act({ action: "central-calendar-close-panel" });
+  const q = currentServer.list()[0];
+  q.counts = { asked: 18, answered: 1, later: 0, notAnswered: 17 };
+  q.answered = [athlete(1)];
+  await openPanelOf(PANEL_KEY, DAY(1));
+  assert.equal(questionReads(calls).length, 2);
+  assert.match(section().textContent, /RPE · 1\/18 answered/);
+});
+
+test("P15. a catalog read in flight across a workspace change: the new calendar's panel still reads its questions", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const responder = panelServer();
+  let held = true;
+  const calls = installFetchMock((call) => (call.url === "/api/calendar/events/types" && held ? ((held = false), gate.then(() => responder(call))) : responder(call)));
+  await loadCentralCalendar({ render });
+  await tick();
+  const first = act({ action: "central-calendar-open-item", key: PANEL_KEY, date: DAY(1) }); // waits on the held catalog read
+  await tick();
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  await loadCentralCalendar({ render });
+  await tick();
+  await openPanelOf(PANEL_KEY, DAY(1));
+  release();
+  await first;
+  await tick();
+  assert.ok(questionReads(calls).length >= 1, "the new calendar read its questions");
+  assert.ok(section());
+});
+
+test("P16. Ask refused with the identical 404 (the switch went off meanwhile): Ask's own sentence", async () => {
+  await openQuestionsPanel({ refuse: (call) => (call.method === "POST" ? NOT_FOUND : null) });
+  await qact("ask-open", { kind: "wellness" });
+  await qact("send");
+  assert.equal(dom().querySelector(".cc-panel-questions .cc-link-message")?.textContent ?? dom().querySelector(".cc-refresh-note")?.textContent, "Questions can't be asked for this event now. Nothing was saved.");
+});
+
+test("P17. a lost Ask whose next read answers 404: the panel still offers Check result", async () => {
+  await openQuestionsPanel({ lose: true });
+  await qact("ask-open", { kind: "wellness" });
+  await qact("send");
+  const server = currentServer;
+  installFetchMock((call) => (call.method === "GET" && call.url.endsWith("/questions") ? NOT_FOUND : server(call)));
+  await act({ action: "central-calendar-close-panel" });
+  await openPanelOf(PANEL_KEY, DAY(1));
+  assert.ok(dom().querySelector('.cc-panel [data-action="central-calendar-link-check"]'), "Check result stays in the panel");
+});
+
+test("P18. one control at a time: an open question step turns off Edit and Cancel event, and they do nothing", async () => {
+  await openQuestionsPanel();
+  await qact("ask-open", { kind: "rpe" });
+  const doc = dom();
+  assert.equal(doc.querySelector('[data-action="central-calendar-edit-event"]').disabled, true);
+  assert.equal(doc.querySelector('[data-action="central-calendar-cancel-event"]').disabled, true);
+  await act({ action: "central-calendar-edit-event", key: PANEL_KEY, date: DAY(1) });
+  assert.equal(state.centralCalendar.form, null);
 });

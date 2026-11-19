@@ -510,7 +510,6 @@ setCentralCalendarAppliedHook(syncPanelEvent);
 // reads it again. The questions are read again when the card's
 // revision moves or a question write was confirmed (`stale`). A 404 hides the
 // section without a word; a failure waits for Try again.
-let questionsCatalogRead = null;
 function panelQuestionsWanted(cal, item) {
   const ws = cal.data?.workspace?.type;
   return Boolean(item && item.kind === "event" && item.canManage === true && (ws === "club" || ws === "team"));
@@ -526,10 +525,10 @@ function syncPanelQuestions(cal, render, { force = false } = {}) {
   if (!cal.eventCatalog) {
     // The panel object is new on every open: a failure belongs to this open only.
     if (cal.questionsCatalogFailedFor === cal.panel) return null;
-    if (!questionsCatalogRead) {
+    if (!cal.questionsCatalogRead) {
       const panel = cal.panel;
-      questionsCatalogRead = ensureEventTypes(cal).then((result) => {
-        questionsCatalogRead = null;
+      cal.questionsCatalogRead = ensureEventTypes(cal).then((result) => {
+        cal.questionsCatalogRead = null;
         if (state.centralCalendar !== cal) return null;
         if (result?.error || !cal.eventCatalog) {
           cal.questionsCatalogFailedFor = panel;
@@ -538,7 +537,7 @@ function syncPanelQuestions(cal, render, { force = false } = {}) {
         return syncPanelQuestions(cal, render);
       });
     }
-    return questionsCatalogRead;
+    return cal.questionsCatalogRead;
   }
   if (!centralCalendarCatalogOf(cal).questionsEnabled) {
     if (current) cal.panelQuestions = null;
@@ -1308,7 +1307,7 @@ function showLinkText(cal, text, { alert = false, family = "link" } = {}) {
 }
 
 async function startLinkWrite(cal, dataset, render) {
-  if (cal.form || linkLockedFor(cal, findItemOnDay(cal, cal.panel.key, cal.panel.date))) return;
+  if (cal.form || cal.questionStep || linkLockedFor(cal, findItemOnDay(cal, cal.panel.key, cal.panel.date))) return;
   // The Align row's first press only shows its step (review M6).
   if (dataset.act === "align") {
     const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
@@ -1388,6 +1387,7 @@ async function checkLinkWrite(cal, entry, render, { openPanel = false } = {}) {
       cal.linkMessage = null;
       cal.alignStep = null;
       cal.questionStep = null;
+      cal.panelQuestions = null;
       render?.();
       void syncPanelEvent(cal, render);
     }
@@ -1487,7 +1487,7 @@ function focusQuestionControl(selector) {
 
 function openQuestionStep(cal, dataset, render) {
   const item = questionPanelItem(cal);
-  if (!item || cal.form || cal.questionStep || linkLockedFor(cal, item)) return;
+  if (!item || cal.form || cal.questionStep || cal.alignStep || linkLockedFor(cal, item)) return;
   const act = dataset.act;
   let step = null;
   if (act === "ask-open") {
@@ -1573,7 +1573,7 @@ async function questionSettled(cal, spec, data, render) {
 }
 
 async function questionRefused(cal, spec, info, render) {
-  const text = ccPanelRefusalText(info);
+  const text = ccPanelRefusalText(info, spec.act);
   const step = cal.questionStep;
   if (ccPanelRefusalKeepsStep(info) && step && step.eventKey === spec.panelKey) {
     // Another time can be chosen in the same step; a new press is a new key.
@@ -1778,6 +1778,8 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     cal.linkMessage = null;
     cal.alignStep = null;
     cal.questionStep = null;
+    // Answers and Later move no revision: every open reads the questions afresh.
+    cal.panelQuestions = null;
     render?.();
     // The sheet is modal below 1024 px: the focus moves to its Close.
     globalThis.document?.querySelector?.(".cc-sheet .cc-panel-close")?.focus?.();
@@ -1889,7 +1891,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-edit-event" || type === "central-calendar-cancel-event") {
     const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
-    if (linkLockedFor(cal, item)) return true;
+    if (linkLockedFor(cal, item) || cal.questionStep) return true;
     if (type === "central-calendar-edit-event") await openEditForm(item, render);
     else openCancelForm(item, render);
     return true;

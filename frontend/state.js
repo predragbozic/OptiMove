@@ -136,6 +136,7 @@ export const emptyCentralCalendarState = () => ({
   panelQuestions: null,
   questionStep: null,
   questionsCatalogFailedFor: null,
+  questionsCatalogRead: null,
 });
 
 export const emptyExerciseOptions = () => ({
