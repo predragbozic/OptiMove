@@ -297,3 +297,34 @@ Step 2 is built on `claude/builder-batch-edit-step2`, from `origin/main` after #
 #653 if it has not merged yet. It is one ★★ package: `db-reviewer`, `security-reviewer`, `code-reviewer` (plus
 `mobile-qa` and `ux-design-reviewer` for the Save question), the tests of section 7 and 10.2, and mutations. Its
 frozen head goes to the *Nezavisni revizor*, then to the manager's gate.
+
+## 11. As built (step 2, branch `claude/builder-batch-edit-step2`)
+
+Where this differs from sections 1-10, this section records what the code does. Code: `backend/src/builderBatchEdit.js`
+(tree load, id-free fingerprint, `planSiblingChange`, the sibling facts and writes) and `prepareBatchEdit` /
+`applyEditDraft` in `backend/src/routes/builder.js`; screen: `renderBuilderBatchEditPanel` (`frontend/builder-view.js`)
+and the `builder-batch-edit-*` actions (`frontend/builder-actions.js`).
+
+- **The RPE submit race (10.2.5) needs no change to the RPE route.** `POST /api/training-load/sessions/:sessionId/rpe`
+  locks the session row first: `backend/src/routes/trainingLoad.js` ~:345-363, the statement that ends
+  `for update of ps` (at :363 on the merge base `d3943466`). So the Save, which locks the sibling session rows it would
+  remove or move `FOR UPDATE` before it reads results, either waits for a submit and then sees its result
+  (`has_results`), or makes the submit wait and the submit then finds the row gone and answers its existing 404. A
+  foreign-key violation cannot occur, so no catch was added (the OptiMove manager's ruling). Both orders are tested
+  through the real routes (step 2 test 13).
+- **A move** carries a sibling's session only while it is still as before (content and fields); otherwise the member
+  is asked about (`changed_separately`).
+- **The choice token** is compared whenever `applyTo` or `choiceToken` is sent, even if nobody is asked any more.
+- **Rights first**, on the transaction's own connection (`getEditablePlan(req, id, client.query)`): a member the coach
+  may not change is only `not_editable`, nothing more about it.
+- **Names (10.2.1)** come from the same predicate as the switcher (`editablePlanAccessSql`, #664): a member the coach
+  may not open is counted without a name.
+- **409 `try_again`** for a lock wait that runs out or a deadlock (nothing written); **409 `source_changed`** when the
+  source was saved after the edit draft was opened (the Save writes the source's `updated_at` with
+  `clock_timestamp()`, so a draft opened while a Save waited is never newer than it); a failed read after the COMMIT
+  answers 200 with what is known.
+- **The screen:** "{name} is one of N athletes in this group" (N counts the hidden members); "Apply these changes to
+  all M athletes (you can edit)?" (M the members the coach may open); one "won't get the changes" list with plain
+  reasons; no group button when nobody else can take the change; *Not saved* / *Your changes may already be saved*
+  after *Check result*, which only reads. With only the reopened plan visible there is no question: "Changes go to
+  this athlete only." Program batches keep that sentence (Q7).
