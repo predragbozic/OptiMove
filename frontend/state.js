@@ -1224,6 +1224,7 @@ export const createInitialState = () => ({
   trainingLoad: emptyTrainingLoadState(),
   myTraining: emptyMyTrainingState(),
   athleteHomeEvents: emptyAthleteHomeEventsState(),
+  athleteQuestions: emptyAthleteQuestionsState(),
   checkIn: emptyCheckInState(),
   // feature/mobile-messages-fullscreen: menuOpen is the mobile thread
   // header's 3-dot overflow menu (Hide/Block live there on mobile instead
@@ -1265,6 +1266,13 @@ export function emptyMyTrainingState() {
 // `today` is the date the rows were read for; `canRetry` is false after a lost sign-in; `expanded` is Show N more.
 export function emptyAthleteHomeEventsState() {
   return { status: "idle", rows: [], today: "", contextKey: "", error: "", canRetry: true, expanded: false };
+}
+
+// The athlete's open calendar questions (K2b-2a-3, docs/ai/central-calendar-k2b2a3-ui-contract.md): `status` is "idle",
+// "ready" or "hidden" (a failed read: nothing is shown); `rows` the explicit pick of athlete-questions-data.js; `notice`
+// one sentence at the top of Home's card slot ("This question isn't open right now.").
+export function emptyAthleteQuestionsState() {
+  return { status: "idle", rows: [], contextKey: "", notice: "" };
 }
 
 export const state = createInitialState();

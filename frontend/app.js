@@ -96,6 +96,8 @@ import { renderMyTrainingHtml } from "./my-training-view.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
 import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
+import { loadAthleteQuestions, resetAthleteQuestions } from "./athlete-questions-data.js";
+import { athleteQuestionsBack, beginAthleteHomeLoad, closeAthleteQuestionsPrompt, setAthleteQuestionsPromptHandlers, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
@@ -681,6 +683,9 @@ function bindEvents() {
   // R2 pictures (FE-1): whatever renders one, its short-lived address is
   // asked for in a batch on the next frame - see media-playback.js.
   installThumbnailResolver(document.body);
+  // K2b-2a-3: the questions' prompt first - Escape is its Later, Tab stays inside it.
+  document.addEventListener("keydown", handleAthleteQuestionsKeys);
+  setAthleteQuestionsPromptHandlers(athleteQuestionHandlers);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!els.mediaModal?.hidden) { closeMedia(); return; }
@@ -2015,7 +2020,7 @@ async function handleGlobalClick(event) {
   if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) })) {
     return;
   }
-  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
+  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openCalendarQuestion: (questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers()), openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
     renderMessages();
     return;
   }
@@ -2172,6 +2177,7 @@ const BACK_STAYED = "stayed";
 
 function handleBrowserBack() {
   if (state.allowBrowserExit) return;
+  if (athleteQuestionsBrowserBack()) return; // K2b-2a-3
   if (state.appHistoryDepth > 0) {
     state.appHistoryDepth -= 1;
     if (handleAppBack() === BACK_STAYED) {
@@ -2538,7 +2544,10 @@ function closeCoachHomePicker() {
   els.content.querySelector(`[data-action="coach-home-picker-open"][data-mode="${mode}"]`)?.focus();
 }
 
-async function loadAthleteHome({ forceRefresh = false } = {}) {
+// `deepLink`: Home was opened by a notification click (or another deep link), so the questions' prompt is not shown.
+async function loadAthleteHome({ forceRefresh = false, deepLink = false } = {}) {
+  // K2b-2a-3: only the latest Home load may show the questions' prompt.
+  const load = beginAthleteHomeLoad();
   state.navStack = [];
   els.context.textContent = "Home";
   els.title.textContent = "Home";
@@ -2559,7 +2568,48 @@ async function loadAthleteHome({ forceRefresh = false } = {}) {
     refreshMyTrainingEntry({ render: () => { renderLibraryNav(); renderAthleteHomeFromCache(); } }),
     // Her events of the next 14 days (K2b-1e, D28): her own GET /api/calendar, painted into Home's section.
     loadAthleteHomeEvents({ render: renderAthleteHomeFromCache, forceRefresh }),
-  ]);
+    // Her open questions of events (K2b-2a-3): the card at the top of Home, and the soft prompt once the reads settled.
+    loadAthleteQuestions({ render: renderAthleteHomeFromCache }),
+  ]).then((results) => {
+    maybeShowAthleteQuestionsPrompt({ athleteMode: isAthleteMode(), deepLink, load });
+    return results;
+  });
+}
+
+// K2b-2a-3: the phone's Back (handleBrowserBack) on the questions' prompt is its Later, as Escape; the history entry the
+// browser consumed is put back, so the next Back behaves as before. False when no prompt is open.
+function athleteQuestionsBrowserBack() {
+  if (!athleteQuestionsBack(athleteQuestionHandlers())) return false;
+  window.history.pushState(state.appHistoryDepth > 0 ? { optimove: true } : { optimoveGuard: true }, "", window.location.href);
+  return true;
+}
+
+// K2b-2a-3: the prompt's keys (registered before the app's Escape handler, which it stops when it handled one).
+function handleAthleteQuestionsKeys(event) {
+  handleAthleteQuestionsKeydown(event, athleteQuestionHandlers());
+}
+
+// K2b-2a-3: what the questions' Answer / Later / notification click call (athlete-questions-actions.js).
+function athleteQuestionHandlers() {
+  return {
+    // Home is already loaded (the card, the prompt, or the notification path's loadHome): only the form opens, with no
+    // second Home load (code review, LOW).
+    openRpe: async (assignmentId) => {
+      await openExternalAssignmentFromNotification(assignmentId);
+      renderActiveTrainingLoadSurface();
+    },
+    openWellness: (assignmentId) => openTestAssignment(assignmentId),
+    rpeFormOpenFor: (assignmentId) => String(state.trainingLoad.rpeForm?.externalAssignmentId || "") === String(assignmentId),
+    render: renderAthleteHomeFromCache,
+    reload: () => loadAthleteQuestions({ render: renderAthleteHomeFromCache }),
+    loadHome: async () => {
+      state.activeTab = "athlete-home";
+      state.navStack = [];
+      renderTabs();
+      renderLibraryNav();
+      await loadAthleteHome({ deepLink: true });
+    },
+  };
 }
 
 // The athlete's own recorded sessions and values (owner, 2026-11-16), read-only.
@@ -2826,7 +2876,7 @@ async function openTestsResults(scheduleId) {
 async function openTrainingLoadAssignment(assignmentId) {
   state.activeTab = "athlete-home";
   state.navStack = [];
-  await loadAthleteHome();
+  await loadAthleteHome({ deepLink: true });
   await openExternalAssignmentFromNotification(assignmentId);
   renderTabs();
   renderLibraryNav();
@@ -3065,6 +3115,11 @@ async function handleContentClick(event) {
     renderTabs();
     renderLibraryNav();
     await loadActiveTab();
+    return;
+  }
+  // K2b-2a-3: the questions' Answer on Home's card (the prompt has its own listener, athlete-questions-actions.js).
+  if (type?.startsWith("athlete-questions-")) {
+    await handleAthleteQuestionsAction(action, athleteQuestionHandlers());
     return;
   }
   // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer. Gated by its prefix, so every other click
@@ -3465,6 +3520,9 @@ async function onWorkspaceChanged() {
   resetMyTraining();
   // So are Home's Upcoming events (K2b-1e): the list and an answer on its way are dropped.
   resetAthleteHomeEvents();
+  // And her open questions (K2b-2a-3): the prompt closes, the list and the app session's prompt memory are dropped.
+  closeAthleteQuestionsPrompt();
+  resetAthleteQuestions();
   if (state.activeTab === "my-training") state.activeTab = isAthleteMode() ? "athlete-home" : "coach-home";
   renderTabs();
   renderLibraryNav();

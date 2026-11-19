@@ -89,6 +89,7 @@ import {
   loadTrainingLoadCalendarWeek,
 } from "./training-load-calendar-data.js";
 import { isHiddenInClub } from "./metric-picker-visibility.js";
+import { athleteQuestionsAnswered } from "./athlete-questions-data.js";
 import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 let analysisLayoutPointer = null;
@@ -2856,6 +2857,7 @@ async function submitRpeForm(renderTrainingLoad) {
     // "can't narrow the blast radius, so don't guess" reasoning as the
     // workspace master toggle above.
     invalidateAllTrainingLoadCalendarGenerations();
+    if (form.externalAssignmentId) athleteQuestionsAnswered(form.externalAssignmentId);
   } catch (error) {
     form.saving = false;
     form.error = error.message || "Could not save this session's feedback.";
