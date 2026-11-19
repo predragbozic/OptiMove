@@ -352,7 +352,8 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     for (const facts of [metricFactsByDefinition, dayLevelFactsByDefinition]) {
       // Kept only when the way it was entered is a known measured one: a fact that does not say how it was entered
       // is left out too (closed, not open).
-      for (const [definitionId, list] of facts) facts.set(definitionId, list.filter((f) => MEASURED_ENTRY_METHODS.has(f.entryMethod)));
+      // And never a calculated value (J21): it is simply absent here, so no role policy can admit it.
+      for (const [definitionId, list] of facts) facts.set(definitionId, list.filter((f) => MEASURED_ENTRY_METHODS.has(f.entryMethod) && f.calculated !== true));
     }
   }
   return { authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };

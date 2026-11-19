@@ -359,3 +359,115 @@ test("4. a dashboard series of HMLD reads its calculated values under every aggr
   assert.deepEqual(await run(plain.id, "standalone_and_source_rollup"), {});
   assert.equal(Object.values(await run(plain.id, "all_including_derived")).map(Number).join(), "7");
 });
+
+// ---- The athlete never sees a calculated value (the Rukovodilac's step-1 decision; the owner's rule that an athlete sees only
+// what was really measured). Each read through its real route, against the coach's read of the same data as the control.
+async function athleteUserOf(athleteId) {
+  const id = await makeUser("athlete self");
+  await admin.query(`update public.athletes set user_id = $2 where id = $1`, [athleteId, id]);
+  await setWorkspace(id, "athlete", athleteId);
+  return { id, cookie: `optimove_session=${await createSession(id)}` };
+}
+const mapi = (path, opts) => call("/api/training-load/metrics", path, opts);
+const dapi = (path, opts) => call("/api/training-load/dashboards", path, opts);
+
+test("5. an athlete's own reads carry no calculated value, name or unit - the activity detail, an occasion, the results and her own dashboards - while the coach's reads of the same data do", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, 9841);
+  const athleteId = team.athleteIds[0];
+  const athlete = await athleteUserOf(athleteId);
+  const first = String(world[ZONES[0]].variableId);
+  const H = String(hmld.id);
+  const occasion = (await admin.query(
+    `select o.id from training_load.metric_values v join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.athlete_id = $1 and v.metric_definition_id = $2 and o.segment_id is null and o.superseded_by_occasion_id is null`, [athleteId, H])).rows[0].id;
+
+  // The activity detail.
+  const coachDetail = await tapi(`/${s.activityId}`, { cookie: team.coach.cookie });
+  assert.equal(coachDetail.status, 200, coachDetail.text);
+  assert.ok(coachDetail.body.facts.some((f) => f.factKind === "metric_value" && f.detail.metricDefinitionId === H), "the coach sees HMLD");
+  const mine = await tapi(`/${s.activityId}`, { cookie: athlete.cookie });
+  assert.equal(mine.status, 200, mine.text);
+  const myDefs = mine.body.facts.filter((f) => f.factKind === "metric_value").map((f) => f.detail.metricDefinitionId);
+  assert.ok(myDefs.includes(first), "her measured input is there");
+  assert.equal(myDefs.includes(H), false, "no calculated value");
+  assert.equal(H in (mine.body.variableNamesById ?? {}), false, "no name or unit of it");
+  assert.equal(mine.text.includes(H) || mine.text.includes(hmld.label), false, "no trace of it anywhere in her answer");
+
+  // One occasion.
+  const coachOcc = await mapi(`/occasions/${occasion}`, { cookie: team.coach.cookie });
+  assert.equal(coachOcc.status, 200, coachOcc.text);
+  assert.ok(coachOcc.text.includes(H), "the coach's occasion read holds HMLD");
+  const myOcc = await mapi(`/occasions/${occasion}`, { cookie: athlete.cookie });
+  assert.equal(myOcc.status, 200, myOcc.text);
+  assert.ok(myOcc.text.includes(first));
+  assert.equal(myOcc.text.includes(H) || myOcc.text.includes(hmld.label), false, "her occasion read holds no calculated value");
+
+  // The results.
+  const myResults = await mapi(`/results?dateFrom=${D1}&dateTo=${D1}`, { cookie: athlete.cookie });
+  assert.equal(myResults.status, 200, myResults.text);
+  assert.ok(myResults.text.includes(first));
+  assert.equal(myResults.text.includes(H) || myResults.text.includes(hmld.label), false, "her results hold no calculated value");
+  const coachResults = await mapi(`/results?dateFrom=${D1}&dateTo=${D1}`, { cookie: team.coach.cookie });
+  assert.ok(coachResults.text.includes(H), "the coach's results hold HMLD");
+
+  // Her own dashboard, under the widest role policy: the calculated series is empty; the input's is not. The coach's is not.
+  const board = async (who) => {
+    const made = await dapi("", { method: "POST", cookie: who.cookie, body: { name: `Board ${key().slice(0, 6)}` } });
+    assert.equal(made.status, 201, made.text);
+    const widget = await dapi(`/${made.body.dashboard.id}/widgets`, { method: "POST", cookie: who.cookie, body: {
+      expectedDashboardRevision: made.body.dashboard.revision, widgetType: "table", title: "t", widgetOrder: 0, x: 0, y: 0, width: 6, height: 4, mobileOrder: 0 } });
+    assert.equal(widget.status, 201, widget.text);
+    let revision = 1;
+    for (const [i, def] of [[0, H], [1, first]]) {
+      const added = await dapi(`/${made.body.dashboard.id}/widgets/${widget.body.widgetId}/series`, { method: "POST", cookie: who.cookie, body: {
+        expectedWidgetRevision: revision, seriesOrder: i, metricDefinitionId: def, dataScopeLevel: "session", analyticalAggregation: "sum",
+        aggregationRolePolicy: "all_including_derived" } });
+      assert.equal(added.status, 201, added.text);
+      revision += 1;
+    }
+    const read = await dapi(`/${made.body.dashboard.id}/query`, { method: "POST", cookie: who.cookie, body: { dateFrom: D1, dateTo: D1 } });
+    assert.equal(read.status, 200, read.text);
+    const [hmldSeries, inputSeries] = read.body.widgets[0].series;
+    return { hmld: hmldSeries.data.current, input: inputSeries.data.current };
+  };
+  const hers = await board(athlete);
+  assert.ok(hers.input.length > 0, "her input series has her value");
+  assert.deepEqual(hers.hmld, [], "her calculated series is empty");
+  const coachs = await board(team.coach);
+  assert.ok(coachs.hmld.length > 0, "the coach's calculated series is not");
+});
+
+test("6. an input value in another unit is never added (the Independent's LOW-1): no calculated value is written, and the review names the input as missing", async () => {
+  const team = await setupTeam();
+  const first = String(world[ZONES[0]].variableId);
+  // The importer writes each value in its variable's unit, so the case is made by hand: one input value's unit_at_capture is
+  // changed in place, with the guards off (an input re-pointed to an older version of another unit would read this way).
+  await checkNow(team, [bundleOf(team, 9851)]);
+  const cand = await pending(team, 9851);
+  const imported = await approve(team, cand);
+  const occasion = (await admin.query(
+    `select o.id from training_load.metric_values v join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.event_id = $1 and v.metric_definition_id = $2 and o.segment_id is null limit 1`, [imported.eventId, String(hmld.id)])).rows[0].id;
+  const { writeCalculatedValues, calculatedForOccasions } = await import("../src/calculatedValues.js");
+  const client = new pg.Client({ connectionString: db.url });
+  await client.connect();
+  try {
+    await client.query("begin");
+    await client.query("set local session_replication_role = replica");
+    await client.query(`delete from training_load.metric_values where occasion_id = $1 and is_derived`, [occasion]);
+    await client.query(`update training_load.metric_values set unit_at_capture = 'km' where occasion_id = $1 and metric_definition_id = $2`, [occasion, first]);
+    await client.query("set local session_replication_role = origin");
+    const written = await writeCalculatedValues(client, { occasionId: occasion, level: "full", ownerTeamId: team.teamId });
+    assert.deepEqual(written, [], "an input in km is not added to metres");
+    const entries = (await calculatedForOccasions(client, { occasions: [{ occasionId: occasion, level: "full" }], ownerTeamId: team.teamId })).get(String(occasion));
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].value, null);
+    assert.deepEqual(entries[0].missingInputs.map((m) => m.metricDefinitionId), [first], "the review names the input in the other unit");
+  } finally {
+    await client.query("rollback").catch(() => {});
+    await client.end();
+  }
+});

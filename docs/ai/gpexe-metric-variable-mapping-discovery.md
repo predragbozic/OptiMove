@@ -4520,12 +4520,22 @@ PR 3's screen says so before Save, and zone match refuses overlapping conditione
 - **The dashboard** (`trainingLoadDashboardQuery.js`): a calculated variable's own value (derived, `derived_rollup`, of a
   version with a calculation) is that variable's only value, so its series reads it under every aggregation-role policy; any
   other `derived_rollup` value keeps the policy's rule, and no other series changes.
+- **The athlete never sees a calculated value** (the *Rukovodilac*'s step-1 decision; the owner's rule that an athlete sees
+  only what was really measured; the *Nezavisni revizor*'s MEDIUM-1 on PR #617). Every athlete-self read leaves out a value
+  that is derived and of a version with a calculation, on the server, with no name or unit of the variable left in the
+  answer: the activity detail (`trainingActivityResults.js`, before `variableNamesById` is built), one occasion and the
+  results (`trainingLoadMetricsMeasurements.js`, by `calculatedValueSql`), and her own dashboards
+  (`trainingLoadDashboardQuery.js`: the athlete workspace drops the facts, so no role policy can admit them). Checked and
+  carrying no metric value, so unchanged: the athlete's activity list, the calendar's counts (`routes/trainingLoad.js`,
+  whether a participant has data and duplicates per variable: a calculated value exists only beside its measured inputs,
+  so neither count changes), the weekly and today reads, the athlete home, and the roster (staff only).
 - **The import check** (`docs/runbooks/gpexe-import-check.sql`): blocks 11-13 count the imported (non-derived) values only,
   and block 11 shows `calculated_values` apart (they have no T6 row). New sha256 `f7c8075d445c461b`.
 - **Tests:** `backend/tests/calculated-variables-2b.test.mjs` (writer and preview: first import, corrected and needs-review
   occasions, a missing input, own-club and hidden variables), `calculated-variables-2b-routes.test.mjs` (through the real
   routes: import, undo and re-import, estimates, the correction, the dashboard under every policy and a non-calculated derived
-  value), `gpexe-import-check-sql.test.mjs` test 6; mutations of the estimates filter, the correction's recalculation and its
+  value; test 5, the athlete's four reads against the coach's; test 6, an input value in another unit is never added and is
+  named as missing), `gpexe-import-check-sql.test.mjs` test 6; mutations of the estimates filter, the correction's recalculation and its
   input-only comparison, the dashboard admission (both directions) and the check's two filters, all killed.
 - **No backfill (as built; a backfill is a separate decision):** a calculated variable applies to the occasions written
   after it exists (or after its club shows it again). An occasion imported before keeps no calculated value: a re-import of

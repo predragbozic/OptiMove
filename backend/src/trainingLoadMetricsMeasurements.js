@@ -11,7 +11,7 @@
 // the catalog's client-requested-scope model.
 import crypto from "crypto";
 import { pool, query } from "./db.js";
-import { writeCalculatedValues } from "./calculatedValues.js";
+import { calculatedValueSql, writeCalculatedValues } from "./calculatedValues.js";
 import { isAthleteInWorkspaceScope, canManageMetricEventInScope, metricEventScopeSqlForWorkspace, catalogVisibilitySql } from "./trainingLoadMetricsAccess.js";
 import { linkMetricEventToActivity } from "./trainingActivityMetricsLink.js";
 
@@ -950,10 +950,11 @@ export async function getOccasionDetail(readContext, occasionId) {
   // An athlete sees only what was really measured (owner, 2026-11-16): an estimate of her own value answers as an
   // occasion that does not exist, and a history that reaches one stops before it.
   if (readContext.isAthleteSelf && row.entry_method === "estimate") return null;
+  // Nor a calculated value (J21): an athlete's read leaves it out, by the database's own facts.
   const values = await query(
     `select v.*, d.label, d.short_label, d.icon_url from training_load.metric_values v
      join training_load.metric_definitions d on d.id = v.metric_definition_id
-     where v.occasion_id = $1`,
+     where v.occasion_id = $1${readContext.isAthleteSelf ? ` and not ${calculatedValueSql("v")}` : ""}`,
     [occasionId],
   );
   return { occasion: row, values: values.rows };
@@ -1031,8 +1032,10 @@ export async function queryResults(readContext, filters = {}) {
   if (readContext.isAthleteSelf) {
     params.push(readContext.athleteId);
     conditions.push(`p.athlete_id = $${params.length}`);
-    // An athlete sees only what was really measured (owner, 2026-11-16): never an estimate.
+    // An athlete sees only what was really measured (owner, 2026-11-16): never an estimate, and never a calculated
+    // value (J21).
     conditions.push("o.entry_method <> 'estimate'");
+    conditions.push(`not ${calculatedValueSql("v")}`);
   } else {
     conditions.push(metricEventScopeSqlForWorkspace(readContext.scope, "ev", params));
   }

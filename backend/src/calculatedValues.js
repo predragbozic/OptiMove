@@ -138,3 +138,26 @@ export async function calculatedForOccasions(client, { occasions, ownerTeamId })
   }
   return out;
 }
+
+// ---- The athlete never sees a calculated value (the Rukovodilac's step-1 decision; the owner's rule that an athlete sees
+// only what was really measured). Decided on the server, by the database's own facts: a value is a calculated one when it
+// is derived and its version carries a calculation (v77; read through the whole row, so a database before v77 has none).
+
+// A SQL condition that is true for a calculated value `v` (alias of training_load.metric_values).
+export function calculatedValueSql(alias = "v") {
+  return `(${alias}.is_derived and exists (select 1 from training_load.metric_definition_versions calc_v
+            where calc_v.id = ${alias}.metric_definition_version_id
+              and coalesce(to_jsonb(calc_v.*) -> 'calculation', 'null'::jsonb) <> 'null'::jsonb))`;
+}
+
+// The version ids, among `versionIds`, that carry a calculation. `run(sql, params)` answers { rows }.
+export async function calculationVersionIds(run, versionIds) {
+  const ids = [...new Set(versionIds.filter(Boolean).map(String))];
+  if (ids.length === 0) return new Set();
+  const rows = (await run(
+    `select id::text as id from training_load.metric_definition_versions v
+      where v.id = any($1::uuid[]) and coalesce(to_jsonb(v.*) -> 'calculation', 'null'::jsonb) <> 'null'::jsonb`,
+    [ids],
+  )).rows;
+  return new Set(rows.map((r) => r.id));
+}
