@@ -67,6 +67,14 @@ test("3. one Back press: only an entry of another tab is taken, once; endAppBack
   assert.equal(history.takeAppBackEntry("weekly"), null, "nothing outside a press");
   history.beginAppBack(null);
   assert.equal(history.takeAppBackEntry("weekly"), null);
+  // A stale place is only one of the tab the user is on (or of no tab): never another tab's.
+  history.beginAppBack({ tab: "central-calendar", calendar: null });
+  assert.equal(history.skipStaleAppBackEntry("weekly"), false);
+  assert.equal(history.endAppBack().taken, false);
+  history.beginAppBack({ tab: "weekly", calendar: null });
+  assert.equal(history.skipStaleAppBackEntry("weekly"), true);
+  assert.equal(history.skipStaleAppBackEntry("weekly"), false, "once");
+  assert.equal(history.endAppBack().taken, true);
 });
 
 test("4. the calendar comes back as it was: view, week, day and the panel re-opened by key, never over a form", () => {
@@ -88,7 +96,7 @@ test("4. the calendar comes back as it was: view, week, day and the panel re-ope
 
 // handleBrowserBack and handleAppBack from app.js, run against fakes with the
 // real app-history.js: every other name they call is recorded.
-function backHarness(appState, { leave = true, overlay = null } = {}) {
+function backHarness(appState, { leave = true, overlay = null, throwOnce = false } = {}) {
   const calls = [];
   const browserBack = sourceOf("function handleBrowserBack() {", "\n}");
   const restorePlace = sourceOf("function restoreAppPlace(place) {", "\n}");
@@ -98,11 +106,15 @@ function backHarness(appState, { leave = true, overlay = null } = {}) {
     BACK_STAYED: "stayed",
     ...history,
     els: { mediaModal: { hidden: true } },
-    window: { history: { pushState: () => calls.push("pushState"), back: () => calls.push("history.back") }, location: { href: "/" }, confirm: () => true },
+    // The browser's Back: its popstate runs handleBrowserBack again, a moment later.
+    window: { history: { pushState: () => calls.push("pushState"), back: () => { calls.push("history.back"); setTimeout(() => fns.handleBrowserBack(), 0); } }, location: { href: "/" }, confirm: () => true },
     isAthleteMode: () => false,
     athleteQuestionsBrowserBack: () => false,
     handleMessagesBack: () => false,
-    closeTopExerciseLayer: () => false,
+    closeTopExerciseLayer: () => {
+      if (throwOnce) { throwOnce = false; throw new Error("a close step failed"); }
+      return false;
+    },
     closeSpecificProgramOverlay: () => false,
     closeCentralCalendarPanel: () => {
       if (overlay !== "calendar-panel") return false;
@@ -119,7 +131,8 @@ function backHarness(appState, { leave = true, overlay = null } = {}) {
     get: (target, key) => (key in target ? target[key] : typeof key === "string" ? () => { calls.push(key); return undefined; } : undefined),
   });
   // eslint-disable-next-line no-new-func
-  const fns = new Function("scope", `with (scope) { ${restorePlace}\n${appBack}\n${browserBack}\nreturn { handleBrowserBack, handleAppBack }; }`)(proxy);
+  let fns;
+  fns = new Function("scope", `with (scope) { ${restorePlace}\n${appBack}\n${browserBack}\nreturn { handleBrowserBack, handleAppBack }; }`)(proxy);
   // pushAppHistory's own two steps (its pushState is the browser's).
   const push = () => { appState.appHistoryDepth += 1; history.pushAppHistoryEntry(history.appHistoryEntryOf(appState)); };
   return { ...fns, calls, push };
@@ -195,4 +208,41 @@ test("9. app.js clears the stack on a workspace switch and on sign-out, and push
   assert.match(sourceOf("async function signOut() {", "\n}"), /clearAppHistoryEntries\(\);/);
   const push = sourceOf("function pushAppHistory() {", "\n}");
   assert.match(push, /state\.appHistoryDepth \+= 1;\n[^]*pushAppHistoryEntry\(appHistoryEntryOf\(state\)\);/);
+});
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+test("10. a stale place of the same tab (the Athletes list opened and closed by its own toggle) is skipped: Back reaches the older place, never Home in the middle", async () => {
+  const s = appState("builder");
+  const h = backHarness(s);
+  h.push(); // Builder -> the calendar from the rail.
+  s.activeTab = "central-calendar";
+  h.push(); // The Athletes list opened, then closed by its toggle: nothing popped.
+  h.push(); // The calendar -> Settings.
+  s.activeTab = "organization";
+  h.handleBrowserBack();
+  assert.equal(s.activeTab, "central-calendar");
+  h.handleBrowserBack(); // The stale entry: one more step back.
+  await tick();
+  assert.equal(s.activeTab, "builder");
+  assert.equal(s.appHistoryDepth, 0);
+  assert.equal(history.appHistoryEntryCount(), 0);
+  assert.ok(!h.calls.includes("confirmLeave:coach-home"), "never Home in the middle of the trail");
+  // With nothing older left, a stale place falls back to Home as before.
+  const t = appState("organization");
+  const g = backHarness(t);
+  g.push();
+  g.handleBrowserBack();
+  await tick();
+  assert.equal(t.activeTab, "coach-home");
+});
+
+test("11. a Back press that throws leaves no place behind for a later press outside a popstate (the app's back button)", () => {
+  const s = appState("central-calendar");
+  const h = backHarness(s, { throwOnce: true });
+  h.push();
+  s.activeTab = "weekly";
+  assert.throws(() => h.handleBrowserBack(), /a close step failed/);
+  h.handleAppBack(); // depth 0: the back button calls it directly.
+  assert.equal(s.activeTab, "coach-home", "the root fallback, not the popped place");
 });

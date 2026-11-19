@@ -84,7 +84,7 @@ import { renderCoachesHtml } from "./coach-profiles.js";
 import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { closeBuilderCalendarEventPanel, handleBuilderCalendarEventAction, handleBuilderCalendarEventInput, resetBuilderCalendarEventForWorkspaceChange } from "./builder-calendar-event-actions.js";
-import { appHistoryEntryOf, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, takeAppBackEntry } from "./app-history.js";
+import { appHistoryEntryOf, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, restoreCentralCalendarPlace, restoreCentralCalendarView, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { renderCentralCalendarHtml } from "./central-calendar-view.js";
@@ -2186,8 +2186,15 @@ function handleBrowserBack() {
     state.appHistoryDepth -= 1;
     const leftTab = state.activeTab;
     beginAppBack(popAppHistoryEntry());
-    const result = handleAppBack();
-    const { entry, taken } = endAppBack();
+    let result;
+    let done;
+    try {
+      result = handleAppBack();
+    } finally {
+      // Never left over for a later press outside a popstate (a back button).
+      done = endAppBack();
+    }
+    const { entry, taken } = done;
     // A press that closed an overlay keeps the place it did not use: the
     // next Back still returns there (an entry of this same tab is used up).
     const unused = !taken && result && result !== BACK_STAYED && entry && entry.tab !== leftTab;
@@ -2325,6 +2332,12 @@ function handleAppBack() {
   if (backTo) {
     if (!confirmLeaveTrainingLoad(backTo.tab)) return BACK_STAYED;
     restoreAppPlace(backTo);
+    return true;
+  }
+  // A stale place of this same tab: one more step back, to the next older
+  // place (its popstate pops it); Home only once the stack is empty.
+  if (skipStaleAppBackEntry(state.activeTab) && state.appHistoryDepth > 0) {
+    window.history.back();
     return true;
   }
 

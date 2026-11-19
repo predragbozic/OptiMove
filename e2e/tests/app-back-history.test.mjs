@@ -55,15 +55,17 @@ const where = (page) => page.evaluate(() => ({
   panel: Boolean(document.querySelector('[data-action="central-calendar-close-panel"]')),
 }));
 
+// A phone opens its menu first (only when it is closed).
 async function openNav(page) {
   const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
+  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
 }
 
 async function openCalendar(page) {
   await openNav(page);
   await page.locator("#calendarToggle").click();
-  await page.waitForSelector(".cc-toolbar", { timeout: 20_000 });
+  // Drawn once the week's days carry their dates (the read is asynchronous).
+  await page.waitForSelector(".central-calendar [data-date]", { timeout: 20_000 });
 }
 
 // Pages the calendar to DAY's week; on a phone the day strip then points at DAY.
@@ -92,7 +94,9 @@ async function openCard(page, filter) {
 
 async function backTo(page, predicate, arg) {
   await page.goBack().catch(() => {});
-  await page.waitForFunction(predicate, arg, { timeout: 20_000 });
+  await page.waitForFunction(predicate, arg, { timeout: 20_000 }).catch(async (error) => {
+    throw new Error(`Back did not land where expected (${JSON.stringify(arg)}): ${JSON.stringify(await where(page))}; ${error.message.split("\n")[0]}`);
+  });
   // And it stays so once the tab's own read has landed.
   await page.waitForTimeout(1000);
   if (!(await page.evaluate(predicate, arg))) {
@@ -168,6 +172,39 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         await page.waitForFunction(() => !document.querySelector(".cc-toolbar"), null, { timeout: 20_000 });
         await backTo(page, calendarAt, [at.period, at.openKey]);
       }
+
+      // A place left behind on the same tab (the Athletes list opened and closed by its own toggle) is skipped:
+      // Builder -> calendar -> Athletes open and closed -> Settings -> Back -> calendar -> Back -> Builder, never Home.
+      await openNav(page);
+      await page.locator('[data-library-tab="builder"]').first().click();
+      await page.waitForFunction(() => !document.querySelector(".cc-toolbar"), null, { timeout: 20_000 });
+      const builderTitle = (await where(page)).title;
+      await openCalendar(page);
+      // The panel left open earlier closes first on Back (the calendar's own Back): closed here, so the path is the
+      // stale place alone.
+      if (await page.locator(".cc-panel-close").count()) {
+        await page.click(".cc-panel-close");
+        await page.waitForFunction(() => !document.querySelector(".cc-panel-close"), null, { timeout: 10_000 });
+      }
+      const atCalendar = await where(page);
+      await openNav(page);
+      await page.click("#athletesToggle");
+      await page.waitForFunction(() => document.querySelector("#athletesToggle")?.getAttribute("aria-expanded") === "true", null, { timeout: 10_000 });
+      await page.click("#athletesToggle");
+      await page.waitForFunction(() => document.querySelector("#athletesToggle")?.getAttribute("aria-expanded") === "false", null, { timeout: 10_000 });
+      await openNav(page);
+      await page.getByText("Settings", { exact: true }).first().click();
+      await page.waitForSelector(".settings-tabs");
+      await backTo(page, calendarAt, [atCalendar.period, atCalendar.openKey]);
+      // Every title shown on the way to the Builder.
+      await page.evaluate(() => {
+        window.__backTitles = [];
+        new MutationObserver(() => window.__backTitles.push(document.querySelector("#screenTitle")?.textContent.trim()))
+          .observe(document.querySelector("#screenTitle"), { childList: true, characterData: true, subtree: true });
+      });
+      await backTo(page, (t) => document.querySelector("#screenTitle")?.textContent.trim() === t, builderTitle);
+      const titles = await page.evaluate(() => window.__backTitles);
+      assert.ok(!titles.includes("Home"), `never Home on the way: ${titles.join(" > ")}`);
       assert.deepEqual(pageErrors, []);
     } finally {
       await context.close();

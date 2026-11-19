@@ -1725,8 +1725,8 @@ test("H2 (owner review): every main sidebar/rail navigation and browser Back in 
   before(appBack, "if (!confirmLeaveTrainingLoad(rootTab)) return BACK_STAYED;", "state.activeTab = rootTab;", "browser Back");
   // Back to a remembered place (app-history.js) asks the same, before it restores anything.
   before(appBack, "if (!confirmLeaveTrainingLoad(backTo.tab)) return BACK_STAYED;", "restoreAppPlace(backTo);", "browser Back to a place");
-  const browserBack = slice("function handleBrowserBack() {", 1600);
-  assert.match(browserBack, /state\.appHistoryDepth -= 1;[\s\S]*?const result = handleAppBack\(\);[\s\S]*?if \(result === BACK_STAYED \|\| unused\) \{[\s\S]*?window\.history\.pushState\(\{ optimove: true \}, "", window\.location\.href\);\s*state\.appHistoryDepth \+= 1;\s*pushAppHistoryEntry\(entry\);/, "a declined Back re-arms the entry it consumed, and the place with it");
+  const browserBack = slice("function handleBrowserBack() {", 2000);
+  assert.match(browserBack, /state\.appHistoryDepth -= 1;[\s\S]*?result = handleAppBack\(\);[\s\S]*?if \(result === BACK_STAYED \|\| unused\) \{[\s\S]*?window\.history\.pushState\(\{ optimove: true \}, "", window\.location\.href\);\s*state\.appHistoryDepth \+= 1;\s*pushAppHistoryEntry\(entry\);/, "a declined Back re-arms the entry it consumed, and the place with it");
   assert.match(browserBack, /if \(handleAppBack\(\)\) \{\s*window\.history\.pushState\(\{ optimoveGuard: true \}/, "at the history root, a declined Back (truthy BACK_STAYED) re-arms the guard entry");
 });
 

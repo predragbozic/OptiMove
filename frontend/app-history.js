@@ -57,6 +57,16 @@ export function takeAppBackEntry(currentTab) {
   return pending.entry;
 }
 
+// A place of the tab the user is on that no overlay used (an Athletes list or
+// an exercise detail left some other way): stale. It is used up, and Back
+// goes on to the next older place instead of falling back to Home.
+export function skipStaleAppBackEntry(currentTab) {
+  if (!pending || pending.taken || !pending.entry) return false;
+  if (pending.entry.tab && pending.entry.tab !== currentTab) return false;
+  pending.taken = true;
+  return true;
+}
+
 export function endAppBack() {
   const done = pending || { entry: null, taken: false };
   pending = null;
