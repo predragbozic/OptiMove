@@ -9,13 +9,16 @@ code. The designer's mockups and the owner's approval come first; then a UI cont
 |---|---|---|
 | **S1** | „u kalendaru glavnom moglo bi se filtriranje i po sportisti (slika npr sa levo desno scrolom ili strelicom za prebacivanje ili vec ne znam kako je najefikasnije) zatim isto tako u weekly programu pa ulazak u nekom sekciju čiji naziv deli više igrača da bismo olakšali treneru da veoma lako pretražuje po sportisti. Mi sada tako nesto efikasno imamo u builderu" | Filter the calendar by athlete with photos, a sideways scroll and arrows. Do the same in the Weekly plan, so that a coach steps through the athletes inside a session several of them share. Use the Builder's athlete switcher as the model. |
 | **S2** | „Po timu takodje unutar kluba" | The same switcher for the teams of a club. |
+| **S3** | „To već imamo vrv" | The team filter already exists in the calendar: the *Groups* chips in Filters. K6 reuses it and builds no second team control; it only brings it next to the athlete strip, so a team can be chosen in one tap. |
 
 ## 1. What exists today (`920459c0`)
 
 - **The Builder's switcher.** The Builder already has an athlete switcher for a batch: pills with photos and
   initials, ‹ › and "1 / N" (`frontend/builder-view.js`). Since #664 it shows only the members the coach may open.
 - **The calendar's read.** `GET /api/calendar` already takes `clubIds`, `teamIds` and `athleteIds`
-  (`backend/src/routes/calendar.js:76-93`). The screen's *Groups* filter uses the teams only.
+  (`backend/src/routes/calendar.js:76-93`).
+- **The calendar's team filter already exists:** the *Groups* chips in the Filters panel
+  (`frontend/central-calendar-view.js`, `central-calendar-toggle-team`). What is missing is an athlete filter.
 - **Opening the Weekly plan.** `openWeeklyPlanForAthleteOnDate(athleteId, date)` (`frontend/app.js`) opens one
   athlete's plan on a day. To see another athlete's plan, the coach goes back to the list. Back now returns to the
   calendar (#657).
@@ -26,7 +29,8 @@ The switcher has the Builder's look: photo pills, ‹ ›, "3 / 18", and a searc
 anyone the coach may not see in the workspace.
 
 - **K6-1, the calendar** (frontend only).
-  - In a club workspace a **team** row comes first (S2): All teams · U19 · First team … with ‹ ›.
+  - In a club workspace the **existing Groups (team) choice** comes first, moved next to the strip so it takes one
+    tap (S2, S3). It is not a second team control.
   - Under it is the **athlete** strip of the chosen team (S1), starting with "All".
   - Choosing an athlete reads the calendar with `athleteIds`. One tap moves to the next or previous athlete.
   - It combines with K5's *Show only* (for example only GPS, for one athlete).
