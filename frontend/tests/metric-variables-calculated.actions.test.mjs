@@ -161,7 +161,7 @@ test("New variable -> Calculated by OptiMove: no day rule or allowed values; the
   assert.equal($('[data-mv-field="minValue"]'), null, "no allowed values");
   for (const sentence of [
     /A day's values are added up \(Sum\)\. A calculated variable has no allowed values\./,
-    /Calculated for sessions imported after this variable was made\. Sessions imported earlier stay without it\./,
+    /Calculated for sessions imported after this variable was made\. A session imported earlier gets it only if it is corrected or imported again with changed data\./,
     /OptiMove calculates it for a team once every variable it adds up is switched on for that team\./,
     /If one of them has no value in a session, this variable has no value there either \(zero is a value; missing is not\)\./,
     /OptiMove does not check whether two of them count the same thing/,
@@ -313,4 +313,15 @@ test("a new version of a drill-only calculated variable keeps its levels: its dr
   await settle();
   assert.equal(posts().length, 1);
   assert.deepEqual(posts()[0].body.calculation, { kind: "sum", inputs: [D("b"), D("c")] });
+});
+
+test("a variable of another unit is not offered: it is listed as cannot be added up, with its unit (independent review LOW-2)", async () => {
+  const km = variable({ id: "aaaaaaaa-2222-4000-8000-00000000000d", label: "Distance in km", ownerScope: "system", levels: ["session", "drill"], currentVersion: version({ unit: "km", dailyAggregationMethod: "sum", minValue: null }) });
+  respond = (call) => (call.method === "GET" && call.url.startsWith(`${BASE}?`) ? { status: 200, body: { variables: [...CANDIDATES, km], nextCursor: null } } : { status: 404, body: { error: "notFound" } });
+  await openCalculated();
+  type("unit", "m");
+  await unitPause();
+  assert.equal($(`[data-mv-input="${km.id}"]`), null, "the km variable is not offered for m");
+  const reasons = [...content.querySelectorAll(".metric-variables-unavailable li")].map((li) => li.textContent.replace(/\s+/g, " "));
+  assert.ok(reasons.some((r) => /Distance in km/.test(r) && /In km, not m\./.test(r)), reasons.join(" | "));
 });

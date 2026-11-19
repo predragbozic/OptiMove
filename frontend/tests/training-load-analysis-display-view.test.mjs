@@ -326,7 +326,7 @@ test("J21: a widget of a calculated variable says from when it has values; one o
       analysis.widgets[0].series = [{ id: "series-1", metric_definition_id: "def-hmld", resolution_status: "resolved", source_policy: "all_with_conflicts" }];
       analysis.metricPicker.definitions = [{ id: "def-hmld", label: "HMLD", calculated }];
       const body = rendered().querySelector(".tl-analysis-widget");
-      const note = /HMLD: Calculated for sessions imported after this variable was made\. Sessions imported earlier stay without it\./;
+      const note = /HMLD: Calculated for sessions imported after this variable was made\. A session imported earlier gets it only if it is corrected or imported again with changed data\./;
       if (calculated) assert.match(body.textContent, note, `${type}: the note`);
       else assert.doesNotMatch(body.textContent, /Calculated for sessions imported/, `${type}: no note`);
     }

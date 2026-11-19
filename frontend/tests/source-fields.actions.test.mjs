@@ -660,6 +660,7 @@ test("the plain row (the owner's screenshot): a human name with GPEXE's own unde
   assert.ok(parked && !parked.open, "the zone sets and threshold events are in one closed group");
   assert.match(parked.querySelector("summary").textContent, /Zone sets and threshold events: not available yet \(2\)/);
   assert.match(parked.textContent, /Distance in each power zone \(m\).*Accelerations above a threshold \(count\)/s);
+  assert.doesNotMatch(parked.textContent, /Open it to confirm/, "a parked row has no next step of its own: the group's sentence is the step");
   for (const word of [/Evidence/, /Verified/, /Observed/, /not proven/, /Meaning confirmed/]) assert.doesNotMatch(text().split("More values GPEXE sends")[0], word, `${word} only in technical details`);
   await click('[data-action="source-fields-technical"]');
   assert.match(text(), /Evidence: Verified/);

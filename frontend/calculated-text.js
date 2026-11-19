@@ -1,8 +1,8 @@
 // Calculated variables (J21): the sentences every screen says about them, in one place, so the Variables screen and the
 // results a coach reads use the same words (the Rukovodilac's condition of 2026-11-19: never an unexplained blank).
 export const CALCULATED_TEXT = Object.freeze({
-  // C144: from now on, no backfill.
-  fromNow: "Calculated for sessions imported after this variable was made. Sessions imported earlier stay without it.",
+  // C144: no backfill; an earlier session gets it when a correction or a changed re-import writes a new occasion.
+  fromNow: "Calculated for sessions imported after this variable was made. A session imported earlier gets it only if it is corrected or imported again with changed data.",
   // C141: no switch per team.
   perTeam: "OptiMove calculates it for a team once every variable it adds up is switched on for that team.",
   // C142 and C145.
@@ -13,7 +13,7 @@ export const CALCULATED_TEXT = Object.freeze({
   athletes: "Athletes do not see calculated variables.",
   dayRule: "A day's values are added up (Sum). A calculated variable has no allowed values.",
   // An empty cell of a calculated variable in a session's results.
-  emptyCell: "Not calculated here: the session was imported before this variable was made, or one of the variables it adds up has no value or is not switched on for this team.",
+  emptyCell: "Not calculated here: the session was imported before this variable was made and not corrected or imported again since, or one of the variables it adds up has no value or is not switched on for this team.",
 });
 
 // Whether a coach's fact (the canonical read) is OptiMove's calculated value: derived, naming its formula version.

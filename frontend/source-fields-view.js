@@ -150,12 +150,12 @@ function technicalRowHtml(field) {
 // The plain row (the owner's screenshot; the same list, one style as "More values GPEXE sends"): the human name with
 // GPEXE's own small under it, the unit as people write it, one state and one next step. The zone sets and threshold
 // events go into one closed group, as on the board.
-function plainRowHtml(field, ctx) {
+function plainRowHtml(field, ctx, { parked = false } = {}) {
   const revision = currentRevision(field);
   const state = fieldPlainState(field, revision);
   const unit = revision?.sourceUnit || revision?.expectedSourceUnit || "";
   const own = field.label && field.label !== fieldHumanName(field) ? `<small class="muted source-fields-own-name">GPEXE: ${escapeHtml(field.label)}</small>` : "";
-  const next = fieldNextStep(ctx, revision, state);
+  const next = parked ? "" : fieldNextStep(ctx, revision, state);
   return `
     <li>
       <button type="button" class="metric-variables-item dc-item" data-action="source-fields-open" data-field-id="${escapeAttr(field.id)}">
@@ -178,7 +178,7 @@ function plainRowsHtml(fields, ctx) {
     ${parked.length ? `<details class="source-fields-parked">
       <summary>Zone sets and threshold events: not available yet (${parked.length})</summary>
       <p class="muted">${escapeHtml(ctx.mayVerify ? PARKED_SENTENCE.platform : PARKED_SENTENCE.club)}</p>
-      <ul class="metric-variables-list">${parked.map((f) => plainRowHtml(f, ctx)).join("")}</ul>
+      <ul class="metric-variables-list">${parked.map((f) => plainRowHtml(f, ctx, { parked: true })).join("")}</ul>
     </details>` : ""}`;
 }
 
