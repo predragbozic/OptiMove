@@ -353,7 +353,7 @@ function renderKindHtml(form) {
   const option = (value, label, hint) => `
     <label class="checkbox-row"><input type="radio" name="mv-kind" value="${value}" data-mv-kind ${form.draft.kind === value ? "checked" : ""} ${locked ? "disabled" : ""}>
       <span><strong>${label}</strong><br><span class="muted">${hint}</span></span></label>`;
-  return `<fieldset class="metric-variables-fieldset"><legend>What fills it</legend>
+  return `<fieldset class="metric-variables-fieldset metric-variables-kind"><legend>What fills it</legend>
     ${option("measured", "Measured", "A data source or a coach records its values.")}
     ${option("calculated", "Calculated by OptiMove", "OptiMove adds up other variables of the same unit, for example the distance in three power zones.")}
   </fieldset>`;
