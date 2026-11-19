@@ -1,0 +1,214 @@
+// Central calendar K2b-2a-2b - "Ask athletes": the pure parts shared by the
+// event form and the event panel (docs/ai/central-calendar-k2b2a2-ui-contract.md
+// sections 3 to 5 and 10). Nothing here talks to the server or the DOM: the
+// window rule mirrored from the server's computeWindow (calendarQuestions.js,
+// which stays the judge), the words of a window, the sentences of the
+// refusals, and the form's question state with the body it sends.
+
+export const CC_QUESTION_KINDS = Object.freeze(["rpe", "wellness"]);
+export const CC_QUESTION_WORDS = Object.freeze({ rpe: "RPE", wellness: "WELLNESS" });
+export const CC_QUESTION_PROMPTS = Object.freeze({ rpe: "How hard was it?", wellness: "How are you feeling?" });
+export const CC_WINDOW_KINDS = Object.freeze(["after_event", "next_morning", "custom"]);
+export const CC_ONE_DAY = "Answers can be collected within one day for now.";
+
+const AFTER_EVENT_OPENS = "18:00";
+const DAY_END = "23:59";
+const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+export function ccAddDays(iso, days) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// The event's facts the window depends on: { day, endDay, startTime, endTime }.
+export function ccQuestionEventOf(source) {
+  return {
+    day: String(source?.day || ""),
+    endDay: String(source?.endDay || ""),
+    startTime: String(source?.startTime || "").slice(0, 5),
+    endTime: String(source?.endTime || "").slice(0, 5),
+  };
+}
+
+// The window's day and times, or { error } with the server's code
+// (invalid_window / window_one_day) - the same rule as computeWindow.
+export function ccQuestionWindowRange(ev, window) {
+  if (!DATE.test(ev.day)) return { error: "invalid_window" };
+  const last = ev.endDay && ev.endDay >= ev.day ? ev.endDay : ev.day;
+  if (window.kind === "after_event") {
+    const start = TIME.test(ev.startTime) ? ev.startTime : "";
+    const end = TIME.test(ev.endTime) ? ev.endTime : "";
+    const opens = end || (start && start > AFTER_EVENT_OPENS ? start : AFTER_EVENT_OPENS);
+    if (opens >= DAY_END) return { error: "invalid_window" };
+    return { date: last, from: opens, to: DAY_END };
+  }
+  if (window.kind === "next_morning") return { date: ccAddDays(last, 1), from: "07:00", to: "12:00" };
+  if (!DATE.test(window.date || "") || window.date < ev.day || window.date > ccAddDays(last, 1)) return { error: "invalid_window" };
+  if (!TIME.test(window.from || "") || !TIME.test(window.to || "")) return { error: "invalid_window" };
+  if (window.from >= window.to) return { error: "window_one_day" };
+  return { date: window.date, from: window.from, to: window.to };
+}
+
+// "Sat 21.11."
+export function ccShortDay(iso) {
+  if (!DATE.test(iso || "")) return "";
+  const d = new Date(`${iso}T00:00:00Z`);
+  return `${WEEKDAYS[d.getUTCDay()]} ${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+}
+
+function onDay(iso, today) {
+  if (today && iso === today) return "today";
+  if (today && iso === ccAddDays(today, 1)) return "tomorrow";
+  return `on ${ccShortDay(iso)}`;
+}
+
+// The window's words: the choice's own quiet line in the form, the panel's
+// "After the event, 18:00–23:59 today".
+export function ccWindowWords(range, { today = "" } = {}) {
+  if (!range || range.error) return "";
+  return `${range.from}–${range.to} ${onDay(range.date, today)}`;
+}
+export const CC_WINDOW_LABELS = Object.freeze({ after_event: "After the event", next_morning: "Next morning", custom: "Custom" });
+
+export function ccPanelWindowText(window, { today = "" } = {}) {
+  if (!window) return "";
+  const range = { date: window.date, from: window.from, to: window.to };
+  if (window.kind === "custom") return `${ccShortDay(window.date)}, ${window.from}–${window.to}`;
+  return `${CC_WINDOW_LABELS[window.kind] || "Window"}, ${ccWindowWords(range, { today })}`;
+}
+
+// The client's own check before a send (the server stays the judge).
+export function ccWindowFieldError(ev, window) {
+  const range = ccQuestionWindowRange(ev, window);
+  if (!range.error) return "";
+  if (window.kind === "after_event") return "The event ends too late to ask after it the same day. Choose Next morning or Custom.";
+  if (window.kind === "custom") {
+    if (!DATE.test(window.date || "") || window.date < ev.day || window.date > ccAddDays(ev.endDay || ev.day, 1)) return "Choose one of the event's days or the day after.";
+    if (!TIME.test(window.from || "") || !TIME.test(window.to || "")) return "Choose both times.";
+    return `The end time must be after the start time. ${CC_ONE_DAY}`;
+  }
+  return "This time to ask doesn't fit the event.";
+}
+
+// The window on the wire: only a custom one carries its date and times.
+export function ccWindowWire(window) {
+  if (window.kind === "custom") return { kind: "custom", date: window.date, from: window.from, to: window.to };
+  return { kind: window.kind };
+}
+
+// ---------------------------------------------------------------------------
+// The sentences (one plain sentence and one next step; never a code or id)
+// ---------------------------------------------------------------------------
+export const CC_FORM_QUESTION_TEXT = Object.freeze({
+  rpe_from_sessions: "RPE comes from this event's linked trainings. Untick RPE, or unlink the trainings first.",
+  rpe_already_linked: "This event already collects RPE through another request. Untick RPE.",
+  rpe_from_question: "This event already asks athletes for RPE. Remove that question first.",
+  wellness_already_scheduled: "Today's WELLNESS already covers this day. Untick WELLNESS, or choose another day.",
+  wellness_not_available: "The WELLNESS check-in isn't available right now. Untick WELLNESS to save.",
+  questions_answered: "Athletes have already answered this event's questions, so its day, time and athletes can't change. Keep them, or remove the answered questions first.",
+  question_already_asked: "This event already asks this question. The event was read again.",
+  window_one_day: "Answers can be collected within one day for now. Choose an end time after the start time.",
+  invalid_window: "This time to ask doesn't fit the event. Choose Next morning or Custom.",
+  invalid_question: "Nothing was saved. Try again.",
+  no_athletes: "Nobody on this event can be asked on that day. Check the event's athletes, or untick the questions.",
+  questions_off: "Questions for athletes are not turned on for this club.",
+  rpe_already_answered: "Athletes have already answered this event's RPE. Remove the session link or keep the event's own RPE.",
+});
+
+export const CC_PANEL_QUESTION_TEXT = Object.freeze({
+  questions_answered: "Athletes have already answered, so this time can't change. Remove the question to stop it.",
+  rpe_from_sessions: "RPE comes from the linked trainings, so it can't be asked here.",
+  rpe_already_linked: "This event already collects RPE through another request.",
+  rpe_from_question: "This event already asks athletes for RPE.",
+  wellness_already_scheduled: "Today's WELLNESS already covers this day. Choose another day.",
+  wellness_not_available: "The WELLNESS check-in isn't available right now.",
+  question_already_asked: "This question is already asked. The event was read again.",
+  window_one_day: "Answers can be collected within one day for now. Choose an end time after the start time.",
+  invalid_window: "This time doesn't fit the event. Choose another one.",
+  no_athletes: "Nobody on this event can be asked on that day.",
+  questions_off: "Questions for athletes are not turned on for this club.",
+  event_changed: "This event was changed meanwhile. The calendar was read again: try again.",
+  event_cancelled: "This event is cancelled, so nothing can be asked.",
+  try_again: "The calendar is busy. Nothing was saved; try again in a moment.",
+  request_key_reused: "This could not be sent. Nothing was saved; try again.",
+});
+
+// The codes a Check result may settle on: given after the request record (the
+// question commands run in the event's runner) or by the body's own checks.
+export const CC_QUESTION_SETTLED_CODES = Object.freeze([
+  "questions_off", "rpe_from_sessions", "rpe_already_linked", "rpe_from_question", "wellness_already_scheduled", "wellness_not_available",
+  "question_already_asked", "questions_answered", "no_athletes", "invalid_window", "window_one_day", "invalid_question", "rpe_already_answered",
+]);
+
+// ---------------------------------------------------------------------------
+// The form's question state
+// ---------------------------------------------------------------------------
+const pick = (on, window = { kind: "after_event" }) => ({ on, window: { kind: window.kind, date: window.date || "", from: window.from || "", to: window.to || "" } });
+
+// A new event: the type's questions ticked, After the event.
+export function ccNewFormQuestions(type) {
+  const defaults = Array.isArray(type?.defaultQuestions) ? type.defaultQuestions : [];
+  return {
+    available: true, touched: false, liveRead: "none", live: [], answered: {}, confirmClose: false,
+    picks: Object.fromEntries(CC_QUESTION_KINDS.map((kind) => [kind, pick(defaults.includes(kind))])),
+    base: null,
+  };
+}
+
+// A type chosen on a new event: its questions, while the coach has not
+// touched the section.
+export function ccApplyTypeQuestions(questions, type) {
+  if (!questions || questions.touched || questions.base) return;
+  const defaults = Array.isArray(type?.defaultQuestions) ? type.defaultQuestions : [];
+  for (const kind of CC_QUESTION_KINDS) questions.picks[kind] = pick(defaults.includes(kind));
+}
+
+// An edit: the event's live questions as GET .../questions gives them.
+export function ccEditFormQuestions(read) {
+  const live = (read?.questions || []).filter((q) => q.status === "live");
+  const questions = {
+    available: true, touched: false, liveRead: "ok", live, confirmClose: false,
+    answered: Object.fromEntries(live.map((q) => [q.kind, q.counts?.answered || 0])),
+    picks: Object.fromEntries(CC_QUESTION_KINDS.map((kind) => {
+      const q = live.find((entry) => entry.kind === kind);
+      return [kind, q ? pick(true, q.window) : pick(false)];
+    })),
+  };
+  questions.base = JSON.parse(JSON.stringify(questions.picks));
+  return questions;
+}
+
+export function ccQuestionsChanged(questions) {
+  if (!questions?.base) return Boolean(questions?.touched);
+  return JSON.stringify(questions.picks) !== JSON.stringify(questions.base);
+}
+
+// The answered questions this save would close early (unticked).
+export function ccQuestionsClosingEarly(questions) {
+  if (!questions?.base) return [];
+  return CC_QUESTION_KINDS.filter((kind) => questions.base[kind]?.on && !questions.picks[kind]?.on && (questions.answered[kind] || 0) > 0);
+}
+
+// What the request carries: `questions` only when the section is shown and
+// the coach changed it (an untouched create lets the server ask the type's
+// defaults; an untouched edit leaves the live questions as they are).
+export function ccQuestionsRequest(questions, ev, { create }) {
+  if (!questions?.available) return { errors: {}, part: {} };
+  const changed = create ? questions.touched : ccQuestionsChanged(questions);
+  if (!changed) return { errors: {}, part: {} };
+  const errors = {};
+  const list = [];
+  for (const kind of CC_QUESTION_KINDS) {
+    const p = questions.picks[kind];
+    if (!p.on) continue;
+    // An answered question that stays keeps its window as it is.
+    const locked = !create && (questions.answered[kind] || 0) > 0;
+    const error = locked ? "" : ccWindowFieldError(ev, p.window);
+    if (error) errors[`question:${kind}`] = error;
+    list.push({ kind, window: ccWindowWire(p.window) });
+  }
+  return { errors, part: Object.keys(errors).length ? null : { questions: list } };
+}

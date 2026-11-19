@@ -22520,6 +22520,86 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   font-style: italic;
 }
 
+/* K2b-2a-2b: "Ask athletes" in the event form (contract section 3). */
+.cc-questions {
+  gap: 6px;
+}
+
+.cc-question {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cc-question-when {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0 0 4px 30px;
+  padding: 0;
+  border: 0;
+}
+
+.cc-question-when legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cc-question-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 14px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.cc-question-choice input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cc-question-custom {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.cc-question-custom .cc-field-hint {
+  grid-column: 1 / -1;
+}
+
+.cc-inline-confirm {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.cc-inline-confirm p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.cc-inline-confirm .plain-button {
+  min-height: 44px;
+}
+
+@media (max-width: 420px) {
+  .cc-question-when {
+    margin-left: 0;
+  }
+}
+
 /* No scroller of its own: the panel or the sheet scrolls (and keeps its
    place across a repaint); the search shows 60 rows at most. */
 .cc-check-list {

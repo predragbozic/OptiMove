@@ -33,6 +33,8 @@ export function centralCalendarCatalogOf(cal) {
     fields: Array.isArray(catalog.fields) ? catalog.fields : [],
     locations: Array.isArray(catalog.locations) ? catalog.locations : [],
     teamDefaults: catalog.teamDefaults && typeof catalog.teamDefaults === "object" ? catalog.teamDefaults : {},
+    // K2b-2a-2b (B1): the owner club's Ask athletes switch.
+    questionsEnabled: catalog.questionsEnabled === true,
   };
 }
 

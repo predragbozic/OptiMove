@@ -1076,7 +1076,7 @@ function panelHost(body, layout) {
 function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = []) {
   // The event form takes the panel's place (K2a-2); the item's panel comes
   // back when the form closes.
-  if (cal.form) return panelHost(renderCentralCalendarEventFormHtml(cal.form, { ...formCtx, longDate: centralCalendarLongDate }), layout);
+  if (cal.form) return panelHost(renderCentralCalendarEventFormHtml(cal.form, { ...formCtx, longDate: centralCalendarLongDate, today }), layout);
   const panel = cal.panel;
   const item = panelItemOf(cal);
   if (!item) return "";
