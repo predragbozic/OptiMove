@@ -802,7 +802,7 @@ const STILL_REFUSED_ON_A_WORKING_BRANCH = [
   ["git merge --no-edit --abort origin/main", ASK],
   // another repository, another configuration, another environment
   ["git -C ../other merge origin/main", ASK],
-  ["git -C . merge origin/main", ASK],
+  ["git -C . merge origin/main", ALLOW], // -C resolved by the hook: the same working branch
   ["git -c merge.ff=false merge origin/main", ASK],
   ["git --git-dir=../other/.git merge origin/main", ASK],
   ["git --work-tree=.. merge origin/main", ASK],
@@ -820,7 +820,8 @@ const STILL_REFUSED_ON_A_WORKING_BRANCH = [
   ["git checkout -B main && git merge origin/main", ASK],
   ["git symbolic-ref HEAD refs/heads/main && git merge origin/main", ASK],
   ["git branch -m main && git merge origin/main", ASK],
-  ["git worktree add ../w main && git merge origin/main", ASK],
+  ["git worktree add ../w main && git merge origin/main", ALLOW], // another work tree; this one keeps its branch
+  ["git worktree add -B main ../w && git merge origin/main", ASK], ["git worktree add --force ../w && git merge origin/main", ASK],
   ["echo ref: refs/heads/main > .git/HEAD && git merge origin/main", ASK],
   ["git fetch origin feature/x:refs/remotes/origin/main && git merge origin/main", ASK],
   ["git fetch origin +refs/heads/evil:refs/remotes/origin/main && git merge origin/main", ASK],
@@ -1032,7 +1033,7 @@ test("merge exemption: the two building blocks, token by token", () => {
     assert.equal(isHarmlessBeforeMerge(yes), true, yes);
   }
   for (const no of ["cd ..", "git checkout main", "git switch main", "git branch", "git branch -m main", "git branch --show-current x", "git fetch upstream", "git fetch origin a:b", "git fetch origin feature/x",
-    "git fetch --all", "git fetch origin main extra", "git -C .. status", "git diff --output=x", "git diff --output x", "git log -o x", "wc -l file", "head file", "cat x", "echo hi", "true", "git pull",
+    "git fetch --all", "git fetch origin main extra", "git -C ~/x status", "git -C $D status", "git diff --output=x", "git diff --output x", "git log -o x", "wc -l file", "head file", "cat x", "echo hi", "true", "git pull",
     "git stash", "git commit -m x", "git remote set-url origin x", "git config user.name x", "git status > x", "git status $(x)", "GIT_DIR=x git status", "", null]) {
     assert.equal(isHarmlessBeforeMerge(no), false, String(no));
   }
@@ -1479,5 +1480,44 @@ test("LOW-2: a temporary directory that lies inside a repository is a work tree"
   } finally {
     if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
     rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------
+// The #640 exemption in worktrees: `git -C <path> merge …` and `cd <path> && … git merge …`.
+// The hook resolves the folder itself and checks the branch THERE; whatever it cannot resolve asks.
+// ------------------------------------------------------------------
+
+test("merge exemption in a worktree: -C <path> and one plain cd <path> are resolved and checked", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-wtm-"));
+  const work = makeRepo("sg-wtm-work-", "feature/k4");
+  const onMain = makeRepo("sg-wtm-main-", "main");
+  const detached = makeRepo("sg-wtm-det-", "feature/d");
+  execFileSync("git", ["checkout", "-q", "--detach"], { cwd: detached });
+  const workName = path.basename(work);
+  try {
+    expectAll([
+      [`git -C ${work} merge --no-edit origin/main`, ALLOW], [`git -C ${work} merge -q origin/main`, ALLOW], [`git -C ${work} merge --no-ff origin/main`, ALLOW],
+      [`cd ${work} && git merge --no-edit origin/main`, ALLOW], [`cd ${work} && git status --short && git merge --no-edit origin/main`, ALLOW],
+      [`cd ${work} && git worktree add ${tmp}/w2 && git merge --no-edit origin/main`, ALLOW],
+      [`cd ${work} && git worktree add -b feature/new ${tmp}/w3 origin/main && git merge --no-edit origin/main`, ALLOW],
+      [`cd ${work} && git fetch -q origin main && git merge --no-edit origin/main`, ALLOW], [`git -C ${work} fetch -q origin && git -C ${work} merge --no-edit origin/main`, ALLOW],
+      [`cd ${path.dirname(work)} && git -C ${workName} merge --no-edit origin/main`, ALLOW],
+      // a worktree whose branch is main, or a detached HEAD, or one the hook cannot resolve: asks
+      [`git -C ${onMain} merge --no-edit origin/main`, ASK], [`cd ${onMain} && git merge --no-edit origin/main`, ASK], [`cd ${detached} && git merge origin/main`, ASK],
+      [`git -C ${tmp}/does-not-exist merge origin/main`, ASK], [`cd ${work} && cd ${onMain} && git merge origin/main`, ASK], [`cd ${onMain} && cd ${work} && git merge origin/main`, ASK],
+      [`cd ~/x && git merge origin/main`, ASK], ["cd $W && git merge origin/main", ASK], ["cd $(pwd) && git merge origin/main", ASK], ["cd - && git merge origin/main", ASK],
+      [`cd "${work}" && git merge origin/main`, ASK], [`cd ${work} && git checkout main && git merge origin/main`, DENY], // stricter than ask: the checkout cannot be verified from here
+      [`cd ${work} && git worktree add -B main ${tmp}/w4 && git merge origin/main`, ASK], [`cd ${work} && git worktree add --force ${tmp}/w5 && git merge origin/main`, ASK],
+      [`git -C ${work} -C ${onMain} merge origin/main`, ASK], [`git -C ${work} merge origin/main origin/master`, ASK], [`git -C ${work} merge --squash origin/main`, ASK],
+      // the other parts of the line are judged as before
+      [`cd ${work} && git merge --no-edit origin/main && git push -f`, DENY], [`cd ${work} && git merge origin/main & git push`, ASK],
+      [`cd ${work} && git merge --no-edit origin/main && git branch -D x`, ASK],
+    ], featureRepo);
+    // from a cwd on main, -C into the working branch is what counts
+    assert.equal(verdict(`git -C ${work} merge --no-edit origin/main`, mainRepo), ALLOW);
+    assert.equal(verdict("git merge --no-edit origin/main", mainRepo), ASK);
+  } finally {
+    for (const d of [tmp, work, onMain, detached]) rmSync(d, { recursive: true, force: true });
   }
 });

@@ -429,11 +429,32 @@ function plainTokens(segment) {
 // `git merge [--no-edit|--no-ff|--no-commit|-q]... origin/main` (or origin/master), the
 // flags before or after the source — and nothing else: no env prefix, no git global
 // option (`-C`, `-c`, `--git-dir`...), no second source, no other flag, no `--abort`.
+// A path the hook can resolve by itself: plain characters only (no ~, $, glob, quotes).
+const PLAIN_PATH_RE = /^[A-Za-z0-9_.\/@-]+$/;
+
+// `git [-C <plain path>] merge ...`: returns the -C path ("" when there is none), or null when
+// the segment is not exactly that.
+function plainMergeDirectoryArgument(segment) {
+  const tokens = plainTokens(segment);
+  if (!tokens || tokens[0] !== "git") return null;
+  let i = 1;
+  let dir = "";
+  if (tokens[i] === "-C") {
+    if (!tokens[i + 1] || !PLAIN_PATH_RE.test(tokens[i + 1])) return null;
+    dir = tokens[i + 1];
+    i += 2;
+  }
+  return tokens[i] === "merge" ? dir : null;
+}
+
 export function isPlainMergeOfRemoteDefault(segment) {
   const tokens = plainTokens(segment);
-  if (!tokens || tokens.length < 3 || tokens[0] !== "git" || tokens[1] !== "merge") return false;
+  if (!tokens || tokens[0] !== "git") return false;
+  const start = tokens[1] === "-C" ? 3 : 1;
+  if (tokens[1] === "-C" && plainMergeDirectoryArgument(segment) === null) return false;
+  if (tokens.length < start + 2 || tokens[start] !== "merge") return false;
   let sources = 0;
-  for (const token of tokens.slice(2)) {
+  for (const token of tokens.slice(start + 1)) {
     if (SAFE_MERGE_FLAGS.has(token)) continue;
     if (SAFE_MERGE_SOURCES.has(token)) { sources++; continue; }
     return false;
@@ -451,8 +472,13 @@ const PLAIN_FILTERS = new Set(["wc", "head", "tail"]);
 // a `bash -c "..."` wrapper — none of them is on this list, so after any of them the
 // merge asks exactly as before.
 export function isHarmlessBeforeMerge(segment) {
-  const tokens = plainTokens(segment);
+  let tokens = plainTokens(segment);
   if (!tokens) return false;
+  // `git -C <plain path> <read command>` reads like the same command run there.
+  if (tokens[0] === "git" && tokens[1] === "-C") {
+    if (!tokens[2] || !PLAIN_PATH_RE.test(tokens[2])) return false;
+    tokens = ["git", ...tokens.slice(3)];
+  }
   if (PLAIN_FILTERS.has(tokens[0])) {
     // `wc -l`, `head -5`, `tail -n 3`: reading a pipe only, never a file argument.
     return tokens.slice(1).every((t) => /^-[A-Za-z0-9]+$/.test(t) || /^[0-9]+$/.test(t));
@@ -469,6 +495,21 @@ export function isHarmlessBeforeMerge(segment) {
     return words.length === 1 || (words.length === 2 && PROTECTED_BRANCHES.has(words[1]));
   }
   if (sub === "branch") return rest.length === 1 && rest[0] === "--show-current";
+  // `git worktree add [-q] [--detach] [-b <new branch>] <path> [<commit>]` creates ANOTHER work
+  // tree; it does not move the branch of the one the merge runs in. -B (resets an existing
+  // branch), --force/-f and every other option are not on this list.
+  if (sub === "worktree") {
+    if (rest[0] !== "add") return false;
+    const words = [];
+    for (let k = 1; k < rest.length; k++) {
+      const t = rest[k];
+      if (t === "-q" || t === "--quiet" || t === "--detach") continue;
+      if (t === "-b") { if (!rest[k + 1] || PROTECTED_BRANCHES.has(rest[k + 1])) return false; k++; continue; }
+      if (t.startsWith("-")) return false;
+      words.push(t);
+    }
+    return words.length >= 1 && words.length <= 2;
+  }
   if (!READ_ONLY_GIT_SUBCOMMANDS.has(sub)) return false;
   // A read command that writes a file is not a read (`git diff --output ...`), and one that
   // runs a configured external program (`--ext-diff`, `--textconv`) could do anything,
@@ -483,10 +524,32 @@ function isKnownWorkingBranch(ref) {
   return !isRefOneOf(ref, ["main", "master"]);
 }
 
+// The folder the merge runs in: the hook's cwd, moved by at most ONE plain `cd <path>` earlier in
+// the line and by the merge's own `-C <path>`. Anything it cannot resolve by itself — a second
+// cd, `cd -`, `cd ~`, a variable, a substitution — is null, and the merge asks.
+export function mergeDirectory(segment, earlierSegments, cwd) {
+  const own = plainMergeDirectoryArgument(segment);
+  if (own === null) return null;
+  let dir = cwd;
+  let changed = false;
+  for (const earlier of earlierSegments) {
+    const tokens = plainTokens(earlier);
+    if (tokens && tokens[0] === "cd") {
+      if (changed || tokens.length !== 2 || !PLAIN_PATH_RE.test(tokens[1])) return null;
+      dir = path.resolve(dir, tokens[1]);
+      changed = true;
+      continue;
+    }
+    if (!isHarmlessBeforeMerge(earlier)) return null;
+  }
+  return own ? path.resolve(dir, own) : dir;
+}
+
 export function isMergeOfRemoteDefaultIntoWorkingBranch(segment, earlierSegments, cwd, currentBranchRefOf = getCurrentBranchRef) {
   if (!isPlainMergeOfRemoteDefault(segment)) return false;
-  if (!earlierSegments.every(isHarmlessBeforeMerge)) return false;
-  return isKnownWorkingBranch(currentBranchRefOf(cwd));
+  const dir = mergeDirectory(segment, earlierSegments, cwd);
+  if (dir === null) return false;
+  return isKnownWorkingBranch(currentBranchRefOf(dir));
 }
 
 export function isGhPrMerge(segment) {
