@@ -193,3 +193,21 @@ wants v80 first, A + B + C replace the screen in the queue unchanged.
 3. Values imported before a setting change: keep them as they are? **Keep** (recommended) / **Hide**.
 4. A team with a different setting: should the board offer to create a matching variable from the column in one step?
    **Later** (recommended) / **Now**.
+
+## 9. Step B as built (the Rukovodilac's GO of 2026-11-19)
+
+Runbook `docs/runbooks/condition-match-v80.md`. Where the build departs from sections 3 and 6:
+
+- **New triggers, not replaced bodies.** `source_metric_check_parameters` (v34) and the v48 activation guard are not
+  replaced: v80 adds `source_metric_mapping_versions_condition_guard` and `source_metric_mapping_activations_match_guard`.
+  Nothing of an earlier migration changes, so the rollback drops what v80 added and needs no md5 restore.
+- **`matched_source_range` beside `matched_condition`.** The importer compares a session's range with the range the
+  activation was matched with, in GPEXE's units (exact decimal text), so no conversion runs at import time.
+- **The owner's confirmation of an event setting** (section 1's "unknown") is a route and an append-only table: the owner
+  enters the threshold and the duration GPEXE shows and presses Confirm; they must equal the team setting of the session the
+  column was compared in (route O). Until then a details event column matches nothing (`event_setting_not_confirmed`).
+- **Which session S1 and A1 read.** The newest stored session of the team that can still be read (not purged, not expired);
+  none is `team_setting_missing`. The board reads the session it shows.
+- **Not built here:** step C (the screen), the Imports sentence for `team_setting_changed` (the code is in the preview's
+  messages; the screen's own sentence is step C), and a check that a team's sessions all carry one setting (section 4's last
+  point: the importer blocks every session that differs, so a mixed history never imports silently).

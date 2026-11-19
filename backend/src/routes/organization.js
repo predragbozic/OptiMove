@@ -595,6 +595,11 @@ async function setUserLoginStatus(req, targetUserId, active) {
     const client = await pool.connect();
     try {
       await client.query("begin");
+      // Lock order (roles R2 contract, section 4.3.1): every advisory lock
+      // first (platform headcount, then each affected club's headcount in
+      // club id order), then the users rows of the whole union in ONE
+      // statement in id order, then only the role rows the decision counts.
+      // See lockLoginDisableRows below.
       await lockPlatformAdminHeadcount(client);
       const targetPlatformAdminRow = await client.query(
         `select 1 from public.user_global_roles where user_id = $1 and role = 'platform_admin' and is_active = true limit 1`,
@@ -605,15 +610,17 @@ async function setUserLoginStatus(req, targetUserId, active) {
         await client.query("rollback");
         return { status: 403, body: { error: "Only a platform admin can manage a platform admin account." } };
       }
+      const clubIds = await lockClubAdminHeadcountsOfUser(client, targetUserId);
+      const qualifying = await lockLoginDisableRows(client, { includePlatformAdmins: targetIsPlatformAdmin, clubIds });
       if (targetIsPlatformAdmin) {
-        const qualifyingIds = await loadQualifyingPlatformAdminIds(client);
+        const qualifyingIds = qualifying.platformAdminIds;
         const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
         if (targetQualifies && qualifyingIds.length <= 1) {
           await client.query("rollback");
           return { status: 409, body: { error: "LAST_PLATFORM_ADMIN" } };
         }
       }
-      const blockedClubId = await findClubAdminLastAdminBlock(client, targetUserId);
+      const blockedClubId = findClubAdminLastAdminBlock(clubIds, qualifying.clubAdminIdsByClub, targetUserId);
       if (blockedClubId) {
         await client.query("rollback");
         return { status: 409, body: { error: "LAST_CLUB_ADMIN" } };
@@ -982,9 +989,11 @@ router.delete("/users/:userId/global-roles/:role", async (req, res, next) => {
     try {
       await client.query("begin");
       if (role === "platform_admin") {
-        // Same shared advisory lock the disable-login path uses, then the
-        // same fresh (login-active AND role-active) qualifying-count read -
-        // see lockPlatformAdminHeadcount/loadQualifyingPlatformAdminIds.
+        // The same shared advisory lock the disable-login path takes, then a
+        // fresh (login-active AND role-active) qualifying-count read - see
+        // lockPlatformAdminHeadcount/loadQualifyingPlatformAdminIds. (The
+        // disable-login path reads its own qualifying sets in
+        // lockLoginDisableRows, after every advisory lock it takes.)
         await lockPlatformAdminHeadcount(client);
         const qualifyingIds = await loadQualifyingPlatformAdminIds(client);
         const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
@@ -2760,19 +2769,16 @@ async function loadQualifyingClubAdminUserIds(client, clubId) {
   return result.rows.map((row) => row.id);
 }
 
-// Must be called inside the same open transaction as the login-disable flow
-// in setUserLoginStatus, before any mutation. Finds every ACTIVE club where
-// the target currently holds an active club_admin role (an archived club is
-// exempt from the LAST_CLUB_ADMIN invariant - it doesn't need to keep an
-// admin forever), locks each one's headcount via lockClubAdminHeadcount in
-// deterministic (sorted club id) order - never any other order - so that
-// two concurrent requests against a user who administers multiple clubs can
-// never form a circular wait, then re-reads the fresh qualifying count for
-// each locked club. Returns the id of the first club where the target would
-// be left as the last qualifying admin, or null if disabling the login is
-// safe for all of them. No bypass for platform admin actors - this runs
-// unconditionally, exactly like the LAST_PLATFORM_ADMIN check above.
-async function findClubAdminLastAdminBlock(client, targetUserId) {
+// The login-disable flow of setUserLoginStatus, step 1 of its club part.
+// Must be called inside its open transaction, AFTER lockPlatformAdminHeadcount
+// and BEFORE any row lock. Finds every ACTIVE club where the target currently
+// holds an active club_admin role (an archived club is exempt from the
+// LAST_CLUB_ADMIN invariant - it doesn't need to keep an admin forever) and
+// takes each one's headcount advisory lock in deterministic (sorted club id)
+// order - never any other order - so that two concurrent requests against a
+// user who administers multiple clubs can never form a circular wait.
+// Returns those club ids in that order.
+async function lockClubAdminHeadcountsOfUser(client, targetUserId) {
   const clubRows = await client.query(
     `select r.club_id as "clubId"
      from public.user_club_roles r
@@ -2785,8 +2791,80 @@ async function findClubAdminLastAdminBlock(client, targetUserId) {
   for (const clubId of clubIds) {
     await lockClubAdminHeadcount(client, clubId);
   }
+  return clubIds;
+}
+
+// The login-disable flow, step 2 (roles R2 contract, section 4.3.1). Must be
+// called only AFTER every advisory lock of the flow is held: the set of users
+// to lock is read here, never before.
+//   1. ONE statement locks the users rows of the whole union - the qualifying
+//      platform admins (only when the target is one) and the qualifying
+//      admins of every affected club - in user id order. A single id-ordered
+//      statement cannot form a circular wait with any other statement that
+//      locks users rows in id order (the old revocations, the Roles API's
+//      pair statement); several statements, each ordered only inside itself,
+//      can.
+//   2. Then the role rows, users before role rows, and only the rows the
+//      decision counts: the platform_admin rows, then the club_admin rows of
+//      the affected clubs, each by user id. Each of these two statements is
+//      also the fresh read of its qualifying set ("qualifying" = login active
+//      AND role active), taken under the locks.
+// No bypass for platform admin actors - exactly as before.
+// The last-admin invariants rest on the headcount advisory locks, not on these
+// row locks: every writer that LOWERS a count (this switch-off and the old
+// platform_admin and club_admin revocations) takes them before it reads the
+// count; a writer that only raises a count may skip them. Any new writer that
+// lowers a count (the Roles API's revoke, when it can lower a basic role's
+// count) must take them too.
+async function lockLoginDisableRows(client, { includePlatformAdmins, clubIds }) {
+  const platformAdminIds = [];
+  const clubAdminIdsByClub = new Map(clubIds.map((clubId) => [String(clubId), []]));
+  if (!includePlatformAdmins && clubIds.length === 0) return { platformAdminIds, clubAdminIdsByClub };
+  await client.query(
+    `select u.id
+     from public.users u
+     where u.is_active = true
+       and (($1::boolean and exists (select 1 from public.user_global_roles g
+                                     where g.user_id = u.id and g.role = 'platform_admin' and g.is_active = true))
+            or exists (select 1 from public.user_club_roles r
+                       where r.user_id = u.id and r.club_id = any($2::uuid[]) and r.role = 'club_admin' and r.is_active = true))
+     order by u.id
+     for update of u`,
+    [includePlatformAdmins, clubIds],
+  );
+  if (includePlatformAdmins) {
+    const result = await client.query(
+      `select g.user_id as "userId"
+       from public.user_global_roles g
+       join public.users u on u.id = g.user_id
+       where g.role = 'platform_admin' and g.is_active = true and u.is_active = true
+       order by g.user_id
+       for update of g`,
+    );
+    for (const row of result.rows) platformAdminIds.push(row.userId);
+  }
+  if (clubIds.length > 0) {
+    const result = await client.query(
+      `select r.user_id as "userId", r.club_id as "clubId"
+       from public.user_club_roles r
+       join public.users u on u.id = r.user_id
+       where r.club_id = any($1::uuid[]) and r.role = 'club_admin' and r.is_active = true and u.is_active = true
+       order by r.user_id, r.club_id
+       for update of r`,
+      [clubIds],
+    );
+    for (const row of result.rows) clubAdminIdsByClub.get(String(row.clubId))?.push(row.userId);
+  }
+  return { platformAdminIds, clubAdminIdsByClub };
+}
+
+// The decision of the login-disable flow for clubs, over the sets read under
+// the locks: the id of the first club (club id order) where the target would
+// be left as the last qualifying admin, or null if disabling the login is
+// safe for all of them.
+function findClubAdminLastAdminBlock(clubIds, clubAdminIdsByClub, targetUserId) {
   for (const clubId of clubIds) {
-    const qualifyingIds = await loadQualifyingClubAdminUserIds(client, clubId);
+    const qualifyingIds = clubAdminIdsByClub.get(String(clubId)) || [];
     const targetQualifies = qualifyingIds.some((id) => String(id) === String(targetUserId));
     if (targetQualifies && qualifyingIds.length <= 1) {
       return clubId;

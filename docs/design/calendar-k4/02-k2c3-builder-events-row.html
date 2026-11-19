@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K2c-3 · The Builder's events row</title>
+<!-- A STATIC DESIGN MOCKUP, not the app. Invented data only. See README.md. -->
+<link rel="stylesheet" href="../../../frontend/styles.css">
+<link rel="stylesheet" href="./mockup.css">
+</head>
+<body class="k4-doc">
+<p class="k4-step">1 · The Builder's day<small>Events row, Create event →, Whole day, Event: [▾] on each session, and a time that doesn't fit</small></p>
+<div class="k4-shell">
+  <nav class="k4-rail" aria-label="Main"><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.2.2 3.8 1.8 4.5 4.8"/></svg></span><span class="on"><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span></nav>
+  <main class="k4-main central-calendar">
+    <header class="k4-topbar"><span class="k4-menu"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span><div><p class="eyebrow">Builder · weekly plan</p><h1>Week 12 – 18 Oct · U19 (18 athletes)</h1></div></header>
+
+  <div class="k4-plan-head"><span class="k4-pill"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.2.2 3.8 1.8 4.5 4.8"/></svg> 18 athletes</span><span class="k4-pill">Published</span></div>
+  <div class="k4-day">
+    <div class="k4-day-head"><span class="k4-day-name">Monday 12.10.2026</span><span class="k4-day-tag">MD-1</span><span class="k4-spacer"></span><button class="plain-button k4-btn">+ Session</button></div>
+    <div class="k4-events-row k4-callout" data-callout="NEW · events row">
+      <span class="k4-events-label">Events:</span>
+      <button class="k4-chip" style="--k4-c:#1f6f68"><span class="k4-chip-bar"></span><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="14" cy="4.5" r="1.8"/><path d="M6 20l4-5 3 2 2-5-4-2-3 3"/><path d="M15 12l3 2 2-1"/></svg></span>Team training <span class="k4-chip-meta">10:00–11:30 · North field</span></button>
+      <button class="k4-chip is-locked" style="--k4-c:#52607a"><span class="k4-chip-bar"></span><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>Video review <span class="k4-chip-meta">09:00 · Managed by the club</span></button>
+      <span class="k4-spacer"></span>
+      <button class="plain-button k4-btn k4-create"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg> Create event <svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+    </div>
+    <div class="k4-wholeday"><label for="wd">Whole day:</label><select id="wd" class="k4-select"><option>Choose an event for every session…</option></select></div>
+    <div class="k4-session">
+  <div class="k4-session-top"><span class="k4-slot k4-ampm">AM</span><span class="k4-slot">Before training</span><span class="k4-session-name">Mobility & activation</span><span class="k4-session-time">10:00 · from the event</span><span class="k4-spacer"></span><span class="k4-select-wrap"><label>Event:</label><select class="k4-select is-linked" style="--k4-c:#1f6f68"><option>Team training 10:00</option></select></span></div></div>
+    <div class="k4-session">
+  <div class="k4-session-top"><span class="k4-slot k4-ampm">AM</span><span class="k4-slot">Training</span><span class="k4-session-name">Main session</span><span class="k4-session-time">08:00</span><span class="k4-spacer"></span><span class="k4-select-wrap"><label>Event:</label><select class="k4-select" style="--k4-c:#1f6f68"><option>No event</option></select></span></div><p class="k4-warn"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg> Main session is at 08:00, outside the event (10:00–11:30). Change its time first. <button class="plain-button k4-btn">Use the event's time</button></p></div>
+    <div class="k4-session">
+  <div class="k4-session-top"><span class="k4-slot k4-ampm">PM</span><span class="k4-slot">After training</span><span class="k4-session-name">Recovery</span><span class="k4-session-time">16:00</span><span class="k4-spacer"></span><span class="k4-select-wrap"><label>Event:</label><select class="k4-select" style="--k4-c:#1f6f68"><option>No event</option></select></span></div></div>
+  </div>
+  </main>
+</div>
+<p class="k4-step">2 · The Event list, open<small>only the same day, only the session's half of the day, a locked event explained</small></p>
+<div class="k4-main"><p class="k4-note" style="margin-bottom:8px">What the <b>Event</b> list offers for <b>Before training · AM</b> (a native select on the device):</p>
+  <ul class="k4-list" role="listbox">
+    <li class="is-on" style="--k4-c:#1f6f68"><span class="k4-tint"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><span>Team training · 10:00–11:30<small>Morning event · AM sessions fit</small></span></li>
+    <li class="is-off"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>Video review · 09:00<small>Linked by the club's admin from the calendar.</small></span></li>
+    <li>— <span>No event<small>Stays its own training, as today</small></span></li>
+  </ul>
+  <p class="k4-note" style="margin-top:12px">A PM session (Recovery 16:00) would not be offered the morning event: O15, AM/PM must fit the event's half of the day.</p></div>
+<p class="k4-step">3 · The event moved later<small>Outside the event's time, never fixed silently</small></p>
+<div class="k4-shell">
+  <nav class="k4-rail" aria-label="Main"><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2c2.2.2 3.8 1.8 4.5 4.8"/></svg></span><span class="on"><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span><span class=""><svg class="" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span></nav>
+  <main class="k4-main central-calendar">
+    <header class="k4-topbar"><span class="k4-menu"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span><div><p class="eyebrow">Builder · weekly plan</p><h1>Week 12 – 18 Oct · U19</h1></div></header>
+
+  <div class="k4-day" style="--k4-c:#1f6f68">
+    <div class="k4-day-head"><span class="k4-day-name">Monday 12.10.2026</span></div>
+    <div class="k4-session">
+  <div class="k4-session-top"><span class="k4-slot k4-ampm">AM</span><span class="k4-slot">Training</span><span class="k4-session-name">Main session</span><span class="k4-session-time">10:30</span><span class="k4-spacer"></span><span class="k4-select-wrap"><label>Event:</label><select class="k4-select is-linked" style="--k4-c:#1f6f68"><option>Team training 10:00</option></select></span></div><p class="k4-warn"><svg class="k4-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg> Outside the event's time (11:00–12:30) <button class="plain-button k4-btn">Use the event's time</button><button class="k4-link">Open the event</button></p></div>
+  </div>
+  <p class="k4-note">Shown when the event was moved later in the calendar. Nothing changes by itself.</p>
+  </main>
+</div>
+<p class="k4-step">4 · A draft that was never saved<small>asked once, before Create event → or the selector</small></p>
+<div class="k4-main"><div class="k4-backdrop"><section class="k4-sheet" role="dialog" aria-labelledby="us">
+  <h3 id="us">This plan isn't saved yet</h3>
+  <p>Save it (the athletes will see it) and continue?</p>
+  <div class="k4-row"><button class="plain-button cc-primary k4-btn">Save and continue</button><button class="plain-button k4-btn">Cancel</button></div>
+</section></div></div>
+</body>
+</html>

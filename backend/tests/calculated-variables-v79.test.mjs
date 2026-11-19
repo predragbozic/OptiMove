@@ -107,7 +107,8 @@ const newVersion = (c, d, { unit = "m", day = "sum", calculation = null, n = 2 }
    values ($1, $2, $3, 'numeric', $4, $5)`, [d, n, unit, day, calculation ? JSON.stringify(calculation) : null]);
 
 before(async () => {
-  assert.equal(GPEXE_TEST_MIGRATIONS.at(-1), V79, "v79 is the last test migration");
+  // v80 (the condition match) comes after v79; the rehearsal database stops at v78 and applies v79 alone.
+  assert.ok(GPEXE_TEST_MIGRATIONS.includes(V79), "v79 is a test migration");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v79rb", migrations: UP_TO_PREV }),
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc79" }),
