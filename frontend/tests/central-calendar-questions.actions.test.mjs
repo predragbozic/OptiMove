@@ -915,3 +915,26 @@ test("P18. one control at a time: an open question step turns off Edit and Cance
   await act({ action: "central-calendar-edit-event", key: PANEL_KEY, date: DAY(1) });
   assert.equal(state.centralCalendar.form, null);
 });
+
+test("P19. a busy answer after the coach closed the panel: the sentence reaches the screen's line, the step goes", async () => {
+  await openQuestionsPanel({ refuse: (call) => (call.method === "POST" ? { status: 503, body: { error: "try_again" } } : null) });
+  const release = currentServer.hold();
+  await qact("ask-open", { kind: "wellness" });
+  const sending = qact("send");
+  await tick();
+  await act({ action: "central-calendar-close-panel" });
+  release();
+  await sending;
+  assert.equal(state.centralCalendar.notice, "The calendar is busy. Nothing was saved; try again in a moment.");
+  assert.equal(state.centralCalendar.questionStep, null);
+});
+
+test("P20. the switch off with a question still not confirmed: no 'Use Ask RPE below.' (no Ask RPE is offered)", async () => {
+  await openQuestionsPanel({ lose: true, items: [eventItem(E_MATCH, DAY(1), { expects: ["rpe"], gaps: ["rpe"] })] });
+  await qact("ask-open", { kind: "wellness" });
+  await qact("send");
+  state.centralCalendar.eventCatalog = { ...state.centralCalendar.eventCatalog, questionsEnabled: false };
+  render();
+  assert.ok(dom().querySelector('.cc-panel [data-action="central-calendar-link-check"]'), "Check result stays");
+  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/);
+});

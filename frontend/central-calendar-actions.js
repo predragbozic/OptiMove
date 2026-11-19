@@ -1575,7 +1575,8 @@ async function questionSettled(cal, spec, data, render) {
 async function questionRefused(cal, spec, info, render) {
   const text = ccPanelRefusalText(info, spec.act);
   const step = cal.questionStep;
-  if (ccPanelRefusalKeepsStep(info) && step && step.eventKey === spec.panelKey) {
+  // Only while that step's panel is still open; else the sentence goes to the screen's line.
+  if (ccPanelRefusalKeepsStep(info) && step && step.eventKey === spec.panelKey && cal.panel.open && cal.panel.key === spec.panelKey) {
     // Another time can be chosen in the same step; a new press is a new key.
     step.error = `${text}${/Nothing was saved/.test(text) ? "" : " Nothing was saved."}`;
     render?.();
