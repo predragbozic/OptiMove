@@ -71,6 +71,20 @@ constraints) and the seed fingerprint of block 4 were taken from the rehearsal o
 
 ## The way back
 
+**The order is fixed: the code first, then (if ever) the database.** The code of R2 reads the role tables on every
+signed-in request (`loadAuthorizationContext`). On a database without them it fails closed: a platform admin still
+passes, and every other request that reaches a `can()` call site answers `503 permissions_unavailable`. So v84 is never
+rolled back while R2's code is live.
+
+How the deploy behaves (`backend/package.json`: `"start": "node src/migrate.js && node src/server.js"`):
+- the new instance starts the server only after the runner applied every migration; a failed v84 (a refused `DO`
+  block, a lock timeout) exits non-zero, the new server never starts, and the previous instance - the previous code,
+  which reads nothing of v84 - keeps serving;
+- while v84 runs, a request of the previous instance that reads `user_club_roles` / `user_team_roles` waits for the
+  migration's COMMIT (the `ACCESS EXCLUSIVE` of the two `ADD CONSTRAINT`, at most `lock_timeout` 5 s each);
+- there is no path where R2's code serves requests on a database without v84, except a manual rollback of v84 while R2's
+  code is live (the case refused above) or a database restored from a backup taken before v84.
+
 - **The application:** deploy the previous commit. R1's `can()` reads nothing of v84, and the two CHECKs refuse nothing R1
   writes. A club's admin then no longer passes `roles.manage`, which only the Roles API checks.
 - **The database:** `permission-roles-v84-rollback.sql` (one transaction, `psql -v ON_ERROR_STOP=1 -f ...`), only after
@@ -80,6 +94,10 @@ constraints) and the seed fingerprint of block 4 were taken from the rehearsal o
   recorded. From then on v84 is forward-only.
 
 ## Known limits
+
+- Rolling back v84 while R2's code is live makes every non-platform request that reaches a `can()` call site answer
+  `503 permissions_unavailable` (fail closed, contract section 6). Roll the code back first. The same holds for a
+  database restored from a backup taken before v84: apply v84 (start the server) before serving.
 
 - The guards keep an unintended write that bypasses the service out; they are no defence against whoever holds the
   database credentials the application and the migrations share (v35's limit). With row-level security and no policy,
