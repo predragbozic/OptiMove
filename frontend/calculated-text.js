@@ -13,7 +13,7 @@ export const CALCULATED_TEXT = Object.freeze({
   athletes: "Athletes do not see calculated variables.",
   dayRule: "A day's values are added up (Sum). A calculated variable has no allowed values.",
   // An empty cell of a calculated variable in a session's results.
-  emptyCell: "Not calculated: one of the variables it adds up has no value for this athlete here.",
+  emptyCell: "Not calculated here: the session was imported before this variable was made, or one of the variables it adds up has no value or is not switched on for this team.",
 });
 
 // Whether a coach's fact (the canonical read) is OptiMove's calculated value: derived, naming its formula version.

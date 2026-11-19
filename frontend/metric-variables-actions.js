@@ -453,6 +453,8 @@ function focusFirstField() {
 // ---------------------------------------------------------------------------
 // Typing: the form's values live in state, so a repaint never loses them.
 // ---------------------------------------------------------------------------
+let unitRepaintTimer = null;
+export const UNIT_REPAINT_MS = 400;
 export function handleVariablesInput(target, { render }) {
   const s = state.trainingLoad.variables;
   if (!s) return false;
@@ -561,13 +563,21 @@ export function handleVariablesInput(target, { render }) {
     globalThis.document?.querySelector?.(`.metric-variables-form [data-mv-field="${name}"]`)?.focus?.();
   }
   if (name === "label" && form.mode === "create") scheduleKeySuggestion(form);
-  // And on the unit (J21): the list of what can be added up is drawn again, the typing kept where it was.
+  // And on the unit (J21): the list of what can be added up is drawn again once the typing pauses (a redraw on every
+  // keystroke could take a phone's keyboard away), the caret kept where it was.
   if (name === "unit" && form.draft.kind === "calculated") {
-    const at = field.selectionStart ?? null;
-    render();
-    const again = globalThis.document?.querySelector?.('.metric-variables-form [data-mv-field="unit"]');
-    again?.focus?.();
-    if (again && at !== null) again.setSelectionRange?.(at, at);
+    clearTimeout(unitRepaintTimer);
+    unitRepaintTimer = setTimeout(() => {
+      if (state.trainingLoad.variables?.form !== form) return;
+      const live = globalThis.document?.querySelector?.('.metric-variables-form [data-mv-field="unit"]');
+      const focused = live && globalThis.document?.activeElement === live;
+      const at = focused ? live.selectionStart ?? null : null;
+      render();
+      if (!focused) return;
+      const again = globalThis.document?.querySelector?.('.metric-variables-form [data-mv-field="unit"]');
+      again?.focus?.();
+      if (again && at !== null) again.setSelectionRange?.(at, at);
+    }, UNIT_REPAINT_MS);
   }
   return true;
 }

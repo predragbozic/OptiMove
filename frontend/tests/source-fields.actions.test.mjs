@@ -177,7 +177,7 @@ test("the list groups the fields by source, shows the unit (expected units marke
   assert.equal($(".metric-classification-section h3").textContent, "GPEXE");
   assert.doesNotMatch(text(), /REST v1|athlete_session\./, "no data family and no key on the list");
   // One sentence of introduction, naming no repository path.
-  assert.equal($(".metric-variables-head p.muted").textContent, "The fields each data source delivers, and how far each one's unit and meaning are proven.");
+  assert.equal($(".metric-variables-head p.muted").textContent, "The values each data source sends, and whether you can use them yet.");
   // The proof words live in the technical view (the plain row is the next test).
   assert.equal($("details.source-fields-legend-chip"), null, "no legend in the plain view");
   await click('[data-action="source-fields-technical"]');
@@ -277,7 +277,7 @@ test("club admin: reads the fields and revisions, is offered no act, and a forge
   await handleSourceFieldsAction($("#forged"), { render });
   assert.equal(sourceFieldsState().form, null);
   await click('[data-action="source-fields-back"]');
-  assert.equal($(".metric-variables-head p.muted").textContent, "The fields each data source delivers; a platform administrator confirms their units and meanings.");
+  assert.equal($(".metric-variables-head p.muted").textContent, "The values each data source sends, and whether you can use them yet. A platform administrator confirms what they mean.");
 });
 
 test("a source with two data families names the family in each group's heading", async () => {

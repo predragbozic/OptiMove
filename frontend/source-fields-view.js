@@ -78,8 +78,8 @@ export function renderSourceFieldsHtml() {
 // One sentence (the language pass): how to confirm is said in the forms.
 function intro(ctx) {
   return ctx.mayVerify
-    ? "The fields each data source delivers, and how far each one's unit and meaning are proven."
-    : "The fields each data source delivers; a platform administrator confirms their units and meanings.";
+    ? "The values each data source sends, and whether you can use them yet."
+    : "The values each data source sends, and whether you can use them yet. A platform administrator confirms what they mean.";
 }
 // G1 (8.4): a source_stated revision is never "confirmed" - its unit is GPEXE's own word and its meaning GPEXE's own
 // label, each checked by an administrator on the board.

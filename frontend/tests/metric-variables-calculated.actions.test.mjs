@@ -21,7 +21,7 @@ let respond = () => ({ status: 404, body: { error: "notFound" } });
 const calls = installFetchMock((call) => respond(call));
 after(() => restoreFetch());
 
-const { KEY_SUGGESTION_DELAY_MS, handleVariablesAction, handleVariablesInput, resetVariables, submitVariablesForm, variablesMayBeLeft } = await import("../metric-variables-actions.js");
+const { KEY_SUGGESTION_DELAY_MS, UNIT_REPAINT_MS, handleVariablesAction, handleVariablesInput, resetVariables, submitVariablesForm, variablesMayBeLeft } = await import("../metric-variables-actions.js");
 const { WRITE_BOUND_MS, buildRequest, openForm, variablesContext, variablesState } = await import("../metric-variables-data.js");
 const { renderVariablesHtml } = await import("../metric-variables-view.js");
 const { renderTrainingLoadCoachHtml } = await import("../training-load-view.js");
@@ -65,6 +65,8 @@ const posts = () => calls.filter((call) => call.method === "POST");
 // (phase 12c) is proved in metric-classification.actions.test.mjs.
 const gets = () => calls.filter((call) => call.method === "GET" && !call.url.includes("/metrics/classification")).map((call) => call.url);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+// The list of what can be added up is drawn again once the typing in the unit pauses.
+const unitPause = () => new Promise((resolve) => setTimeout(resolve, UNIT_REPAINT_MS + 20));
 
 async function click(selector) {
   const element = $(selector);
@@ -168,6 +170,7 @@ test("New variable -> Calculated by OptiMove: no day rule or allowed values; the
   ]) assert.match(text(), sentence);
   assert.match(text(), /Enter the unit above: the variables of that unit are offered here\./, "before a unit, nothing is offered");
   type("unit", "m");
+  await unitPause();
   const offered = [...content.querySelectorAll(".metric-variables-inputs [data-mv-input]")].map((b) => b.dataset.mvInput);
   assert.deepEqual(offered, [Z(3), Z(4), Z(5), Z(6)], "the zones in m added up by day, by name");
   const why = [...content.querySelectorAll(".metric-variables-unavailable li")].map((li) => li.textContent.replace(/\s+/g, " ").trim());
@@ -187,6 +190,7 @@ test("Create sends the calculation in the order ticked, Sum as the day rule, no 
   await openCalculated();
   type("label", "HMLD");
   type("unit", "m");
+  await unitPause();
   pick(Z(5));
   await submit();
   assert.equal(posts().length, 0, "one variable is not a sum");
@@ -212,6 +216,7 @@ test("Measured stays as before: switching back drops nothing of the measured for
   assert.ok($('[data-mv-field="dailyAggregationMethod"]'));
   type("label", "Total distance");
   type("unit", "m");
+  await unitPause();
   choose("dailyAggregationMethod", "sum");
   await submit();
   await settle();
@@ -228,6 +233,7 @@ test("club: the variables to add up are its own and OptiMove's, read once each; 
   };
   await openCalculated();
   type("unit", "m");
+  await unitPause();
   const reads = gets().filter((u) => u.includes("state=active"));
   assert.ok(reads.includes(`${BASE}?scope=own&state=active`) && reads.includes(`${BASE}?scope=system&state=active&hidden=include`), JSON.stringify(reads));
   assert.match(text(), /Power zone 4 distance m · OptiMove/);
@@ -266,4 +272,45 @@ test("v78's refusals show the server's own sentence, which names the variable; a
   assert.equal(codeText({ status: 409, code: "calculation_input_archive_in_use", message: "HMLD adds up this variable; it cannot be archived while HMLD uses it." }, "archive"),
     "HMLD adds up this variable; it cannot be archived while HMLD uses it. Nothing was saved.");
   assert.equal(codeText({ status: 409, code: "calculation_unit_mismatch", message: "x" }), "Every chosen variable must have this variable's unit.");
+});
+
+test("the unit is typed without a redraw on every keystroke: the list is drawn once the typing pauses (mobile-qa)", async () => {
+  respond = candidatesAnd();
+  await openCalculated();
+  let draws = 0;
+  const counted = () => { draws += 1; render(); };
+  for (const value of ["k", "km", "m"]) {
+    const element = $('[data-mv-field="unit"]');
+    element.value = value;
+    handleVariablesInput(element, { render: counted });
+  }
+  assert.equal(draws, 0, "no redraw while typing");
+  await unitPause();
+  assert.equal(draws, 1, "one redraw after the pause");
+  assert.ok($(`[data-mv-input="${Z(3)}"]`), "the variables in m are offered");
+});
+
+test("a new version of a drill-only calculated variable keeps its levels: its drill-only inputs stay ticked and are sent (code review)", async () => {
+  const D = (n) => `aaaaaaaa-2222-4000-8000-00000000000${n}`;
+  const drillOnly = [zone("b", { id: D("b"), label: "Drill zone 1", levels: ["drill"] }), zone("c", { id: D("c"), label: "Drill zone 2", levels: ["drill"] })];
+  const calc = { kind: "sum", inputs: [D("b"), D("c")].map((id, i) => ({ id, key: `dz${i}`, label: `Drill zone ${i + 1}` })) };
+  const own = { label: "Drill HMLD", levels: ["drill"], currentVersion: version({ calculation: calc, minValue: null }) };
+  respond = (call) => {
+    if (call.method === "GET" && call.url.startsWith(`${BASE}?`)) return { status: 200, body: { variables: [variable(own), ...CANDIDATES, ...drillOnly], nextCursor: null } };
+    if (call.method === "GET" && call.url.startsWith(`${BASE}/${VAR_ID}`)) return { status: 200, body: detail(own) };
+    if (call.method === "POST") return { status: 201, body: { variable: variable(), replayed: false } };
+    return { status: 404, body: { error: "notFound" } };
+  };
+  const { loadVariablesSection } = await import("../metric-variables-actions.js");
+  await loadVariablesSection(render);
+  await click(`[data-action="metric-variables-open"][data-variable-id="${VAR_ID}"]`);
+  await settle();
+  await click('[data-action="metric-variables-version-open"]');
+  await settle();
+  assert.deepEqual([...content.querySelectorAll(".metric-variables-inputs input:checked")].map((b) => b.dataset.mvInput), [D("b"), D("c")]);
+  assert.equal($(`[data-mv-input="${Z(6)}"]`), null, "a session-only variable is not offered to a drill-only one");
+  await submit();
+  await settle();
+  assert.equal(posts().length, 1);
+  assert.deepEqual(posts()[0].body.calculation, { kind: "sum", inputs: [D("b"), D("c")] });
 });

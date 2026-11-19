@@ -1583,6 +1583,8 @@ async function fetchAnalysisMetricDefinitions(picker, contextKey) {
       // the club hides is not offered, but results still carry its name.
       ownerScope: d.ownerScope || d.owner_scope || null,
       hiddenInClub: d.hiddenInClub === true,
+      // J21: a calculated variable's widget says from when it has values.
+      calculated: d.calculated === true,
       ...(structureByDefId.get(d.id) || {}),
     }));
     metricDefinitionsWorkspaceKey = contextKey;

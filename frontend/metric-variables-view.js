@@ -239,7 +239,7 @@ function renderVersionHtml(version) {
         escapeHtml(version.unit || ""),
         version.calculation ? `adds up ${escapeHtml(calculationNames(version.calculation))}` : version.dailyAggregationMethod ? `per day: ${escapeHtml(aggregationLabel(version.dailyAggregationMethod))}` : "",
         version.calculation ? "" : escapeHtml(rangeSummary(version)),
-        escapeHtml(conditionSummary(version.condition)),
+        version.condition ? escapeHtml(conditionSummary(version.condition)) : "",
       ].filter(Boolean).join(" · ")}</p>
       ${conditionNoteFor(version) ? `<p class="muted">${escapeHtml(conditionNoteFor(version))}</p>` : ""}
       ${version.reason ? `<p>Reason: ${escapeHtml(version.reason)}</p>` : ""}
@@ -339,7 +339,7 @@ function renderConditionHtml(form) {
   if (["zone_between", "zone_one_sided", "event_threshold"].includes(d.conditionKind)) {
     parts.push(textInput(form, "conditionUnit", event ? "Unit of the threshold" : "Unit of the levels", { max: LIMITS.unit, required: true, list: "mv-unit-suggestions", token: true, hint: event ? "Usually not the variable's unit: m/s2 for a count of accelerations." : "Usually not the variable's unit: km/h for a distance zone measured in m." }));
   }
-  return `<fieldset class="metric-variables-fieldset"><legend>Condition</legend><p class="muted">Optional: a zone the value is measured in, or an effort the variable counts.</p><div class="metric-variables-grid">${parts.join("")}</div></fieldset>`;
+  return `<fieldset class="metric-variables-fieldset"><legend>Condition</legend><p class="muted">Optional: a zone the value is measured in, or an effort the variable counts.${d.kind === "calculated" ? " Usually none for a calculated variable." : ""}</p><div class="metric-variables-grid">${parts.join("")}</div></fieldset>`;
 }
 
 // The names a calculation adds up, in its order ("A + B + C").

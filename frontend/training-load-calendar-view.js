@@ -581,7 +581,7 @@ function renderResultsTableHtml(nav, detail, athleteNamesById) {
         </tbody>
       </table>
     </div>
-    ${calculatedShown.length ? `<p class="muted tl-calculated-note">${escapeHtml(calculatedShown.map((c) => c.shortLabel || c.label).join(", "))} ${calculatedShown.length === 1 ? "is" : "are"} calculated by OptiMove from other variables. ${escapeHtml(CALCULATED_TEXT.fromNow)} An empty cell means one of the variables it adds up has no value for that athlete.</p>` : ""}
+    ${calculatedShown.length ? `<p class="muted tl-calculated-note">${escapeHtml(calculatedShown.map((c) => c.shortLabel || c.label).join(", "))} ${calculatedShown.length === 1 ? "is" : "are"} calculated by OptiMove from other variables. ${escapeHtml(CALCULATED_TEXT.fromNow)} An empty cell means the session was imported before it was made, or one of the variables it adds up has no value or is not switched on for this team.</p>` : ""}
     ${renderPartValuesHintHtml(nav, detail)}
   `;
 }

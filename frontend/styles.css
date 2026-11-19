@@ -19443,6 +19443,16 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   flex-basis: 100%;
 }
 /* J21: the variables a calculated one adds up - one per row, each a 44 px target like the levels. */
+.metric-variables-unavailable > summary,
+.source-fields-parked > summary {
+  /* a list item keeps the disclosure triangle (display:flex drops it in Safari) */
+  display: list-item;
+  min-height: 44px;
+  padding: 11px 0;
+  box-sizing: border-box;
+  line-height: 22px;
+  cursor: pointer;
+}
 .metric-variables-inputs {
   display: flex;
   flex-direction: column;

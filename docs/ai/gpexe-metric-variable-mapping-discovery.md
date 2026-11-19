@@ -4562,22 +4562,30 @@ PR 3's screen says so before Save, and zone match refuses overlapping conditione
   imported earlier stay without it.*), per team, no overlap check, athletes do not see it. A new version of a calculated
   variable preselects its inputs. v77 / v78 refusals read as the server's sentence plus *Nothing was saved.*
 - **Where an empty value shows:** a session's results table names a calculated column (*X is calculated by OptiMove from
-  other variables …*), and its empty cell has the label *Not calculated: one of the variables it adds up has no value for
-  this athlete here.* A dashboard widget of a calculated variable carries *X: Calculated for sessions imported after this
+  other variables …*), and its empty cell has the label *Not calculated here: the session was imported before this variable
+  was made, or one of the variables it adds up has no value or is not switched on for this team.* A dashboard widget of a calculated variable carries *X: Calculated for sessions imported after this
   variable was made.* (`frontend/calculated-text.js` holds the sentences.)
-- **Athlete workspace (the Rukovodilac's LOW 2 of 2b):** `GET /api/training-load/metrics/definitions` leaves out every
-  definition whose current version has a calculation; `/definitions/:id` and `/definitions/:id/versions` answer the 404 of a
-  missing id; `isMetricVisibleToDashboard` refuses one on an athlete's board (the same 404). Staff lists carry `calculated`.
+- **Athlete workspace (the Rukovodilac's LOW 2 of 2b):** outside a known staff workspace (platform, private coach, club,
+  team; an unresolved one included, fail closed) `GET /api/training-load/metrics/definitions` leaves out every definition
+  whose current version has a calculation; `/definitions/:id`, `/definitions/:id/versions` and hide / unhide
+  (`/definitions/:id/hide`) answer the 404 of a missing id and write nothing; `/structure-links` leaves out a link to one;
+  `isMetricVisibleToDashboard` refuses one on an athlete's board (the same 404); a template cloned into an athlete's
+  workspace leaves such a series `unresolved` (its key hints are resolved without it; a legacy series without hints is not
+  copied, reported `omitted`). Staff lists carry `calculated`, and the dashboard's picker keeps it.
 - **Source fields, the plain row:** a human name first (*Top speed*, *Total distance*, *Duration*, *Brake events*, *Burst
   events*) with GPEXE's own name under it; the unit; one state (*In use for First team …* / *Ready to use* / *Not available
   yet*); one next step. Evidence words only behind *Show technical details*. The five parameterized seeds sit in a closed
   *Zone sets and threshold events: not available yet* group. `GET /fields` carries `inUse {teams, count}`: open activations on
   active teams of active clubs, up to three names, a club admin sees its own club's teams only.
-- **Tests:** `metric-variables-calculated.actions.test.mjs` (6), new cases in the calendar, analysis-display and source-fields
+- **Tests:** `metric-variables-calculated.actions.test.mjs` (8: also the unit redrawn once the typing pauses, and a
+  drill-only variable's new version), new cases in the calendar, analysis-display and source-fields
   suites; backend `calculated-variables-2b-routes.test.mjs` tests 5, 7 and 8 (the athlete's catalog and board through the real
-  routes, `inUse` per audience); `source-field-observed-g1b2` test 11 plants 7300.375 (cannot occur in a UUID). Mutations of
+  routes, `inUse` per audience) and test 9 (hide / unhide, structure links, the clone's batch resolution);
+  `source-field-observed-g1b2` test 11 plants 7300.375 (cannot occur in a UUID). Mutations of
   the catalog list and read, the dashboard series, the additive rule, the input order, the version preselect, the two notes,
-  the `inUse` club filter and the plain-row state and group, all killed.
+  the `inUse` club filter, the plain-row state and group, hide without the filter, the structure-link filter, the clone
+  batch filter, the fail-closed exclusion, the picker's flag, the version's levels and the unit's pause, all killed. Not
+  tested: the clone route itself and its legacy hint-less branch (the route needs v71, outside the suite's migrations).
 
 **Backfill: "Calculate for sessions imported earlier" (proposed, not built; after PR 3, before the ratio / difference
 migration).**

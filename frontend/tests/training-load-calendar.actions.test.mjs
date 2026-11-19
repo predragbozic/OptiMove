@@ -1292,8 +1292,8 @@ test("a calculated variable's column says it is OptiMove's and from when; its em
   }) });
   const html = renderTrainingLoadCalendarHtml();
   assert.match(html, /HMLD is calculated by OptiMove from other variables\. Calculated for sessions imported after this variable was made\./);
-  assert.match(html, /An empty cell means one of the variables it adds up has no value for that athlete\./);
-  assert.ok(html.includes('aria-label="Not calculated: one of the variables it adds up has no value for this athlete here."'), "Bea's HMLD cell says why it is empty");
+  assert.match(html, /An empty cell means the session was imported before it was made, or one of the variables it adds up has no value or is not switched on for this team\./);
+  assert.ok(html.includes('aria-label="Not calculated here: the session was imported before this variable was made, or one of the variables it adds up has no value or is not switched on for this team."'), "Bea's HMLD cell says why it is empty");
   // Without a calculated variable, nothing new is said.
   resetState();
   withActivitySelected(state.trainingLoad.calendar, { detail: activityDetailPayload({ facts: [metricValueFact("ath-1"), metricValueFact("ath-2", { metricDefinitionId: "def-b" })] }) });

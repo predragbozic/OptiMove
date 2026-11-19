@@ -438,7 +438,7 @@ export function openForm(mode, { variable = null } = {}) {
     replacing: read ? { label: false, shortLabel: false, description: false } : null,
     // Set by a 409 variable_changed: the names someone else saved meanwhile.
     conflict: null,
-    draft: mode === "version" ? draftFromVersion(current) : read ? { ...emptyDraft(), ...read.names }
+    draft: mode === "version" ? { ...draftFromVersion(current), levels: [...(variable?.levels || ["session"])] } : read ? { ...emptyDraft(), ...read.names }
       : mode === "icon" ? { ...emptyDraft(), iconKey: variable?.icon || "" } : emptyDraft(),
     dirty: false,
     requestKey: newRequestKey(),
