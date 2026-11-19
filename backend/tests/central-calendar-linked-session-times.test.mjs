@@ -280,3 +280,49 @@ test("10. the athlete weekly reader (athletes.js loadWeeklyData, GET /api/athlet
   assert.equal(main.sessionTime, "10:00");
   assert.equal(main.sessionTimeFromEvent, true);
 });
+
+// The OptiMove manager's NO-GO on #649: the event's time is decoration and
+// must never take a plan read down. A failed read of the links (here: the
+// table is gone, as in a database without the calendar migrations) answers
+// the plan exactly as it is without links.
+test("11. a failed event-time read never fails the plan: GET /api/plans/:planId/weekly answers 200, identical to the plan before it had a link", async () => {
+  const w = await teamWorld("failopen", { n: 1 });
+  const s = await planSession({ athleteId: w.athletes[0].athleteId, team: w.team, coachUserId: w.coach.id });
+  const read = () => api(`/api/plans/${s.planId}/weekly`, { cookie: m.roles.platformAdmin.cookie });
+  const unlinked = await read();
+  assert.equal(unlinked.status, 200, unlinked.text);
+  await attach(w, await makeEvent(w), [s.logicalSessionId]);
+  const linked = await read();
+  assert.notEqual(linked.text, unlinked.text, "with the link the event's time is shown");
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.join(" ")); };
+  await q(`alter table calendar.event_session_links rename to event_session_links_gone`);
+  try {
+    const failed = await read();
+    assert.equal(failed.status, 200, failed.text);
+    assert.deepEqual(failed.body, unlinked.body, "the plan without event times");
+    assert.ok(!failed.text.includes("event_session_links"), "no SQL text in the answer");
+  } finally {
+    await q(`alter table calendar.event_session_links_gone rename to event_session_links`);
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^\[linked-session-times\] event times not read \(42P01\); the plan is shown without them$/);
+});
+
+test("12. linkedSessionTimes on a query that throws returns the rows unchanged and logs one line with no data", async () => {
+  const rows = [{ plan_id: crypto.randomUUID(), athlete_uuid: crypto.randomUUID(), date: DAY, am_pm: "AM", bta: "T", session_order: 1, session_time: null, session_name: "Secret name" }];
+  const before = JSON.stringify(rows);
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.join(" ")); };
+  try {
+    const out = await linkedSessionTimes({ query: async () => { throw Object.assign(new Error(`timeout on ${rows[0].plan_id}`), { code: "57014" }); } }, rows);
+    assert.equal(out, rows);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(JSON.stringify(rows), before);
+  assert.deepEqual(warnings, ["[linked-session-times] event times not read (57014); the plan is shown without them"]);
+});

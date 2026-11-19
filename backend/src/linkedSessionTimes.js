@@ -25,7 +25,7 @@
 // and never the event's id, title or place.
 //
 // One statement for any number of rows (and none when every row has its own
-// time or no slot); `rows` are rows of plans.v_weekly_plan_items (plan_id,
+// time or no slot); if it fails, the rows are returned as they were; `rows` are rows of plans.v_weekly_plan_items (plan_id,
 // athlete_uuid, date, am_pm, bta, session_order, session_time). Each row
 // without its own time gets `linked_event_start_time` / `linked_event_end_time`
 // ("HH:MM" or null); a row that has its own time is left as it is.
@@ -62,7 +62,12 @@ export async function linkedSessionTimes(queryable, rows) {
   if (!candidates.size) return rows;
   const keys = [...candidates.keys()];
   const first = keys.map((key) => candidates.get(key)[0]);
-  const result = await queryable.query(
+  // The event's time is decoration: a failed read (a missing table, a
+  // timeout, a lock, anything) never takes the plan down. The plan is read
+  // without event times, and one line without any data is logged.
+  let result;
+  try {
+    result = await queryable.query(
     `select k.i::int as i,
             case when k.day = e.day then to_char(e.start_time, 'HH24:MI') end as start_time,
             case when k.day = coalesce(e.end_day, e.day) then to_char(e.end_time, 'HH24:MI') end as end_time
@@ -78,7 +83,12 @@ export async function linkedSessionTimes(queryable, rows) {
       first.map((r) => String(r.plan_id)), first.map((r) => dayOf(r.date)), first.map((r) => r.am_pm ?? null),
       first.map((r) => r.bta ?? null), first.map((r) => Number(r.session_order)), first.map((r) => String(r.athlete_uuid)),
     ],
-  );
+    );
+  } catch (error) {
+    const code = String(error?.code || "error").replace(/[^A-Za-z0-9_]/g, "").slice(0, 20) || "error";
+    console.warn(`[linked-session-times] event times not read (${code}); the plan is shown without them`);
+    return rows;
+  }
   for (const found of result.rows) {
     const start = hhmm(found.start_time);
     const end = hhmm(found.end_time);
