@@ -205,6 +205,13 @@ export function closeCentralCalendarPanel(render) {
   const cal = state.centralCalendar;
   if (cal.form) return closeEventForm(render) ? true : CENTRAL_CALENDAR_STAYED;
   if (!cal.panel.open) return false;
+  // An open question step closes first, as its Not now / Keep it (the panel stays).
+  if (cal.questionStep && !cal.linkWrite) {
+    cal.questionStep = null;
+    render?.();
+    if (render) focusQuestionControl(".cc-question-button");
+    return true;
+  }
   const key = cal.panel.key;
   cal.panel = closedPanel();
   cal.panelQuestions = null;

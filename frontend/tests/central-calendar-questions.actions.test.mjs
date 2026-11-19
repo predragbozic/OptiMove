@@ -1076,3 +1076,18 @@ test("P27b. Open in calendar while that event's panel was left open (the coach w
   assert.equal(questionReads(calls).length, 2, "read afresh");
   assert.match(section().textContent, /RPE · 1\/18 answered/);
 });
+
+test("P29. Escape inside a question step closes the step only; the next Escape closes the panel and drops its questions read", async () => {
+  const { closeCentralCalendarPanel } = await import("../central-calendar-actions.js");
+  state.activeTab = "central-calendar";
+  await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
+  await qact("remove-open", { questionId: Q_RPE });
+  assert.ok(dom().querySelector("#ccQuestionStepText"));
+  assert.equal(closeCentralCalendarPanel(render), true);
+  assert.equal(state.centralCalendar.questionStep, null);
+  assert.equal(state.centralCalendar.panel.open, true, "the panel stays");
+  assert.equal(dom().querySelector("#ccQuestionStepText"), null);
+  assert.equal(closeCentralCalendarPanel(render), true);
+  assert.equal(state.centralCalendar.panel.open, false);
+  assert.equal(state.centralCalendar.panelQuestions, null);
+});
