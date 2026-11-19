@@ -36,7 +36,7 @@ import { pool } from "./db.js";
 import { boundedText } from "./metricTextRules.js";
 import { dateStr, isValidCalendarDate, normalizedSessionName, readScheduleTargetAthletes, timeStr } from "./calendarQuery.js";
 import {
-  calendarActivityScopeSql, calendarAthleteScopeSql, calendarScheduleCandidateSql, loadWorkspaceTeams, membershipOnDaySql,
+  calendarActivityScopeSql, calendarAthleteScopeSql, calendarScheduleCandidateSql, eventTargetsAthleteSql, loadWorkspaceTeams, targetsAthleteSql,
 } from "./calendarAccess.js";
 import {
   EventError, eventOwnerForWorkspace, eventOwnerId, eventOwnerOfRow, eventPlaceOf, eventShowsFieldSql, eventShowsPlaceSql, eventShowsTypeSql,
@@ -1414,22 +1414,6 @@ const linkNotAvailable = () => bad("link_not_available", "One of these links is 
 // The athlete `athleteExpr` is a target of the event `eventParam` ON THE DAY
 // `dayExpr`: directly, or a member of a target team or club that day — the
 // calendar's one membership rule (readScheduleTargetAthletes).
-function eventTargetsAthleteSql(eventParam, athleteExpr, dayExpr) {
-  return targetsAthleteSql(`calendar.event_targets tg where tg.event_id = ${eventParam}`, athleteExpr, dayExpr);
-}
-
-// K2c-2-B (2.3.4): the one rule of "this athlete is a target of the event on
-// that day", over a source of target rows `tg(target_kind, target_athlete_id,
-// target_team_id, target_club_id)` - the stored event's (the attach), or the
-// targets a create resolved before its INSERT (`unnest`). `source` ends in
-// its own `where` clause.
-function targetsAthleteSql(source, athleteExpr, dayExpr) {
-  return `exists (select 1 from ${source} and (
-            (tg.target_kind = 'athlete' and tg.target_athlete_id = ${athleteExpr})
-         or (tg.target_kind = 'team' and ${membershipOnDaySql(athleteExpr, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = tg.target_team_id)`, dayExpr)})
-         or (tg.target_kind = 'club' and ${membershipOnDaySql(athleteExpr, (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, dayExpr)})))`;
-}
-
 // A plan or an activity may be linked only inside the event owner's own tree
 // (security review of K2a-1b): the owner itself, a team event's club, or a
 // club event's teams — the owners whose managers can always see the event

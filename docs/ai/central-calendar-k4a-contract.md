@@ -1,7 +1,6 @@
 # Central calendar — K4a contract: the athlete's Calendar
 
-Status: **Proposed** (2026-11-19, written against `main` `c605c44`). Documents only: no code, no migration. It goes to
-the OptiMove manager for GO. The backend part is ★ (external-review trigger 2, info-hiding).
+Status: **Accepted** (the OptiMove manager's GO, 2026-11-19; Q1–Q6 as recommended). Written against `main` `c605c44`; K4a-B as built on `fd67cc4` (no migration). The backend part is ★ (external-review trigger 2, info-hiding).
 
 Based on: the K4 plan section 2 (`docs/ai/central-calendar-k4-plan.md`, on `main`); the owner-approved mockup 04
 (`docs/design/calendar-k4/04-k4a-athlete-calendar.html`, branch `claude/central-calendar-k4-design`, D7 and D8 accepted
@@ -44,8 +43,11 @@ planned sessions of that day into its card, as the coach's card does. Nothing el
 - The link read (`readEventSessionLinks`, `calendarQuery.js:552-571`) runs for the athlete too, **restricted to the
   athlete's own plans**: `l.plan_id` in the plans whose `athlete_id` is the athlete's (`ctx.athleteId`). A teammate's
   link is never read into the athlete's request (defence in depth; the planned rows are already the athlete's only).
-- The activity links are **not** read for the athlete (out of scope; the athlete's own activities stay their own
-  cards as today).
+- The activity links are **not** read for the athlete. **As built (K4a-B):** an athlete's own recorded activity that
+  is linked to one of her sessions follows that session: when the session folds into the event, the activity folds
+  with it (the coach's rule, `logicalSessionToKey`), and the athlete's event card carries no activity link (D21). Before
+  K4a it showed as an id in her planned card's `links.activityIds`; no athlete screen reads that today, and K4a-F's
+  card does not need it.
 - `foldsInto` keeps its rules unchanged: a planned event, shown on that day (`eventDayKeys`, so only an event the
   athlete is a target of that day), `kinds` containing `event`. A cancelled event folds nothing (K2a manager decision
   9.12): its sessions are planned cards again.
