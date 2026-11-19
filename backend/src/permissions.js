@@ -41,6 +41,9 @@ export const PERMISSIONS = Object.freeze({
   // Organization and staff
   "org.view": permission("organization", CLUB_TEAM),
   "org.teams.manage": permission("organization", CLUB),
+  // Edit a club's own details (name and the fields PUT /clubs/:clubId accepts).
+  // The owner, 2026-11-19: done by the platform admin and the club's admin.
+  "org.club.edit": permission("organization", CLUB),
   "accounts.manage": permission("organization", CLUB, { systemRoleOnly: true }),
   "staff.assign": permission("organization", CLUB, { systemRoleOnly: true }),
   "roles.manage": permission("organization", CLUB, { systemRoleOnly: true }),
@@ -125,7 +128,7 @@ function group(key, label, steps) {
 export const PERMISSION_GROUPS = Object.freeze([
   group("organization", "Organization and staff", [
     ["view", "View", ["org.view"]],
-    ["manage_teams", "Manage teams", ["org.teams.manage"]],
+    ["manage_teams", "Manage teams", ["org.teams.manage", "org.club.edit"]],
     ["manage_staff", "Manage staff and accounts", ["accounts.manage", "staff.assign", "roles.manage"]],
   ]),
   group("athletes", "Athletes", [
@@ -199,6 +202,7 @@ export const BASIC_ROLE_PERMISSIONS = Object.freeze({
   club_admin: Object.freeze([
     "org.view",
     "org.teams.manage",
+    "org.club.edit",
     "athletes.manage",
     "athletes.remove",
     "staff.assign",
@@ -235,7 +239,7 @@ export function teamScope(id) {
 // A club or team scope without an id (null, undefined, "") is no resource:
 // nobody but a platform admin passes it.
 //
-// Two conventions about the scope, which the SQL twin of R2
+// Three conventions about the scope, which the SQL twin of R2
 // (public.user_has_permission) must copy exactly:
 //   1. global scope = a platform admin only, WHATEVER the word. A club or
 //      team word checked at global scope ("accounts.manage", "athletes.remove"
@@ -245,6 +249,10 @@ export function teamScope(id) {
 //      assigned only for a club ("staff.assign") can therefore be checked at
 //      team scope; it then passes for the admin of the team's club and never
 //      for the team's own coach, unless the Team coach set holds the word too.
+//   3. a club or team scope without an id (null, undefined, "") is no
+//      resource: only a platform admin passes it, whatever rows the account
+//      holds. The twin must refuse a NULL scope id the same way, never match
+//      it against a role row.
 // The catalog's `scopeTypes` say where a role may be ASSIGNED, not which
 // resource scopes a check may name.
 export function can(authz, permission, scope) {

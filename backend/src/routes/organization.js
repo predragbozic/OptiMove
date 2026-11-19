@@ -3,7 +3,6 @@ import { Router } from "express";
 import { pool, query } from "../db.js";
 import { withExerciseReuseTransaction } from "../exerciseAccess.js";
 import {
-  canManageClub as authzCanManageClub,
   isPlatformAdministrator,
   loadAuthorizationContext,
 } from "../authz.js";
@@ -1059,7 +1058,7 @@ router.post("/clubs", async (req, res, next) => {
 
 router.put("/clubs/:clubId", async (req, res, next) => {
   try {
-    if (!(await canManageClub(req, req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
+    if (!can(req.authz, "org.club.edit", clubScope(req.params.clubId))) return res.status(403).json({ error: "Club is outside your access." });
     const name = clean(req.body?.name);
     if (!name) return res.status(400).json({ error: "Club name is required." });
     const result = await query(
@@ -3629,7 +3628,7 @@ async function loadManagedAthletes(req) {
          -- ARCHIVED relationship they still own/manage, so "Show archived"
          -- has something to render and Restore has something to act on.
          -- This is visibility only - it never implies active access; every
-         -- write endpoint (canManageAthlete, canManageTeam, canManageClub)
+         -- write endpoint (canManageAthlete and the permission checks)
          -- independently re-checks against ACTIVE rows only.
          or exists (
            select 1 from public.user_athletes ua_archived
@@ -3837,10 +3836,6 @@ async function canManageAthletes(req, athleteIds, executor = { query }) {
   );
   for (const row of result.rows) manageable.add(String(row.athlete_id));
   return manageable;
-}
-
-function canManageClub(req, clubId) {
-  return authzCanManageClub(req.authz, clubId);
 }
 
 

@@ -68,6 +68,7 @@ const ORGANIZATION_JS = fs.readFileSync(path.join(REPO_ROOT, "backend/src/routes
 const PLAN_CATALOG = {
   "org.view": ["club", "team"],
   "org.teams.manage": ["club"],
+  "org.club.edit": ["club"], // the 52nd word: the owner's decision of 2026-11-19
   "athletes.view": ["club", "team"],
   "athletes.manage": ["club", "team"],
   "athletes.remove": ["club", "team"],
@@ -126,10 +127,10 @@ const GROUP_KEYS = [
 ];
 const ALL_WORDS = Object.keys(PERMISSIONS);
 
-test("a1. the catalog is exactly the plan's 51 words, each with the plan's scope types", () => {
-  assert.equal(Object.keys(PLAN_CATALOG).length, 51);
-  assert.equal(ALL_WORDS.length, 51);
-  assert.equal(new Set(ALL_WORDS).size, 51);
+test("a1. the catalog is exactly the plan's 51 words and org.club.edit (52), each with its scope types", () => {
+  assert.equal(Object.keys(PLAN_CATALOG).length, 52);
+  assert.equal(ALL_WORDS.length, 52);
+  assert.equal(new Set(ALL_WORDS).size, 52);
   assert.deepEqual([...ALL_WORDS].sort(), Object.keys(PLAN_CATALOG).sort());
   for (const word of ALL_WORDS) {
     assert.deepEqual([...PERMISSIONS[word].scopeTypes], PLAN_CATALOG[word], `scope types of ${word}`);
@@ -161,7 +162,7 @@ test("a3. twelve groups; every word belongs to exactly one group, and that group
       assert.equal(PERMISSIONS[word].module, group.key, `module of ${word}`);
     }
   }
-  assert.equal(seen.size, 51, "every catalog word is in a group");
+  assert.equal(seen.size, 52, "every catalog word is in a group");
 });
 
 test("a4. levels: start with Off, name only the group's own catalog words, are cumulative, and hold no platform-only word", () => {
@@ -333,6 +334,7 @@ const ROUTE_TABLE = {
   "PUT /users/:userId/global-roles/:role": [["platform.admin", "GLOBAL_SCOPE", "!can", "isPlatformAdministrator"]],
   "DELETE /users/:userId/global-roles/:role": [["platform.admin", "GLOBAL_SCOPE", "!can", "isPlatformAdministrator"]],
   "POST /clubs": [["platform.admin", "GLOBAL_SCOPE", "!can", "isPlatformAdministrator"]],
+  "PUT /clubs/:clubId": [["org.club.edit", "clubScope(req.params.clubId)", "!can", "canManageClub"]],
   "DELETE /clubs/:clubId": [["platform.admin", "GLOBAL_SCOPE", "!can", "isPlatformAdministrator"]],
   "POST /teams": [["org.teams.manage", "clubScope(clubId)", "!can", "canManageClub"]],
   "PUT /teams/:teamId": [
@@ -439,10 +441,10 @@ test("b1. the per-call-site table is exactly the can() calls of routes/organizat
   const expected = Object.fromEntries(Object.entries(ROUTE_TABLE).map(([handler, sites]) => [handler, sites.map(([word, scope, shape]) => [word, scope, shape])]));
   assert.deepEqual(table, expected);
   assert.deepEqual(Object.keys(table), Object.keys(ROUTE_TABLE), "handlers in source order");
-  assert.equal(Object.keys(ROUTE_TABLE).length, 28);
-  assert.equal(CALL_SITES.length, 35);
+  assert.equal(Object.keys(ROUTE_TABLE).length, 29);
+  assert.equal(CALL_SITES.length, 36);
   // The comment that mentions can() is not a call: the raw text has one more.
-  assert.equal([...ORGANIZATION_JS.matchAll(/(?<![\w.$])can\(req\.authz\b/g)].length, 36);
+  assert.equal([...ORGANIZATION_JS.matchAll(/(?<![\w.$])can\(req\.authz\b/g)].length, 37);
   for (const site of CALL_SITES) {
     assert.ok(Object.hasOwn(PERMISSIONS, site.permission), `${site.handler}: ${site.permission} is a catalog word`);
     assert.ok(OLD[site.oldName], `${site.handler}: ${site.oldName} is a predicate of authz.js`);
@@ -571,6 +573,7 @@ test("b2z. every (word, scope type) organization.js checks is one the word may b
     "athletes.remove @ club: assignable",
     "athletes.remove @ global: convention 1: global scope, a platform admin only",
     "athletes.remove @ team: assignable",
+    "org.club.edit @ club: assignable",
     "org.teams.manage @ club: assignable",
     "org.view @ team: assignable",
     "platform.admin @ global: assignable",
@@ -632,7 +635,7 @@ test("b3. the expected answers themselves, spelled out for the main cases", () =
 
 test("b4. a platform admin passes every permission in every scope; a permission no module has moved to passes for nobody else", () => {
   const notUsed = ALL_WORDS.filter((w) => !USED_WORDS.includes(w));
-  assert.equal(notUsed.length, 51 - USED_WORDS.length);
+  assert.equal(notUsed.length, 52 - USED_WORDS.length);
   for (const [name, authz] of Object.entries(CONTEXTS)) {
     const platform = authz.platformRoles.length > 0;
     for (const type of ["global", "club", "team"]) {
@@ -651,7 +654,7 @@ test("b4. a platform admin passes every permission in every scope; a permission 
 test("b5. the basic sets: platform admin everything; club admin and team coach hold only words organization.js uses, and exactly the derived ones", () => {
   assert.deepEqual(Object.keys(BASIC_ROLE_PERMISSIONS).sort(), ["club_admin", "platform_admin", "team_coach"]);
   assert.deepEqual([...BASIC_ROLE_PERMISSIONS.platform_admin].sort(), [...ALL_WORDS].sort());
-  assert.deepEqual([...BASIC_ROLE_PERMISSIONS.club_admin].sort(), ["athletes.manage", "athletes.remove", "org.teams.manage", "org.view", "staff.assign"]);
+  assert.deepEqual([...BASIC_ROLE_PERMISSIONS.club_admin].sort(), ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "staff.assign"]);
   assert.deepEqual([...BASIC_ROLE_PERMISSIONS.team_coach].sort(), ["athletes.manage", "athletes.remove", "org.view"]);
   for (const role of ["club_admin", "team_coach"]) {
     const words = BASIC_ROLE_PERMISSIONS[role];
@@ -731,12 +734,16 @@ test("b9. routes/organization.js no longer imports the predicates can() replaced
   const authzImport = ORGANIZATION_JS.match(/import \{([^}]*)\} from "\.\.\/authz\.js";/);
   assert.ok(authzImport, "the authz.js import");
   const names = authzImport[1].split(",").map((s) => s.trim()).filter(Boolean).sort();
-  // canManageClub: PUT /clubs/:clubId only (the catalog has no word for editing a club's own details).
   // isPlatformAdministrator: the list loaders' SQL branches, the mixed clubRoles.length checks, canManageAthlete(s),
-  // setUserLoginStatus's target rule, the response's isPlatformAdmin fact.
-  assert.deepEqual(names, ["canManageClub as authzCanManageClub", "isPlatformAdministrator", "loadAuthorizationContext"]);
-  assert.equal([...ORGANIZATION_JS.matchAll(/(?<!function )\bcanManageClub\(req,/g)].length, 1, "one remaining canManageClub call: PUT /clubs/:clubId");
-  assert.doesNotMatch(ORGANIZATION_JS, /\bcanManageTeam\(req,/);
+  // setUserLoginStatus's target rule, the response's isPlatformAdmin fact. Nothing else of authz.js's predicates:
+  // PUT /clubs/:clubId, the last canManageClub call, checks "org.club.edit" since the owner's decision of 2026-11-19.
+  assert.deepEqual(names, ["isPlatformAdministrator", "loadAuthorizationContext"]);
+  const code = stripComments(ORGANIZATION_JS);
+  for (const gone of ["canManageClub", "canManageTeam", "canManageTeamById", "canAssignClubRole", "canAssignTeamRole", "canUsePlatformAdministration", "authzCanManageClub", "authzCanManageTeam", "authzCanAssignClubRole", "authzCanAssignTeamRole"]) {
+    assert.doesNotMatch(code, new RegExp(`\\b${gone}\\b`), `${gone} is neither defined, imported nor called in the code`);
+  }
+  // Not in the SQL text the file sends either (a comment inside a query named the removed wrappers).
+  assert.doesNotMatch(ORGANIZATION_JS, /canManageTeam\b|authzCanManage|authzCanAssign/);
   assert.match(ORGANIZATION_JS, /import \{ can, clubScope, GLOBAL_SCOPE, teamScope \} from "\.\.\/permissions\.js";/);
 });
 
@@ -828,6 +835,23 @@ function setsRole(setClause) {
   return false;
 }
 
+// An UPDATE's SET clause: from `set` to the first FROM / WHERE / RETURNING that is
+// not inside parentheses or a quoted string (a subselect's own FROM does not end it).
+function updateSetClause(statement) {
+  const set = statement.match(/\bset\b/i);
+  if (!set) return null;
+  const rest = statement.slice(set.index + set[0].length);
+  let depth = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (ch === "'") { const end = rest.indexOf("'", i + 1); i = end === -1 ? rest.length : end; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (depth === 0 && /^(from|where|returning)\b/i.test(rest.slice(i, i + 10)) && (i === 0 || !/[\w$."]/.test(rest[i - 1]))) return rest.slice(0, i);
+  }
+  return rest;
+}
+
 // null when the statement can only leave the table's one word in `role`;
 // otherwise why not. Anything it cannot read is a problem (fail closed).
 function roleWriteProblem({ verb, table, statement }) {
@@ -885,9 +909,9 @@ function roleWriteProblem({ verb, table, statement }) {
     return null;
   }
   if (verb === "update") {
-    const set = statement.match(/\bset\b([\s\S]*?)(\bfrom\b|\bwhere\b|\breturning\b|$)/i);
-    if (!set) return "an update without a readable SET";
-    if (setsRole(set[1])) return "an update that sets role";
+    const set = updateSetClause(statement);
+    if (set === null) return "an update without a readable SET";
+    if (setsRole(set)) return "an update that sets role";
     return null;
   }
   return `a ${verb} statement`;
@@ -971,6 +995,10 @@ test("c2. the scan's own rule: it refuses every other shape of write", () => {
   assert.match(problem("update public.user_club_roles set (role, is_active) = ('director', true) where user_id = $1"), /update that sets role/);
   assert.match(problem("update public.user_team_roles set (is_active, \"role\") = (select true, 'assistant')"), /update that sets role/);
   assert.match(problem("insert into public.user_team_roles (user_id, team_id, role) values ($1,$2,'team_coach') on conflict (user_id, team_id, role) do update set (is_active, role) = (true, 'assistant')"), /upsert that sets role/);
+  // A subselect in the SET clause does not end it: the assignment after it is still read.
+  assert.match(problem("update public.user_club_roles set updated_at = (select now() from public.users limit 1), role = 'director' where user_id = $1"), /update that sets role/);
+  assert.equal(problem("update public.user_club_roles set updated_at = (select now() from public.users where true limit 1), is_active = false where user_id = $1 and role = 'club_admin'"), null);
+  assert.equal(problem("update public.user_team_roles set is_active = false\nfrom public.teams t\nwhere t.id = team_id and role = 'team_coach' returning role"), null);
   // A multi-row VALUES whose later row has another word, however far from the first row.
   assert.match(problem("insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'club_admin'), ($3, $4, 'director')"), /role in row 2 is 'director'/);
   assert.match(problem("insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'club_admin')\n\n\n      ,\n\n   ($3, $4, 'club_admin'), (coalesce($5, ($6)), $7, $8)"), /role in row 3 is \$8/);
