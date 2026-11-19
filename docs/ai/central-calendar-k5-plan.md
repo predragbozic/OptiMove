@@ -12,6 +12,7 @@ because Imports belongs to his mapping stream.
 | **H2** | „Npr gps uvoz mi bismo trebali i na glavnom kalendaru da vidimo neki gps ikonicu ili nesto preko čega bismo mogli ući dalje" | GPS is visible on the main calendar with a GPS icon, and a click goes on from there. |
 | **H3** | „U filteru moze da se izabere samo gps uvozi... zatim nesto drugo.... Da možemo lako naci" | The calendar's filter has a choice for each kind of activity: GPS imports, tests, RPE requests, trainings and events by type. Choosing one shows only that kind, so it is easy to find. |
 | **H4** | „Događaj na kalendaru glavnom mogao bi da sadrži na sebi već ikonice rpe, gps ili testa čisto kao oznaka da on sadrži to u sebi ako sadrzi" | An event card shows small RPE, GPS and test icons, only as a mark that the event holds that kind of item. |
+| **H5** | „Ako nema događaja a imamo gps ili rpe onda kao po predlogu koji si mi pokazao" | With no event, a GPS import, an RPE request or a test is a small mark under its day, as in the mockups (K5-2, *Small marks*). |
 
 The rule of the K4 plan carries over (O13): there is no big change of the current state. Each part reuses existing
 routes and links.
@@ -78,7 +79,7 @@ The panel of each kind gets one clear button to where its work is done. Back ret
     today (an athlete's view folds no schedule), and she sees no mark about the team.
   - On a phone the icons sit in one row with the event type's icon, at most three, and never push the title out of
     view.
-- **Small marks.** A test, an RPE request or an activity that is in no event is a compact chip under its day, not a
+- **Small marks (H5).** A test, an RPE request or an activity that is in no event is a compact chip under its day, not a
   full card. Examples: "🧪 CMJ test", "📡 GPS 10:05", "RPE request". A click opens its panel, and from there *Go
   there*. The filters (FE-D16) keep working.
 
