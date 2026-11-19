@@ -273,6 +273,7 @@ router.get("/definitions", async (req, res, next) => {
     const { rows, nextCursor } = await listDefinitions(req, {
       search: req.query.search, ownerScope: req.query.ownerScope, state: req.query.state, cursor, limit: req.query.limit, hideClubId,
       teamClubId: req.query.purpose === "dashboardSeries" && workspace?.type === "team" ? workspace.clubId ?? null : null,
+      athleteWorkspace: workspace?.type === "athlete",
     });
     res.json({ rows, nextCursor });
   } catch (error) {
@@ -283,7 +284,8 @@ router.get("/definitions", async (req, res, next) => {
 router.get("/definitions/:id", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const row = await getDefinition(req, req.params.id);
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const row = await getDefinition(req, req.params.id, { athleteWorkspace: workspace?.type === "athlete" });
     if (!row) return res.status(404).json({ error: "Metric definition not found." });
     res.json({ row });
   } catch (error) {
@@ -351,7 +353,8 @@ router.put("/definitions/:id/scope-capabilities", async (req, res, next) => {
 router.get("/definitions/:id/versions", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const rows = await listDefinitionVersions(req, req.params.id);
+    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const rows = await listDefinitionVersions(req, req.params.id, { athleteWorkspace: workspace?.type === "athlete" });
     if (rows === null) return res.status(404).json({ error: "Metric definition not found." });
     res.json({ rows });
   } catch (error) {

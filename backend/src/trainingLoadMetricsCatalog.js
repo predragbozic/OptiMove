@@ -9,6 +9,7 @@
 // handler or a test harness.
 import { query, pool } from "./db.js";
 import { canManageCatalogRow, catalogVisibilitySql, resolveCatalogOwnerScope } from "./trainingLoadMetricsAccess.js";
+import { calculatedDefinitionSql } from "./calculatedValues.js";
 
 const DEFAULT_ICON_URL = "/assets/icons/metric-default.svg";
 
@@ -166,7 +167,7 @@ function validateVersionInput(body) {
   };
 }
 
-export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null, teamClubId = null } = {}) {
+export async function listDefinitions(req, { search, ownerScope, state, cursor, limit, hideClubId = null, teamClubId = null, athleteWorkspace = false } = {}) {
   const params = [];
   let visSql = catalogVisibilitySql(req, "d", params);
   // v55 (O7): for the dashboard series picker in a team's workspace the list also offers the variables of the team's
@@ -186,6 +187,9 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
   params.push(req.user.id);
   const hiddenSql = `not exists (select 1 from training_load.metric_definition_hidden h where h.definition_id = d.id and h.user_id = $${params.length})`;
   const conditions = [visSql, hiddenSql];
+  // J21: an athlete's workspace never lists a calculated variable (OptiMove's sum of measured values; she sees only what
+  // was measured) - no label, no picker entry.
+  if (athleteWorkspace) conditions.push(`not ${calculatedDefinitionSql("d")}`);
   if (state) {
     params.push(state);
     conditions.push(`d.state = $${params.length}`);
@@ -242,7 +246,7 @@ export async function listDefinitions(req, { search, ownerScope, state, cursor, 
   return { rows, nextCursor };
 }
 
-export async function getDefinition(req, id) {
+export async function getDefinition(req, id, { athleteWorkspace = false } = {}) {
   const result = await query(
     `select d.*, dv.unit, dv.value_type, dv.min_value, dv.max_value, dv.condition_description, dv.daily_aggregation_method, dv.version_number
      from training_load.metric_definitions d
@@ -260,6 +264,8 @@ export async function getDefinition(req, id) {
     params,
   );
   if (!visibleCheck.rowCount) return null;
+  // J21: in an athlete's workspace a calculated variable reads exactly like a missing one.
+  if (athleteWorkspace && (await query(`select 1 from training_load.metric_definitions d where d.id = $1 and ${calculatedDefinitionSql("d")}`, [id])).rowCount) return null;
   const capsResult = await query(`select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level`, [id]);
   return { ...row, scope_capabilities: capsResult.rows.map((r) => r.scope_level) };
 }
@@ -529,8 +535,8 @@ export async function createDefinitionVersion(req, id, body, { onLocked } = {}) 
   }
 }
 
-export async function listDefinitionVersions(req, id) {
-  const visible = await getDefinition(req, id);
+export async function listDefinitionVersions(req, id, { athleteWorkspace = false } = {}) {
+  const visible = await getDefinition(req, id, { athleteWorkspace });
   if (!visible) return null;
   const result = await query(`select * from training_load.metric_definition_versions where metric_definition_id = $1 order by version_number`, [id]);
   return result.rows;
