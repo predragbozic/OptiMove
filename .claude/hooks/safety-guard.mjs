@@ -59,9 +59,20 @@ export function splitCommandSegments(cmd) {
       current += ch;
       continue;
     }
+    // A backslash before a newline joins the two lines (line continuation); any other
+    // backslash outside quotes escapes the next character, which therefore never splits.
+    if (ch === "\\") {
+      if (cmd[i + 1] === "\n") { current += " "; i++; continue; }
+      if (cmd[i + 1] === "\r" && cmd[i + 2] === "\n") { current += " "; i += 2; continue; }
+      if (i + 1 < cmd.length) { current += ch + cmd[i + 1]; i++; continue; }
+    }
     if (ch === "&" && cmd[i + 1] === "&") { segments.push(current); current = ""; i++; continue; }
     if (ch === "|" && cmd[i + 1] === "|") { segments.push(current); current = ""; i++; continue; }
-    if (ch === ";" || ch === "|") { segments.push(current); current = ""; continue; }
+    if (ch === "|" && cmd[i + 1] === "&") { segments.push(current); current = ""; i++; continue; } // |& pipes stderr too
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") { segments.push(current); current = ""; continue; }
+    // A single & runs the command before it in the background: a separator. Not when it is
+    // part of a redirection (2>&1, >&2, <&0, &>file).
+    if (ch === "&" && cmd[i - 1] !== ">" && cmd[i - 1] !== "<" && cmd[i + 1] !== ">") { segments.push(current); current = ""; continue; }
     current += ch;
   }
   segments.push(current);
@@ -550,6 +561,407 @@ export function isPersistentSqlWrite(segment) {
 }
 
 // ---------------------------------------------------------------------------
+// Reading what hides: wrappers, substitutions, groups, heredocs. The rule is "a dangerous
+// command is caught wherever it can be read"; only what truly cannot be read asks.
+// ---------------------------------------------------------------------------
+
+const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell"]);
+const KNOWN_COMMANDS_BY_PATH = new Set([
+  "git", "gh", "rm", "rmdir", "del", "psql", "node", "npm", "npx", "env", "sudo", "doas",
+  "bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd", "sed", "sort", "uniq",
+  "rg", "find", "xargs", "timeout", "nohup", "nice", "time", "stdbuf", "exec", "command",
+]);
+const SHELL_KEYWORDS = new Set(["then", "do", "else", "elif", "if", "while", "until", "!", "time", "{", "(", "(("]);
+
+function basenameOfCommand(word) {
+  const base = word.split(/[\\/]/).pop().replace(/\.exe$/i, "");
+  return base.toLowerCase();
+}
+
+// Drops the wrappers that run the command after them unchanged: env (and its assignments),
+// sudo/doas, command, exec, nohup, nice, time, timeout, stdbuf, xargs, a leading backslash,
+// an absolute or relative path to a known command, shell keywords, and opening/closing
+// parentheses or braces of a group. Returns the command underneath, or the segment itself.
+export function normalizeSegment(segment) {
+  let current = typeof segment === "string" ? segment.trim() : "";
+  for (let round = 0; round < 12; round++) {
+    const before = current;
+    current = current.replace(/^[({]+\s*/, "").replace(/\s*[)}]+\s*;?\s*$/, "").trim();
+    current = stripLeadingEnvAssignments(current).trim();
+    let tokens = tokenizeWords(current);
+    if (tokens.length === 0) return "";
+    let first = tokens[0];
+    if (first.startsWith("\\") && first.length > 1) { tokens[0] = first.slice(1); first = tokens[0]; }
+    if ((first.includes("/") || first.includes("\\")) && KNOWN_COMMANDS_BY_PATH.has(basenameOfCommand(first))) {
+      tokens[0] = basenameOfCommand(first);
+      first = tokens[0];
+    }
+    const name = first.toLowerCase();
+    let skip = 0;
+    if (SHELL_KEYWORDS.has(name)) skip = 1;
+    else if (name === "env") {
+      skip = 1;
+      while (skip < tokens.length) {
+        const t = tokens[skip];
+        if (/^-[uCS]$/.test(t) || /^--(unset|chdir|split-string)$/.test(t)) { skip += 2; continue; }
+        if (/^-/.test(t) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { skip += 1; continue; }
+        break;
+      }
+    } else if (name === "sudo" || name === "doas") {
+      skip = 1;
+      while (skip < tokens.length && tokens[skip].startsWith("-")) {
+        skip += /^-[ugCDhprtUT]$/.test(tokens[skip]) ? 2 : 1;
+      }
+    } else if (name === "command") {
+      if (tokens.slice(1).some((t) => /^-[a-zA-Z]*[vV]/.test(t))) return current; // only looks the name up
+      skip = 1;
+      while (skip < tokens.length && tokens[skip].startsWith("-")) skip += 1;
+    } else if (name === "exec") {
+      skip = 1;
+      while (skip < tokens.length && tokens[skip].startsWith("-")) skip += tokens[skip] === "-a" ? 2 : 1;
+    } else if (name === "nohup" || name === "setsid") {
+      skip = 1;
+    } else if (name === "nice") {
+      skip = 1;
+      while (skip < tokens.length && tokens[skip].startsWith("-")) skip += tokens[skip] === "-n" ? 2 : 1;
+    } else if (name === "timeout") {
+      skip = 1;
+      while (skip < tokens.length && tokens[skip].startsWith("-")) skip += /^-[sk]$/.test(tokens[skip]) ? 2 : 1;
+      skip += 1; // the duration
+    } else if (name === "stdbuf") {
+      skip = 1;
+      while (skip < tokens.length && tokens[skip].startsWith("-")) skip += /^-[ioe]$/.test(tokens[skip]) ? 2 : 1;
+    } else if (name === "xargs") {
+      skip = 1;
+      while (skip < tokens.length && tokens[skip].startsWith("-")) {
+        skip += /^-[nIPLdEsa]$/.test(tokens[skip]) ? 2 : 1;
+      }
+    }
+    if (skip > 0) tokens = tokens.slice(skip);
+    current = tokens.join(" ").trim();
+    if (current === before) break;
+  }
+  return current;
+}
+
+// The command texts inside $( ), <( ), >( ) and backticks of a segment, outermost first.
+// Single-quoted text is literal and skipped; double-quoted text is scanned, as the shell
+// does. An unclosed one runs to the end of the segment.
+export function extractSubstitutions(segment) {
+  const found = [];
+  if (typeof segment !== "string") return found;
+  let quote = null;
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (quote === "'") { if (ch === "'") quote = null; continue; }
+    if (ch === "\\") { i++; continue; }
+    if (ch === "'" && quote === null) { quote = "'"; continue; }
+    if (ch === '"') { quote = quote === '"' ? null : '"'; continue; }
+    if ((ch === "$" || ch === "<" || ch === ">") && segment[i + 1] === "(") {
+      let depth = 1;
+      let j = i + 2;
+      for (; j < segment.length && depth > 0; j++) {
+        if (segment[j] === "(") depth++;
+        else if (segment[j] === ")") depth--;
+      }
+      found.push(segment.slice(i + 2, depth === 0 ? j - 1 : j));
+      i = (depth === 0 ? j - 1 : j);
+      continue;
+    }
+    if (ch === "`") {
+      const end = segment.indexOf("`", i + 1);
+      found.push(segment.slice(i + 1, end === -1 ? segment.length : end));
+      i = end === -1 ? segment.length : end;
+    }
+  }
+  return found.map((t) => t.trim()).filter(Boolean);
+}
+
+// Heredocs. The body of a heredoc that a shell reads (`bash <<EOF`, `sh -s <<'E'`) is
+// commands and is checked like any other line; the body of any other heredoc is data
+// (a commit message, a file being written, a Python script) and is not read as shell.
+// A here-string to a shell (`bash <<< "..."`) is commands too. Returns the command text
+// without the data bodies, the shell bodies, and the bodies that ran to the end without
+// their closing word (read as commands: something is off).
+export function extractHeredocs(cmd) {
+  const result = { text: "", shellBodies: [] };
+  if (typeof cmd !== "string") return result;
+  const lines = cmd.split(/\r?\n/);
+  const out = [];
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    out.push(line);
+    const pending = [];
+    const re = /(^|[^<])<<(-?)\s*(?:'([A-Za-z_][\w.-]*)'|"([A-Za-z_][\w.-]*)"|\\?([A-Za-z_][\w.-]*))/g;
+    // Single-quoted text is literal: a `<<` inside it is not a heredoc. The quotes of the
+    // delimiter itself (`<<'E'`) are part of the operator, so they are kept.
+    const unquoted = line.replace(/(<<-?\s*)?'[^']*'/g, (m, op) => (op ? m : " ".repeat(m.length)));
+    let m;
+    while ((m = re.exec(unquoted)) !== null) {
+      const at = m.index + m[1].length;
+      const owner = unquoted.slice(0, at).split(/&&|\|\||;|\|/).pop();
+      pending.push({ word: m[3] || m[4] || m[5], tabs: m[2] === "-", shell: SHELLS.has(basenameOfCommand(normalizeSegment(owner).split(/\s+/)[0] || "")) });
+    }
+    const here = /(^|[^<])<<<\s*(.+)$/.exec(unquoted);
+    if (here) {
+      const owner = unquoted.slice(0, here.index + here[1].length).split(/&&|\|\||;|\|/).pop();
+      if (SHELLS.has(basenameOfCommand(normalizeSegment(owner).split(/\s+/)[0] || ""))) {
+        result.shellBodies.push(stripQuotes(line.slice(here.index + here[1].length + 3).trim()));
+      }
+    }
+    for (const doc of pending) {
+      const body = [];
+      let closed = false;
+      while (li + 1 < lines.length) {
+        li++;
+        const candidate = doc.tabs ? lines[li].replace(/^\t+/, "") : lines[li];
+        if (candidate === doc.word) { closed = true; break; }
+        body.push(lines[li]);
+      }
+      if (doc.shell || !closed) result.shellBodies.push(body.join("\n"));
+    }
+  }
+  result.text = out.join("\n");
+  return result;
+}
+
+// What cannot be read at all: a shell that reads its commands from a pipe or from stdin
+// (`... | bash`, `curl ... | sh`), and eval / sh -c whose whole code is a variable.
+export function isUnreadableShellInput(segment, isPartOfLargerLine) {
+  const normalized = normalizeSegment(segment);
+  const tokens = tokenizeWords(normalized);
+  if (tokens.length === 0) return false;
+  const name = basenameOfCommand(tokens[0]);
+  if (SHELLS.has(name) && isPartOfLargerLine) {
+    const rest = tokens.slice(1);
+    const readsStdin = rest.every((t) => t.startsWith("-") && !/c/.test(t.replace(/^--?/, "").slice(0, 1) === "c" ? "c" : "")) || rest.includes("-s") || rest.includes("-");
+    if (readsStdin && !rest.some((t) => /^-[A-Za-z]*c[A-Za-z]*$/.test(t) || /^-(Command|c|File)$/i.test(t))) return true;
+  }
+  if (/^eval$/i.test(tokens[0]) && tokens.length >= 2 && /^["']?\$/.test(tokens[1])) return true;
+  const inner = unwrapInterpreterCommand(normalized);
+  if (inner !== null && /^\$[{A-Za-z_(]/.test(inner.trim())) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Checks that keep the wider allow list honest: an allowed read command that could
+// write, delete or run something else asks.
+// ---------------------------------------------------------------------------
+
+const SED_SIMPLE_COMMANDS = new Set(["p", "P", "=", "q", "Q", "l", "n", "N", "d", "D", "g", "G", "h", "H", "x", "z", "{", "}"]);
+
+// A sed script that only selects and prints: addresses, and the commands above, `s///`
+// and `y///` without the e or w flags, `a`/`i`/`c` text, labels and branches. Anything
+// else (w, W, e, r, R, s///w, s///e, an unparseable script) is not read-only.
+export function isReadOnlySedScript(script) {
+  if (typeof script !== "string") return false;
+  let i = 0;
+  const n = script.length;
+  const skipRegex = (start, delim) => {
+    let j = start;
+    while (j < n && script[j] !== delim) { if (script[j] === "\\") j++; j++; }
+    return j < n ? j + 1 : -1;
+  };
+  const skipAddress = () => {
+    if (/[0-9]/.test(script[i] || "")) { while (/[0-9~]/.test(script[i] || "")) i++; return true; }
+    if (script[i] === "$") { i++; return true; }
+    if (script[i] === "/") { const j = skipRegex(i + 1, "/"); if (j < 0) return null; i = j; while (/[IM]/.test(script[i] || "")) i++; return true; }
+    if (script[i] === "\\" && i + 1 < n) { const d = script[i + 1]; const j = skipRegex(i + 2, d); if (j < 0) return null; i = j; while (/[IM]/.test(script[i] || "")) i++; return true; }
+    return false;
+  };
+  while (i < n) {
+    while (i < n && /[\s;]/.test(script[i])) i++;
+    if (i >= n) break;
+    if (script[i] === "#") { while (i < n && script[i] !== "\n") i++; continue; }
+    const a1 = skipAddress();
+    if (a1 === null) return false;
+    if (a1 && script[i] === ",") { i++; if (script[i] === "+" || script[i] === "~") { i++; while (/[0-9]/.test(script[i] || "")) i++; } else if (skipAddress() !== true) return false; }
+    while (i < n && /\s/.test(script[i])) i++;
+    if (script[i] === "!") { i++; while (i < n && /\s/.test(script[i])) i++; }
+    const c = script[i];
+    if (c === undefined) return !a1 ? true : false;
+    if (SED_SIMPLE_COMMANDS.has(c)) { i++; continue; }
+    if (c === ":" || c === "b" || c === "t" || c === "T") { while (i < n && script[i] !== ";" && script[i] !== "\n" && script[i] !== "}") i++; continue; }
+    if (c === "a" || c === "i" || c === "c") { while (i < n && script[i] !== "\n") i++; continue; }
+    if (c === "s" || c === "y") {
+      const d = script[i + 1];
+      if (!d || /[\s\\\n]/.test(d)) return false;
+      let j = skipRegex(i + 2, d); if (j < 0) return false;
+      j = skipRegex(j, d); if (j < 0) return false;
+      i = j;
+      if (c === "s") {
+        while (i < n && /[gpiImM0-9]/.test(script[i])) i++;
+        if (/[ewEW]/.test(script[i] || "")) return false;
+      }
+      continue;
+    }
+    return false; // w W e r R F v and anything unknown
+  }
+  return true;
+}
+
+function readsAndWritesNothingElse(tokens) {
+  const name = basenameOfCommand(tokens[0] || "");
+  const rawRest = tokens.slice(1);
+  const rest = rawRest.map(stripQuotes);
+  if (name === "sed") {
+    // Only the form the allow list lets through without a question (`sed -n ...`): any other
+    // sed is not allowed there, so Claude Code itself asks or decides as it always has.
+    if (rest[0] !== "-n") return true;
+    if (rest.some((t) => /^--sandbox$/.test(t))) return !rest.some((t) => /^(-i|--in-place)/.test(t) || /^-[a-zA-Z]*i/.test(t) && !/^-[a-zA-Z]*[ef]$/.test(t));
+    const scripts = [];
+    let scriptFromArgs = true;
+    for (let k = 0; k < rest.length; k++) {
+      const t = rest[k];
+      if (/^(--in-place|-i)/.test(t) || (/^-[a-zA-Z]+$/.test(t) && t.includes("i"))) return false;
+      if (t === "-e" || t === "--expression") { scripts.push(rawRest[k + 1] ?? ""); k++; scriptFromArgs = false; continue; }
+      if (t.startsWith("--expression=")) { scripts.push(rawRest[k].slice(13)); scriptFromArgs = false; continue; }
+      if (t === "-f" || t.startsWith("--file")) return false; // a script file cannot be read here
+      if (t.startsWith("-")) continue;
+      if (scriptFromArgs) { scripts.push(rawRest[k]); scriptFromArgs = false; }
+    }
+    // Shell expansions inside a double-quoted or unquoted script are line numbers in
+    // practice ("$n,\$p", "$((n+20))p"): read each as the number 1 and an escaped \$ as $.
+    // A single-quoted script is literal ('1,$p': sed's own last-line address). A script
+    // that is nothing but a variable has no command left and is not read-only.
+    const expand = (raw) => raw.startsWith("'") ? stripQuotes(raw) : stripQuotes(raw)
+      .replace(/\\\$/g, "\u0000") // an escaped \$ is a literal $: keep it out of the variables
+      .replace(/\$\(\([^)]*\)\)/g, "1")
+      .replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*/g, "1")
+      .replace(/\u0000/g, "$");
+    return scripts.every((script) => isReadOnlySedScript(expand(script)));
+  }
+  if (name === "sort") return !rest.some((t) => /^--(output|compress-program)/.test(t) || /^-[a-zA-Z]*o/.test(t));
+  if (name === "uniq") {
+    const positional = [];
+    for (let k = 0; k < rest.length; k++) {
+      const t = rest[k];
+      if (/^-[fsw]$/.test(t)) { k++; continue; }
+      if (t.startsWith("-") && t !== "-") continue;
+      positional.push(t);
+    }
+    return positional.length < 2; // uniq INPUT OUTPUT writes OUTPUT
+  }
+  if (name === "rg") return !rest.some((t) => /^--pre(=|$)/.test(t));
+  if (name === "find") return !rest.some((t) => /^-(exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/.test(t));
+  if (name === "git") {
+    const sub = rest.find((t) => !t.startsWith("-"));
+    if (["diff", "log", "show", "format-patch", "ls-remote", "fetch", "merge-tree", "ls-tree", "status", "rev-parse", "merge-base"].includes(sub)) {
+      return !rest.some((t) => /^--(output|ext-diff|textconv|upload-pack|exec)(=|$)/.test(t));
+    }
+    return true;
+  }
+  if (name === "node" && rest[0] === "--test") {
+    if (rest.some((t) => /(^|[\\/])\.\.([\\/]|$)/.test(t))) return false;
+    if (rest.some((t) => /^(-e|--eval|-p|--print)(=|$)/.test(t))) return false;
+    return true;
+  }
+  return true;
+}
+
+export function isAllowedReadCommandWriting(segment) {
+  const tokens = tokenizeWords(normalizeSegment(segment));
+  if (tokens.length === 0) return false;
+  return !readsAndWritesNothingElse(tokens);
+}
+
+// A database URL (or PGHOST) set for this command that is not this machine. The test
+// runners are allowed without a question; pointed at a real database they would create
+// and drop databases there.
+const DATABASE_VARIABLE_RE = /^((?:[A-Za-z0-9_]*_)?DATABASE_URL|PGHOST|PGHOSTADDR|PGSERVICE|PGSERVICEFILE)=(.*)$/;
+const LOOPBACK_HOST_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)$/i;
+
+function isLoopbackDatabaseValue(name, rawValue) {
+  const value = stripQuotes(rawValue);
+  if (value === "") return true;
+  if (/[$`]/.test(value)) return false; // cannot be read
+  if (/^PGSERVICE/.test(name)) return false;
+  if (/^PGHOST/.test(name)) return value.split(",").every((h) => LOOPBACK_HOST_RE.test(h.trim()) || h.trim().startsWith("/"));
+  const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(\[[^\]]+\]|[^:/?#,]*)/i.exec(value);
+  if (!m) return false;
+  if (/[?&](host|hostaddr|service)=/i.test(value)) return false;
+  return m[1] === "" || LOOPBACK_HOST_RE.test(m[1]);
+}
+
+export function setsNonLocalDatabase(segment) {
+  let text = typeof segment === "string" ? segment.trim() : "";
+  text = text.replace(/^(?:export|declare\s+-x|set)\s+/, "");
+  const tokens = tokenizeWords(text);
+  for (const t of tokens) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) break; // the assignments in front of the command
+    const m = DATABASE_VARIABLE_RE.exec(t);
+    if (m && !isLoopbackDatabaseValue(m[1], m[2])) return true;
+  }
+  const env = tokens[0] === "env" ? tokens.slice(1) : [];
+  for (const t of env) {
+    const m = DATABASE_VARIABLE_RE.exec(t);
+    if (m && !isLoopbackDatabaseValue(m[1], m[2])) return true;
+  }
+  return false;
+}
+
+// Files that hold secrets. Their examples (.env.example, .env.sample, .env.template) do not.
+const SECRET_PATH_PATTERNS = [
+  /(^|[\\/])\.env(\.(local|production|prod|development|dev|staging|test)(\.local)?)?$/i,
+  /(^|[\\/])\.env[*?[]/,
+  /(^|[\\/])\.?pgpass(\.conf)?$/i,
+  /\.(pem|key|p12|pfx|jks|keystore)$/i,
+  /(^|[\\/])id_(rsa|dsa|ecdsa|ed25519)$/,
+  /(^|[\\/])\.(netrc|npmrc|git-credentials)$/i,
+  /(^|[\\/])\.?credentials(\.json)?$/i,
+];
+
+export function mentionsSecretFile(segment) {
+  const tokens = tokenizeWords(typeof segment === "string" ? segment : "");
+  return tokens.slice(1).some((raw) => {
+    const t = stripQuotes(raw);
+    const value = t.includes("=") && t.startsWith("-") ? t.slice(t.indexOf("=") + 1) : t;
+    if (/\.(example|sample|template)$/i.test(value)) return false;
+    return SECRET_PATH_PATTERNS.some((re) => re.test(value));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ASK checks added with the hardening: forms that lose work or history and were silent.
+// ---------------------------------------------------------------------------
+
+export function isGitStashPop(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "stash");
+  return parsed !== null && /^pop\b/i.test(parsed.rest);
+}
+
+export function isGitBranchForceDelete(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "branch");
+  if (!parsed) return false;
+  const tokens = parsed.rest.split(/\s+/).filter(Boolean);
+  let del = false;
+  let force = false;
+  for (const t of tokens) {
+    if (/^-[a-zA-Z]+$/.test(t)) {
+      if (t.includes("D")) return true;
+      if (t.includes("d")) del = true;
+      if (t.includes("f")) force = true;
+    } else if (t === "--delete") del = true;
+    else if (t === "--force") force = true;
+  }
+  return del && force;
+}
+
+export function isGitPushDelete(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "push");
+  if (!parsed) return false;
+  const tokens = parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes);
+  return tokens.some((t) => t === "--delete" || t === "--prune" || t === "--mirror" || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(t) || /^\+?:[^\s]/.test(t));
+}
+
+export function isGitPullRebase(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "pull");
+  if (!parsed) return false;
+  const tokens = parsed.rest.split(/\s+/).filter(Boolean);
+  return tokens.some((t) => t === "--rebase" || /^--rebase=(?!false$)/.test(t) || /^-[a-zA-Z]*r[a-zA-Z]*$/.test(t));
+}
+
+// ---------------------------------------------------------------------------
 // Shell command dispatcher (Bash + PowerShell share this — both tools use the same
 // `command` string input field)
 // ---------------------------------------------------------------------------
@@ -581,6 +993,15 @@ const ASK_REASONS = {
   commitMain: "This commit would land directly on 'main' — needs your explicit confirmation.",
   deploy: "This looks like a deploy command (Render/Vercel/Cloudflare/Supabase) — needs your explicit confirmation.",
   migration: "This looks like it runs the database migration runner — needs your explicit confirmation.",
+  stashPop: "'git stash pop' can leave conflicts and drops the stash entry once applied — needs your explicit confirmation.",
+  branchForceDelete: "'git branch -D' deletes a branch even when its work is merged nowhere — needs your explicit confirmation.",
+  pushDelete: "This push deletes a branch on the remote (--delete, -d, :branch, --prune, --mirror) — needs your explicit confirmation.",
+  pullRebase: "'git pull --rebase' rewrites your local commits on top of the remote — needs your explicit confirmation.",
+  unreadable: "A shell here reads commands this guard cannot see (from a pipe, or from a variable) — needs your explicit confirmation.",
+  readCommandWrites:
+    "This read command is used in a form that writes, deletes or runs something else (sed -i or a writing sed script, sort -o, uniq with an output file, rg --pre, find -exec/-delete, git --output/--ext-diff/--upload-pack, node --test outside the test folders) — needs your explicit confirmation.",
+  nonLocalDatabase: "This command sets a database URL (or PGHOST) that is not this machine, or one that cannot be read — needs your explicit confirmation.",
+  secretFile: "This command names a file that holds secrets (.env, pgpass, a key or credentials file) — needs your explicit confirmation.",
   sqlWrite:
     "This looks like a SQL write (INSERT/UPDATE/DELETE/ALTER/DROP/TRUNCATE/CREATE/GRANT/REVOKE) against a database — needs your explicit confirmation unless you know this specific target is a disposable test database.",
 };
@@ -594,7 +1015,8 @@ const ASK_REASONS = {
 // not adversarial — wrapping a command in `bash -c` is an ordinary habit (e.g. to dodge
 // quoting differences between shells), not a deliberate evasion technique.
 const INTERPRETER_WRAPPER_PATTERNS = [
-  /^(?:bash|sh|zsh|dash)\s+-c\s+(.+)$/i,
+  /^(?:bash|sh|zsh|dash|ksh)\s+(?:-[A-Za-z]+\s+|--[a-z-]+\s+)*-[A-Za-z]*c[A-Za-z]*\s+(.+)$/,
+  /^eval\s+(.+)$/,
   /^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-NoProfile\s+)?(?:-Command|-c)\s+(.+)$/i,
   /^cmd(?:\.exe)?\s+\/c\s+(.+)$/i,
 ];
@@ -612,18 +1034,28 @@ export function unwrapInterpreterCommand(segment) {
 // `bash -c "bash -c ..."`), the inner command of any interpreter-wrapper segment — so a
 // wrapped dangerous command is checked exactly like an unwrapped one.
 function expandSegments(segments, depth = 0) {
-  if (depth > 4) return segments;
+  if (depth > 6) return segments;
   const expanded = [];
   for (const segment of segments) {
     expanded.push(segment);
-    const inner = unwrapInterpreterCommand(segment);
+    const normalized = normalizeSegment(segment);
+    if (normalized && normalized !== segment.trim().replace(/\s+/g, " ")) expanded.push(...expandSegments([normalized], depth + 1));
+    const inner = unwrapInterpreterCommand(normalized || segment);
     if (inner) expanded.push(...expandSegments(splitCommandSegments(inner), depth + 1));
+    for (const sub of extractSubstitutions(segment)) expanded.push(...expandSegments(splitCommandSegments(sub), depth + 1));
+    // A variable as the command word (`$GIT push -f`) is read as git, the only command
+    // whose subcommands these rules know; for anything else it changes nothing.
+    const variableCommand = /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s+(.+)$/.exec(normalized || "");
+    if (variableCommand) expanded.push(`git ${variableCommand[1]}`);
   }
   return expanded;
 }
 
 export function classifyShellCommand(cmd, cwd) {
-  const segments = expandSegments(splitCommandSegments(cmd));
+  const { text, shellBodies } = extractHeredocs(cmd);
+  const topLevel = splitCommandSegments(text);
+  const segments = expandSegments(topLevel);
+  for (const body of shellBodies) segments.push(...expandSegments(splitCommandSegments(body)));
 
   for (const segment of segments) {
     if (isGitAddBroad(segment)) return { decision: "deny", reason: DENY_REASONS.gitAddBroad };
@@ -646,6 +1078,14 @@ export function classifyShellCommand(cmd, cwd) {
       return { decision: "ask", reason: ASK_REASONS.mergeRebase };
     }
     if (isGhPrMerge(segment)) return { decision: "ask", reason: ASK_REASONS.ghPrMerge };
+    if (isGitStashPop(segment)) return { decision: "ask", reason: ASK_REASONS.stashPop };
+    if (isGitBranchForceDelete(segment)) return { decision: "ask", reason: ASK_REASONS.branchForceDelete };
+    if (isGitPushDelete(segment)) return { decision: "ask", reason: ASK_REASONS.pushDelete };
+    if (isGitPullRebase(segment)) return { decision: "ask", reason: ASK_REASONS.pullRebase };
+    if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
+    if (isAllowedReadCommandWriting(segment)) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (setsNonLocalDatabase(segment)) return { decision: "ask", reason: ASK_REASONS.nonLocalDatabase };
+    if (mentionsSecretFile(segment)) return { decision: "ask", reason: ASK_REASONS.secretFile };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };
     if (isCommitOnMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };
     if (isDeployCommand(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };

@@ -173,8 +173,81 @@ across projects/instances:
 a feature branch, tests and builds (`npm test`, `vite build`, `npm run dev`), read-only
 SQL, `git clean -n`, switching branches (`git checkout <branch>`), unstaging without
 touching the working tree (`git restore --staged <path>`), reversible stash operations
-(`git stash`, `push`, `pop`, `apply`, `list`, `show`), and any tool this hook doesn't
-govern at all (`Read`, `Write`, `Grep`, ...).
+(`git stash`, `push`, `apply`, `list`, `show` — `pop` asks, see below), and any tool this
+hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
+
+### ASK added with the hardening (Bash + PowerShell)
+
+- `git stash pop`; `git branch -D` (and `-d -f`, `--delete --force`); a push that deletes a
+  remote branch (`--delete`, `-d`, `origin :branch`, `--prune`, `--mirror`); `git pull
+  --rebase` / `-r` / `--rebase=<anything but false>`. They were silent before, which
+  contradicted `.claude/rules/git-safety.md`. Measured cost: in one executor session's 1,252
+  Bash calls (2026-11), one real `git branch -D` and nothing else.
+- A shell that reads commands this hook cannot see: `... | bash`, `... | sh -s`, `eval "$X"`,
+  `bash -c "$X"`.
+- A database URL or `PGHOST`/`PGHOSTADDR`/`PGSERVICE` set for a command (prefix, `env`,
+  `export`) that is not this machine, or cannot be read (`$VAR`, backticks).
+- A command that names a file holding secrets: `.env`, `.env.local`/`.production`/...,
+  `pgpass.conf`, `.pgpass`, `*.pem`, `*.key`, `*.p12`, `id_rsa`/`id_ed25519` (not `.pub`),
+  `.netrc`, `.npmrc`, `.git-credentials`, `credentials`, `.credentials.json`. Not
+  `.env.example`/`.sample`/`.template`.
+- An allowed read command used in a form that writes, deletes or runs something else (next
+  section).
+
+### How the hook reads a command line
+
+Each part of a line is judged on its own and the strictest verdict wins. Before judging,
+the hook also reads:
+- every line of a multi-line command (newline and CR separate commands; a backslash before a
+  newline joins lines), and a single `&` (background) as a separator;
+- the command behind `env`, `sudo`/`doas`, `command`, `exec`, `nohup`, `nice`, `time`,
+  `timeout`, `stdbuf`, `xargs`, a leading backslash, an absolute or relative path to a known
+  command, shell keywords (`then`, `do`, `if`, ...) and `( )` / `{ }` groups;
+- what runs inside `$( )`, `<( )`, `>( )` and backticks (not inside single quotes);
+- the code of `bash/sh/zsh/dash/ksh -c` (any flag cluster with `c`, e.g. `-lc`), `eval`,
+  PowerShell `-Command` and `cmd /c`;
+- the body of a heredoc that a shell reads (`bash <<'E'`), and a here-string to a shell. The
+  body of any other heredoc is data (a commit message, a file being written, a Python
+  script) and is not read as shell; a heredoc without its closing word is read as commands;
+- a variable as the command word (`$GIT push -f`) is read as git.
+What still cannot be seen: what a script file, a Python or Node program, or a git
+configuration runs; a command assembled at run time from several variables.
+
+### The allow list (`.claude/settings.json` `permissions.allow`) and what the hook adds
+
+Claude Code already runs its own read-only set (`ls`, `cat`, `head`, `tail`, `grep`, `find`,
+`wc`, `diff`, read-only git, ...) without a question; the entries below make that explicit and
+add `sed -n`, `rg`, `sort`, `uniq`, `cut`, three git read commands and the two test folders. An
+allow rule is a text pattern (`Bash(sort:*)` also matches `sort -o file`), and a compound
+command runs without a question only when every part is allowed. Redirection targets (`> file`)
+are checked by Claude Code itself against the working directories and the Edit rules. A hook
+"ask" still asks when an allow rule matches.
+
+| Entry | Why it cannot write, delete or reach production | What the hook adds on top |
+|---|---|---|
+| `Bash(sed -n:*)` | prints selected lines | asks for `-i`, `--in-place`, a script with `w`/`W`/`e`/`r`/`R`, `s///w`, `s///e`, `-f file`, an unreadable script |
+| `Bash(grep:*)`, `Bash(rg:*)` | read and print | `rg --pre` (runs a program) asks; a named secret file asks |
+| `Bash(cat:*)`, `Bash(head:*)`, `Bash(tail:*)`, `Bash(wc:*)`, `Bash(cut:*)`, `Bash(diff:*)`, `Bash(ls)`, `Bash(ls:*)` | read and print | a named secret file asks |
+| `Bash(find:*)` | lists | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint*`, `-fls` ask (Claude Code itself also refuses to auto-allow them) |
+| `Bash(sort:*)` | prints | `-o`, `--output`, `--compress-program` ask |
+| `Bash(uniq:*)` | prints | a second file name (the output file) asks |
+| `Bash(git ls-remote:*)`, `Bash(git ls-tree:*)`, `Bash(git merge-tree:*)` | read; merge-tree may add objects to `.git`, never refs | `--upload-pack`/`--exec` (runs a program), `--output`, `--ext-diff`, `--textconv` ask — also for the git read commands allowed before (`diff`, `log`, `show`, `fetch`) |
+| `Bash(node --test backend/tests/*)`, `Bash(node --test frontend/tests/*)` | run the repository's own tests | a path with `..`, `-e`/`--eval`/`-p`/`--print` asks; a non-local database URL in front asks |
+
+Not allowed: `rm`, `mv`, `cp`, `tee`, `awk`, `xargs`, `curl`, `wget`, `psql`/`pg_*`, a shell,
+`python`, git `add/commit/reset/clean/stash/rebase/checkout/restore/switch/pull/merge`, any MCP
+write tool, anything under `.claude/`. Claude Code's own "sensitive file" prompt for
+`.claude/` settings and hooks stays and is outside this hook.
+
+Secret files for the `Read` tool (and the file commands Claude Code recognises in Bash, such
+as `cat`, `head`, `tail`, `sed`): `permissions.deny` has `Read(**/.pgpass)`,
+`Read(**/pgpass.conf)`, `Read(**/*.pem)`, `Read(**/*.key)`, `Read(**/id_rsa)`,
+`Read(**/id_ed25519)`, `Read(**/.git-credentials)`, `Read(**/.credentials.json)`;
+`permissions.ask` has `Read(**/.env)`, `Read(**/.env.local)`, `Read(**/.env.production)`. The
+`**/` form is gitignore syntax but not shown in Claude Code's documentation: check it once
+with `/permissions` in a new session. These rules do not cover a program that reads files
+without naming them (`grep -r`, a Node script); `rg` skips files that `.gitignore` lists,
+`grep -r` does not.
 
 ## Safety contract
 
