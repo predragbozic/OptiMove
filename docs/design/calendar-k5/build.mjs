@@ -59,16 +59,17 @@ function shell(eyebrow, h1, inner, active = "calendar") {
 }
 const nav = (label = "12 – 18 Oct 2026") => `<div class="k4-nav"><span class="k4-period">${label}</span><button class="plain-button k4-btn" aria-label="Previous week">${icon("chevL")}</button><button class="plain-button k4-btn">Today</button><button class="plain-button k4-btn" aria-label="Next week">${icon("chevR")}</button><span class="k4-spacer"></span><button class="plain-button cc-primary k4-btn">New event</button></div>`;
 
-function card({ when, kind, title, place = "", color = C.training, ic = "run", extra = "", count = "", open = false }) {
+function card({ when, kind, title, place = "", color = C.training, ic = "run", extra = "", count = "", open = false, holds: kinds = [] }) {
   return `<button type="button" class="cc-card cc-card-event${open ? " is-open" : ""}" style="--cc-team-color:${color}">
   <span class="cc-card-stripe" aria-hidden="true"></span>
   <span class="cc-card-body">
-    <span class="cc-card-top"><span class="k4-tint" style="--k4-c:${color}">${icon(ic)}</span><span class="cc-card-when">${when}</span><span class="cc-card-kind">${kind}</span></span>
+    <span class="cc-card-top"><span class="k4-tint" style="--k4-c:${color}">${icon(ic)}</span>${holds(kinds)}<span class="cc-card-when">${when}</span><span class="cc-card-kind">${kind}</span></span>
     <span class="cc-card-title">${title}</span>
     ${place ? `<span class="cc-card-place">${place}</span>` : ""}
     <span class="cc-card-meta"><span class="cc-team-pill"><span class="cc-team-dot" style="background:${color}"></span><span class="cc-team-pill-name">U19</span></span>${extra}${count ? `<span class="cc-card-count">${count}</span>` : ""}</span>
   </span></button>`;
 }
+const holds = (kinds) => kinds.length ? `<span class="k5-holds" role="img" aria-label="Holds ${kinds.map((k) => ({ rpe: "RPE", gps: "GPS", test: "a test" })[k]).join(", ")}">${kinds.map((k) => `<svg viewBox="0 0 24 24" aria-hidden="true" style="color:${({ rpe: C.rpe, gps: C.gps, test: C.test })[k]}">${P[({ rpe: "gauge", gps: "gps", test: "tests" })[k]]}</svg>`).join("")}</span>` : "";
 const gpsMark = (n) => `<span class="k5-gps" title="GPS data of ${n} athletes is in this event">${icon("gps", "")} GPS · ${n}</span>`;
 const mark = ({ ic, text, color, waiting = false, label }) => `<button type="button" class="k5-mark${waiting ? " is-waiting" : ""}" style="--k5-c:${color}" aria-label="${label || text}">${icon(ic, "")}${text}</button>`;
 const dayMark = (n) => `<button type="button" class="k5-daymark" aria-label="${n} GPS sessions to review in Imports">${icon("gps", "")}${n} GPS sessions to review</button>`;
@@ -77,14 +78,14 @@ const dayMark = (n) => `<button type="button" class="k5-daymark" aria-label="${n
 const DAYS = [["Mon", 12], ["Tue", 13], ["Wed", 14], ["Thu", 15], ["Fri", 16], ["Sat", 17], ["Sun", 18]];
 function weekData({ suggest = false } = {}) {
   return {
-    12: { cards: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", extra: gpsMark(18), count: "18", open: !suggest })],
+    12: { cards: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", holds: ["gps"], count: "18", open: !suggest })],
           marks: [mark({ ic: "gauge", text: "RPE · Gym", color: C.rpe, label: "RPE request, Gym, not in an event" })] },
     13: { cards: [card({ when: "17:30", kind: "Training", title: "Speed & agility", place: "Indoor hall", count: "18" })],
           marks: [mark({ ic: "tests", text: "CMJ test", color: C.test, label: "Test schedule CMJ, not in an event" })] },
     14: { cards: [], marks: [mark({ ic: "gps", text: "GPS 10:05", color: C.gps, label: "Imported GPS activity at 10:05, not in an event" })], daymark: 2 },
     15: { cards: [card({ when: "10:00", kind: "Training", title: "Tactical session", place: "North field", count: "18", open: suggest })],
           marks: [mark({ ic: "gps", text: "GPS 10:05", color: C.gps, label: "Imported GPS activity at 10:05, not in an event" })] },
-    17: { cards: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", count: "20", extra: gpsMark(16) })], marks: [] },
+    17: { cards: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", count: "20", holds: ["gps"] })], marks: [] },
   };
 }
 function weekColumns(data) {
@@ -143,15 +144,14 @@ function goPage() {
 function marksPage() {
   const data = weekData();
   const evPanel = `<aside class="cc-panel">${panelHead({ title: "Team training", kindWord: "Training", ic: "run", color: C.training, when: "Monday 12 October 2026 (today) · 10:00–11:30", place: "North field" })}
-    <p class="cc-panel-note k4-row k4-callout" data-callout="NEW">${gpsMark(18)} GPS data of 18 athletes is in this event.</p>
+    <p class="cc-panel-note k4-row k4-callout" data-callout="NEW">${holds(["gps"])} GPS data of 18 athletes is in this event.</p>
     <div class="k5-go">${goBtn("Open in Training Load", "load")}</div></aside>`;
   const month = (() => {
     const cells = [];
     for (let d = 1; d <= 28; d += 1) {
       const n = d + 4; // 5 Oct … 1 Nov, invented
       const lines = [];
-      if ([5, 12, 15, 19, 22, 26].includes(n)) lines.push(`<span class="cc-mini-line" style="--k5-c:${C.training}"><i></i><span>10:00 Training</span></span>`);
-      if ([12, 26].includes(n)) lines.push(`<span class="cc-mini-line" style="--k5-c:${C.gps}">${icon("gps", "")}<span>GPS · 18</span></span>`);
+      if ([5, 12, 15, 19, 22, 26].includes(n)) lines.push(`<span class="cc-mini-line" style="--k5-c:${C.training}"><i></i><span>10:00 Training</span>${[12, 26].includes(n) ? holds(["gps"]) : ""}</span>`);
       if ([14, 21].includes(n)) lines.push(`<span class="cc-mini-line" style="--k5-c:${C.gps}">${icon("gps", "")}<span>GPS 10:05</span></span>`);
       if ([13, 20].includes(n)) lines.push(`<span class="cc-mini-line" style="--k5-c:${C.test}">${icon("tests", "")}<span>CMJ test</span></span>`);
       if ([12].includes(n)) lines.push(`<span class="cc-mini-line" style="--k5-c:${C.rpe}">${icon("gauge", "")}<span>RPE · Gym</span></span>`);
@@ -220,7 +220,7 @@ function backPage() {
       <div class="k4-session"><div class="k4-session-top"><span class="k4-slot" style="background:#f3e7f4;color:${C.test}">08:30</span><span class="k4-session-name">CMJ test</span><span class="k4-session-time">7 of 18 results</span><span class="k4-spacer"></span><button class="plain-button cc-primary k4-btn">Enter results</button></div></div></div>`, "tests");
   const home = shell("Coach", "Home", `
     <section class="k4-day"><div class="k4-day-head"><span class="k4-day-name">Today · Monday 12.10</span><span class="k4-spacer"></span><button class="plain-button k4-btn k4-callout" data-callout="NEW">${icon("calendar")} Open in calendar</button></div>
-      <div class="k4-session"><div class="k4-session-top"><span class="k4-tint" style="--k4-c:${C.training}">${icon("run")}</span><span class="k4-session-name">Team training</span><span class="k4-session-time">10:00 · North field</span><span class="k4-spacer"></span>${gpsMark(18)}</div></div>
+      <div class="k4-session"><div class="k4-session-top"><span class="k4-tint" style="--k4-c:${C.training}">${icon("run")}</span><span class="k4-session-name">Team training</span><span class="k4-session-time">10:00 · North field</span><span class="k4-spacer"></span>${holds(["gps"])}</div></div>
       <div class="k4-session"><div class="k4-session-top"><span class="k4-tint" style="--k4-c:${C.rpe}">${icon("gauge")}</span><span class="k4-session-name">RPE · Gym</span><span class="k4-session-time">4 of 6 answered</span></div></div>
     </section>`, "home");
   return page("K5-5 · Open in calendar", [
@@ -243,10 +243,10 @@ function filterPage() {
     <div class="cc-chip-row"><span class="cc-chip-row-label">Types</span>${chip("Training", 4, true)}${chip("Match", 1, true)}${chip("Travel", 1, true)}</div></details>`;
   const all = weekData();
   const gpsOnly = {
-    12: { cards: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", extra: gpsMark(18), count: "18" })], marks: [] },
+    12: { cards: [card({ when: "10:00", kind: "Training", title: "Team training", place: "North field", holds: ["gps"], count: "18" })], marks: [] },
     14: { cards: [], marks: [mark({ ic: "gps", text: "GPS 10:05", color: C.gps })], daymark: 2 },
     15: { cards: [], marks: [mark({ ic: "gps", text: "GPS 10:05", color: C.gps })] },
-    17: { cards: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", count: "20", extra: gpsMark(16) })], marks: [] },
+    17: { cards: [card({ when: "15:00", kind: "Match", title: "U19 vs Lakeside", place: "City stadium", color: C.match, ic: "trophy", count: "20", holds: ["gps"] })], marks: [] },
   };
   const status = (word) => `<p class="k5-filter-status" role="status">${icon("gps", "")} Showing only <b>${word}</b> · 5 this week <button class="k4-link">Show all</button></p>`;
   const testsOnly = { 13: { cards: [], marks: [mark({ ic: "tests", text: "CMJ test", color: C.test })] }, 16: { cards: [], marks: [mark({ ic: "tests", text: "Sprint 30 m", color: C.test })] }, 18: { cards: [], marks: [mark({ ic: "tests", text: "Yo-Yo IR1", color: C.test })] } };
@@ -262,7 +262,6 @@ function filterPage() {
 
 // ============================================ 07 H4 what an event holds =====
 function holdsPage() {
-  const holds = (kinds) => kinds.length ? `<span class="k5-holds" role="img" aria-label="Holds ${kinds.map((k) => ({ rpe: "RPE", gps: "GPS", test: "a test" })[k]).join(", ")}">${kinds.map((k) => `<svg viewBox="0 0 24 24" aria-hidden="true" style="color:${({ rpe: C.rpe, gps: C.gps, test: C.test })[k]}">${P[({ rpe: "gauge", gps: "gps", test: "tests" })[k]]}</svg>`).join("")}</span>` : "";
   const hcard = ({ when, kind, title, place, color = C.training, ic = "run", kinds = [], count = "18", callout = "" }) => `<button type="button" class="cc-card cc-card-event${callout ? " k4-callout" : ""}"${callout ? ` data-callout="${callout}"` : ""} style="--cc-team-color:${color}">
   <span class="cc-card-stripe" aria-hidden="true"></span>
   <span class="cc-card-body">

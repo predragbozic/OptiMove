@@ -26,7 +26,7 @@ number is invented. The icons `gps`, `clipboard` (tests) and `gauge` (RPE) are t
 - **A card** is an event or a Builder training: what you plan.
 - **A chip** (a small pill with a coloured left edge and its kind's icon) is something that is in no event: a test,
   an RPE request or a GPS activity. It is a third of a card's height, so a day stays readable.
-- **A mark** inside a card ("GPS · 18") says what the event holds.
+- **A mark** inside a card says what the event holds: an icon only (RPE, GPS, test), no number (H4, E12).
 - **A dashed amber** shape means "waiting for you" (the GPS to review). Everything has an icon and words, never
   colour alone.
 - **Colours** (from the calendar's closed palette): tests violet, RPE amber, GPS blue, as fixed kind colours, so
@@ -53,7 +53,8 @@ Open questions:
 
 ## 2. K5-2 — GPS and small marks
 
-**First thing seen:** the week as today, plus a blue **GPS · 18** pill on events that hold an import, and small
+**First thing seen:** the week as today, plus a small blue **GPS icon** on events that hold an import (H4: a mark only;
+the count stays in the panel), and small
 chips under a day for what stands alone ("CMJ test", "RPE · Gym", "GPS 10:05").
 
 - An imported activity uses the `gps` icon everywhere (chip, panel, month line).
@@ -62,8 +63,8 @@ chips under a day for what stands alone ("CMJ test", "RPE · Gym", "GPS 10:05").
 - A chip's click opens its panel (K5-1), never the module directly, so the coach sees what it is first.
 
 Open questions:
-- **E3. "GPS · 18" or "📡 18"?** Recommend the `gps` icon + "GPS · 18" (a word reads at a glance; an emoji renders
-  differently on each phone).
+- **E3. Decided by H4 / E12:** on a card, the `gps` icon only (no emoji, no number); "GPS data of 18 athletes is in
+  this event." stays in the panel.
 - **E4. Chips under the cards, or mixed in by time?** Recommend under the cards: the planned day stays on top, and a
   chip never splits two trainings.
 
@@ -149,10 +150,10 @@ on sadrži to u sebi ako sadrzi."
 - The icon row carries `role="img"` with a label ("Holds RPE, GPS, a test"), so a screen reader says what the colours
   and shapes mean.
 
-Open question:
-- **E12. H4 vs K5-2's "GPS · 18" pill on the card.** H4 asks for no number on the card. Recommend that H4 replaces
-  the pill: the card shows the GPS icon only, and "GPS data of 18 athletes is in this event." stays in the panel.
-  Screens 01–06 still show the pill; they will be aligned once you confirm.
+Decided:
+- **E12. H4 replaces K5-2's "GPS · 18" pill** (the stream manager, 2026-11-19, on the owner's „čisto kao oznaka"). On a
+  card every kind is the icon only; the count stays in the panel. Screens 01–06 are aligned. A day chip of something
+  in no event ("GPS 10:05", "RPE · Gym", "CMJ test") stays as it is: that is H5, the small mark under a day.
 
 ---
 
