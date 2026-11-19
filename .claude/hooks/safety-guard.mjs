@@ -252,6 +252,25 @@ const SQL_READ_ONLY_HINT = /\b(SELECT|EXPLAIN|SHOW)\b/i;
 // DENY checks — never auto-execute these, no matter who asks
 // ---------------------------------------------------------------------------
 
+// git (like the GNU tools) accepts any unique prefix of a long option: `--forc`, `--for` and
+// even `--f` are `--force` to `git checkout`; `--har` is `--hard`. A rule that compares long
+// options by exact name is blind to that, so every comparison below goes through this: true
+// when the word (before any "=") is `--` plus at least one letter and is a prefix of `name`.
+// An ambiguous prefix git itself would refuse counts too: the stricter verdict wins.
+export function longOptionIs(word, name) {
+  const t = String(word).split("=")[0];
+  return t.length >= 3 && t.startsWith("--") && name.startsWith(t);
+}
+
+// For commands whose long options are judged by an explicit list: "safe" when the word is a
+// prefix only of safe names, "danger" when it is a prefix of a dangerous name, else "unknown".
+function classifyLongOption(word, safeNames, dangerousNames) {
+  const t = String(word).split("=")[0];
+  if (dangerousNames.some((n) => longOptionIs(t, n))) return "danger";
+  if (safeNames.some((n) => n === t || longOptionIs(t, n))) return "safe";
+  return "unknown";
+}
+
 export function isGitAddBroad(segment) {
   const parsed = extractGitSubcommandArgs(segment, "add");
   if (!parsed) return false;
@@ -265,7 +284,7 @@ export function isGitAddBroad(segment) {
 export function isGitResetHard(segment) {
   const parsed = extractGitSubcommandArgs(segment, "reset");
   if (!parsed) return false;
-  return /--hard\b/i.test(parsed.rest);
+  return parsed.rest.split(/\s+/).some((t) => longOptionIs(t, "--hard"));
 }
 
 export function isGitCleanDestructive(segment) {
@@ -275,8 +294,8 @@ export function isGitCleanDestructive(segment) {
   let dryRun = false;
   let force = false;
   for (const t of tokens) {
-    if (/^--dry-run$/i.test(t)) dryRun = true;
-    else if (/^--force$/i.test(t)) force = true;
+    if (longOptionIs(t, "--dry-run")) dryRun = true;
+    else if (longOptionIs(t, "--force")) force = true;
     else if (/^-[a-zA-Z]+$/.test(t)) {
       if (/n/i.test(t)) dryRun = true;
       if (/f/i.test(t)) force = true;
@@ -292,7 +311,9 @@ export function isGitPushForce(segment) {
   const parsed = extractGitSubcommandArgs(segment, "push");
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean);
-  return tokens.some((t) => /^(-f|--force|--force-with-lease(=.*)?)$/i.test(t));
+  return tokens.some((t) => (/^-[a-zA-Z]+$/.test(t) && t.includes("f")) // -f, -uf, -fu
+    || longOptionIs(t, "--force") || longOptionIs(t, "--force-with-lease")
+    || /^\+[^:+\s]/.test(stripQuotes(t))); // `git push origin +branch`: a forced refspec
 }
 
 // `git checkout <branch>` (switching branches) is normal workflow and left alone. What
@@ -335,8 +356,8 @@ export function isGitRestoreDiscardingWork(segment) {
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return false;
-  const isStaged = (t) => /^(--staged|-S)$/i.test(t);
-  const isWorktree = (t) => /^(--worktree|-W)$/i.test(t);
+  const isStaged = (t) => t === "-S" || longOptionIs(t, "--staged") || (/^-[a-zA-Z]+$/.test(t) && t.includes("S"));
+  const isWorktree = (t) => t === "-W" || longOptionIs(t, "--worktree") || (/^-[a-zA-Z]+$/.test(t) && t.includes("W"));
   const hasStagedOnly = tokens.some(isStaged) && !tokens.some(isWorktree);
   if (hasStagedOnly) return false;
   const hasTarget = tokens.some((t) => t === "--" || !t.startsWith("-"));
@@ -1392,6 +1413,74 @@ export function isHarmlessRedirectTarget(rawTarget, variables = new Map()) {
 // Plain assignments in a command line (`S=/tmp/x`, `export S=/tmp/x`): their values are
 // known, so `> $S/out.txt` can be judged. A name assigned twice, or a value with an
 // expansion in it, is not used.
+// The separators between the top-level parts of a line, in order (";", "\n", "&&", "||", "|",
+// "|&", "&"), read with the same quoting rules as splitCommandSegments.
+export function lineSeparators(cmd) {
+  const found = [];
+  let quote = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (quote) {
+      if (quote === '"' && ch === "\\") { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "\\") { i++; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    const two = cmd.slice(i, i + 2);
+    if (two === "&&" || two === "||" || two === "|&") { found.push(two); i++; continue; }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") { found.push(ch === "\r" ? "\n" : ch); continue; }
+    if (ch === "&" && cmd[i - 1] !== ">" && cmd[i - 1] !== "<" && cmd[i + 1] !== ">") found.push("&");
+  }
+  return found;
+}
+
+const PLAIN_ASSIGNMENT_RE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=([^\s$`'"\\();|&<>{}]*)$/;
+// Commands that can set a variable some other way than NAME=value (or run code that does).
+const VARIABLE_SETTERS = new Set(["eval", "source", ".", "read", "mapfile", "readarray", "declare", "typeset", "local", "readonly",
+  "unset", "let", "getopts", "printf", "export", "alias", "select", "trap", "builtin", "command", "exec", "set", "shift", "for",
+  "while", "until", "if", "case", "function", "coproc", "then", "do", "else", "elif"]);
+
+// The variables a redirect may use: only in a line made of plain assignments `NAME=value`
+// (no $, backtick, quotes or substitution in the value; `export NAME=value` too) and plain
+// commands, joined by ";" or a newline — or by "&&" before the first assignment only — with no
+// "||", pipe or background job anywhere. A variable mentioned in any other form before the
+// redirect (`read S`, `for S in`, `S+=`, `${S:=x}`, `unset S`, `S=$(...)`, a prefix
+// `S=x cmd`, ...) is unknown, and so is every variable when a part could set one another way
+// (eval, source, read, declare, a loop, a function, ...). Returns one Map per top-level part:
+// the certain values of the parts before it. Anything unknown means the redirect asks.
+export function redirectVariables(text, topLevel) {
+  const empty = topLevel.map(() => new Map());
+  const separators = lineSeparators(text);
+  if (separators.some((sep) => sep === "||" || sep === "|" || sep === "|&" || sep === "&")) return empty;
+  if (separators.length !== Math.max(0, topLevel.length - 1)) return empty; // could not line them up: unknown
+  const result = [];
+  const values = new Map();
+  const poisoned = new Set();
+  for (let i = 0; i < topLevel.length; i++) {
+    result.push(new Map([...values].filter(([name]) => !poisoned.has(name))));
+    const part = topLevel[i].trim();
+    const assignment = PLAIN_ASSIGNMENT_RE.exec(part);
+    const before = i === 0 ? null : separators[i - 1];
+    if (assignment) {
+      // after "&&" an assignment may be skipped (false && S=/tmp/x): only once nothing else has been assigned
+      if (before === "&&" && i > 0 && !topLevel.slice(0, i).every((p) => PLAIN_ASSIGNMENT_RE.test(p.trim()))) { poisoned.add(assignment[1]); continue; }
+      if (values.has(assignment[1]) || poisoned.has(assignment[1])) { poisoned.add(assignment[1]); continue; }
+      values.set(assignment[1], shellWord(assignment[2]));
+      continue;
+    }
+    const first = tokenizeWords(part)[0] ?? "";
+    if (VARIABLE_SETTERS.has(shellWord(first)) || /^[({]/.test(part) || /^[\w.:-]+\s*\(\s*\)/.test(part)) return result.concat(topLevel.slice(i + 1).map(() => new Map())).map(() => new Map());
+    // any other mention of a known name than $NAME / ${NAME} poisons it
+    for (const name of new Set([...values.keys(), ...(part.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [])])) {
+      const bare = new RegExp(`(^|[^$\\w{])${name}(?![\\w])`).test(part);
+      const operator = new RegExp(`\\$\\{${name}[^}\\w]`).test(part);
+      if ((bare || operator) && values.has(name)) poisoned.add(name);
+    }
+  }
+  return result;
+}
+
 export function plainAssignments(segments) {
   const values = new Map();
   const seen = new Set();
@@ -1572,17 +1661,39 @@ export function isGitConfigOverride(segment) {
 
 export function isGitResetMergeOrKeep(segment) {
   const parsed = extractGitSubcommandArgs(segment, "reset");
-  return parsed !== null && /(^|\s)--(merge|keep)\b/.test(parsed.rest);
+  return parsed !== null && parsed.rest.split(/\s+/).some((t) => longOptionIs(t, "--merge") || longOptionIs(t, "--keep"));
 }
 
+// checkout and switch: their long options are judged by a list of known options. A prefix of a
+// forcing option (--force, --discard-changes) or any option not on the list asks.
+const CHECKOUT_SAFE_LONG = ["--quiet", "--progress", "--no-progress", "--detach", "--orphan", "--track", "--no-track", "--guess",
+  "--no-guess", "--merge", "--conflict", "--recurse-submodules", "--no-recurse-submodules", "--overlay", "--no-overlay",
+  "--ignore-other-worktrees", "--ignore-skip-worktree-bits"];
+const SWITCH_SAFE_LONG = ["--create", "--force-create", "--quiet", "--progress", "--no-progress", "--detach", "--orphan", "--track",
+  "--no-track", "--guess", "--no-guess", "--merge", "--conflict", "--recurse-submodules", "--no-recurse-submodules",
+  "--ignore-other-worktrees"];
+
 export function isForcedSwitch(segment) {
-  for (const sub of ["switch", "checkout"]) {
+  for (const [sub, safe, dangerous] of [["switch", SWITCH_SAFE_LONG, ["--force", "--discard-changes"]], ["checkout", CHECKOUT_SAFE_LONG, ["--force"]]]) {
     const parsed = extractGitSubcommandArgs(segment, sub);
     if (!parsed) continue;
     const tokens = parsed.rest.split(/\s+/).filter(Boolean);
-    if (tokens.some((t) => t === "--force" || t === "--discard-changes" || (/^-[a-zA-Z]+$/.test(t) && t.includes("f")))) return true;
+    for (const t of tokens) {
+      if (t === "--") break;
+      if (/^-[a-zA-Z]+$/.test(t) && t.includes("f")) return true;
+      if (t.startsWith("--") && classifyLongOption(t, safe, dangerous) !== "safe") return true;
+    }
   }
   return false;
+}
+
+// `git worktree remove --force` deletes a work tree with uncommitted changes in it.
+export function isGitWorktreeForceRemove(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "worktree");
+  if (!parsed) return false;
+  const tokens = parsed.rest.split(/\s+/).filter(Boolean);
+  if (tokens[0] !== "remove") return false;
+  return tokens.slice(1).some((t) => (/^-[a-zA-Z]+$/.test(t) && t.includes("f")) || longOptionIs(t, "--force"));
 }
 
 export function isGitStashPop(segment) {
@@ -1601,8 +1712,8 @@ export function isGitBranchForceDelete(segment) {
       if (t.includes("D")) return true;
       if (t.includes("d")) del = true;
       if (t.includes("f")) force = true;
-    } else if (t === "--delete") del = true;
-    else if (t === "--force") force = true;
+    } else if (longOptionIs(t, "--delete")) del = true;
+    else if (longOptionIs(t, "--force")) force = true;
   }
   return del && force;
 }
@@ -1611,14 +1722,14 @@ export function isGitPushDelete(segment) {
   const parsed = extractGitSubcommandArgs(segment, "push");
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes);
-  return tokens.some((t) => t === "--delete" || t === "--prune" || t === "--mirror" || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(t) || /^\+?:[^\s]/.test(t));
+  return tokens.some((t) => longOptionIs(t, "--delete") || longOptionIs(t, "--prune") || longOptionIs(t, "--mirror") || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(t) || /^\+?:[^\s]/.test(t));
 }
 
 export function isGitPullRebase(segment) {
   const parsed = extractGitSubcommandArgs(segment, "pull");
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean);
-  return tokens.some((t) => t === "--rebase" || /^--rebase=(?!false$)/.test(t) || /^-[a-zA-Z]*r[a-zA-Z]*$/.test(t));
+  return tokens.some((t) => (longOptionIs(t, "--rebase") && !/=(false|no|off|0)$/i.test(t)) || /^-[a-zA-Z]*r[a-zA-Z]*$/.test(t));
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,6 +1764,7 @@ const ASK_REASONS = {
   commitMain: "This commit would land directly on 'main' — needs your explicit confirmation.",
   deploy: "This looks like a deploy command (Render/Vercel/Cloudflare/Supabase) — needs your explicit confirmation.",
   migration: "This looks like it runs the database migration runner — needs your explicit confirmation.",
+  worktreeForceRemove: "'git worktree remove --force' deletes a work tree even with uncommitted changes in it — needs your explicit confirmation.",
   stashPop: "'git stash pop' can leave conflicts and drops the stash entry once applied — needs your explicit confirmation.",
   branchForceDelete: "'git branch -D' deletes a branch even when its work is merged nowhere — needs your explicit confirmation.",
   pushDelete: "This push deletes a branch on the remote (--delete, -d, :branch, --prune, --mirror) — needs your explicit confirmation.",
@@ -1737,13 +1849,11 @@ export function classifyShellCommand(cmd, cwd) {
   const { text, shellBodies } = extractHeredocs(cmd);
   const topLevel = splitCommandSegments(text);
   const segments = expandSegments(topLevel);
-  // A redirect sees only the assignments made BEFORE it in the line (`cat x > $S/a; S=/tmp/y`
-  // writes to "/a"): every segment that comes from top-level part i gets the assignments of
-  // parts 0..i-1. Segments from a shell's heredoc get none.
+  // A redirect may use a variable only when its value is certain. See redirectVariables.
   const variablesBefore = new Map();
+  const known = shellBodies.length ? topLevel.map(() => new Map()) : redirectVariables(text, topLevel);
   for (let i = 0; i < topLevel.length; i++) {
-    const known = plainAssignments(topLevel.slice(0, i));
-    for (const piece of expandSegments([topLevel[i]])) if (!variablesBefore.has(piece)) variablesBefore.set(piece, known);
+    for (const piece of expandSegments([topLevel[i]])) if (!variablesBefore.has(piece)) variablesBefore.set(piece, known[i]);
   }
   const background = hasBackgroundJob(text);
   const createsWorkTree = segments.some(createsGitWorkTree);
@@ -1771,6 +1881,7 @@ export function classifyShellCommand(cmd, cwd) {
     }
     if (isGhPrMerge(segment)) return { decision: "ask", reason: ASK_REASONS.ghPrMerge };
     if (isGitStashPop(segment)) return { decision: "ask", reason: ASK_REASONS.stashPop };
+    if (isGitWorktreeForceRemove(segment)) return { decision: "ask", reason: ASK_REASONS.worktreeForceRemove };
     if (isGitBranchForceDelete(segment)) return { decision: "ask", reason: ASK_REASONS.branchForceDelete };
     if (isGitPushDelete(segment)) return { decision: "ask", reason: ASK_REASONS.pushDelete };
     if (isGitPullRebase(segment)) return { decision: "ask", reason: ASK_REASONS.pullRebase };

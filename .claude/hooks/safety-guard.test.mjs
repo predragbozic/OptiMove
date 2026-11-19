@@ -1523,3 +1523,85 @@ test("a redirect sees only the assignments made before it in the line", () => {
     ]);
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 });
+
+// ------------------------------------------------------------------
+// Review of #665, HIGH-1: a variable the hook resolves to a temp path that the shell sets
+// somewhere else first. Real execution proves the loss; the hook must ask.
+// ------------------------------------------------------------------
+
+test("HIGH-1 (proof by execution): read/for/$(...)/eval set the variable before the redirect; the hook asks", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-var-"));
+  const y = path.join(tmp, "y");
+  try {
+    for (const line of [`S=${y}; read S < list; cat g.txt > $S`, `S=${y}; for S in f.txt; do :; done; cat g.txt > $S`,
+      `S=${y}; S=$(echo f.txt); cat g.txt > $S`, `S=${y}; eval S=f.txt; cat g.txt > $S`]) {
+      writeFileSync(path.join(tmp, "f.txt"), "precious\n");
+      writeFileSync(path.join(tmp, "g.txt"), "overwritten\n");
+      writeFileSync(path.join(tmp, "list"), "f.txt\n");
+      execFileSync("bash", ["-c", line], { cwd: tmp });
+      assert.equal(readFileSync(path.join(tmp, "f.txt"), "utf8"), "overwritten\n", `the shell wrote elsewhere: ${line}`);
+      assert.equal(verdict(line, tmp), ASK, line);
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("HIGH-1: every other way of setting the variable, or an assignment that may not run, makes it unknown", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-var2-"));
+  const y = path.join(tmp, "y");
+  try {
+    expectAll([
+      [`S=${y}; unset S; cat g > $S`, ASK], [`S=${y}; S+=x; cat g > $S`, ASK], [`S=${y}; declare S=f; cat g > $S`, ASK], [`S=${y}; typeset S=f; cat g > $S`, ASK],
+      [`S=${y}; readonly S=f; cat g > $S`, ASK], [`f() { local S=x; }; S=${y}; cat g > $S`, ASK], [`S=${y}; printf -v S f; cat g > $S`, ASK],
+      [`S=${y}; mapfile S < l; cat g > $S`, ASK], [`S=${y}; let S=1; cat g > $S`, ASK], [`S=${y}; getopts a S; cat g > $S`, ASK],
+      [`S=${y}; if true; then S=f; fi; cat g > $S`, ASK], [`S=${y}; : \${S:=f}; cat g > $S`, ASK], [`S=${y}; source x.sh; cat g > $S`, ASK],
+      [`S=${y}; . x.sh; cat g > $S`, ASK], [`false && S=${y}; cat g > $S`, ASK], [`true || S=${y}; cat g > $S`, ASK], [`S=${y} | true; cat g > $S`, ASK],
+      [`S=${y}; select S in a; do break; done; cat g > $S`, ASK], [`S=${y}; S=x cat a; cat g > $S`, ASK], [`S=${y}; export S=f; cat g > $S`, ASK],
+      [`S=${y}; echo "$S" & cat g > $S`, ASK], [`S="${y}"; cat g > $S`, ASK], [`S=${y}/$X; cat g > $S`, ASK],
+      // certain: plain assignments and plain commands joined by ; or a newline (or && from the start)
+      [`S=${y}; cat g > $S/new1.txt`, ALLOW], [`S=${y}\ncat g > $S/new2.txt`, ALLOW], [`S=${y} && cat g > $S/new3.txt`, ALLOW],
+      [`export S=${y}; grep -n x f > \${S}/new4.txt`, ALLOW], [`A=1 && S=${y} && cat g > $S/new5.txt`, ALLOW],
+      [`S=${y}; echo $S; cat g > $S/new6.txt`, ALLOW], [`S=${y}; git status && cat g > $S/new7.txt`, ALLOW],
+    ], tmp);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------
+// Review of #665, HIGH-2: abbreviated long options. Real execution proves git accepts them.
+// ------------------------------------------------------------------
+
+test("HIGH-2 (proof by execution): abbreviated force options discard a change; the hook stops each", () => {
+  const repo = makeRepo("sg-abbr-", "main");
+  const git = (...a) => execFileSync("git", a, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(path.join(repo, "f.txt"), "a\n");
+  git("add", "f.txt"); git("commit", "-qm", "f"); git("branch", "other");
+  try {
+    for (const [cmd, args] of [["git checkout --forc other", ["checkout", "--forc", "other"]], ["git checkout --f other", ["checkout", "--f", "other"]],
+      ["git switch --disc other", ["switch", "--disc", "other"]], ["git reset --har", ["reset", "--har", "-q"]]]) {
+      writeFileSync(path.join(repo, "f.txt"), "dirty\n");
+      git(...args);
+      assert.equal(readFileSync(path.join(repo, "f.txt"), "utf8"), "a\n", `git did not discard with ${cmd}`);
+      git("checkout", "-q", "main");
+      const v = verdict(cmd, repo);
+      assert.ok(v === ASK || v === DENY, `${cmd}: ${v}`);
+    }
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+test("HIGH-2: every git rule reads a long option as a possible prefix", () => {
+  expectAll([
+    // `other` and `x` are no revisions here, so checkout is denied by the discard rule before the forcing rule asks
+    ["git checkout --forc other", DENY], ["git checkout --for other", DENY], ["git checkout --f other", DENY], ["git checkout --bogus x", DENY],
+    ["git checkout --forc HEAD", ASK], ["git checkout --f HEAD", ASK], ["git checkout --bogus HEAD", ASK],
+    ["git switch --disc other", ASK], ["git switch --dis other", ASK], ["git switch --force other", ASK], ["git switch --forc other", ASK],
+    ["git switch --force-c x origin/main", ALLOW], ["git switch --force-create x origin/main", ALLOW], ["git switch --cre x", ALLOW], ["git checkout --det HEAD", ALLOW],
+    ["git checkout --quiet -b x", ALLOW], ["git switch --no-guess x", ALLOW],
+    ["git reset --har", DENY], ["git reset --h HEAD~1", DENY], ["git reset --mer", ASK], ["git reset --kee HEAD~1", ASK], ["git reset --soft HEAD~1", ALLOW],
+    ["git clean --forc", DENY], ["git clean -d --fo", DENY], ["git clean --forc --dry", ALLOW],
+    ["git push --force-w origin x", DENY], ["git push --forc origin x", DENY], ["git push -uf origin x", DENY], ["git push origin +x", DENY], ["git push origin +x:y", DENY],
+    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ALLOW], ["git push --follow-tags origin x", ALLOW],
+    ["git branch --del --forc x", ASK], ["git branch --del x", ALLOW],
+    ["git restore --work f", DENY], ["git restore --stag f", ALLOW], ["git restore --stag --work f", DENY],
+    ["git pull --reb", ASK], ["git pull --reb=false", ALLOW], ["git pull --no-reb", ALLOW],
+    ["git worktree remove --forc ../w", ASK], ["git worktree remove -f ../w", ASK], ["git worktree remove ../w", ALLOW],
+  ]);
+});

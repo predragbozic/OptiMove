@@ -116,6 +116,13 @@ the opposite of what a safety layer should do.
 
 ### ASK (Bash + PowerShell)
 
+- **Every long git option is read as a possible prefix.** git accepts any unique prefix of a long
+  option (`--forc`, `--for`, even `--f` are `--force` to `git checkout`; `--har` is `--hard`;
+  `--force-w` is `--force-with-lease`), so every rule compares through `longOptionIs`, and an
+  ambiguous prefix git would refuse counts as the dangerous option too. `git checkout` and
+  `git switch` go further: a long option not on their list of known options asks. `git push origin
+  +branch` (a forced refspec) and `-uf` clusters are a force push; `git worktree remove --force`
+  asks.
 - `git merge` / `git rebase` — except a plain `git merge [--no-edit|--no-ff|--no-commit|-q] origin/main`
   (or `origin/master`) while the current branch is known and is not `main`/`master` (read as a full
   ref, see below), alone or after read-only commands (`git status/fetch/rev-parse/log/diff/show/
@@ -264,8 +271,14 @@ or not yet, is `.git`. A line that creates a work tree (`git init`, `git clone`,
 `git worktree add`) gets no temporary-directory exemption at all: the folder it creates is not a
 work tree yet when the hook looks. If `git worktree move`, `git submodule add`, `cp -r`, `tar x` or any
 other command that can create or move a work tree is ever added to the allow list, it must be
-added to `createsGitWorkTree` too. A redirect sees only the plain assignments made BEFORE it in
-the line (`cat x > $S/a; S=/tmp/y` writes to `/a` and asks). **An existing
+added to `createsGitWorkTree` too. A redirect may use a variable only when its value is certain: the
+line consists only of plain assignments `NAME=value` (no `$`, backtick, quotes or substitution in
+the value; `export NAME=value` too) and plain commands, joined by `;` or a newline (or by `&&`
+while everything before is a plain assignment), with no `||`, pipe or background job; the
+assignment comes before the redirect; and the name is not set or mentioned in any other way
+before it (`read S`, `for S in`, `S+=`, `${S:=x}`, `unset S`, `S=$(...)`, `S=x cmd`, a second
+assignment, `eval`, `source`, `declare`, a loop, a function ...). Otherwise the variable is
+unknown and the redirect asks. **An existing
 file always asks**, whatever it is: rewriting or appending to it may change something that runs
 later — a script, a `package.json` (npm run), a SQL file (psql -f), a patch (git apply), a list
 (xargs), a `postgresql.conf` (pg_ctl start runs its commands). Measured on the replay: 29 of
