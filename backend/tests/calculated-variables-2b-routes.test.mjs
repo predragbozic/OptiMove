@@ -745,3 +745,127 @@ test("11. v79: a coach's dashboard refuses a ratio in plain words (the dashboard
   assert.equal(resolved.get("ratio").status, "unresolved");
   assert.deepEqual(resolved.get("difference"), { status: "resolved", candidateIds: [String(rest.id)] });
 });
+
+test("12. v79: a staff definition answer says how a variable is calculated - kind, scale for a ratio, its inputs in the formula's order by name and unit - and how a dashboard may combine it; a measured one says calculation null; an input the viewer may not read keeps its place with nothing named", async () => {
+  const { perMin, share, rest } = await v79Variables();
+  const team = await setupTeam();
+  const named = async (id) => {
+    const r = (await admin.query(
+      `select d.id::text as id, d.label, d.short_label, dv.unit from training_load.metric_definitions d
+         join training_load.metric_definition_versions dv on dv.id = d.current_version_id where d.id = $1`, [id])).rows[0];
+    return { definitionId: r.id, name: r.label, shortName: r.short_label ?? null, unit: r.unit ?? null };
+  };
+  const id = (name) => String(world[name].variableId);
+  const expected = {
+    [String(perMin.id)]: { calculation: { kind: "ratio", scale: 1, inputs: [await named(id("gpexe_total_distance")), await named(id("gpexe_time_min"))] },
+      allowedAggregations: ["ratio", "max", "last", "none"] },
+    [String(share.id)]: { calculation: { kind: "ratio", scale: 100, inputs: [await named(String(hmld.id)), await named(id("gpexe_total_distance"))] },
+      allowedAggregations: ["ratio", "max", "last", "none"] },
+    [String(rest.id)]: { calculation: { kind: "difference", inputs: [await named(id("gpexe_total_distance")), await named(String(hmld.id))] },
+      allowedAggregations: ["sum", "avg", "max", "last", "none"] },
+    [String(hmld.id)]: { calculation: { kind: "sum", inputs: await Promise.all(ZONES.map((z) => named(id(z)))) },
+      allowedAggregations: ["sum", "avg", "max", "last", "none"] },
+    [id("gpexe_total_distance")]: { calculation: null, allowedAggregations: ["sum", "avg", "max", "last", "none"] },
+  };
+  // The coach's list (with and without the dashboard picker's purpose) and GET one: the same fields, the existing names kept.
+  for (const purpose of ["", "&purpose=dashboardSeries"]) {
+    const seen = new Map();
+    let cursor = "";
+    for (let page = 0; page < 20; page += 1) {
+      const list = await mapi(`/definitions?limit=100${purpose}${cursor}`, { cookie: team.coach.cookie });
+      assert.equal(list.status, 200, list.text);
+      for (const row of list.body.rows) seen.set(String(row.id), row);
+      if (!list.body.nextCursor) break;
+      cursor = `&cursorLabel=${encodeURIComponent(list.body.nextCursor.label)}&cursorId=${list.body.nextCursor.id}`;
+    }
+    for (const [defId, want] of Object.entries(expected)) {
+      const row = seen.get(defId);
+      assert.ok(row, `${defId} listed${purpose}`);
+      assert.deepEqual({ calculation: row.calculation, allowedAggregations: row.allowedAggregations }, want, `list${purpose} ${defId}`);
+      assert.ok(row.current_version_id && row.daily_aggregation_method, "current_version_id and daily_aggregation_method as before");
+    }
+    assert.equal(seen.get(String(perMin.id)).daily_aggregation_method, "ratio");
+    assert.equal(seen.get(String(rest.id)).daily_aggregation_method, "sum");
+  }
+  for (const [defId, want] of Object.entries(expected)) {
+    const one = await mapi(`/definitions/${defId}`, { cookie: team.coach.cookie });
+    assert.equal(one.status, 200, one.text);
+    assert.deepEqual({ calculation: one.body.row.calculation, allowedAggregations: one.body.row.allowedAggregations }, want, `GET ${defId}`);
+  }
+  // An input the viewer may not read (here: another club's variable, and a viewer with no role) keeps its place, unnamed.
+  const otherClub = (await admin.query(`insert into public.clubs (name) values ($1) returning id`, [`Other ${key().slice(0, 6)}`])).rows[0].id;
+  const { withCalculationsForTest } = await import("../src/trainingLoadMetricsCatalog.js");
+  const withCalculationsForTestLater = (viewer, inputId) => withCalculationsForTest(viewer, [{ id: "x", value_type: "numeric",
+    calculation: { kind: "ratio", scale: 100, inputs: [String(inputId), String(hmld.id)] } }]);
+  // A real variable with a current version (the database's guards off on this disposable database only), so only the
+  // visibility rule can leave it unnamed.
+  const raw = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await raw.connect();
+  let hidden;
+  try {
+    await raw.query("begin");
+    await raw.query("set local session_replication_role = replica");
+    hidden = (await raw.query(
+      `insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id) values ($1, 'Their secret', 'club', $2) returning id`,
+      [`secret_${key().slice(0, 8)}`, otherClub])).rows[0].id;
+    const version = (await raw.query(
+      `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, daily_aggregation_method)
+       values ($1, 1, 'm', 'numeric', 'sum') returning id`, [hidden])).rows[0].id;
+    await raw.query(`update training_load.metric_definitions set current_version_id = $2 where id = $1`, [hidden, version]);
+    await raw.query("commit");
+  } finally {
+    await raw.end();
+  }
+  // A platform administrator reads it, named: the row is real.
+  const padmin = { user: { id: crypto.randomUUID() }, authz: { platformRoles: ["platform_admin"], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
+  const [seenByAdmin] = await withCalculationsForTestLater(padmin, hidden);
+  assert.equal(seenByAdmin.calculation.inputs[0].name, "Their secret");
+  const nobody = { user: { id: crypto.randomUUID() }, authz: { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [] } };
+  const [shaped] = await withCalculationsForTest(nobody, [{ id: "x", value_type: "numeric",
+    calculation: { kind: "ratio", scale: 100, inputs: [String(hidden), String(hmld.id)] } }]);
+  assert.deepEqual(shaped.calculation, { kind: "ratio", scale: 100, inputs: [
+    { definitionId: null, name: null, shortName: null, unit: null }, await named(String(hmld.id))] });
+  assert.equal(JSON.stringify(shaped).includes(String(hidden)) || JSON.stringify(shaped).includes("Their secret"), false);
+});
+
+test("13. v79: the preview names why a calculation with every input wrote nothing - a denominator of 0, a difference below 0 - and nothing for a value written", async () => {
+  const { calculatedForOccasions } = await import("../src/calculatedValues.js");
+  const { perMin, rest } = await v79Variables();
+  const team = await setupTeam();
+  await importSession(team, 9853);
+  const occ = (await admin.query(
+    `select o.id::text as id from training_load.metric_events e
+       join training_load.metric_event_participants p on p.event_id = e.id
+       join training_load.metric_measurement_occasions o on o.event_participant_id = p.id
+       join training_load.metric_values v on v.occasion_id = o.id and v.metric_definition_id = $2
+      where e.owner_team_id = $1 and o.segment_id is null limit 1`, [team.teamId, perMin.id])).rows[0].id;
+  const valueOf = async (defId) => (await admin.query(
+    `select value_numeric from training_load.metric_values where occasion_id = $1 and metric_definition_id = $2`, [occ, defId])).rows[0]?.value_numeric;
+  const reasons = async (client) => {
+    const entries = (await calculatedForOccasions(client, { occasions: [{ occasionId: occ, level: "full" }], ownerTeamId: team.teamId })).get(occ) ?? [];
+    return Object.fromEntries(entries.filter((e) => [String(perMin.id), String(rest.id)].includes(e.metricDefinitionId)).map((e) => [e.metricDefinitionId, e.reason]));
+  };
+  assert.ok(await valueOf(perMin.id) !== undefined && await valueOf(rest.id) !== undefined, "both written at import");
+  assert.deepEqual(await reasons(admin), { [String(perMin.id)]: null, [String(rest.id)]: null });
+  // Inside a rolled-back transaction: the inputs changed and the calculated values removed, as an import that wrote none.
+  const c = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await c.connect();
+  try {
+    await c.query("begin");
+    await c.query("set local session_replication_role = replica");
+    await c.query(`delete from training_load.metric_values where occasion_id = $1 and metric_definition_id = any($2::uuid[])`, [occ, [perMin.id, rest.id]]);
+    const id = (name) => String(world[name].variableId);
+    const setValue = (defId, v) => c.query(`update training_load.metric_values set value_numeric = $3 where occasion_id = $1 and metric_definition_id = $2`, [occ, defId, v]);
+    await setValue(id("gpexe_time_min"), 0);
+    await setValue(id("gpexe_total_distance"), 1);
+    assert.deepEqual(await reasons(c), { [String(perMin.id)]: "denominator_zero", [String(rest.id)]: "below_zero" });
+    await setValue(id("gpexe_time_min"), -2);
+    assert.equal((await reasons(c))[String(perMin.id)], "denominator_negative");
+    await setValue(id("gpexe_time_min"), 2);
+    await setValue(id("gpexe_total_distance"), -1);
+    assert.equal((await reasons(c))[String(perMin.id)], "numerator_negative");
+  } finally {
+    await c.query("rollback").catch(() => {});
+    await c.end();
+  }
+});

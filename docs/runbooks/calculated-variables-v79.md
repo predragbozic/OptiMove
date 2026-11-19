@@ -33,6 +33,18 @@ Plan and dashboard contract: `docs/ai/calculated-variables-v79-plan.md` (accepte
   (`409 ratio_not_available`, "Dashboards cannot show a ratio yet. Use the variables it divides for now."), the simple builder
   does not list it, a template clone leaves a hint naming one unresolved, and the query answers a ratio series under `sum`,
   `avg` or `ratio` as an error. A difference is an amount and works everywhere a sum does.
+* **The definition answer** (`GET /api/training-load/metrics/definitions` and `/definitions/:id`, staff workspaces; the
+  *Rukovodilac*'s ruling 1 for the dashboard stream): every row also carries `calculation` - `null` for a measured variable,
+  otherwise `{ kind, scale (a ratio only), inputs: [{ definitionId, name, shortName, unit }] }` in the formula's order -
+  and `allowedAggregations` (a ratio `["ratio","max","last","none"]`; any other number `["sum","avg","max","last","none"]`;
+  text and yes/no `["last","none"]`). The row keeps its existing names (`current_version_id`, `daily_aggregation_method`,
+  snake_case from the table; `ownerScope`, `hiddenInClub`, `calculated` as before). An input is named by the same
+  visibility rule as the row; one the viewer may not read keeps its place with every field `null`.
+* **The preview's `reason`**, when every input has a value and still none is written: `denominator_zero`,
+  `denominator_negative`, `numerator_negative` (a ratio) or `below_zero` (a difference), from the same input values the
+  writer used. Since every calculated entry now carries the key, a candidate previewed before the deploy whose preview
+  holds a calculated entry answers `preview_changed` once at its first approval (*Review again* imports it). Before the
+  deploy, read whether any pending candidate's preview holds one; with no calculated variable in use, none does.
 * **Deployed alone, v79 changes nothing a reader or a writer sees**: no ratio or difference exists until the API creates one.
 
 ## Running it

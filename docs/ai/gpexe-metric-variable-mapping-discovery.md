@@ -4623,12 +4623,16 @@ with O1-O6; runbook `docs/runbooks/calculated-variables-v79.md`).**
 - **Values:** exactly `a - b` (no value below 0) or `round(numerator * scale / denominator, 6)` (no value for a denominator of
   0); the input values in place; a ratio may divide a sum's own value. The writer runs sums first, then ratios and
   differences, in the import's transaction; a team with only sums sends one statement per occasion as before. The preview's
-  entry gains `reason` (`denominator_zero`, `below_zero`) when every input has a value and still none is written.
+  entry gains `reason` (`denominator_zero`, `denominator_negative`, `numerator_negative`, `below_zero`, from the input values
+  the writer used) when every input has a value and still none is written.
 - **Dashboards:** until the dashboard stream builds the ratio rule (the plan's section 6), a ratio is refused on save
   (`409 ratio_not_available`), the simple builder leaves it out, a clone leaves a hint naming one unresolved, and the query
   answers a ratio series under `sum`, `avg` or `ratio` as an error; the database refuses `sum`/`avg` on a ratio and `ratio`
   on anything else. A difference is an amount and works as a sum does.
 - **Athletes:** never see one (PR 3's rule is by `calculation`, so it covers every kind; route test 10).
+- **The definition answer** (staff): `calculation` (`null`, or `{ kind, scale, inputs: [{ definitionId, name, shortName,
+  unit }] }`, an input the viewer may not read with every field `null`) and `allowedAggregations` on every row of
+  `/api/training-load/metrics/definitions` and `/definitions/:id` (route test 12).
 - **Readers of the day rule:** the dashboard query (refuses, above), the estimates (`not_estimable`; calculated variables are
   never estimated anyway), the mapping (a calculated variable is never a mapping target, v77), the results and the Variables
   screen (shown as "Ratio (the day's totals divided)"); the calendar, the athlete's views and the Activities drawer show each

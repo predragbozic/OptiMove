@@ -390,7 +390,7 @@ test("7. a new version: a calculated variable changes its inputs (kept as a calc
   const users = (await rows(k, `select d.label from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id = d.current_version_id
      where v.calculation -> 'inputs' ? $1 order by d.label, d.id`, [W.z4.id])).map((x) => x.label);
   assert.ok(users.includes(W.hmld.label));
-  assert.equal(agg.body.message, `${users[0]} adds up this variable, so a day's values stay added up (Sum).`);
+  assert.equal(agg.body.message, `${users[0]} uses this variable, so a day's values stay added up (Sum).`);
   const kept = await post(`/variables/${W.z4.id}/versions`, W.pa, { requestKey: key(), expectedCurrentVersionId: W.z4.currentVersion.id, unit: "m", dailyAggregationMethod: "sum", maxValue: "100000" });
   assert.equal(kept.status, 201, kept.text);
   W.hmldVersion = current;
@@ -688,7 +688,7 @@ test("16. a sum adds only amounts (the owner, 2026-11-18): an input whose day ru
     const before = await counts();
     const res = await post(`/variables/${input.id}/archive`, who, { requestKey: key(), reason: "Not used any more" });
     refused(res, 409, "calculation_input_archive_in_use");
-    assert.equal(res.body.message, `${calc.label} adds up this variable; it cannot be archived while ${calc.label} uses it.`);
+    assert.equal(res.body.message, `${calc.label} uses this variable; it cannot be archived while ${calc.label} does.`);
     assert.deepEqual(await counts(), before);
   }
   // Once the calculated variable itself is archived, its inputs may be archived too.
@@ -831,7 +831,7 @@ test("20. through the routes, a restore of a calculated variable and an archive 
     assert.equal((await restoring).status, 200);
     const refusedArchive = await archiving;
     refused(refusedArchive, 409, "calculation_input_archive_in_use");
-    assert.equal(refusedArchive.body.message, `${first.c.label} adds up this variable; it cannot be archived while ${first.c.label} uses it.`);
+    assert.equal(refusedArchive.body.message, `${first.c.label} uses this variable; it cannot be archived while ${first.c.label} does.`);
     // (ii) The archive holds (the input's row FOR UPDATE); the restore waits on the input, then is refused naming it.
     const second = await fresh();
     h = holdAt("variable_archive");

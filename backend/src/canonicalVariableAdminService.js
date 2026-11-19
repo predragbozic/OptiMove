@@ -130,12 +130,12 @@ const TEXT = {
   calculation_unit_mismatch: "Every input must have the calculated variable's unit.",
   calculation_level_mismatch: "Every input must have every level of the calculated variable.",
   calculation_kind_fixed: "A variable is calculated from its first version or never, and keeps its kind (add up, divide or subtract).",
-  variable_used_by_calculation: "A calculated variable adds up this variable; its unit stays as it is.",
+  variable_used_by_calculation: "A calculated variable uses this variable; its unit stays as it is.",
   // PR 2 (the owner's rule of 2026-11-18): a sum adds only what can be added.
   calculated_day_rule_fixed: "A calculated variable adds its inputs up, so a day's values are added up too (Sum).",
-  calculation_input_day_rule_in_use: "A calculated variable adds up this variable, so a day's values stay added up (Sum).",
+  calculation_input_day_rule_in_use: "A calculated variable uses this variable, so a day's values stay added up (Sum).",
   calculation_input_not_additive: "An input is not an amount; only amounts (combined by Sum) can be added up.",
-  calculation_input_archive_in_use: "A calculated variable adds up this variable; it cannot be archived while it is used.",
+  calculation_input_archive_in_use: "A calculated variable uses this variable; it cannot be archived while it is used.",
   calculation_input_not_active: "An input of this calculated variable is archived; restore it first.",
 };
 // The sentence of an input whose day rule is not Sum: it names the variable and why it cannot be added up.
@@ -143,8 +143,8 @@ const NOT_AN_AMOUNT = { avg: "is an average", max: "is a highest value", last: "
 const notAdditiveText = (label, method) => (method === "none"
   ? `${label} keeps each value separately, not as an amount; it cannot be added up.`
   : `${label} ${NOT_AN_AMOUNT[method] ?? "is not an amount"}, not an amount; it cannot be added up.`);
-const dayRuleInUseText = (label) => `${label} adds up this variable, so a day's values stay added up (Sum).`;
-const archiveInUseText = (label) => `${label} adds up this variable; it cannot be archived while ${label} uses it.`;
+const dayRuleInUseText = (label) => `${label} uses this variable, so a day's values stay added up (Sum).`;
+const archiveInUseText = (label) => `${label} uses this variable; it cannot be archived while ${label} does.`;
 // A rename's precondition: the server's SHA-256 of the stored label, short
 // label, description and state (hex).
 const LABELS_TOKEN = /^[0-9a-f]{64}$/;

@@ -129,7 +129,19 @@ export async function calculatedLevels(client, { ownerTeamId }) {
 // The preview's entries (C142), for the occasions THIS import wrote, in one statement: per occasion, every calculated
 // variable that applies, with the value written or, when an input has no value there, the inputs missing by name. Returns a
 // Map occasionId -> entries; an occasion with none is absent (the preview then carries no entry for it).
-const NO_VALUE_REASON = Object.freeze({ ratio: "denominator_zero", difference: "below_zero" });
+// Why a calculation with every input still wrote no value (v79), from the same input values and the same conditions as
+// KINDS' `valid` (the code review of v79 PR 1): a ratio's denominator is 0 or below 0, or its numerator below 0; a
+// difference below 0.
+function noValueReason(kind, values) {
+  const [first, second] = (values ?? []).map(Number);
+  if (kind === "ratio") {
+    if (second === 0) return "denominator_zero";
+    if (second < 0) return "denominator_negative";
+    if (first < 0) return "numerator_negative";
+  }
+  if (kind === "difference" && first - second < 0) return "below_zero";
+  return null;
+}
 export async function calculatedForOccasions(client, { occasions, ownerTeamId }) {
   const out = new Map();
   const wanted = occasions.filter((o) => LEVEL[o.level]);
@@ -162,7 +174,11 @@ export async function calculatedForOccasions(client, { occasions, ownerTeamId })
                                         or (c.calculation ->> 'kind' <> 'sum'
                                             and exists (select 1 from training_load.metric_definition_versions sv
                                                          where sv.id = iv.metric_definition_version_id
-                                                           and to_jsonb(sv.*) -> 'calculation' ->> 'kind' = 'sum'))))) as missing
+                                                           and to_jsonb(sv.*) -> 'calculation' ->> 'kind' = 'sum'))))) as missing,
+            -- The input values the writer used (INPUT_VALUE), in the calculation's order: the reason a value is missing.
+            (select jsonb_agg(iv.value_numeric order by i.ord)
+               from jsonb_array_elements_text(c.calculation -> 'inputs') with ordinality as i(id, ord)
+               ${INPUT_VALUE.replace("iv.occasion_id = $1", "iv.occasion_id = occ.occasion_id")}) as input_values
        from occ
        join cands c on c.scope_level = occ.scope_level
        left join training_load.metric_values w on w.occasion_id = occ.occasion_id and w.metric_definition_id = c.id and w.is_derived
@@ -176,8 +192,8 @@ export async function calculatedForOccasions(client, { occasions, ownerTeamId })
       metricDefinitionId: r.definition_id, label: r.label,
       value: written ? r.value : null, unit: written ? r.unit : null,
       missingInputs: written ? [] : r.missing.map((m) => ({ metricDefinitionId: m.id, label: m.label })),
-      // v79: every input has a value and still none is written - a ratio's denominator is 0, or a difference is below 0.
-      reason: written || r.missing.length ? null : (NO_VALUE_REASON[r.kind] ?? null),
+      // v79: every input has a value and still none is written - noValueReason says why.
+      reason: written || r.missing.length ? null : noValueReason(r.kind, r.input_values),
     });
   }
   return out;
