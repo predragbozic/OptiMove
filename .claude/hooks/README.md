@@ -173,8 +173,133 @@ across projects/instances:
 a feature branch, tests and builds (`npm test`, `vite build`, `npm run dev`), read-only
 SQL, `git clean -n`, switching branches (`git checkout <branch>`), unstaging without
 touching the working tree (`git restore --staged <path>`), reversible stash operations
-(`git stash`, `push`, `pop`, `apply`, `list`, `show`), and any tool this hook doesn't
-govern at all (`Read`, `Write`, `Grep`, ...).
+(`git stash`, `push`, `apply`, `list`, `show` — `pop` asks, see below), and any tool this
+hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
+
+### ASK added with the hardening (Bash + PowerShell)
+
+- `git stash pop`; `git branch -D` (and `-d -f`, `--delete --force`); a push that deletes a
+  remote branch (`--delete`, `-d`, `origin :branch`, `--prune`, `--mirror`); `git pull
+  --rebase` / `-r` / `--rebase=<anything but false>`. They were silent before, which
+  contradicted `.claude/rules/git-safety.md`. Measured cost: in one executor session's 1,252
+  Bash calls (2026-11), one real `git branch -D` and nothing else.
+- A shell that reads commands this hook cannot see: `... | bash`, `... | sh -s`, `eval "$X"`,
+  `bash -c "$X"`.
+- A database URL or `PGHOST`/`PGHOSTADDR`/`PGSERVICE` set for a command (prefix, `env`,
+  `export`) that is not this machine, or cannot be read (`$VAR`, backticks).
+- A command that names a file holding secrets: `.env` and every copy or variant of it
+  (`.env.local`, `.env.bak`, `.env~`, `.env.save`, `backend/.env/`), `.envrc`,
+  `/proc/<pid>/environ`,
+  `pgpass.conf`, `.pgpass`, `*.pem`, `*.key`, `*.p12`, `id_rsa`/`id_ed25519` (not `.pub`),
+  `.netrc`, `.npmrc`, `.git-credentials`, `credentials`, `.credentials.json`. Not
+  `.env.example`/`.sample`/`.template`.
+- An allowed read command used in a form that writes, deletes or runs something else (next
+  section).
+
+### How the hook reads a command line
+
+Each part of a line is judged on its own and the strictest verdict wins. Before judging,
+the hook also reads:
+- every line of a multi-line command (newline and CR separate commands; a backslash before a
+  newline joins lines), and a single `&` (background) as a separator;
+- the command behind `env`, `sudo`/`doas`, `command`, `exec`, `nohup`, `nice`, `time`,
+  `timeout`, `stdbuf`, `xargs`, a leading backslash, an absolute or relative path to a known
+  command, shell keywords (`then`, `do`, `if`, ...) and `( )` / `{ }` groups;
+- what runs inside `$( )`, `<( )`, `>( )` and backticks (not inside single quotes);
+- the code of `bash/sh/zsh/dash/ksh -c` (any flag cluster with `c`, e.g. `-lc`), `eval`,
+  PowerShell `-Command` and `cmd /c`;
+- a shell as the first word inside `<( )` or `>( )` that reads what it is fed (`cat >(sh)`)
+  asks; a substitution is one operand for the option check (`cat <(sort -r x)` is `cat` with
+  one operand);
+- the body of a heredoc that a shell reads (`bash <<'E'`), and a here-string to a shell. The
+  body of any other heredoc is data (a commit message, a file being written, a Python
+  script) and is not read as shell; a heredoc without its closing word is read as commands;
+- a variable as the command word (`$GIT push -f`) is read as git;
+- every word as the program receives it: `'git'`, `"git"`, `g\it`, `re""set`, `$'reset'`,
+  `$'\x72eset'`, `$'\u0072eset'`, `$'\U00000072eset'` are all plain words, and a backslash-newline inside a word joins it
+  (`--ha\⏎rd` is `--hard`);
+- a line with a background job (a single `&`) gets no merge exemption.
+What still cannot be seen: what a script file, a Python or Node program, or a git
+configuration runs; a command assembled at run time from several variables.
+
+### The allow list (`.claude/settings.json` `permissions.allow`) and what the hook adds
+
+Claude Code already runs its own read-only set (`ls`, `cat`, `head`, `tail`, `grep`, `find`,
+`wc`, `diff`, read-only git, ...) without a question; the entries below make that explicit and
+add `sed -n`, `rg`, `sort`, `uniq`, `cut`, three git read commands and the two test folders. An
+allow rule is a text pattern (`Bash(sort:*)` also matches `sort --out=file`), and a compound
+command runs without a question only when every part is allowed. A hook "ask" still asks when an
+allow rule matches.
+
+**The rule for every allowed command: the hook is silent only when every option is on that
+command's explicit list of known-safe options** (`spec(...)` tables in `safety-guard.mjs`). Any
+other option asks — including an abbreviated long option: git and the GNU tools accept
+`--upload` for `--upload-pack`, `--out` for `--output`, `--in-pl` for `--in-place`, and none of
+these abbreviations is on a list. Options are read as the program receives them (quotes and
+backslashes removed), redirection words are not options.
+
+| Entry | On its list (examples) | Never on it (asks) |
+|---|---|---|
+| `Bash(sed -n:*)` | `-n -E -r -s -u -z -e --expression --sandbox` | `-i`, `--in-place`, `-f`; a script with `w`/`W`/`e`/`r`/`R`, `s///w`, `s///e`, or one that cannot be read (`$X`) |
+| `Bash(grep:*)` | the matching, context, include/exclude and output-format options | anything else |
+| `Bash(rg:*)` | the matching, glob/type, context, `--files`, `--json`, `--hidden`, `--no-ignore` options | `--pre`, `--pre-glob`, `-z`/`--search-zip` (run programs) |
+| `Bash(cat:*)`, `head`, `tail`, `wc`, `cut`, `ls`, `diff` | their reading and formatting options | `wc --files0-from`, `diff -l` (runs `pr`), anything else |
+| `Bash(find:*)` | `-name -iname -path -type -maxdepth -mindepth -newer -mtime -size -empty -print -prune` and the operators | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint*`, `-fls`, `-files0-from`, anything else |
+| `Bash(sort:*)` | the ordering, key and field options | `-o`, `--output`, `-T`, `--compress-program`, `--files0-from` |
+| `Bash(uniq:*)` | its counting and comparing options | a second file name (the output file) |
+| `git status/diff/log/show/fetch/rev-parse/merge-base/ls-remote/ls-tree/merge-tree`, `git worktree list` | per subcommand: the reading, formatting, revision-range and pickaxe options; `fetch` and `ls-remote` with a remote NAME (`origin`) and branch names or ref patterns — a URL or a path asks (a request to any host) | `--output`, `--ext-diff`, `--textconv`, `--upload-pack`, `--exec`, `--show-signature` (runs gpg), a fetch refspec with `:` (it writes local refs); git global options other than `-C`, `--no-pager`, `--no-optional-locks`, `--literal-pathspecs` |
+| `Bash(node --test backend/tests/*)`, `…frontend/tests/*` | test files under the two folders (no `..`, no absolute path); `--test-name-pattern`, `--test-skip-pattern`, `--test-concurrency`, `--test-timeout`, `--test-only`, `--test-shard`, `--test-reporter=spec/tap/dot/junit/lcov`, `--test-reporter-destination=stdout/stderr`, `--experimental-test-isolation=none/process` | `--import`, `--require`, `-r`, `--loader`, `-e`, a reporter module or a destination file, anything else |
+
+**Writing to a file.** An allowed command with an output redirection (`>`, `>>`, `>|`, `&>`,
+`N>`) asks, unless the target is `/dev/null`, `/dev/stdout`, `/dev/stderr`, a descriptor
+(`2>&1`, `>&2`), or a plain absolute path that, with every symbolic link followed, lies inside
+the system's temporary directory (`os.tmpdir()`, `/tmp`) AND does not exist yet AND is not inside a
+git work tree (no parent folder holds a `.git` file or folder: executors' and reviewers'
+worktrees live under the temporary directory too) and not inside or named `.git`. **An existing
+file always asks**, whatever it is: rewriting or appending to it may change something that runs
+later — a script, a `package.json` (npm run), a SQL file (psql -f), a patch (git apply), a list
+(xargs), a `postgresql.conf` (pg_ctl start runs its commands). Measured on the replay: 29 of
+1,252 calls write to an existing scratch file and ask for that. A target with `..`, `~`, a glob, or a
+variable whose value is not a plain assignment earlier in the same line (`S=/tmp/x; ... > $S/out`)
+asks. Commands that are not on the allow list (`echo x > file`) are left to Claude Code's own
+redirection check.
+
+**In front of an allowed command** (or exported anywhere in the line), an environment variable
+that changes what a program runs or loads asks: `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`,
+`PATH`, `PAGER`, `EDITOR`, `BASH_ENV`, `GIT_*`, `RIPGREP_CONFIG_PATH` and similar; so does a
+database URL or `PGHOST` that is not this machine, cannot be read, or names several hosts.
+
+**Also asks:** an `alias` definition (`alias g=git; g reset --hard`); `git -c` / `--config-env`
+with any key other than `user.name`, `user.email`, `color.ui`, `core.quotepath`,
+`init.defaultBranch` and a few display settings (`git -c alias.x='reset --hard' x`,
+`git -c core.pager=...`); `git reset --merge` / `--keep`; `git switch -f` / `--discard-changes`
+and `git checkout -f` (a `checkout` that discards files stays denied). A function definition's
+body is read as commands (`f(){ git reset --hard; }` is denied).
+
+**Measured** (all 1,252 Bash calls of one executor session, 2026-11, replayed through main's
+hook and settings and through these, with a model of Claude Code's own decision: its
+documented read-only set plus the allow rules as text patterns, redirections assumed allowed
+by Claude Code): without any question 62 → 380 calls; 321 calls stop asking; 3 start asking
+(all three write into repository files: `cat > docs/...`, `git diff > ../x.patch`).
+
+Not allowed: `rm`, `mv`, `cp`, `tee`, `awk`, `xargs`, `curl`, `wget`, `psql`/`pg_*`, a shell,
+`python`, git `add/commit/reset/clean/stash/rebase/checkout/restore/switch/pull/merge`, any MCP
+write tool, anything under `.claude/`. Claude Code's own "sensitive file" prompt for
+`.claude/` settings and hooks stays and is outside this hook.
+
+Secret files for the `Read` tool (and the file commands Claude Code recognises in Bash, such
+as `cat`, `head`, `tail`, `sed`): `permissions.deny` has `Read(**/.pgpass)`,
+`Read(**/pgpass.conf)`, `Read(**/*.pem)`, `Read(**/*.key)`, `Read(**/id_rsa)`,
+`Read(**/id_ed25519)`, `Read(**/.git-credentials)`, `Read(**/.credentials.json)`;
+`permissions.ask` has `Read(**/.env)`, `Read(**/.env.local)`, `Read(**/.env.production)`. The
+`**/` form is gitignore syntax but not shown in Claude Code's documentation: check it once
+with `/permissions` in a new session. **What still reads a secret silently:** a command that
+reads files without naming them — `grep -r x .`, `rg -uu x` / `rg --no-ignore --hidden x`,
+`cat *` in a folder that holds a `.env`, a Node or Python script. `rg` without `-uu` skips files
+that `.gitignore` lists; `grep -r` does not. The hook asks only for a NAMED secret file,
+including through quotes (`backend/'.env'`, `.\env`) and globs or braces whose literal part can
+reach one (`.e*`, `.en{v,}`, `.[e]nv`, `pgpass*`, `id_*`, `*.pem`); a bare `*` is not treated
+as aimed at a secret.
 
 ## Safety contract
 
