@@ -439,9 +439,10 @@ const SETTLES_ON_CHECK = {
   activate: ["version_not_submitted", "active_version_changed", "revision_not_verified", "canonical_version_changed", "source_metric_target_taken",
     "target_not_active", "conversion_unavailable", "bound_conversion_unavailable", "level_not_allowed", "source_metric_unsupported",
     "parameters_unsupported", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding",
-    "condition_mismatch"],
+    "condition_mismatch", "team_setting_mismatch", "team_setting_missing", "event_setting_not_confirmed"],
   disable: ["version_status_changed"],
-  switchOn: ["version_not_active", "field_retired", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"],
+  switchOn: ["version_not_active", "field_retired", "unit_word_missing", "unit_word_ambiguous", "binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding",
+    "team_setting_mismatch", "team_setting_missing", "event_setting_not_confirmed", "conversion_unavailable"],
   switchOff: ["activation_not_open"],
 };
 export function checkSettles(act, info) {
@@ -512,8 +513,13 @@ const ACT_TEXT = {
   switchOff: { activation_not_open: "This team was already switched off." },
 };
 // The refusals about one team of a batch: the team is named (J16 6).
-export const TEAM_CODES = new Set(["binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding"]);
+// v80 step C2: a column matched through the team's GPEXE setting is refused per team (S1, A1's listed starts), naming it.
+const MATCH_TEAM_CODES = ["team_setting_mismatch", "team_setting_missing", "event_setting_not_confirmed"];
+export const TEAM_CODES = new Set(["binding_not_active", "binding_source_mismatch", "activation_exists", "variable_taken_on_binding", ...MATCH_TEAM_CODES]);
 export const TEAM_CODE_TEXT = {
+  team_setting_mismatch: "has another setting in GPEXE than this variable counts",
+  team_setting_missing: "has no saved session with GPEXE's team settings yet (find new sessions first)",
+  event_setting_not_confirmed: "waits for GPEXE's events setting to be confirmed in Source fields",
   binding_not_active: "is no longer linked to GPEXE",
   binding_source_mismatch: "is linked to another source",
   activation_exists: "already gets this field",

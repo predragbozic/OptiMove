@@ -45,7 +45,7 @@ export function emptySourceFieldsState() {
     // Bumped on every reset: an answer for an older view is dropped.
     generation: 0,
     list: { items: [], loaded: false, loading: false, error: null },
-    detail: { id: null, field: null, verifications: [], observations: null, observationsError: null, loading: false, error: null },
+    detail: { id: null, field: null, verifications: [], eventSetting: null, observations: null, observationsError: null, loading: false, error: null },
     form: null,
     // I2 / I3: the names GPEXE sent that no source field covers yet (read-only).
     inventory: emptyInventory(),
@@ -188,6 +188,8 @@ export const verifyUnit = (fieldId, revisionId, body) => write(actPath(fieldId, 
 export const verifyMeaning = (fieldId, revisionId, body) => write(actPath(fieldId, revisionId, "meaning"), body);
 // G1b: route C, a field created from a name of the inventory (platform admin, platform workspace).
 export const createSourceField = (body) => write(BASE, body);
+// v80 step C1: the owner's confirmation of GPEXE's events setting for an events column (two numbers and Confirm).
+export const confirmEventSetting = (fieldId, revisionId, body) => write(`${BASE}/${encodeURIComponent(fieldId)}/revisions/${encodeURIComponent(revisionId)}/event-setting-confirmation`, body);
 // G1b-2 (plan section 8.2): the platform's comparison of a generic field - the teams (the platform board's list), one
 // comparison (route 8), the tick (route O) and the stored comparisons (route 10).
 export const fetchBoardTeams = () => api("/api/training-load/sources/metrics/board/teams");
@@ -444,6 +446,51 @@ export function openSourceFieldForm(act, { field, revision }) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// v80 step C1: GPEXE's events setting of an events column (the owner types what GPEXE shows; OptiMove never shows its
+// own value before Confirm - the server's eventSetting carries none).
+// ---------------------------------------------------------------------------
+export const EVENT_WORD = { acceleration: "acceleration", deceleration: "deceleration" };
+// The block's state, from the field read's eventSetting: not_compared, not_kept (platform only), form, confirmed.
+export function eventSettingState(es) {
+  if (!es) return null;
+  if (es.confirmation) return "confirmed";
+  if (!es.compared || !es.revisionId) return "not_compared";
+  if (es.sessionKept === false) return "not_kept";
+  return "form";
+}
+// The form is offered to a platform administrator only, and only in the "form" state (a club admin reads the block).
+export const eventSettingFormOffered = (ctx, es) => Boolean(ctx?.mayVerify && es && eventSettingState(es) === "form" && es.sessionKept === true);
+export function eventSettingConfirmedText(es) {
+  const c = es?.confirmation;
+  if (!c) return "";
+  const dir = es.event === "deceleration" ? "at or below" : "at or above";
+  return `Confirmed: ${EVENT_WORD[es.event] || "events"} events ${dir} ${c.thresholdValue} m/s² lasting ${c.durationSeconds} s.`;
+}
+export function openEventSettingForm({ field, eventSetting }) {
+  return {
+    act: "event",
+    requestKey: newRequestKey(),
+    busy: false,
+    unconfirmed: false,
+    checkNote: "",
+    dirty: false,
+    errors: {},
+    error: "",
+    fieldId: field.id,
+    fieldName: fieldHumanName(field),
+    revisionId: eventSetting.revisionId,
+    event: eventSetting.event === "deceleration" ? "deceleration" : "acceleration",
+    draft: { thresholdValue: "", durationSeconds: "" },
+  };
+}
+// A number as typed: blanks removed, a comma read as the decimal point; the server takes at most 6 + 6 digits.
+const DECIMAL_TYPED = /^-?(0|[1-9][0-9]{0,5})(\.[0-9]{1,6})?$/;
+export function typedDecimal(value) {
+  const text = String(value ?? "").trim().replace(",", ".");
+  return DECIMAL_TYPED.test(text) ? text : null;
+}
+
 function unitFieldError(value) {
   if (!value) return "Required.";
   if ([...value].length > LIMITS.unit) return `At most ${LIMITS.unit} characters.`;
@@ -468,6 +515,16 @@ export function buildSourceFieldRequest(form) {
     if (!o || !o.confirmable || !o.values?.a?.raw || !o.values?.b?.raw) return { body: null, errors: { attested: "Show a comparison of two athletes first." } };
     if (d.attested !== true) return { body: null, errors: { attested: "Tick this only after comparing both athletes with the GPEXE screen." } };
     return { errors, body: { requestKey: form.requestKey, session: { candidateId: o.session.candidateId, pairs: [...o.pair.positions], placementHash: o.placementHash }, attested: true } };
+  }
+  if (form.act === "event") {
+    const thresholdValue = typedDecimal(d.thresholdValue);
+    const durationSeconds = typedDecimal(d.durationSeconds);
+    if (!String(d.thresholdValue ?? "").trim()) errors.thresholdValue = "Required.";
+    else if (thresholdValue === null) errors.thresholdValue = "A number, for example 2.5.";
+    if (!String(d.durationSeconds ?? "").trim()) errors.durationSeconds = "Required.";
+    else if (durationSeconds === null || durationSeconds.startsWith("-")) errors.durationSeconds = "A number of seconds, for example 0.3.";
+    if (Object.keys(errors).length) return { body: null, errors };
+    return { errors, body: { requestKey: form.requestKey, thresholdValue, durationSeconds } };
   }
   if (form.act === "create") {
     // The label is sent without the blanks around it; the server checks the same rule (one line, visible characters).
@@ -512,6 +569,8 @@ const SETTLED_ON_CHECK = new Set([
   // Route O's refusals: nothing is written with them.
   "field_has_parameters", "field_has_evidence", "revision_not_active", "unit_not_stated", "board_changed", "binding_not_active", "pair_not_comparable",
   "not_enough_athletes", "snapshot_expired", "candidate_source_mismatch", "candidate_not_importable", "candidate_too_large", "session_start_unknown",
+  // v80 step C1: the confirmation's refusals; the server answers a saved key's row first, so these mean nothing was saved.
+  "setting_differs", "not_an_event_column", "not_compared", "session_not_kept",
 ]);
 export const checkSettles = (info) => SETTLED_ON_CHECK.has(info.code);
 export function checkNoteText(info) {
@@ -599,7 +658,23 @@ export function observationReadText(info) {
   };
   return texts[info.code] || (info.status ? "The comparison could not be read." : "No answer from the server.");
 }
+// v80 step C1: the confirmation's refusals. setting_differs is the server's own sentence (it names GPEXE's setting for the
+// compared session - the one place it is shown, after the owner typed a value).
+const EVENT_CODE_TEXT = {
+  notFound: "It is not available in this workspace now. Whether the confirmation was saved is not known: open the field from the platform workspace to see.",
+  invalid_body: "Not saved: enter the threshold and the duration GPEXE shows, as numbers.",
+  not_an_event_column: "Not saved: only a GPEXE acceleration or deceleration events value takes this confirmation.",
+  not_compared: "Not saved: compare this value with GPEXE first. The field is read again.",
+  session_not_kept: "Not saved: the session this value was compared in is no longer kept. Compare it with GPEXE again first. The field is read again.",
+  try_again: "Someone else is changing this field now. Nothing was saved. Try again.",
+  internal_error: "The server could not save it. Nothing was saved. Try again.",
+  request_key_reused: "An earlier confirmation of this form may already be stored. Close and look at the field before confirming again.",
+};
 export function sourceFieldCodeText(info, form = null) {
+  if (form?.act === "event") {
+    if (info.code === "setting_differs" && typeof info.message === "string" && info.message) return `Not saved. ${info.message}`;
+    return EVENT_CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
+  }
   if (form?.act === "observe") return OBSERVE_CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was saved." : "No answer from the server.");
   if (form?.act === "create") return CREATE_CODE_TEXT[info.code] || (info.status ? "Something went wrong. Nothing was created." : "No answer from the server.");
   if (form?.parameterKind === "zone_bounds" && ZONE_CODE_TEXT[info.code]) return ZONE_CODE_TEXT[info.code];
@@ -612,12 +687,18 @@ export const CLOSES_FORM = new Set([
   "unit_already_verified", "meaning_already_verified", "revision_retired",
   // Route O (G1b-2): the comparison no longer fits the field.
   "field_has_parameters", "field_has_evidence", "revision_not_active",
+  // v80 step C1: the field is no longer in the form's state.
+  "not_an_event_column", "not_compared", "session_not_kept",
 ]);
 // Route O's refusals after which the comparison is read again (the form stays).
 export const REREADS_OBSERVATION = new Set(["board_changed", "pair_not_comparable", "unit_not_stated", "binding_not_active"]);
 // The last question before a write-once act (OptiMove asks before every act
 // it cannot take back: Bind, Reconnect, Unbind).
 export function confirmQuestion(form, body) {
+  if (form.act === "event") {
+    const dir = form.event === "deceleration" ? "at or below" : "at or above";
+    return `Confirm that GPEXE shows ${form.event} events ${dir} ${body.thresholdValue} m/s² lasting ${body.durationSeconds} s for ${form.fieldName}? It is saved once and never changed here.`;
+  }
   if (form.act === "observe") {
     const o = form.observation;
     // The owner's rule: the decision in plain words; GPEXE's word and name stay under Technical details.

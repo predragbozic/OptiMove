@@ -57,10 +57,20 @@ export function startSourceFieldDrag(event, { isBlocked = () => false } = {}) {
   return true;
 }
 
+// v80 step C2: a variable with a condition takes only the columns the server listed as matching (data-mb-only-fields).
+// This is help on the screen only: the server judges every placement again and refuses any other.
+function acceptsDrag(target) {
+  if (!target) return false;
+  const only = target.dataset?.mbOnlyFields;
+  if (only === undefined) return true;
+  return Boolean(draggedFieldId) && only.split(",").includes(draggedFieldId);
+}
+
 // dragover: over an empty variable the drop is allowed and the variable is marked.
 export function overSourceFieldDrag(event) {
   if (!isFieldDrag(event)) return false;
-  const target = event.target?.closest?.(TARGET_SELECTOR);
+  const found = event.target?.closest?.(TARGET_SELECTOR);
+  const target = acceptsDrag(found) ? found : null;
   event.currentTarget?.querySelectorAll?.(".is-drop-target").forEach((other) => {
     if (other !== target) other.classList.remove("is-drop-target");
   });
@@ -85,7 +95,8 @@ export function leaveSourceFieldDrag(event) {
 export function dropSourceFieldDrag(event, { onDrop }) {
   if (!isFieldDrag(event)) return false;
   event.preventDefault();
-  const target = event.target?.closest?.(TARGET_SELECTOR);
+  const found = event.target?.closest?.(TARGET_SELECTOR);
+  const target = acceptsDrag(found) ? found : null;
   const fieldId = event.dataTransfer.getData(SOURCE_FIELD_DRAG_TYPE) || draggedFieldId;
   endDrag(event.currentTarget);
   const variableId = target?.dataset.variableId || "";

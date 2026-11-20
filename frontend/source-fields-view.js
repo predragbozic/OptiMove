@@ -12,6 +12,7 @@ import {
   currentRevision, hasBound, inventoryGroups, inventoryState, inventoryMatches, levelsText, readableName, zoneLimitsNote, meaningActOffered, operatorWords, sourceFieldsContext, sourceFieldsState,
   unitActOffered, createOffered, createNextStep, FIELD_LABEL_MAX,
   DURATION_HOURS_NOTE, observationLines, observationReasonText, observationWordText, observeOffered,
+  eventSettingConfirmedText, eventSettingState,
 } from "./source-fields-data.js";
 import { LIMITS } from "./metric-variables-data.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -394,6 +395,7 @@ function renderDetailHtml(s, ctx) {
     ${d.loading ? `<p class="muted" role="status">Loading the field...</p>` : ""}
     ${d.error ? `<div class="error" role="alert"><p>${escapeHtml(d.error)} The field below may be out of date.</p><button class="plain-button" type="button" data-action="source-fields-detail-reload">Try again</button></div>` : ""}
     ${ctx.mayVerify ? "" : `<p class="muted">Read only here: a platform administrator confirms units and meanings in the platform workspace.</p>`}
+    ${eventSettingBlockHtml(s, ctx)}
     <h3>Revisions</h3>
     ${(field.revisions || []).length ? `<ol class="metric-variables-versions">${field.revisions.map((r) => renderRevisionHtml(r, field, ctx, stale)).join("")}</ol>` : `<p class="muted">No revisions.</p>`}
     <h3>Checks and confirmations</h3>
@@ -606,10 +608,66 @@ function renderObserveFormHtml(s) {
     </form>`;
 }
 
+// v80 step C1: two numbers and Confirm. No value is filled in and OptiMove's own value is never shown before Confirm: the
+// owner types what GPEXE's team settings show. A number field with a fixed unit; a comma is read as the decimal point.
+function numberInput(form, field, label, unit, hint) {
+  const locked = form.busy || form.unconfirmed;
+  return `
+    <label class="search-field"><span>${escapeHtml(label)}</span>
+      <span class="source-fields-number">
+        <input type="text" inputmode="decimal" data-sf-field="${field}" value="${escapeAttr(form.draft[field] ?? "")}" maxlength="14" autocomplete="off"${TOKEN_ATTRS} ${locked ? "disabled" : ""}${described(form, field, hint)}${invalid(form, field)}>
+        <span class="source-fields-number-unit">${escapeHtml(unit)}</span>
+      </span>
+      <span class="muted" id="sf-hint-${field}">${escapeHtml(hint)}</span>
+      ${fieldError(form, field)}
+    </label>`;
+}
+function renderEventFormHtml(form) {
+  const word = form.event === "deceleration" ? "deceleration" : "acceleration";
+  return `
+    <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="event" novalidate autocomplete="off">
+      <h2 id="source-fields-title">Confirm GPEXE's ${word} events setting for ${escapeHtml(form.fieldName)}</h2>
+      <p class="metric-variables-field-note">In GPEXE, open the team's settings and enter the ${word} events threshold and duration it shows. OptiMove checks them against the session you compared; it is saved once.</p>
+      ${numberInput(form, "thresholdValue", `${word[0].toUpperCase()}${word.slice(1)} events threshold`, "m/s²", word === "deceleration" ? "As GPEXE shows it, for example -2.5." : "As GPEXE shows it, for example 2.5.")}
+      ${numberInput(form, "durationSeconds", "Duration", "s", "As GPEXE shows it, for example 0.3.")}
+      ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
+      ${form.unconfirmed ? unconfirmedHtml(form) : `
+      <div class="data-sources-form-actions">
+        <button class="plain-button data-sources-primary" type="submit" ${form.busy ? "disabled" : ""}>${form.busy ? "Confirming..." : "Confirm"}</button>
+        <button class="plain-button ghost" type="button" data-action="source-fields-cancel" ${form.busy ? "disabled" : ""}>Cancel</button>
+      </div>`}
+    </form>`;
+}
+
+// v80 step C1: the block of an events column's detail. The gate stays closed until the comparison and the confirmation
+// exist; every state says so in plain words. A club admin reads the block without the form.
+function eventSettingBlockHtml(s, ctx) {
+  const es = s.detail.eventSetting;
+  const st = eventSettingState(es);
+  if (!st) return "";
+  const word = es.event === "deceleration" ? "deceleration" : "acceleration";
+  const closed = "Until then this column fills no variable with a condition.";
+  let body;
+  if (st === "confirmed") body = `<p>${escapeHtml(eventSettingConfirmedText(es))}${es.confirmation?.confirmedAt ? ` (${escapeHtml(fmtDate(es.confirmation.confirmedAt))})` : ""}</p>`;
+  else if (st === "not_compared") body = `<p>Compare this value with GPEXE first (one session, two athletes), then confirm GPEXE's ${word} events setting. ${closed}</p>`;
+  else if (st === "not_kept") body = `<p>The session you compared is no longer kept. Compare this value with GPEXE again first. ${closed}</p>`;
+  else if (!ctx.mayVerify) body = `<p>Compared with GPEXE. A platform administrator still confirms GPEXE's ${word} events setting. ${closed}</p>`;
+  else {
+    const stale = s.detail.loading || Boolean(s.detail.error);
+    body = `<p>In GPEXE, open the team's settings and enter the ${word} events threshold and duration it shows. ${closed}</p>
+      <div class="data-sources-form-actions"><button class="plain-button data-sources-primary" type="button" data-action="source-fields-event-open" ${stale ? "disabled" : ""}>Confirm GPEXE's setting</button></div>`;
+  }
+  return `<section class="source-fields-event-setting" aria-labelledby="source-fields-event-title">
+    <h3 id="source-fields-event-title">GPEXE's events setting</h3>
+    ${body}
+  </section>`;
+}
+
 function renderFormHtml(s) {
   const form = s.form;
   if (form.act === "create") return renderCreateFormHtml(s);
   if (form.act === "observe") return renderObserveFormHtml(s);
+  if (form.act === "event") return renderEventFormHtml(form);
   const name = `${escapeHtml(form.fieldName)} (revision ${escapeHtml(String(form.revisionNumber ?? ""))})`;
   const bound = form.parameterKind === "zone_bounds" || form.parameterKind === "event_threshold";
   const locked = form.busy || form.unconfirmed;
