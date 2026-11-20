@@ -323,13 +323,12 @@ export function readManifest(projectDirAbs) {
   return { kindOverrides: parsed.kindOverrides || {}, fileOptions: parsed.fileOptions || {}, knownFailures, knownNoExit: parsed.knownNoExit || [] };
 }
 
-// node's own per-test limit for a file: a test that never finishes is
-// cancelled by node (reported as a failure with failureType
-// testTimeoutFailure), the file's remaining tests and hooks still run, and
-// the process exits on its own - so a hung test does not cost the whole
-// file limit and does not skip an after() that drops a database. The file
-// limit (the tree kill) stays as the backstop for a test that never yields
-// or a hook that never finishes.
+// The per-test limit for a file. It is passed to node as --test-timeout, but node applies that
+// flag only to files it runs through --test; this runner starts each file directly, so the limit
+// is kept by the runner itself (runOneFile): a test that is still running with no test event for
+// the limit plus a margin ends the file (the process tree), is reported as "test timeout: <name>",
+// and in a database kind the file's leftover test databases are dropped or named. The file limit
+// stays as the backstop (a limit longer than the file limit, a hook that never finishes).
 function defaultTestTimeoutMs(fileTimeoutMs) {
   return fileTimeoutMs > 120_000 ? fileTimeoutMs - 60_000 : Math.ceil(fileTimeoutMs * 0.8);
 }
@@ -357,10 +356,11 @@ export function listTestFiles(testsDirAbs) {
 // maintenance-database target. The audit also connects, so the server
 // identity checks of the support module (a managed service, a public
 // address behind a loopback tunnel) run before the first file.
-function auditDatabases({ backendDirAbs, env }) {
+function auditDatabases({ backendDirAbs, env, dropOnly = [] }) {
   const script = path.join(backendDirAbs, "tests", "support", "disposable-db-audit.mjs");
   if (!fs.existsSync(script)) return { error: `${script} is missing` };
-  const r = spawnSync(process.execPath, [script, "--json"], { cwd: backendDirAbs, env, encoding: "utf8", timeout: 30_000, windowsHide: true });
+  const extra = dropOnly.length ? ["--drop", "--yes", "--force", ...dropOnly.map((n) => `--only=${n}`)] : [];
+  const r = spawnSync(process.execPath, [script, "--json", ...extra], { cwd: backendDirAbs, env, encoding: "utf8", timeout: 30_000, windowsHide: true });
   if (r.status !== 0) return { error: (r.stderr || r.stdout || "").trim().split("\n").pop() || `exit ${r.status}` };
   try {
     return JSON.parse(r.stdout.trim().split("\n").pop());
@@ -551,6 +551,22 @@ async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, te
   // waiting for the whole time limit. Any other file waits the full limit:
   // ending early would risk cutting an after() hook that drops a database.
   const idleMs = knownNoExit ? knownNoExit.idleMs || DEFAULT_KNOWN_NO_EXIT_IDLE_MS : null;
+  // The per-test limit, kept by the runner itself: node applies --test-timeout only when it runs a
+  // file through --test, and this runner starts each file directly (node 22.23: the flag is
+  // ignored, a hung test ran to the FILE limit and its after() never ran). While a test is running
+  // and no test event arrives for the limit (plus a little, so a node that does apply the flag
+  // cancels first and the file goes on), the runner ends the file and names the test.
+  let testTimedOut = null;
+  const watchdogMs = testTimeoutMs + Math.min(5_000, Math.ceil(testTimeoutMs / 2));
+  const testTimer = setInterval(async () => {
+    if (!isAlive(child) || timedOut || endedIdle || testTimedOut) return;
+    const running = parser.runningNames();
+    if (running.length && Date.now() - parser.state.lastEventAt >= watchdogMs) {
+      testTimedOut = { name: running[running.length - 1], path: running, afterMs: watchdogMs };
+      runningAtEnd = running;
+      await killProcessTree(child);
+    }
+  }, 250);
   const idleTimer = idleMs
     ? setInterval(async () => {
         if (!isAlive(child) || endedIdle || timedOut) return;
@@ -562,6 +578,7 @@ async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, te
     : null;
   const exit = await done;
   clearTimeout(timeoutTimer);
+  clearInterval(testTimer);
   if (idleTimer) clearInterval(idleTimer);
   child.stdout.off("data", onStdout);
   child.stderr.off("data", onStderr);
@@ -582,6 +599,9 @@ async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, te
   let status;
   let noExit = false;
   if (exit.spawnError || logError) status = "crash";
+  // a test the runner ended: the tests after it never ran, so the file is never ok, even when the
+  // test is listed as a known failure
+  else if (testTimedOut) status = "timeout";
   else if (timedOut && runningAtEnd.length) status = "timeout";
   else if (timedOut || endedIdle) {
     // The process was ended by the runner while no test was running.
@@ -609,6 +629,7 @@ async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, te
     signal: exit.signal,
     timedOut,
     running: runningAtEnd,
+    testTimeout: testTimedOut,
     noExit,
     noExitKnown,
     pipeHeldOpen: Boolean(exit.pipeHeldOpen),
@@ -796,6 +817,8 @@ async function runStep(step, args, io) {
       const leftFromEarlier = auditBefore.databases.filter((d) => d.disposable).length;
       if (leftFromEarlier) io.out(`  note: ${leftFromEarlier} disposable test database(s) from earlier runs already on the server (node backend/tests/support/disposable-db-audit.mjs lists them)`);
     }
+    // names already on the server before a file ran, so a per-file cleanup touches only new ones
+    const namedLeftovers = new Set((auditBefore?.databases || []).map((d) => d.name));
     for (const f of filesOfKind) {
       const knownFailures = manifest.knownFailures.filter((e) => e.file === f.file);
       const knownNoExit = manifest.knownNoExit.find((e) => e.file === f.file) || null;
@@ -804,6 +827,28 @@ async function runStep(step, args, io) {
       const r = await runOneFile({ projectDirAbs, testsDirAbs, file: f.file, env, timeoutMs, testTimeoutMs, logDir, knownFailures, knownNoExit });
       r.kind = k;
       r.testTimeoutMs = testTimeoutMs;
+      // The runner ended this file in the middle of a test, so its after() hooks never ran: the
+      // databases that appeared since the step's audit (and were not already named for an earlier
+      // file) are this file's. Droppable test names are dropped now - the file's process tree is
+      // gone, so --force only ends sessions it left behind; any other name is reported.
+      if (auditBefore && (r.testTimeout || r.timedOut)) {
+        const now = auditDatabases({ backendDirAbs, env });
+        if (now.error) {
+          r.cleanup = { error: now.error };
+        } else {
+          const fresh = now.databases.filter((d) => !namedLeftovers.has(d.name));
+          const droppable = fresh.filter((d) => d.disposable).map((d) => d.name);
+          const dropped = droppable.length ? auditDatabases({ backendDirAbs, env, dropOnly: droppable }) : { dropped: [], refused: [] };
+          r.cleanup = dropped.error
+            ? { error: dropped.error, leftover: fresh.map((d) => d.name) }
+            : { dropped: dropped.dropped, leftover: [...fresh.filter((d) => !d.disposable).map((d) => d.name), ...dropped.refused.map((x) => x.name)] };
+          for (const d of fresh) namedLeftovers.add(d.name);
+          for (const n of r.cleanup.dropped || []) namedLeftovers.delete(n);
+        }
+        if (r.cleanup.error || r.cleanup.leftover.length) {
+          r.ok = false;
+        }
+      }
       results.push(r);
       if (!r.ok) ok = false;
       if (!args.quiet) {
@@ -816,7 +861,10 @@ async function runStep(step, args, io) {
         if (hung.length) io.out(`           ${hung.length} test(s) never finished and were cancelled by the per-test limit of ${formatDuration(testTimeoutMs)}${hung.every((d) => d.known) ? " (known)" : ""}`);
         if (r.status === "xfail") io.out(`           known failure(s) only: ${r.knownFailuresSeen.length}`);
         for (const t of r.unexpectedPasses) io.out(`           listed in test-manifest.json but passed; remove its entry: ${t}`);
-        if (r.status === "timeout") io.out(`           ended after ${formatDuration(timeoutMs)}${r.running.length ? ` while running: ${r.running.join(" > ")}` : " before any test reported"}`);
+        if (r.testTimeout) io.out(`           test timeout: ${r.testTimeout.name} (no test event for ${formatDuration(r.testTimeout.afterMs)}, per-test limit ${formatDuration(testTimeoutMs)}); the runner ended the file, so the tests after it did not run${r.testTimeout.path.length > 1 ? ` [${r.testTimeout.path.join(" > ")}]` : ""}`);
+        else if (r.status === "timeout") io.out(`           ended after ${formatDuration(timeoutMs)}${r.running.length ? ` while running: ${r.running.join(" > ")}` : " before any test reported"}`);
+        if (r.cleanup?.error) io.out(`           cleanup of this file's test databases failed: ${r.cleanup.error}${r.cleanup.leftover?.length ? `; leftover: ${r.cleanup.leftover.join(", ")}` : ""}`);
+        else if (r.cleanup) io.out(`           cleanup of this file's test databases: ${r.cleanup.dropped.length ? `dropped ${r.cleanup.dropped.join(", ")}` : "none to drop"}${r.cleanup.leftover.length ? `; leftover (a manual decision): ${r.cleanup.leftover.join(", ")}` : ""}`);
         if (r.noExit) io.out(`           ${r.tests ? "every test reported" : "the tests reported"} but the process stayed alive${r.noExitKnown ? " (known, ended after the idle period)" : ": a hook did not finish, a test never yielded, or a server, client or timer stayed open; the runner ended it"}`);
         if (r.status === "crash") io.out(`           no test ran to a result; exit ${r.exitCode ?? r.signal ?? r.spawnError}; see ${r.logPath}`);
       }
@@ -877,7 +925,11 @@ function summarize(stepResults, io, { strictNotRun = false } = {}) {
   const bad = results.filter((r) => !r.ok);
   if (bad.length) {
     io.out("Not ok:");
-    for (const r of bad) io.out(`  ${statusLabel(r)}  ${r.file}  (${r.logPath})`);
+    for (const r of bad) {
+      io.out(`  ${statusLabel(r)}  ${r.file}  (${r.logPath})`);
+      if (r.testTimeout) io.out(`        test timeout: ${r.testTimeout.name}; the runner ended the file, so the tests after it did not run`);
+      if (r.cleanup?.error || r.cleanup?.leftover?.length) io.out(`        leftover test databases: ${r.cleanup.error ? `cleanup failed (${r.cleanup.error})` : r.cleanup.leftover.join(", ")}`);
+    }
   }
   // No file disappears silently: every file in the run's scope that no step ran is named here.
   if (notRun.length) {

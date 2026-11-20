@@ -100,7 +100,11 @@ its sibling **X5b** ("B resolves BEFORE A …") hangs the same way, and nothing 
 does. They are hanging tests, not a leaked handle: the frontend manifest gives the file a
 per-test limit of 15 s (`fileOptions.testTimeoutMs`), node cancels each with
 `testTimeoutFailure`, the remaining tests run, the process exits, and both are listed as
-known failures (the file then reports 115 pass / 2 fail in about 30 s). The cause is not
+known failures (the file then reports 115 pass / 2 fail in about 30 s). Update 2026-11-20:
+on node 22.23 the file is started directly (not through `--test`), nothing keeps the event
+loop alive while X5a waits, and node cancels X5a and X5b at once with `cancelledByParent`
+("Promise resolution is still pending but the event loop has already resolved"); the
+manifest lists that fingerprint as well, and the file reports 115 pass / 2 known in 0.3 s. The cause is not
 established and is not touched by T1. No backend file left its process alive, no file
 hit its time limit, and no file in either package leaks a handle after its tests
 (the `knownNoExit` lists are empty).
@@ -211,11 +215,16 @@ Everything else in section 2 stays as it is in T1 and is listed in section 8 for
 `scripts/test-runner.mjs` runs each test file as its own `node` process (the file is
 executed directly, with the runner's reporter attached), serially, with:
 
-- two limits per file: node's own per-test limit (`--test-timeout`, 4 min for unit files
-  and 14 min for the database kinds by default, or `fileOptions.testTimeoutMs` from the
-  manifest) cancels a test that never finishes, reports it as a failure naming the test,
-  and lets the file's remaining tests and its `after()` run, so a hung test does not skip
-  the drop of a database; and a file limit (`--timeout-ms`; 5 min for unit, 15 min for
+- two limits per file: a per-test limit (4 min for unit files and 14 min for the database
+  kinds by default, or `fileOptions.testTimeoutMs` from the manifest). It is passed to node
+  as `--test-timeout`, but node ignores that flag for a file it does not run through
+  `--test`, so the runner keeps it itself (2026-11-20): when a test is still running and no
+  test event has come for the limit plus half of it (at most 5 s more), the runner ends the
+  file's process tree and reports the file `TIMEOUT` with "test timeout: <test name>"; the
+  tests after it and the file's `after()` do not run, so in a database kind the runner
+  then drops the test databases that appeared during that file (droppable names only,
+  `disposable-db-audit.mjs --drop --only=<name>`) and names any other one as leftover; a
+  listed known failure does not make such a file ok. And a file limit (`--timeout-ms`; 5 min for unit, 15 min for
   the database kinds) as the backstop, on whose expiry the whole process tree is ended
   (`taskkill /T` on Windows, the process group elsewhere) and the file is reported
   `TIMEOUT` naming the test that was running. A test that never yields to the event
@@ -355,7 +364,7 @@ still needs `test:backend:shared` on a local development database before a PR, a
   guarded today. T2 item: a content marker in each scan test (for example
   `// @optimove-guard: secret-scan`) that the runner refuses to list, so neither a name
   nor a title is the control.
-- `fileOptions`: `{ "<file>": { testTimeoutMs, note } }` — node's per-test limit for one
+- `fileOptions`: `{ "<file>": { testTimeoutMs, note } }` — the per-test limit for one
   file, used today only for the file with the hanging tests X5a and X5b (15 s instead of
   the 4-minute default, so the file costs about 30 s, not minutes).
 - `knownNoExit`: `{ file, idleMs, note }` — a file whose process stays alive after its
@@ -387,7 +396,7 @@ All on 2026-10-11, this workstation, worktree at `241765e` plus the T1 changes.
 
 | What | Command | Result |
 |---|---|---|
-| the runner itself | `npm run test:runner` | 35 of 35 checks: one throwaway file per verdict (pass, fail, known-fail incl. a nested describe, did-not-exit, a stuck test with a grandchild, crash at import, unexpected pass — also title by title inside a file with another listed failure —, known did-not-exit ended after its idle period, a slow `after()` never cut, a hung test cancelled by the per-test limit with the file running on, a file that prints a 4 MiB burst and fails as its last act still reported with its summary); **the fingerprint rule**: the same title with the expected failureType and message → known-fail, the same title with another failureType → fail, with another message → fail, a known timeout that turns into an assertion failure → fail, a listed test that passes → unexpected pass; a manifest entry without a fingerprint, with an unknown failureType, with a pattern that does not compile or is too unspecific (`^.*`), or for a secret / credential scan test (by file name in any directory, or by title) → refused before any file; the grandchild process gone afterwards, a kept log per file, a project without a manifest, no `DATABASE_URL` / `GPEXE_API_TOKEN` / `SOURCE_CREDENTIAL_KEYS` / `GITHUB_TOKEN` / `*_API_KEY` visible to a unit file, a `.env` in the test's cwd not loaded, no canary credential in the output / report / logs, the runner's rules equal to the support module's, and the refusals (a remote host, a Supabase pooler, `monitoring2`, a libpq `host=` / `port=` / `user=` override, a shared step without `--shared-db`, naming the wrong database, naming a non-OptiMove database, an ambient variable as opt-in) — each refused with exit 2 before any file ran and without the credential in the message |
+| the runner itself | `npm run test:runner` | 42 of 42 checks (node 22.23, 2026-11-20): one throwaway file per verdict (pass, fail, known-fail incl. a nested describe, did-not-exit, a stuck test with a grandchild, crash at import, unexpected pass — also title by title inside a file with another listed failure —, known did-not-exit ended after its idle period, a slow `after()` never cut, a really hung test (a live timer) ended by the runner's own per-test limit and named, its `after()` and later tests not run and the file never ok even when the test is listed, a hang longer than the file limit ended at the file limit and named, a file that prints a 4 MiB burst and fails as its last act still reported with its summary); **the fingerprint rule**: the same title with the expected failureType and message → known-fail, the same title with another failureType → fail, with another message → fail, a known timeout that turns into an assertion failure → fail, a listed test that passes → unexpected pass; a manifest entry without a fingerprint, with an unknown failureType, with a pattern that does not compile or is too unspecific (`^.*`), or for a secret / credential scan test (by file name in any directory, or by title) → refused before any file; the grandchild process gone afterwards, a kept log per file, a project without a manifest, no `DATABASE_URL` / `GPEXE_API_TOKEN` / `SOURCE_CREDENTIAL_KEYS` / `GITHUB_TOKEN` / `*_API_KEY` visible to a unit file, a `.env` in the test's cwd not loaded, no canary credential in the output / report / logs, the runner's rules equal to the support module's, and the refusals (a remote host, a Supabase pooler, `monitoring2`, a libpq `host=` / `port=` / `user=` override, a shared step without `--shared-db`, naming the wrong database, naming a non-OptiMove database, an ambient variable as opt-in) — each refused with exit 2 before any file ran and without the credential in the message |
 | the secret-scan guard | `cd backend && node --test --test-name-pattern "^12\. no credential" tests/source-hosts-server3.test.mjs`, then the whole file, then the same test with a 40-hex value planted in `.gitignore` (restored afterwards) | 1/1 and 13/13 after the SHA in `CURRENT_STATE.md` was shortened; with the planted value test 12 fails naming `.gitignore` — the files after `CURRENT_STATE.md` in its list are scanned again; `.gitignore` restored byte-for-byte and the test passes again |
 | frontend support | `support-helpers.test.mjs` through the runner | 9/0 |
 | backend support | `support-disposable-db.test.mjs` (disposable kind, and under plain `node --test`) | 5/0: name and server rules (incl. the query-parameter rule), create → landing check → the audit lists it as droppable with its open session → drop ends that session → gone, the object count in `postgres` unchanged; the server-address table: only `127.0.0.0/8`, `::1`, their IPv4-mapped form and a Unix socket (null) count as local, while `10.0.0.5`, `172.16.0.1`, `172.31.255.254`, `192.168.1.10`, `fd12:3456::1`, `fc00::1`, `fe80::1`, `100.64.0.1`, `169.254.1.1`, IPv4-mapped private, public and malformed values (`::ffff:`, a doubled prefix, five octets, an octet above 255, a prefix length above 128) are refused; `--drop` refusals |

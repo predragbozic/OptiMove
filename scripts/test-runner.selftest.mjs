@@ -50,6 +50,7 @@ import fs from "node:fs";
 test("never finishes and keeps a grandchild alive", async () => {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   fs.writeFileSync(process.env.SELFTEST_GRANDCHILD_PID_FILE, String(child.pid));
+  setInterval(() => {}, 1000);
   await new Promise(() => {});
 });
 `,
@@ -68,10 +69,21 @@ setInterval(() => {}, 1000);
 test("passes quickly", () => {});
 after(async () => { await new Promise((r) => setTimeout(r, 2500)); });
 `,
-  "k-hang-known.test.mjs": `import { test } from "node:test";
+  "k-hang-known.test.mjs": `import { test, after } from "node:test";
+import fs from "node:fs";
+after(() => { fs.writeFileSync(process.env.SELFTEST_AFTER_MARK_FILE, "after() ran"); });
 test("fine before the hang", () => {});
-test("hangs forever (known, cancelled by the per-test limit)", async () => { await new Promise(() => {}); });
-test("runs after the hang was cancelled", () => {});
+test("hangs forever (known, ended by the runner's per-test limit)", async () => {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+});
+test("never runs: the runner ended the file", () => {});
+`,
+  "s-hang-file-limit.test.mjs": `import { test } from "node:test";
+test("hangs past the file limit", async () => {
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+});
 `,
   "l-partial-xpass.test.mjs": `import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -132,7 +144,7 @@ const MANIFEST = {
     { file: "b-fail.test.mjs", test: "broken two (known)", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
     { file: "c-known-fail.test.mjs", test: "nested known failure", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
     { file: "g-unexpected-pass.test.mjs", test: "listed as a known failure but passes", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
-    { file: "k-hang-known.test.mjs", test: "hangs forever (known, cancelled by the per-test limit)", failureType: "testTimeoutFailure", messagePattern: TIMEOUT, since: "2026-10-11", note: "self-test" },
+    { file: "k-hang-known.test.mjs", test: "hangs forever (known, ended by the runner's per-test limit)", failureType: "testTimeoutFailure", messagePattern: TIMEOUT, since: "2026-10-11", note: "self-test" },
     { file: "l-partial-xpass.test.mjs", test: "listed and now passes", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
     { file: "l-partial-xpass.test.mjs", test: "listed and still fails", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
     { file: "o-fp-match.test.mjs", test: "fails with the expected cause", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
@@ -140,7 +152,7 @@ const MANIFEST = {
     { file: "q-fp-message.test.mjs", test: "fails with another message than listed", failureType: "testCodeFailure", messagePattern: STRICT_EQUAL, since: "2026-10-11", note: "self-test" },
     { file: "r-fp-timeout-now-assert.test.mjs", test: "a known timeout that now fails an assertion", failureType: "testTimeoutFailure", messagePattern: TIMEOUT, since: "2026-10-11", note: "self-test" },
   ],
-  fileOptions: { "k-hang-known.test.mjs": { testTimeoutMs: 1500, note: "self-test" } },
+  fileOptions: { "k-hang-known.test.mjs": { testTimeoutMs: 1500, note: "self-test" }, "e-stuck.test.mjs": { testTimeoutMs: 1500, note: "self-test" } },
   knownNoExit: [{ file: "h-noexit-known.test.mjs", idleMs: 1500, note: "self-test" }],
 };
 
@@ -196,13 +208,14 @@ function check(name, fn) {
 
 const project = makeProject();
 const pidFile = path.join(project, "grandchild.pid");
+const afterMarkFile = path.join(project, "after-ran.mark");
 const reportPath = path.join(project, "report.json");
 const logDir = path.join(project, "logs");
 try {
   const started = Date.now();
   const run = runRunner(
     ["--project", "frontend", "--project-dir", project, "--timeout-ms", "5000", "--json", reportPath, "--log-dir", logDir, "--quiet"],
-    { SELFTEST_GRANDCHILD_PID_FILE: pidFile, DATABASE_URL: CANARY_DB_URL, GPEXE_API_TOKEN: CANARY_TOKEN, SOURCE_CREDENTIAL_KEYS: `1:${CANARY_TOKEN}`, GITHUB_TOKEN: CANARY_TOKEN, MY_SERVICE_API_KEY: CANARY_TOKEN },
+    { SELFTEST_GRANDCHILD_PID_FILE: pidFile, SELFTEST_AFTER_MARK_FILE: afterMarkFile, DATABASE_URL: CANARY_DB_URL, GPEXE_API_TOKEN: CANARY_TOKEN, SOURCE_CREDENTIAL_KEYS: `1:${CANARY_TOKEN}`, GITHUB_TOKEN: CANARY_TOKEN, MY_SERVICE_API_KEY: CANARY_TOKEN },
   );
   const elapsed = Date.now() - started;
   check("the runner reports a failed run (exit 1) for a project with failing files", () => assert.equal(run.status, 1, run.stderr));
@@ -217,12 +230,25 @@ try {
   check("a file with an unlisted failure is fail / not ok and names the failing test only", () => expect("b-fail.test.mjs", { status: "fail", ok: false, unknownFailures: ["broken one"], knownFailuresSeen: ["broken two (known)"] }));
   check("a file whose only failures are listed is known-fail / ok, nested describe included", () => expect("c-known-fail.test.mjs", { status: "xfail", ok: true, unknownFailures: [] }));
   check("a file that finished its tests but never exited is did-not-exit / not ok", () => expect("d-noexit.test.mjs", { status: "pass", ok: false, noExit: true, noExitKnown: false, pass: 1 }));
-  check("a test that never finishes is cancelled by node's per-test limit, reported as a failure, and the file still runs on and exits", () => {
-    expect("k-hang-known.test.mjs", { status: "xfail", ok: true, noExit: false, timedOut: false, pass: 2, fail: 1, knownFailuresSeen: ["hangs forever (known, cancelled by the per-test limit)"] });
-    assert.equal(byFile["k-hang-known.test.mjs"].failureDetails[0].failureType, "testTimeoutFailure");
-    assert.ok(byFile["k-hang-known.test.mjs"].durationMs < 4500, "ended well before the file limit");
+  check("a test that really hangs (a live timer) is ended by the runner's own per-test limit and named; the file is a timeout, never ok, even when the test is listed", () => {
+    const name = "hangs forever (known, ended by the runner's per-test limit)";
+    expect("k-hang-known.test.mjs", { status: "timeout", ok: false, noExit: false, timedOut: false, pass: 1, running: [name] });
+    const r = byFile["k-hang-known.test.mjs"];
+    assert.equal(r.testTimeout?.name, name);
+    assert.equal(r.testTimeout.afterMs, 2250, "per-test limit 1500 ms plus half of it");
+    assert.ok(r.durationMs < 4500, `ended well before the file limit (${r.durationMs} ms)`);
   });
-  check("a file whose stuck test keeps a grandchild alive is a failure (the per-test limit cancelled it) and the process is ended at the file limit", () => expect("e-stuck.test.mjs", { status: "fail", ok: false, timedOut: true, noExit: true, running: [], unknownFailures: ["never finishes and keeps a grandchild alive"] }));
+  check("the tests and the after() hook behind a hang the runner ended do not run, and the report says so", () => {
+    assert.equal(fs.existsSync(afterMarkFile), false, "after() ran although the process was ended");
+    assert.match(run.stdout + run.stderr, /test timeout: hangs forever \(known, ended by the runner's per-test limit\).*the tests after it did not run/);
+  });
+  check("a stuck test that keeps a grandchild alive is ended by the per-test limit, named, and the whole tree goes", () => {
+    expect("e-stuck.test.mjs", { status: "timeout", ok: false, timedOut: false, running: ["never finishes and keeps a grandchild alive"] });
+    assert.equal(byFile["e-stuck.test.mjs"].testTimeout?.name, "never finishes and keeps a grandchild alive");
+  });
+  check("a hang longer than the file limit (the per-test limit not reached) is still ended at the file limit and named", () => {
+    expect("s-hang-file-limit.test.mjs", { status: "timeout", ok: false, timedOut: true, testTimeout: null, running: ["hangs past the file limit"] });
+  });
   check("a file that cannot even load is crash / not ok", () => expect("f-crash.test.mjs", { status: "crash", ok: false }));
   check("a listed failure that passes is reported as an unexpected pass (ok, with a warning)", () => expect("g-unexpected-pass.test.mjs", { status: "pass", ok: true, unexpectedPass: true, unexpectedPasses: ["listed as a known failure but passes"] }));
   check("a listed failure that passes is reported title by title even while another listed failure in the same file still fails", () => expect("l-partial-xpass.test.mjs", { status: "xfail", ok: true, unexpectedPass: true, unexpectedPasses: ["listed and now passes"], knownFailuresSeen: ["listed and still fails"] }));
