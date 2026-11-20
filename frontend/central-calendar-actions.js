@@ -22,7 +22,7 @@ import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
   CENTRAL_CALENDAR_EVENT_KINDS,
-  CENTRAL_CALENDAR_KINDS,
+  CENTRAL_CALENDAR_SHOW_ONLY,
   CENTRAL_CALENDAR_VIEWS,
   cancelCentralCalendarEvent,
   centralCalendarCheckSettles,
@@ -128,7 +128,7 @@ function closedPanel() {
 export function captureCentralCalendarView(root) {
   if (!root?.querySelectorAll) return null;
   const scroll = {};
-  for (const row of root.querySelectorAll(".cc-chip-row")) {
+  for (const row of root.querySelectorAll(".cc-chip-row, .cc-showonly")) {
     const label = row.getAttribute?.("aria-label");
     if (label && row.scrollLeft) scroll[label] = row.scrollLeft;
   }
@@ -150,12 +150,41 @@ export function captureCentralCalendarView(root) {
   return { scroll, focus, field, panelScroll };
 }
 
-export function restoreCentralCalendarView(root, snapshot) {
-  if (!root?.querySelectorAll || !snapshot) return;
-  for (const row of root.querySelectorAll(".cc-chip-row")) {
-    const label = row.getAttribute?.("aria-label");
-    if (label && snapshot.scroll[label]) row.scrollLeft = snapshot.scroll[label];
+// K5-2 (contract 2.5, Phone): after every paint the chosen *Show only* pill is scrolled into view inside its row. Only
+// the row scrolls, sideways (`inline: "nearest"`): the page never moves, even when the row is above the screen.
+export function revealCentralCalendarShowOnly(root) {
+  const row = root?.querySelector?.(".cc-showonly");
+  const pill = row?.querySelector?.('[aria-checked="true"]');
+  if (!row) return;
+  if (pill && row.scrollWidth > row.clientWidth) {
+    const start = pill.offsetLeft;
+    const end = start + pill.offsetWidth;
+    if (start < row.scrollLeft) row.scrollLeft = start;
+    else if (end > row.scrollLeft + row.clientWidth) row.scrollLeft = end - row.clientWidth;
   }
+  // The fade at the right edge while more pills lie past it (UX review): set now, and kept by the row's own scroll.
+  // The row is a new element on every paint, so it never holds two listeners.
+  markShowOnlyMore(row);
+  row.addEventListener?.("scroll", () => markShowOnlyMore(row), { passive: true });
+}
+
+function markShowOnlyMore(row) {
+  if (!row.dataset) return;
+  const more = row.scrollLeft + row.clientWidth < row.scrollWidth - 2;
+  if (more) row.dataset.more = "true";
+  else delete row.dataset.more;
+}
+
+export function restoreCentralCalendarView(root, snapshot) {
+  if (!root?.querySelectorAll) return;
+  if (snapshot) {
+    for (const row of root.querySelectorAll(".cc-chip-row, .cc-showonly")) {
+      const label = row.getAttribute?.("aria-label");
+      if (label && snapshot.scroll[label]) row.scrollLeft = snapshot.scroll[label];
+    }
+  }
+  revealCentralCalendarShowOnly(root);
+  if (!snapshot) return;
   const panel = root.querySelector?.(".cc-panel");
   if (panel && snapshot.panelScroll) panel.scrollTop = snapshot.panelScroll;
   if (snapshot.field) {
@@ -180,6 +209,8 @@ export function restoreCentralCalendarView(root, snapshot) {
   for (const [name, value] of [["key", focus.key], ["date", focus.date], ["team-id", focus.teamId], ["kind", focus.kind], ["event-kind", focus.eventKind], ["view", focus.view], ["mode", focus.mode]]) {
     if (value) selector.push(`[data-${name}="${cssValue(value)}"]`);
   }
+  // Show only's All pill is the one with an empty kind: named, so the focus never depends on the pills' order.
+  if (focus.action === "central-calendar-show-only" && !focus.kind) selector.push('[data-kind=""]');
   root.querySelector?.(selector.join(""))?.focus?.({ preventScroll: true });
 }
 
@@ -196,7 +227,8 @@ function cssValue(value) {
 function focusCard(key) {
   if (!key) return;
   const value = cssValue(key);
-  globalThis.document?.querySelector?.(`.cc-card[data-key="${value}"], .cc-mini[data-key="${value}"]`)?.focus?.({ preventScroll: true });
+  // K5-2: a test, an RPE request and an activity open their panel from a day chip.
+  globalThis.document?.querySelector?.(`.cc-card[data-key="${value}"], .cc-mini[data-key="${value}"], .cc-daychip[data-key="${value}"]`)?.focus?.({ preventScroll: true });
 }
 
 // Back and Escape close the event form or an open item panel first; false
@@ -1904,10 +1936,27 @@ export function handleCentralCalendarInput(target, { render } = {}) {
   return true;
 }
 
+// K5-2 *Show only* is a radio group with one tab stop: the arrow keys (and Home / End) move to another pill and choose
+// it, through the same click as a tap. The repaint keeps the focus on the chosen pill (captureCentralCalendarView).
+const SHOW_ONLY_KEYS = Object.freeze(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+function handleShowOnlyArrows(event) {
+  if (!SHOW_ONLY_KEYS.includes(event?.key) || !event.target?.matches?.(".cc-showonly-pill")) return false;
+  const pills = [...(event.target.closest(".cc-showonly")?.querySelectorAll(".cc-showonly-pill") || [])];
+  const index = pills.indexOf(event.target);
+  if (index < 0 || !pills.length) return false;
+  event.preventDefault();
+  const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+  const next = event.key === "Home" ? 0 : event.key === "End" ? pills.length - 1 : (index + step + pills.length) % pills.length;
+  pills[next].focus?.();
+  pills[next].click?.();
+  return true;
+}
+
 // app.js's keydown on the content: Enter in the athlete search finds, it
 // never submits the event form (HTML's implicit submission would create or
 // save the event before the athletes are chosen).
 export function handleCentralCalendarKeydown(event) {
+  if (handleShowOnlyArrows(event)) return true;
   if (event?.key !== "Enter" || !event.target?.matches?.("[data-cc-event-athlete-search]")) return false;
   event.preventDefault();
   // A phone's Search key: the keyboard goes away so the filtered list shows.
@@ -1919,7 +1968,7 @@ export function handleCentralCalendarKeydown(event) {
   return true;
 }
 
-export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad, openBuilder } = {}) {
+export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad, openTrainingLoadSchedule, openTests, openBuilder } = {}) {
   const type = action?.dataset?.action || "";
   if (!type.startsWith("central-calendar-")) return false;
   const cal = state.centralCalendar;
@@ -2047,13 +2096,15 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     render?.();
     return true;
   }
-  if (type === "central-calendar-toggle-kind") {
+  // K5-2 *Show only* (contract 2.5): one kind at a time - a tap on another pill switches straight over, All (or the
+  // green line's Show all, central-calendar-all-types) brings everything back. Any kind but Events clears the event
+  // types: they narrow events only.
+  if (type === "central-calendar-show-only") {
     const kind = action.dataset.kind || "";
     const before = centralCalendarServerKinds(cal.filters);
-    if (CENTRAL_CALENDAR_KINDS.includes(kind)) {
-      toggleValue(cal.filters.kinds, kind);
-      // Events chosen: every event passes, so the event types are cleared.
-      if (kind === "event" && cal.filters.kinds.includes("event")) cal.filters.eventKinds = [];
+    if (kind === "" || CENTRAL_CALENDAR_SHOW_ONLY.includes(kind)) {
+      cal.filters.kinds = kind ? [kind] : [];
+      if (kind !== "event") cal.filters.eventKinds = [];
     }
     await typesChanged(cal, before, render);
     return true;
@@ -2063,9 +2114,8 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     const before = centralCalendarServerKinds(cal.filters);
     if (CENTRAL_CALENDAR_EVENT_KINDS.includes(eventKind)) {
       toggleValue(cal.filters.eventKinds, eventKind);
-      // Narrowing to some event types turns Events off, so every pressed chip
-      // changes the list (Events would let every event through anyway).
-      if (cal.filters.eventKinds.length) cal.filters.kinds = cal.filters.kinds.filter((kind) => kind !== "event");
+      // K5-2 (Q3): an event type is a sub-filter of Events, so choosing one sets *Show only* to Events.
+      if (cal.filters.eventKinds.length) cal.filters.kinds = ["event"];
     }
     await typesChanged(cal, before, render);
     return true;
@@ -2242,7 +2292,18 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   if (type === "central-calendar-open-training-load") {
     const date = action.dataset.date;
     if (!isIsoDate(date)) return true;
-    await openTrainingLoad?.({ activityId: action.dataset.activityId || null, date });
+    // K5-1: the Roster button asks for the activity's Roster tab.
+    const tab = action.dataset.tab === "roster" && action.dataset.activityId ? "roster" : "";
+    await openTrainingLoad?.({ activityId: action.dataset.activityId || null, date, ...(tab ? { tab } : {}) });
+    return true;
+  }
+  // K5-1: an RPE request's schedule in Training Load › Schedule, and a test schedule's day in Tests.
+  if (type === "central-calendar-open-rpe-schedule" || type === "central-calendar-open-tests") {
+    const date = action.dataset.date;
+    const scheduleId = action.dataset.scheduleId || "";
+    if (!scheduleId || !isIsoDate(date)) return true;
+    const open = type === "central-calendar-open-tests" ? openTests : openTrainingLoadSchedule;
+    await open?.({ scheduleId, date });
     return true;
   }
   if (type === "central-calendar-open-athlete") {
