@@ -8736,6 +8736,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-batch-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .builder-batch-edit-actions button { min-height: 44px; padding-top: 8px; padding-bottom: 8px; line-height: 1.25; }
 .builder-batch-edit-actions .builder-batch-edit-primary { background: #287e77; border-color: #287e77; color: #fff; }
+.builder-sessions-locked { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid #f0c9a8; border-radius: 8px; background: #fff8f1; color: #344054; font-size: 14px; overflow-wrap: anywhere; }
+.builder-sessions-locked p { margin: 0; }
+.builder-sessions-locked-list { margin: 0; padding-left: 20px; display: grid; gap: 10px; }
+.builder-sessions-locked-item { display: grid; gap: 6px; }
+.builder-sessions-locked-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.builder-sessions-locked-actions button { min-height: 44px; padding-top: 8px; padding-bottom: 8px; line-height: 1.25; }
 .builder-batch-hidden { display: block; color: #667085; font-size: 12px; overflow-wrap: anywhere; }
 .builder-batch-hidden-alone { margin: 0; padding: 8px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; }
 .builder-batch-edit-note { margin: 0; padding: 10px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }

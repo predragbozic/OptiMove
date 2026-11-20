@@ -265,6 +265,9 @@ export const emptyBuilderState = (overrides = {}) => ({
   // docs/ai/builder-batch-edit-plan.md: Save of a reopened weekly batch member
   // asks who gets the changes. null | { stage: "scope" | "ask" | "unconfirmed" | "done", ... }
   batchEditChoice: null,
+  // Task 5 (docs/ai/builder-batch-edit-plan.md 12.3): a Save refused with
+  // 409 edit_sessions_locked. null | { sessions: [...] }
+  sessionsLocked: null,
   drafts: [],
   draftsLoading: false,
   openingDraftId: "",

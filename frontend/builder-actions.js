@@ -88,7 +88,10 @@ function setBuilderDraft(nextDraft, options = {}) {
   const previousBatch = previousDraft?.batch;
   const previousBatchId = getBuilderBatchId(previousDraft);
   // A batch-edit question belongs to the draft it was asked for.
-  if (String(previousDraft?.plan?.id || "") !== String(nextDraft?.plan?.id || "")) state.builder.batchEditChoice = null;
+  if (String(previousDraft?.plan?.id || "") !== String(nextDraft?.plan?.id || "")) {
+    state.builder.batchEditChoice = null;
+    state.builder.sessionsLocked = null;
+  }
   state.builder.draft = preserveBuilderItemEdits(nextDraft);
   if (
     options.preserveBatch !== false &&
@@ -1465,6 +1468,11 @@ export async function handleBuilderDraftAction(action, handlers) {
     handlers.renderBuilder();
     return true;
   }
+  if (type === "builder-sessions-locked-close") {
+    state.builder.sessionsLocked = null;
+    handlers.renderBuilder();
+    return true;
+  }
   if (type === "builder-batch-edit-done") {
     const plan = state.builder.draft?.plan;
     state.builder.clipboard = null;
@@ -1535,6 +1543,7 @@ export async function handleBuilderDraftAction(action, handlers) {
       // list (see loadBuilderDrafts) must never keep showing it once the
       // user next lands on that empty-state picker.
       invalidateBuilderDraftsCache();
+      state.builder.sessionsLocked = null;
       if (result?.deleted && result?.empty) {
         await exitBuilderToPlanContext(draft.plan, handlers);
         return true;
@@ -1558,6 +1567,16 @@ export async function handleBuilderDraftAction(action, handlers) {
       state.builder.batchEditChoice = null;
       await exitBuilderToPlanContext(result?.plan || draft.plan, handlers);
     } catch (error) {
+      // Task 5: nothing was saved; say which sessions block and the way out.
+      // The draft stays as it is (both Saves: this athlete and the group).
+      if (error?.status === 409 && error.data?.code === "edit_sessions_locked") {
+        state.builder.batchEditChoice = null;
+        state.builder.sessionsLocked = { sessions: Array.isArray(error.data.sessions) ? error.data.sessions : [] };
+        action.disabled = false;
+        action.innerHTML = originalHTML;
+        handlers.renderBuilder();
+        return true;
+      }
       if (batchExtra) {
         if (error?.status === 409 && error.data?.code === "batch_members_need_choice") {
           state.builder.batchEditChoice = { stage: "ask", data: error.data };
