@@ -221,3 +221,108 @@ Runbook `docs/runbooks/condition-match-v80.md`. Where the build departs from sec
 - **An event-setting confirmation holds per field revision and numbers, not per team**: a team whose own session carries
   the same threshold and duration matches without a confirmation of its own. It stays so for now (the Rukovodilac's note to
   the owner, 2026-11-19).
+
+## 10. Step C: the screen contract (Proposed, 2026-11-20; no code before the Rukovodilac's GO)
+
+Verified against `main` `8b3d9639`. Step C is frontend plus three small reads on the server (C0). There is no migration and
+no change to a write route, a lock or a right.
+
+**The gate stays closed until the owner has compared and confirmed.** A `details.players.*` event column matches nothing
+until two things are recorded, and every screen below says so in plain words:
+- the owner's comparison (route O) on one session: session 17.11, two athletes, against GPEXE;
+- the owner's confirmation of the setting GPEXE shows: 2.5 m/s² lasting 0.3 s.
+
+Until both exist, the server already refuses: route O's evidence is `not_compared`, and S1, A1 and the board save return
+`event_setting_not_confirmed`. The screen adds no gate of its own and never offers a step that the server would refuse.
+
+### C0. Reads the screen needs (server, no migration; code-reviewer + security-reviewer, ★)
+
+1. **`GET /fields/:fieldId` (Source fields detail): an `eventSetting` object**, present only for an events column with an event rule:
+   - `{ event, needed: true, compared, sessionSetting, confirmation }`;
+   - `compared`: whether route O's comparison is recorded on the active revision;
+   - `sessionSetting`: the compared session's `{ operator, value, durationSeconds }`, or null when that session is no
+     longer kept;
+   - `confirmation`: the newest row `{ thresholdValue, durationSeconds, confirmedAt }`, or null.
+
+   The audience is the field read's (platform admin, club admin). The numbers are GPEXE settings, not personal data, and
+   no user id is returned.
+2. **The board: per variable with a condition, `waitingFieldIds`.** These are the placeable columns whose match fails only
+   because of `event_setting_not_confirmed`. Today such a variable says "No column fills it yet", which hides the reason.
+3. **The preview's block `team_setting_changed` names both settings.** It carries `blocked.setting`:
+   `{ variableLabel, teamName, current, matched }`, both ranges as `{ operator, value, durationSeconds | min/max, unit }`.
+   It also carries the sentence of section 5 built on the server, so the coach and the administrator read the same words.
+   The ranges are team settings and carry no id; the coach's "no technical details" rule (J20-A2) is kept.
+
+### C1. Source fields: "Confirm GPEXE's setting" (platform admin, platform workspace only)
+
+On an events column's detail, the platform admin sees one block, **GPEXE's events setting**. Its state comes from
+`eventSetting`:
+
+| State | What the block says | Action |
+|---|---|---|
+| not compared | "Compare this value with GPEXE first (one session, two athletes). Until then it fills no variable with a condition." | link to Compare |
+| compared, session no longer kept | "The session you compared is no longer kept. Compare again first." | link to Compare |
+| compared, not confirmed | "In GPEXE, open the team's settings and enter the acceleration events threshold and duration it shows." | the form |
+| confirmed | "Confirmed: at or above 2.5 m/s² lasting 0.3 s (date)." No form. | none |
+
+- **The form:** two number fields with fixed units (`m/s²` and `s`), 16 px text, `inputmode="decimal"`. A comma is read as
+  a decimal point, and the value is sent as text. There is one primary button, **Confirm**. There is no default value:
+  the owner types what GPEXE shows and never copies what OptiMove shows, so the compared session's setting is **not**
+  shown before Confirm.
+- **The answers:**
+  - **201 or 200:** the "confirmed" state.
+  - **`setting_differs`:** the server's sentence (it names the session's setting). The fields stay filled, so a typing
+    error can be corrected.
+  - **`not_compared` / `session_not_kept`:** that state's sentence.
+  - **`try_again`:** "Nothing was saved. Try again."
+  - **`503 outcome_unknown`, a 5xx, or a lost answer:** "Result not confirmed" with **Check result**, which sends the same
+    `requestKey` and body; nothing is sent by itself.
+  - **`verified_after_commit_error`:** confirmed.
+  - **`request_key_reused`:** a new key on the next Confirm.
+
+  One write at a time.
+- **A club admin** sees the block read-only: the state words, no form.
+
+### C2. The board (club and platform): the matching drop and the refusals
+
+- **A variable with a condition:**
+  - with `matchingFieldIds`: the ordinary "Empty · drag a column here". While dragging, only the matching columns take
+    the drop: the others show no drop target, and a drop on them is refused locally with the server's message.
+  - with `waitingFieldIds` only: "Counts only events above 2.5 m/s² lasting 0.3 s. A column with this setting waits for
+    GPEXE's setting to be confirmed in Source fields." For a platform admin, this is a link to that column's Source fields
+    detail.
+  - with neither: step A's sentence, unchanged.
+- **A refused placement** (`team_setting_mismatch`) shows the server's `message` verbatim (section 5's sentence, naming
+  both settings). The other codes (`event_setting_not_confirmed`, `team_setting_missing`, `conversion_unavailable`) each
+  get one sentence from the server's text.
+- **S1 / A1 refusals** on the Mappings screen name the team, as the server's `current.bindingId` already allows.
+
+### C3. Imports: a session blocked by `team_setting_changed`
+
+- **The session row's reason** (coach and administrator alike) is section 5's sentence from `blocked.setting`: "First
+  team's acceleration setting in GPEXE changed to 2.5 m/s² lasting 0.5 s for this session; Accelerations counts those
+  lasting 0.3 s. Nothing of this session is imported. Set it back in GPEXE, or switch Accelerations off for First team."
+- **The row:** *Needs attention*, with no Approve and no *Update the review*. A new check after GPEXE is set back
+  re-reads the session.
+- **An administrator** also gets a link to Mappings, for switching the column off for the team.
+
+### C4. Tests and checks
+
+- **Backend (C0):** the three reads; the audience and the identical 404 for the field read; no id in `blocked.setting`.
+- **Frontend:**
+  - each state of C1 through the real handlers with a fake server: the comma, a lost answer and Check result with the
+    same key, `setting_differs` keeping the fields;
+  - the board's matching / waiting / neither;
+  - the Imports sentence.
+- **Mutations** on the form's key reuse and the drop filter.
+- **Browser QA** at 1280 / 390 / 360 px for C1 and C3, and the drag at 1280 px.
+- **The full `--preset frontend-fast`** on the head against main (the Frontend PR gate).
+- **Reviewers:** code-reviewer, mobile-qa and ux-design-reviewer, and security-reviewer for C0. No external trigger
+  applies: there is no write, right or migration change.
+
+### C5. Open, for the Rukovodilac
+
+1. Should the club admin see the C1 block at all (read-only), or only the board's "waits for confirmation" line?
+   Recommended: read-only, so the club knows why.
+2. Should the Imports reason also name the date from which GPEXE's setting changed? The thresholds read gives the set's
+   validity. Recommended: no, not now.
