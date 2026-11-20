@@ -1556,3 +1556,42 @@ test("V80-8. a variable whose stored condition is not an object (a raw or legacy
   const row = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board.variables.find((x) => x.id === odd.id);
   assert.deepEqual([row.condition?.kind, row.placeable, row.matchingFieldIds], ["unsupported", false, []]);
 });
+
+test("V80-9. the approve route (the Independent's LOW-3 on PR #659): a session previewed before a matched zone column was switched on, whose zone 3 is 25-65 W/kg, is refused at approval - the approval recomputes it to team_setting_changed (preview_changed), the next approval is refused as blocked, and nothing of it is imported", async () => {
+  const { enableTeamImportSwitch } = await import("./support/team-import-switch.mjs");
+  const { t, cand } = await plantedTeam();
+  // An ordinary mapping first, so the session has something to import.
+  const fTime = await field("time");
+  const vMin = await variable(W.caA, { unit: "min" });
+  ok(await save(W.caA, t, cand, [await newRow(W.caA, t, cand, fTime, vMin)]));
+  const changed = await candidate(t, { startedAt: "2026-09-15T18:08:12Z" });
+  await plantSession(changed, { thresholds: { power_thresholds: [20, 25, 65, 75] } });
+  const gpexe = async (path, body) => {
+    const res = await fetch(`${apiBase}/api/training-load/gpexe/teams/${t.teamId}/candidates/${changed.id}/${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Cookie: W.paA.cookie }, body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    return { status: res.status, body: JSON.parse(text), text };
+  };
+  const before = await gpexe("preview", {});
+  assert.equal(before.status, 200, before.text);
+  assert.notEqual(before.body.candidate.preview.blocked?.code, "team_setting_changed", "before the zone column, nothing to block");
+  const hashBefore = before.body.candidate.previewHash ?? before.body.candidate.preview_hash;
+  // The club's matched zone column switched on for the team (from the session it matches).
+  ok(await save(W.caA, t, cand, [await preplacedRow(W.caA, t, cand, V80.zone)]));
+  await enableTeamImportSwitch(k, t.teamId, W.pa.id);
+  const events = async () => Number((await one(`select count(*) as n from training_load.metric_events where owner_team_id = $1`, [t.teamId])).n);
+  const eventsBefore = await events();
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  try {
+    const first = await gpexe("approve", { previewHash: hashBefore });
+    assert.deepEqual([first.status, first.body.error], [409, "preview_changed"], first.text);
+    const stored = await one(`select status, preview -> 'blocked' ->> 'code' as code, preview_hash from training_load.gpexe_import_candidates where id = $1`, [changed.id]);
+    assert.equal(stored.code, "team_setting_changed", JSON.stringify(stored));
+    const second = await gpexe("approve", { previewHash: stored.preview_hash });
+    assert.deepEqual([second.status, second.body.error], [409, "blocked"], second.text);
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  assert.equal(await events(), eventsBefore, "nothing of the session is imported");
+});

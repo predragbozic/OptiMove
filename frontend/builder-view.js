@@ -1,3 +1,5 @@
+import { k3BlockInEvent } from "./central-calendar-k3-actions.js";
+import { renderK3BandHtml, renderK3DayMarkHtml, renderK3OutcomeHtml, renderK3SaveBarHtml, renderK3SavedHtml, renderK3SessionHtml, renderK3SessionNoteHtml } from "./central-calendar-k3-view.js";
 import {
   builderExerciseCountDots,
   builderIconGlyph,
@@ -93,15 +95,29 @@ function builderStructureContext() {
     builderNodePresets: state.builder.nodePresets || [],
     blockAddOpen: state.builder.blockAddOpen,
     sessionQuickAdd: state.builder.sessionQuickAdd,
-    // K2c-2-F: "Make an event" on a weekly session's row and its panel.
-    renderCalendarEventButton: (block, session) => renderBuilderCalendarEventButton({
+    // K2c-2-F: "Make an event" on a weekly session's row and its panel; not
+    // while the K3 band is shown (one way to an event at a time).
+    renderCalendarEventButton: (block, session) => (state.builder.k3 ? "" : renderBuilderCalendarEventButton({
       draft: state.builder.draft, block, session, workspaceType: builderCalendarEventWorkspaceType(),
       panel: state.builder.calendarEvent, made: state.builder.calendarEventsMade,
-    }),
-    renderCalendarEventPanel: (block, session) => renderBuilderCalendarEventPanel({
+    })),
+    renderCalendarEventPanel: (block, session) => (state.builder.k3 ? "" : renderBuilderCalendarEventPanel({
       session, block, panel: state.builder.calendarEvent, types: state.builder.calendarEvent?.types || [],
-    }),
+    })),
+    // K3: the event's day, each session's In / Not in this event, its note.
+    k3InEvent: (block) => k3BlockInEvent(state.builder.k3, block),
+    k3DayMark: (block) => (state.builder.k3 ? renderK3DayMarkHtml(state.builder.k3, block) : ""),
+    k3Session: (block, session) => (state.builder.k3 ? renderK3SessionHtml(state.builder.k3, block, session) : ""),
+    k3SessionNote: (block, session) => (state.builder.k3 ? renderK3SessionNoteHtml(state.builder.k3, block, session) : ""),
   };
+}
+
+// The members of a group the coach may not open are only a count from the
+// server (loadBuilderBatch's hiddenCount): said in one sentence, never drawn.
+export function renderBuilderBatchHiddenNote(hiddenCount) {
+  const n = Number(hiddenCount) || 0;
+  if (n < 1) return "";
+  return `<small class="builder-batch-hidden" data-builder-batch-hidden>${n} other athlete${n === 1 ? "" : "s"} in this group ${n === 1 ? "has a plan" : "have plans"} you can't open.</small>`;
 }
 
 export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
@@ -120,6 +136,7 @@ export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
         <p class="eyebrow">Group builder</p>
         <strong>${escapeHtml(current?.athleteName || current?.name || "Current copy")}</strong>
         <small>${currentIndex + 1} / ${batchPlans.length}</small>
+        ${renderBuilderBatchHiddenNote(state.builder.draft?.batch?.hiddenCount)}
         <small data-builder-batch-status role="status" aria-live="polite" hidden></small>
       </div>
       <div class="builder-batch-controls">
@@ -314,6 +331,19 @@ export function renderBuilder() {
   renderBuilderBatchSwitchProgress();
   renderBuilderDraftOpenProgress();
   if (state.builder.leaving) els.content.querySelector(".builder-workspace")?.setAttribute("inert", "");
+  syncK3StickyHeights();
+}
+
+// K3 (2.7): what the page scrolls to stops under the sticky band and above the
+// sticky Save and link bar, whatever their real height (a long title wraps).
+function syncK3StickyHeights() {
+  const root = globalThis.document?.documentElement;
+  if (!root?.style) return;
+  for (const [name, selector] of [["--k3-band-h", ".builder-workspace .k3-band"], ["--k3-save-h", ".k3-save-bar"]]) {
+    const el = els.content?.querySelector?.(selector);
+    if (el?.offsetHeight) root.style.setProperty(name, `${el.offsetHeight}px`);
+    else root.style.removeProperty(name);
+  }
 }
 
 export function renderBuilderDraftOpenProgress() {
@@ -528,7 +558,7 @@ function renderBuilderInner() {
   const draftBatchPlans = Array.isArray(draft?.batch?.plans) ? draft.batch.plans : [];
   els.context.textContent = "Program builder";
   els.title.textContent = draft
-    ? (draftBatchPlans.length > 1
+    ? (draftBatchPlans.length + (Number(draft?.batch?.hiddenCount) || 0) > 1
       ? "Group builder"
       : (draft.plan.athleteName || (draft.plan.isTemplate ? "Reusable template" : "Draft")))
     : "New program";
@@ -540,6 +570,12 @@ function renderBuilderInner() {
         ${renderBuilderEntryTiles()}
       </section>
     `;
+    return;
+  }
+  const k3 = state.builder.k3 || null;
+  // K3: after Save and link the draft is gone; the band and the outcome stay.
+  if (k3?.saved) {
+    els.content.innerHTML = renderK3SavedHtml(k3);
     return;
   }
   if (!draft) {
@@ -603,23 +639,30 @@ function renderBuilderInner() {
   // A reopened, published member of a group (an edit draft) is not in the
   // batch's list (loadBuilderBatch leaves edit drafts out), so no switcher is
   // drawn for it; say plainly that its changes reach this athlete only.
-  const isEditDraftOfBatch = isEditDraft && batchPlans.length > 1 && !hasBatch
+  // The group's size counts the members this coach may not open too (the
+  // server sends them only as hiddenCount).
+  const hiddenCount = Number(draft.batch?.hiddenCount) || 0;
+  const isEditDraftOfBatch = isEditDraft && batchPlans.length + hiddenCount > 1 && !hasBatch
     && batchPlans.some((plan) => String(plan.id) === String(draft.plan.editSourcePlanId || ""));
   els.content.innerHTML = `
-    <section class="content-section builder-workspace">
+    <section class="content-section builder-workspace${k3 ? " has-k3" : ""}">
+      ${k3 ? renderK3BandHtml(k3) : ""}
+      ${k3 ? renderK3OutcomeHtml(k3) : ""}
       <header class="builder-program-bar">
         <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}">${isWeekly ? "" : `<input name="coverImageUrl" type="url" class="builder-plan-cover-input" value="${escapeAttr(draft.plan.coverImageUrl || "")}" placeholder="Cover image URL (optional)" aria-label="Cover image URL">`}</form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions">
           <span class="item-badge builder-status-chip${isEditDraft || (draft.plan.status || "draft") === "draft" ? " is-draft" : ""}">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
           <button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="Exit" aria-description="Exit and keep this draft for later.">${ICON_DOOR_EXIT}</button>
           ${draft.plan.isTemplate && !isWeekly ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
-          ${draft.plan.status === "draft" ? `<button class="plain-button icon-button builder-finish-button" type="button" data-action="builder-submit-plan" aria-label="${saveLabel}" aria-description="${isEditDraft ? "Apply changes to the original plan." : "Save and finish — marks this plan as active."}">${ICON_CHECK}</button>` : `<span class="builder-finished-label">Saved</span>`}
+          ${draft.plan.status === "draft" && !k3 ? `<button class="plain-button icon-button builder-finish-button" type="button" data-action="builder-submit-plan" aria-label="${saveLabel}" aria-description="${isEditDraft ? "Apply changes to the original plan." : "Save and finish — marks this plan as active."}">${ICON_CHECK}</button>` : `<span class="builder-finished-label">Saved</span>`}
           ${draft.plan.status === "draft" ? `<button class="plain-button icon-button danger-action" type="button" data-action="builder-discard-current-draft" aria-label="Discard changes" aria-description="Discard all changes in this draft.">${ICON_X}</button>` : ""}
           <span class="builder-discard-status" data-builder-discard-status role="status" aria-live="polite" hidden></span>
         </div>
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
-      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex) : isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() : ""}
+      ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex)
+        : isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() + (hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : "")
+        : batchIndex >= 0 && hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type === "cross-plan-block" ? "block" : state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}
       ${isWeekly ? renderBuilderTrainingLoadSettings(draft) : ""}
       <div class="builder-layout">
@@ -644,6 +687,7 @@ function renderBuilderInner() {
             </div>`}
         </section>
       </div>
+      ${k3 ? renderK3SaveBarHtml(k3, draft) : ""}
       ${state.builder.structureModalOpen && selectedSession ? renderBuilderStructureModal(selectedSession, selectedNode, structureContext) : ""}
       ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(state, selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}

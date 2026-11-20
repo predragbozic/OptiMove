@@ -7,7 +7,9 @@ const entries = [];
 
 // Where the user is now: the tab, and on the central calendar its view, week,
 // day and open panel (by key, re-opened only when the item still exists).
-export function appHistoryEntryOf(state) {
+// K4a: `extra.athleteCalendar` is the athlete's Calendar's own place (its week,
+// day and scroll; athlete-calendar-data.js keeps that slice), given by the caller.
+export function appHistoryEntryOf(state, extra = {}) {
   const tab = String(state?.activeTab || "");
   const cal = state?.centralCalendar;
   const calendar = tab === "central-calendar" && cal
@@ -19,7 +21,8 @@ export function appHistoryEntryOf(state) {
       panelDate: cal.panel?.open ? String(cal.panel.date || "") : "",
     }
     : null;
-  return { tab, calendar };
+  const athleteCalendar = tab === "athlete-calendar" && extra.athleteCalendar ? { ...extra.athleteCalendar } : null;
+  return { tab, calendar, athleteCalendar };
 }
 
 export function pushAppHistoryEntry(entry) {
@@ -29,6 +32,11 @@ export function pushAppHistoryEntry(entry) {
 // The newest entry, or null when none is left (the root fallback then applies).
 export function popAppHistoryEntry() {
   return entries.length ? entries.pop() : null;
+}
+
+// The newest entry still on the stack (the step the user is on), or null.
+export function appHistoryTopEntry() {
+  return entries.length ? entries[entries.length - 1] : null;
 }
 
 export function appHistoryEntryCount() {

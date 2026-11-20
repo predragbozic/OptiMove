@@ -104,12 +104,14 @@ const ITEMS = [
   })),
 ];
 
+// `kinds` (FE-D16) answers only those kinds, as the real route does.
 function rangeAnswer(url, items = ITEMS, workspace = { type: "club", scopeId: CLUB }) {
   const params = new URL(url, "http://localhost").searchParams;
   const from = params.get("from");
   const to = params.get("to");
+  const kinds = params.get("kinds") ? params.get("kinds").split(",") : null;
   const days = [];
-  for (let cursor = from; cursor <= to; cursor = addDaysIso(cursor, 1)) days.push({ date: cursor, items: items.filter((item) => item.date === cursor).map((item) => (params.get("include") === "athletes" ? { ...item, athletes: [] } : { ...item })) });
+  for (let cursor = from; cursor <= to; cursor = addDaysIso(cursor, 1)) days.push({ date: cursor, items: items.filter((item) => item.date === cursor && (!kinds || kinds.includes(item.kind))).map((item) => (params.get("include") === "athletes" ? { ...item, athletes: [] } : { ...item })) });
   return { from, to, today: params.get("today"), workspace, teams: workspace.type === "private_coach" ? [] : TEAMS, days };
 }
 
@@ -1418,4 +1420,41 @@ test("11k. HIGH-1: a late answer that does not settle (no answer, 503 outcome_un
     await act({ action: "central-calendar-new-event" });
     assert.equal(state.centralCalendar.form.pending, true);
   }
+});
+
+// --- FE-D16 follow-ups (central-calendar-k2b2-plan.md 9.4): the types filter with a form ------------------------------
+
+// An RPE request of its own (not folded) on the match's day, so "RPE requests" alone has a card to show.
+const OWN_RPE = baseItem({ key: `external:sch-own:${DAY(1)}`, kind: "external", date: DAY(1), title: "RPE after the match", eventType: "match", startTime: "17:00", teamIds: [U17], athleteCount: 18, expects: ["rpe"], status: "awaiting_entry", rpe: { asked: 18, submitted: 2 }, links: { activityIds: [], externalScheduleId: "sch-own", externalOccurrenceId: "occ-own" } });
+
+test("FE-D16g. a types change never closes a panel over an open form, the first time and from the cache: the edit form stays, with its panel and no notice", async () => {
+  const calls = await openEdit({ items: [...ITEMS, OWN_RPE] });
+  const cal = state.centralCalendar;
+  assert.equal(cal.form?.mode, "edit");
+  for (const round of ["read", "cached"]) {
+    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+    assert.ok(rangeReads(calls).some((call) => call.url.includes("kinds=external")), `${round}: the kinds read ran`);
+    assert.deepEqual({ open: cal.panel.open, key: cal.panel.key }, { open: true, key: `event:${E_MATCH}:${DAY(1)}` }, `${round}: the match's card is hidden, but its form is open`);
+    assert.equal(cal.form?.mode, "edit", `${round}: the form and what was typed in it stay`);
+    assert.equal(cal.notice, "", round);
+    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  }
+  assert.equal(rangeReads(calls).filter((call) => call.url.includes("kinds=external")).length, 1, "the second round came from the cache");
+});
+
+// KNOWN LIMIT 1 of FE-D16 (plan 9.4): kinds mode shows a panel only for a card it shows, so an event created while only
+// "RPE requests" is chosen gets its "created" line but no open panel. This test pins today's behaviour; a later fix
+// (the panel of a just-saved item opened from the unfiltered answer) changes it on purpose.
+test("FE-D16h. known limit: an event created while only RPE requests is chosen says it was created; its panel does not open", async () => {
+  state.centralCalendar.selectedDate = DAY(2);
+  state.centralCalendar.filters.kinds = ["external"];
+  const calls = await openCreate({ items: [...ITEMS, OWN_RPE] });
+  fillValid();
+  await submitCentralCalendarEventForm({ render });
+  const cal = state.centralCalendar;
+  assert.equal(writesOf(calls).length, 1);
+  assert.ok(rangeReads(calls).some((call) => call.url.includes("kinds=external")), "the reload read the chosen kinds");
+  assert.equal(cal.form, null);
+  assert.equal(cal.notice, "“Training” was created.", "never \"no longer on this day\": the item was saved");
+  assert.equal(cal.panel.open, false, "its card is filtered out, so its panel does not open (the known limit)");
 });

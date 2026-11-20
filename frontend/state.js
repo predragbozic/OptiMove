@@ -344,6 +344,9 @@ export const emptyBuilderState = (overrides = {}) => ({
   // "In calendar" badge; never stored).
   calendarEvent: null,
   calendarEventsMade: [],
+  // K3 (2.3): the event this Builder plans for, with its band
+  // (central-calendar-k3-actions.js); null otherwise.
+  k3: null,
   ...overrides,
 });
 
@@ -685,6 +688,15 @@ export const emptyRpeForm = (overrides = {}) => ({
   saving: false,
   error: "",
   savedFeedback: null,
+  // K4b: "submit" (the first answer) or "change" (the athlete changes her
+  // own external answer while the question is open; rpe-answer-change.js).
+  mode: "submit",
+  original: null,
+  expectedRevision: null,
+  closesAt: "",
+  requestKey: "",
+  unconfirmed: false,
+  locked: false,
   ...overrides,
 });
 

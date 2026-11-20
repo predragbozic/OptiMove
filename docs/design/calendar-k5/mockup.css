@@ -1,0 +1,311 @@
+/* Calendar K5 design mockups — NOT app code. The K4 mockup base (docs/design/calendar-k4/mockup.css,
+   copied unchanged so this folder stands alone) plus the K5 pieces at the end (k5- prefix).
+   Loaded after ../../../frontend/styles.css. Invented data only. */
+
+body.k4-doc {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ---- The page frame: the step labels between screens. ---- */
+.k4-step {
+  margin: 0;
+  padding: 10px 16px;
+  background: #20242a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: .02em;
+}
+.k4-step small { font-weight: 500; opacity: .8; margin-left: 6px; }
+
+/* ---- A trimmed copy of the app shell. ---- */
+.k4-shell { display: grid; grid-template-columns: 72px minmax(0, 1fr); min-height: 640px; }
+.k4-rail { background: #101820; display: grid; align-content: start; gap: 8px; padding: 12px 10px; }
+.k4-rail span { display: grid; place-items: center; width: 52px; height: 44px; border-radius: var(--radius); color: #c9d1dc; }
+.k4-rail span.on { background: var(--accent); color: #fff; }
+.k4-rail svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.k4-main { min-width: 0; padding: 20px 28px 32px; }
+.k4-topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.k4-topbar .eyebrow { margin: 0; color: var(--muted); font-size: 12px; font-weight: 750; text-transform: uppercase; }
+.k4-topbar h1 { margin: 0; font-size: 24px; }
+.k4-menu { display: none; }
+
+/* ---- Generic small pieces. ---- */
+.k4-icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.k4-tint { color: var(--k4-c, var(--accent)); }
+.k4-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.k4-spacer { flex: 1; }
+.k4-btn { white-space: nowrap; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.k4-muted { color: var(--muted); }
+.k4-note { margin: 0; color: var(--muted); font-size: 14px; }
+.k4-strong { font-weight: 800; }
+.k4-callout { position: relative; outline: 3px dashed #e0605f; outline-offset: 3px; border-radius: var(--radius); }
+.k4-callout::after { content: attr(data-callout); position: absolute; right: -6px; top: -14px; padding: 1px 8px; border-radius: 999px; background: #e0605f; color: #fff; font-size: 11px; font-weight: 800; white-space: nowrap; }
+
+/* ---- The coach's calendar (week + panel). ---- */
+.k4-cal { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 14px; align-items: start; }
+.k4-cal .cc-week { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.k4-cal .cc-panel { position: static; }
+.k4-cal .cc-week .cc-card-title { overflow-wrap: normal; word-break: normal; hyphens: auto; font-size: 14px; }
+.k4-cal .cc-week .cc-day-column { padding: 6px; }
+.k4-cal .cc-week { gap: 6px; }
+.k4-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.k4-nav .k4-period { font-weight: 800; font-size: 17px; margin-right: 8px; }
+
+/* ---- The band (K3 and K2c-3: where the coach came from, and one way back). ---- */
+.k4-band {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 14px;
+  padding: 10px 12px 10px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgba(22, 34, 45, .06);
+}
+.k4-band-bar { align-self: stretch; border-radius: var(--radius) 0 0 var(--radius); background: var(--k4-c, var(--accent)); }
+.k4-band-title { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 800; }
+.k4-band-meta { color: var(--muted); font-weight: 600; }
+.k4-band-line { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.k4-band.k4-band-form { background: #fbf6e9; border-color: #ecdcae; }
+
+/* ---- The Builder (approximation of builder-structure.js; the code keeps its own markup). ---- */
+.k4-plan-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.k4-plan-head h2 { margin: 0; font-size: 20px; }
+.k4-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px; border-radius: 999px; background: var(--surface-soft); border: 1px solid var(--line); font-size: 13px; font-weight: 700; }
+.k4-day { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); margin-bottom: 12px; }
+.k4-day.is-event { border-color: var(--k4-c); box-shadow: inset 4px 0 0 var(--k4-c); }
+.k4-day-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.k4-day-name { font-weight: 800; letter-spacing: .03em; text-transform: uppercase; font-size: 14px; }
+.k4-day-tag { padding: 2px 8px; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 12px; font-weight: 800; }
+.k4-day-dim { opacity: .55; }
+.k4-events-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+.k4-events-label { font-size: 13px; font-weight: 800; color: var(--muted); }
+.k4-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 0; overflow: hidden;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 700; text-align: left;
+}
+.k4-chip-bar { align-self: stretch; width: 5px; background: var(--k4-c, var(--accent)); }
+.k4-chip .k4-chip-meta { color: var(--muted); font-weight: 600; }
+.k4-chip.is-locked { background: var(--surface-soft); border-style: dashed; }
+.k4-wholeday { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.k4-wholeday label { font-size: 14px; font-weight: 800; }
+
+.k4-session { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.k4-session:last-child { border-bottom: 0; }
+.k4-session-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.k4-slot { padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 800; white-space: nowrap; }
+.k4-slot.k4-ampm { background: var(--surface-soft); color: var(--muted); }
+.k4-session-name { font-weight: 800; }
+.k4-session-time { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.k4-session-body { color: var(--muted); font-size: 14px; }
+
+/* The "In this event" toggle (K3). */
+.k4-in {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--k4-c); background: color-mix(in srgb, var(--k4-c) 10%, white); color: var(--text); font: inherit; font-size: 14px; font-weight: 800;
+}
+.k4-in .k4-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--k4-c); }
+.k4-in.is-out { border-color: var(--line-strong); background: var(--surface-soft); color: var(--muted); }
+.k4-in.is-out .k4-dot { background: transparent; border: 2px solid var(--muted); width: 8px; height: 8px; }
+.k4-link { background: none; border: 0; padding: 0 4px; min-height: 44px; color: var(--accent); font: inherit; font-weight: 800; text-decoration: underline; }
+
+/* The Event selector (K2c-3). */
+.k4-select-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.k4-select-wrap label { font-size: 14px; font-weight: 800; }
+.k4-select {
+  min-height: 44px; min-width: 200px; padding: 0 36px 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 9l6 6 6-6' fill='none' stroke='%23667085' stroke-width='2'/%3E%3C/svg%3E") no-repeat right 10px center / 18px;
+  font: inherit; font-size: 16px; color: var(--text); appearance: none;
+}
+.k4-select.is-linked { border-color: var(--k4-c); box-shadow: inset 4px 0 0 var(--k4-c); }
+
+/* The open list, drawn for the review (a native select on the device). */
+.k4-list { margin: 0; padding: 6px; list-style: none; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); max-width: 420px; }
+.k4-list li { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 10px; border-radius: 6px; font-weight: 700; }
+.k4-list li.is-on { background: var(--accent-soft); }
+.k4-list li.is-off { color: var(--muted); }
+.k4-list li small { display: block; font-weight: 500; color: var(--muted); }
+
+/* A state line: glyph + words + colour, never colour alone. */
+.k4-warn { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; padding: 8px 10px; border-radius: var(--radius); background: #fbefd9; color: #6d4103; font-size: 14px; font-weight: 700; }
+.k4-ok { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; padding: 10px 12px; border-radius: var(--radius); background: #e4f3e6; color: #1f5a28; font-size: 15px; font-weight: 700; }
+
+/* The Builder's bottom bar. */
+.k4-savebar { position: static; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 -6px 16px rgba(22, 34, 45, .06); }
+
+/* Sheets and dialogs (the calendar's sheet pattern). */
+.k4-sheet { max-width: 520px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); display: grid; gap: 12px; }
+.k4-sheet h3 { margin: 0; font-size: 18px; }
+.k4-sheet p { margin: 0; }
+.k4-backdrop { padding: 24px; background: rgba(16, 24, 32, .45); border-radius: var(--radius); display: grid; place-items: center; }
+
+/* ---- The athlete's Calendar (K4a). ---- */
+.k4-ath-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.k4-ath-tabs span { min-height: 40px; display: inline-flex; align-items: center; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-weight: 800; font-size: 14px; }
+.k4-ath-tabs span.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.k4-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: 12px; }
+.k4-strip button { min-height: 56px; display: grid; place-items: center; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font: inherit; padding: 4px 0; }
+.k4-strip button small { font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase; }
+.k4-strip button b { font-size: 17px; }
+.k4-strip button i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.k4-strip button.is-today { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+.k4-strip button.is-on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.k4-strip button.is-on small { color: #dff; }
+.k4-strip button.is-on i { background: #fff; }
+.k4-days { display: grid; gap: 14px; }
+.k4-day-label { margin: 0 0 6px; font-size: 13px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.k4-day-label b { color: var(--text); }
+.k4-acard { display: grid; grid-template-columns: 5px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.k4-acard + .k4-acard { margin-top: 8px; }
+.k4-acard-bar { background: var(--k4-c, var(--accent)); }
+.k4-acard-body { display: grid; gap: 6px; padding: 12px 14px; min-width: 0; }
+.k4-acard-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; color: var(--muted); }
+.k4-acard-top .k4-when { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+.k4-acard-title { margin: 0; font-weight: 800; font-size: 16px; overflow-wrap: anywhere; }
+.k4-acard-place { margin: 0; color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.k4-acard-place a { color: var(--accent); font-weight: 800; }
+.k4-acard-sessions { margin: 2px 0 0; padding: 8px 10px; list-style: none; border-radius: var(--radius); background: var(--surface-soft); display: grid; gap: 4px; font-size: 14px; }
+.k4-acard-sessions li { display: flex; gap: 8px; align-items: baseline; }
+.k4-acard-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.k4-acard.is-cancelled .k4-acard-title { color: var(--muted); text-decoration: line-through; }
+.k4-acard.is-cancelled .k4-acard-bar { background: var(--line-strong); }
+.k4-rpe-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; padding: 8px 10px; border-radius: var(--radius); background: #e4f3e6; color: #1f5a28; font-weight: 800; font-size: 14px; }
+.k4-rpe-line.is-closed { background: var(--surface-soft); color: var(--muted); }
+.k4-backbar { flex-wrap: wrap; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+
+/* The RPE form. */
+.k4-rpe-scale { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 4px; }
+.k4-rpe-scale button { min-height: 48px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); font: inherit; font-weight: 800; font-size: 16px; }
+.k4-rpe-scale button.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.k4-rpe-word { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; font-weight: 700; }
+.k4-field { display: grid; gap: 6px; }
+.k4-field span { font-weight: 800; font-size: 14px; }
+.k4-field input, .k4-field textarea { min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); font: inherit; font-size: 16px; }
+.k4-field input[readonly] { background: var(--surface-soft); color: var(--muted); }
+
+/* ---- The coach's event panel: answers (package 5). ---- */
+.k4-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.k4-sum div { padding: 10px; border-radius: var(--radius); background: var(--surface-soft); }
+.k4-sum b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.k4-sum small { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+.k4-answers { margin: 0; padding: 0; list-style: none; display: grid; }
+.k4-answers li { display: grid; grid-template-columns: minmax(0, 1fr) 54px 64px; gap: 8px; align-items: center; min-height: 44px; padding: 6px 4px; border-top: 1px solid var(--line); font-size: 14px; }
+.k4-answers li.k4-answers-head { min-height: 0; padding: 4px; border-top: 0; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.k4-answers .k4-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; }
+.k4-answers .k4-who { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.k4-answers .k4-who a { color: var(--text); font-weight: 700; text-decoration: none; }
+.k4-changed { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 10px; background: var(--cc-awaiting-soft, #fbefd9); color: var(--cc-awaiting, #9a5b05); font-size: 11px; font-weight: 800; }
+.k4-waiting { color: var(--muted); }
+.k4-history { margin: 0; padding: 8px 10px; border-left: 3px solid #e0b25a; background: #fffaf0; font-size: 13px; color: var(--muted); }
+
+/* ---- Phone (≤ 760 px, as the app). ---- */
+@media (max-width: 760px) {
+  .k4-shell { grid-template-columns: 1fr; }
+  .k4-rail { display: none; }
+  .k4-main { padding: 12px 16px 24px; }
+  .k4-topbar h1 { font-size: 20px; }
+  .k4-menu { display: inline-grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .k4-cal { grid-template-columns: 1fr; }
+  .k4-cal .cc-week { display: none; }
+  .k4-cal-list { display: grid !important; gap: 10px; }
+  .k4-band { grid-template-columns: 6px minmax(0, 1fr); position: sticky; top: 0; z-index: 5; }
+  .k4-band > .k4-band-back { grid-column: 2; justify-self: stretch; width: 100%; }
+  .k4-session-top .k4-spacer { display: none; }
+  .k4-select-wrap { width: 100%; display: grid; gap: 4px; }
+  .k4-select { width: 100%; min-width: 0; }
+  .k4-events-row .k4-create { width: 100%; }
+  .k4-savebar .plain-button { flex: 1 1 100%; }
+  .k4-sheet { max-width: none; border-radius: 16px 16px 0 0; }
+  .k4-backdrop { padding: 60px 0 0; place-items: end stretch; }
+  .k4-answers li { grid-template-columns: minmax(0, 1fr) 44px 56px; }
+  .k4-rpe-scale { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .k4-hide-phone { display: none !important; }
+}
+@media (min-width: 761px) {
+  .k4-cal-list { display: none !important; }
+  .k4-hide-desk { display: none !important; }
+}
+
+/* =================== K5 additions =================== */
+
+/* "Go there": the one button of a panel that leads to the work. */
+.k5-go { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.k5-go .cc-primary { justify-self: stretch; }
+.k5-panels { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; align-items: start; }
+
+/* A small mark: an item that is in no event, as a chip under its day. */
+.k5-marks { display: flex; flex-wrap: wrap; gap: 6px; }
+.k5-mark {
+  display: inline-flex; align-items: center; gap: 5px; min-height: 32px; max-width: 100%; padding: 0 9px 0 7px;
+  border: 1px solid var(--line-strong); border-left: 3px solid var(--k5-c, var(--muted)); border-radius: 999px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 12px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.k5-mark svg { width: 15px; height: 15px; flex: none; color: var(--k5-c, var(--muted)); }
+.k5-mark.is-waiting { border-style: dashed; background: #fbefd9; color: #6d4103; }
+/* Touch: the 32 px chip keeps a 44 px hit area through its padding box on a phone. */
+@media (max-width: 760px) { .k5-mark { min-height: 44px; font-size: 13px; } }
+
+/* The GPS mark on an event card. */
+.k5-gps { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 10px; background: #e6eefb; color: #2c4f8f; font-size: 11px; font-weight: 800; }
+.k5-gps svg { width: 13px; height: 13px; }
+
+/* The day mark "GPS sessions to review". */
+.k5-daymark { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 44px; padding: 4px 8px; border: 1px dashed #c9a35a; border-radius: var(--radius); background: #fff7e8; color: #6d4103; font: inherit; font-size: 12px; font-weight: 800; text-align: left; }
+.k5-daymark svg { width: 16px; height: 16px; flex: none; }
+
+/* The suggestion "Add to ‘Training 10:00’?". */
+.k5-suggest { display: grid; gap: 8px; padding: 10px 12px; border-radius: var(--radius); background: var(--accent-soft); border: 1px solid #bfe0da; }
+.k5-suggest p { margin: 0; font-weight: 800; }
+.k5-suggest small { color: var(--muted); font-weight: 600; }
+
+/* Month cell. */
+.k5-month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.k5-month > div { min-height: 104px; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); display: grid; align-content: start; gap: 4px; min-width: 0; }
+.k5-month b { font-size: 13px; }
+.k5-month .cc-mini-line { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 750; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.k5-month .cc-mini-line i { width: 7px; height: 7px; border-radius: 50%; background: var(--k5-c); flex: none; }
+.k5-month .k5-more { font-size: 11px; color: var(--muted); font-weight: 800; }
+.k5-month svg { width: 13px; height: 13px; flex: none; color: var(--k5-c); }
+
+@media (max-width: 760px) {
+  .k5-panels { grid-template-columns: 1fr; }
+  .k5-month > div { min-height: 64px; padding: 4px; }
+  .k5-month .cc-mini-line span, .k5-month .k5-more { display: none; }
+  .k5-month .cc-mini-line { justify-content: center; }
+}
+.k5-month > * { min-width: 0; }
+@media (max-width: 760px) {
+  .k5-month { gap: 2px; }
+  .k5-month > div { padding: 3px; }
+  .k5-month > p { font-size: 10px; letter-spacing: 0; }
+  .k5-month .cc-mini-line { flex-wrap: wrap; }
+}
+
+/* H3: "Show only" — one tap shows only that kind (a radio row). */
+.k5-quick { display: flex; gap: 6px; overflow-x: auto; padding: 2px 2px 6px; margin-bottom: 8px; scrollbar-width: thin; }
+.k5-q { display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; font-weight: 750; white-space: nowrap; }
+.k5-q svg { width: 16px; height: 16px; }
+.k5-q-gps svg { color: #2c5aa0; }
+.k5-q.is-on { border-color: var(--accent); background: var(--accent); color: #fff; }
+.k5-q.is-on svg { color: #fff; }
+.k5-q.is-on .cc-chip-count { background: rgba(255,255,255,.2); color: #fff; }
+.k5-more-filters { margin-bottom: 10px; }
+.k5-more-filters summary { display: inline-flex; list-style: none; cursor: pointer; }
+.k5-more-filters .cc-chip-row { margin-top: 8px; }
+.k5-filter-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; padding: 6px 10px; border-radius: var(--radius); background: var(--accent-soft); color: var(--text); font-size: 14px; }
+.k5-filter-status svg { width: 16px; height: 16px; color: #2c5aa0; }
+.k4-nav { flex-wrap: wrap; }
+.k5-mark svg, .k5-gps svg, .k5-daymark svg, .k5-q svg, .k5-filter-status svg, .k5-month svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.k5-filter-status .k4-link { min-height: 32px; }
+.k5-gps { white-space: nowrap; }
+
+/* H4: what an event holds — one small icon per kind (RPE, GPS, test), a mark only. */
+.k5-holds { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.k5-holds svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
