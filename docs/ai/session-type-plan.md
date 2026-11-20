@@ -1,235 +1,345 @@
-# OptiMove decides the session type, not the source (plan)
+# OptiMove decides the session type, not the source; manual values on the roster (plan)
 
-Status: **Proposed** (2026-11-20). This is a plan only: no code and no migration file until the owner accepts it. The
-migration number comes from the *Rukovodilac*.
+Status: **Proposed** (2026-11-20, second head). This is a plan only: no code and no migration file until the owner
+accepts it. Migration numbers come from the *Rukovodilac*.
 Last verified against commit: `d3b5f50b` (`origin/main`, merge of PR #693).
-Level: risky. It changes what an import writes (the activity's type) and needs a migration, so it goes through the
-*Nezavisni revizor* and the *Rukovodilac*'s full gate (triggers 1 and 3 of `CLAUDE.md`; trigger 4 for the approval's
-transaction).
+Level: risky. It changes what an import writes and what a coach may write on a session, it needs migrations, and it
+touches the approval's transaction. So it goes through the *Nezavisni revizor* and the *Rukovodilac*'s full gate
+(triggers 1, 2, 3 and 4 of `CLAUDE.md`).
 
 ## 0. The owner's words (relayed by the *Rukovodilac*, 2026-11-20)
 
-- The types: "Full training, game, friendly game, exercise, compensation, RTP".
+- Types: "Full training, game, friendly game, exercise, compensation, RTP".
 - "A friendly is not added to the average of normal matches, but matches may count toward friendlies; if that is a
   problem, only sessions with the same name."
+- "cele sesije su to, samo njihov naziv, inače mi možemo dodati i neki drugi naziv kasnije, treba imati to negde u tag
+  i presets-u. Mogu i posle uvoza da menjam. Ako je u generalnom kalendaru podešeno može da se povuče ili odmah po
+  uvozu da izaberem koji tip treninga. S tim što u rosteru ili negde drugo mogu i da promenim tip sesije ili čak nekom
+  igraču ne svima, znači mogu i po igraču da promenim. Na primer uvezao sam ih sve ali neki igrač nije bio u ful
+  treningu već je radio nešto sa strane... pa njemu svakako ide druga vrsta sesije."
+- On manual values (relayed): "na ekranu danas postoji samo procena". The owner also wants:
+  - **manual entry**: an athlete without a device, whose numbers the coach types in;
+  - **manual correction** of a measured value: the measured value is not deleted; the correction counts and is marked
+    as manual, with who and when.
+- On re-import, word for word: "kada ponovo uvozim sesiju dobijam pitanje da li želim da ostanu moji podaci koji su
+  upisani".
+- Context: the owner plans to delete all 15 imported sessions through the app and import them again. So no backfill of
+  mapped or calculated values is planned.
 
 ## 1. What the code does today (checked on `d3b5f50b`)
 
 | Fact | Where |
 |---|---|
-| The activity's type is a row of the catalog `training.activity_types` (`key`, `label`, `is_active`); seeded with `training_session`, `match`, `testing_session`, `recovery_session`. The table's own comment: a new type is an INSERT, never a schema change. | `migrations_v2/202609071000_training_activity_v1_core_tables.sql:39-49` |
-| `training.activities.activity_type_key` references it and may be null. | same file, `:89` |
-| On a `confirmed` or `superseded` activity the type is immutable, except through `training.correct_confirmed_activity_fields(...)`, which locks the row and writes a before/after row to `training.activity_field_correction_log` (who, why). No route calls it today. | same file, `:167-182`, `:258-290` |
-| The GPEXE mapper turns the source's category into the type with one fixed pair: `FULL TRAINING` -> `training_session`. Any other category throws `unsupported_category`, so the whole session is blocked at the check (shown as `unsupported_session_type`). | `backend/src/gpexeImportMapper.js:49`, `:368-369`; `backend/src/gpexeImportReasons.js:63` |
-| The writer passes that key to `training.materialize_activity_group_from_metric_event`. | `backend/src/gpexeImportWriter.js:757` |
-| The preview's session summary carries the source's `categoryName`, not the OptiMove type; the preview hash covers the summary. | `backend/src/gpexeImportPreview.js:268-280`, `:354` |
-| An import never links a calendar event: `calendar.event_activity_links` rows are written by hand (K2a-1b, K5-3 *Add to the event?*). | `backend/src/calendarEventService.js:1794`; no writer in `gpexeImport*.js` |
-| Calendar event types are per club, with a write-once `kind` in (`training`, `match`, `travel`, `meeting`, `day_off`, `camp`, `test`); the system seed has one row per kind. | `migrations_v2/202610311000_calendar_v49_events.sql:98-133`, `:864-871` |
-| The estimate's Own average reads only sessions whose activity has the SAME `activity_type_key` as the target. The D7 match rule is not built. | `backend/src/metricEstimateService.js:255-272` |
+| The activity's type is a row of `training.activity_types` (`key` PK, `label`, `is_active`). It is global, with no owner, and seeded with `training_session`, `match`, `testing_session`, `recovery_session`. Its own comment: a new type is an INSERT, not a schema change. No route writes it. | `migrations_v2/202609071000_training_activity_v1_core_tables.sql:39-49` |
+| `training.activities.activity_type_key` references it and may be null. On a `confirmed` or `superseded` activity it changes only through `training.correct_confirmed_activity_fields(...)`, which locks the row and writes a before/after row to `training.activity_field_correction_log` (who, why). No route calls it. | same file, `:89`, `:167-182`, `:258-290` |
+| `training.activity_participants` (one row per athlete and activity) has no type column. | same file, `:305-334` |
+| The GPEXE mapper turns the category into the type with one pair, `FULL TRAINING` -> `training_session`. Any other category throws `unsupported_category`, which blocks the session at the check. | `backend/src/gpexeImportMapper.js:49`, `:368-369`; `backend/src/gpexeImportReasons.js:63` |
+| The preview's session summary carries the source `categoryName`; the preview hash covers the summary. | `backend/src/gpexeImportPreview.js:268-280`, `:354` |
+| An import never links a calendar event; `calendar.event_activity_links` rows are written by hand (K2a-1b, K5-3). | `backend/src/calendarEventService.js:1794` |
+| Calendar event types are per club, with a write-once `kind` (`training`, `match`, `travel`, `meeting`, `day_off`, `camp`, `test`). | `migrations_v2/202610311000_calendar_v49_events.sql:98-133`, `:864-871` |
+| Settings → *Tags & Presets* edits the builder's taxonomy (`library.node_presets`, template tags, `api/taxonomy/*`). It holds nothing about sessions. | `backend/src/routes/taxonomy.js`, `frontend/taxonomy-actions.js` |
+| The estimate methods are `proportional` (Own average), `copy_athlete`, `team_average` and `scale_recording`. Own average reads only sessions whose activity has the same `activity_type_key` as the target's. D7 is not built. | `backend/src/metricEstimateService.js:34`, `:255-272` |
+| Manual values already exist in the backend. An occasion's `entry_method` takes `manual`, `api_import`, `csv_import` and `estimate`. `POST /api/training-load/metrics/occasions/imported-correction` corrects an imported value manually: the imported occasion is kept as superseded, the identity's current occasion becomes the manual one. `POST …/occasions/:id/correct` corrects a manual one. Neither route has a screen on the roster. | `migrations_v2/202611121000_training_load_v63_metric_value_estimates.sql:90-91`; `backend/src/trainingLoadMetricsMeasurements.js:713-790`; `backend/src/routes/trainingLoadMetrics.js:558-590` |
+| On a re-import the writer never replaces a manual current occasion. It records the source's value as `stale_resend_ignored`, flagged in `changesToImported`, and the review asks for *accept changes*. | `backend/src/gpexeImportWriter.js:58-66`, `:584-590` |
+| The undo (v57, v76) refuses a session that holds any manual occasion (`manual_occasion`). | `migrations_v2/202611051000_training_load_v57_session_undo.sql:306`, `:550-551` |
 
-## 2. One type list (no parallel registry)
+## 2. The list of types: editable, one registry
 
-The list stays `training.activity_types`. The owner's six names map to it like this:
+**One registry.** The list stays `training.activity_types`. There is no parallel table, and the Tags & Presets tables
+are the builder's and are not used for it. The screen lives in Settings → **Tags & Presets**, as a new section
+*Session types*, because that is where the owner looks for it.
 
-| Owner's word | Key | Today |
-|---|---|---|
-| Full training | `training_session` (label stays "Training session", or renamed "Full training" by the owner) | exists |
-| Game | `match` | exists |
-| Friendly game | `friendly_match` | new row |
-| Exercise | `exercise_session` | new row (see question Q1) |
-| Compensation | `compensation_session` | new row |
-| RTP | `rtp_session` (label "Return to play") | new row |
+**Ownership.**
+- **System types** are offered to every club. The platform admin edits them. Six are seeded, named as the owner named
+  them:
 
-- `testing_session` and `recovery_session` stay in the catalog for activities that already use them. They are not
-  offered for a GPS session unless the owner wants them.
-- **Rows on production need a migration file.** The rows are data, not schema, but nothing writes to production
-  except through the migration runner, so the four rows come in the same migration as section 7.
+  | Key | Label |
+  |---|---|
+  | `training_session` | Full training (renamed from "Training session") |
+  | `match` | Game |
+  | `friendly_match` | Friendly game |
+  | `exercise_session` | Exercise |
+  | `compensation_session` | Compensation |
+  | `rtp_session` | RTP |
 
-**Calendar fit.** A calendar event's `kind` is coarser than this list (`match` covers both a game and a friendly).
-Recommended: a nullable `activity_type_key` on `calendar.event_types`, which references `training.activity_types`. The
-system rows are seeded (`training` -> `training_session`, `match` -> `match`, `test` -> `testing_session`), and a club
-may add its own "Friendly" type that points at `friendly_match`. That table belongs to the calendar stream, so this
-column goes in only with that stream's agreement. Until then, rule (a) of section 3 uses the kind alone.
+  `testing_session` and `recovery_session` stay for the activities that already use them. They are archived from the
+  pickers unless the owner wants them.
+- **Club types** are added by the club's admin, for that club's teams only.
+- No team level: a coach chooses among the system types and the club's types. A coach of a team asks the club's admin
+  for a new name, as with the calendar's event types.
 
-## 3. Where the type comes from
+**Identity is not the name.**
+- The `key` is the identity. It is permanent, and every activity and override points at it. A club type's key is
+  generated (`c_<8 hex>_<slug>`), so it never collides across clubs.
+- *Rename* changes only `label`. Every session, past ones included, shows the new name at once, because nothing
+  stores the label. Each rename writes a row to a new log table (who, when, old and new label).
+- *Archive* sets `is_active = false` with who and when. The type is no longer offered for a new choice. Sessions that
+  have it keep it and show "<label> (archived)". Own average and D7 keep treating it as its own type. It can be
+  restored.
+- No delete: the foreign keys forbid it once a type is in use.
+
+## 3. A type on two levels: the session and the athlete
+
+- **The session's type** is `training.activities.activity_type_key`. It is the default for everyone in the session.
+- **The athlete's exception** is a new row for one participant: "this athlete did <type> in this session". It is set
+  from the Roster tab, on the athlete's row.
+- **The effective type** of an athlete in a session is the athlete's live exception if one exists, otherwise the
+  session's type. A function `training.effective_activity_type(participant_id)` is the one place that decides it.
+- **Storage.** A new table holds the exceptions: `training.participant_activity_types`. Its columns are
+  `participant_id`, `activity_type_key`, `set_by`, `set_at`, `reason`, and `ended_at` / `ended_by` for history. There
+  is one live row per participant. Clearing an exception ends the row: nothing is deleted.
+- **Merge and reparent.** An exception belongs to a participant row. If participants are merged, the canonical
+  participant keeps its own exception, if it has one, and the merged participant's exception ends. On a reparent to
+  another activity the exception ends, because the session around it changed. Both are written in the merge or
+  reparent transaction, and both are listed by the roster's "changed under you" mark.
+- An exception equal to the session's type is refused (`409 same_as_session`), so the roster never shows a
+  meaningless exception.
+
+## 4. Where the session's type comes from
 
 The order, first match wins:
 
-1. **(a) The linked calendar event.** If the activity is linked to a live calendar event, the event type's
-   `activity_type_key` (or, until the column exists, its kind: `training` -> `training_session`, `match` -> `match`)
-   is the **suggestion**. Today an import has no link at approval time (section 1), so this applies mainly to a type
-   change after the import (section 4): linking an event whose type differs offers *Change the type to <X>?*. It
-   never changes anything by itself.
-2. **(b) The source's category, confirmed by the coach.**
-   - The team's last choice for that category is the suggestion. It is stored per team, source and category, in a
-     new table: `training_load.source_session_types` (`owner_team_id`, `source_system`, `category_name`,
-     `activity_type_key`, who, when).
-   - The seed is one row per team that holds a binding: `FULL TRAINING` -> `training_session`, today's fixed pair.
-   - At approval the coach sees the suggestion and may change it. The review's header reads
-     "Type: Full training (from GPEXE "FULL TRAINING") - Change".
-3. **(c) An unknown category no longer refuses the session.** The mapper builds the plan with
-   `activityTypeKey: null`, and the session is a pending candidate with the blocker `session_type_required`
-   ("Choose the session type").
-   - Approve stays off until a type is chosen.
-   - The check-time preview runs with no type. The column may be null, and the preview is rolled back.
-   - The approval refuses a null type with `409 session_type_required`, and writes nothing.
+1. **(a) The linked calendar event.**
+   - If the activity is linked to a live event, the event type gives the suggestion. Once the calendar stream agrees,
+     a nullable `calendar.event_types.activity_type_key` holds it. Until then the kind gives it: `training` →
+     Full training, `match` → Game.
+   - An import has no link at approval time, so this mostly applies afterwards: linking an event whose type differs
+     offers *Change the session type to <X>?*. Nothing changes by itself.
+2. **(b) The source's category.** The team's last choice for that category is the suggestion. A new table holds it:
+   `training_load.source_session_types` (team, source, category → type; who, when). It is seeded with
+   `FULL TRAINING` → `training_session` for each bound team. At approval the review reads
+   "Type: Full training (from GPEXE "FULL TRAINING") · Change", and the coach confirms or changes it.
+3. **(c) An unknown category no longer refuses the session.**
+   - The mapper builds the plan with `activityTypeKey: null`, and the candidate is pending with the blocker
+     `session_type_required` ("Choose the session type"). Approve stays off until a type is chosen.
+   - The check-time preview runs without a type: the column may be null, and the preview is rolled back.
+   - The approval refuses a null type with `409 session_type_required` and writes nothing.
 
-**Sent and checked.**
-- The approval body (single and batch) carries `activityTypeKey` per candidate. The server checks it against
-  `training.activity_types where is_active`, before any lock (`400 invalid_session_type`).
-- The chosen type goes into the plan and into the preview's session summary as `activityTypeKey`. The preview hash
-  therefore binds it, and a type changed after the review answers `preview_changed`.
-- **Hash effect:** every stored preview changes once, because the summary gains a field. So a candidate reviewed
-  before the deploy answers `preview_changed` once at approval (the J20-A1 *Update the review* path, as after v62).
-  No imported data changes.
+The approval body carries `activityTypeKey` per candidate, single and batch. It is checked against the types offered
+to the team, before any lock (`400 invalid_session_type`). The chosen type goes into the plan and the preview's
+summary, so the preview hash binds it: a type changed after the review answers `preview_changed`. Every stored preview
+changes once, because the summary gains a field. A candidate reviewed before the deploy therefore needs *Update the
+review* once (the J20-A1 path, as after v62).
 
-**After a confirmed approval** the team's suggestion for that category is updated in its own short transaction. It is
-best effort: a failure is logged and never touches the import.
+After a confirmed approval, the team's suggestion for that category is updated in its own short transaction. That
+write is best effort and never touches the import.
 
-## 4. Changing the type after the import
+At approval only the session's type is chosen. Per-athlete exceptions are set on the roster afterwards, so the review
+stays one decision per session.
 
-- **Route:** `POST /api/training-activity/:activityId/type` `{ activityTypeKey, reason, requestKey }`.
-  - It calls `training.correct_confirmed_activity_fields` with every other field unchanged. That function already
-    locks the activity row and writes the before/after row to the correction log (who, why, when).
-  - The same type again is a no-op `200`. A `requestKey` replay answers the saved outcome, and the request record is
-    the correction-log row together with the key.
-- **Who:** the people who manage the team's sessions. That is the team's coach in the team's workspace, the club's
-  admin and a platform admin, the audience of roster decisions (`training.lock_activity_decider`). Everyone else gets
-  the identical 404 (ADR-006). The rights lock comes before the activity row, users first (the rule of PR #346).
-- **Estimates already saved stay as they are**, with their value and their v63 basis unchanged.
-  - The panel marks such an estimate as "Calculated when this was a <old type> session".
-  - The mark is derived, not stored: the estimate's saved time is compared with the activity's last type correction
-    in the log. So no estimate column is needed and v63's shape check is untouched.
-  - A new estimate uses the new type.
-- **Merged or superseded activities:** the change acts on the canonical activity only
-  (`training.resolve_canonical_activity_id`); a superseded id answers `409 activity_superseded` with the current id,
-  as the roster does.
+## 5. Changing types after the import
 
-## 5. Own average by OptiMove type (D7)
+- **The session.** `POST /api/training-activity/:activityId/type` `{ activityTypeKey, reason, requestKey }`.
+  - It goes through `training.correct_confirmed_activity_fields` with every other field unchanged, so the row is
+    locked and the correction log writes who, why and when.
+  - Sending the same type is a `200` that changes nothing. A `requestKey` replay answers the saved outcome.
+- **The athlete.** `PUT /api/training-activity/:activityId/roster/:athleteId/type` `{ activityTypeKey | null, reason,
+  requestKey }` sets or ends the exception, with who, when and why.
+- **Who.** Whoever manages the team's sessions: the team's coach in the team's workspace, the club's admin and a
+  platform admin. That is the audience of roster decisions (`training.lock_activity_decider`). Everyone else gets the
+  identical 404 (ADR-006). The lock order is users first (the rule of PR #346), then the role, then the canonical
+  activity, then the participant. A superseded id answers `409 activity_superseded` with the current id.
+- **Estimates already saved are never recalculated silently.**
+  - An estimate whose athlete's effective type changed after it was saved keeps its value and its v63 basis. It is
+    marked "Calculated when this was <old type>" and offers **Change the estimate…**, which opens the estimate panel
+    with the new type.
+  - The mark is derived, not stored. It compares the estimate's saved time with the latest change of that athlete's
+    effective type: the correction log for the session, the exception rows for the athlete. No estimate column is
+    needed.
 
-Own average already compares by `activity_type_key` (section 1), so it follows the OptiMove type automatically once
-the type is right. The open part is D7, which types count toward which:
+## 6. What the effective type changes, and what it does not
+
+**Own average** works by the athlete's effective type, in history too. A past session counts toward an athlete's
+Own average only if the athlete's effective type in it equals the target's, with D7 applied (below). "Then" means the
+past session's effective type as it stands now: a correction fixes the record, so a past session corrected to RTP
+leaves the Full-training average. In SQL, the filter `a.activity_type_key = $8` becomes
+`training.effective_activity_type(<that past participant>) = any($8)`.
+
+**D7, which types count toward which:**
 
 | Option | Rule | Cost |
 |---|---|---|
-| **1 (owner's first wording, recommended)** | A game counts only games. A friendly counts friendlies and games. Every other type counts only itself. | One fixed table of comparison sets in code (`COMPARES_WITH`), with no migration. The SQL filter becomes `a.activity_type_key = any($8)`. The panel's "Compares with:" names the set ("Friendly game and Game"). Tests: one per direction (a friendly target sees a game; a game target never sees a friendly). |
-| 2 ("same type only") | Every type counts only itself. | No code change beyond today. A friendly's Own average often has fewer than 3 sessions ("too_few_sessions"), so the coach falls back to the position or team average more often. |
+| **1 (recommended)** | A game counts only games. A friendly counts friendlies and games. Every other type counts only itself. | One fixed table of sets in code; the panel's "Compares with" names the set ("Friendly game and Game"); two tests, one per direction. |
+| 2 | Same type only. | Nothing beyond today. A friendly's Own average more often has fewer than 3 sessions, so the coach falls back to another method more often. |
 
-Recommendation: **option 1**. It is what the owner asked for first, and its cost is one constant and two tests.
-Nothing in it is a problem, so the owner's fallback ("only the same name") is not needed. Rule D7 never reads the
-source's category, only the OptiMove type.
+Recommendation: option 1, the owner's first wording. It is no problem to build, so the fallback "only the same name"
+is not needed. A club type counts only itself.
 
-## 6. The sessions already imported
+**Team average and Copy from an athlete** use only athletes whose effective type equals the target athlete's.
 
-- As relayed, 15 imported sessions on production are all GPEXE `FULL TRAINING`, imported as `training_session`. That
-  is the right type, so nothing is rewritten and no backfill runs.
-- If the owner wants one of them marked differently (an RTP session recorded as a full training, say), it is changed
-  one at a time through section 4, with a reason, after the deploy.
-- The count is not read from production by this plan. The *Rukovodilac*'s read-only post-check confirms it:
-  `select activity_type_key, count(*)` over the activities the GPEXE approvals wrote.
+Recommendation:
+- **Team average** filters to those athletes. With fewer than the method's minimum, the method is unavailable, with
+  the reason `too_few_same_type` ("Not enough athletes did <type> in this session").
+- **Copy from an athlete** offers only same-type athletes in its picker. A save naming an athlete of another type
+  (stale screen) answers `409 source_type_differs` and writes nothing.
 
-## 7. Migration, locks and transactions
+A warning instead of a refusal would let a Full-training value land on an RTP athlete, which is what the owner wants
+to avoid.
 
-**Migration: yes, one, ★★.** It contains:
-1. four rows in `training.activity_types` (section 2), checked by key;
-2. `training_load.source_session_types`:
-   - a primary key on team, source and category;
-   - a foreign key to `training.activity_types`;
-   - the v35 actor guard on every write: a team manager, or the approval's own user;
-   - text checked by `source_metric_text_ok`;
-   - the seed rows of section 3 (b);
-3. (only if the calendar stream agrees) `calendar.event_types.activity_type_key`, nullable, with the system seed.
-   Otherwise this is a later calendar migration.
+**Dashboards.** No dashboard filter or grouping reads a type today (`trainingLoadDashboard*.js`). When one is built,
+by session or by athlete:
+- **By athlete (recommended)** is right for exceptions: an RTP athlete's values never land in "Full training". Cost: a
+  join to the exception table per participant, through the effective-type function or a view, and one index on the
+  live exceptions.
+- **By session** is cheaper but wrong for exactly the case the owner described.
 
-Its rollback refuses once an activity uses a new type, or a non-seed map row exists. It comes with a preflight,
-a post-check and a runbook, as usual.
+That is a later request. This plan only makes sure the effective type is readable.
+
+**Unchanged:** RPE and sRPE (asked and stored as today), the calendar (an event keeps its own type; a link only offers
+the change), the roster's states, the import's values.
+
+## 7. Manual entry and manual correction on the roster
+
+The same place: the Roster tab, the athlete's row, the same panel as the estimate.
+
+- **Enter values** is a fifth option beside the four estimate methods, for an athlete with no device record. The coach
+  types a value per variable. The server writes a `manual` occasion through the same materialization the estimate
+  uses: the participant, the event participant, the occasion. It is marked "Entered by <coach> on <date>". If the
+  athlete already has an estimate, the manual values replace it as the current occasion; the estimate stays as
+  history.
+- **Correct a measured value**, on a row with a device record, uses the existing imported-correction route. The
+  measured occasion is kept as superseded, the manual one counts, and the row shows "Corrected by <coach> on <date>
+  (measured: <value>)". *Undo correction* makes the measured occasion current again (a manual correction of the
+  manual occasion back to the measured values, through `…/occasions/:id/correct`). Nothing is deleted.
+- **Rights.** These routes check the metrics scope today (`requireMetricsScope`). Before they get a screen, their
+  rights are checked against the roster audience, and the identical 404 for everyone else, with the security review.
+  Any difference is fixed in the same pull request.
+- **Migration:** none. `manual` exists, and so do both routes.
+
+## 8. Re-import: "do you want to keep my data"
+
+Today a re-import never replaces a manual value: it records the source's value as `stale_resend_ignored` and asks for
+*accept changes*. The owner wants a question instead:
+
+- When a re-import meets manual values (a manual entry or a correction), the review lists them in a block of their
+  own: "<n> athletes have values you entered. Keep my values (default) / Use GPEXE's values". The answer is per
+  session, with a per-athlete toggle under it.
+- The approval carries `replaceManual: [athleteIds]`, bound in the preview hash.
+  - **Keep** is today's path: the source's value is recorded but not current. The row stays marked.
+  - **Use GPEXE's values** is a new writer path, `manual_replaced`: the imported occasion supersedes the manual one,
+    and the manual one stays as history.
+  - Either way the change is listed in `changesToImported`, and the accept box still covers it. The question replaces
+    the generic box only for these rows.
+- Estimates keep the existing 6b-B rule, which this plan does not change.
+
+**Undo.** The undo (v57, v76) refuses a session that holds a manual value. The owner's plan to delete and re-import the
+15 sessions works only while they hold none, which should be today. After section 7 is in use, an undo of a session
+with manual values is refused. Question 3 below asks whether the undo should list and remove them behind a
+confirmation, the way O1 removes roster work.
+
+## 9. The sessions already imported
+
+- Per the *Rukovodilac*, the owner will delete the 15 sessions and import them again, so nothing is rewritten and no
+  backfill runs. Each re-import chooses its type at approval (section 4).
+- If they are not deleted, they keep `training_session` (Full training), which is right for GPEXE `FULL TRAINING`.
+- The count is not read from production by this plan.
+
+## 10. Migrations, locks and transactions
+
+**Migration ST-1 (★★):**
+- `training.activity_types` gains:
+  - an owner (`system` or `club`) and the owner club;
+  - who archived it and when;
+  - the rename log table;
+  - the v35 actor guard on every write;
+  - text checked by `source_metric_text_ok`;
+  - the seed and the renames of section 2.
+- `training_load.source_session_types`, with its guard and seed.
+
+**Migration ST-2 (★★):**
+- `training.participant_activity_types`, with:
+  - its one-live-row index;
+  - the actor guard;
+  - `training.effective_activity_type()`;
+  - the end-on-merge and end-on-reparent rule.
+- An index on the live rows.
+
+**Calendar (only if the calendar stream agrees):** `calendar.event_types.activity_type_key`, nullable, with its seed.
+
+Each migration has a rollback that refuses once its data is used, plus a preflight, a post-check and a runbook.
 
 **The approval.**
-- The type is part of the body and the plan. It adds no lock: the catalog is read once outside the transaction, and
-  the foreign key on `training.activities` is the database's guarantee if a type is retired meanwhile.
-- The approval's lock order (rights -> candidate -> team import lock -> mapping) is unchanged.
-- The suggestion's write after the COMMIT is a separate transaction. It never takes the team import lock, so it
-  cannot wait on a running check.
+- The type is part of the body and the plan. It adds no lock: the offered types are read once outside the
+  transaction, and the foreign key is the backstop.
+- The existing lock order (rights → candidate → team import lock → mapping) is unchanged.
+- `replaceManual` changes only what the writer does for the listed occasions, inside the identity locks it already
+  takes.
+- The suggestion's write after the COMMIT is its own transaction and never takes the team import lock.
 
-**The type change (section 4):** rights (users first) -> the canonical activity `FOR UPDATE` (inside the sanctioned
-function) -> the correction log. It takes no team import lock, so it never waits for an import. An import that
-re-sights the session later does not touch the activity's type: the writer's supplemented path keeps the activity.
+**A type change:** users → role → canonical activity `FOR UPDATE` → (participant) → log. It takes no team import lock,
+so it never waits for an import. A re-sighting import never touches an activity's type or an exception.
 
-**Dashboards.** No dashboard filter reads `activity_type_key` today (checked: `trainingLoadDashboard*.js`), so nothing
-changes there. A type filter is a later, separate request.
+**Calendar K5-4.** The "waiting for import" marks show the suggested type, or "Type to choose". That is a small
+calendar-stream follow-up; the candidate list gains `suggestedActivityTypeKey`.
 
-**Calendar K5-4.**
-- The "waiting for import" marks read the candidates, and show the source's category today.
-- After this plan they show the suggested OptiMove type, or "Type to choose" for `session_type_required`.
-- That is a small calendar-stream follow-up; the candidate list gains `suggestedActivityTypeKey` for it.
+## 11. Test plan (disposable databases; mutations marked M)
 
-## 8. Test plan (disposable databases; mutations marked M)
-
-1. **Mapper.**
-   - `FULL TRAINING` without a choice gives `training_session`.
-   - An unknown category gives a plan with a null type and the blocker `session_type_required`, not a throw.
-   - M: restore the throw, and the test fails.
-2. **Preview hash.**
-   - The same candidate with two different chosen types gives two different hashes.
-   - Approving with a type other than the reviewed one answers `preview_changed`, and nothing is written.
-   - M: drop `activityTypeKey` from the summary, and the test fails.
+1. **Type list.**
+   - A club admin adds, renames and archives a club type. Another club's admin gets the identical 404. A coach cannot
+     write.
+   - A rename changes the label on an old session, and the key is unchanged.
+   - An archived type is not offered, but stays on its sessions.
+   - A raw write without the actor setting is refused.
+   - M: drop the guard → the test fails.
+2. **Mapper and preview.**
+   - An unknown category gives `session_type_required`, not a throw.
+   - Two chosen types give two different hashes.
+   - Approving with another type answers `preview_changed`, and nothing is written.
+   - M: restore the throw, or drop the type from the summary → the test fails.
 3. **Approval.**
-   - A null type: `409 session_type_required`, nothing written.
-   - An inactive or unknown key: `400 invalid_session_type`, before any lock. The test asserts no lock was taken.
-   - A chosen `friendly_match` writes it on the activity.
-   - The batch carries a type per item.
-   - M: skip the null check, and the test fails.
-4. **Suggestion.**
-   - After the approval, the team's map row holds the choice, and the next check suggests it.
-   - Another team's choice never leaks into this team's suggestion.
-   - A failure of the suggestion's write leaves the import committed.
-   - M: write the map with the wrong team, and the test fails.
-5. **Type change.**
-   - The coach and the club admin may change it; another club's admin, a coach of another team and an athlete get
-     the identical 404 (byte for byte).
-   - One correction-log row with who and why.
-   - The same type is a no-op.
-   - A `requestKey` replay writes nothing.
-   - A superseded id answers `409`.
-   - A recorded-SQL-order test (users -> role -> activity), per the rule of PR #346.
-   - M: drop the rights check, and the test fails. M: lock the activity before the users row, and the order test
-     fails.
-6. **Estimates (D7, option 1).**
-   - A friendly target counts games and friendlies; a game target never counts a friendly.
-   - A saved estimate keeps its value after a type change and shows the "Calculated when…" mark; a new proposal uses
-     the new type.
-   - M: make the set symmetric, and the game test fails.
-7. **Migration.**
-   - Apply, rollback and re-apply on a disposable database.
-   - The rollback refuses when a new type is in use.
-   - The actor guard refuses a raw map write without the actor setting.
-   - M: remove the guard's trigger, and the test fails.
+   - A null type → 409. A type not offered to the team → 400, before any lock.
+   - A chosen type is written.
+   - The batch takes one type per item.
+   - The suggestion updates for this team only, and a failure of its write leaves the import committed.
+4. **Exceptions.**
+   - Set, end, and the history kept.
+   - The same type as the session → 409.
+   - The effective type follows the exception.
+   - On a merge the canonical participant's exception stays; on a reparent it ends.
+   - The roster audience may write; everyone else gets the identical 404.
+   - Lock order: a recorded-SQL-order test.
+   - M: the effective function returns the session's type → the tests fail.
+5. **Estimates.**
+   - Own average takes a past session only when the athlete's effective type matched. D7 option 1 in both
+     directions.
+   - Team average excludes other-type athletes, and `too_few_same_type`.
+   - Copy refuses another-type source with 409.
+   - A saved estimate keeps its value and carries the mark after a type change.
+   - M: make the D7 set symmetric; ignore the exception in the history → the tests fail.
+6. **Manual.**
+   - An entry for an athlete with no record writes a `manual` occasion and replaces an estimate.
+   - A correction keeps the measured occasion as superseded; *Undo correction* restores it.
+   - The rights match the roster audience.
+   - M: the correction deletes the measured occasion → the test fails.
+7. **Re-import.**
+   - Keep: the manual value stays current, and the source's value is recorded.
+   - Use GPEXE: the import supersedes the manual value, and the manual one stays as history.
+   - `replaceManual` is bound in the hash.
+   - M: ignore `replaceManual` → the test fails.
+8. **Migrations.** Apply, rollback and re-apply; the rollback refuses once its data is used.
 
-Test commands: `--kind disposable` for each new suite, `--preset gpexe`, `--preset frontend-fast` on the head and on
-a clean main (the frontend PR gate), and `test:backend:shared` for the training-activity route (a per-session
-decision).
+Commands: `--kind disposable` for each new suite, `--preset gpexe`, `--preset frontend-fast` on the head and on a clean
+main (the frontend PR gate), and `test:backend:shared` for the training-activity routes (a per-session decision). The
+whole e2e for the screens.
 
-## 9. Split into pull requests
+## 12. Split into pull requests
 
-1. **ST-1 (★★, migration):**
-   - the catalog rows, the map table and its guard;
-   - the mapper and preview change (unknown category -> `session_type_required`);
-   - the approval's type and the suggestion's write;
-   - the backend tests.
-2. **ST-2 (★★, no migration):** the type change route with its rights, plus the estimate's derived mark and D7.
-3. **ST-3 (ordinary):** the screens:
-   - the type chooser in the session review;
-   - *Choose the session type* on a blocked row;
-   - the type change in the session's header;
-   - "Compares with" naming the set.
+1. **ST-1 (★★, migration):** the type list and its Settings section; the source map; the mapper, preview and approval
+   with the chosen type.
+2. **ST-2 (★★, migration):** per-athlete exceptions, the session type change, the effective type in the estimates
+   (Own average, D7, Team average, Copy), and the derived estimate mark.
+3. **ST-3 (★★, no migration):** manual entry and correction on the roster, after the rights check of section 7; the
+   re-import question and the `manual_replaced` writer path.
+4. **ST-4 (ordinary):** the remaining screens and texts.
 
 The calendar column and K5-4's label go to the calendar stream, if it agrees.
 
-## 10. Questions for the owner (at most three)
+## 13. Questions for the owner (at most three)
 
-1. **"Exercise":** what is this session? An individual or gym session, a team drill session, or something else? The
-   answer sets its key and label.
+1. **"Exercise":** what is this session? An individual or gym session, a drill session, or something else? The answer
+   sets its key and label.
 2. **D7:** option 1 (a friendly counts games, a game never counts a friendly; recommended) or option 2 (same type
    only)?
-3. **Who may change a session's type after import:** the team's coach, the club admin and a platform admin
-   (recommended, the same people as roster decisions), or only the people who may approve imports?
+3. **Undo with manual values:** should deleting an imported session also remove the values the coach entered or
+   corrected, after a confirmation that lists them (recommended, like O1's roster work)? Or should it keep refusing
+   until they are removed by hand?
