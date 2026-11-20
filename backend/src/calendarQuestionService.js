@@ -78,10 +78,18 @@ export async function getEventQuestions(ctx, eventId) {
     [eventId],
   )).rows[0];
   if (!row || !row.questions_on || !eventWriteBasis(ctx, eventOwnerOfRow(row))) throw notFound();
+  // K4b (v83): an RPE answer the athlete changed carries the time of its last change.
+  const changesInstalled = (await pool.query(`select to_regclass('training_load.session_feedback_changes') is not null as ok`)).rows[0].ok;
+  const lastChangedSql = changesInstalled
+    ? `(case when q.kind = 'rpe' then (select max(h.changed_at) from training_load.session_feedback_changes h
+          join training_load.external_assignments ea on ea.id = h.external_assignment_id
+          join training_load.external_schedule_occurrences eo on eo.id = ea.occurrence_id
+         where eo.schedule_id = q.external_schedule_id and ea.athlete_id = a.id) end)`
+    : "null::timestamptz";
   const questions = (await pool.query(
     `select q.id, q.kind, q.window_kind, q.window_date, q.opens_time, q.closes_time, q.ended_at, q.end_reason,
             (select coalesce(jsonb_agg(jsonb_build_object('athleteId', a.id, 'name', ${athleteName("a")},
-                     'answered', ${ANSWERED_SQL("a.id")},
+                     'answered', ${ANSWERED_SQL("a.id")}, 'lastChangedAt', ${lastChangedSql},
                      'later', exists (select 1 from calendar.question_postponements p where p.question_id = q.id and p.athlete_id = a.id))
                    order by ${athleteName("a")}, a.id), '[]'::jsonb)
                from (${ASKED_SQL}) asked join public.athletes a on a.id = asked.athlete_id) as athletes
@@ -101,7 +109,10 @@ export async function getEventQuestions(ctx, eventId) {
         window: { kind: q.window_kind, date: dateOnly(q.window_date), from: hhmm(q.opens_time), to: hhmm(q.closes_time) },
         status: q.ended_at ? q.end_reason : "live",
         counts: { asked: q.athletes.length, answered: answered.length, later: later.length, notAnswered: notAnswered.length },
-        answered: strip(answered), later: strip(later), notAnswered: strip(notAnswered),
+        answered: q.kind === "rpe"
+          ? answered.map((a) => ({ athleteId: a.athleteId, name: a.name, changed: a.lastChangedAt != null, lastChangedAt: a.lastChangedAt ?? null }))
+          : strip(answered),
+        later: strip(later), notAnswered: strip(notAnswered),
       };
     }),
   };

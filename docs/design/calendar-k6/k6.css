@@ -1,0 +1,48 @@
+/* Calendar K6 design mockups — NOT app code. Loaded after frontend/styles.css and base-k5.css (the K4 + K5 mockup
+   base, copied unchanged so this folder stands alone). The athlete strip uses the Builder's real classes
+   (builder-batch-*), and the groups use the calendar's real Groups chips (cc-chip-row / cc-chip): one component,
+   no second team control (S3). Invented data only. */
+
+.k6-switch { display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .06); min-width: 0; }
+.k6-switch .cc-chip-row { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.k6-switch .cc-chip { flex: none; white-space: nowrap; }
+.k6-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 6px; }
+.k6-row .plain-button.icon-button, .k6-head .plain-button.icon-button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; display: grid; place-items: center; font-size: 18px; }
+.k6-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.k6-label b { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
+.k6-label span { text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.k6-switch .builder-batch-pills { max-width: none; min-width: 0; }
+.k6-switch .builder-batch-pill { flex: 0 0 70px; width: 70px; height: 66px; }
+.k6-switch .builder-batch-avatar { border-color: var(--k6-c, #dce6ea); }
+.k6-switch .builder-batch-pill.is-active .builder-batch-avatar { border-color: #287e77; box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--k6-c, #287e77); }
+.k6-all .builder-batch-avatar { background: var(--accent-soft); border-color: #bfe0da; color: var(--accent); font-size: 11px; }
+.k6-teamdot { position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; background: var(--k6-c); }
+.k6-divider { flex: none; align-self: stretch; display: grid; place-items: center; padding: 0 4px; border-left: 2px solid var(--k6-c); color: var(--k6-c); font-size: 11px; font-weight: 800; writing-mode: vertical-rl; transform: rotate(180deg); }
+.k6-search { position: relative; display: flex; align-items: center; gap: 8px; }
+.k6-search input { flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); font: inherit; font-size: 16px; background: var(--surface); }
+.k6-results { margin: 4px 0 0; padding: 4px; list-style: none; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); display: grid; }
+.k6-results li { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 4px 8px; border-radius: 6px; font-weight: 700; }
+.k6-results li.is-hl { background: var(--accent-soft); }
+.k6-results li small { color: var(--muted); font-weight: 600; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.k6-results li small i { width: 10px; height: 10px; border-radius: 50%; background: var(--k6-c); }
+.k6-results .builder-batch-avatar { width: 34px; height: 34px; font-size: 11px; flex: none; border-color: var(--k6-c); }
+.k6-results mark { background: #fff1b8; padding: 0; }
+.k6-note { margin: 0; font-size: 13px; color: var(--muted); }
+.k6-chosen { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px; padding: 6px 10px; border-radius: var(--radius); background: var(--accent-soft); font-size: 14px; }
+.k6-chosen .k4-link { min-height: 32px; }
+
+/* K6-2: the Weekly plan header. */
+.k6-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
+.k6-head-name { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; }
+.k6-head-name .builder-batch-avatar { flex: none; }
+.k6-head-name strong { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.k6-head-name small { color: var(--muted); font-weight: 700; white-space: nowrap; }
+.k6-crumb { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--muted); font-size: 14px; }
+.k6-crumb b { color: var(--text); }
+.k6-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.k4-nav { flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .k6-pair { grid-template-columns: 1fr; }
+  .k6-switch { padding: 8px; }
+  .k6-head-name small { display: none; }
+}

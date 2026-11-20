@@ -1,6 +1,6 @@
 # Central calendar — K5 plan: the calendar as the hub of the app's activities
 
-Status: **Direction accepted by the owner (H1–H3) and agreed by the OptiMove manager** (2026-11-19, written against `main` `1a5cdb79`). This plan contains no code. Each part needs a
+Status: **Direction accepted by the owner (H1–H5), its mockups approved (2026-11-19, „Ove slike izgledaju ok”), and agreed by the OptiMove manager** (2026-11-19, written against `main` `1a5cdb79`). This plan contains no code. Each part needs a
 UI contract and the manager's GO. The part that touches Imports (K5-4) is agreed with the OptiMove manager first,
 because Imports belongs to his mapping stream.
 
@@ -11,6 +11,8 @@ because Imports belongs to his mapping stream.
 | **H1** | „Mi sada sa ovim u stvari hoćemo na neki način i da centralizujemo u kalendaru aktivnosti aplikacije. Sve što ima neki vid nedeljne kalendarske opcije npr testiranja, gps uvozi trebalo bi da budu deo nekog događaja ili ako nisu deo događaja da se nekako obeleže na kalendaru na neki prostor i jednostavan način da kroz klik možemo otići tamo gde treba....razmisli i o tome" | The central calendar becomes the hub. Everything with a date (trainings, tests, RPE requests, GPS imports) is part of an event. If it is not, it is marked on the calendar in a small, simple way, and one click takes you where its work is done. |
 | **H2** | „Npr gps uvoz mi bismo trebali i na glavnom kalendaru da vidimo neki gps ikonicu ili nesto preko čega bismo mogli ući dalje" | GPS is visible on the main calendar with a GPS icon, and a click goes on from there. |
 | **H3** | „U filteru moze da se izabere samo gps uvozi... zatim nesto drugo.... Da možemo lako naci" | The calendar's filter has a choice for each kind of activity: GPS imports, tests, RPE requests, trainings and events by type. Choosing one shows only that kind, so it is easy to find. |
+| **H4** | „Događaj na kalendaru glavnom mogao bi da sadrži na sebi već ikonice rpe, gps ili testa čisto kao oznaka da on sadrži to u sebi ako sadrzi" | An event card shows small RPE, GPS and test icons, only as a mark that the event holds that kind of item. |
+| **H5** | „Ako nema događaja a imamo gps ili rpe onda kao po predlogu koji si mi pokazao" | With no event, a GPS import, an RPE request or a test is a small mark under its day, as in the mockups (K5-2, *Small marks*). |
 
 The rule of the K4 plan carries over (O13): there is no big change of the current state. Each part reuses existing
 routes and links.
@@ -59,7 +61,25 @@ The panel of each kind gets one clear button to where its work is done. Back ret
 
 - **The GPS icon.** An imported activity (device data) gets the `gps` icon. An event with a folded import shows a
   small GPS mark on its card, for example "📡 GPS · 18". The click opens the import's activity in Training Load (K5-1).
-- **Small marks.** A test, an RPE request or an activity that is in no event is a compact chip under its day, not a
+- **What an event holds (H4).** An event card carries a small icon for each kind of item it really holds: RPE, GPS,
+  test. The icons are the same as on the chips and in the filter. They are only a mark: no number and no state on the
+  card; the state stays in the card's status line and in the panel, as today.
+  - What the answer already says (`backend/src/calendarQuery.js`, the card's output):
+    - RPE: the event collects RPE when `expects` contains `rpe`, or `scheduleFold.external` is `folded`;
+    - test: `expects` contains `test_result`, or `scheduleFold.test` is `folded`;
+    - GPS: **not exact today.** `expects` with `device_data` says only that the event waits for device data, and
+      `links.activityIds` does not tell an import from a coach-made activity. The card already knows it inside the read
+      (`fold.activities[].imported`); K5-2 adds it to the output as one boolean, `holdsImport`. It is a small backend
+      change with no migration, and the reader who sees the event's activities already sees their ids.
+  - The GPS icon means an import is linked. An event that waits for device data with none linked yet gets no GPS icon;
+    its status line says what is missing, as today.
+  - No icon for a kind the event does not hold. A schedule shown beside the event (`separate`) keeps its own chip and
+    gives the event no icon.
+  - An athlete's reduced card gets no icons: her RPE request and her test stay their own cards beside the event, as
+    today (an athlete's view folds no schedule), and she sees no mark about the team.
+  - On a phone the icons sit in one row with the event type's icon, at most three, and never push the title out of
+    view.
+- **Small marks (H5).** A test, an RPE request or an activity that is in no event is a compact chip under its day, not a
   full card. Examples: "🧪 CMJ test", "📡 GPS 10:05", "RPE request". A click opens its panel, and from there *Go
   there*. The filters (FE-D16) keep working.
 
@@ -136,12 +156,13 @@ frontend PR (★, his gate).
 
 ## 3. Order and reviews
 
-1. **K5-1 and K5-2:** one small frontend package after K3 / K2c-3 and K4a-F. The reviews are `code-reviewer`,
-   `mobile-qa` and `ux-design-reviewer`, plus a browser check at 1280 / 390 / 375 / 360 px and the Frontend PR gate.
+1. **K5-1 and K5-2:** one small package after K3 / K2c-3 and K4a-F, frontend except H4's one output field
+   (`holdsImport`). The reviews are `code-reviewer`, `mobile-qa` and `ux-design-reviewer`, plus a browser check at
+   1280 / 390 / 375 / 360 px, the Frontend PR gate, and the whole disposable backend run for the calendar reader.
 2. **K5-3:** its own contract first. If a route changes, add `security-reviewer`.
 3. **K5-4:** the manager answered (a) and (b) (section K5-4). Its contract comes next, and the Imports entry is its own
    small PR, announced to the manager before it starts.
 4. **K5-5:** a small frontend change; it may go with K5-1.
 
-The designer makes mockups of K5-1 and K5-2 (the GPS icon, the chips and *Go there*) before any code, and the owner
+The designer makes mockups of K5-1 and K5-2 (the GPS icon, the event's icons of H4, the chips and *Go there*) before any code, and the owner
 approves them, as for K4.
