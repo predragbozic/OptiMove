@@ -196,6 +196,23 @@ function processAlive(pid) {
 const runnerModule = await import(pathToFileURL(RUNNER).href);
 const supportModule = await import(pathToFileURL(path.join(REPO_ROOT, "backend", "tests", "support", "disposable-db.mjs")).href);
 
+// Does this node apply --test-timeout to a file started directly (the way the runner starts
+// one)? node 22.23 does not: the runner's own per-test limit then ends the file. A node that
+// does cancels the test itself first and the file runs on. The hang checks assert the branch
+// that matches the node they run on.
+function nodeAppliesTestTimeout() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-test-runner-selftest-probe-"));
+  try {
+    const file = path.join(dir, "probe.test.mjs");
+    fs.writeFileSync(file, 'import { test } from "node:test";\ntest("probe", async () => { const t = setInterval(() => {}, 1000); await new Promise(() => {}); });\n');
+    const r = spawnSync(process.execPath, ["--test-timeout=300", file], { encoding: "utf8", timeout: 5_000 });
+    return !r.error && /test timed out after 300ms/.test(`${r.stdout}${r.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+const NODE_APPLIES_TEST_TIMEOUT = nodeAppliesTestTimeout();
+
 const checks = [];
 function check(name, fn) {
   try {
@@ -230,25 +247,41 @@ try {
   check("a file with an unlisted failure is fail / not ok and names the failing test only", () => expect("b-fail.test.mjs", { status: "fail", ok: false, unknownFailures: ["broken one"], knownFailuresSeen: ["broken two (known)"] }));
   check("a file whose only failures are listed is known-fail / ok, nested describe included", () => expect("c-known-fail.test.mjs", { status: "xfail", ok: true, unknownFailures: [] }));
   check("a file that finished its tests but never exited is did-not-exit / not ok", () => expect("d-noexit.test.mjs", { status: "pass", ok: false, noExit: true, noExitKnown: false, pass: 1 }));
-  check("a test that really hangs (a live timer) is ended by the runner's own per-test limit and named; the file is a timeout, never ok, even when the test is listed", () => {
-    const name = "hangs forever (known, ended by the runner's per-test limit)";
-    expect("k-hang-known.test.mjs", { status: "timeout", ok: false, noExit: false, timedOut: false, pass: 1, running: [name] });
-    const r = byFile["k-hang-known.test.mjs"];
-    assert.equal(r.testTimeout?.name, name);
-    assert.equal(r.testTimeout.afterMs, 2250, "per-test limit 1500 ms plus half of it");
-    assert.ok(r.durationMs < 4500, `ended well before the file limit (${r.durationMs} ms)`);
-  });
-  check("the tests and the after() hook behind a hang the runner ended do not run, and the report says so", () => {
-    assert.equal(fs.existsSync(afterMarkFile), false, "after() ran although the process was ended");
-    assert.match(run.stdout + run.stderr, /test timeout: hangs forever \(known, ended by the runner's per-test limit\).*the tests after it did not run/);
-  });
-  check("a stuck test that keeps a grandchild alive is ended by the per-test limit, named, and the whole tree goes", () => {
-    expect("e-stuck.test.mjs", { status: "timeout", ok: false, timedOut: false, running: ["never finishes and keeps a grandchild alive"] });
-    assert.equal(byFile["e-stuck.test.mjs"].testTimeout?.name, "never finishes and keeps a grandchild alive");
-  });
-  check("a hang longer than the file limit (the per-test limit not reached) is still ended at the file limit and named", () => {
-    expect("s-hang-file-limit.test.mjs", { status: "timeout", ok: false, timedOut: true, testTimeout: null, running: ["hangs past the file limit"] });
-  });
+  if (!NODE_APPLIES_TEST_TIMEOUT) {
+    check("[node ignores --test-timeout for a direct file] a test that really hangs (a live timer) is ended by the runner's own per-test limit and named; the file is a timeout, never ok, even when the test is listed", () => {
+      const name = "hangs forever (known, ended by the runner's per-test limit)";
+      expect("k-hang-known.test.mjs", { status: "timeout", ok: false, noExit: false, timedOut: false, pass: 1, running: [name] });
+      const r = byFile["k-hang-known.test.mjs"];
+      assert.equal(r.testTimeout?.name, name);
+      assert.equal(r.testTimeout.afterMs, 2250, "per-test limit 1500 ms plus half of it");
+      assert.ok(r.durationMs < 4500, `ended well before the file limit (${r.durationMs} ms)`);
+    });
+    check("[node ignores --test-timeout for a direct file] the tests and the after() hook behind a hang the runner ended do not run, and the report says so", () => {
+      assert.equal(fs.existsSync(afterMarkFile), false, "after() ran although the process was ended");
+      assert.match(run.stdout + run.stderr, /test timeout: hangs forever \(known, ended by the runner's per-test limit\).*the tests after it did not run/);
+    });
+    check("[node ignores --test-timeout for a direct file] a stuck test that keeps a grandchild alive is ended by the per-test limit, named, and the whole tree goes", () => {
+      expect("e-stuck.test.mjs", { status: "timeout", ok: false, timedOut: false, running: ["never finishes and keeps a grandchild alive"] });
+      assert.equal(byFile["e-stuck.test.mjs"].testTimeout?.name, "never finishes and keeps a grandchild alive");
+    });
+    check("[node ignores --test-timeout for a direct file] a hang longer than the file limit (the per-test limit not reached) is still ended at the file limit and named", () => {
+      expect("s-hang-file-limit.test.mjs", { status: "timeout", ok: false, timedOut: true, testTimeout: null, running: ["hangs past the file limit"] });
+    });
+  } else {
+    // Not run on node 22.23 (the node this was written on); the expectations follow node's
+    // documented behaviour: node cancels the test with testTimeoutFailure and the file goes on.
+    check("[node applies --test-timeout] node cancels the hung test first, the runner's limit does not fire, the file runs on and its after() runs", () => {
+      expect("k-hang-known.test.mjs", { status: "xfail", ok: true, timedOut: false, testTimeout: null, knownFailuresSeen: ["hangs forever (known, ended by the runner's per-test limit)"] });
+      assert.equal(byFile["k-hang-known.test.mjs"].failureDetails[0].failureType, "testTimeoutFailure");
+      assert.equal(fs.existsSync(afterMarkFile), true, "after() did not run");
+    });
+    check("[node applies --test-timeout] a cancelled stuck test whose timer and grandchild stay alive is a failure, ended at the file limit", () => {
+      expect("e-stuck.test.mjs", { status: "fail", ok: false, timedOut: true, testTimeout: null, unknownFailures: ["never finishes and keeps a grandchild alive"] });
+    });
+    check("[node applies --test-timeout] a hang whose timer stays alive after node cancelled it is ended at the file limit", () => {
+      expect("s-hang-file-limit.test.mjs", { ok: false, timedOut: true, testTimeout: null });
+    });
+  }
   check("a file that cannot even load is crash / not ok", () => expect("f-crash.test.mjs", { status: "crash", ok: false }));
   check("a listed failure that passes is reported as an unexpected pass (ok, with a warning)", () => expect("g-unexpected-pass.test.mjs", { status: "pass", ok: true, unexpectedPass: true, unexpectedPasses: ["listed as a known failure but passes"] }));
   check("a listed failure that passes is reported title by title even while another listed failure in the same file still fails", () => expect("l-partial-xpass.test.mjs", { status: "xfail", ok: true, unexpectedPass: true, unexpectedPasses: ["listed and now passes"], knownFailuresSeen: ["listed and still fails"] }));
@@ -325,6 +358,69 @@ try {
     }
   });
   check("the whole self-test project ran within the time limits", () => assert.ok(elapsed < 60_000, `took ${elapsed} ms`));
+
+  // The cleanup after a file the runner ended (database kinds), with a fake audit and drop.
+  {
+    const db = (name, extra = {}) => ({ name, disposable: /^optimove_tests_[a-z0-9_]+_[0-9a-f]{12}$/.test(name), sessions: 0, ...extra });
+    const OWN = "optimove_tests_a_b_0123456789ab";
+    const EARLIER = "optimove_tests_c_d_0123456789ac";
+    const run = (before, nows, dropResult = (names) => ({ dropped: names, refused: [] })) => {
+      const calls = { drop: [], sleeps: 0 };
+      let i = 0;
+      const p = runnerModule.cleanUpEndedFile({
+        before: { databases: before },
+        audit: () => nows[Math.min(i++, nows.length - 1)],
+        drop: (names) => { calls.drop.push(names); return dropResult(names); },
+        sleep: async () => { calls.sleeps++; },
+      });
+      return p.then((result) => ({ result, calls }));
+    };
+    const pending = [];
+    const checkAsync = (name, fn) => pending.push([name, fn]);
+    checkAsync("cleanup: the ended file's own droppable database is dropped, by name only", async () => {
+      const { result, calls } = await run([db("postgres_like_kept")], [{ databases: [db("postgres_like_kept"), db(OWN)] }]);
+      assert.deepEqual(result, { dropped: [OWN], leftover: [] });
+      assert.deepEqual(calls.drop, [[OWN]]);
+    });
+    checkAsync("cleanup: a database that was there before the file (an earlier file's leftover) is never touched or blamed", async () => {
+      const { result, calls } = await run([db(EARLIER)], [{ databases: [db(EARLIER), db(OWN)] }]);
+      assert.deepEqual(result.dropped, [OWN]);
+      assert.ok(!calls.drop.flat().includes(EARLIER));
+      assert.ok(!result.leftover.includes(EARLIER));
+    });
+    checkAsync("cleanup: a database with a session open is looked at again after a wait and, still busy, left as leftover, never dropped", async () => {
+      const { result, calls } = await run([], [{ databases: [db(OWN, { sessions: 1 })] }, { databases: [db(OWN, { sessions: 1 })] }]);
+      assert.deepEqual(result, { dropped: [], leftover: [OWN] });
+      assert.equal(calls.sleeps, 1);
+      assert.deepEqual(calls.drop, []);
+    });
+    checkAsync("cleanup: a session that closes during the wait lets the database be dropped", async () => {
+      const { result } = await run([], [{ databases: [db(OWN, { sessions: 1 })] }, { databases: [db(OWN)] }]);
+      assert.deepEqual(result, { dropped: [OWN], leftover: [] });
+    });
+    checkAsync("cleanup: another name is leftover (a manual decision); a drop the audit refused is leftover; an audit error is an error", async () => {
+      const a = await run([], [{ databases: [db("some_manual_name")] }]);
+      assert.deepEqual(a.result, { dropped: [], leftover: ["some_manual_name"] });
+      const b = await run([], [{ databases: [db(OWN)] }], (names) => ({ dropped: [], refused: names.map((name) => ({ name, reason: "x" })) }));
+      assert.deepEqual(b.result, { dropped: [], leftover: [OWN] });
+      const c = await run([], [{ error: "connection refused" }]);
+      assert.equal(c.result.error, "connection refused");
+      const d = await runnerModule.cleanUpEndedFile({ before: { error: "no server" }, audit: () => ({ databases: [] }), drop: () => ({}) });
+      assert.match(d.error, /no snapshot before the file/);
+    });
+    checkAsync("cleanup: the drop never passes --force and names each database with --only", async () => {
+      assert.deepEqual(runnerModule.auditArgs([]), ["--json"]);
+      assert.deepEqual(runnerModule.auditArgs([OWN]), ["--json", "--drop", "--yes", `--only=${OWN}`]);
+    });
+    for (const [name, fn] of pending) {
+      try {
+        await fn();
+        check(name, () => {});
+      } catch (error) {
+        check(name, () => { throw error; });
+      }
+    }
+  }
 
   // A file that replaces db.js with mock.module is unit; the same file without the mock, or
   // with its own pg import, still needs a database.

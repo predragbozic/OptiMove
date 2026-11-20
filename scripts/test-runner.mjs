@@ -356,11 +356,17 @@ export function listTestFiles(testsDirAbs) {
 // maintenance-database target. The audit also connects, so the server
 // identity checks of the support module (a managed service, a public
 // address behind a loopback tunnel) run before the first file.
+// The audit's arguments. A drop names its databases one by one and never passes --force: the
+// audit script then refuses a database that still has a session open (another run on the same
+// server may be using it), and the runner reports it as leftover instead.
+export function auditArgs(dropOnly = []) {
+  return ["--json", ...(dropOnly.length ? ["--drop", "--yes", ...dropOnly.map((n) => `--only=${n}`)] : [])];
+}
+
 function auditDatabases({ backendDirAbs, env, dropOnly = [] }) {
   const script = path.join(backendDirAbs, "tests", "support", "disposable-db-audit.mjs");
   if (!fs.existsSync(script)) return { error: `${script} is missing` };
-  const extra = dropOnly.length ? ["--drop", "--yes", "--force", ...dropOnly.map((n) => `--only=${n}`)] : [];
-  const r = spawnSync(process.execPath, [script, "--json", ...extra], { cwd: backendDirAbs, env, encoding: "utf8", timeout: 30_000, windowsHide: true });
+  const r = spawnSync(process.execPath, [script, ...auditArgs(dropOnly)], { cwd: backendDirAbs, env, encoding: "utf8", timeout: 30_000, windowsHide: true });
   if (r.status !== 0) return { error: (r.stderr || r.stdout || "").trim().split("\n").pop() || `exit ${r.status}` };
   try {
     return JSON.parse(r.stdout.trim().split("\n").pop());
@@ -482,6 +488,40 @@ export async function killProcessTree(child) {
     }
   }
   return waitForExit(child, 10_000);
+}
+
+// The databases a file the runner ended left behind: those on the server now that were not
+// there in the snapshot taken right before the file started. Only a droppable test database
+// with no session open is dropped; one with a session open (still closing, or another run's)
+// and any other name are left for a manual decision.
+export function planFileCleanup({ before, now }) {
+  const known = new Set(before.map((d) => d.name));
+  const fresh = now.filter((d) => !known.has(d.name));
+  return {
+    fresh: fresh.map((d) => d.name),
+    droppable: fresh.filter((d) => d.disposable && !(d.sessions > 0)).map((d) => d.name),
+    busy: fresh.filter((d) => d.disposable && d.sessions > 0).map((d) => d.name),
+    other: fresh.filter((d) => !d.disposable).map((d) => d.name),
+  };
+}
+
+// audit() -> { databases } | { error }; drop(names) -> { dropped, refused } | { error }.
+// A session the ended process left may take a moment to close: a busy name is looked at once
+// more after waitMs, never ended by force.
+export async function cleanUpEndedFile({ before, audit, drop, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), waitMs = 1_000 }) {
+  if (!before || before.error) return { error: `no snapshot before the file${before?.error ? ` (${before.error})` : ""}`, dropped: [], leftover: [] };
+  let now = audit();
+  if (now.error) return { error: now.error, dropped: [], leftover: [] };
+  let plan = planFileCleanup({ before: before.databases, now: now.databases });
+  if (plan.busy.length) {
+    await sleep(waitMs);
+    now = audit();
+    if (now.error) return { error: now.error, dropped: [], leftover: plan.fresh };
+    plan = planFileCleanup({ before: before.databases, now: now.databases });
+  }
+  const result = plan.droppable.length ? drop(plan.droppable) : { dropped: [], refused: [] };
+  if (result.error) return { error: result.error, dropped: [], leftover: plan.fresh };
+  return { dropped: result.dropped, leftover: [...plan.other, ...plan.busy, ...result.refused.map((x) => x.name)] };
 }
 
 async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, testTimeoutMs, logDir, knownFailures, knownNoExit }) {
@@ -628,6 +668,7 @@ async function runOneFile({ projectDirAbs, testsDirAbs, file, env, timeoutMs, te
     exitCode: exit.code,
     signal: exit.signal,
     timedOut,
+    endedIdle,
     running: runningAtEnd,
     testTimeout: testTimedOut,
     noExit,
@@ -817,37 +858,26 @@ async function runStep(step, args, io) {
       const leftFromEarlier = auditBefore.databases.filter((d) => d.disposable).length;
       if (leftFromEarlier) io.out(`  note: ${leftFromEarlier} disposable test database(s) from earlier runs already on the server (node backend/tests/support/disposable-db-audit.mjs lists them)`);
     }
-    // names already on the server before a file ran, so a per-file cleanup touches only new ones
-    const namedLeftovers = new Set((auditBefore?.databases || []).map((d) => d.name));
     for (const f of filesOfKind) {
       const knownFailures = manifest.knownFailures.filter((e) => e.file === f.file);
       const knownNoExit = manifest.knownNoExit.find((e) => e.file === f.file) || null;
       const fileOptions = manifest.fileOptions[f.file] || {};
       const testTimeoutMs = fileOptions.testTimeoutMs || defaultTestTimeoutMs(timeoutMs);
+      // the server's databases right before this file, so a cleanup after it touches only its own
+      const beforeFile = auditBefore ? auditDatabases({ backendDirAbs, env }) : null;
       const r = await runOneFile({ projectDirAbs, testsDirAbs, file: f.file, env, timeoutMs, testTimeoutMs, logDir, knownFailures, knownNoExit });
       r.kind = k;
       r.testTimeoutMs = testTimeoutMs;
-      // The runner ended this file in the middle of a test, so its after() hooks never ran: the
-      // databases that appeared since the step's audit (and were not already named for an earlier
-      // file) are this file's. Droppable test names are dropped now - the file's process tree is
-      // gone, so --force only ends sessions it left behind; any other name is reported.
-      if (auditBefore && (r.testTimeout || r.timedOut)) {
-        const now = auditDatabases({ backendDirAbs, env });
-        if (now.error) {
-          r.cleanup = { error: now.error };
-        } else {
-          const fresh = now.databases.filter((d) => !namedLeftovers.has(d.name));
-          const droppable = fresh.filter((d) => d.disposable).map((d) => d.name);
-          const dropped = droppable.length ? auditDatabases({ backendDirAbs, env, dropOnly: droppable }) : { dropped: [], refused: [] };
-          r.cleanup = dropped.error
-            ? { error: dropped.error, leftover: fresh.map((d) => d.name) }
-            : { dropped: dropped.dropped, leftover: [...fresh.filter((d) => !d.disposable).map((d) => d.name), ...dropped.refused.map((x) => x.name)] };
-          for (const d of fresh) namedLeftovers.add(d.name);
-          for (const n of r.cleanup.dropped || []) namedLeftovers.delete(n);
-        }
-        if (r.cleanup.error || r.cleanup.leftover.length) {
-          r.ok = false;
-        }
+      // The runner ended this file (a test over its limit, the file limit, or the idle end), so
+      // its after() hooks may not have run: the databases that appeared since the snapshot just
+      // before it are its own. See planFileCleanup / cleanUpEndedFile.
+      if (auditBefore && (r.testTimeout || r.timedOut || r.endedIdle)) {
+        r.cleanup = await cleanUpEndedFile({
+          before: beforeFile,
+          audit: () => auditDatabases({ backendDirAbs, env }),
+          drop: (names) => auditDatabases({ backendDirAbs, env, dropOnly: names }),
+        });
+        if (r.cleanup.error || r.cleanup.leftover.length) r.ok = false;
       }
       results.push(r);
       if (!r.ok) ok = false;
