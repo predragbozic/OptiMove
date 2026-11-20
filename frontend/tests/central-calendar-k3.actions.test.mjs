@@ -329,6 +329,23 @@ test("8c. a session whose own time is outside the event cannot join it: the sent
   assert.equal(state.builder.events.message.useEventTime, "s1");
 });
 
+test("8d. an event the coach does not manage is never written, whatever the select sends: one session and the whole day send nothing", async () => {
+  // The selects list such an event disabled (6.4), but a handler never trusts
+  // the page: a value naming it - a stale page, a crafted change - is dropped.
+  state.activeTab = "builder";
+  state.builder = emptyBuilderState({ draft: draftOf({ isEditDraft: true }) });
+  const clubEvent = { ...EVENT, key: `event:e2:${DAY}`, eventId: "e2", title: "Club training", canManage: false };
+  const calls = installFetchMock((call) => (call.url.startsWith("/api/calendar?") ? { status: 200, body: calendarAnswer([clubEvent, planned(["l1", "l2"])]) } : { status: 500, body: {} }));
+  await row.loadBuilderEvents();
+  const before = calls.length;
+  await row.chooseSessionEvent(DAY, "s1", "e2");
+  assert.equal(calls.length, before, "one session: nothing sent");
+  await row.chooseWholeDay(DAY, "e2");
+  assert.equal(calls.length, before, "the whole day: nothing sent");
+  assert.equal(row.builderEventsBusy(), false);
+  assert.equal(row.builderSessionEvent(DAY, state.builder.draft.blocks[0].sessions[0]), "");
+});
+
 test("9. Q8: a team workspace's whole roster is the team target; otherwise the athletes", () => {
   state.builder = emptyBuilderState({ draft: draftOf() });
   assert.deepEqual(row.builderEventTargets(), [{ kind: "team", id: "t1", name: "First team" }]);
