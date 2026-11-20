@@ -487,7 +487,8 @@ export function openEventSettingForm({ field, eventSetting }) {
 // A number as typed: blanks removed, a comma read as the decimal point; the server takes at most 6 + 6 digits.
 const DECIMAL_TYPED = /^-?(0|[1-9][0-9]{0,5})(\.[0-9]{1,6})?$/;
 export function typedDecimal(value) {
-  const text = String(value ?? "").trim().replace(",", ".");
+  // A typographic minus (U+2212) or an en dash, from a paste or autocorrect, is read as "-".
+  const text = String(value ?? "").trim().replace(/^[−–]/, "-").replace(",", ".");
   return DECIMAL_TYPED.test(text) ? text : null;
 }
 

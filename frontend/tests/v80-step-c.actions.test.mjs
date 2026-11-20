@@ -206,6 +206,9 @@ test("C1-6. typedDecimal: the server's number rule; a comma is a decimal point; 
   assert.equal(typedDecimal("2,5"), "2.5");
   assert.equal(typedDecimal(" -2.5 "), "-2.5");
   assert.equal(typedDecimal("0.3"), "0.3");
+  // A typographic minus or an en dash (a paste, autocorrect) is a minus (mobile-qa MEDIUM-1).
+  assert.equal(typedDecimal("−2,5"), "-2.5");
+  assert.equal(typedDecimal("–2.5"), "-2.5");
   for (const bad of ["", "2.", ".5", "1e3", "2.5.1", "1234567", "0.1234567", "abc"]) assert.equal(typedDecimal(bad), null, bad);
 });
 

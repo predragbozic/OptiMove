@@ -610,12 +610,13 @@ function renderObserveFormHtml(s) {
 
 // v80 step C1: two numbers and Confirm. No value is filled in and OptiMove's own value is never shown before Confirm: the
 // owner types what GPEXE's team settings show. A number field with a fixed unit; a comma is read as the decimal point.
-function numberInput(form, field, label, unit, hint) {
+// A deceleration threshold is negative: the iOS decimal keypad has no minus key, so that one field takes the text keyboard.
+function numberInput(form, field, label, unit, hint, { signed = false } = {}) {
   const locked = form.busy || form.unconfirmed;
   return `
     <label class="search-field"><span>${escapeHtml(label)}</span>
       <span class="source-fields-number">
-        <input type="text" inputmode="decimal" data-sf-field="${field}" value="${escapeAttr(form.draft[field] ?? "")}" maxlength="14" autocomplete="off"${TOKEN_ATTRS} ${locked ? "disabled" : ""}${described(form, field, hint)}${invalid(form, field)}>
+        <input type="text" inputmode="${signed ? "text" : "decimal"}" data-sf-field="${field}" value="${escapeAttr(form.draft[field] ?? "")}" maxlength="14" autocomplete="off"${TOKEN_ATTRS} ${locked ? "disabled" : ""}${described(form, field, hint)}${invalid(form, field)}>
         <span class="source-fields-number-unit">${escapeHtml(unit)}</span>
       </span>
       <span class="muted" id="sf-hint-${field}">${escapeHtml(hint)}</span>
@@ -628,7 +629,7 @@ function renderEventFormHtml(form) {
     <form class="data-sources-form metric-variables-form source-fields-form" data-source-fields-form="event" novalidate autocomplete="off">
       <h2 id="source-fields-title">Confirm GPEXE's ${word} events setting for ${escapeHtml(form.fieldName)}</h2>
       <p class="metric-variables-field-note">In GPEXE, open the team's settings and enter the ${word} events threshold and duration it shows. OptiMove checks them against the session you compared; it is saved once.</p>
-      ${numberInput(form, "thresholdValue", `${word[0].toUpperCase()}${word.slice(1)} events threshold`, "m/s²", word === "deceleration" ? "As GPEXE shows it, for example -2.5." : "As GPEXE shows it, for example 2.5.")}
+      ${numberInput(form, "thresholdValue", `${word[0].toUpperCase()}${word.slice(1)} events threshold`, "m/s²", word === "deceleration" ? "As GPEXE shows it, for example -2.5." : "As GPEXE shows it, for example 2.5.", { signed: word === "deceleration" })}
       ${numberInput(form, "durationSeconds", "Duration", "s", "As GPEXE shows it, for example 0.3.")}
       ${form.error ? `<p class="error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       ${form.unconfirmed ? unconfirmedHtml(form) : `

@@ -19735,18 +19735,25 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   border: 1px solid var(--line);
   border-radius: 8px;
 }
-.source-fields-number {
+/* Specific enough to win over `.search-field span` and `.metric-variables-form .search-field span span` (mobile-qa). */
+.metric-variables-form .search-field .source-fields-number {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin: 0;
+  min-width: 0;
 }
-.source-fields-number input {
+.metric-variables-form .search-field .source-fields-number input {
   flex: 1 1 auto;
   min-width: 0;
   max-width: 12rem;
   font-size: 16px;
 }
-.source-fields-number-unit {
+.metric-variables-form .search-field .source-fields-number .source-fields-number-unit {
+  display: inline;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 400;
   color: var(--muted);
   white-space: nowrap;
 }
