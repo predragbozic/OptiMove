@@ -248,7 +248,8 @@ test("1a. an event card: its type's icon, its type (Event · type as the tooltip
   assert.equal(view.centralCalendarItemIconKey({ kind: "event", eventKind: "day_off" }), "bed");
   assert.equal(view.centralCalendarItemIconKey({ kind: "event", eventKind: "unknown" }), "calendar-event");
   assert.equal(view.centralCalendarItemIconKey({ kind: "planned" }), "barbell");
-  assert.match(card.getAttribute("aria-label"), /Cup match, Event · Match · 18 athletes, 15:00–17:00, City stadium, Planned/);
+  // K5-2 (H4): the marks' words follow the kind - the match expects RPE.
+  assert.match(card.getAttribute("aria-label"), /Cup match, Event · Match · 18 athletes, Holds RPE, 15:00–17:00, City stadium, Planned/);
 });
 
 test("1b. a multi-day event says which day of the span each card is; a cancelled one is struck with its pill", async () => {
@@ -290,7 +291,8 @@ test("1d. a referenced schedule shown beside the event (scheduleFold: separate):
   const card = dom().querySelector(`.cc-card[data-key="event:${E_MATCH}:${DAY(1)}"]`);
   assert.equal(card.querySelector(".cc-card-note").textContent, "Linked schedule shown separately");
   assert.match(card.getAttribute("aria-label"), /Linked schedule shown separately/);
-  assert.ok(dom().querySelector('.cc-card[data-key="external:sch-9:d1"]'), "the schedule's own card is beside it");
+  assert.ok(dom().querySelector('.cc-daychip[data-key="external:sch-9:d1"]'), "the schedule's own chip is beside it (K5-2, H5)");
+  assert.equal(card.querySelector(".cc-card-marks"), null, "a schedule shown beside the event gives the event no RPE mark");
   await act({ action: "central-calendar-open-item", key: `event:${E_MATCH}:${DAY(1)}`, date: DAY(1) });
   const panel = dom().querySelector(".cc-panel").textContent;
   assert.match(panel, /The linked RPE request reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts\./);
@@ -301,13 +303,15 @@ test("1d. a referenced schedule shown beside the event (scheduleFold: separate):
 
 // --- 2. The Filters panel and the chips -------------------------------------------
 
-test("2a. the Filters panel starts collapsed with one summary line; the chips are in the markup, hidden; the toggle opens it", async () => {
+test("2a. More filters starts collapsed with one summary line; the chips are in the markup, hidden; the toggle opens it", async () => {
   const calls = installFetchMock(server());
   await loadCentralCalendar({ render });
   let doc = dom();
   const toggle = doc.querySelector('[data-action="central-calendar-toggle-filters"]');
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
-  assert.equal(toggle.querySelector(".cc-filters-summary").textContent, "All groups · all types");
+  assert.equal(toggle.querySelector(".cc-filters-word").textContent, "More filters");
+  assert.equal(toggle.querySelector(".cc-filters-summary").textContent, "All groups · all event types");
+  assert.equal(doc.querySelector("#ccFiltersBody .cc-showonly"), null, "Show only stays in view, outside the folded part");
   assert.ok(doc.querySelector("#ccFiltersBody").hasAttribute("hidden"));
   assert.ok(doc.querySelector('#ccFiltersBody [data-action="central-calendar-toggle-team"]'), "the chips stay in the markup");
   await act({ action: "central-calendar-toggle-filters" });
@@ -315,43 +319,54 @@ test("2a. the Filters panel starts collapsed with one summary line; the chips ar
   assert.equal(doc.querySelector('[data-action="central-calendar-toggle-filters"]').getAttribute("aria-expanded"), "true");
   assert.equal(doc.querySelector("#ccFiltersBody").hasAttribute("hidden"), false);
   await act({ action: "central-calendar-toggle-team", teamId: U19 });
-  await act({ action: "central-calendar-toggle-kind", kind: "event" });
-  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "U19 · Events");
+  await act({ action: "central-calendar-show-only", kind: "event" });
+  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "U19 · all event types", "the kind is the Show only row's");
   await act({ action: "central-calendar-toggle-team", teamId: U17 });
   await act({ action: "central-calendar-toggle-team", teamId: U13 });
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "match" });
-  await act({ action: "central-calendar-toggle-kind", kind: "planned" });
-  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · Planned training, Match", "Match turned Events off");
-  await act({ action: "central-calendar-toggle-kind", kind: "activity" });
-  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · 3 types");
+  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · Match");
+  await act({ action: "central-calendar-toggle-event-kind", eventKind: "meeting" });
+  await act({ action: "central-calendar-toggle-event-kind", eventKind: "camp" });
+  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · 3 event types");
   assert.equal(rangeReads(calls).length, 1, "no chip sends a request");
 });
 
-test("2b. All groups and All types count every card and clear their row; the Types chips name Events and RPE requests (9.10)", async () => {
+test("2b. All groups and the All pill count every card; Show only names Events and RPE requests (9.10) as a radio group; Show all clears it", async () => {
   installFetchMock(server());
   await loadCentralCalendar({ render });
   let doc = dom();
   const count = (selector) => doc.querySelector(`${selector} .cc-chip-count`).textContent;
   assert.equal(count('[data-action="central-calendar-all-groups"]'), String(ITEMS.length));
-  assert.equal(count('[data-action="central-calendar-all-types"]'), String(ITEMS.length));
+  const all = '.cc-showonly [data-kind=""]';
+  assert.equal(count(all), String(ITEMS.length));
+  assert.equal(doc.querySelector(".cc-showonly").getAttribute("role"), "radiogroup");
+  assert.equal(doc.querySelector(all).getAttribute("role"), "radio");
+  assert.equal(doc.querySelector(all).getAttribute("aria-checked"), "true");
   assert.equal(doc.querySelector('[data-action="central-calendar-all-groups"]').getAttribute("aria-pressed"), "true");
-  assert.equal(count('[data-kind="event"]'), "5");
-  assert.equal(doc.querySelector('[data-kind="event"] .cc-chip-label').textContent, "Events");
-  assert.equal(doc.querySelector('[data-kind="external"] .cc-chip-label').textContent, "RPE requests");
-  assert.equal(doc.querySelector('[data-kind="planned"] .cc-chip-label').textContent, "Planned training");
-  assert.ok(doc.querySelector('[data-kind="event"] svg.cc-chip-icon'), "a type chip carries its icon");
+  assert.equal(count('.cc-showonly [data-kind="event"]'), "5");
+  assert.deepEqual([...doc.querySelectorAll(".cc-showonly .cc-chip-label")].map((node) => node.textContent),
+    ["All", "Events", "Planned training", "GPS imports", "Other activities", "RPE requests", "Scheduled tests"], "the pills in the contract's order");
+  assert.ok(doc.querySelector('.cc-showonly [data-kind="event"] svg.cc-chip-icon'), "a pill carries its icon");
+  assert.equal(doc.querySelector(".cc-showonly-line"), null, "no green line on All");
   await act({ action: "central-calendar-toggle-team", teamId: U17 });
   doc = dom();
   assert.equal(doc.querySelector('[data-action="central-calendar-all-groups"]').getAttribute("aria-pressed"), "false");
   await act({ action: "central-calendar-all-groups" });
   assert.deepEqual(state.centralCalendar.filters.teamIds, []);
-  await act({ action: "central-calendar-toggle-kind", kind: "event" });
+  await act({ action: "central-calendar-show-only", kind: "event" });
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "camp" });
-  await act({ action: "central-calendar-all-types" });
+  doc = dom();
+  assert.deepEqual([...doc.querySelectorAll('.cc-showonly [aria-checked="true"]')].map((node) => node.dataset.kind), ["event"], "one pill is checked");
+  // The green line (E10): the chosen kind in words, its count on the displayed days, and Show all.
+  const line = doc.querySelector(".cc-showonly-line");
+  assert.match(line.textContent, /Showing only Events · 3 this week/, "Events narrowed to Camp counts the camp's three cards on screen");
+  assert.equal(line.querySelector("strong").textContent, "Events");
+  await act({ action: line.querySelector("button").dataset.action });
   assert.deepEqual(state.centralCalendar.filters, { teamIds: [], kinds: [], eventKinds: [] });
+  assert.equal(dom().querySelector(".cc-showonly-line"), null);
 });
 
-test("2c. the Event types chips: one per kind on the displayed days with its icon and count; Events and the event types exclude each other, so every pressed chip changes the list", async () => {
+test("2c. the Event types chips: one per kind on the displayed days with its icon and count; K5-2: an event type narrows Events, and another kind clears the types", async () => {
   installFetchMock(server());
   await loadCentralCalendar({ render });
   let doc = dom();
@@ -360,34 +375,37 @@ test("2c. the Event types chips: one per kind on the displayed days with its ico
   assert.equal(doc.querySelector('[data-event-kind="camp"] .cc-chip-count').textContent, "3");
   assert.equal(doc.querySelector('[data-event-kind="match"] .cc-chip-label').textContent, "Match");
   assert.ok(doc.querySelector('[data-event-kind="match"] svg.cc-chip-icon'));
-  const keys = () => [...dom().querySelectorAll(".cc-card")].map((card) => card.dataset.key);
+  const keys = () => [...dom().querySelectorAll(".cc-card, .cc-daychip")].map((card) => card.dataset.key);
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "match" });
   assert.deepEqual(keys(), [`event:${E_MATCH}:${DAY(1)}`], "Match alone: the matches only");
-  await act({ action: "central-calendar-toggle-kind", kind: "planned" });
-  assert.deepEqual(keys(), ["planned:batch-1", `event:${E_MATCH}:${DAY(1)}`], "a kind and an event kind add up");
-  await act({ action: "central-calendar-toggle-kind", kind: "event" });
-  assert.equal(keys().filter((key) => key.startsWith("event:")).length, 5, "Events lets every event through");
-  assert.deepEqual(state.centralCalendar.filters.eventKinds, [], "Events clears the event types it covers");
+  assert.deepEqual(state.centralCalendar.filters.kinds, ["event"], "an event type sets Show only to Events");
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "camp" });
-  assert.deepEqual(state.centralCalendar.filters.kinds, ["planned"], "an event type turns Events off");
-  assert.deepEqual(keys(), ["planned:batch-1", ...[2, 3, 4].map((offset) => `event:${E_CAMP}:${DAY(offset)}`)]);
+  assert.deepEqual(keys(), [`event:${E_MATCH}:${DAY(1)}`, ...[2, 3, 4].map((offset) => `event:${E_CAMP}:${DAY(offset)}`)], "two types add up within Events");
+  await act({ action: "central-calendar-show-only", kind: "planned" });
+  assert.deepEqual(keys(), ["planned:batch-1"], "a kind other than Events shows only that kind");
+  assert.deepEqual(state.centralCalendar.filters.eventKinds, [], "and clears the event types");
+  await act({ action: "central-calendar-toggle-event-kind", eventKind: "camp" });
+  assert.deepEqual(state.centralCalendar.filters.kinds, ["event"]);
+  assert.deepEqual(keys(), [2, 3, 4].map((offset) => `event:${E_CAMP}:${DAY(offset)}`));
+  await act({ action: "central-calendar-show-only", kind: "event" });
+  assert.deepEqual(state.centralCalendar.filters.eventKinds, ["camp"], "Events keeps its own sub-filter");
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "bogus" });
   assert.deepEqual(state.centralCalendar.filters.eventKinds, ["camp"], "an unknown kind is ignored");
-  assert.equal(dom().querySelector('[data-kind="test"] .cc-chip-label').textContent, "Scheduled tests");
+  assert.equal(dom().querySelector('.cc-showonly [data-kind="test"] .cc-chip-label').textContent, "Scheduled tests");
   // A chosen kind keeps its chip even on a week without it.
-  state.centralCalendar.filters = { teamIds: [], kinds: [], eventKinds: ["travel"] };
+  state.centralCalendar.filters = { teamIds: [], kinds: ["event"], eventKinds: ["travel"] };
   render();
   doc = dom();
   assert.equal(doc.querySelector('[data-event-kind="travel"] .cc-chip-count').textContent, "0");
   assert.equal(doc.querySelector('[data-event-kind="travel"]').getAttribute("aria-pressed"), "true");
 });
 
-test("2d. a week without events has no Event types row; the K1b Types chips keep counting", async () => {
+test("2d. a week without events has no Event types row; the Show only pills keep counting", async () => {
   installFetchMock(server({ items: ITEMS.filter((item) => item.kind !== "event") }));
   await loadCentralCalendar({ render });
   const doc = dom();
   assert.equal(doc.querySelector('[aria-label="Event types"]'), null);
-  assert.equal(doc.querySelector('[data-kind="event"] .cc-chip-count').textContent, "0");
+  assert.equal(doc.querySelector('.cc-showonly [data-kind="event"] .cc-chip-count').textContent, "0");
 });
 
 // --- 3. The selected day and the strip ----------------------------------------------
@@ -403,8 +421,10 @@ test("3a. a phone's day: the per-team row (every team, 0 included), the timed ca
   assert.deepEqual(row, ["U19 · 3 items", "U17 · 0 items", "U13 · 0 items"]);
   assert.ok(doc.querySelector(".cc-day-teams .cc-team-pill.is-empty"));
   const list = doc.querySelector(".cc-day-list");
-  const order = [...list.querySelectorAll(".cc-card, .cc-day-section")].map((node) => (node.classList.contains("cc-day-section") ? `[${node.textContent}]` : node.dataset.key));
+  const order = [...list.querySelectorAll(".cc-card, .cc-daychip, .cc-day-section")].map((node) => (node.classList.contains("cc-day-section") ? `[${node.textContent}]` : node.dataset.key));
+  // K5-2 (E4): the "No time" split is the cards'; the day's chips (the activity) follow them all.
   assert.deepEqual(order, ["planned:batch-1", "[No time]", `event:${E_MEETING}:${DAY(0)}`, "activity:act-1"], "a slot counts as a time; the untimed keep their order");
+  assert.ok(list.querySelector('.cc-daychip[data-key="activity:act-1"]'), "the activity is a chip after the cards");
   // The Groups chips choose the teams the row names; one team alone would
   // only repeat the day's count.
   await act({ action: "central-calendar-toggle-team", teamId: U17 });
@@ -1432,12 +1452,12 @@ test("FE-D16g. a types change never closes a panel over an open form, the first 
   const cal = state.centralCalendar;
   assert.equal(cal.form?.mode, "edit");
   for (const round of ["read", "cached"]) {
-    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+    await act({ action: "central-calendar-show-only", kind: "external" });
     assert.ok(rangeReads(calls).some((call) => call.url.includes("kinds=external")), `${round}: the kinds read ran`);
     assert.deepEqual({ open: cal.panel.open, key: cal.panel.key }, { open: true, key: `event:${E_MATCH}:${DAY(1)}` }, `${round}: the match's card is hidden, but its form is open`);
     assert.equal(cal.form?.mode, "edit", `${round}: the form and what was typed in it stay`);
     assert.equal(cal.notice, "", round);
-    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+    await act({ action: "central-calendar-show-only", kind: "" });
   }
   assert.equal(rangeReads(calls).filter((call) => call.url.includes("kinds=external")).length, 1, "the second round came from the cache");
 });

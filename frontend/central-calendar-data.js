@@ -25,6 +25,9 @@ const WEEK_MODE_STORAGE_KEY = "optimove.central-calendar.week-mode";
 
 // The kinds in the Types chips' order: events first (K2a-2), then K1's four.
 export const CENTRAL_CALENDAR_KINDS = Object.freeze(["event", "planned", "activity", "external", "test"]);
+// K5-2 *Show only* (central-calendar-k5-12-contract.md 2.5): one client kind at a time, in the pills' order. The
+// server's `activity` splits into GPS imports (`gps`) and Other activities (`other_activity`).
+export const CENTRAL_CALENDAR_SHOW_ONLY = Object.freeze(["event", "planned", "gps", "other_activity", "external", "test"]);
 export const CENTRAL_CALENDAR_VIEWS = Object.freeze(["month", "week", "day"]);
 // An event's kind (D2, the seeded types' base kinds; K2a plan section 6).
 export const CENTRAL_CALENDAR_EVENT_KINDS = Object.freeze(["training", "match", "test", "travel", "meeting", "day_off", "camp"]);
@@ -76,13 +79,16 @@ export function centralCalendarUrl(from, to, today, { includeAthletes = false, k
 }
 
 // FE-D16 (central-calendar-k2b2-plan.md 9.4): without `event` in `kinds` the server folds nothing into an event,
-// so while the chosen types are only kinds other than Events (no event type either), the cards come from a read of
-// exactly those kinds: with "RPE requests" alone an RPE request an event folds is its own card again. "" otherwise:
-// the cards are the unfiltered answer's, filtered in the browser (decision A). The kinds go in the chips' order.
+// so while *Show only* is a kind other than Events (no event type either), the cards come from a read of that kind:
+// with "RPE requests" an RPE request an event folds is its own card again. "" otherwise: the cards are the unfiltered
+// answer's, filtered in the browser (decision A). K5-2 (contract 2.5): GPS imports reads unfiltered (it needs the
+// event, planned and RPE cards that hold an import), Other activities reads `kinds=activity` and leaves the imports
+// out in the browser.
+const SHOW_ONLY_SERVER_KINDS = Object.freeze({ planned: "planned", other_activity: "activity", external: "external", test: "test" });
 export function centralCalendarServerKinds(filters) {
-  const kinds = filters?.kinds || [];
-  if (!kinds.length || kinds.includes("event") || (filters?.eventKinds || []).length) return "";
-  return CENTRAL_CALENDAR_KINDS.filter((kind) => kinds.includes(kind)).join(",");
+  const only = (filters?.kinds || [])[0] || "";
+  if (!only || (filters?.eventKinds || []).length) return "";
+  return SHOW_ONLY_SERVER_KINDS[only] || "";
 }
 
 // The answer the cards and the open panel are drawn from: the kinds read while it is the one asked for and covers
@@ -360,6 +366,9 @@ export const sendCentralCalendarLinkWrite = (path, body) => eventWrite(path, "PO
 // { requestKey, expectedRevision, ... } and are sent again unchanged by Check
 // result.
 export const fetchCentralCalendarEventQuestions = (eventId) => api(`${eventPath(eventId)}/questions`);
+// The event panel package (Q7): the values of a manager's panel, read on every
+// open and never cached (an athlete may change her answer while the coach looks).
+export const fetchCentralCalendarAnswers = (path) => api(path);
 export const centralCalendarQuestionPath = (eventId, questionId = "", tail = "") => `${eventPath(eventId)}/questions${questionId ? `/${encodeURIComponent(questionId)}` : ""}${tail ? `/${tail}` : ""}`;
 export const sendCentralCalendarQuestionWrite = (path, body) => eventWrite(path, "POST", body);
 

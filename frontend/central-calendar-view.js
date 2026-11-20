@@ -1,5 +1,5 @@
 import { calendarColorIndex, calendarTeamColorIndexes } from "./calendar-colors.js";
-import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS, centralCalendarServerKinds, centralCalendarShownData, centralCalendarTeamLabel } from "./central-calendar-data.js";
+import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_SHOW_ONLY, centralCalendarShownData, centralCalendarTeamLabel } from "./central-calendar-data.js";
 import {
   centralCalendarCatalogOf,
   renderCentralCalendarEventDetailsHtml,
@@ -26,6 +26,18 @@ import {
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
 import { CC_WAITING_SENTENCE, ccPanelAskOffered, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
+import {
+  ccAnswerEntries,
+  ccAnswersReadable,
+  ccAnswersSummary,
+  ccAnswersSummaryParts,
+  ccAnswersSummarySpoken,
+  ccAnswersWanted,
+  ccAthleteAnswerText,
+  ccChangedAtOf,
+  ccChangedText,
+  ccSpokenAnswerText,
+} from "./central-calendar-answers.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -54,7 +66,22 @@ export const CENTRAL_CALENDAR_EVENT_KIND_LABELS = Object.freeze({ training: "Tra
 // One icon of icon-library.js per type: an event by its kind (the base-kind
 // defaults; K2b makes a type's icon editable), every other card by its kind.
 export const CENTRAL_CALENDAR_EVENT_KIND_ICONS = Object.freeze({ training: "run", match: "trophy", test: "clipboard", travel: "route", meeting: "team", day_off: "bed", camp: "mountain" });
-export const CENTRAL_CALENDAR_KIND_ICONS = Object.freeze({ event: "calendar-event", planned: "barbell", activity: "activity", external: "gauge", test: "stopwatch" });
+// K5-2 (Q7): one icon per kind everywhere - a test is `clipboard`, as in the approved mockups.
+export const CENTRAL_CALENDAR_KIND_ICONS = Object.freeze({ event: "calendar-event", planned: "barbell", activity: "activity", external: "gauge", test: "clipboard" });
+// *Show only* (contract 2.5): the pills' words and icons, one client kind each.
+export const CENTRAL_CALENDAR_SHOW_ONLY_LABELS = Object.freeze({
+  event: "Events", planned: "Planned training", gps: "GPS imports", other_activity: "Other activities", external: "RPE requests", test: "Scheduled tests",
+});
+export const CENTRAL_CALENDAR_SHOW_ONLY_ICONS = Object.freeze({
+  event: "calendar-event", planned: "barbell", gps: "gps", other_activity: "activity", external: "gauge", test: "clipboard",
+});
+// H4 (contract 2.3): what an event holds, as marks in this order; the words for its label.
+const MARK_ICONS = Object.freeze({ rpe: "gauge", gps: "gps", test: "clipboard" });
+const MARK_WORDS = Object.freeze({ rpe: "RPE", gps: "GPS data", test: "a test" });
+// The server's IMPORTED_ORIGINS (backend/src/calendarQuery.js).
+const IMPORTED_ORIGINS = Object.freeze(["api_import", "source_import"]);
+// H5 (contract 2.4): what is in no event shows as a small chip under its day.
+const DAY_CHIP_KINDS = Object.freeze(["test", "external", "activity"]);
 // A team's colour (D11, K2b-1c): the one its club chose under Settings ->
 // Calendar (`teams[].colorKey`), else the next automatic colour by the
 // team's position in the answer's teams[] (calendar-colors.js). Their values
@@ -118,19 +145,76 @@ export function centralCalendarItemsByDate(data) {
   return byDate;
 }
 
-// Decision A: a card is hidden when it carries none of the chosen teams or
-// its type is not chosen. A type is a kind (Events, Planned training, …) or,
-// for an event, its kind (Match, Travel, …): an event passes when Events is
-// chosen or its own kind is (K2a-2). Nothing inside a card changes.
+// K5-2 (contract 2.1): an imported activity, or an event, planned or RPE card that holds one (`holdsImport`, a
+// coach's or a reader's answer only).
+export function centralCalendarItemImported(item) {
+  if (item?.kind === "activity") return IMPORTED_ORIGINS.includes(item.origin);
+  if (item?.kind === "event" || item?.kind === "planned" || item?.kind === "external") return item.holdsImport === true;
+  return false;
+}
+
+// *Show only*'s match for one client kind (contract 2.5).
+export function centralCalendarShowOnlyMatches(item, only) {
+  switch (only) {
+    case "gps": return centralCalendarItemImported(item);
+    case "other_activity": return item?.kind === "activity" && !centralCalendarItemImported(item);
+    default: return item?.kind === only;
+  }
+}
+
+// Decision A: a card is hidden when it carries none of the chosen teams or does not match *Show only* (K5-2: at most
+// one kind). Event types narrow events only (choosing one sets *Show only* to Events). Nothing inside a card changes.
 export function centralCalendarVisibleItems(items, filters) {
   const teamIds = filters?.teamIds || [];
-  const kinds = filters?.kinds || [];
+  const only = (filters?.kinds || [])[0] || "";
   const eventKinds = filters?.eventKinds || [];
   return (items || []).filter((item) => {
-    if ((kinds.length || eventKinds.length) && !kinds.includes(item.kind) && !(item.kind === "event" && eventKinds.includes(item.eventKind))) return false;
+    if (only && !centralCalendarShowOnlyMatches(item, only)) return false;
+    if (eventKinds.length && !(item.kind === "event" && eventKinds.includes(item.eventKind))) return false;
     if (teamIds.length && !(item.teamIds || []).some((id) => teamIds.includes(id))) return false;
     return true;
   });
+}
+
+// H4 (contract 2.3): the marks of what a card holds, in this order. An event: RPE (its folded RPE request, or RPE
+// expected while no request stands beside it), GPS (an import), test (likewise). A planned or RPE card: only GPS.
+// Nothing on a cancelled card or any other kind (the athlete's reduced card has none of these fields).
+export function centralCalendarCardMarks(item) {
+  if (!item || item.cancelled) return [];
+  if (item.kind === "planned" || item.kind === "external") return item.holdsImport === true ? ["gps"] : [];
+  if (item.kind !== "event") return [];
+  const expects = item.expects || [];
+  const fold = item.scheduleFold || {};
+  const marks = [];
+  if (fold.external === "folded" || (expects.includes("rpe") && fold.external !== "separate")) marks.push("rpe");
+  if (item.holdsImport === true) marks.push("gps");
+  if (fold.test === "folded" || (expects.includes("test_result") && fold.test !== "separate")) marks.push("test");
+  return marks;
+}
+
+// "Holds RPE, GPS data and a test"; "" without marks.
+export function centralCalendarMarksLabel(marks) {
+  const words = (marks || []).map((mark) => MARK_WORDS[mark]).filter(Boolean);
+  if (!words.length) return "";
+  return `Holds ${words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`}`;
+}
+
+function renderMarksHtml(item, size = 14) {
+  const marks = centralCalendarCardMarks(item);
+  if (!marks.length) return "";
+  return `<span class="cc-card-marks" role="img" aria-label="${escapeAttr(centralCalendarMarksLabel(marks))}">${marks.map((mark) => renderIconSvg(MARK_ICONS[mark], { size, className: `cc-mark cc-mark-${mark}` })).join("")}</span>`;
+}
+
+// H5: a test, an RPE request or an activity is a small chip under its day (contract 2.4).
+export function centralCalendarIsDayChip(item) {
+  return DAY_CHIP_KINDS.includes(item?.kind);
+}
+
+// The chip's short text: "CMJ test", "RPE · Gym", "GPS 10:05" / "GPS", or the activity's title.
+export function centralCalendarDayChipText(item) {
+  if (item.kind === "external") return `RPE · ${centralCalendarTitle(item)}`;
+  if (item.kind === "activity" && centralCalendarItemImported(item)) return item.startTime ? `GPS ${String(item.startTime).slice(0, 5)}` : "GPS";
+  return centralCalendarTitle(item);
 }
 
 export function centralCalendarFiltersActive(filters) {
@@ -143,13 +227,14 @@ export function centralCalendarFiltersActive(filters) {
 // what All groups and All types count.
 export function centralCalendarChipCounts(byDate, days) {
   const teams = new Map();
-  const kinds = Object.fromEntries(CENTRAL_CALENDAR_KINDS.map((kind) => [kind, 0]));
+  // K5-2: the *Show only* kinds; GPS imports also counts the event, planned and RPE cards holding an import (Q11).
+  const kinds = Object.fromEntries(CENTRAL_CALENDAR_SHOW_ONLY.map((kind) => [kind, 0]));
   const eventKinds = new Map();
   let total = 0;
   for (const date of days) {
     for (const item of byDate.get(date) || []) {
       total += 1;
-      if (item.kind in kinds) kinds[item.kind] += 1;
+      for (const kind of CENTRAL_CALENDAR_SHOW_ONLY) if (centralCalendarShowOnlyMatches(item, kind)) kinds[kind] += 1;
       if (item.kind === "event" && item.eventKind) eventKinds.set(item.eventKind, (eventKinds.get(item.eventKind) || 0) + 1);
       for (const teamId of item.teamIds || []) teams.set(teamId, (teams.get(teamId) || 0) + 1);
     }
@@ -167,6 +252,8 @@ export function centralCalendarItemIconKey(item) {
     if (isLibraryKey(item.eventTypeIconKey)) return item.eventTypeIconKey;
     return CENTRAL_CALENDAR_EVENT_KIND_ICONS[item.eventKind] || CENTRAL_CALENDAR_KIND_ICONS.event;
   }
+  // K5-2: an imported activity is `gps` everywhere (card, chip, month, panel).
+  if (item?.kind === "activity" && centralCalendarItemImported(item)) return "gps";
   return CENTRAL_CALENDAR_KIND_ICONS[item?.kind] || CENTRAL_CALENDAR_KIND_ICONS.event;
 }
 
@@ -242,7 +329,7 @@ export function centralCalendarKindLabel(item) {
   }
   if (item.kind === "planned") return `Planned training · ${athleteCountLabel(count)}`;
   if (item.kind === "activity") {
-    const word = item.origin === "api_import" || item.origin === "source_import" ? "Imported activity" : "Activity";
+    const word = centralCalendarItemImported(item) ? "Imported activity" : "Activity";
     return count ? `${word} · ${athleteCountLabel(count)}` : word;
   }
   if (item.kind === "external") {
@@ -425,6 +512,8 @@ function renderTeamPillHtml(teamId, teams) {
 
 function cardAriaLabel(item, teams, today) {
   const parts = [centralCalendarTitle(item), centralCalendarKindLabel(item)];
+  const marks = centralCalendarMarksLabel(centralCalendarCardMarks(item));
+  if (marks) parts.push(marks);
   const when = centralCalendarWhenLabel(item);
   if (when) parts.push(when);
   const span = centralCalendarSpanLabel(item);
@@ -462,7 +551,7 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
   return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
       <span class="cc-card-stripe" aria-hidden="true"></span>
       <span class="cc-card-body">
-        <span class="cc-card-top">${itemIconHtml(item)}${when ? `<span class="cc-card-when">${escapeHtml(when)}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
+        <span class="cc-card-top">${itemIconHtml(item)}${renderMarksHtml(item)}${when ? `<span class="cc-card-when">${escapeHtml(when)}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
         <span class="cc-card-title">${escapeHtml(centralCalendarTitle(item))}</span>
         ${place ? `<span class="cc-card-place">${escapeHtml(place)}</span>` : ""}
         ${centralCalendarScheduleSeparate(item) ? `<span class="cc-card-note">${SEPARATE_WORDS}</span>` : ""}
@@ -478,9 +567,36 @@ function renderMiniCardHtml(item, teams, openKey, today) {
   const firstTeam = (item.teamIds || [])[0];
   return `<button type="button" class="cc-mini cc-mini-${escapeAttr(item.kind)}${item.cancelled ? " is-cancelled" : ""}${openKey === item.key ? " is-open" : ""}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
         <span class="cc-mini-dot" aria-hidden="true"></span>
-        <span class="cc-mini-title">${itemIconHtml(item, "cc-mini-icon", 12)}${escapeHtml(centralCalendarTitle(item))}</span>
+        <span class="cc-mini-title">${itemIconHtml(item, "cc-mini-icon", 12)}${renderMarksHtml(item, 12)}${escapeHtml(centralCalendarTitle(item))}</span>
         ${badge ? `<span class="cc-mini-status cc-mini-status-${badge.tone}" aria-hidden="true"></span>` : ""}
       </button>`;
+}
+
+// H5 (contract 2.4): the day chip of a test, an RPE request or an activity - its kind's icon, short text, the GPS mark
+// of an RPE request that holds an import, and the status as a dot; the full sentence is its aria-label. A click opens
+// its panel, as a card does.
+function renderDayChipHtml(item, teams, openKey, today) {
+  const badge = centralCalendarStatusBadge(item, today);
+  const firstTeam = (item.teamIds || [])[0];
+  const classes = ["cc-daychip", `cc-daychip-${escapeAttr(item.kind)}`];
+  if (centralCalendarItemImported(item)) classes.push("is-imported");
+  if (item.cancelled) classes.push("is-cancelled");
+  if (openKey && openKey === item.key) classes.push("is-open");
+  // The tooltip: the whole name (a narrow column cuts it) and the status the dot stands for.
+  const tooltip = `${centralCalendarDayChipText(item)}${badge ? ` · ${badge.label}` : ""}`;
+  return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} title="${escapeAttr(tooltip)}" aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">${itemIconHtml(item, "cc-daychip-icon", 14)}${renderMarksHtml(item)}<span class="cc-daychip-text">${escapeHtml(centralCalendarDayChipText(item))}</span>${badge ? `<span class="cc-daychip-status cc-mini-status-${badge.tone}" aria-hidden="true"></span>` : ""}</button>`;
+}
+
+// One item in a day's list: a full card, or a chip (H5).
+function renderDayItemHtml(item, teams, openKey, today, shortKind = false) {
+  return centralCalendarIsDayChip(item) ? renderDayChipHtml(item, teams, openKey, today) : renderCentralCalendarCardHtml(item, { teams, openKey, today, shortKind });
+}
+
+// A day's items in the list layouts: its cards first, then its chips, each part in the server's order (E4).
+function renderCardsThenChipsHtml(items, teams, openKey, today, shortKind = false) {
+  const cards = items.filter((item) => !centralCalendarIsDayChip(item));
+  const chips = items.filter((item) => centralCalendarIsDayChip(item));
+  return `${cards.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey, today, shortKind })).join("")}${chips.length ? `<div class="cc-daychips">${chips.map((item) => renderDayChipHtml(item, teams, openKey, today)).join("")}</div>` : ""}`;
 }
 
 function renderChipHtml({ action, dataAttr = "", value = "", label, count, active, style = "", dot = false, icon = "" }) {
@@ -488,27 +604,50 @@ function renderChipHtml({ action, dataAttr = "", value = "", label, count, activ
   return `<button type="button" class="cc-chip${active ? " is-active" : ""}" data-action="${action}"${data} aria-pressed="${active ? "true" : "false"}" aria-label="${escapeAttr(`${label}, ${count}`)}"${style}>${dot ?`<span class="cc-chip-dot" aria-hidden="true"></span>` : ""}${icon ? renderIconSvg(icon, { size: 14, className: "cc-chip-icon" }) : ""}<span class="cc-chip-label">${escapeHtml(label)}</span><span class="cc-chip-count">${escapeHtml(String(count))}</span></button>`;
 }
 
-// The collapsed panel's one line: "All groups · all types", or the chosen
+// *More filters*' one line (K5-2: the kinds are the *Show only* row's): "All groups · all event types", or the chosen
 // names (two at most, then a count).
 export function centralCalendarFiltersSummary(filters, teams) {
   const names = (list, label, plural) => (list.length <= 2 ? list.join(", ") : `${list.length} ${plural}`) || label;
   const groups = names((filters.teamIds || []).map((id) => teamName(id, teams)), "All groups", "groups");
-  const types = [
-    ...(filters.kinds || []).map((kind) => CENTRAL_CALENDAR_KIND_LABELS[kind] || kind),
-    ...(filters.eventKinds || []).map((kind) => CENTRAL_CALENDAR_EVENT_KIND_LABELS[kind] || kind),
-  ];
-  return `${groups} · ${names(types, "all types", "types")}`;
+  const types = (filters.eventKinds || []).map((kind) => CENTRAL_CALENDAR_EVENT_KIND_LABELS[kind] || kind);
+  return `${groups} · ${names(types, "all event types", "event types")}`;
 }
 
-// The Filters panel (the owner's design): one button that folds the chips
-// away with a summary line; the chips stay in the markup (hidden) so their
-// sideways scroll and the focus survive a repaint. Groups: All groups and a
-// chip per team with its colour dot; Types: All types and the five kinds;
-// Event types: a chip per event kind on the displayed days (or chosen).
+// *Show only* (contract 2.5, H3): one row of pills, a radio group - All and the six client kinds, each with its icon
+// and the displayed days' count. One tap shows only that kind; another switches straight over.
+function renderShowOnlyHtml(cal, counts) {
+  const only = (cal.filters.kinds || [])[0] || "";
+  const pill = (kind, label, count, icon) => {
+    const on = kind === only;
+    return `<button type="button" class="cc-chip cc-showonly-pill${on ? " is-active" : ""}${kind ? ` cc-showonly-${kind}` : ""}" role="radio" aria-checked="${on ? "true" : "false"}" tabindex="${on ? "0" : "-1"}" data-action="central-calendar-show-only" data-kind="${escapeAttr(kind)}" aria-label="${escapeAttr(`${label}, ${count}`)}">${icon ? renderIconSvg(icon, { size: 16, className: "cc-chip-icon" }) : ""}<span class="cc-chip-label">${escapeHtml(label)}</span><span class="cc-chip-count">${escapeHtml(String(count))}</span></button>`;
+  };
+  return `<div class="cc-showonly" role="radiogroup" aria-label="Show only">
+      ${pill("", "All", counts.total, "")}
+      ${CENTRAL_CALENDAR_SHOW_ONLY.map((kind) => pill(kind, CENTRAL_CALENDAR_SHOW_ONLY_LABELS[kind], counts.kinds[kind] || 0, CENTRAL_CALENDAR_SHOW_ONLY_ICONS[kind])).join("")}
+    </div>`;
+}
+
+// The green line while *Show only* is not All (E10): "Showing only GPS imports · 5 this week · Show all".
+function renderShowOnlyLineHtml(cal, counts) {
+  const only = (cal.filters.kinds || [])[0] || "";
+  if (!only) return "";
+  // Events narrowed by event types counts the events of those types, as the screen shows them.
+  const eventKinds = only === "event" ? cal.filters.eventKinds || [] : [];
+  const count = eventKinds.length ? eventKinds.reduce((sum, kind) => sum + (counts.eventKinds.get(kind) || 0), 0) : counts.kinds[only] || 0;
+  const scope = cal.view === "month" ? "this month" : cal.view === "day" ? "on this day" : "this week";
+  return `<p class="cc-showonly-line" role="status">${renderIconSvg(CENTRAL_CALENDAR_SHOW_ONLY_ICONS[only], { size: 16, className: "cc-showonly-line-icon" })}<span>Showing only <strong>${escapeHtml(CENTRAL_CALENDAR_SHOW_ONLY_LABELS[only] || only)}</strong> · ${count} ${scope}</span><button type="button" class="plain-button cc-inline-button cc-showonly-all" data-action="central-calendar-all-types">Show all</button></p>`;
+}
+
+// The filters (the owner's design, K5-2): the green line and the *Show only* row stay in view; *More filters* folds
+// the Groups and Event types chips away with a summary line. The folded chips stay in the markup (hidden) so their
+// sideways scroll and the focus survive a repaint. Groups: All groups and a chip per team with its colour dot; Event
+// types: a chip per event kind on the displayed days (or chosen).
 function renderFiltersHtml(cal, counts, teams) {
   if (!cal.data) return "";
   const filters = cal.filters;
-  const active = centralCalendarFiltersActive(filters);
+  // *Clear filters* beside More filters only while a group or an event type is chosen: Show only alone is reset by
+  // the green line's Show all (one button per question).
+  const active = (filters.teamIds?.length || 0) + (filters.eventKinds?.length || 0) > 0;
   const open = Boolean(cal.filtersOpen);
   const groups = teams.length
     ? `<div class="cc-chip-row" role="group" aria-label="Groups">
@@ -520,14 +659,6 @@ function renderFiltersHtml(cal, counts, teams) {
         })).join("")}
       </div>`
     : "";
-  const types = `<div class="cc-chip-row" role="group" aria-label="Types">
-        <span class="cc-chip-row-label">Types</span>
-        ${renderChipHtml({ action: "central-calendar-all-types", label: "All types", count: counts.total, active: !filters.kinds.length && !filters.eventKinds.length })}
-        ${CENTRAL_CALENDAR_KINDS.map((kindKey) => renderChipHtml({
-          action: "central-calendar-toggle-kind", dataAttr: "data-kind", value: kindKey, label: CENTRAL_CALENDAR_KIND_LABELS[kindKey],
-          count: counts.kinds[kindKey] || 0, active: filters.kinds.includes(kindKey), icon: CENTRAL_CALENDAR_KIND_ICONS[kindKey],
-        })).join("")}
-      </div>`;
   const eventKinds = CENTRAL_CALENDAR_EVENT_KINDS.filter((kind) => counts.eventKinds.get(kind) || filters.eventKinds.includes(kind));
   const eventTypes = eventKinds.length
     ? `<div class="cc-chip-row" role="group" aria-label="Event types">
@@ -539,13 +670,15 @@ function renderFiltersHtml(cal, counts, teams) {
       </div>`
     : "";
   return `<div class="cc-filters${open ? " is-open" : ""}">
+      ${renderShowOnlyLineHtml(cal, counts)}
+      ${renderShowOnlyHtml(cal, counts)}
       <div class="cc-filters-bar">
         <button type="button" class="cc-filters-toggle" data-action="central-calendar-toggle-filters" aria-expanded="${open ? "true" : "false"}" aria-controls="ccFiltersBody">
-          ${renderIconSvg("adjust", { size: 18, className: "cc-filters-icon" })}<span class="cc-filters-word">Filters</span><span class="cc-filters-summary">${escapeHtml(centralCalendarFiltersSummary(filters, teams))}</span><span class="cc-filters-chevron" aria-hidden="true"></span>
+          ${renderIconSvg("adjust", { size: 18, className: "cc-filters-icon" })}<span class="cc-filters-word">More filters</span><span class="cc-filters-summary">${escapeHtml(centralCalendarFiltersSummary(filters, teams))}</span><span class="cc-filters-chevron" aria-hidden="true"></span>
         </button>
         ${active ? `<button type="button" class="plain-button cc-clear-filters" data-action="central-calendar-clear-filters">Clear filters</button>` : ""}
       </div>
-      <div class="cc-filters-body" id="ccFiltersBody"${open ? "" : " hidden"}>${groups}${types}${eventTypes}</div>
+      <div class="cc-filters-body" id="ccFiltersBody"${open ? "" : " hidden"}>${groups}${eventTypes}</div>
     </div>`;
 }
 
@@ -626,7 +759,7 @@ function renderEmptyHtml(cal, scope) {
 function renderDayCardsHtml(items, teams, openKey, today, { emptyText = "—", emptyAction = "", shortKind = false } = {}) {
   if (!items.length && emptyAction) return `<div class="om-empty cc-day-empty" role="status"><p class="om-empty__text">${escapeHtml(emptyText)}</p><div class="om-empty__actions">${emptyAction}</div></div>`;
   if (!items.length) return `<p class="cc-day-empty">${escapeHtml(emptyText)}</p>`;
-  return items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey, today, shortKind })).join("");
+  return renderCardsThenChipsHtml(items, teams, openKey, today, shortKind);
 }
 
 function dayHeadHtml(date, today, count, { button = true } = {}) {
@@ -673,13 +806,13 @@ function renderWeekGridHtml(days, byDate, cal, teams, today) {
   const heads = days.map((date) => `<div class="cc-timegrid-head${date === today ? " is-today" : ""}">${dayHeadHtml(date, today, visible.get(date).length)}</div>`).join("");
   const untimed = days.map((date) => {
     const items = visible.get(date).filter((item) => hourOf(item) === null);
-    return `<div class="cc-timegrid-cell cc-timegrid-untimed${date === today ? " is-today" : ""}">${items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey: cal.panel.key, today })).join("")}</div>`;
+    return `<div class="cc-timegrid-cell cc-timegrid-untimed${date === today ? " is-today" : ""}">${items.map((item) => renderDayItemHtml(item, teams, cal.panel.key, today)).join("")}</div>`;
   }).join("");
   const rows = hours.map((hour) => {
     const label = `${String(hour).padStart(2, "0")}:00`;
     const cells = days.map((date) => {
       const items = visible.get(date).filter((item) => hourOf(item) === hour);
-      return `<div class="cc-timegrid-cell${date === today ? " is-today" : ""}" data-hour="${hour}">${items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey: cal.panel.key, today })).join("")}</div>`;
+      return `<div class="cc-timegrid-cell${date === today ? " is-today" : ""}" data-hour="${hour}">${items.map((item) => renderDayItemHtml(item, teams, cal.panel.key, today)).join("")}</div>`;
     }).join("");
     return `<div class="cc-timegrid-row"><span class="cc-timegrid-hour">${label}</span>${cells}</div>`;
   }).join("");
@@ -741,10 +874,14 @@ function renderDayTeamsHtml(items, cal, teams) {
 // to the end; each part keeps the server's order (plan section 8).
 function renderDayListCardsHtml(items, teams, openKey, today, emptyText, emptyAction = "") {
   if (!items.length) return `<div class="cc-day-cards">${renderDayCardsHtml(items, teams, openKey, today, { emptyText, emptyAction })}</div>`;
-  const untimed = items.filter((item) => !item.startTime && !item.slot);
-  const timed = items.filter((item) => item.startTime || item.slot);
+  // K5-2 (E4): the "No time" split is the cards'; the chips follow them all.
+  const cards = items.filter((item) => !centralCalendarIsDayChip(item));
+  const chips = items.filter((item) => centralCalendarIsDayChip(item));
+  const untimed = cards.filter((item) => !item.startTime && !item.slot);
+  const timed = cards.filter((item) => item.startTime || item.slot);
   return `${timed.length ? `<div class="cc-day-cards">${renderDayCardsHtml(timed, teams, openKey, today)}</div>` : ""}
-      ${untimed.length ? `<h5 class="cc-day-section">No time</h5><div class="cc-day-cards cc-day-cards-untimed">${renderDayCardsHtml(untimed, teams, openKey, today)}</div>` : ""}`;
+      ${untimed.length ? `<h5 class="cc-day-section">No time</h5><div class="cc-day-cards cc-day-cards-untimed">${renderDayCardsHtml(untimed, teams, openKey, today)}</div>` : ""}
+      ${chips.length ? `<div class="cc-day-cards">${renderDayCardsHtml(chips, teams, openKey, today)}</div>` : ""}`;
 }
 
 function renderSelectedDayListHtml(date, byDate, cal, teams, today, { heading = true } = {}) {
@@ -832,26 +969,65 @@ function renderPanelAthletesHtml(item, cal, roster) {
   if (panel.loading) return `${head}<p class="cc-panel-note" role="status">Loading athletes…</p>`;
   if (panel.error === "changed") return `${head}<p class="cc-panel-note">This item has changed since the calendar was loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry">Refresh the calendar</button>`;
   if (panel.error) return `${head}<p class="cc-panel-note">Athlete names could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry-athletes">Try again</button>`;
-  const athletes = [...(panel.athletes || [])].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  // The event panel package: a manager's event panel shows each athlete's
+  // values and the summary (a UI rule, not an access rule: section 2 of
+  // docs/ai/central-calendar-event-panel-contract.md). A reader's panel keeps
+  // its states only.
+  const manager = ccAnswersWanted(item);
+  const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
+  // A manager's athletes no longer targeted come after the others, marked.
+  const athletes = manager
+    ? [...(panel.athletes || [])].sort((a, b) => (a.targeted === false) - (b.targeted === false) || byName(a, b))
+    : [...(panel.athletes || [])].sort(byName);
   if (!athletes.length) return `${head}<p class="cc-panel-note">${count ? "No athlete names were returned." : "No athletes on this item."}</p>`;
   const teams = cal.data?.teams || [];
-  const rosterNote = recorded && item.attendance.needsState > 0
-    ? `<p class="cc-panel-note">Who still needs an attendance state is on the Roster tab — use Open in Training Load above.</p>`
+  // K5-1: the Roster button above the list says who still needs a state; without an activity id there is none.
+  const rosterNote = recorded && item.attendance.needsState > 0 && !(item.links?.activityIds || []).length
+    ? `<p class="cc-panel-note">Who still needs an attendance state is on the activity's Roster tab in Training Load.</p>`
     : "";
-  return `${head}<ul class="cc-athletes" role="list">
+  const answersView = manager && cal.panelAnswers && cal.panelAnswers.panel === panel && cal.panelAnswers.key === item.key ? cal.panelAnswers : null;
+  const entries = answersView?.weekly ? ccAnswerEntries(item, answersView.weekly) : null;
+  const questionsRead = cal.panelQuestions && cal.panelQuestions.key === item.key ? cal.panelQuestions.read : null;
+  let summaryHtml = "";
+  if (manager) {
+    // A panel with nothing that can carry a value reads nothing: its summary
+    // (if anybody is counted) comes from the card's states alone.
+    const reads = ccAnswersReadable(item);
+    if (reads && (!answersView || answersView.loading)) summaryHtml = `<p class="cc-panel-note cc-answers-summary" role="status">Loading answers…</p>`;
+    else if (reads && answersView.error) summaryHtml = `<p class="cc-panel-note cc-answers-summary" role="status">Answers could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-answers-retry">Try again</button>`;
+    else {
+      const summary = ccAnswersSummary(athletes, entries);
+      const parts = ccAnswersSummaryParts(summary);
+      // A line breaks only at "·" (each part stays whole); the spoken label says "2 of 12".
+      if (parts.length) summaryHtml = `<p class="cc-answers-summary" role="status" aria-label="${escapeAttr(ccAnswersSummarySpoken(summary))}">${parts.map((part) => `<span class="cc-answers-part">${escapeHtml(part)}</span>`).join(` <span aria-hidden="true">·</span> `)}</p>`;
+    }
+  }
+  return `${head}${summaryHtml}<ul class="cc-athletes" role="list">
       ${athletes.map((athlete) => {
         const stateLabel = athleteStateLabel(athlete);
+        const answerText = entries ? ccAthleteAnswerText(entries.get(String(athlete.athleteId))) : "";
+        const changedText = manager && answerText ? ccChangedText(ccChangedAtOf(questionsRead, athlete.athleteId)) : "";
+        const excluded = manager && athlete.targeted === false;
         const names = (athlete.teamIds || []).map((id) => teamName(id, teams)).join(", ");
-        const side = `<span class="cc-athlete-side">${names ? `<span class="cc-athlete-teams">${escapeHtml(names)}</span>` : ""}${stateLabel ? `<span class="cc-athlete-state cc-athlete-state-${escapeAttr(athlete.rpe || athlete.result || "none")}">${escapeHtml(stateLabel)}</span>` : ""}`;
+        const stateHtml = answerText
+          ? `<span class="cc-athlete-state cc-athlete-values cc-athlete-state-${escapeAttr(athlete.rpe || "none")}">${escapeHtml(answerText)}</span>`
+          : stateLabel ? `<span class="cc-athlete-state cc-athlete-state-${escapeAttr(athlete.rpe || athlete.result || "none")}">${escapeHtml(stateLabel)}</span>` : "";
+        const side = `<span class="cc-athlete-side">${names ? `<span class="cc-athlete-teams">${escapeHtml(names)}</span>` : ""}${stateHtml}${changedText ? `<span class="cc-athlete-changed">${escapeHtml(changedText)}</span>` : ""}${excluded ? `<span class="cc-athlete-note">No longer in this event</span>` : ""}`;
         if (!roster?.has(String(athlete.athleteId))) {
           return `<li><div class="cc-athlete cc-athlete-static">
             <span class="cc-athlete-name">${escapeHtml(athlete.name || "Athlete")}</span>
             ${side}<span class="cc-athlete-note">Not in this workspace's roster</span></span>
           </div></li>`;
         }
-        return `<li><button type="button" class="cc-athlete" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(athlete.athleteId)}" data-date="${escapeAttr(item.date)}" aria-label="${escapeAttr(`${athlete.name || "Athlete"}, open the weekly plan on ${centralCalendarLongDate(item.date)}`)}">
+        // A reader's row is exactly today's (contract section 2, Q6); a manager's
+        // names its values in the label and shows where it leads.
+        const spoken = manager
+          ? [athlete.name || "Athlete", ccSpokenAnswerText(answerText || stateLabel), changedText, excluded ? "no longer in this event" : "", `open the weekly plan on ${centralCalendarLongDate(item.date)}`].filter(Boolean).join(", ")
+          : `${athlete.name || "Athlete"}, open the weekly plan on ${centralCalendarLongDate(item.date)}`;
+        return `<li><button type="button" class="cc-athlete" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(athlete.athleteId)}" data-date="${escapeAttr(item.date)}" aria-label="${escapeAttr(spoken)}">
             <span class="cc-athlete-name">${escapeHtml(athlete.name || "Athlete")}</span>
-            ${side}</span>
+            ${side}</span>${manager ? `
+            <span class="cc-athlete-go" aria-hidden="true">Weekly plan ›</span>` : ""}
           </button></li>`;
       }).join("")}
     </ul>${rosterNote}`;
@@ -1075,6 +1251,81 @@ function renderPlannedLinksHtml(item, cal, pending, linkEntries = []) {
   return `<section class="cc-panel-links" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}><h4 class="cc-panel-subtitle" id="ccLinksTitle">Link to an event</h4>${feedback}${body}${partialHtml}</section>`;
 }
 
+// ---------------------------------------------------------------------------
+// K5-1 (central-calendar-k5-12-contract.md 1.2): *Go there* - each panel's way to where its work is done. A button
+// that leaves the calendar carries a trailing arrow (Q5); the openers record the calendar's place first, so Back
+// returns to the same day with the same panel (K4-0). The Builder is not a target (Q1).
+// ---------------------------------------------------------------------------
+function goButtonHtml({ action, label, attrs = "", primary = false, aria = "" }) {
+  return `<button type="button" class="plain-button${primary ? " cc-primary" : ""} cc-panel-button cc-go-button" data-action="${action}" ${attrs}${aria ? ` aria-label="${escapeAttr(aria)}"` : ""}>${escapeHtml(label)}</button>`;
+}
+
+function weekdayLong(iso) {
+  return new Intl.DateTimeFormat("en-GB", { weekday: "long" }).format(dateAtNoon(iso));
+}
+
+// The targets of one card, in the plan's order (RPE, Tests, then the activities); each with its button and a short
+// line. The schedule ids are a manager's only (a reader's event card carries none), so a reader gets the activities.
+export function centralCalendarGoTargets(item) {
+  const links = item?.links || {};
+  const date = item?.date || "";
+  const targets = [];
+  if ((item?.kind === "external" || item?.kind === "event") && links.externalScheduleId) {
+    targets.push({
+      key: "rpe", name: "RPE request", meta: item.kind === "event" && item.rpe ? `RPE ${item.rpe.submitted}/${item.rpe.asked}` : "",
+      action: "central-calendar-open-rpe-schedule", label: "Open in Training Load",
+      attrs: `data-schedule-id="${escapeAttr(links.externalScheduleId)}" data-date="${escapeAttr(date)}"`,
+      hint: "Opens Training Load › Schedule on this RPE request.",
+    });
+  }
+  if ((item?.kind === "test" || item?.kind === "event") && links.testScheduleId) {
+    targets.push({
+      key: "test", name: "Test", meta: item.kind === "event" && item.results ? `Results ${item.results.completed}/${item.results.expected}` : "",
+      action: "central-calendar-open-tests", label: "Open in Tests",
+      attrs: `data-schedule-id="${escapeAttr(links.testScheduleId)}" data-date="${escapeAttr(date)}"`,
+      hint: `Opens Tests on ${weekdayLong(date)}, to see who has answered.`,
+    });
+  }
+  const activityIds = links.activityIds || [];
+  if (activityIds.length) {
+    const thing = item.kind === "event" ? "event" : item.kind === "external" ? "RPE request" : "training";
+    const one = activityIds.length === 1;
+    targets.push({
+      key: "activity",
+      name: one ? (centralCalendarItemImported(item) ? "GPS data" : "Activity") : `${activityIds.length} activities`,
+      meta: "",
+      action: "central-calendar-open-training-load",
+      label: one ? "Open in Training Load" : "Open the day in Training Load",
+      attrs: `${one ? `data-activity-id="${escapeAttr(activityIds[0])}" ` : ""}data-date="${escapeAttr(date)}"`,
+      hint: item.kind === "activity" ? "" : one ? `1 activity is recorded for this ${thing}.` : `${activityIds.length} activities are recorded for this ${thing}.`,
+    });
+  }
+  return targets;
+}
+
+function renderGoThereHtml(item) {
+  const targets = centralCalendarGoTargets(item);
+  if (!targets.length) return "";
+  // An event lists what it holds, one row per item with its own button (E2).
+  if (item.kind === "event") {
+    return `<section class="cc-go cc-go-event" aria-labelledby="ccGoTitle">
+        <h4 class="cc-panel-subtitle" id="ccGoTitle">In this event</h4>
+        <ul class="cc-go-list" role="list">${targets.map((target) => `<li class="cc-go-row"><p class="cc-go-name">${escapeHtml(target.name)}${target.meta ? ` <span class="cc-go-meta">· ${escapeHtml(target.meta)}</span>` : ""}</p>${goButtonHtml({ ...target, aria: `${target.label}: ${target.name}` })}</li>`).join("")}</ul>
+      </section>`;
+  }
+  // Any other panel: the first target full width and primary with its line; the rest after it (Q2).
+  const needsState = item.kind === "activity" ? Number(item.attendance?.needsState) || 0 : 0;
+  const activityId = (item.links?.activityIds || [])[0];
+  const roster = needsState > 0 && activityId
+    ? `<p class="cc-panel-note cc-go-warn">${escapeHtml(`${needsState} ${needsState === 1 ? "athlete needs" : "athletes need"} an attendance state.`)}</p>
+      ${goButtonHtml({ action: "central-calendar-open-training-load", label: `Roster · ${needsState} need${needsState === 1 ? "s" : ""} a state`, attrs: `data-activity-id="${escapeAttr(activityId)}" data-date="${escapeAttr(item.date)}" data-tab="roster"` })}`
+    : "";
+  return `<section class="cc-go" aria-label="Go there">
+      ${targets.map((target, index) => `${goButtonHtml({ ...target, primary: index === 0 })}${target.hint ? `<p class="cc-panel-note cc-go-hint">${escapeHtml(target.hint)}</p>` : ""}`).join("")}
+      ${roster}
+    </section>`;
+}
+
 function panelHost(body, layout) {
   if (layout === "wide") return `<aside class="cc-panel" aria-labelledby="ccPanelTitle">${body}</aside>`;
   return `<button type="button" class="cc-sheet-backdrop" data-action="central-calendar-close-panel" aria-label="Close" tabindex="-1"></button>
@@ -1095,14 +1346,6 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
   // K2b-2a-2b: a live question is something expected after the event.
   const sentence = ownSentence === "Nothing is expected after this event." && item.canManage === true && ccPanelQuestionsWaiting(cal.panelQuestions, item) ? CC_WAITING_SENTENCE : ownSentence;
   const count = centralCalendarCountLabel(item);
-  const activityIds = item.links?.activityIds || [];
-  const thing = item.kind === "event" ? "event" : item.kind === "external" ? "RPE request" : "training";
-  const singularNote = item.kind === "planned" || item.kind === "external" || item.kind === "event" ? `<p class="cc-panel-note">1 activity is recorded for this ${thing}.</p>` : "";
-  const trainingLoad = activityIds.length === 1
-    ? `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-open-training-load" data-activity-id="${escapeAttr(activityIds[0])}" data-date="${escapeAttr(item.date)}">Open in Training Load</button>${singularNote}`
-    : activityIds.length > 1
-      ? `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-open-training-load" data-date="${escapeAttr(item.date)}">Open the day in Training Load</button><p class="cc-panel-note">${activityIds.length} activities are recorded for this ${thing}.</p>`
-      : "";
   // K2c-1: this panel's link command left not confirmed (by the event, or by
   // the planned card it was sent from).
   const pending = uncertainWrites.find((entry) => entry.mode === "link" && (entry.panelKey === item.key || (item.kind === "event" && entry.eventId === item.eventId))) || null;
@@ -1121,12 +1364,13 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: item.canManage === true && formCtx.catalog?.questionsEnabled === true && ccPanelAskOffered(item, cal.panelQuestions, "rpe", questionChannelsOf(item, cal)) }) : ""}
       ${item.kind === "event" ? renderCentralCalendarEventDetailsHtml(item, cal.panelEvent) : ""}
+      ${item.kind === "event" ? renderGoThereHtml(item) : ""}
       ${item.kind === "event" ? renderK3PanelHtml(item, cal, { locked: linksLocked }) : ""}
       ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending, pendingQuestion) : ""}
       ${questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : ""}
       ${renderEventActionsHtml(item, { locked: linksLocked })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
-      ${trainingLoad}
+      ${item.kind === "event" ? "" : renderGoThereHtml(item)}
       <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`;
   return panelHost(body, layout);
 }
@@ -1185,11 +1429,10 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   const days = cal.anchor ? centralCalendarDisplayedDays(cal.view, cal.anchor) : [];
   const counts = centralCalendarChipCounts(byDate, days);
   // FE-D16: a chosen kind read on its own counts what it shows (an RPE request no longer folded into its event).
+  // K5-2: the chosen *Show only* kind's own count from that answer - Other activities leaves its imports out.
   const shown = centralCalendarShownData(cal);
-  if (shown && shown !== cal.data) {
-    const own = centralCalendarChipCounts(centralCalendarItemsByDate(shown), days).kinds;
-    for (const kind of centralCalendarServerKinds(cal.filters).split(",")) counts.kinds[kind] = own[kind] || 0;
-  }
+  const only = (cal.filters?.kinds || [])[0] || "";
+  if (shown && shown !== cal.data && only) counts.kinds[only] = centralCalendarChipCounts(centralCalendarItemsByDate(shown), days).kinds[only] || 0;
   // The panel column exists only while the open item is really in the answer,
   // or while the event form is open.
   const panelOpen = Boolean(cal.form) || Boolean(panelItemOf(cal));

@@ -1035,10 +1035,14 @@ function coachWorkspaceScopeSqlForWorkspace(workspace, req, alias, startIndex) {
 
 // ------------------------------------------------------------
 // Shared weekly projection - Coach Today/Schedule/Results tabs AND the
-// athlete's own Weekly plan view all read this one endpoint. Purely
-// read-only: no materialization, no write, of any kind - browsing a week
-// (past, present, or future) can never create or alter a training session
-// or a feedback row.
+// athlete's own Weekly plan view (and, since the event panel package, the
+// central calendar's event panel for its manager) all read this one
+// endpoint. Browsing a week (past, present, or future) can never create or
+// alter a training session or a feedback row. Its one write: a coach's read
+// first materializes the ACTIVE workspace's due external RPE occurrences
+// (ensureCurrentExternalOccurrencesForCoach, below) - the same write every
+// coach Training Load read makes; it changes no authorization and exposes
+// nothing. In the platform workspace that covers every active schedule.
 //
 // Dual-scoped by caller: an athlete account whose CURRENT active
 // workspace is "athlete" is always scoped to their own athlete_id (never
@@ -1182,7 +1186,7 @@ router.get("/weekly", async (req, res, next) => {
     }
 
     const liveResult = await query(
-      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled, ps.training_load_enabled,
+      `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.am_pm, ps.bta, ps.session_time, ps.rpe_enabled, ps.training_load_enabled, ps.session_order,
               pd.date as session_date, p.id as plan_id, p.name as plan_name, p.created_by_user_id as plan_created_by_user_id,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at,
@@ -1273,7 +1277,7 @@ router.get("/weekly", async (req, res, next) => {
     // a second, duplicate entry (which would double the athlete's sRPE in
     // every aggregate).
     const orphanedResult = await query(
-      `select sf.id as feedback_id, sf.session_date, sf.plan_name, sf.session_name, sf.session_am_pm as am_pm, sf.session_bta as bta, sf.session_time,
+      `select sf.id as feedback_id, sf.logical_session_id, sf.session_date, sf.plan_name, sf.session_name, sf.session_am_pm as am_pm, sf.session_bta as bta, sf.session_time,
               sf.athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
        from training_load.session_feedback sf
@@ -1318,6 +1322,13 @@ router.get("/weekly", async (req, res, next) => {
         : false;
       bucket.sessions.push({
         sessionId: row.session_id,
+        // Event panel package: an opaque id of a session whose row this
+        // caller already reads (the same id is on its calendar card's
+        // links.logicalSessionIds), and the session's order in its slot,
+        // so two sessions of one slot can be told apart. Neither changes
+        // which rows are returned or to whom.
+        logicalSessionId: row.logical_session_id,
+        sessionOrder: row.session_order,
         sessionName: row.session_name || "",
         amPm: row.am_pm || "",
         bta: row.bta || "",
@@ -1384,6 +1395,10 @@ router.get("/weekly", async (req, res, next) => {
       if (!bucket) continue;
       bucket.sessions.push({
         sessionId: null,
+        // The feedback row's own logical_session_id (non-null: source is
+        // 'planned'); it stores no order, so sessionOrder is null.
+        logicalSessionId: row.logical_session_id,
+        sessionOrder: null,
         sessionName: row.session_name || "",
         amPm: row.am_pm || "",
         bta: row.bta || "",
