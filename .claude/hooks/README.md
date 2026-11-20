@@ -204,6 +204,24 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
 
 ### ASK added with the hardening (Bash + PowerShell)
 
+- P3-P5 (owner, in the executor's session, 2026-11-20). `.claude/settings.json` lets `git add`,
+  `git commit`, `git push -u origin …`/`git push origin …`, `rm`, `rmdir`, `cp`, `mv`, `mkdir`,
+  `ln`, `touch` and `pg_ctlcluster 16 main stop` through by name; the hook asks for every form
+  outside the approved scope:
+  - `git add -u`/`--update`/`-f`/`--force`, a glob or magic pathspec (`*.js`, `:/`), a pathspec
+    file; `git commit -a`/`--all` (and in clusters, `-am`); a commit on `main` or `master`;
+  - every push except `git push [-u|--set-upstream] [-q] origin <B>` where `<B>` is the branch
+    checked out where the push runs (read from git, as a full ref) and not `main`/`master`: a bare
+    `git push`, another remote or branch, a refspec, tags, `--no-verify`, any other option;
+  - `rm`, `rmdir`, `cp`, `mv`, `mkdir`, `ln`, `touch` unless every path they change is inside the
+    session's own temporary folder (never the folder itself), outside every git work tree (a
+    recursive delete or move of a folder that holds one asks too), absolute, without `..`,
+    named literally or by a plain variable of the same line; a glob only in the last part of a
+    non-recursive `rm`. `cp` reads its sources and `ln -s` writes only a link's text, so those
+    may be anywhere; `mv` deletes its sources, so they must be inside. A hard link (`ln` without
+    `-s`, `cp -l`) always asks, and so does overwriting a hard-linked or symlinked file. Without a
+    `session_id` in the hook input there is no own folder, and all of these ask.
+
 - `git stash pop`; `git branch -D` (and `-d -f`, `--delete --force`); a push that deletes a
   remote branch (`--delete`, `-d`, `origin :branch`, `--prune`, `--mirror`); `git pull
   --rebase` / `-r` / `--rebase=<anything but false>`. They were silent before, which
@@ -318,10 +336,12 @@ unknown and the redirect asks. A setter word (`read`, `printf`, `declare`, `mapf
 again), or any indirection (`${!x}`, an assignment inside `$(( ))` or `(( ))`, which also covers
 `$(( $T = 5 ))`), makes EVERY variable of the line unknown: `T=S; time read $T` sets `S`
 without naming it, as the tests prove with real bash. **An existing
-file always asks**, whatever it is: rewriting or appending to it may change something that runs
-later — a script, a `package.json` (npm run), a SQL file (psql -f), a patch (git apply), a list
-(xargs), a `postgresql.conf` (pg_ctl start runs its commands). Measured on the replay: 29 of
-1,252 calls write to an existing scratch file and ask for that. A target with `..`, `~`, a glob, or a
+file asks**, whatever it is (rewriting or appending to it may change something that runs later — a
+script, a `package.json`, a SQL file for psql -f, a patch, a `postgresql.conf`), with one exception
+since 2026-11-20 (owner): a plain file inside this session's OWN temporary folder (its scratchpad,
+`<tmp>/claude-<uid>/<project>/<session id>/scratchpad`, known from the hook input's `session_id`),
+outside every git work tree, and not a hard link (another name of the file could be in a
+repository); a symbolic link there still asks. A target with `..`, `~`, a glob, or a
 variable whose value is not a plain assignment earlier in the same line (`S=/tmp/x; ... > $S/out`)
 asks. Commands that are not on the allow list (`echo x > file`) are left to Claude Code's own
 redirection check.

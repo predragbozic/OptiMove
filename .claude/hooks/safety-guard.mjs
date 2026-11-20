@@ -1473,8 +1473,9 @@ function insideGitWorkTreeOrGitDir(realPath) {
 }
 
 export function isWritableTempTarget(target) {
-  // An existing file, link or folder always asks; so does a dangling link.
-  try { fs.lstatSync(target); return false; } catch { /* does not exist yet: go on */ }
+  // An existing file asks, except a plain file of this session's own temporary folder (owner,
+  // 2026-11-20); a link, a folder, a hard link or a dangling link always asks.
+  try { fs.lstatSync(target); return !fs.lstatSync(target).isSymbolicLink() && isChangeableScratchFile(target); } catch { /* does not exist yet: go on */ }
   // the real place of the new file: its nearest existing parent, every link followed
   // The parts of the path that do not exist yet are kept: /tmp/x/.git/hooks/f with only /tmp/x
   // existing is still a path through a .git.
@@ -2028,6 +2029,9 @@ const DENY_REASONS = {
 };
 
 const ASK_REASONS = {
+  stageBroad: "This stages more than the files it names (git add -u/-f/a glob/a pathspec file, git commit -a) — needs your explicit confirmation.",
+  pushNotOwnBranch: "Only 'git push [-u] origin <the branch checked out here>' (not main/master) goes without a question; this push is another form — needs your explicit confirmation.",
+  fileOpOutsideScratch: "This deletes, moves or changes a path that is not plainly inside this session's own temporary folder (or touches a git work tree, a hard link, or the folder itself) — needs your explicit confirmation.",
   mergeRebase:
     "'git merge'/'git rebase' rewrites branch history or state — needs your explicit confirmation. (Only a plain 'git merge origin/main' into a working branch that is not main/master goes without one.)",
   ghPrMerge: "'gh pr merge' merges a pull request — needs your explicit confirmation.",
@@ -2117,6 +2121,224 @@ export function hasBackgroundJob(text) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Executor work without a question (owner, in the executor's session, 2026-11-20): commit and
+// push to one's own work branch (never main, never force), starting and stopping the local test
+// database, deleting and changing files in one's own temporary folder. `.claude/settings.json`
+// lets these commands through by name; the rules below ask for every form outside that scope,
+// and a hook "ask" still prompts when an allow rule matches.
+// ---------------------------------------------------------------------------
+
+// The session's own scratch folder: <tmp>/claude-<uid>/<project>/<session id>/scratchpad. Set by
+// classifyToolCall from the hook input; without a session id there is no own folder.
+let currentSessionId = null;
+
+function insideOwnScratch(realPath, { rootAllowed = false } = {}) {
+  if (!currentSessionId || typeof realPath !== "string") return false;
+  for (const root of tempRoots()) {
+    const esc = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = new RegExp(`^${esc}/claude-[^/]+/[^/]+/${currentSessionId}/scratchpad(/.*)?$`).exec(realPath);
+    if (m) return rootAllowed || Boolean(m[1] && m[1] !== "/");
+  }
+  return false;
+}
+
+// The real place of a path: every link followed, for the parts that exist; the missing tail kept.
+// followLast=false keeps a final symbolic link itself (rm removes the link, not its target).
+function realPlace(p, { followLast = true } = {}) {
+  let probe = p;
+  const missing = [];
+  if (!followLast) {
+    try { fs.lstatSync(p); probe = path.dirname(p); missing.unshift(path.basename(p)); } catch { /* resolved below */ }
+  }
+  for (let n = 0; n < 64; n++) {
+    try { return path.join(fs.realpathSync(probe), ...missing); } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) return null;
+      missing.unshift(path.basename(probe));
+      probe = parent;
+    }
+  }
+  return null;
+}
+
+// A folder that holds a git work tree or a .git anywhere inside it (a recursive delete or move
+// would take it along). A walk that is too large to finish counts as one.
+function containsGitWorkTree(dir) {
+  let budget = 20000;
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (--budget < 0) return true;
+      if (e.name === ".git") return true;
+      if (e.isDirectory() && !e.isSymbolicLink()) stack.push(path.join(d, e.name));
+    }
+  }
+  return false;
+}
+
+// An existing file that may be changed: inside the own scratch folder, not a folder, and not a
+// hard link (another name of the same file could live anywhere, a repository included).
+function isChangeableScratchFile(target) {
+  let st;
+  try { st = fs.statSync(target); } catch { return false; }
+  if (!st.isFile() || st.nlink > 1) return false;
+  const real = realPlace(target);
+  return Boolean(real) && insideOwnScratch(real) && !insideGitWorkTreeOrGitDir(real);
+}
+
+const SCRATCH_OPS = {
+  rm: { short: "rRfvd", long: ["--recursive", "--force", "--verbose", "--dir"] },
+  rmdir: { short: "pv", long: ["--parents", "--verbose"] },
+  cp: { short: "rRpafvnLPHT", long: ["--recursive", "--preserve", "--archive", "--force", "--verbose", "--no-clobber", "--dereference", "--no-dereference", "--no-target-directory"] },
+  mv: { short: "fvnT", long: ["--force", "--verbose", "--no-clobber", "--no-target-directory"] },
+  mkdir: { short: "pv", long: ["--parents", "--verbose"] },
+  ln: { short: "sfnvT", long: ["--symbolic", "--force", "--no-dereference", "--verbose", "--no-target-directory"] },
+  touch: { short: "cam", long: ["--no-create"] },
+};
+
+// rm, rmdir, cp, mv, mkdir, ln, touch: no question only when every path it changes is inside the
+// own scratch folder (never the folder itself), outside every git work tree, named literally (a
+// plain variable of the same line counts), absolute, without `..`; a glob only in the last part
+// and never with a recursive delete. cp reads its sources from anywhere; mv deletes its sources,
+// so they must be inside too. A hard link (ln without -s, cp -l) always asks.
+export function scratchFileOpNeedsQuestion(segment, variables = new Map()) {
+  // the raw words (quotes kept, for the variables) and the words as the command receives them
+  const rawWords = withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment))));
+  const words = rawWords.map(shellWord);
+  const name = words[0];
+  if (!Object.prototype.hasOwnProperty.call(SCRATCH_OPS, name)) return false;
+  // a substitution anywhere in the part (the words above are read with it masked) could put any
+  // path into an operand after the hook looked: `rm $S/\`echo ../../x\``
+  if (/`|\$\(|[<>]\(/.test(segment)) return true;
+  const opSpec = SCRATCH_OPS[name];
+  const flags = new Set();
+  const resolved = [];
+  let afterDashes = false;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    if (!afterDashes && w === "--") { afterDashes = true; continue; }
+    if (!afterDashes && w.startsWith("--")) {
+      if (!opSpec.long.includes(w)) return true;
+      flags.add(w);
+      continue;
+    }
+    if (!afterDashes && /^-./.test(w)) {
+      for (const ch of w.slice(1)) {
+        if (!opSpec.short.includes(ch)) return true;
+        flags.add(`-${ch}`);
+      }
+      continue;
+    }
+    // an operand: the line's own plain variables put in, then read as the command would
+    let t = rawWords[i];
+    for (const [n, v] of variables) t = t.split("${" + n + "}").join(v).split("$" + n).join(v);
+    if (/[$`{}~\\]/.test(t)) return true;
+    resolved.push(shellWord(t));
+  }
+  if (!resolved.length) return true;
+  // cp reads its sources and ln -s only writes a link's text: those may be anywhere (a secret
+  // file still asks, by its own rule). Every path that is changed must be absolute.
+  const changed = name === "cp" || name === "ln" ? resolved.slice(-1) : resolved;
+  if (changed.some((p) => !path.isAbsolute(p) || p.split(/[\\/]/).includes(".."))) return true;
+  if (name === "ln" && !flags.has("-s") && !flags.has("--symbolic")) return true;
+  const recursive = flags.has("-r") || flags.has("-R") || flags.has("--recursive");
+  const mustBeInside = name === "cp" ? resolved.slice(-1) : name === "ln" ? resolved.slice(-1) : resolved;
+  for (const p of mustBeInside) {
+    const dirPart = path.dirname(p);
+    if (/[*?[\]]/.test(dirPart)) return true;
+    const globbed = /[*?[\]]/.test(path.basename(p));
+    if (globbed && (recursive || name !== "rm")) return true;
+    const followLast = name !== "rm" && name !== "rmdir" && name !== "mv";
+    const real = globbed ? (realPlace(dirPart) && path.join(realPlace(dirPart), path.basename(p))) : realPlace(p, { followLast });
+    if (!real || !insideOwnScratch(real) || insideGitWorkTreeOrGitDir(real)) return true;
+    // a recursive delete or a move takes everything inside along
+    if ((recursive || name === "mv") && !globbed) {
+      try { if (fs.lstatSync(p).isDirectory() && containsGitWorkTree(p)) return true; } catch { /* does not exist */ }
+    }
+    // overwriting an existing file: only a plain file of the scratch folder
+    if (name === "cp" || name === "touch" || name === "mv") {
+      try {
+        const st = fs.statSync(p);
+        if (!st.isDirectory() && !isChangeableScratchFile(p)) return true;
+      } catch { /* new */ }
+    }
+  }
+  if (name === "cp" && (flags.has("-l") || flags.has("--link"))) return true;
+  return false;
+}
+
+// git add that stages more than named files, or ignored ones: -u/--update, -f/--force, a
+// pathspec with a glob or magic (":/", ":(top)"), a pathspec file. (`.`, -A, --all are denied.)
+export function gitAddNeedsQuestion(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "add");
+  if (!parsed) return false;
+  for (const t of parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes)) {
+    if (t === "--") continue;
+    if (/^--/.test(t)) {
+      if (["--update", "--force", "--all", "--no-ignore-removal", "--renormalize"].some((o) => longOptionIs(t, o))) return true;
+      if (longOptionIs(t, "--pathspec-from-file")) return true;
+      continue;
+    }
+    if (/^-[A-Za-z]+$/.test(t)) {
+      if (/[uAf]/.test(t.slice(1))) return true;
+      continue;
+    }
+    if (/[*?[\]]/.test(t) || t.startsWith(":")) return true;
+  }
+  return false;
+}
+
+// git commit -a / --all stages every tracked change: the same as `git add -u`.
+export function gitCommitStagesAll(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "commit");
+  if (!parsed) return false;
+  for (const t of parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes)) {
+    if (t === "--") break;
+    if (/^--/.test(t) && longOptionIs(t, "--all")) return true;
+    // a short cluster up to its first option that takes a value (-am "x": a, then m)
+    if (/^-[A-Za-z]+$/.test(t)) {
+      for (const ch of t.slice(1)) {
+        if (ch === "a") return true;
+        if ("mFCcSu".includes(ch)) break;
+      }
+    }
+  }
+  return false;
+}
+
+// git commit on main or master (the hook reads the branch as a full ref).
+export function isCommitOnProtectedBranch(segment, cwd) {
+  const parsed = extractGitSubcommandArgs(segment, "commit");
+  if (!parsed) return false;
+  return isRefOneOf(getCurrentBranchRef(parsed.dir ? path.resolve(cwd, parsed.dir) : cwd), ["main", "master"]);
+}
+
+// git push without a question: only `git push [-u|--set-upstream] [-q|--quiet] origin <B>` where
+// <B> is the branch checked out where the push runs, and not main or master. A bare push, another
+// remote, another branch, a refspec, tags, --all, --mirror, --delete, any force: asks (or is
+// denied by the rules above).
+export function gitPushNeedsQuestion(segment, cwd) {
+  const parsed = extractGitSubcommandArgs(segment, "push");
+  if (!parsed) return false;
+  const tokens = parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes);
+  const operands = [];
+  for (const t of tokens) {
+    if (["-u", "--set-upstream", "-q", "--quiet"].includes(t)) continue;
+    if (t.startsWith("-")) return true;
+    operands.push(t);
+  }
+  if (operands.length !== 2 || operands[0] !== "origin") return true;
+  const branch = operands[1];
+  if (!REMOTE_OR_BRANCH_RE.test(branch) || branch.includes(":") || branch.startsWith("+")) return true;
+  if (/^(main|master)$/i.test(branch)) return true;
+  const ref = getCurrentBranchRef(parsed.dir ? path.resolve(cwd, parsed.dir) : cwd);
+  return ref !== `refs/heads/${branch}` || isRefOneOf(ref, ["main", "master"]);
+}
+
 export function classifyShellCommand(cmd, cwd) {
   const { text, shellBodies } = extractHeredocs(cmd);
   const topLevel = splitCommandSegments(text);
@@ -2170,7 +2392,10 @@ export function classifyShellCommand(cmd, cwd) {
     if (setsNonLocalDatabase(segment)) return { decision: "ask", reason: ASK_REASONS.nonLocalDatabase };
     if (mentionsSecretFile(segment)) return { decision: "ask", reason: ASK_REASONS.secretFile };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };
-    if (isCommitOnMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };
+    if (isCommitOnMain(segment, cwd) || isCommitOnProtectedBranch(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };
+    if (gitCommitStagesAll(segment) || gitAddNeedsQuestion(segment)) return { decision: "ask", reason: ASK_REASONS.stageBroad };
+    if (gitPushNeedsQuestion(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushNotOwnBranch };
+    if (scratchFileOpNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map())) return { decision: "ask", reason: ASK_REASONS.fileOpOutsideScratch };
     if (isDeployCommand(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };
     if (isMigrationRunner(segment)) return { decision: "ask", reason: ASK_REASONS.migration };
     if (isPersistentSqlWrite(segment)) return { decision: "ask", reason: ASK_REASONS.sqlWrite };
@@ -2234,6 +2459,8 @@ export function classifyToolCall(input) {
   const toolName = input && typeof input.tool_name === "string" ? input.tool_name : null;
   const toolInput = (input && input.tool_input) || {};
   const cwd = (input && typeof input.cwd === "string" && input.cwd) || process.cwd();
+  // the session's own temporary folder is known only through its id (see insideOwnScratch)
+  currentSessionId = input && typeof input.session_id === "string" && /^[A-Za-z0-9-]{8,80}$/.test(input.session_id) ? input.session_id : null;
 
   if (!toolName) return null;
 

@@ -92,7 +92,7 @@ const CASES = [
   ["git push -f origin main", bash("git push -f origin main"), DENY], // force wins even though target is also main
 
   // ---- ALLOW: normal feature push ----
-  ["git push origin feature/foo", bash("git push origin feature/foo"), ALLOW],
+  ["git push origin feature/foo", bash("git push origin feature/foo"), ASK], // P3: only the branch checked out here
 
   // ---- DENY: recursive root delete (Unix) ----
   ["rm -rf /", bash("rm -rf /"), DENY],
@@ -102,8 +102,8 @@ const CASES = [
   ["rm -fr . (flags reversed)", bash("rm -fr ."), DENY],
 
   // ---- ALLOW: scoped delete ----
-  ["rm -rf node_modules", bash("rm -rf node_modules"), ALLOW],
-  ["rm -rf ./dist/subdir", bash("rm -rf ./dist/subdir"), ALLOW],
+  ["rm -rf node_modules", bash("rm -rf node_modules"), ASK], // P5: outside the own temp folder (asked by Claude Code before too)
+  ["rm -rf ./dist/subdir", bash("rm -rf ./dist/subdir"), ASK],
 
   // ---- DENY: recursive root delete (PowerShell) ----
   ["Remove-Item -Recurse -Force C:\\", pwsh("Remove-Item -Recurse -Force C:\\"), DENY],
@@ -354,13 +354,13 @@ test("git checkout <tracked file path> without -- is denied (real discard risk, 
   assert.equal(result?.decision, "deny", "a tracked file path, not a valid revision, must not be silently treated as a safe branch switch");
 });
 
-test("commit/push-to-main checks degrade to 'unknown, don't ask' outside any git repo", () => {
+test("outside any git repo: a commit is 'unknown, don't ask'; a push asks (P3: silent only to the branch checked out)", () => {
   const nonRepoDir = mkdtempSync(path.join(tmpdir(), "safety-guard-non-repo-"));
   try {
     const commitResult = classifyToolCall(bash("git commit -m wip", nonRepoDir));
     const pushResult = classifyToolCall(bash("git push", nonRepoDir));
     assert.equal(commitResult, null);
-    assert.equal(pushResult, null);
+    assert.equal(pushResult?.decision, "ask");
   } finally {
     rmSync(nonRepoDir, { recursive: true, force: true });
   }
@@ -1141,7 +1141,7 @@ test("new ASK rules: stash pop, branch -D, deleting a remote branch, pull --reba
     ["git branch -d x", ALLOW], ["git branch --show-current", ALLOW], ["git branch -f x HEAD", ASK], ["git branch", ALLOW],
     ["git push origin --delete x", ASK], ["git push -d origin x", ASK], ["git push origin :x", ASK], ["git push origin +:x", ASK],
     ["git push --prune origin", ASK], ["git push --mirror", ASK],
-    ["git push origin x:y", ASK], ["git push -u origin fix/x", ALLOW], ["git push --dry-run origin x", ALLOW],
+    ["git push origin x:y", ASK], ["git push -u origin fix/x", ASK], ["git push --dry-run origin x", ASK], // P3: not the branch checked out here
     ["git pull --rebase", ASK], ["git pull --rebase=merges", ASK], ["git pull --rebase=interactive origin main", ASK], ["git pull -r", ASK], ["git pull -qr", ASK],
     ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW], ["git pull", ALLOW], ["git pull --ff-only", ALLOW],
   ]);
@@ -1240,9 +1240,14 @@ test("settings.json: the wider allow list is exactly the read and test commands 
   ];
   for (const entry of added) assert.ok(allow.includes(entry), `missing ${entry}`);
   const forbidden = /^Bash\((rm|mv|cp|curl|wget|psql|pg_dump|pg_restore|chmod|chown|tee|dd|awk|xargs|sh|bash|python|python3)\b|^Bash\(npx (?!vite build:\*\)$)|^Bash\(git (add|commit|reset|clean|stash|rebase|checkout|restore|switch|branch -[dD]|pull|merge)(?![-\w])|^Bash\(sed(?! -n)|\.claude|^mcp__(?!claude-code-remote__send_message$)|^Bash\(\*|^Bash\(.*\*.*\*/;
-  const offending = allow.filter((entry) => forbidden.test(entry));
+  // P3-P5 (owner, in the executor's session, 2026-11-20): these entries let the commands through by
+  // name; the hook asks for every form outside the approved scope (tests "P3" and "P5" below).
+  const approvedP3P5 = ["Bash(git add:*)", "Bash(git commit:*)", "Bash(git push -u origin:*)", "Bash(git push origin:*)", "Bash(rm:*)", "Bash(rmdir:*)",
+    "Bash(cp:*)", "Bash(mv:*)", "Bash(mkdir:*)", "Bash(ln:*)", "Bash(touch:*)", "Bash(pg_ctlcluster 16 main stop)"];
+  for (const entry of approvedP3P5) assert.ok(allow.includes(entry), `missing ${entry}`);
+  const offending = allow.filter((entry) => forbidden.test(entry) && !approvedP3P5.includes(entry));
   assert.deepEqual(offending, []);
-  assert.equal(allow.filter((e) => /^Bash\(git push/.test(e)).every((e) => /^Bash\(git push -u origin (design|feature|fix|docs)\/:\*\)$/.test(e)), true, "only the four branch-prefix pushes that were there before");
+  assert.equal(allow.filter((e) => /^Bash\(git push/.test(e)).every((e) => /^Bash\(git push -u origin (design|feature|fix|docs)\/:\*\)$/.test(e) || approvedP3P5.includes(e)), true, "no other push pattern");
 });
 
 // ------------------------------------------------------------------
@@ -1639,7 +1644,7 @@ test("HIGH-2: every git rule reads a long option as a possible prefix", () => {
     ["git reset --har", DENY], ["git reset --h HEAD~1", DENY], ["git reset --mer", ASK], ["git reset --kee HEAD~1", ASK], ["git reset --soft HEAD~1", ALLOW],
     ["git clean --forc", DENY], ["git clean -d --fo", DENY], ["git clean --forc --dry", ASK], ["git clean -n -d", ALLOW],
     ["git push --force-w origin x", DENY], ["git push --forc origin x", DENY], ["git push -uf origin x", DENY], ["git push origin +x", DENY], ["git push origin +x:y", DENY],
-    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ALLOW], ["git push --follow-tags origin x", ASK],
+    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ASK], ["git push --follow-tags origin x", ASK],
     ["git branch --del --forc x", ASK], ["git branch --del x", ASK], ["git branch --delete x", ALLOW],
     ["git restore --work f", DENY], ["git restore --stag f", ASK], ["git restore --staged f", ALLOW], ["git restore --stag --work f", DENY],
     ["git pull --reb", ASK], ["git pull --reb=false", ASK], ["git pull --no-reb", ASK], ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW],
@@ -1839,4 +1844,110 @@ test("LOW-1 (#665): `git config <subcommand>` that writes asks; get/list read", 
     ["git config rename-section a b", ASK], ["git config remove-section a", ASK], ["git config -e", ASK], ["git config user.name x", ASK],
     ["git config get user.name", ALLOW], ["git config list", ALLOW], ["git config --get user.name", ALLOW], ["git config user.name", ALLOW],
   ]);
+});
+
+// ------------------------------------------------------------------
+// P3-P5 (owner, in the executor's session, 2026-11-20): commit and push to one's own work branch,
+// the local test database, deleting and changing files in one's own temporary folder. Settings
+// let the commands through by name; the hook asks for every form outside that scope.
+// ------------------------------------------------------------------
+
+const SID = "0a1b2c3d-4e5f-4061-8a9b-0c1d2e3f4a5b";
+function makeScratch() {
+  const base = mkdtempSync(path.join(tmpdir(), "claude-test-"));
+  const scratch = path.join(base, "-proj", SID, "scratchpad");
+  mkdirSync(scratch, { recursive: true });
+  return { base, scratch };
+}
+const verdictIn = (command, cwd, sid = SID) => classifyToolCall({ ...bash(command, cwd), session_id: sid })?.decision ?? null;
+
+test("P5 (proof by execution): a hard link or a symlink in the scratch folder writes into the repository", () => {
+  const repo = makeRepo("sg-p5-link-", "feature/x");
+  const { base, scratch } = makeScratch();
+  try {
+    writeFileSync(path.join(repo, "f.txt"), "original\n");
+    execFileSync("ln", [path.join(repo, "f.txt"), path.join(scratch, "hard.txt")]);
+    execFileSync("ln", ["-s", path.join(repo, "f.txt"), path.join(scratch, "sym.txt")]);
+    for (const name of ["hard.txt", "sym.txt"]) {
+      const line = `cat /dev/null > ${path.join(scratch, name)}`;
+      writeFileSync(path.join(repo, "f.txt"), "original\n");
+      execFileSync("bash", ["-c", line]);
+      assert.equal(readFileSync(path.join(repo, "f.txt"), "utf8"), "", `bash did not write through ${name}`);
+      assert.equal(verdictIn(line, repo), ASK, line);
+      assert.equal(verdictIn(`cp /dev/null ${path.join(scratch, name)}`, repo), ASK);
+    }
+    // a hard link is never made without a question; a symbolic link only as text
+    assert.equal(verdictIn(`ln ${path.join(repo, "f.txt")} ${path.join(scratch, "h2")}`, repo), ASK);
+    assert.equal(verdictIn(`cp -l ${path.join(repo, "f.txt")} ${path.join(scratch, "h3")}`, repo), ASK);
+    assert.equal(verdictIn(`ln -s ${path.join(repo, "f.txt")} ${path.join(scratch, "s2")}`, repo), ALLOW);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("P5: files in the own scratch folder are deleted and changed without a question; nothing else is", () => {
+  const repo = makeRepo("sg-p5-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const other = path.join(base, "-proj", "ffffffff-0000-4000-8000-000000000000", "scratchpad");
+  try {
+    mkdirSync(other, { recursive: true });
+    writeFileSync(path.join(scratch, "plain.txt"), "x");
+    writeFileSync(path.join(other, "theirs.txt"), "x");
+    mkdirSync(path.join(scratch, "empty"));
+    mkdirSync(path.join(scratch, "holds-wt", "w"), { recursive: true });
+    writeFileSync(path.join(scratch, "holds-wt", "w", ".git"), "gitdir: x\n");
+    execFileSync("git", ["init", "-q", path.join(scratch, "wt")]);
+    const s = scratch;
+    const rows = [
+      [`rm ${s}/plain.txt`, ALLOW], [`rm -f ${s}/plain.txt 2>/dev/null`, ALLOW], [`rm -rf ${s}/empty`, ALLOW], [`rm ${s}/*.txt`, ALLOW], [`rmdir ${s}/empty`, ALLOW],
+      [`S=${s}; rm $S/plain.txt`, ALLOW], [`mkdir -p ${s}/a/b`, ALLOW], [`touch ${s}/new.txt`, ALLOW], [`cp README.md ${s}/copy.md`, ALLOW],
+      [`mv ${s}/plain.txt ${s}/renamed.txt`, ALLOW], [`ln -s README.md ${s}/link`, ALLOW], [`cat README.md > ${s}/plain.txt`, ALLOW],
+      // outside the own folder, the folder itself, a work tree, or not readable here
+      [`rm ${s}`, ASK], [`rm -rf ${s}`, ASK], [`rm ${other}/theirs.txt`, ASK], [`cat README.md > ${other}/theirs.txt`, ASK], [`rm -rf ${s}/wt`, ASK],
+      [`rm -rf ${s}/wt/x`, ASK], [`rm -rf ${s}/holds-wt`, ASK], [`mv ${s}/holds-wt ${s}/elsewhere`, ASK], [`rm -rf ${s}/*`, ASK], [`rm ${repo}/f`, ASK],
+      [`rm plain.txt`, ASK], [`rm $X/plain.txt`, ASK], [`rm ${s}/../x`, ASK], [`rm ~/x`, ASK], [`rm -i ${s}/plain.txt`, ASK], [`rm --no-preserve-root ${s}/x`, ASK],
+      [`mv ${s}/plain.txt ${repo}/x`, ASK], [`mv ${repo}/README.md ${s}/x`, ASK], [`cp README.md ${repo}/x`, ASK], [`mkdir ${repo}/d`, ASK], [`touch ${repo}/t`, ASK],
+      [`rm ${s}/plain.txt; rm -f ${repo}/x`, ASK], [`echo $(rm ${repo}/x)`, ASK],
+      // brace expansion and substitutions are computed by bash after the hook looked: {..,a} is ../
+      [`rm ${s}/{..,a}/plain.txt`, ASK], [`rm -rf ${s}/{a,..}`, ASK], [`rm ${s}/\`echo x\``, ASK], [`rm ${s}/$(echo ../../x)`, ASK], [`rm -rf ${s}/\`printf %s ../../../x\``, ASK], [`touch ${s}/a\\b`, ASK],
+    ];
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+    // the own folder is the one of THIS session: another id, or none, asks
+    assert.equal(verdictIn(`rm ${s}/plain.txt`, repo, "ffffffff-0000-4000-8000-000000000000"), ASK);
+    assert.equal(classifyToolCall(bash(`rm ${s}/plain.txt`, repo))?.decision, ASK);
+    // a relative path is read against the hook's own process folder, not the command's: it asks
+    const here = process.cwd();
+    try {
+      process.chdir(s);
+      assert.equal(verdictIn("rm plain.txt", s), ASK);
+      assert.equal(verdictIn("touch ./new.txt", s), ASK);
+    } finally { process.chdir(here); }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("P3: commit and push to the own work branch without a question; everything else asks", () => {
+  const repo = makeRepo("sg-p3-", "feature/own");
+  const onMaster = makeRepo("sg-p3-master-", "master");
+  try {
+    expectAll([
+      ["git add src/a.js", ALLOW], ["git add -- a.js b.js", ALLOW], ["git commit -m x", ALLOW], ["git commit --amend --no-edit", ALLOW],
+      ["git push -u origin feature/own", ALLOW], ["git push origin feature/own", ALLOW], ["git push -q --set-upstream origin feature/own", ALLOW],
+      [`git -C ${repo} push -u origin feature/own`, ALLOW],
+      ["git add -u", ASK], ["git add --update", ASK], ["git add -f .env.example", ASK], ["git add --force x", ASK], ["git add 'src/*.js'", ASK],
+      ["git add :/", ASK], ["git add --pathspec-from-file=list", ASK], ["git commit -am x", ASK], ["git commit -a -m x", ASK], ["git commit --all -m x", ASK],
+      ["git push", ASK], ["git push origin", ASK], ["git push origin feature/other", ASK], ["git push upstream feature/own", ASK],
+      ["git push origin feature/own:main", ASK], ["git push origin feature/own:feature/other", ASK], ["git push --tags", ASK], ["git push origin v1", ASK],
+      ["git push --no-verify origin feature/own", ASK], ["git push -v origin feature/own", ASK], ["git push --dry-run origin feature/own", ASK], ["git push origin main", ASK], ["git push -f origin feature/own", DENY],
+    ], repo);
+    assert.equal(verdict("git commit -m x", onMaster), ASK);
+    assert.equal(verdict("git push -u origin master", onMaster), ASK);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(onMaster, { recursive: true, force: true });
+  }
 });
