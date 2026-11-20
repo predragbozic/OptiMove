@@ -28,6 +28,11 @@ export const CALENDAR_TESTS_MIGRATIONS = Object.freeze([
 export const CALENDAR_QUESTIONS_MIGRATIONS = Object.freeze([
   "202611191000_calendar_v81_athlete_questions.sql",
 ]);
+// v83 (K4b, an athlete changes their own RPE answer): a calendar-stream migration of training_load; kept out of
+// GPEXE_TEST_MIGRATIONS so the suites that pin their own last migration (v79) stay as they are.
+export const CALENDAR_RPE_CHANGE_MIGRATIONS = Object.freeze([
+  "202611201200_training_load_v83_rpe_answer_change.sql",
+]);
 export const CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS = Object.freeze([
   "202609011200_training_load_v6_external_schedule_event_type.sql",
   // v7 (the external schedules' notification rules): the calendar's RPE
@@ -40,7 +45,7 @@ export const CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS = Object.freeze([
 // the list there, so a suite that rehearses a rollback never has a later
 // migration between its rehearsal and its checks.
 export function calendarMigrations({ upTo = null } = {}) {
-  const all = [...CALENDAR_TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS, ...CALENDAR_QUESTIONS_MIGRATIONS].sort();
+  const all = [...CALENDAR_TESTS_MIGRATIONS, ...GPEXE_TEST_MIGRATIONS, ...CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS, ...CALENDAR_QUESTIONS_MIGRATIONS, ...CALENDAR_RPE_CHANGE_MIGRATIONS].sort();
   return upTo ? all.filter((m) => m <= upTo) : all;
 }
 

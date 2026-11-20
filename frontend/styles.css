@@ -8730,6 +8730,9 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-batch-sync { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 13px; font-weight: 800; white-space: nowrap; }
 .builder-batch-sync input { width: 16px; height: 16px; margin: 0; accent-color: #287e77; }
 .builder-batch-mode small { color: #667085; font-size: 12px; }
+.builder-batch-hidden { display: block; color: #667085; font-size: 12px; overflow-wrap: anywhere; }
+.builder-batch-hidden-alone { margin: 0; padding: 8px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; }
+.builder-batch-edit-note { margin: 0; padding: 10px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
 .builder-batch-buttons { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .builder-batch-pills { display: flex; gap: 6px; max-width: min(420px, 42vw); overflow-x: auto; padding: 2px; }
 .builder-batch-pill { flex: 0 0 76px; width: 76px; height: 74px; display: grid; justify-items: center; align-content: center; gap: 5px; padding: 4px; border: 0; border-radius: 6px; background: transparent; color: #344054; font-weight: 800; cursor: pointer; }
@@ -8947,6 +8950,11 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
   .builder-batch-sync { width: 100%; justify-content: center; box-sizing: border-box; }
   .builder-batch-buttons { justify-content: space-between; }
   .builder-batch-pills { max-width: 100%; }
+  /* A batch of many athletes (a K3 team plan: the whole team) scrolls its
+     pills sideways inside the switcher instead of widening the page. */
+  .builder-batch-switcher, .builder-batch-controls, .builder-batch-buttons { min-width: 0; max-width: 100%; }
+  .builder-batch-controls, .builder-batch-buttons { width: 100%; box-sizing: border-box; }
+  .builder-batch-pills { flex: 1 1 0; min-width: 0; }
   .builder-source-actions { align-items: flex-end; flex-direction: column; gap: 6px; }
   .builder-copy-plan-footer { align-items: stretch; flex-direction: column; }
   .builder-copy-plan-footer .plain-button { width: 100%; }
@@ -20647,6 +20655,7 @@ body.exercise-header-pinned #viewToolbar {
    same tokens. */
 .central-calendar,
 .calendar-settings,
+.builder-workspace,
 .athlete-home-events {
   --cc-team-0: #1f6f68;
   --cc-team-1: #b5542b;
@@ -28839,6 +28848,99 @@ body:not(.athlete-mode):not(.login-mode) .cc-builder-event .plain-button {
   }
 }
 
+/* ============================================================
+   K3 (docs/ai/central-calendar-k3-plan.md 2.1 - 2.7; the owner-approved
+   mockup docs/design/calendar-k4/01): Plan the training in the event's
+   panel, its sheet, and in the Builder the band, the event's day, the
+   In / Not in this event chips and the Save and link bar. Every state has
+   words and a glyph, never colour alone; 44 px targets.
+   ============================================================ */
+.cc-panel-k3 { display: grid; gap: 8px; margin: 12px 0; }
+.cc-panel-k3 .cc-panel-note { margin: 0; }
+.cc-panel-k3 .k3-plan-button { width: 100%; justify-content: center; }
+.cc-panel-k3 .cc-panel-button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.k3-error { margin: 0; color: #9b2c2c; font-weight: 700; }
+
+.k3-sheet-layer { position: fixed; inset: 0; z-index: 1210; display: grid; place-items: center; padding: 24px; }
+.k3-sheet-backdrop { position: absolute; inset: 0; border: 0; background: rgba(16, 24, 32, .45); cursor: default; }
+.k3-sheet { position: relative; display: grid; gap: 12px; width: min(520px, 100%); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); overflow: auto; overscroll-behavior: contain; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface, #fff); box-shadow: 0 18px 40px rgba(16, 24, 32, .2); }
+.k3-sheet-title { margin: 0; font-size: 18px; }
+.k3-sheet-text, .k3-sheet-note { margin: 0; }
+.k3-sheet-note { color: var(--muted); font-size: 14px; }
+.k3-sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.k3-sheet-button { min-height: 44px; }
+.k3-sheet-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.k3-sheet-list .k3-sheet-button { width: 100%; justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
+body:has(.k3-sheet-layer) { overflow: hidden; }
+
+.k3-band {
+  display: grid; --k3-c: var(--k3-color, var(--accent)); grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  margin: 0 0 14px; padding: 10px 12px 10px 16px;
+  border: 1px solid var(--line); border-left: 6px solid var(--k3-c); border-radius: var(--radius);
+  background: var(--surface, #fff); box-shadow: 0 4px 14px rgba(22, 34, 45, .06);
+}
+.k3-band-title { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 800; overflow-wrap: anywhere; }
+.k3-band-title .k3-type-icon { color: var(--k3-c); flex: none; }
+.k3-band-meta { color: var(--muted); font-weight: 600; }
+.k3-band-line { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.k3-band-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; white-space: nowrap; }
+
+.builder-block.is-k3-day { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
+.k3-day-mark, .k3-chip {
+  display: inline-flex; --k3-c: var(--k3-color, var(--accent)); align-items: center; gap: 6px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--k3-c); background: color-mix(in srgb, var(--k3-c) 10%, white); color: var(--text, #20242a);
+  font: inherit; font-size: 14px; font-weight: 800; white-space: nowrap;
+}
+.k3-day-mark { min-height: 30px; font-size: 12px; margin-left: 8px; }
+.k3-chip { min-height: 44px; }
+button.k3-chip { cursor: pointer; }
+.k3-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--k3-c); flex: none; }
+.k3-ring { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--muted); flex: none; }
+.k3-chip.is-out, .k3-chip.is-outside { border-color: var(--line); background: var(--surface-soft); color: var(--muted); }
+.k3-chip.is-warning { border-color: #ecc98a; background: #fbefd9; color: #6d4103; }
+.k3-chip svg, .k3-note svg, .k3-outcome-text svg { flex: none; }
+.k3-session { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-left: auto; }
+.k3-session-time { color: var(--muted); font-size: 14px; white-space: nowrap; }
+.k3-put-back { min-height: 44px; padding: 0 4px; font-weight: 800; }
+.k3-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 6px 0 0; padding: 8px 10px; border-radius: var(--radius); font-size: 14px; font-weight: 700; }
+.k3-note.is-warning { background: #fbefd9; color: #6d4103; }
+.k3-note-button { min-height: 44px; }
+
+.k3-save-bar {
+  position: sticky; bottom: 0; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface, #fff); box-shadow: 0 -6px 16px rgba(22, 34, 45, .06);
+}
+.k3-save-line { flex: 1 1 260px; margin: 0; color: var(--muted); }
+.k3-save-button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: auto; }
+
+.k3-outcome { display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px; border-radius: var(--radius); }
+.k3-outcome:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.k3-outcome.is-ok { background: #e4f3e6; color: #1f5a28; }
+.k3-outcome.is-busy { background: var(--surface-soft); color: var(--muted); }
+.k3-outcome.is-warning { background: #fbefd9; color: #6d4103; }
+.k3-outcome.is-error { background: #fbe4e4; color: #8a1f1f; }
+.k3-outcome-text { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.k3-outcome-note { margin: 0; font-size: 14px; }
+.k3-outcome-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.k3-outcome-button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+
+@media (max-width: 760px) {
+  .k3-sheet-layer { place-items: end stretch; padding: 48px 0 0; }
+  .k3-sheet { width: 100%; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); border-radius: 16px 16px 0 0; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+  .k3-save-bar { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .k3-sheet-actions .k3-sheet-button { flex: 1 1 100%; }
+  .k3-band { grid-template-columns: minmax(0, 1fr); position: sticky; top: 0; z-index: 5; }
+  /* The sticky band never covers the row being edited (2.7): what the page
+     scrolls to stops under it, with a 12 px gap. */
+  html:has(.k3-band) { scroll-padding-top: calc(var(--k3-band-h, 150px) + 12px); }
+  html:has(.k3-save-bar) { scroll-padding-bottom: calc(var(--k3-save-h, 128px) + 12px); }
+  .k3-band-back { width: 100%; justify-content: center; }
+  .k3-session { margin-left: 0; width: 100%; }
+  .k3-save-button { flex: 1 1 100%; justify-content: center; }
+  .k3-outcome-button { flex: 1 1 100%; justify-content: center; }
+}
+
 /* ---------------------------------------------------------------------------
    K2b-2a-3: the athlete's questions of Ask athletes - the soft prompt and the card at the top of Home
    (docs/ai/central-calendar-k2b2a3-ui-contract.md sections 2, 6 and 8). Its own block, its own prefix.
@@ -29028,4 +29130,123 @@ body.athlete-questions-prompt-open {
   .athlete-questions-answer {
     width: 100%;
   }
+}
+
+/* ===== The athlete's Calendar (K4a, docs/ai/central-calendar-k4a-contract.md section 2, mockup 04) ===== */
+.athlete-calendar { display: grid; gap: 12px; max-width: 760px; }
+.ac-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ac-period { margin: 0 4px; font-size: 17px; font-weight: 800; min-width: 0; }
+.ac-nav-arrow { min-width: 44px; min-height: 44px; font-size: 22px; line-height: 1; }
+.ac-today { min-height: 44px; }
+.ac-today[aria-disabled="true"] { opacity: .55; }
+.ac-strip { display: none; }
+.ac-days { display: grid; gap: 16px; }
+.ac-day { display: grid; gap: 8px; scroll-margin-top: 92px; }
+.ac-day-label { margin: 0; font-size: 13px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.ac-day-label b { color: var(--text); }
+.ac-card { --ac-stripe: var(--accent); display: grid; grid-template-columns: 5px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.ac-card-planned { --ac-stripe: var(--cc-team-3, #8a4c8f); }
+.ac-card-stripe { background: var(--ac-stripe); }
+.ac-card-body { display: grid; gap: 6px; padding: 12px 14px; min-width: 0; }
+.ac-card-top { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; color: var(--muted); }
+.ac-card-icon { display: inline-flex; color: var(--ac-stripe); }
+.ac-card-when { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+.ac-card-title { margin: 0; font-weight: 800; font-size: 16px; overflow-wrap: anywhere; }
+.ac-card .cc-panel-place { margin: 0; }
+.ac-sessions { margin: 2px 0 0; padding: 8px 10px; list-style: none; border-radius: var(--radius); background: var(--surface-soft); display: grid; gap: 4px; font-size: 14px; }
+.ac-sessions li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; min-width: 0; }
+.ac-session-slot { padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 800; white-space: nowrap; }
+.ac-session-text { min-width: 0; overflow-wrap: anywhere; }
+.ac-muted { color: var(--muted); }
+.ac-answer { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 10px; border-radius: var(--radius); background: #e4f3e6; color: #1f5a28; font-weight: 800; font-size: 14px; }
+.ac-answer[hidden] { display: none; }
+.ac-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.ac-button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.ac-card.is-cancelled .ac-card-title { color: var(--muted); text-decoration: line-through; }
+.ac-card.is-cancelled .ac-card-stripe { background: var(--line-strong); }
+.ac-state { display: grid; gap: 8px; justify-items: start; padding: 16px; border: 1px dashed var(--line); border-radius: var(--radius); }
+.ac-state p { margin: 0; }
+.ac-notice { margin: 0; padding: 8px 12px; border-radius: var(--radius); background: var(--surface-soft); font-size: 14px; }
+.ac-backbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.ac-backbar-where { font-size: 14px; overflow-wrap: anywhere; }
+.ac-notice.is-saved { background: #e4f3e6; color: #1f5a28; font-weight: 800; }
+
+@media (max-width: 760px) {
+  /* Under the athlete's sticky topbar (the Weekly plan's .week-nav-panel offset), then the head, then the strip. */
+  .athlete-calendar { --ac-under-topbar: calc(var(--athlete-topbar-height, 61px) + env(safe-area-inset-top, 0px)); --ac-head-height: 56px; --ac-strip-height: 62px; }
+  .ac-head { position: sticky; top: var(--ac-under-topbar); z-index: 30; min-height: var(--ac-head-height); box-sizing: border-box; padding: 6px 0; background: var(--bg, #eef1f4); }
+  /* One row whatever the week's label: a long one ("28 Dec 2026 – 3 Jan 2027") wraps inside its own cell, two lines
+     of 15 px fit the 44 px row, so the head stays --ac-head-height and the strip under it never covers it. */
+  .ac-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px auto; align-items: center; height: var(--ac-head-height); }
+  .ac-period { margin: 0; min-width: 0; font-size: 15px; line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
+  .ac-strip { position: sticky; top: calc(var(--ac-under-topbar) + var(--ac-head-height)); z-index: 30; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; padding-bottom: 6px; background: var(--bg, #eef1f4); }
+  .ac-strip-day { min-height: 56px; min-width: 0; display: grid; place-items: center; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font: inherit; padding: 4px 0; color: var(--text); }
+  .ac-strip-day small { font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase; }
+  .ac-strip-day b { font-size: 17px; }
+  .ac-strip-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .ac-strip-dot.is-busy { background: var(--accent); }
+  /* Today is the strongest state (filled); a tapped day is only outlined (the tap scrolls the list). */
+  .ac-strip-day.is-selected { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
+  .ac-strip-day.is-today { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .ac-strip-day.is-today small { color: #fff; }
+  .ac-strip-day.is-today .ac-strip-dot.is-busy { background: #fff; }
+  .ac-day { scroll-margin-top: calc(var(--ac-under-topbar) + var(--ac-head-height) + var(--ac-strip-height) + 8px); }
+  .ac-card-actions { flex-direction: column; }
+  .ac-card-actions .ac-button { width: 100%; }
+}
+
+/* -------------------- K4b: changing an RPE answer while the question is open -------------------- */
+.training-load-list-row:has(.training-load-rpe-answer) {
+  flex-wrap: wrap;
+}
+.training-load-rpe-answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.training-load-rpe-answer-value {
+  font-weight: 700;
+  color: var(--text);
+}
+.training-load-rpe-answer .training-load-rpe-change {
+  min-height: 44px;
+  min-width: 44px;
+}
+.training-load-rpe-answer-until {
+  flex-basis: 100%;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.training-load-home-answers {
+  display: grid;
+  gap: 8px;
+}
+.training-load-home-answer {
+  display: grid;
+  gap: 4px;
+}
+.training-load-home-answer-name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.training-load-rpe-change-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.training-load-rpe-change-until {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cc-question-changed {
+  color: var(--muted);
+  font-size: 13px;
 }

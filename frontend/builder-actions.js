@@ -8,6 +8,7 @@ import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { invalidateCentralCalendarCache } from "./central-calendar-data.js";
 import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-view-modes.js";
 import { planItemText } from "./exercise-text.js";
+import { k3AdoptDraft, k3DefaultAmPm, k3SetTimeMessage, k3TimeRefusal } from "./central-calendar-k3-actions.js";
 import { emptyBlockPicker, emptyBuilderState, state } from "./state.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
@@ -68,6 +69,12 @@ function getBuilderBatchId(draft = state.builder.draft) {
 }
 
 function shouldSyncBuilderBatch() {
+  // A reopened, published plan (an edit draft) is applied to this athlete only:
+  // the server never syncs an edit draft's batch (wantsBatchSync and
+  // syncBatchFromPlan in backend/src/routes/builder.js), so the request must
+  // not claim to. A new batch draft keeps the coach's "Apply changes to all
+  // athletes" choice.
+  if (state.builder.draft?.plan?.isEditDraft) return false;
   const batchPlans = state.builder.draft?.batch?.plans || [];
   return Boolean(state.builder.batchSync && (batchPlans.length > 1 || getBuilderBatchId()));
 }
@@ -91,7 +98,38 @@ function setBuilderDraft(nextDraft, options = {}) {
   if (previousBatchId && state.builder.draft?.plan && !getBuilderBatchId(state.builder.draft)) {
     state.builder.draft.plan.batchId = previousBatchId;
   }
+  // K3: the event's band stays with its own plans, another plan ends it, and
+  // a plan of a remembered context gets it back (central-calendar-k3-actions.js).
+  k3AdoptDraft(state.builder.draft);
   return state.builder.draft;
+}
+
+// K3 (docs/ai/central-calendar-k3-plan.md 2.5): Save and link's first step,
+// the Builder's own Save and finish (the queued saves flushed first). Resolves
+// the server's answer ({ plan } or { deleted, empty }) and throws its error;
+// it does not leave the Builder.
+export async function submitBuilderPlanForK3(handlers = {}) {
+  await handlers.flushBuilderAutosaves?.();
+  await builderMutationQueue;
+  const draft = state.builder.draft;
+  if (!draft?.plan?.id) throw Object.assign(new Error("No plan is open."), { status: 400 });
+  const result = await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}/submit`, {
+    method: "POST",
+    body: JSON.stringify(withBatchSyncPayload({ responseMode: "summary" })),
+  });
+  // An edit draft's ids are gone with its Save (applyEditDraft): nothing
+  // copied from it may be pasted.
+  if (draft.plan.isEditDraft) state.builder.clipboard = null;
+  invalidateBuilderDraftsCache();
+  return result;
+}
+
+// K3 / O14: *Use the event's time* clears the session's own time (one queued
+// Builder PATCH), so it follows the event from then on.
+export async function clearBuilderSessionTime(sessionId) {
+  const draft = state.builder.draft;
+  if (!draft || !findBuilderSession(draft, sessionId)) return;
+  setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload({ time: "" })) }));
 }
 
 function withBatchSyncPayload(payload = {}) {
@@ -739,9 +777,11 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   }
   if (type === "builder-toggle-session-quick-add") {
     const blockId = action.dataset.blockId || "";
+    // K3 (2.4): a new session on the event's day starts in the event's half.
+    const block = state.builder.draft?.blocks?.find((entry) => entry.id === blockId);
     state.builder.sessionQuickAdd = state.builder.sessionQuickAdd.blockId === blockId
       ? { blockId: "", amPm: "", bta: "", time: "" }
-      : { blockId, amPm: "", bta: "", time: "" };
+      : { blockId, amPm: k3DefaultAmPm(block), bta: "", time: "" };
     handlers.renderBuilder();
     return true;
   }
@@ -1656,6 +1696,16 @@ export async function submitBuilderForm(form, handlers) {
     setBuilderDraft(await queuedBuilderApi(`/api/builder/nodes/${encodeURIComponent(form.dataset.nodeId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "update-session") {
+    // K3 / O14: a session in the event takes only a time inside the event;
+    // the field keeps its old value (the form's other fields still save).
+    const refusal = k3TimeRefusal(form.dataset.sessionId, data.time);
+    k3SetTimeMessage(form.dataset.sessionId, refusal);
+    if (refusal) {
+      const session = findBuilderSession(draft, form.dataset.sessionId);
+      data.time = session?.time || "";
+      const input = form.querySelector?.('input[name="time"]');
+      if (input) input.value = data.time;
+    }
     setBuilderDraft(await queuedBuilderApi(`/api/builder/sessions/${encodeURIComponent(form.dataset.sessionId)}`, { method: "PATCH", body: JSON.stringify(withBatchSyncPayload(data)) }));
   }
   if (mode === "add-node") {

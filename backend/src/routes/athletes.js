@@ -5,6 +5,7 @@ import { query } from "../db.js";
 import { buildPrograms, buildWeeks } from "../utils/grouping.js";
 import { canAccessAthlete } from "../access.js";
 import { currentAthleteRosterScope } from "../athleteRosterScope.js";
+import { linkedSessionTimes } from "../linkedSessionTimes.js";
 
 const router = Router();
 
@@ -273,7 +274,8 @@ router.get("/:athleteId/program-data", async (req, res, next) => {
   }
 });
 
-async function loadWeeklyData(athleteId) {
+// Exported for its test (central-calendar-linked-session-times, test 10).
+export async function loadWeeklyData(athleteId) {
   // Mirrors plans.v_weekly_plan_items's own internal ORDER BY exactly (see
   // migrations_v2/202608231000_weekly_plan_items_hierarchy_order.sql) - a
   // `select *` from a view does NOT guarantee its rows arrive pre-sorted to
@@ -292,6 +294,8 @@ async function loadWeeklyData(athleteId) {
   );
   await decorateMediaRows(items.rows,'plan_item',query);
   await decoratePlanItemEnglish(items.rows, query);
+  // K3 / K2c-3: a session without its own time shows its linked event's time.
+  await linkedSessionTimes({ query }, items.rows);
   return {
     mode: "date",
     weeks: buildWeeks(items.rows),
