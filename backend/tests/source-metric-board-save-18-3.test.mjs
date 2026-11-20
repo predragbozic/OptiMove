@@ -1398,7 +1398,8 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   // v80 step C0: the field detail says the state of the confirmation, to the field read's audience only.
   const detailOf = async (who) => ok(await get(`/fields/${fAcc.fieldId}`, who));
   for (const who of [W.pa, W.caA]) {
-    assert.deepEqual((await detailOf(who)).eventSetting, { event: "acceleration", revisionId: fAcc.revId, compared: false, sessionKept: false, confirmation: null });
+    // sessionKept is the platform administrator's only (the compared session may be another club's team).
+    assert.deepEqual((await detailOf(who)).eventSetting, { event: "acceleration", revisionId: fAcc.revId, compared: false, sessionKept: who === W.pa ? false : null, confirmation: null });
   }
   const coach = { id: await user("coach") };
   await k.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [coach.id, t.teamId]);
@@ -1416,9 +1417,13 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   // condition on C1: not shown, and not in the answer either); the board names the column that waits for the confirmation.
   const waiting = await get(`/fields/${fAcc.fieldId}`, W.pa);
   assert.deepEqual(ok(waiting).eventSetting, { event: "acceleration", revisionId: fAcc.revId, compared: true, sessionKept: true, confirmation: null });
+  assert.equal((await detailOf(W.caA)).eventSetting.sessionKept, null, "a club admin never learns whether the compared session is kept");
   assert.equal(/\b2\.5\b|\b0\.3\b|teamThresholds|duration_seconds/.test(waiting.text), false, waiting.text);
-  const accOnBoard = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board.variables.find((x) => x.id === acc.id);
+  const waitingBoard = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
+  const accOnBoard = waitingBoard.variables.find((x) => x.id === acc.id);
   assert.deepEqual([accOnBoard.placeable, accOnBoard.matchingFieldIds, accOnBoard.waitingFieldIds], [false, [], [fAcc.fieldId]]);
+  // A column whose setting is not the variable's (0.3 s against 0.5 s) never waits: a confirmation would not make it match.
+  assert.deepEqual(waitingBoard.variables.find((x) => x.id === slow.id).waitingFieldIds, []);
   // A save sent past the screen onto the waiting column is refused by the server all the same (the screen's drop filter is
   // only help; C2's condition).
   const pastScreen = await placementRaw(W.caA, t, cand, fAcc, acc);
@@ -1445,7 +1450,7 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   // The detail shows the owner's own confirmed numbers; the board offers the column (no longer waiting).
   const confirmedDetail = (await detailOf(W.caA)).eventSetting;
   assert.deepEqual({ ...confirmedDetail, confirmation: { ...confirmedDetail.confirmation, confirmedAt: Boolean(confirmedDetail.confirmation?.confirmedAt) } },
-    { event: "acceleration", revisionId: fAcc.revId, compared: true, sessionKept: true, confirmation: { thresholdValue: "2.5", durationSeconds: "0.3", confirmedAt: true } });
+    { event: "acceleration", revisionId: fAcc.revId, compared: true, sessionKept: null, confirmation: { thresholdValue: "2.5", durationSeconds: "0.3", confirmedAt: true } });
   const accNow = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board.variables.find((x) => x.id === acc.id);
   assert.deepEqual([accNow.placeable, accNow.matchingFieldIds.includes(fAcc.fieldId), accNow.waitingFieldIds], [true, true, []]);
   // Now the column fills the variable with that setting, and not the one of 0.5 s.
@@ -1569,7 +1574,7 @@ test("V80-5. the importer through its real activation read: a team's next sessio
   coach.cookie = await cookieFor(coach.id);
   const asCoach = await candidateRead(coach);
   assert.equal(asCoach.status, 200, asCoach.text);
-  assert.deepEqual(asCoach.body.candidate.preview.blocked, { code: "data_setup_incomplete", message: "The team's setting in GPEXE changed for this session, so nothing of it is imported. Ask an administrator, or set it back in GPEXE." });
+  assert.deepEqual(asCoach.body.candidate.preview.blocked, { code: "data_setup_incomplete", message: "This session can't be imported until an administrator finishes its data setup." });
   assert.equal(/25–6[05]|"setting"/.test(asCoach.text), false, "no range or structured setting reaches a coach");
   const fine = await recompute(cand);
   assert.equal(fine.status, 200, fine.text);

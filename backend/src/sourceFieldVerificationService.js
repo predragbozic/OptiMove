@@ -95,7 +95,6 @@ export const mayVerify = (ctx) => ctx?.basis === "platform_admin" && ctx?.owner?
 // GET /fields/:fieldId - the same audience as GET /fields (C94). The history
 // names the act, its time and its reference, never who performed it.
 export async function getField({ ctx, fieldId, query }) {
-  void ctx;
   if (Object.keys(query ?? {}).length > 0) throw refusal(400, "invalid_query", "The query carries a parameter this route does not take.");
   if (typeof fieldId !== "string" || !UUID.test(fieldId)) return null;
   return boundedRead(async (client) => {
@@ -118,7 +117,7 @@ export async function getField({ ctx, fieldId, query }) {
       [revisions.map((r) => r.id), 2 * LIST_CAPS.revisionsPerField + 1],
     )).rows;
     if (history.length > 2 * LIST_CAPS.revisionsPerField) throw tooLarge(2 * LIST_CAPS.revisionsPerField);
-    const eventSetting = await eventSettingOf(client, field);
+    const eventSetting = await eventSettingOf(client, field, { platform: ctx?.basis === "platform_admin" });
     return {
       ...(eventSetting ? { eventSetting } : {}),
       field: {
@@ -139,7 +138,9 @@ export async function getField({ ctx, fieldId, query }) {
 // whether that compared session is still kept, and the newest confirmation of the active revision (the owner's own typed
 // numbers). It never carries the compared session's setting: the owner types what GPEXE shows, so OptiMove's value is
 // shown only by the confirmation's own refusal (setting_differs). Without v80 installed, no key.
-async function eventSettingOf(client, field) {
+// sessionKept is the platform administrator's only (the security review of C0, LOW-1): the compared session may be another
+// club's team, so a club admin reads null there and never learns whether that team's snapshot is still kept.
+async function eventSettingOf(client, field, { platform }) {
   if (field.source_system !== "gpexe" || field.api_family !== "rest_v1") return null;
   const rule = conditionRuleFor(field.source_metric_key);
   if (!needsEventConfirmation(rule)) return null;
@@ -149,9 +150,9 @@ async function eventSettingOf(client, field) {
       where source_metric_definition_id = $1 and state = 'active' limit 1`,
     [field.id],
   )).rows[0];
-  if (!rev || rev.parameter_kind !== "none") return { event: rule.event, revisionId: null, compared: false, sessionKept: false, confirmation: null };
+  if (!rev || rev.parameter_kind !== "none") return { event: rule.event, revisionId: null, compared: false, sessionKept: platform ? false : null, confirmation: null };
   const compared = rev.evidence_status === "source_stated" && rev.meaning_observation_id !== null;
-  const kept = compared && (await client.query(
+  const kept = !platform ? null : compared && (await client.query(
     `select 1 from training_load.source_metric_confirmation_sessions s
        join training_load.gpexe_import_candidates c on c.id = s.candidate_id
       where s.confirmation_id = $1 and c.raw_purged_at is null and c.raw_expires_at > now() limit 1`,
