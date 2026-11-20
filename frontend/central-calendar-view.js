@@ -26,6 +26,16 @@ import {
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
 import { CC_WAITING_SENTENCE, ccPanelAskOffered, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
+import {
+  ccAnswerEntries,
+  ccAnswersSummary,
+  ccAnswersSummaryText,
+  ccAnswersWanted,
+  ccAthleteAnswerText,
+  ccChangedAtOf,
+  ccChangedText,
+  ccSpokenAnswerText,
+} from "./central-calendar-answers.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -832,26 +842,55 @@ function renderPanelAthletesHtml(item, cal, roster) {
   if (panel.loading) return `${head}<p class="cc-panel-note" role="status">Loading athletes…</p>`;
   if (panel.error === "changed") return `${head}<p class="cc-panel-note">This item has changed since the calendar was loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry">Refresh the calendar</button>`;
   if (panel.error) return `${head}<p class="cc-panel-note">Athlete names could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry-athletes">Try again</button>`;
-  const athletes = [...(panel.athletes || [])].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  // The event panel package: a manager's event panel shows each athlete's
+  // values and the summary (a UI rule, not an access rule: section 2 of
+  // docs/ai/central-calendar-event-panel-contract.md). A reader's panel keeps
+  // its states only.
+  const manager = ccAnswersWanted(item);
+  const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
+  // A manager's athletes no longer targeted come after the others, marked.
+  const athletes = manager
+    ? [...(panel.athletes || [])].sort((a, b) => (a.targeted === false) - (b.targeted === false) || byName(a, b))
+    : [...(panel.athletes || [])].sort(byName);
   if (!athletes.length) return `${head}<p class="cc-panel-note">${count ? "No athlete names were returned." : "No athletes on this item."}</p>`;
   const teams = cal.data?.teams || [];
   const rosterNote = recorded && item.attendance.needsState > 0
     ? `<p class="cc-panel-note">Who still needs an attendance state is on the Roster tab — use Open in Training Load above.</p>`
     : "";
-  return `${head}<ul class="cc-athletes" role="list">
+  const answersView = manager && cal.panelAnswers && cal.panelAnswers.panel === panel && cal.panelAnswers.key === item.key ? cal.panelAnswers : null;
+  const entries = answersView?.weekly ? ccAnswerEntries(item, answersView.weekly) : null;
+  const questionsRead = cal.panelQuestions && cal.panelQuestions.key === item.key ? cal.panelQuestions.read : null;
+  let summaryHtml = "";
+  if (manager) {
+    if (!answersView || answersView.loading) summaryHtml = `<p class="cc-panel-note cc-answers-summary" role="status">Loading answers…</p>`;
+    else if (answersView.error) summaryHtml = `<p class="cc-panel-note cc-answers-summary">Answers could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-answers-retry">Try again</button>`;
+    else {
+      const text = ccAnswersSummaryText(ccAnswersSummary(athletes, entries));
+      if (text) summaryHtml = `<p class="cc-answers-summary">${text.split(" · ").map((part) => `<span>${escapeHtml(part)}</span>`).join(`<span aria-hidden="true"> · </span>`)}</p>`;
+    }
+  }
+  return `${head}${summaryHtml}<ul class="cc-athletes" role="list">
       ${athletes.map((athlete) => {
         const stateLabel = athleteStateLabel(athlete);
+        const answerText = entries ? ccAthleteAnswerText(entries.get(String(athlete.athleteId))) : "";
+        const changedText = manager && answerText ? ccChangedText(ccChangedAtOf(questionsRead, athlete.athleteId)) : "";
+        const excluded = manager && athlete.targeted === false;
         const names = (athlete.teamIds || []).map((id) => teamName(id, teams)).join(", ");
-        const side = `<span class="cc-athlete-side">${names ? `<span class="cc-athlete-teams">${escapeHtml(names)}</span>` : ""}${stateLabel ? `<span class="cc-athlete-state cc-athlete-state-${escapeAttr(athlete.rpe || athlete.result || "none")}">${escapeHtml(stateLabel)}</span>` : ""}`;
+        const stateHtml = answerText
+          ? `<span class="cc-athlete-state cc-athlete-values cc-athlete-state-${escapeAttr(athlete.rpe || "none")}">${escapeHtml(answerText)}</span>`
+          : stateLabel ? `<span class="cc-athlete-state cc-athlete-state-${escapeAttr(athlete.rpe || athlete.result || "none")}">${escapeHtml(stateLabel)}</span>` : "";
+        const side = `<span class="cc-athlete-side">${names ? `<span class="cc-athlete-teams">${escapeHtml(names)}</span>` : ""}${stateHtml}${changedText ? `<span class="cc-athlete-changed">${escapeHtml(changedText)}</span>` : ""}${excluded ? `<span class="cc-athlete-note">No longer in this event</span>` : ""}`;
         if (!roster?.has(String(athlete.athleteId))) {
           return `<li><div class="cc-athlete cc-athlete-static">
             <span class="cc-athlete-name">${escapeHtml(athlete.name || "Athlete")}</span>
             ${side}<span class="cc-athlete-note">Not in this workspace's roster</span></span>
           </div></li>`;
         }
-        return `<li><button type="button" class="cc-athlete" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(athlete.athleteId)}" data-date="${escapeAttr(item.date)}" aria-label="${escapeAttr(`${athlete.name || "Athlete"}, open the weekly plan on ${centralCalendarLongDate(item.date)}`)}">
+        const spoken = [athlete.name || "Athlete", ccSpokenAnswerText(answerText || ""), changedText, excluded ? "no longer in this event" : "", `open the weekly plan on ${centralCalendarLongDate(item.date)}`].filter(Boolean).join(", ");
+        return `<li><button type="button" class="cc-athlete" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(athlete.athleteId)}" data-date="${escapeAttr(item.date)}" aria-label="${escapeAttr(spoken)}">
             <span class="cc-athlete-name">${escapeHtml(athlete.name || "Athlete")}</span>
             ${side}</span>
+            <span class="cc-athlete-go" aria-hidden="true">Weekly plan ›</span>
           </button></li>`;
       }).join("")}
     </ul>${rosterNote}`;

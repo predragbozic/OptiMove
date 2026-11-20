@@ -360,6 +360,9 @@ export const sendCentralCalendarLinkWrite = (path, body) => eventWrite(path, "PO
 // { requestKey, expectedRevision, ... } and are sent again unchanged by Check
 // result.
 export const fetchCentralCalendarEventQuestions = (eventId) => api(`${eventPath(eventId)}/questions`);
+// The event panel package (Q7): the values of a manager's panel, read on every
+// open and never cached (an athlete may change her answer while the coach looks).
+export const fetchCentralCalendarAnswers = (path) => api(path);
 export const centralCalendarQuestionPath = (eventId, questionId = "", tail = "") => `${eventPath(eventId)}/questions${questionId ? `/${encodeURIComponent(questionId)}` : ""}${tail ? `/${tail}` : ""}`;
 export const sendCentralCalendarQuestionWrite = (path, body) => eventWrite(path, "POST", body);
 

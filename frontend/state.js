@@ -137,6 +137,9 @@ export const emptyCentralCalendarState = () => ({
   questionStep: null,
   questionsCatalogFailedFor: null,
   questionsCatalogRead: null,
+  // The event panel package: a manager's panel's values ({ panel, key,
+  // loading, error, weekly }), read on every open, never cached.
+  panelAnswers: null,
 });
 
 export const emptyExerciseOptions = () => ({

@@ -21631,6 +21631,55 @@ body.exercise-header-pinned #viewToolbar {
   font-weight: 700;
 }
 
+/* The event panel package: the summary under the Athletes heading, each
+   athlete's values, "Changed HH:MM" and the row's own "Weekly plan ›". */
+.cc-answers-summary {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.cc-athlete-values {
+  overflow-wrap: anywhere;
+}
+
+.cc-athlete-changed {
+  color: var(--muted);
+}
+
+.cc-athlete-go {
+  flex: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Below 480 px a row wraps: the name and "Weekly plan ›" on the first line,
+   the values (and the teams) on the second. */
+@media (max-width: 479px) {
+  .cc-athlete {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .cc-athlete-name {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .cc-athlete-go {
+    order: 2;
+  }
+
+  .cc-athlete .cc-athlete-side {
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    text-align: left;
+  }
+}
+
 .cc-sheet-backdrop {
   display: none;
 }
