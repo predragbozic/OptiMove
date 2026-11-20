@@ -1,16 +1,13 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { needsModuleMocksRelaunch, relaunchWithModuleMocks } from "./support/relaunch-with-module-mocks.mjs";
 import express from 'express';
 import { id, draft, builtins, snapshot, context } from './fixtures/dashboard-simple/contracts.mjs';
 
-if (!process.execArgv.includes('--experimental-test-module-mocks')) {
+if (needsModuleMocksRelaunch()) {
   test('S3a routes and capabilities with an isolated database mock', () => {
-    const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', (process.versions.node.split('.')[0] === '22' ? '--experimental-test-isolation=none' : '--test-isolation=none'), fileURLToPath(import.meta.url)], { encoding: 'utf8' });
-    assert.ifError(child.error);
-    assert.equal(child.status, 0, child.stdout + child.stderr);
+    relaunchWithModuleMocks(import.meta.url);
   });
 } else {
   mock.module('../src/db.js', { namedExports: { query: async () => assert.fail('Unexpected default database access') } });

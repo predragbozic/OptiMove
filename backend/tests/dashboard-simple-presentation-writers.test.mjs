@@ -1,13 +1,10 @@
 import { test, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { needsModuleMocksRelaunch, relaunchWithModuleMocks } from "./support/relaunch-with-module-mocks.mjs";
 
-if (!process.execArgv.includes("--experimental-test-module-mocks")) {
+if (needsModuleMocksRelaunch()) {
   test("legacy presentation writers with isolated database mocks", () => {
-    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", (process.versions.node.split('.')[0] === '22' ? '--experimental-test-isolation=none' : '--test-isolation=none'), fileURLToPath(import.meta.url)], { encoding: "utf8" });
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
+    relaunchWithModuleMocks(import.meta.url);
   });
 } else {
   const dashboardId = "10000000-0000-4000-8000-000000000001";
