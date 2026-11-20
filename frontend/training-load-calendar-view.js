@@ -2,6 +2,7 @@ import { estimateLabelText } from "./activity-estimate.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, monthLabel } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
+import { renderOpenInCalendarHtml } from "./open-in-calendar.js";
 import { buildWeeklyCalendarMonth } from "./weekly-plan.js";
 import { formatSrpe } from "./training-load-view.js";
 import { renderActivityRosterHtml, rosterTabLabel } from "./activity-roster-view.js";
@@ -60,6 +61,7 @@ function renderCalendarNavHeaderHtml(nav) {
       <button type="button" class="plain-button compact-button tl-calendar-expand-toggle" data-action="training-load-calendar-toggle-month" aria-expanded="${nav.monthMode ? "true" : "false"}" aria-label="${nav.monthMode ? "Collapse to week view" : "Expand to month view"}">
         ${nav.monthMode ? "Week view" : "Month view"}
       </button>
+      ${renderOpenInCalendarHtml(nav.selectedDate || nav.weekStart)}
     </div>
   `;
 }

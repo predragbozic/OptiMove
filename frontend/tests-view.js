@@ -3,6 +3,7 @@ import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { els } from "./dom.js";
 import { revealActiveTab } from "./om-tabs.js";
 import { renderImage } from "./media.js";
+import { renderOpenInCalendarHtml } from "./open-in-calendar.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDayMonth, formatWeekday, initialsFor, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthMatrixIso } from "./utils.js";
 
@@ -314,6 +315,7 @@ function renderWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate
         </div>
         <button type="button" class="plain-button icon-button tests-weekly-arrow" data-action="tests-weekly-next-week" data-section="${section}" aria-label="Next week">&rarr;</button>
         <button type="button" class="plain-button compact-button tests-weekly-today-button" data-action="tests-weekly-today" data-section="${section}">Today</button>
+        ${renderOpenInCalendarHtml(selectedDay?.date || weekStart)}
       </div>
       <div class="tests-weekly-strip" role="tablist" aria-label="Select a day">
         ${days.map((day) => renderWeeklyStripDayHtml(section, day, day.date === selectedDay?.date, todayIso)).join("")}
@@ -329,6 +331,7 @@ function renderWeeklyShellHtml({ section, days, weekStart, weekEnd, selectedDate
             ? `<div class="om-empty tests-empty" role="status"><p class="om-empty__text">${escapeHtml(emptyAgendaText)}</p><div class="om-empty__actions">${emptyAgendaAction}</div></div>`
             : `<p class="muted tests-empty">${escapeHtml(emptyAgendaText)}</p>`}
       </div>
+      ${selectedDay ? `<div class="tests-weekly-day-link">${renderOpenInCalendarHtml(selectedDay.date, { view: "day", quiet: true })}</div>` : ""}
     </div>
   `;
 }
