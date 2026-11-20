@@ -33,7 +33,7 @@ const { typedDecimal } = await import("../source-fields-data.js");
 const { placementRefusal } = await import("../metric-board-data.js");
 const { overSourceFieldDrag, dropSourceFieldDrag } = await import("../metric-board-drag.js");
 const { blockedCoachText } = await import("../gpexe-import-view.js");
-const { TEAM_CODES, TEAM_CODE_TEXT } = await import("../metric-mappings-data.js");
+const { TEAM_CODES, TEAM_CODE_TEXT, refusalText } = await import("../metric-mappings-data.js");
 const { state } = await import("../state.js");
 
 const FB = "/api/training-load/sources/metrics/fields";
@@ -223,6 +223,8 @@ test("C2-1. a refused placement shows the server's sentence naming both settings
     assert.ok(TEAM_CODES.has(code), code);
     assert.ok(TEAM_CODE_TEXT[code], code);
   }
+  // Switching on for a team whose matched unit has no conversion has its own sentence (code review LOW-1).
+  assert.match(refusalText("switchOn", { code: "conversion_unavailable", status: 409 }), /no usable conversion .* Ask a platform administrator to add it\./);
 });
 
 test("C2-2. the drop filter: a variable with a condition takes a drop only from a column the server listed as matching; any other variable takes every column (help only - the server judges again)", async () => {

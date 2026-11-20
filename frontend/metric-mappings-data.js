@@ -508,6 +508,8 @@ const ACT_TEXT = {
   },
   disable: { version_status_changed: "This version changed meanwhile." },
   switchOn: { version_not_active: "This version is no longer active.", field_retired: "This version is no longer active.",
+    // v80 step C2 (code review LOW-1): a column matched through the team's GPEXE setting whose unit has no conversion.
+    conversion_unavailable: "There is no usable conversion between this column's unit and the variable's now. Ask a platform administrator to add it.",
     // G1b-3: a version from before the exact-word rule.
     unit_word_missing: "OptiMove does not know a GPEXE unit word for this field's unit, so it cannot import its values." },
   switchOff: { activation_not_open: "This team was already switched off." },
