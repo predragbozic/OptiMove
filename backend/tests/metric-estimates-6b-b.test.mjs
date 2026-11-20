@@ -323,6 +323,13 @@ test("3. the proposal: the session's variables (a max variable is not estimable,
   assert.equal(ta[maxSpeed], undefined, "only estimable variables get a value");
   const pr = Object.fromEntries(r.body.methods.proportional.values.map((x) => [x.metricDefinitionId, x]));
   assert.deepEqual(pr[distance], { metricDefinitionId: distance, value: 2170, reason: null, basis: { minutes: 21.7, ratePerMinute: 100, sessions: 3 } });
+  // The panel's line: the day of each session Own average used (newest first; this world's three are on one day) and the
+  // type it compares with.
+  const days = r.body.methods.proportional.sessionDays;
+  assert.equal(days.length, 3, JSON.stringify(days));
+  assert.ok(days.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)), JSON.stringify(days));
+  assert.deepEqual(days, [...days].sort().reverse());
+  assert.deepEqual(r.body.methods.proportional.comparesWith, { key: "training_session", label: "Training session" });
   assert.equal(r.body.methods.copy_athlete.reason, "choose_source");
   assert.deepEqual(r.body.methods.copy_athlete.sources.map((x) => x.name).sort(), ["Ana", "Bea", "Cil"]);
   // The coach's own minutes and a source athlete.
@@ -335,6 +342,7 @@ test("3. the proposal: the session's variables (a max variable is not estimable,
   const r3 = await proposal(team, s, team.athleteIds[EVA]);
   assert.equal(r3.body.methods.proportional.available, false);
   assert.equal(r3.body.methods.proportional.reason, "too_few_sessions");
+  assert.deepEqual(r3.body.methods.proportional.sessionDays, []);
   // Ana was measured: every variable is measured_exists or not estimable.
   const r4 = await proposal(team, s, team.athleteIds[ANA]);
   assert.equal(r4.body.variables.every((x) => !x.estimable), true);

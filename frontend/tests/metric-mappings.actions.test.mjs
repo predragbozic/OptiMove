@@ -583,6 +583,24 @@ test("14. a batch refused for one team names it (never its id) and offers the ot
   assert.deepEqual(second.body.bindings.map((b) => b.bindingId).sort(), [B2, id("b1b1b1b1", 4)].sort());
 });
 
+test("14b (v80, code review LOW-3 on #690). a team refused because its GPEXE setting is not the variable's names the team and shows the server's sentence naming both settings", async () => {
+  db.activations = db.activations.filter((a) => a.bindingId !== B1);
+  const message = "This column counts events at or above 2.5 m/s² lasting 0.5 s (First team's setting in GPEXE); Accelerations counts events at or above 2.5 m/s² lasting 0.3 s. Choose a variable with the same setting, or change the team's setting in GPEXE.";
+  let first = true;
+  overrides.push((c) => (c.method === "POST" && c.url === `${B}/activations` && first ? ((first = false), ok({ error: "team_setting_mismatch", message, current: { bindingId: B1 } }, 409)) : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  await input('[data-mm-field="club"]', CLUB);
+  await click(`[data-action="metric-mappings-every-team"][data-connection-id="${CONN}"]`);
+  await input('[data-mm-field="requirement"][value="optional"]', true);
+  await input('[data-mm-field="reason"]', "Start.");
+  await click('[data-action="metric-mappings-review"]');
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  assert.match(text(), /“First team” has another setting in GPEXE than this variable counts, so nothing was saved\. This column counts events at or above 2\.5 m\/s² lasting 0\.5 s/);
+  assert.match(text(), /Accelerations counts events at or above 2\.5 m\/s² lasting 0\.3 s\./);
+});
+
 test("15. switch off: one confirmation naming the team, its link and the version, then the body", async () => {
   await open("detail");
   await click(`[data-action="metric-mappings-switch-off-open"][data-activation-id="${id("ac000000", 1)}"]`);
