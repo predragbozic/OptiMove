@@ -2865,6 +2865,22 @@ function openRpeChangeFormForAssignment(assignmentId) {
   });
 }
 
+// K4b on the athlete's Calendar: the same change form, from the row her own weekly read returned (athlete-calendar-
+// answers.js). `dateLabel` is the Calendar's day ("Monday 12.10"). Answers the form it opened, or null.
+export function openRpeChangeFormFromRow(row, { date = "", title = "", dateLabel = "" } = {}) {
+  if (!row || !row.rated || !row.changeable || row.source !== "scheduled_external" || !row.externalAssignmentId) return null;
+  state.trainingLoad.showSessionList = false;
+  state.trainingLoad.rpeForm = emptyRpeForm({
+    externalAssignmentId: row.externalAssignmentId,
+    source: "scheduled_external",
+    sessionName: title || row.sessionName,
+    date: date || row.date,
+    dateLabel,
+    ...rpeChangeFormFields(row),
+  });
+  return state.trainingLoad.rpeForm;
+}
+
 function newRequestKey() {
   return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID()
     : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = Math.floor(Math.random() * 16); return (c === "x" ? r : (r % 4) + 8).toString(16); });

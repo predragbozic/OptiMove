@@ -29049,6 +29049,11 @@ body.athlete-questions-prompt-open {
 .ac-muted { color: var(--muted); }
 .ac-answer { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 10px; border-radius: var(--radius); background: #e4f3e6; color: #1f5a28; font-weight: 800; font-size: 14px; }
 .ac-answer[hidden] { display: none; }
+/* K4b: "Your RPE: 7 · Change" with its deadline inside the answer block (the shared line of rpe-answer-change.js). */
+.ac-answer-rpe { display: block; }
+.ac-answer-rpe .training-load-rpe-answer-value { color: inherit; font-weight: 800; }
+.ac-answer-rpe .training-load-rpe-answer-until { color: inherit; font-weight: 600; }
+.ac-answer-rpe .training-load-rpe-change { background: var(--surface); }
 .ac-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 .ac-button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .ac-card.is-cancelled .ac-card-title { color: var(--muted); text-decoration: line-through; }
@@ -29100,6 +29105,15 @@ body.athlete-questions-prompt-open {
 .training-load-rpe-answer-value {
   font-weight: 700;
   color: var(--text);
+}
+/* The RPE form's own buttons (Save, Save change, Check result, Done, Cancel, the close cross) are 44 px targets on a
+   phone or a touch tablet, where the Calendar and Home open it (the same query as its 16 px fields). */
+@media (max-width: 760px), (pointer: coarse) {
+  .training-load-rpe-panel .compact-button,
+  .training-load-rpe-panel .icon-button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 .training-load-rpe-answer .training-load-rpe-change {
   min-height: 44px;
