@@ -90,7 +90,7 @@ import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsRe
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
-import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn } from "./central-calendar-gps-review.js";
+import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
 import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
@@ -2634,6 +2634,8 @@ async function openTestsDayFromCalendar({ scheduleId, date }) {
 // the chosen day's read). The calendar writes nothing into Imports and never starts a search.
 async function openImportsOnDay({ teamId, day }) {
   if (!confirmLeaveTrainingLoad("training-load")) return;
+  // The coach goes to change what the marks count: the return reads them again (code review), never a stale "2 to review".
+  clearGpsReview();
   setImportsReturn({ day });
   pushAppHistory();
   state.activeTab = "training-load";
@@ -2645,12 +2647,20 @@ async function openImportsOnDay({ teamId, day }) {
   els.toolbar.innerHTML = "";
   renderTabs();
   renderLibraryNav();
-  await enterImportsOnDay({
+  const outcome = await enterImportsOnDay({
     teamId, day, render: renderTrainingLoad,
     phone: Boolean(window.matchMedia?.(IMPORTS_PHONE_QUERY)?.matches),
     scrollToChooser: () => els.content.querySelector("#imports-period")?.scrollIntoView?.({ block: "start" }),
     stillThere: () => state.activeTab === "training-load",
   });
+  // Imports opened as it was (busy, or the day refused): the band says the day was not chosen (UX review).
+  setImportsReturnOutcome(outcome);
+  if (state.activeTab === "training-load") renderImportsBackBand();
+}
+
+// "05.11.", as Imports' own period chooser writes a day.
+function shortImportsDay(day) {
+  return `${day.slice(8, 10)}.${day.slice(5, 7)}.`;
 }
 
 // Back to calendar on Imports (contract 3.2): drawn on every Training Load paint from the step's marker, so a reload of
@@ -2662,7 +2672,7 @@ function renderImportsBackBand() {
     existing?.remove();
     return;
   }
-  const html = `<div class="cc-imports-back"><button type="button" class="plain-button cc-imports-back-button" data-action="imports-back-to-calendar"><span aria-hidden="true">‹</span> Back to calendar</button><span class="cc-imports-back-day">${escapeHtml(centralCalendarLongDate(back.day))}</span></div>`;
+  const html = `<div class="cc-imports-back"><button type="button" class="plain-button cc-imports-back-button" data-action="imports-back-to-calendar"><span aria-hidden="true">‹</span> Back to calendar</button><span class="cc-imports-back-day">${escapeHtml(centralCalendarLongDate(back.day))}</span>${back.notChosen ? `<p class="cc-imports-back-note" role="status">${escapeHtml(`Imports is busy, so ${shortImportsDay(back.day)} was not chosen. Choose it under Find new sessions once the search or import is done.`)}</p>` : ""}</div>`;
   if (existing) existing.outerHTML = html;
   else els.toolbar.insertAdjacentHTML("beforeend", html);
 }

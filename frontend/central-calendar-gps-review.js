@@ -110,13 +110,18 @@ export function gpsReviewMarksShown(cal) {
 // shows it.
 let returnMarker = null;
 export function setImportsReturn({ day }) {
-  returnMarker = ISO_DAY.test(String(day || "")) ? { day, entry: null } : null;
+  returnMarker = ISO_DAY.test(String(day || "")) ? { day, entry: null, notChosen: false } : null;
 }
 export function claimImportsReturn(entry) {
   if (returnMarker && !returnMarker.entry && entry) returnMarker.entry = entry;
 }
+// The entry's outcome (central-calendar-imports-entry.js): "as-is" means Imports opened without the day chosen (busy,
+// or a day the chooser refused), and the band says so in the calendar's own words.
+export function setImportsReturnOutcome(outcome) {
+  if (returnMarker) returnMarker.notChosen = outcome === "as-is";
+}
 export function importsReturnFor(topEntry) {
-  return returnMarker && returnMarker.entry && returnMarker.entry === topEntry ? { day: returnMarker.day } : null;
+  return returnMarker && returnMarker.entry && returnMarker.entry === topEntry ? { day: returnMarker.day, notChosen: returnMarker.notChosen } : null;
 }
 
 // The mark's words (contract 1.4, mockup 04): the GPS icon and the number only.

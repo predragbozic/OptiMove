@@ -24,11 +24,16 @@ export function importsEntryBusy(gx) {
 
 // `stillThere`: whether the screen is still Training Load > Imports after the load (the user may have left).
 // Answers "left", "as-is" (Imports opened as it is) or "chosen".
+// One entry at a time: a later mark's click makes an earlier entry still loading give up (it never chooses its day
+// under the later entry's band).
+let entryGeneration = 0;
+
 export async function enterImportsOnDay({ teamId, day, phone = false, render = () => {}, scrollToChooser = () => {}, stillThere = () => true }) {
+  const mine = ++entryGeneration;
   setTrainingLoadSection("imports");
   render();
   await loadTrainingLoadSectionData("imports", render);
-  if (!stillThere() || state.trainingLoad.section !== "imports") return "left";
+  if (mine !== entryGeneration || !stillThere() || state.trainingLoad.section !== "imports") return "left";
   const gx = state.trainingLoad.gpexe;
   // Imports' team is the workspace's own; a different one is never switched.
   if (importsEntryBusy(gx) || String(gx?.teamId || "") !== String(teamId || "") || !chooseDay(day, gx)) {

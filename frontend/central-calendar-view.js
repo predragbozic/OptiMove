@@ -768,7 +768,8 @@ function renderGpsMarkHtml(cal, date, { mini = false } = {}) {
   const mark = gpsMarkFor(cal, date);
   if (!mark) return "";
   const words = gpsReviewWords(mark);
-  const shown = mini ? (mark.uncertain ? "" : `${mark.count}${mark.plus ? "+" : ""}`) : words;
+  // A mini mark: the icon and the number; an uncertain one "?" (its label says "GPS sessions may be waiting").
+  const shown = mini ? (mark.uncertain ? "?" : `${mark.count}${mark.plus ? "+" : ""}`) : words;
   return `<button type="button" class="cc-daymark cc-daymark-gps${mini ? " cc-daymark-mini" : ""}" data-action="central-calendar-gps-review" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(`${words} on ${centralCalendarLongDate(date)}, open Imports`)}">${renderIconSvg("gps", { size: 16, className: "cc-daymark-icon" })}${shown ? `<span class="cc-daymark-words">${escapeHtml(shown)}</span>` : ""}</button>`;
 }
 

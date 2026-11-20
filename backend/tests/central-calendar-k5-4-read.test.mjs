@@ -215,16 +215,35 @@ test("K5-4 pin 1: for the team's coach, the club's admin and a platform admin, t
   assert.deepEqual(byDay["2026-09-06"], { needs: 0, ready: 0, imported: 0, out: 1 });
 });
 
-test("K5-4 pin 2: a refusal is the identical 404 - an unknown team, another team's coach, another club's admin, an athlete", async () => {
+test("K5-4 pin 2: a refusal is the identical 404 - an unknown team, another team's coach, another club's admin, an athlete, a coach in a club workspace for a team not hers", async () => {
   const unknown = await raw(`/teams/00000000-0000-4000-8000-000000000000/calendar${CAL}`, { cookie: team.coach.cookie });
   assert.equal(unknown.status, 404);
   const athlete = await athleteAccount(team.athleteIds[0]);
+  // A coach of another team whose active workspace is this team's club: a club workspace grants a coach nothing here.
+  const clubWorkspaceCoach = await makeUser("k54 coach in a club workspace");
+  await admin.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [clubWorkspaceCoach, other.teamId]);
+  await setWorkspace(clubWorkspaceCoach, "club", team.clubId);
   for (const [who, cookie] of [
     ["another team's coach", other.coach.cookie],
     ["another club's admin, in its club workspace", other.clubAdmin.cookie],
     ["an athlete of the team", athlete.cookie],
+    ["a coach in this team's club workspace, for a team not hers", await cookieFor(clubWorkspaceCoach)],
   ]) {
     const res = await raw(`/teams/${team.teamId}/calendar${CAL}`, { cookie });
     assert.deepEqual([res.status, res.body], [unknown.status, unknown.body], `${who}: the identical 404`);
   }
+  // The workspace guard, not the right: the team's OWN coach who also coaches another team, while that other team's
+  // workspace is the active one, gets the same 404. (A club workspace she holds no club role for is not honoured -
+  // resolveActiveWorkspace falls back to a workspace she may use - so that one cannot be her active workspace.)
+  await admin.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [team.coach.id, other.teamId]);
+  await setWorkspace(team.coach.id, "team", other.teamId);
+  try {
+    const res = await raw(`/teams/${team.teamId}/calendar${CAL}`, { cookie: team.coach.cookie });
+    assert.deepEqual([res.status, res.body], [unknown.status, unknown.body], "the team's own coach in another team's workspace: the identical 404");
+  } finally {
+    await setWorkspace(team.coach.id, "team", team.teamId);
+    await admin.query(`delete from public.user_team_roles where user_id = $1 and team_id = $2`, [team.coach.id, other.teamId]);
+  }
+  const back = await raw(`/teams/${team.teamId}/calendar${CAL}`, { cookie: team.coach.cookie });
+  assert.equal(back.status, 200, "and in her team workspace she reads it again");
 });

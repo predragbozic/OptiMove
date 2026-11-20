@@ -83,6 +83,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.ok(look.inside, "the mark fits the screen");
       if (width < 600) assert.ok(look.height >= 44, `a 44 px target on a phone (${look.height})`);
       assert.equal(await overflow(page), 0, "no horizontal page scroll on the calendar");
+      if (process.env.K54_SHOTS) await page.screenshot({ path: `${process.env.K54_SHOTS}/calendar-${width}.png` });
 
       await page.click(MARK);
       await page.waitForSelector(".imports-period .period-range-text", { state: "attached", timeout: 30_000 });
@@ -110,7 +111,18 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         assert.equal(imports.open, false, "a computer: the chooser is on the page, not a sheet");
         assert.equal(imports.modal, null, "no dialog on a computer");
         assert.equal(await overflow(page), 0);
+        // After the scroll to the chooser the band is still in view (UX review): the only way back must be visible.
+        const band = await page.evaluate(() => {
+          const r = document.querySelector('[data-action="imports-back-to-calendar"]').getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom, vh: window.innerHeight };
+        });
+        assert.ok(band.top >= 0 && band.bottom <= band.vh, `Back to calendar is in view after the scroll ${JSON.stringify(band)}`);
+        // And the scroll itself happened: the chooser's top is on screen (code review).
+        const chooserTop = await page.evaluate(() => document.querySelector("#imports-period").getBoundingClientRect().top);
+        assert.ok(chooserTop >= 0 && chooserTop < 900, `the chooser is scrolled into view (top ${chooserTop})`);
+        if (process.env.K54_SHOTS) await page.screenshot({ path: `${process.env.K54_SHOTS}/imports-${width}.png` });
       }
+      assert.equal(await page.locator(".cc-imports-back-note").count(), 0, "the day was chosen: no 'not chosen' note");
       await page.click('[data-action="imports-back-to-calendar"]');
       await page.waitForSelector(MARK, { timeout: 20_000 });
       assert.equal(await page.locator('[data-action="imports-back-to-calendar"]').count(), 0, "the band is gone on the calendar");

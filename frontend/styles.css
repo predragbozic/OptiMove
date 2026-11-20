@@ -29242,7 +29242,8 @@ body.athlete-questions-prompt-open {
   font-weight: 800;
   line-height: 1.25;
   text-align: left;
-  overflow-wrap: anywhere;
+  /* Whole words wrap in a narrow week column; a word breaks only if it cannot fit at all (mobile review). */
+  overflow-wrap: break-word;
   cursor: pointer;
 }
 .cc-daymark:hover { border-style: solid; }
@@ -29252,11 +29253,19 @@ body.athlete-questions-prompt-open {
 .cc-daymark-mini { min-height: 28px; margin-top: 2px; padding: 2px 6px; font-size: 12px; }
 .cc-layout-medium .cc-daymark { min-height: 44px; }
 .cc-daymark-sign { display: inline-flex; color: var(--om-warning, #8a5300); }
-@media (pointer: coarse), (max-width: 760px) {
+/* Any touch input (a touch laptop or tablet that reports a fine primary pointer included) gets the full target. */
+@media (pointer: coarse), (any-pointer: coarse), (max-width: 760px) {
   .cc-daymark,
   .cc-daymark-mini { min-height: 44px; }
 }
 .cc-imports-back { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+/* On a computer the entry scrolls Imports to its period chooser, below the work list: the toolbar holding the band
+   stays at the top of the view, so the way back never scrolls away (UX review; checked by the e2e at 1280 px). A phone
+   opens the chooser as a full-screen sheet instead. */
+@media (min-width: 761px) {
+  .toolbar:has(> .cc-imports-back) { position: sticky; top: 0; z-index: 20; padding: 8px 0; background: var(--bg); }
+}
+.cc-imports-back-note { flex-basis: 100%; margin: 0; font-size: 14px; color: var(--om-warning, #8a5300); overflow-wrap: break-word; }
 .cc-imports-back-button { min-height: 44px; }
 .cc-imports-back-day { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
 

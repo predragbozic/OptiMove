@@ -466,8 +466,9 @@ function candidate(n, day, overrides = {}) {
     sessionType: "FULL TRAINING", reasons: [], lastSeenAt: `${day}T12:00:00Z`, ...overrides,
   };
 }
-function importsServer({ candidates = [], truncated = false, older = {}, lastCheck = null } = {}) {
-  const calls = installFetchMock((call) => {
+function importsServer({ candidates = [], truncated = false, older = {}, lastCheck = null, hold = null } = {}) {
+  const calls = installFetchMock(async (call) => {
+    if (hold && call.url.endsWith("/status")) await hold;
     if (call.url === "/api/organization") return { status: 200, body: ORG };
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/[^?]*)(\?.*)?$/);
     if (!m) return { status: 404, body: { error: "notFound" } };
@@ -583,6 +584,31 @@ test("B2b. a team other than the workspace's own is never switched, and a future
   assert.equal(period.periodOf(gx()).open, false);
 });
 
+test("B4. two entries overlapping: the later mark's day wins; the earlier entry still loading gives up", async () => {
+  enterAsTeamCoach();
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  importsServer({ candidates: [candidate(1, PDAY(1)), candidate(2, D)], hold });
+  const first = enterImportsOnDay({ teamId: U17, day: PDAY(1), phone: false });
+  const second = enterImportsOnDay({ teamId: U17, day: D, phone: false });
+  release();
+  assert.deepEqual(await Promise.all([first, second]), ["left", "chosen"]);
+  assert.deepEqual(period.periodRange(gx()), { from: D, to: D, days: 1 }, "the later mark's day");
+});
+
+test("R7. the mark's entry drops the marks: back on the calendar they are read again, never a stale count", async () => {
+  let waiting = 2;
+  const calls = await openCalendar({ gpsRoute: (call) => ({ status: 200, body: gpsAnswer(call.url, [gpsDay({ day: PDAY(2), ready: waiting, imported: 2 - waiting })]) }) });
+  assert.equal(markText(PDAY(2)), "2 GPS sessions to review");
+  // What app.js's openImportsOnDay does first (pinned by G1): the coach imports both sessions, then comes back.
+  gps.clearGpsReview();
+  waiting = 0;
+  await loadCentralCalendar({ render });
+  await tick();
+  assert.equal(gpsReads(calls).length, 2, "read again on the return");
+  assert.equal(markOn(PDAY(2)), null, "nothing waiting any more: no mark");
+});
+
 // --- B3: the band's marker --------------------------------------------------------------
 
 test("B3. Back to calendar belongs only to the step the mark pushed: claimed once, gone on any other step", () => {
@@ -593,7 +619,11 @@ test("B3. Back to calendar belongs only to the step the mark pushed: claimed onc
   assert.equal(gps.importsReturnFor(pushed), null, "nothing before the push claims it");
   gps.claimImportsReturn(pushed);
   gps.claimImportsReturn(later);
-  assert.deepEqual(gps.importsReturnFor(pushed), { day: D }, "the pushed step shows it");
+  assert.deepEqual(gps.importsReturnFor(pushed), { day: D, notChosen: false }, "the pushed step shows it");
+  gps.setImportsReturnOutcome("as-is");
+  assert.deepEqual(gps.importsReturnFor(pushed), { day: D, notChosen: true }, "Imports opened as it was: the band says the day was not chosen");
+  gps.setImportsReturnOutcome("chosen");
+  assert.deepEqual(gps.importsReturnFor(pushed), { day: D, notChosen: false });
   assert.equal(gps.importsReturnFor(later), null, "a later step does not");
   assert.equal(gps.importsReturnFor(before), null, "nor another step at that depth");
   gps.setImportsReturn({ day: "not-a-day" });
@@ -618,7 +648,9 @@ function body(name) {
 test("G1. openImportsOnDay asks Training Load's leave question first, then the marker and ONE history step, then the module's entry", () => {
   const entry = body("openImportsOnDay");
   const ask = entry.indexOf("if (!confirmLeaveTrainingLoad(\"training-load\")) return;");
+  const drop = entry.indexOf("clearGpsReview();");
   const marker = entry.indexOf("setImportsReturn({ day });");
+  assert.ok(ask >= 0 && ask < drop && drop < marker, "the marks are dropped after the leave question (R7: the return reads them again)");
   const push = entry.indexOf("pushAppHistory();");
   const enter = entry.indexOf("await enterImportsOnDay({");
   assert.ok(ask >= 0 && ask < marker && marker < push && push < enter, "leave question, marker, push, entry - in that order");
@@ -633,4 +665,7 @@ test("G2. the band is drawn on every Training Load paint, its step is claimed on
   assert.match(body("pushAppHistory"), /claimImportsReturn\(entry\);/);
   assert.match(body("signOut"), /clearGpsReview\(\);/);
   assert.match(appJs, /action\.dataset\.action === "imports-back-to-calendar"[\s\S]{0,300}window\.history\.back\(\)/, "the band's click is the app's Back");
+  const entry = body("openImportsOnDay");
+  assert.match(entry, /const outcome = await enterImportsOnDay\(\{[\s\S]*\}\);\s*\/\/[^\n]*\n\s*setImportsReturnOutcome\(outcome\);\s*if \(state\.activeTab === "training-load"\) renderImportsBackBand\(\);/, "the entry's outcome reaches the band");
+  assert.match(body("renderImportsBackBand"), /back\.notChosen \? `<p class="cc-imports-back-note" role="status">/, "a note only when the day was not chosen");
 });
