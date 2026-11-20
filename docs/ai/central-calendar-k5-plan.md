@@ -52,7 +52,7 @@ The panel of each kind gets one clear button to where its work is done. Back ret
 | Kind | Button | Opens |
 |---|---|---|
 | A Builder training (planned group) | *Open in Builder* (coach) | The Builder on that plan's week and day |
-| A Tests schedule | *Open in Tests* | Tests on that schedule's day, to enter results |
+| A Tests schedule | *Open in Tests* | Tests on that schedule's day, to see who has answered (results come from the athletes' own forms; contract Q4) |
 | An RPE schedule | *Open in Training Load* | Training Load › Schedule on that schedule |
 | An activity | *Open in Training Load* (exists) | The activity; *Roster* when someone still needs an attendance state |
 | An event | its folded items' buttons, in the order above | — |
