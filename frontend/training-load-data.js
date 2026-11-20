@@ -433,6 +433,16 @@ export async function submitExternalRpe(assignmentId, { rpe, durationMinutes, no
   });
 }
 
+// K4b: the athlete changes their own external answer while the question is
+// open. requestKey makes a resend (Check result) never change twice;
+// expectedRevision refuses a change made on another screen first.
+export async function changeExternalRpe(assignmentId, { requestKey, rpe, durationMinutes, note, expectedRevision }) {
+  return api(`/api/training-load/external-assignments/${encodeURIComponent(assignmentId)}/rpe/change`, {
+    method: "POST",
+    body: JSON.stringify({ requestKey, rpe, durationMinutes, note: note || "", expectedRevision }),
+  });
+}
+
 // Training Load Schedule tab's own quick RPE ON/OFF toggle. A 409 with
 // error: "hasExistingResults" is a real, expected outcome (not a failure) -
 // the caller shows a confirm dialog and retries with

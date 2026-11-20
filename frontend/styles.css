@@ -8730,6 +8730,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-batch-sync { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 13px; font-weight: 800; white-space: nowrap; }
 .builder-batch-sync input { width: 16px; height: 16px; margin: 0; accent-color: #287e77; }
 .builder-batch-mode small { color: #667085; font-size: 12px; }
+.builder-batch-hidden { display: block; color: #667085; font-size: 12px; overflow-wrap: anywhere; }
+.builder-batch-hidden-alone { margin: 0; padding: 8px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; }
 .builder-batch-edit-note { margin: 0; padding: 10px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
 .builder-batch-buttons { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .builder-batch-pills { display: flex; gap: 6px; max-width: min(420px, 42vw); overflow-x: auto; padding: 2px; }
@@ -29092,4 +29094,60 @@ body.athlete-questions-prompt-open {
   .ac-day { scroll-margin-top: calc(var(--ac-under-topbar) + var(--ac-head-height) + var(--ac-strip-height) + 8px); }
   .ac-card-actions { flex-direction: column; }
   .ac-card-actions .ac-button { width: 100%; }
+}
+
+/* -------------------- K4b: changing an RPE answer while the question is open -------------------- */
+.training-load-list-row:has(.training-load-rpe-answer) {
+  flex-wrap: wrap;
+}
+.training-load-rpe-answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.training-load-rpe-answer-value {
+  font-weight: 700;
+  color: var(--text);
+}
+.training-load-rpe-answer .training-load-rpe-change {
+  min-height: 44px;
+  min-width: 44px;
+}
+.training-load-rpe-answer-until {
+  flex-basis: 100%;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.training-load-home-answers {
+  display: grid;
+  gap: 8px;
+}
+.training-load-home-answer {
+  display: grid;
+  gap: 4px;
+}
+.training-load-home-answer-name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.training-load-rpe-change-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.training-load-rpe-change-until {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cc-question-changed {
+  color: var(--muted);
+  font-size: 13px;
 }

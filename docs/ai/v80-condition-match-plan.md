@@ -211,3 +211,13 @@ Runbook `docs/runbooks/condition-match-v80.md`. Where the build departs from sec
 - **Not built here:** step C (the screen), the Imports sentence for `team_setting_changed` (the code is in the preview's
   messages; the screen's own sentence is step C), and a check that a team's sessions all carry one setting (section 4's last
   point: the importer blocks every session that differs, so a mixed history never imports silently).
+
+### 9.1 After the reviews of PR #659 (recorded, not built)
+
+- **The database does not bind a rule to the field's key, nor `matched_source_range` to the condition** (the Independent's
+  LOW-1; migration v80's version and activation guards): the service does (`conditionRuleFor`, the match). A later
+  migration may add a database function that mirrors `conditionRuleFor` in the version guard - only on the Rukovodilac's
+  order.
+- **An event-setting confirmation holds per field revision and numbers, not per team**: a team whose own session carries
+  the same threshold and duration matches without a confirmation of its own. It stays so for now (the Rukovodilac's note to
+  the owner, 2026-11-19).

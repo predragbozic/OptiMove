@@ -387,7 +387,7 @@ router.get("/plans/:planId", async (req, res, next) => {
   try {
     const plan = await getEditablePlan(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Draft program not found" });
-    res.json(await buildDraft(plan));
+    res.json(await buildDraft(plan, req));
   } catch (error) { next(error); }
 });
 
@@ -546,7 +546,7 @@ router.post("/plans/:planId/sync-batch", withBatchReuseGuard(async (req, res, ne
     if (!plan) return;
     if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req.user, req.exerciseReuseGuard);
     const freshPlan = await getEditablePlan(req, plan.id);
-    res.json(await buildDraft(freshPlan || plan));
+    res.json(await buildDraft(freshPlan || plan, req));
   } catch (error) { next(error); }
 }));
 
@@ -619,7 +619,7 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    res.status(201).json(await buildDraft(await getEditablePlan(req, createdIds[0])));
+    res.status(201).json(await buildDraft(await getEditablePlan(req, createdIds[0]), req));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -874,7 +874,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         client.release();
         client = null;
         res.status(201);
-        return timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, replay.planId)))), assignments: replay.assignments });
+        return timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, replay.planId), req))), assignments: replay.assignments });
       }
       if (!claimed) {
         await client.query("rollback");
@@ -967,7 +967,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     client = null;
     emitPlanAssignedRealtime(notifiedUserIds);
     res.status(201);
-    timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, createdIds[0])))), assignments });
+    timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, createdIds[0]), req))), assignments });
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -983,9 +983,9 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
   try {
     const plan = await timing.measure("access", () => getEditablePlan(req, req.params.planId));
     if (!plan) return res.status(404).json({ error: "Program not found or not editable." });
-    if (plan.is_edit_draft) return timing.json(await timing.measure("response", () => buildDraft(plan)));
+    if (plan.is_edit_draft) return timing.json(await timing.measure("response", () => buildDraft(plan, req)));
     if (plan.status === "draft" && plan.source_type === "builder" && !plan.edit_source_plan_id) {
-      return timing.json(await timing.measure("response", () => buildDraft(plan)));
+      return timing.json(await timing.measure("response", () => buildDraft(plan, req)));
     }
 
     const existingDraft = await timing.measure("lookup", () => query(
@@ -999,7 +999,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
       [plan.id, req.user.id],
     ));
     if (existingDraft.rows[0]) {
-      return timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, existingDraft.rows[0].id))));
+      return timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, existingDraft.rows[0].id), req)));
     }
 
     client = await timing.measure("pool", () => pool.connect());
@@ -1047,7 +1047,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
     await client.query("commit");
     client.release();
     client = null;
-    timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, created.rows[0].id))));
+    timing.json(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, created.rows[0].id), req)));
   } catch (error) {
     if (client) {
       try { await client.query("rollback"); } catch {}
@@ -1896,7 +1896,7 @@ router.delete("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
 
 async function buildSubmitResponse(req, plan) {
   // Save exits Builder; Assign and older clients still need the complete tree.
-  if (req.body?.responseMode !== "summary") return buildDraft(plan);
+  if (req.body?.responseMode !== "summary") return buildDraft(plan, req);
   return {
     saved: true,
     plan: {
@@ -1912,7 +1912,7 @@ async function buildSubmitResponse(req, plan) {
   };
 }
 
-async function buildDraft(plan) {
+async function buildDraft(plan, req) {
   const result = await query(
     `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
             ps.id as session_id, ps.am_pm, ps.bta, ps.session_time, ps.session_order, ps.name as session_name, ps.rpe_enabled, ps.training_load_enabled,
@@ -1969,7 +1969,7 @@ async function buildDraft(plan) {
       requestRpeDefault: Boolean(plan.request_rpe_default),
     },
     blocks: [...blocks.values()],
-    batch: await loadBuilderBatch(plan),
+    batch: await loadBuilderBatch(plan, req),
   };
 }
 
@@ -1993,7 +1993,7 @@ async function respondWithDraft(req, res, user, plan, options = {}) {
     await syncBatchFromPlan(targetPlan, user, req.exerciseReuseGuard);
     freshPlan = await getEditablePlan(req, targetPlan.id);
   }
-  const draft = await buildDraft(freshPlan || targetPlan);
+  const draft = await buildDraft(freshPlan || targetPlan, req);
   if (options.status) return res.status(options.status).json(draft);
   return res.json(draft);
 }
@@ -2899,19 +2899,28 @@ async function getEditablePlan(req, planId) {
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.id = $1
-       and p.plan_type in ('program', 'weekly')
-       and (
-         p.created_by_user_id = $2
-         or $3::boolean
-         or exists (
-           select 1
-           from public.athletes managed_athlete
-           where managed_athlete.id = p.athlete_id
-             and ${athleteAccessPredicate("managed_athlete", "$2")}
-         )
-       )`, [planId, req.user.id, canAccessAllAthletes(req)],
+       and ${editablePlanAccessSql("p", "$2", "$3")}`, [planId, req.user.id, canAccessAllAthletes(req)],
   );
   return result.rows[0] || null;
+}
+
+// Who may open a Builder plan: the one source of truth for getEditablePlan
+// and for the batch switcher's members (loadBuilderBatch). `userParam` is the
+// viewer's user id, `allParam` canAccessAllAthletes(req).
+function editablePlanAccessSql(alias, userParam, allParam) {
+  return `(
+         ${alias}.plan_type in ('program', 'weekly')
+         and (
+           ${alias}.created_by_user_id = ${userParam}
+           or ${allParam}::boolean
+           or exists (
+             select 1
+             from public.athletes managed_athlete
+             where managed_athlete.id = ${alias}.athlete_id
+               and ${athleteAccessPredicate("managed_athlete", userParam)}
+           )
+         )
+       )`;
 }
 
 // Copy paths must lock the target plan before child FK/row locks (same order as DELETE).
@@ -3200,23 +3209,32 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
   return "";
 }
 
-async function loadBuilderBatch(plan) {
+// The batch switcher's members: only the plans this viewer may open, by the
+// very predicate getEditablePlan uses (editablePlanAccessSql); the rest only
+// as a count, with no id, name, week or status (security review of the
+// Builder batch edit, HIGH: a coach who could open one member saw every
+// member's athlete and plan).
+async function loadBuilderBatch(plan, req) {
   if (!plan.builder_batch_id) return null;
+  if (!req?.user?.id) throw new Error("loadBuilderBatch needs the viewer's request.");
   const result = await query(
     `select p.id, p.name, p.plan_type, p.week_start, p.status,
             a.athlete_id, a.source_external_id as athlete_source_external_id,
-            coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name
+            coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name,
+            ${editablePlanAccessSql("p", "$2", "$3")} as visible
      from plans.plans p
      left join public.athletes a on a.id = p.athlete_id
      where p.builder_batch_id = $1
        and coalesce(p.is_active, true)
        and not coalesce(p.is_edit_draft, false)
      order by coalesce(a.athlete_id::text, a.source_external_id, p.name), p.created_at`,
-    [plan.builder_batch_id],
+    [plan.builder_batch_id, req.user.id, canAccessAllAthletes(req)],
   );
+  const visible = result.rows.filter((row) => row.visible === true);
   return {
     id: plan.builder_batch_id,
-    plans: result.rows.map((row) => ({
+    hiddenCount: result.rows.length - visible.length,
+    plans: visible.map((row) => ({
       id: row.id,
       name: row.name || "",
       planType: row.plan_type,
