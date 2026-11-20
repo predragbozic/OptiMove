@@ -1404,3 +1404,9 @@ for (const kind of ['clubIds','teamIds','athleteIds']) test(`shell ${kind} paylo
   finishA();await pending;assert.equal(a.queryResult.widgets[0].series[0].data.current[0].value,3);
   state.trainingLoad.filter[kind]=[metricId,activityId];await queryAnalysisDashboard(()=>{});assert.equal(requests,3);assert.equal(a.queryResult.widgets[0].series[0].data.current[0].value,1);
 });
+
+test('a shell selection over the shared limit gives a plain next step, never an error code',async()=>{
+  resetState();const a=state.trainingLoad.analysis;a.dashboard=dashboard();a.selectedDashboardId=dashboardId;a.widgets=[widget()];state.trainingLoad.filter.athleteIds=Array.from({length:201},(_,i)=>`athlete-${i}`);
+  installFetchMock(async()=>({status:400,body:{error:'invalidRequest'}}));await queryAnalysisDashboard(()=>{});
+  assert.equal(a.queryError,'Choose at most 200 clubs, teams and athletes in the filter.');assert.doesNotMatch(renderTrainingLoadAnalysisHtml(),/invalidRequest/);
+});

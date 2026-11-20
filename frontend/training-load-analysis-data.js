@@ -325,7 +325,8 @@ export async function queryAnalysisDashboard(onPainted, { force = false } = {}) 
     applyError: (error) => {
       if (generation !== queryGeneration || queryContextKey() !== contextKey) return;
       a.queryLoading = false;
-      a.queryError = error.status === 409 && error.message === "dashboardArchived" ? "This dashboard is archived." : (error.message || "Could not run dashboard query.");
+      const shellCount = Object.values(runtimePayload.shellFilter ?? {}).reduce((n, ids) => n + ids.length, 0);
+      a.queryError = error.status === 400 && shellCount > 200 ? 'Choose at most 200 clubs, teams and athletes in the filter.' : error.status === 409 && error.message === "dashboardArchived" ? "This dashboard is archived." : (error.message || "Could not run dashboard query.");
       onPainted?.();
     },
     getCurrentContextKey: queryContextKey,

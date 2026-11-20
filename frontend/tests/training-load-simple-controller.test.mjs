@@ -757,3 +757,8 @@ test('shell selection is a distinct preview context and a change invalidates sav
   h.context={...h.context,shellFilter:{clubIds:[],teamIds:['team-b'],athleteIds:[]}};
   await h.controller.save();assert.equal(h.of('save').length,0);assert.match(h.controller.model.saveError,/filters changed/);
 });
+
+test('a preview shell-limit refusal gives a plain next step',async()=>{
+  const h=harness();h.context={...h.context,shellFilter:{clubIds:[],teamIds:[],athleteIds:Array.from({length:201},(_,i)=>`athlete-${i}`)}};await ready(h);
+  h.reply('preview',()=>Promise.reject(apiError(400,'invalidRequest')));await h.controller.preview();assert.equal(h.controller.model.error,'Close the editor and choose at most 200 clubs, teams and athletes.');
+});
