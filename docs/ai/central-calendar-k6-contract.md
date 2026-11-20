@@ -1,7 +1,8 @@
 # Central calendar — K6 UI contract: the team and athlete switcher
 
 Status: **Decided by the stream manager** (2026-11-20): Q1–Q9 of section 7 as recommended, so K6 stays ★, with no
-backend and no new read; Q10 (Back, after the owner's S6) is open, and until it is decided K6 builds its option (a).
+backend and no new read; Q10 (Back, after the owner's S6) decided the same day: (a), today's Back and a one-tap
+*Back to calendar*.
 Next: the OptiMove manager's GO. Documents only:
 no code, no route, no migration. Written against `main` `ec467638`, on the K6 plan (`docs/ai/central-calendar-k6-plan.md`,
 the owner's S1–S6) and the approved mockups (`docs/design/calendar-k6/`, F1–F6 as recommended). Where this contract
@@ -392,9 +393,9 @@ Moving to athlete B:
   the remaining drill-in entries of the Weekly tab are skipped by `skipStaleAppBackEntry` until the calendar's entry
   is restored. (`takeAppBackEntry` answers only inside a popstate press, so the click handler never calls it.)
 
-So ten athletes are never ten Backs (Q6, decided): switching adds no entry. **Q10** below is about the stream
-manager's reading "one Back leaves the plan": with today's app-wide Back, the phone's Back steps up the drilled
-levels first, so that holds for *Back to calendar*, not for the phone's Back from a section.
+So ten athletes are never ten Backs (Q6, decided): switching adds no entry. Leaving the plan in one press is the
+job of *Back to calendar*; the phone's Back keeps stepping up one level per press, as everywhere in the app (Q10,
+decided: (a)).
 
 **A write in flight.** The Weekly plan's own writes (the copy modal, the more-menu actions) keep their existing
 guards; while one is in flight the switcher's buttons are disabled, the Builder's pattern
@@ -633,17 +634,11 @@ backend change.
   **Recommend not in K6**: S1 asks for it inside the calendar's flow. It can follow with the same component.
 - **Q9. The 60 of F3: a constant, or per club?** **Recommend a constant** in `athlete-switcher.js`, changed by a pull
   request if the pilot shows another number.
-- **Q10 (open, after S6). The phone's Back from deep inside a plan.** The stream manager's reading of S6 is "one
-  Back leaves the plan". Today's app-wide Back does not do that: each drill-in pushes a history entry
-  (`app.js:3221-3227`) and Back steps up one level per press before it leaves (`app.js:2285-2289`); with S6 the coach
-  will often be three levels deep (session › domain › section). Options:
-  - (a) **Recommended:** keep today's Back (one level per press, the same everywhere in the app), and give the
-    Weekly plan the visible *Back to calendar*, one tap from any depth (3.2). No app-wide change.
-  - (b) A plan opened from the calendar pushes no per-level entries, and the phone's Back from it clears `navStack`
-    and returns to the calendar in one press. It changes the Back of one screen against the rest of the app, and the
-    drill-in code shared with every Weekly plan, so it needs its own decision and tests.
-
-  Until Q10 is decided, K6 builds (a); (b) would be its own change.
+- **Q10. The phone's Back from deep inside a plan (after S6).** **Decided by the stream manager, 2026-11-20: (a).**
+  Today's app-wide Back stays: each drill-in pushes a history entry (`app.js:3221-3227`) and Back steps up one level
+  per press before it leaves (`app.js:2285-2289`). The Weekly plan gets the visible *Back to calendar*, one tap from
+  any depth (3.2). The shared drill-in code is not changed. (The option not taken, (b), was: a plan opened from the
+  calendar pushes no per-level entries and the phone's Back leaves it in one press.)
 
 ## 8. Not in K6
 
