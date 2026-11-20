@@ -252,6 +252,25 @@ const SQL_READ_ONLY_HINT = /\b(SELECT|EXPLAIN|SHOW)\b/i;
 // DENY checks — never auto-execute these, no matter who asks
 // ---------------------------------------------------------------------------
 
+// git (like the GNU tools) accepts any unique prefix of a long option: `--forc`, `--for` and
+// even `--f` are `--force` to `git checkout`; `--har` is `--hard`. A rule that compares long
+// options by exact name is blind to that, so every comparison below goes through this: true
+// when the word (before any "=") is `--` plus at least one letter and is a prefix of `name`.
+// An ambiguous prefix git itself would refuse counts too: the stricter verdict wins.
+export function longOptionIs(word, name) {
+  const t = String(word).split("=")[0];
+  return t.length >= 3 && t.startsWith("--") && name.startsWith(t);
+}
+
+// For commands whose long options are judged by an explicit list: "safe" when the word is a
+// prefix only of safe names, "danger" when it is a prefix of a dangerous name, else "unknown".
+function classifyLongOption(word, safeNames, dangerousNames) {
+  const t = String(word).split("=")[0];
+  if (dangerousNames.some((n) => longOptionIs(t, n))) return "danger";
+  if (safeNames.some((n) => n === t || longOptionIs(t, n))) return "safe";
+  return "unknown";
+}
+
 export function isGitAddBroad(segment) {
   const parsed = extractGitSubcommandArgs(segment, "add");
   if (!parsed) return false;
@@ -265,7 +284,7 @@ export function isGitAddBroad(segment) {
 export function isGitResetHard(segment) {
   const parsed = extractGitSubcommandArgs(segment, "reset");
   if (!parsed) return false;
-  return /--hard\b/i.test(parsed.rest);
+  return parsed.rest.split(/\s+/).some((t) => longOptionIs(t, "--hard"));
 }
 
 export function isGitCleanDestructive(segment) {
@@ -275,8 +294,8 @@ export function isGitCleanDestructive(segment) {
   let dryRun = false;
   let force = false;
   for (const t of tokens) {
-    if (/^--dry-run$/i.test(t)) dryRun = true;
-    else if (/^--force$/i.test(t)) force = true;
+    if (longOptionIs(t, "--dry-run")) dryRun = true;
+    else if (longOptionIs(t, "--force")) force = true;
     else if (/^-[a-zA-Z]+$/.test(t)) {
       if (/n/i.test(t)) dryRun = true;
       if (/f/i.test(t)) force = true;
@@ -292,7 +311,9 @@ export function isGitPushForce(segment) {
   const parsed = extractGitSubcommandArgs(segment, "push");
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean);
-  return tokens.some((t) => /^(-f|--force|--force-with-lease(=.*)?)$/i.test(t));
+  return tokens.some((t) => (/^-[a-zA-Z]+$/.test(t) && t.includes("f")) // -f, -uf, -fu
+    || longOptionIs(t, "--force") || longOptionIs(t, "--force-with-lease")
+    || /^\+[^:+\s]/.test(stripQuotes(t))); // `git push origin +branch`: a forced refspec
 }
 
 // `git checkout <branch>` (switching branches) is normal workflow and left alone. What
@@ -316,6 +337,9 @@ export function isGitCheckoutDiscardingWork(segment, cwd) {
   const dashDashIdx = tokens.findIndex((t) => t === "--");
   if (dashDashIdx !== -1) return tokens.length > dashDashIdx + 1; // `-- <path...>` present
   if (tokens.some((t) => /^-[bB]$/.test(t))) return false; // creates a new branch, not a discard
+  // These forms take a commit or a branch, never a path: they cannot discard a file's changes,
+  // even when the ref cannot be verified from here (the worktree does not exist yet).
+  if (tokens.some((t) => /^(--detach|--orphan|--track|-t)$/.test(t) || /^--track=/.test(t))) return false;
   const nonFlag = tokens.filter((t) => !t.startsWith("-"));
   if (nonFlag.length === 0) return false;
   if (nonFlag.length > 1) return true; // ambiguous multi-arg form without `--`, treat as risky
@@ -332,11 +356,12 @@ export function isGitRestoreDiscardingWork(segment) {
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return false;
-  const isStaged = (t) => /^(--staged|-S)$/i.test(t);
-  const isWorktree = (t) => /^(--worktree|-W)$/i.test(t);
+  const isStaged = (t) => t === "-S" || longOptionIs(t, "--staged") || (/^-[a-zA-Z]+$/.test(t) && t.includes("S"));
+  const isWorktree = (t) => t === "-W" || longOptionIs(t, "--worktree") || (/^-[a-zA-Z]+$/.test(t) && t.includes("W"));
   const hasStagedOnly = tokens.some(isStaged) && !tokens.some(isWorktree);
   if (hasStagedOnly) return false;
-  const hasTarget = tokens.some((t) => t === "--" || !t.startsWith("-"));
+  // a pathspec file names targets too: `--pathspec-from-file=list` (and every prefix of it)
+  const hasTarget = tokens.some((t) => t === "--" || !t.startsWith("-") || longOptionIs(t, "--pathspec-from-file"));
   return hasTarget;
 }
 
@@ -567,6 +592,17 @@ export function isPersistentSqlWrite(segment) {
 // Reading what hides: wrappers, substitutions, groups, heredocs. The rule is "a dangerous
 // command is caught wherever it can be read"; only what truly cannot be read asks.
 // ---------------------------------------------------------------------------
+
+// Every git subcommand name, porcelain and plumbing: a `$VAR` command word followed by one of
+// these is read as git; followed by anything else it is not.
+const KNOWN_GIT_SUBCOMMANDS = new Set(["add", "am", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file", "check-attr",
+  "check-ignore", "checkout", "checkout-index", "cherry", "cherry-pick", "clean", "clone", "commit", "commit-tree", "config", "count-objects",
+  "describe", "diff", "diff-files", "diff-index", "diff-tree", "difftool", "fast-import", "fetch", "filter-branch", "for-each-ref", "format-patch",
+  "fsck", "gc", "grep", "hash-object", "init", "log", "ls-files", "ls-remote", "ls-tree", "maintenance", "merge", "merge-base", "merge-file",
+  "merge-tree", "mergetool", "mktag", "mktree", "mv", "name-rev", "notes", "prune", "pull", "push", "range-diff", "read-tree", "rebase",
+  "reflog", "remote", "repack", "replace", "reset", "restore", "rev-list", "rev-parse", "revert", "rm", "send-email", "shortlog", "show",
+  "show-ref", "sparse-checkout", "stash", "status", "submodule", "switch", "symbolic-ref", "tag", "update-index", "update-ref",
+  "update-server-info", "var", "verify-commit", "version", "whatchanged", "worktree", "write-tree"]);
 
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell"]);
 const KNOWN_COMMANDS_BY_PATH = new Set([
@@ -1389,6 +1425,111 @@ export function isHarmlessRedirectTarget(rawTarget, variables = new Map()) {
 // Plain assignments in a command line (`S=/tmp/x`, `export S=/tmp/x`): their values are
 // known, so `> $S/out.txt` can be judged. A name assigned twice, or a value with an
 // expansion in it, is not used.
+// The separators between the top-level parts of a line, in order (";", "\n", "&&", "||", "|",
+// "|&", "&"), read with the same quoting rules as splitCommandSegments.
+export function lineSeparators(cmd) {
+  const found = [];
+  let quote = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (quote) {
+      if (quote === '"' && ch === "\\") { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "\\") { i++; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    const two = cmd.slice(i, i + 2);
+    if (two === "&&" || two === "||" || two === "|&") { found.push(two); i++; continue; }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") { found.push(ch === "\r" ? "\n" : ch); continue; }
+    if (ch === "&" && cmd[i - 1] !== ">" && cmd[i - 1] !== "<" && cmd[i + 1] !== ">") found.push("&");
+  }
+  return found;
+}
+
+const PLAIN_ASSIGNMENT_RE = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=([^\s$`'"\\();|&<>{}]*)$/;
+// Commands that can set a variable some other way than NAME=value (or run code that does).
+const VARIABLE_SETTERS = new Set(["eval", "source", ".", "read", "mapfile", "readarray", "declare", "typeset", "local", "readonly",
+  "unset", "let", "getopts", "printf", "export", "alias", "select", "trap", "builtin", "command", "exec", "set", "shift", "for",
+  "while", "until", "if", "case", "function", "coproc", "then", "do", "else", "elif"]);
+
+// The variables a redirect may use: only in a line made of plain assignments `NAME=value`
+// (no $, backtick, quotes or substitution in the value; `export NAME=value` too) and plain
+// commands, joined by ";" or a newline — or by "&&" before the first assignment only — with no
+// "||", pipe or background job anywhere. A variable mentioned in any other form before the
+// redirect (`read S`, `for S in`, `S+=`, `${S:=x}`, `unset S`, `S=$(...)`, a prefix
+// `S=x cmd`, ...) is unknown, and so is every variable when a part could set one another way
+// (eval, source, read, declare, a loop, a function, ...). Returns one Map per top-level part:
+// the certain values of the parts before it. Anything unknown means the redirect asks.
+// The command word of a part once the prefixes that run a command unchanged are peeled:
+// `!`, `time [-p]`, `command`, `builtin`, `nohup`, `exec`, `env [options] [NAME=value]...`, and
+// leading NAME=value prefixes. `time read $T` is a read.
+function commandWordAfterPrefixes(part) {
+  let words = tokenizeWords(part).map(shellWord);
+  for (let n = 0; n < 12 && words.length; n++) {
+    const w = words[0];
+    if (w === "!") { words = words.slice(1); continue; }
+    if (w === "time") { words = words.slice(1); while (words[0] === "-p" || words[0] === "--") words = words.slice(1); continue; }
+    if (w === "command" || w === "builtin" || w === "nohup" || w === "exec") { words = words.slice(1); while (words[0]?.startsWith("-")) words = words.slice(1); continue; }
+    if (w === "env") { words = words.slice(1); while (words[0] && (words[0].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]))) words = words.slice(1); continue; }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) && words.length > 1) { words = words.slice(1); continue; }
+    break;
+  }
+  return words[0] ?? "";
+}
+
+// Whether a line could set a variable in a way the plain-assignment reading does not see: a
+// setter at a command position of any part or substitution (after the prefixes above), an
+// indirect name (${!x}), or an assignment inside arithmetic ($(( T = 5 ))).
+function lineMaySetVariablesIndirectly(text, parts, depth = 0) {
+  if (/\$\{!/.test(text)) return true;
+  if (/\$\(\([^)]*[^=!<>]=[^=]/.test(text) || /\(\([^)]*[^=!<>]=[^=]/.test(text)) return true;
+  for (const part of parts) {
+    const peeled = part.trim().replace(/^[({]\s*/, "");
+    if (PLAIN_ASSIGNMENT_RE.test(peeled)) continue;
+    if (VARIABLE_SETTERS.has(commandWordAfterPrefixes(peeled))) return true;
+    if (depth < 4) {
+      for (const inner of extractSubstitutions(part)) {
+        if (lineMaySetVariablesIndirectly(inner, splitCommandSegments(inner), depth + 1)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function redirectVariables(text, topLevel) {
+  const empty = topLevel.map(() => new Map());
+  if (lineMaySetVariablesIndirectly(text, topLevel)) return empty;
+  const separators = lineSeparators(text);
+  if (separators.some((sep) => sep === "||" || sep === "|" || sep === "|&" || sep === "&")) return empty;
+  if (separators.length !== Math.max(0, topLevel.length - 1)) return empty; // could not line them up: unknown
+  const result = [];
+  const values = new Map();
+  const poisoned = new Set();
+  for (let i = 0; i < topLevel.length; i++) {
+    result.push(new Map([...values].filter(([name]) => !poisoned.has(name))));
+    const part = topLevel[i].trim();
+    const assignment = PLAIN_ASSIGNMENT_RE.exec(part);
+    const before = i === 0 ? null : separators[i - 1];
+    if (assignment) {
+      // after "&&" an assignment may be skipped (false && S=/tmp/x): only once nothing else has been assigned
+      if (before === "&&" && i > 0 && !topLevel.slice(0, i).every((p) => PLAIN_ASSIGNMENT_RE.test(p.trim()))) { poisoned.add(assignment[1]); continue; }
+      if (values.has(assignment[1]) || poisoned.has(assignment[1])) { poisoned.add(assignment[1]); continue; }
+      values.set(assignment[1], shellWord(assignment[2]));
+      continue;
+    }
+    const first = tokenizeWords(part)[0] ?? "";
+    if (VARIABLE_SETTERS.has(shellWord(first)) || /^[({]/.test(part) || /^[\w.:-]+\s*\(\s*\)/.test(part)) return result.concat(topLevel.slice(i + 1).map(() => new Map())).map(() => new Map());
+    // any other mention of a known name than $NAME / ${NAME} poisons it
+    for (const name of new Set([...values.keys(), ...(part.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [])])) {
+      const bare = new RegExp(`(^|[^$\\w{])${name}(?![\\w])`).test(part);
+      const operator = new RegExp(`\\$\\{${name}[^}\\w]`).test(part);
+      if ((bare || operator) && values.has(name)) poisoned.add(name);
+    }
+  }
+  return result;
+}
+
 export function plainAssignments(segments) {
   const values = new Map();
   const seen = new Set();
@@ -1569,17 +1710,159 @@ export function isGitConfigOverride(segment) {
 
 export function isGitResetMergeOrKeep(segment) {
   const parsed = extractGitSubcommandArgs(segment, "reset");
-  return parsed !== null && /(^|\s)--(merge|keep)\b/.test(parsed.rest);
+  return parsed !== null && parsed.rest.split(/\s+/).some((t) => longOptionIs(t, "--merge") || longOptionIs(t, "--keep"));
+}
+
+// checkout and switch: their long options are judged by a list of known options. A prefix of a
+// forcing option (--force, --discard-changes) or any option not on the list asks.
+const CHECKOUT_SAFE_LONG = ["--quiet", "--progress", "--no-progress", "--detach", "--orphan", "--track", "--no-track", "--guess",
+  "--no-guess", "--merge", "--conflict", "--recurse-submodules", "--no-recurse-submodules", "--overlay", "--no-overlay",
+  "--ignore-other-worktrees", "--ignore-skip-worktree-bits"];
+const SWITCH_SAFE_LONG = ["--create", "--force-create", "--quiet", "--progress", "--no-progress", "--detach", "--orphan", "--track",
+  "--no-track", "--guess", "--no-guess", "--merge", "--conflict", "--recurse-submodules", "--no-recurse-submodules",
+  "--ignore-other-worktrees"];
+
+// ---------------------------------------------------------------------------
+// git: an allow list of subcommands (review of #665). A git subcommand that is not on this
+// list asks — plumbing such as update-ref, read-tree, checkout-index, reflog expire, gc,
+// filter-branch, replace, symbolic-ref with a write, and every porcelain command that is not
+// named here (cherry-pick, revert, apply, am, bisect, notes, ...). Within a listed subcommand
+// the options come from a list too; an unknown or abbreviated-to-something-else option asks.
+// The rules above (deny for reset --hard, push --force, ...; ask for merge, rebase, branch -D,
+// ...) still come first and keep their own reasons.
+// ---------------------------------------------------------------------------
+
+const LOG_FAMILY = spec(GIT_LOG_FAMILY);
+const REMOTE_OR_BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9_./@-]*$/;
+const atMostOperands = (n) => (ops) => ops.length <= n;
+
+const GIT_POLICY = {
+  // reading
+  status: (a) => optionsAreKnown(a, GIT_SUBCOMMANDS.status),
+  diff: (a) => optionsAreKnown(a, GIT_SUBCOMMANDS.diff),
+  log: (a) => optionsAreKnown(a, GIT_SUBCOMMANDS.log),
+  show: (a) => optionsAreKnown(a, GIT_SUBCOMMANDS.show),
+  fetch: (a) => optionsAreKnown(a, GIT_SUBCOMMANDS.fetch),
+  "rev-parse": (a) => optionsAreKnown(a, GIT_SUBCOMMANDS["rev-parse"]),
+  "merge-base": (a) => optionsAreKnown(a, GIT_SUBCOMMANDS["merge-base"]),
+  "ls-remote": (a) => optionsAreKnown(a, GIT_SUBCOMMANDS["ls-remote"]),
+  "ls-tree": (a) => optionsAreKnown(a, GIT_SUBCOMMANDS["ls-tree"]),
+  "merge-tree": (a) => optionsAreKnown(a, GIT_SUBCOMMANDS["merge-tree"]),
+  "rev-list": (a) => optionsAreKnown(a, spec({ ...GIT_LOG_FAMILY, long: [...GIT_LOG_FAMILY.long, "--count", "--objects", "--objects-edge", "--no-object-names", "--timestamp", "--header", "--bisect"] })),
+  shortlog: (a) => optionsAreKnown(a, spec({ ...GIT_LOG_FAMILY, short: GIT_LOG_FAMILY.short + "nse", long: [...GIT_LOG_FAMILY.long, "--numbered", "--summary", "--email", "--committer"], longArg: [...GIT_LOG_FAMILY.longArg, "--group"] })),
+  "ls-files": (a) => optionsAreKnown(a, spec({ short: "cdmoiuskztvf", shortArg: "xX", long: ["--cached", "--deleted", "--modified", "--others", "--ignored", "--stage", "--unmerged", "--killed", "--directory", "--no-empty-directory", "--full-name", "--error-unmatch", "--exclude-standard", "--eol", "--deduplicate", "--sparse", "--recurse-submodules", "--debug"], longArg: ["--exclude", "--exclude-from", "--exclude-per-directory", "--with-tree", "--format"], longOpt: ["--abbrev"] })),
+  blame: (a) => optionsAreKnown(a, spec({ short: "lstnfpecwb", shortArg: "L", long: ["--porcelain", "--line-porcelain", "--show-name", "--show-number", "--show-stats", "--root", "--incremental", "--show-email", "--minimal", "--reverse", "--first-parent"], longArg: ["--date", "--ignore-rev", "--contents", "--since"], longOpt: ["--abbrev", "--color-lines", "--color-by-age"], numeric: false })),
+  grep: (a) => optionsAreKnown(a, spec({ short: "inwvlLcHhIEFPoqzaW", shortArg: "efABCm", long: ["--cached", "--untracked", "--no-index", "--ignore-case", "--word-regexp", "--invert-match", "--files-with-matches", "--name-only", "--files-without-match", "--count", "--line-number", "--column", "--heading", "--break", "--full-name", "--extended-regexp", "--fixed-strings", "--perl-regexp", "--basic-regexp", "--all-match", "--and", "--or", "--not", "--recurse-submodules", "--text", "--no-color", "--quiet", "--null", "--only-matching", "--show-function", "--function-context", "--exclude-standard", "--no-exclude-standard"], longArg: ["--max-depth", "--threads", "--max-count", "--context", "--after-context", "--before-context", "--regexp", "--file"], longOpt: ["--color"], numeric: true })),
+  describe: (a) => optionsAreKnown(a, spec({ long: ["--tags", "--all", "--always", "--long", "--exact-match", "--first-parent", "--contains", "--debug"], longArg: ["--match", "--exclude", "--candidates"], longOpt: ["--abbrev", "--dirty", "--broken"] })),
+  "cat-file": (a) => optionsAreKnown(a, spec({ short: "tpse", long: ["--batch-all-objects", "--unordered", "--buffer", "--follow-symlinks", "--allow-unknown-type", "--use-mailmap", "--no-use-mailmap"], longOpt: ["--batch", "--batch-check", "--batch-command"] })),
+  "show-ref": (a) => optionsAreKnown(a, spec({ short: "sqd", long: ["--head", "--heads", "--tags", "--branches", "--verify", "--quiet", "--dereference", "--exists"], longOpt: ["--hash", "--abbrev"] })),
+  "for-each-ref": (a) => optionsAreKnown(a, spec({ long: ["--shell", "--perl", "--python", "--tcl", "--ignore-case", "--omit-empty"], longArg: ["--count", "--sort", "--format", "--points-at", "--merged", "--no-merged", "--contains", "--no-contains", "--exclude"] })),
+  "check-ignore": (a) => optionsAreKnown(a, spec({ short: "qvnz", long: ["--quiet", "--verbose", "--non-matching", "--stdin", "--no-index"] })),
+  "name-rev": (a) => optionsAreKnown(a, spec({ long: ["--tags", "--all", "--name-only", "--no-undefined", "--always", "--annotate-stdin"], longArg: ["--refs", "--exclude"] })),
+  version: (a) => a.every((w) => w === "--build-options"),
+  // reading forms of commands that can also write
+  "symbolic-ref": (a) => optionsAreKnown(a, spec({ short: "q", long: ["--quiet", "--short", "--no-recurse"], operands: (ops) => ops.length === 1 })),
+  reflog: (a) => {
+    if (a[0] === "expire" || a[0] === "delete" || a[0] === "drop") return false;
+    const rest = a[0] === "show" || a[0] === "list" || a[0] === "exists" ? a.slice(1) : a;
+    return optionsAreKnown(rest, LOG_FAMILY);
+  },
+  tag: (a) => optionsAreKnown(a, spec({ short: "l", shortArg: "n", long: ["--list", "--column", "--no-column", "--ignore-case", "--omit-empty"], longArg: ["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"], operands: (ops) => a.some((w) => w === "-l" || w === "--list") || ops.length === 0 })),
+  remote: (a) => {
+    if (a.length === 0 || (a.length === 1 && (a[0] === "-v" || a[0] === "--verbose"))) return true;
+    if (a[0] === "show") return optionsAreKnown(a.slice(1), spec({ short: "n", operands: (ops) => ops.every((o) => REMOTE_OR_BRANCH_RE.test(o)) }));
+    if (a[0] === "get-url") return optionsAreKnown(a.slice(1), spec({ long: ["--push", "--all"], operands: (ops) => ops.length === 1 }));
+    return false;
+  },
+  config: (a) => {
+    const reading = a.some((w) => ["--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch", "get", "list"].includes(w));
+    const ok = optionsAreKnown(a, spec({ short: "lz", long: ["--get", "--get-all", "--get-regexp", "--list", "--show-origin", "--show-scope", "--name-only", "--null", "--global", "--local", "--system", "--worktree", "--includes", "--no-includes", "--get-urlmatch", "--bool", "--int", "--path"], longArg: ["--file", "--blob", "--type", "--default"] }));
+    if (!ok) return false;
+    const operands = a.filter((w) => !w.startsWith("-"));
+    return reading || operands.length === 1; // `git config user.name` reads; two operands write
+  },
+  // the working-branch flow (the deny/ask rules above still apply first)
+  add: (a) => optionsAreKnown(a, spec({ short: "vnuNfq", long: ["--verbose", "--dry-run", "--update", "--intent-to-add", "--force", "--ignore-errors", "--ignore-missing", "--renormalize", "--quiet", "--sparse"], longArg: ["--chmod", "--pathspec-from-file"], longOpt: ["--pathspec-file-nul"] })),
+  commit: (a) => optionsAreKnown(a, spec({ short: "qvas", shortArg: "mFCc", long: ["--quiet", "--verbose", "--all", "--amend", "--no-edit", "--signoff", "--no-signoff", "--allow-empty", "--allow-empty-message", "--reset-author", "--only", "--include", "--status", "--no-status", "--dry-run", "--short", "--porcelain", "--null", "--no-post-rewrite"], longArg: ["--message", "--file", "--reuse-message", "--reedit-message", "--author", "--date", "--cleanup", "--trailer", "--fixup", "--squash"] })),
+  push: (a) => optionsAreKnown(a, spec({ short: "uqvn", long: ["--set-upstream", "--quiet", "--verbose", "--dry-run", "--porcelain", "--progress", "--no-progress", "--atomic"], operands: (ops) => ops.every((o, k) => (k === 0 ? REMOTE_NAME_RE.test(o) : REMOTE_OR_BRANCH_RE.test(o))) })),
+  pull: (a) => optionsAreKnown(a, spec({ short: "qv", long: ["--quiet", "--verbose", "--ff-only", "--ff", "--no-ff", "--no-rebase", "--no-edit", "--commit", "--no-commit", "--prune", "--no-tags", "--progress", "--no-progress"], longOpt: ["--rebase"], value: (name, value) => name !== "--rebase" || /^(false|no|off|0)$/i.test(value), operands: (ops) => ops.every((o, k) => (k === 0 ? REMOTE_NAME_RE.test(o) : REMOTE_OR_BRANCH_RE.test(o))) })),
+  merge: () => true, // judged by the merge rule above: it asks unless it is the exempt merge of origin/main
+  rebase: () => true, // asks by the rule above
+  branch: (a) => optionsAreKnown(a, spec({ short: "arvlqdmct", shortArg: "u", long: ["--all", "--remotes", "--verbose", "--list", "--quiet", "--delete", "--move", "--copy", "--show-current", "--unset-upstream", "--no-track", "--ignore-case", "--omit-empty", "--no-column", "--no-color"], longArg: ["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format", "--set-upstream-to"], longOpt: ["--color", "--column", "--track", "--abbrev"] })),
+  checkout: (a) => optionsAreKnown(a, spec({ short: "qtm", shortArg: "b", long: CHECKOUT_SAFE_LONG.filter((n) => !["--orphan", "--conflict"].includes(n)), longArg: ["--orphan", "--conflict"], longOpt: ["--track", "--recurse-submodules"] })),
+  switch: (a) => optionsAreKnown(a, spec({ short: "qtmd", shortArg: "c", long: SWITCH_SAFE_LONG.filter((n) => !["--create", "--orphan", "--conflict", "--force-create"].includes(n)), longArg: ["--create", "--orphan", "--conflict"], longOpt: ["--track", "--recurse-submodules"] })),
+  restore: (a) => optionsAreKnown(a, spec({ short: "qWS", shortArg: "s", long: ["--staged", "--worktree", "--quiet", "--overlay", "--no-overlay", "--progress", "--no-progress", "--ignore-unmerged", "--merge", "--ours", "--theirs"], longArg: ["--source", "--conflict"] })),
+  reset: (a) => optionsAreKnown(a, spec({ short: "qN", long: ["--soft", "--mixed", "--quiet", "--no-refresh", "--refresh", "--hard", "--merge", "--keep"], longArg: ["--pathspec-from-file"] })),
+  rm: (a) => optionsAreKnown(a, spec({ short: "rqn", long: ["--cached", "--quiet", "--dry-run", "--ignore-unmatch", "--sparse"], longArg: ["--pathspec-from-file"] })),
+  clean: (a) => optionsAreKnown(a, spec({ short: "ndxXqf", shortArg: "e", long: ["--dry-run", "--quiet", "--force"], longArg: ["--exclude"] })),
+  stash: (a) => {
+    const sub = a[0] && !a[0].startsWith("-") ? a[0] : "push";
+    const rest = a[0] && !a[0].startsWith("-") ? a.slice(1) : a;
+    if (sub === "list" || sub === "show") return optionsAreKnown(rest, LOG_FAMILY);
+    if (sub === "push" || sub === "save") return optionsAreKnown(rest, spec({ short: "ukqaS", shortArg: "m", long: ["--include-untracked", "--keep-index", "--no-keep-index", "--quiet", "--all", "--staged"], longArg: ["--message", "--pathspec-from-file"] }));
+    if (sub === "apply") return optionsAreKnown(rest, spec({ short: "q", long: ["--index", "--quiet"] }));
+    if (sub === "pop" || sub === "drop" || sub === "clear") return true; // judged by the rules above (ask / deny)
+    return false; // stash branch, store, create, ...
+  },
+  worktree: (a) => {
+    const sub = a[0];
+    const rest = a.slice(1);
+    if (sub === "list") return optionsAreKnown(rest, GIT_WORKTREE_LIST);
+    if (sub === "add") return optionsAreKnown(rest, spec({ short: "q", shortArg: "b", long: ["--detach", "--quiet", "--checkout", "--no-checkout", "--lock", "--no-track", "--guess-remote", "--no-guess-remote"], longArg: ["--reason"], longOpt: ["--track"] }));
+    if (sub === "remove") return optionsAreKnown(rest, spec({ long: [] })) || true; // --force asks by the rule above; plain remove refuses a dirty tree
+    if (sub === "prune") return optionsAreKnown(rest, spec({ short: "nv", long: ["--dry-run", "--verbose"], longArg: ["--expire"] }));
+    if (sub === "lock" || sub === "unlock") return optionsAreKnown(rest, spec({ longArg: ["--reason"] }));
+    return false; // move, repair
+  },
+  init: (a) => optionsAreKnown(a, spec({ short: "q", shortArg: "b", long: ["--quiet", "--bare"], longArg: ["--initial-branch", "--object-format"] })),
+  clone: (a) => optionsAreKnown(a, spec({ short: "qn", shortArg: "bo", long: ["--quiet", "--no-checkout", "--single-branch", "--no-single-branch", "--no-tags", "--shallow-submodules", "--progress"], longArg: ["--branch", "--depth", "--filter", "--origin", "--shallow-since"] })),
+};
+
+const GLOBAL_GIT_FLAGS = new Set(["--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"]);
+
+// True when the git command must ask: a subcommand that is not on GIT_POLICY, an option that is
+// not on its list, or a global option other than -C, -c (judged by isGitConfigOverride) and the
+// harmless display flags.
+export function gitCommandNeedsQuestion(segment) {
+  const words = commandWords(segment);
+  if (words[0] !== "git") return false;
+  let i = 1;
+  while (i < words.length && words[i].startsWith("-")) {
+    const w = words[i];
+    if (w === "-C" || w === "-c" || w === "--config-env") { i += 2; continue; }
+    if (/^-c./.test(w) || w.startsWith("--config-env=")) { i += 1; continue; }
+    if (GLOBAL_GIT_FLAGS.has(w)) { i += 1; continue; }
+    if (w === "--version" || w === "--help") return false;
+    return true;
+  }
+  const sub = words[i];
+  if (sub === undefined) return false;
+  const rule = Object.prototype.hasOwnProperty.call(GIT_POLICY, sub) ? GIT_POLICY[sub] : null;
+  if (!rule) return true;
+  return !rule(words.slice(i + 1));
 }
 
 export function isForcedSwitch(segment) {
-  for (const sub of ["switch", "checkout"]) {
+  for (const [sub, safe, dangerous] of [["switch", SWITCH_SAFE_LONG, ["--force", "--discard-changes"]], ["checkout", CHECKOUT_SAFE_LONG, ["--force"]]]) {
     const parsed = extractGitSubcommandArgs(segment, sub);
     if (!parsed) continue;
     const tokens = parsed.rest.split(/\s+/).filter(Boolean);
-    if (tokens.some((t) => t === "--force" || t === "--discard-changes" || (/^-[a-zA-Z]+$/.test(t) && t.includes("f")))) return true;
+    for (const t of tokens) {
+      if (t === "--") break;
+      if (/^-[a-zA-Z]+$/.test(t) && t.includes("f")) return true;
+      if (t.startsWith("--") && classifyLongOption(t, safe, dangerous) !== "safe") return true;
+    }
   }
   return false;
+}
+
+// `git worktree remove --force` deletes a work tree with uncommitted changes in it.
+export function isGitWorktreeForceRemove(segment) {
+  const parsed = extractGitSubcommandArgs(segment, "worktree");
+  if (!parsed) return false;
+  const tokens = parsed.rest.split(/\s+/).filter(Boolean);
+  if (tokens[0] !== "remove") return false;
+  return tokens.slice(1).some((t) => (/^-[a-zA-Z]+$/.test(t) && t.includes("f")) || longOptionIs(t, "--force"));
 }
 
 export function isGitStashPop(segment) {
@@ -1598,8 +1881,8 @@ export function isGitBranchForceDelete(segment) {
       if (t.includes("D")) return true;
       if (t.includes("d")) del = true;
       if (t.includes("f")) force = true;
-    } else if (t === "--delete") del = true;
-    else if (t === "--force") force = true;
+    } else if (longOptionIs(t, "--delete")) del = true;
+    else if (longOptionIs(t, "--force")) force = true;
   }
   return del && force;
 }
@@ -1608,14 +1891,14 @@ export function isGitPushDelete(segment) {
   const parsed = extractGitSubcommandArgs(segment, "push");
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes);
-  return tokens.some((t) => t === "--delete" || t === "--prune" || t === "--mirror" || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(t) || /^\+?:[^\s]/.test(t));
+  return tokens.some((t) => longOptionIs(t, "--delete") || longOptionIs(t, "--prune") || longOptionIs(t, "--mirror") || /^-[a-zA-Z]*d[a-zA-Z]*$/.test(t) || /^\+?:[^\s]/.test(t));
 }
 
 export function isGitPullRebase(segment) {
   const parsed = extractGitSubcommandArgs(segment, "pull");
   if (!parsed) return false;
   const tokens = parsed.rest.split(/\s+/).filter(Boolean);
-  return tokens.some((t) => t === "--rebase" || /^--rebase=(?!false$)/.test(t) || /^-[a-zA-Z]*r[a-zA-Z]*$/.test(t));
+  return tokens.some((t) => (longOptionIs(t, "--rebase") && !/=(false|no|off|0)$/i.test(t)) || /^-[a-zA-Z]*r[a-zA-Z]*$/.test(t));
 }
 
 // ---------------------------------------------------------------------------
@@ -1650,6 +1933,8 @@ const ASK_REASONS = {
   commitMain: "This commit would land directly on 'main' — needs your explicit confirmation.",
   deploy: "This looks like a deploy command (Render/Vercel/Cloudflare/Supabase) — needs your explicit confirmation.",
   migration: "This looks like it runs the database migration runner — needs your explicit confirmation.",
+  gitNotOnList: "This git command is not on the hook's list of known git commands, or one of its options is not on that command's list (plumbing such as update-ref, read-tree, checkout-index, reflog expire; checkout -B, switch -C, branch -f/-M, rm -f, ...) — needs your explicit confirmation.",
+  worktreeForceRemove: "'git worktree remove --force' deletes a work tree even with uncommitted changes in it — needs your explicit confirmation.",
   stashPop: "'git stash pop' can leave conflicts and drops the stash entry once applied — needs your explicit confirmation.",
   branchForceDelete: "'git branch -D' deletes a branch even when its work is merged nowhere — needs your explicit confirmation.",
   pushDelete: "This push deletes a branch on the remote (--delete, -d, :branch, --prune, --mirror) — needs your explicit confirmation.",
@@ -1707,7 +1992,7 @@ function expandSegments(segments, depth = 0) {
     // A variable as the command word (`$GIT push -f`) is read as git, the only command
     // whose subcommands these rules know; for anything else it changes nothing.
     const variableCommand = /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s+(.+)$/.exec(normalized || "");
-    if (variableCommand) expanded.push(`git ${variableCommand[1]}`);
+    if (variableCommand && KNOWN_GIT_SUBCOMMANDS.has(variableCommand[1].split(/\s+/)[0])) expanded.push(`git ${variableCommand[1]}`);
   }
   return expanded;
 }
@@ -1734,7 +2019,12 @@ export function classifyShellCommand(cmd, cwd) {
   const { text, shellBodies } = extractHeredocs(cmd);
   const topLevel = splitCommandSegments(text);
   const segments = expandSegments(topLevel);
-  const variables = plainAssignments(topLevel);
+  // A redirect may use a variable only when its value is certain. See redirectVariables.
+  const variablesBefore = new Map();
+  const known = shellBodies.length ? topLevel.map(() => new Map()) : redirectVariables(text, topLevel);
+  for (let i = 0; i < topLevel.length; i++) {
+    for (const piece of expandSegments([topLevel[i]])) if (!variablesBefore.has(piece)) variablesBefore.set(piece, known[i]);
+  }
   const background = hasBackgroundJob(text);
   const createsWorkTree = segments.some(createsGitWorkTree);
   for (const body of shellBodies) segments.push(...expandSegments(splitCommandSegments(body)));
@@ -1761,18 +2051,20 @@ export function classifyShellCommand(cmd, cwd) {
     }
     if (isGhPrMerge(segment)) return { decision: "ask", reason: ASK_REASONS.ghPrMerge };
     if (isGitStashPop(segment)) return { decision: "ask", reason: ASK_REASONS.stashPop };
+    if (isGitWorktreeForceRemove(segment)) return { decision: "ask", reason: ASK_REASONS.worktreeForceRemove };
     if (isGitBranchForceDelete(segment)) return { decision: "ask", reason: ASK_REASONS.branchForceDelete };
     if (isGitPushDelete(segment)) return { decision: "ask", reason: ASK_REASONS.pushDelete };
     if (isGitPullRebase(segment)) return { decision: "ask", reason: ASK_REASONS.pullRebase };
     if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     // `cat >(sh)`, `x <(bash)`: a shell inside a process substitution reads what it is fed
     if (processSubstitutions(segment).some((inner) => isUnreadableShellInput(inner, true))) return { decision: "ask", reason: ASK_REASONS.unreadable };
-    if (allowedCommandNeedsQuestion(segment, variables, { noTempExemption: createsWorkTree })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (allowedCommandNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { noTempExemption: createsWorkTree })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
     if (setsDangerousEnvironment(segment)) return { decision: "ask", reason: ASK_REASONS.dangerousEnv };
     if (definesAlias(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isGitConfigOverride(segment)) return { decision: "ask", reason: ASK_REASONS.gitConfigOverride };
     if (isGitResetMergeOrKeep(segment)) return { decision: "ask", reason: ASK_REASONS.resetMergeKeep };
     if (isForcedSwitch(segment)) return { decision: "ask", reason: ASK_REASONS.forcedSwitch };
+    if (gitCommandNeedsQuestion(segment)) return { decision: "ask", reason: ASK_REASONS.gitNotOnList };
     if (setsNonLocalDatabase(segment)) return { decision: "ask", reason: ASK_REASONS.nonLocalDatabase };
     if (mentionsSecretFile(segment)) return { decision: "ask", reason: ASK_REASONS.secretFile };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };
