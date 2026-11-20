@@ -1,6 +1,6 @@
 // FE-D16 (central-calendar-k2b2-plan.md 9.4): an RPE request an event refers to is folded into the event's card on
 // the calendar; with "RPE requests" alone chosen the screen reads `kinds=external`, so the request is its own card.
-// At 1280 and 390 px, as the team coach.
+// At 1280, 390, 375 and 360 px, as the team coach.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";

@@ -1189,6 +1189,25 @@ test("FE-D16f. a kinds answer made void by an invalidation while in flight is re
   assert.ok(dom().querySelector('[data-key="external:sch-fold:d2"]'), "the second answer is shown");
 });
 
+test("FE-D16f2. a retry voided again is not read a third time: the retry is bounded at one", async () => {
+  const fake = heldKindsResponder();
+  const calls = installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  const toggling = act({ action: "central-calendar-toggle-kind", kind: "external" });
+  await tick();
+  invalidateCentralCalendarCache();
+  fake.release();
+  await tick();
+  assert.equal(fake.held(), 1, "the one retry is in flight");
+  invalidateCentralCalendarCache();
+  fake.release();
+  await tick();
+  assert.equal(fake.held(), 0, "no third kinds read is in flight");
+  await toggling;
+  assert.equal(calendarCalls(calls).filter((call) => params(call).get("kinds")).length, 2, "no third kinds read");
+  assert.ok(!state.centralCalendar.kindsAnswer, "the voided retry's answer is not applied");
+});
+
 // KNOWN LIMIT 2 of FE-D16 (plan 9.4): with an event type chosen next to "RPE requests" the read stays unfiltered, so a
 // request folded into an event of another type shows nowhere. This test pins today's behaviour; a later fix (a
 // `kinds=external,event` read with the type filter in the browser, or a server-side type filter) changes it on purpose.

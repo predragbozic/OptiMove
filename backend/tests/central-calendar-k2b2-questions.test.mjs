@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { addDays, calendarRoleMatrix, newKey, startCalendarApp, uid } from "./support/calendar-fixture.mjs";
-import { waitOutUtcMidnight } from "./support/utc-day-guard.mjs";
+import { utcDateOf, waitOutUtcMidnight } from "./support/utc-day-guard.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
@@ -49,6 +49,8 @@ before(async () => {
 
 after(async () => {
   if (env) await env.stop();
+  // The guard above decides only when the file starts: a run longer than its margin could still cross midnight.
+  assert.equal(utcDateOf(Date.now()), TODAY, "this run crossed UTC midnight; failures in it are not real (utc-day-guard.mjs)");
 });
 
 const role = (name) => m.roles[name];
