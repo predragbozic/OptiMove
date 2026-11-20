@@ -96,9 +96,15 @@ function stripHtml(slice, days, today) {
   }).join("")}</div>`;
 }
 
+const SIGN_IN_BUTTON = `<button type="button" class="plain-button ac-button cc-primary ac-button-primary" data-action="athlete-calendar-sign-in">Sign in</button>`;
+
 function bodyHtml(slice, days, today) {
   if (slice.status === "error") {
-    return `<div class="ac-state" role="alert"><p>${escapeHtml(slice.error || "The calendar could not be read.")}</p>${slice.canRetry ? `<button type="button" class="plain-button ac-button" data-action="athlete-calendar-retry">Try again</button>` : ""}</div>`;
+    // Signed out (401): the sentence and one way back in, the login (the app's entry at "/").
+    const action = slice.signedOut
+      ? SIGN_IN_BUTTON
+      : slice.canRetry ? `<button type="button" class="plain-button ac-button" data-action="athlete-calendar-retry">Try again</button>` : "";
+    return `<div class="ac-state" role="alert"><p>${escapeHtml(slice.error || "The calendar could not be read.")}</p>${action}</div>`;
   }
   if (slice.status !== "ready" || !slice.data) return `<p class="muted ac-state" role="status">Loading calendar…</p>`;
   if (!days.length) {
@@ -120,7 +126,10 @@ export function renderAthleteCalendarHtml(slice, { questions = [], today = local
       ${stripHtml(slice, days, today)}
       ${slice?.notice ? (slice.notice === "Your answer was saved." || slice.notice === "Your answer was changed."
         ? `<p class="ac-notice is-saved" role="status"><span aria-hidden="true">✓</span> ${escapeHtml(slice.notice)}</p>`
-        : `<p class="ac-notice" role="status">${escapeHtml(slice.notice)}</p>`) : ""}
+        : slice.signedOut && slice.status === "ready"
+          // Signed out over a loaded week: the notice and the same way back in as the empty week's error.
+          ? `<div class="ac-notice ac-notice-signed-out" role="status"><p>${escapeHtml(slice.notice)}</p>${SIGN_IN_BUTTON}</div>`
+          : `<p class="ac-notice" role="status">${escapeHtml(slice.notice)}</p>`) : ""}
       ${bodyHtml(slice, days, today)}
     </section>`;
 }

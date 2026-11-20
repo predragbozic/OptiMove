@@ -29064,6 +29064,9 @@ body.athlete-questions-prompt-open {
 .ac-backbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
 .ac-backbar-where { font-size: 14px; overflow-wrap: anywhere; }
 .ac-notice.is-saved { background: #e4f3e6; color: #1f5a28; font-weight: 800; }
+/* Signed out over a loaded week: the notice and its Sign in, one under the other. */
+.ac-notice-signed-out { display: grid; gap: 8px; justify-items: start; }
+.ac-notice-signed-out p { margin: 0; }
 
 @media (max-width: 760px) {
   /* Under the athlete's sticky topbar (the Weekly plan's .week-nav-panel offset), then the head, then the strip. */
