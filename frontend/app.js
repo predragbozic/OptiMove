@@ -4288,8 +4288,13 @@ async function openBuilderForK3(draft, context) {
   state.selectedTemplateId = null;
   renderTabs();
   renderLibraryNav();
-  await loadBuilder();
-  // The event's day is brought into view (2.3), its column whole.
+  // loadBuilder() draws the week before it waits for the exercises: the
+  // event's day is brought into view (2.3), its column whole, as soon as it
+  // is drawn, and again once the load ends (a later render keeps the
+  // strip's scroll, but the layout may have changed meanwhile).
+  const loading = loadBuilder();
+  showK3Day();
+  await loading;
   showK3Day();
 }
 

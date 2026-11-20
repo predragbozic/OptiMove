@@ -84,10 +84,11 @@ for (const width of [1280, 390, 375, 360]) {
         // The event's day is in view on entry, its column whole (2.3).
         const seen = await page.evaluate(() => {
           const d = document.querySelector(".builder-block.is-k3-day").getBoundingClientRect();
-          const g = document.querySelector(".builder-block-grid").getBoundingClientRect();
-          return d.left >= g.left - 1 && d.right <= g.right + 1;
+          const grid = document.querySelector(".builder-block-grid");
+          const g = grid.getBoundingClientRect();
+          return { whole: d.left >= g.left - 1 && d.right <= g.right + 1, day: [Math.round(d.left), Math.round(d.right)], grid: [Math.round(g.left), Math.round(g.right)], scrollLeft: grid.scrollLeft, scrollWidth: grid.scrollWidth, clientWidth: grid.clientWidth };
         });
-        assert.ok(seen, "the event's day column is whole in the strip");
+        assert.ok(seen.whole, `the event's day column is whole in the strip: ${JSON.stringify(seen)}`);
         const day = page.locator(".builder-block.is-k3-day");
         assert.equal(await day.count(), 1, "the event's day is marked");
         assert.match(await day.textContent(), /In this event/);
