@@ -1,7 +1,7 @@
 # Central calendar — K6 UI contract: the team and athlete switcher
 
-Status: **Proposed** (2026-11-20), for the stream manager and then the OptiMove manager's GO. Documents only: no
-code, no route, no migration. Written against `main` `ec467638`, on the K6 plan (`docs/ai/central-calendar-k6-plan.md`,
+Status: **Decided by the stream manager** (2026-11-20): Q1–Q9 of section 7 as recommended, so K6 stays ★, with no
+backend and no new read. Next: the OptiMove manager's GO. Documents only: no code, no route, no migration. Written against `main` `ec467638`, on the K6 plan (`docs/ai/central-calendar-k6-plan.md`,
 the owner's S1–S5) and the approved mockups (`docs/design/calendar-k6/`, F1–F6 as recommended). Where this contract
 and a mockup differ, this contract says why.
 
@@ -14,7 +14,7 @@ the workspace already makes and already shows: the rail roster (`GET /api/admin/
 for a club admin's team grouping only, `GET /api/organization`, which Training Load's Club/Team/Athletes filter, the
 Tests recipient picker and the Builder's athlete picker already read in the same workspace. The calendar sends the
 `athleteIds` filter that `GET /api/calendar` already takes and already narrows inside the scope. Section 7 lists the
-two places where a backend field would make the result better (Q4, Q7); both are recommended **against** for K6.
+two places where a backend field would make the result better (Q4, Q7); both were decided **against** for K6.
 
 ## 1. One shared component
 
@@ -424,9 +424,14 @@ view, no console error.
 The Frontend PR gate (the whole `--preset frontend-fast` on the head and on a clean `origin/main`, compared), the
 targeted suites above, the backend disposable H tests, the build, `git diff --check`, the browser check of 6.2, and
 `git merge-tree` against #673 and the open calendar branches. Reviews: `code-reviewer`, `mobile-qa`,
-`ux-design-reviewer` (the plan's section 4); no `security-reviewer` unless the GO adds a backend field (Q4, Q7).
+`ux-design-reviewer` (the plan's section 4); no `security-reviewer` on the code, since no backend changes (Q4 and Q7
+decided).
 
-## 7. Open questions, each with a recommendation
+## 7. Questions, decided
+
+**Decided by the stream manager on 2026-11-20: every question as recommended below.** In particular Q2 (no strip in
+the platform workspace; the Groups chips stay), and Q4 and Q7 (the light reads are not taken), so K6 stays ★ with no
+backend change.
 
 - **Q1. The Groups chips: one team, or several as today?** The strip shows one team's athletes. **Recommend one
   team** (plus *All groups*), in the box and on the cards. Several teams at once would make the strip a mix the
@@ -457,7 +462,7 @@ targeted suites above, the backend disposable H tests, the build, `git diff --ch
 
 ## 8. Not in K6
 
-- No new route, no backend change, no migration (unless the GO takes Q4 or Q7 the other way, which makes that part ★★).
+- No new route, no backend change, no migration (Q4 and Q7 decided: the light reads are not taken).
 - No change to the Builder's switcher beyond the extraction (1.4).
 - No change to K5; K6 and K5 share the green line (2.5) in whichever order they land.
 - No physical-device check in this contract; the e2e widths of 6.2 and `mobile-qa` cover the layout, and a device check
