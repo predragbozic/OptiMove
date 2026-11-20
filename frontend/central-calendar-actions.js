@@ -17,6 +17,7 @@ import {
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { k3SheetAction, k3StartFromPanel } from "./central-calendar-k3-actions.js";
+import { ccAnswersPaths, ccAnswersReadable, ccMergeWeekly } from "./central-calendar-answers.js";
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
@@ -29,6 +30,7 @@ import {
   centralCalendarOutcomeUnknown,
   createCentralCalendarEvent,
   centralCalendarQuestionPath,
+  fetchCentralCalendarAnswers,
   fetchCentralCalendarEvent,
   fetchCentralCalendarEventQuestions,
   invalidateCentralCalendarCache,
@@ -422,6 +424,7 @@ function resetPanelReads(cal) {
   cal.alignStep = null;
   cal.questionStep = null;
   cal.panelQuestions = null;
+  cal.panelAnswers = null;
 }
 
 // Leaving the form (another item, Escape / Back, a workspace switch through
@@ -587,7 +590,41 @@ function panelEventWanted(item) {
 function syncPanelEvent(cal, render) {
   const questions = syncPanelQuestions(cal, render);
   const event = syncPanelEventOnly(cal, render);
-  return questions || event ? Promise.all([questions, event]) : null;
+  const answers = syncPanelAnswers(cal, render);
+  return questions || event || answers ? Promise.all([questions, event, answers]) : null;
+}
+
+// The event panel package (docs/ai/central-calendar-event-panel-contract.md,
+// section 2, Q7): a manager's panel reads each athlete's values with ONE
+// GET /api/training-load/weekly of the panel's day, on every open and on
+// every move to another event or day - never cached, since an athlete may
+// change her answer while the coach looks. The read belongs to the panel
+// object it was made for: a new open is a new panel, so a late answer of an
+// earlier one is dropped. A reader's panel reads nothing (Q6).
+function syncPanelAnswers(cal, render, { force = false } = {}) {
+  if (state.centralCalendar !== cal || !cal.panel.open) return null;
+  const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
+  const current = cal.panelAnswers;
+  // Only a panel that can carry a value reads (no athletes, or nothing linked
+  // or folded that asks: no read and no "answers" line).
+  if (!ccAnswersReadable(item)) {
+    if (current) cal.panelAnswers = null;
+    return null;
+  }
+  if (!force && current && current.panel === cal.panel && current.key === item.key) return current.loading ? current.promise : null;
+  const view = { panel: cal.panel, key: item.key, loading: true, error: "", weekly: null, promise: null };
+  cal.panelAnswers = view;
+  render?.();
+  view.promise = Promise.all(ccAnswersPaths(item).map((path) => fetchCentralCalendarAnswers(path)))
+    .then((answers) => ({ weekly: ccMergeWeekly(answers) }), () => ({ failed: true }))
+    .then(({ weekly, failed }) => {
+      if (state.centralCalendar !== cal || cal.panelAnswers !== view || cal.panel !== view.panel) return;
+      view.loading = false;
+      if (failed || !weekly) view.error = "failed";
+      else view.weekly = weekly;
+      render?.();
+    });
+  return view.promise;
 }
 function syncPanelEventOnly(cal, render) {
   if (state.centralCalendar !== cal || !cal.panel.open || cal.form) return null;
@@ -2196,6 +2233,10 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-retry-athletes") {
     await loadCentralCalendarDay({ render, forceRefresh: true });
+    return true;
+  }
+  if (type === "central-calendar-answers-retry") {
+    if (cal.panel.open) await syncPanelAnswers(cal, render, { force: true });
     return true;
   }
   if (type === "central-calendar-open-training-load") {
