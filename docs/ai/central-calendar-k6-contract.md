@@ -20,7 +20,7 @@ two places where a backend field would make the result better (Q4, Q7); both wer
 
 ### 1.1 What exists
 
-The Builder's batch switcher (`renderBuilderBatchSwitcher`, `frontend/builder-view.js:114-164` on `ec467638`) draws:
+The Builder's batch switcher (`renderBuilderBatchSwitcher`, `frontend/builder-view.js:115-164` on `ec467638`) draws:
 - a summary (`builder-batch-summary`): the eyebrow "Group builder", the current name, "N / M", the hidden-members
   sentence of #664 (`renderBuilderBatchHiddenNote`), and a status line for a switch in flight;
 - the controls (`builder-batch-buttons`): ‹, the pills (`builder-batch-pills` / `-pill` / `-avatar` / `-photo` /
@@ -28,7 +28,7 @@ The Builder's batch switcher (`renderBuilderBatchSwitcher`, `frontend/builder-vi
 - the Builder's own mode (`builder-batch-mode`): *Apply changes to all athletes*, or the edit draft's sentence. Step 2
   (#673, frozen, not merged) replaces this part for an edit draft with its own panel.
 
-`renderBuilderBatchSwitchProgress` (`builder-view.js:351-375`) disables the arrows and pills and marks the rest of
+`renderBuilderBatchSwitchProgress` (`builder-view.js:350-372`) disables the arrows and pills and marks the rest of
 the workspace inert while a switch is in flight.
 
 ### 1.2 What is extracted
@@ -43,7 +43,8 @@ renderAthleteSwitcherStripHtml({
   keyAttr,        // the data-* attribute that carries the key ("data-plan-id", "data-athlete-key", …)
   allItem,        // optional { label: "Everyone", caption: "All" }: a first pill whose key is ""
   ariaLabel,      // the strip's label ("Batch athlete plans", "Athletes")
-  wrapArrows,     // false: ‹ on the first and › on the last are disabled (the Builder today)
+  wrapArrows,     // false: ‹ on the first pill and › on the last are disabled (the Builder today);
+                  // with allItem, *All* is the first pill, so ‹ is disabled on *Everyone*
 })
 athleteCaption(name)          // "Ana K." — the rule the Builder uses today
 athleteSwitcherScrollIntoView(root)   // keeps the chosen pill in view (F1, phones)
@@ -66,8 +67,8 @@ renderAthleteSwitcherSearchHtml({ value, action, placeholder, results, activeInd
 
 `renderBuilderBatchSwitcher` keeps its section, its summary, its hidden-members sentence, its status line and its
 mode part. It calls `renderAthleteSwitcherStripHtml` with:
-- `items` = the batch plans (key = plan id, name = `athleteName || name`, image from `state.athletes`, the rule of
-  today);
+- `items` = the batch plans (key = plan id, name = `athleteName || name || "Program copy"`, image from
+  `state.athletes`, the rule of today: the fallback feeds the caption, the title and the initials);
 - `action` = `builder-open-batch-plan`, `keyAttr` = `data-plan-id`;
 - no `allItem`, no dot, no group label, `wrapArrows: false`.
 
@@ -78,7 +79,9 @@ mode part. It calls `renderAthleteSwitcherStripHtml` with:
 
 - **A golden test**, written and committed **before** the extraction, on today's `renderBuilderBatchSwitcher`: three
   batches (2, 5 and 12 plans; first, middle and last chosen; with and without a photo; with a hidden count; as an edit
-  draft and not). The extraction must leave every string identical. The existing Builder suites
+  draft and not; one plan with neither `athleteName` nor `name`, so "Program copy" is pinned). It compares the **raw
+  HTML string**, whitespace included: the extraction copies the template literal's indentation and line breaks as
+  they are, so every string stays identical. The existing Builder suites
   (`builder-edit-draft-batch-sync`, `builder-batch-hidden-members`, `builder-drafts-view-cache` and the rest of
   `--filter builder`) must stay green unchanged.
 - **Order with #673.** Step 2 changes the Builder's mode part and the render chain around the switcher
@@ -133,19 +136,35 @@ is the one the calendar's panel already uses for its drill-in (`centralCalendarR
 
 The strip's list is `state.athletes` **intersected with** the membership facts, never `GET /api/organization`'s
 athlete list on its own. That list also carries rows whose only tie is archived (for Settings' *Show archived*), and
-the memberships of an athlete in **other** clubs and teams. So:
+**every** membership of each athlete it returns, with the club's and team's names, in other clubs too:
+`loadManagedAthletes` builds `memberships` from all of the athlete's rows (`backend/src/routes/organization.js:3670-3686`),
+and the workspace filter (`:70-101`) narrows which athletes are returned, not their memberships. That is an existing
+property of the Settings read, outside K6 (recorded for the OptiMove manager, section 8). For K6 it means the
+**frontend rule below is the only thing that keeps another club's names off the calendar**, and F-H2 is its guard:
+- **Reduced on arrival.** The calendar never stores the answer. On arrival it keeps only `{ athleteUuid, teamId }`
+  pairs where `membershipType === "team"`, `status === "active"`, `teamId` is one of `cal.data.teams`, and the
+  athlete is in `state.athletes`; everything else (users, e-mails, invites, join links, access requests, names,
+  archive reasons, other memberships) is dropped at once and is never put into `state` or the calendar's state.
 - a row of `GET /api/organization` that is not in `state.athletes` is never drawn;
-- a membership whose team is not one of the calendar answer's `teams` is never read: no other team's or club's name
+- a membership whose team is not one of the calendar answer's `teams` is never kept: no other team's or club's name
   is shown, even for an athlete who also trains with another club;
 - an athlete of the roster with no active team membership in the workspace's teams is listed after the teams, under
   the label "No team" (club workspace only).
+- **Narrower than the calendar's scope, on purpose.** A club workspace's roster is the athletes with an active
+  **club** membership (`athleteRosterScope.js:15`); the calendar's own scope also reaches an athlete with only a
+  team membership in one of the club's teams on that day. Such an athlete is on the cards but not in the strip, and
+  K6 never sends their id. That is not a leak (the strip is the narrower set).
+- **A presentation hint only.** The kept pairs decide the grouping, the dot and the order; they authorize nothing. The
+  server decides every read again (`athleteIds` narrows inside its scope, 2.5).
 
 **Why `GET /api/organization` and not a new read.** It is already read, in the active workspace, by Training Load's
 filter (`loadTrainingLoadOrgPickerData`, `frontend/training-load-data.js:404-409`), the Tests recipient picker and the
 Builder's athlete picker, and what K6 takes from it (who is in which of the workspace's teams) is already shown in
 Settings → Teams and → Athletes of the same workspace. The calendar reads it once per workspace, **only in a club
-workspace**, with its own small cache that a workspace switch clears (the same rule as Training Load's copy). A team
-coach, a private coach and the platform do not read it for K6.
+workspace**, into its own small cache of the reduced pairs, keyed by sign-in and workspace
+(`currentUserWorkspaceContextParts()`) and guarded by a generation counter, so an answer for workspace W1 that
+arrives after a switch to W2 is dropped and never drawn. A workspace switch or a sign-out clears it. A team coach, a
+private coach and the platform do not read it for K6.
 
 If `GET /api/organization` fails or is still loading in a club workspace, the strip shows the roster by name with no
 team grouping and no dot, and the Groups row still works on the cards (2.5). A sentence says "Teams could not be
@@ -163,7 +182,9 @@ loaded. Try again", with a retry.
     their teams in that order, with that team's dot. In a chosen team's strip they appear in each of their teams.
     The search result names both teams (2.6).
 - **All groups, more than 60 athletes:** no strip. The box shows the search and one sentence, "62 athletes in the
-  club. Search for an athlete, or choose a group." The 60 is a constant in the code, not a setting.
+  club. Search for an athlete, or choose a group." The number is the length of the strip's own list (2.3, the
+  roster after the intersection), never the length of `GET /api/organization`'s list (which also counts
+  archived-only ties). The 60 is a constant in the code, not a setting.
 - **"N / M"** counts within the strip shown (the team's, or the club's when the strip is shown with *All groups*). It
   is not drawn while *Everyone* is chosen.
 
@@ -175,6 +196,11 @@ id outside the scope matches nothing (tested today: `central-calendar-k1a.test.m
 
 - The URL builder (`centralCalendarUrl`) gains `athleteIds`. The cache key (`centralCalendarContextKey`) gains
   `athlete:<uuid>`, so the unfiltered read keeps its key and its cache.
+- **`athleteIds` alone.** The athlete read never sends `clubIds` or `teamIds`: the server's filter is a union inside
+  the scope ("club OR team OR athlete", `calendarAthleteFilterSql`), so a team sent with the athlete would widen the
+  answer to the whole team. The Groups chips stay an in-memory filter (2.2). A URL-builder test and a mutation pin it.
+- **No new content.** For any viewer, the athlete read returns a subset of the unfiltered read of the same range
+  (H5): K6 adds no card, team or right the coach does not already see, it only gathers one athlete's.
 - This changes decision A of the K1b data module ("never a filter parameter", `central-calendar-data.js:9-12`): the
   athlete is a server filter. Its comment is updated. The reason: the cards and their numbers must be that athlete's
   (the mockup's "U19" without "18", Ana's own "Gym · upper body"), which an in-memory filter of the unfiltered answer
@@ -184,8 +210,16 @@ id outside the scope matches nothing (tested today: `central-calendar-k1a.test.m
 
 **With FE-D16.** The two filters stack. While only non-event kinds are chosen, the kinds read
 (`centralCalendarServerKinds`) also carries `athleteIds`: its key is `kinds:<kinds>` plus `athlete:<uuid>`. The cards
-come from the most specific read that covers the range: kinds + athlete, else athlete, else the unfiltered answer
-(`centralCalendarShownData`). A stale read is dropped by the generation counters, as today.
+come from the most specific read that covers the range: kinds + athlete, else athlete. **While an athlete is chosen,
+the cards never fall back to the unfiltered answer** (today's last fallback of `centralCalendarShownData`,
+`central-calendar-data.js:91-96`): while the athlete's read is loading the grid shows the calendar's loading state,
+and if it fails, the calendar's error state with *Try again*, never everyone's cards under "Showing Ana Kovač". A
+stale read is dropped by the generation counters, as today.
+
+**Known: an athlete only linked to an event.** Under `athleteIds` an event is kept only when one of its **target**
+athletes is in the filter (`calendarQuery.js:904-910`). An athlete whose session is linked to an event she is not a
+target of (`targeted: false`) therefore sees that session as her own planned card, not under the event. That is the
+server's existing rule; K6 does not change it, and the panel of the unfiltered calendar still shows the event.
 
 **With K5's *Show only*** (K5-2, not built yet). *Show only* filters the shown answer in memory, so it works on the
 athlete's read unchanged ("only GPS imports, for Ana"). If K5 is built first, K6 adds the athlete to its line; if K6
@@ -193,13 +227,13 @@ is first, K5 adds its kind to K6's line.
 
 **The Groups chips while an athlete is chosen.** The chips' in-memory card filter (`cal.filters.teamIds`,
 `central-calendar-view.js:125-130`) is **suspended** while an athlete is chosen: the chosen team then scopes only the
-strip. Otherwise a club-wide event Ana is in (its `teamIds` empty or another team's) would vanish from her week.
-**Q3** asks; the recommendation is to suspend.
+strip. Otherwise a club-wide event Ana is in (its `teamIds` empty or another team's) would vanish from her week
+(Q3, decided).
 
 **The open panel.** The day read for the panel (`include=athletes`) carries the same `athleteIds` and kinds as the
 cards it was opened from (the FE-D16 rule of `central-calendar-data.js:475`), so the panel finds its card. The
 panel's athlete list is then the chosen athlete's row. *Show everyone* in the panel's note reads the item again
-without the athlete. **Q5** asks whether the panel should list everyone on the item instead.
+without the athlete (Q5, decided).
 
 **The green line (F2).** Whenever the choice is not *Everyone*, a line above the grid says what is shown:
 - "Showing **Ana Kovač** · U19 · *Show everyone*";
@@ -210,11 +244,16 @@ without the athlete. **Q5** asks whether the panel should list everyone on the i
 clears the athlete too.
 
 **Remembered (F2).** The chosen athlete and team are kept in memory, by sign-in and workspace, for the session (the
-pattern of the calendar's view mode, but in memory only, never in `localStorage`). A workspace switch, a sign-out or
-a roster reload that no longer has the athlete sets *Everyone*.
+pattern of the calendar's view mode, but in memory only, never in `localStorage`). Before the first read that would
+use it, a remembered athlete is checked against the current `state.athletes` (and a remembered team against
+`cal.data.teams`); one that is no longer there is dropped and *Everyone* is used, so a stale id is never sent. A
+workspace switch or a sign-out clears the choice. Entering the platform workspace clears it too, and there "Showing
+…" never appears (no strip, Q2).
 
-**One athlete at a time.** ‹ › move to the previous or next pill in the strip shown. With *Everyone* chosen, › chooses
-the first athlete and ‹ the last. The arrows are disabled at the ends (no wrap, as in the Builder). A read in flight shows the calendar's existing loading state; a second tap cancels the first by generation.
+**One athlete at a time.** ‹ › move to the previous or next pill in the strip shown. The *All* pill is the strip's
+first pill, so on *Everyone* › chooses the first athlete and ‹ is disabled; on the last athlete › is disabled (no
+wrap, as in the Builder). A read in flight shows the calendar's existing loading state; a second tap cancels the
+first by generation.
 
 ### 2.6 The search (S4)
 
@@ -233,6 +272,9 @@ the first athlete and ‹ the last. The arrows are disabled at the ends (no wrap
   - a team coach: "No athlete in this team matches ‘marko’." (nothing about other teams);
   - a club admin: "No athlete in this club matches ‘marko’.";
   - a private coach: "None of your athletes matches ‘marko’."
+
+  The sentence depends only on the typed text and the list searched: a name of an athlete outside the list (another
+  team's, another club's) gives exactly the same sentence as a name that exists nowhere.
 
 ### 2.7 Phones
 
@@ -254,7 +296,7 @@ in a club workspace the Groups row above it (S2).
 - **The list:** the same list as K6-1's strip for the team chosen there (2.3); from K6-3, the event's athletes only
   (4.2). An athlete not in `state.athletes` is never in it (the plan's own route reads by the roster's id).
 - It is not drawn for an athlete's own workspace, and not when the plan was opened from the Athletes list or Coach
-  Home (the switcher belongs to the calendar's flow; **Q8**).
+  Home (the switcher belongs to the calendar's flow; Q8, decided).
 
 ### 3.2 Moving to another athlete keeps the week, the day and the open session
 
@@ -263,23 +305,51 @@ The plan is selected by `state.selectedAthleteId` (the roster's `athlete_id`) an
 coach is at is:
 - the week: `state.viewedWeekStart`;
 - the day: `state.selectedWeekDay`;
-- the open session: `state.navStack`, the drill-in path of nodes (`app.js:3220-3227`), whose levels are the day's
-  `amPm` / `bta` / `session` nodes and below.
+- the open session: `state.navStack`, the drill-in path of nodes (`app.js:3221-3227`). Its first levels are the
+  session levels built by `frontend/program-structure.js`: an `amPm` node (AM / PM), under it a `bta` node (one node
+  per B / T / A of that half-day: **every session of the same slot shares one `bta` node**, whatever its order); or,
+  for items with no AM/PM, a `bta` node directly, or one `session` node (the blank group, `program-structure.js:90`).
+  Below those come domain / category / section nodes. Node ids are random (`crypto.randomUUID()`), and nodes carry no
+  slot field.
+
+**The slot key of each level**, derived from the node's own items (never from its label or id):
+- `amPm` → the items' `amPm`;
+- `bta` → (`amPm` of its items, or "" when none, `bta`);
+- `session` → the blank group: ("", "").
+
+Matching goes **no deeper than the session level**: below it (domains, categories, sections) the nodes are each
+athlete's own content, with no shared key, and labels are not used to match (they carry a session's own name and
+time, which may differ between athletes; today's sibling match by type and label, `app.js:4523-4525`, is not used
+here). Two sessions in one slot are one `bta` node, so "the session" kept is that slot's node.
 
 Moving to athlete B:
-1. Remember A's place as **slot facts**, not node objects: the week, the day, and for each level of `navStack` its
-   node type and its slot key (`amPm`, `bta`, and the session's order within the slot when the items carry it).
-   Labels are **not** used to match: they carry a session's own name and time, which may differ between athletes.
+1. Remember A's place as **slot facts**: the week, the day, and the slot keys of `navStack`'s session levels (at most
+   two: `amPm`, then `bta`; or one).
 2. Set `state.selectedAthleteId` to B, load B's weekly data (cached if seen this session), and set
    `viewedWeekStart` and `selectedWeekDay` to A's.
-3. Rebuild `navStack` for B level by level, from B's nodes of that day, matching the type and the slot key. Stop at
-   the deepest level that matches.
-4. A quiet line under the header says what is kept: "Monday 12.10 · Training · Main session". If the path stopped
-   early, the line says what B does not have: "Ben has no Training · Main session on Monday 12.10." The day stays open.
+3. Rebuild `navStack` for B from B's nodes of that day, level by level, matching the slot key. Stop at the deepest
+   level that matches, never below the session level.
+4. A quiet line under the header says what is kept: "Monday 12.10 · Training · Main session" (B's own names). If the
+   path stopped early, the line says what B does not have: "Ben has no Training (PM) on Monday 12.10." The day stays
+   open. If A was deeper than the session level, B's view stops at the session level, and the line says so ("Opened
+   at Training · PM").
 
-**History.** Moving between athletes **replaces** the history entry; it does not push one. One Back (the button, the
-phone's or the browser's) returns to where the plan was opened from: the calendar's place, or the event's panel
-(K4-0). **Q6** asks; replace is recommended, so ten athletes are not ten Backs.
+**History.** Moving between athletes pushes **no** history entry and replaces `navStack` without
+`pushAppHistory()`. The rebuilt path therefore holds no per-level entries. Back works as it does today, which
+(`handleAppBack`, `app.js:2285-2289` before `takeAppBackEntry`, `:2331`) means:
+- **the phone's and the browser's Back** first step up the open session's levels that were opened by a drill-in
+  (each drill-in pushed one entry, `app.js:3221-3227`), and then return to where the plan was opened from (the
+  calendar's place, or the event's panel, K4-0). After a switch, B's path may be shorter than A's, so some of A's
+  drill-in entries find no level left to pop; today's code then takes the newest app-history entry, and a stale entry
+  of the same tab is skipped (`skipStaleAppBackEntry`). The contract's requirement is the outcome, not a press count:
+  every Back either steps up one open level or moves on, never shows the same view twice, and the last one lands on
+  the calendar's place. The weekly test pins the exact count for A two levels deep and B one level deep;
+- **the visible *Back to calendar* control** returns to the calendar's place in one tap, whatever the depth: it
+  clears `navStack` and goes back through the app history to the entry the calendar left (`takeAppBackEntry` /
+  `restoreAppPlace`).
+
+So ten athletes are never ten Backs (Q6, decided). Changing the phone's Back to skip the session levels would change
+the app-wide Back and is not part of K6.
 
 **A write in flight.** The Weekly plan's own writes (the copy modal, the more-menu actions) keep their existing
 guards; while one is in flight the switcher's buttons are disabled, the Builder's pattern
@@ -303,8 +373,8 @@ session, one athlete at a time, only the 5 of this event." It is offered when:
 - at least one listed athlete of the event's day is in `state.athletes`.
 
 A coach who only reads the event (the reduced view, no `sessionLinks`) gets **Open the week** instead: the same
-switcher on the event's day, without a session. **Q7** asks whether readers should get the session too; it would need
-the slot in the reduced view (a backend field), and is recommended against for K6.
+switcher on the event's day, without a session (Q7, decided: no slot in the reduced view). A reader never gets the
+"not in your roster" sentence of 4.2.
 
 ### 4.2 Which athletes are listed (F6)
 
@@ -312,11 +382,16 @@ The switcher holds the athletes of the event's panel list for that day (the day 
 holds the event's targets and every athlete of a linked session, `targeted: false` for a linked one who is not a
 target), **intersected with `state.athletes`**, in the panel's order (by name). An athlete outside the roster stays in
 the panel as today ("Not in this workspace's roster") and is not in the switcher; the switcher says "2 athletes of
-this event are not in your roster" (the Builder's hidden-count sentence of #664, worded for the event).
+this event are not in your roster" (the Builder's hidden-count sentence of #664, worded for the event). The number is
+the panel list's own length minus the switcher's, so it counts only athletes the server already named to this
+manager in the panel; it is shown to a manager only (a reader has no switcher here, 4.1).
 
-- **The session opened** is the event's linked session of that day: the slot of its session links. If the event's
-  links on that day name more than one slot (two trainings linked to one event), the panel shows one button per slot:
-  "See each athlete · Main session", "See each athlete · Gym".
+- **The session opened** is the event's linked slot of that day: the (`amPm`, `bta`) of its session links (3.2's
+  slot key; a link's `order` is not a level of the Weekly plan, so two links of one slot open the same node). If the
+  event's links on that day name more than one slot (two trainings in different slots linked to one event), the panel
+  shows one button per slot: "See each athlete · Main session", "See each athlete · Gym".
+- **How it opens.** The plan opens on the day, then on the slot's node, by the same drill-in as a tap (one history
+  entry per level, 3.2), so Back steps up from the slot and then returns to the panel.
 - **F6: a target with no linked session.** The athlete is in the switcher. When the coach reaches them, the plan
   opens on the day and says "**Not in this session** · Ben has no Main session linked to this event on Monday 12.10."
   The strip marks the pill with a small "–" once known. Before the coach reaches them, the switcher knows only who
@@ -326,9 +401,12 @@ this event are not in your roster" (the Builder's hidden-count sentence of #664,
 
 ### 4.3 Back
 
-*Back to calendar* sits above the switcher. It, the phone's Back and the browser's Back return to the calendar with
-the event's panel open on that day (K4-0, `captureCentralCalendarView` / `restoreCentralCalendarView`). Moving between
-athletes replaced the history entry (3.2), so one Back is enough.
+*Back to calendar* sits above the switcher and returns, in one tap, to the calendar with the event's panel open on
+that day. The phone's and the browser's Back first step up the opened slot's levels, then return there (3.2). The
+place is K4-0's app-history entry (`appHistoryEntryOf`, `frontend/app-history.js:10-23`: the view, the anchor, the
+selected day and the open panel's key) restored by `restoreCentralCalendarPlace` (`central-calendar-actions.js:376-394`).
+The chosen athlete is not part of that entry; it survives Back through the in-memory remembered choice of 2.5.
+Switching athletes pushed no entry (3.2), so it adds no Back.
 
 ## 5. Who sees what, and the info-hiding tests
 
@@ -338,19 +416,28 @@ The switcher never lists, names, counts or colours an athlete or a team the acti
 - athletes: only `state.athletes` (the server's roster scope), intersected, never united, with any other list;
 - teams: only `cal.data.teams` (the calendar answer's workspace teams), for the Groups row, the dot, the order and the
   search's team names;
-- counts: the Groups chips' counts of today; the hidden-count sentences count only athletes the server already named
-  to this viewer (an event's panel list, a batch's `hiddenCount`).
+- counts: the Groups chips' counts of today; the strip's own length (never `GET /api/organization`'s); the
+  hidden-count sentences count only athletes the server already named to this viewer (an event's panel list, a
+  batch's `hiddenCount`);
+- stored data: of `GET /api/organization`, only the reduced `{ athleteUuid, teamId }` pairs of 2.3, never the answer.
 
-The server is the guard. `athleteIds` narrows inside the scope; a forged id returns nothing. The frontend rule is
-defence in depth and a correctness rule (no pill that leads nowhere).
+The server is the guard. `athleteIds` narrows inside the scope; a forged id returns nothing; the athlete read is
+always a subset of the unfiltered read (H5). The frontend rule is defence in depth and a correctness rule (no pill
+that leads nowhere), and for other clubs' membership names in `GET /api/organization` it is the only guard (2.3).
 
 ### 5.2 The info-hiding test list
 
 Backend (disposable database, through the real routes; no new route, so these pin the reads K6 relies on):
 - **H1, the manager's condition.** A club with teams A and B; athlete a1 in A, b1 in B, and x1 in A **and** in another
   club's team. A team coach of A in A's team workspace: `GET /api/admin/athletes` lists a1 and x1 and **not** b1;
-  `GET /api/calendar?athleteIds=<b1>` returns no card of b1; `GET /api/organization` lists no b1 and names no team of
-  the other club. (The first and second exist in parts today; H1 puts them in one test named for K6.)
+  `GET /api/calendar?athleteIds=<b1>` returns no card of b1; `GET /api/calendar?athleteIds=<b1>&teamIds=<B>` still
+  returns nothing outside A's scope. (These exist in parts today; H1 puts them in one test named for K6.) H1 does
+  **not** assert anything about `GET /api/organization`: a team coach does not read it for K6, and that answer does
+  carry x1's other-club membership names today (2.3, recorded in section 8).
+- **H5, no new content.** For the team coach of A and for the club admin: `GET /api/calendar?athleteIds=<x1>` for a
+  range returns a **subset** of the unfiltered read of the same range: every card's key, title, `teams` and
+  `canManage` also appear in the unfiltered answer (x1 is in the other club's team too, so items of that club that
+  target x1 are in both or in neither).
 - **H2.** A club admin of the club: the roster lists a1, b1 and x1, no athlete of the other club;
   `athleteIds=<an athlete of the other club>` returns nothing.
 - **H3.** A private coach: only their own relationship's athletes; no `GET /api/organization` read is needed.
@@ -358,16 +445,22 @@ Backend (disposable database, through the real routes; no new route, so these pi
 
 Frontend (JSDOM, through the real handlers, with a fake API that keeps the routes' contracts):
 - **F-H1.** Team workspace: the strip and the search list exactly the roster; a name of another team typed in the
-  search gives the team sentence and no other team's name anywhere in the DOM; no Groups row; `GET /api/organization`
-  is not requested.
-- **F-H2.** Club workspace, `GET /api/organization` answering an athlete **not** in the roster (an archived-only tie)
-  and a membership of x1 in another club's team: the archived athlete is drawn nowhere; the other club's team name is
-  in no pill, label, search result or `aria-label`.
+  search gives the team sentence and no other team's name anywhere in the DOM; that sentence is byte-identical to the
+  one for a name that exists nowhere; no Groups row; `GET /api/organization` is not requested.
+- **F-H2.** Club workspace, `GET /api/organization` answering an athlete **not** in the roster (an archived-only tie),
+  a membership of x1 in another club's team, users with e-mails and a join link: the archived athlete is drawn
+  nowhere; the other club's team and club names are in no pill, label, search result or `aria-label`; the stored cache
+  holds only `{ athleteUuid, teamId }` pairs of the workspace's teams (no other key, no e-mail, no other-club id or
+  name, checked with `JSON.stringify` of the whole calendar state).
 - **F-H3.** A `GET /api/organization` that fails: the strip falls back to the roster by name; nothing else is drawn.
 - **F-H4.** K6-3: a panel athlete not in the roster is not in the switcher, and the event sentence counts them.
-- **F-H5.** The platform workspace: no strip, no search, no `GET /api/organization` read for K6.
-- **F-H6.** A workspace switch clears the chosen athlete, the search and the cached organization read; the next
+- **F-H5.** The platform workspace: no strip, no search, no `GET /api/organization` read for K6, no "Showing …" line,
+  and an athlete chosen in another workspace is cleared on entering it.
+- **F-H6.** A workspace switch clears the chosen athlete, the search and the cached organization pairs; the next
   workspace's first render shows none of them.
+- **F-H7.** A coach with roles in two workspaces: a slow `GET /api/organization`, athlete read, kinds read or panel
+  day read of W1 that answers after the switch to W2 is dropped and drawn nowhere; a remembered athlete is checked
+  against W2's roster before the first read, so its id is never sent in W2.
 
 ## 6. Tests
 
@@ -378,18 +471,25 @@ Frontend (JSDOM, through the real handlers, with a fake API that keeps the route
 - `builder-batch-switcher-golden.test.mjs` (1.4): committed first, unchanged by the extraction.
 - `central-calendar-k6.actions.test.mjs`, through the real handlers:
   - the list per workspace type (2.3), the 60 rule (2.4), the order by team then name, x1 once with *All groups*;
-  - the read's URL and key with an athlete, with kinds, and both (2.5); a slower older read dropped;
-  - the Groups chips suspended while an athlete is chosen (Q3 as recommended);
+  - the read's URL and key with an athlete, with kinds, and both (2.5); the athlete URL never carries `teamIds` or
+    `clubIds`; a slower older read dropped;
+  - while an athlete is chosen and its read is pending or failed, no card of the unfiltered answer is drawn;
+  - the Groups chips suspended while an athlete is chosen (Q3);
   - the green line's three forms; *Show everyone*; Clear filters;
   - search → another team sets Groups and reads the week;
   - remembered across a view switch, cleared by a workspace switch;
   - the F-H tests of 5.2.
-- `weekly-k6.actions.test.mjs`: › keeps the week, the day and the slot path; a path that stops early and its
-  sentence; labels that differ but slots that match; "No plan this week"; history replaced, one Back returns.
+- `weekly-k6.actions.test.mjs`: › keeps the week, the day and the slot path; A and B with differently named sessions
+  in the same T slot reach the `bta` level; A deeper than the session level → B stops at it, with the sentence; a
+  missing slot and its sentence; "No plan this week"; switching athletes pushes no history entry
+  (`state.appHistoryDepth` unchanged); through `handleBrowserBack()` from a real drill-in: Back steps up A's drilled
+  levels, then lands on the calendar (`state.activeTab === "central-calendar"`), and *Back to calendar* lands there
+  in one tap.
 - `central-calendar-k6-3.actions.test.mjs`: the action offered to a manager only; one button per slot; the list,
-  roster-intersected, with its sentence; "Not in this session" for a target without a link; Back to the panel.
+  roster-intersected, with its sentence (a manager only); "Not in this session" for a target without a link; Back to
+  the panel, with `selectedDate` kept and the chosen athlete still chosen.
 
-Backend: H1–H4 in `central-calendar-k6-scope.test.mjs` (disposable).
+Backend: H1–H5 in `central-calendar-k6-scope.test.mjs` (disposable).
 
 ### 6.2 e2e (Playwright, `e2e/`, at 1280, 390, 375 and 360 px)
 
@@ -401,7 +501,8 @@ a private coach, three events (one with five linked athletes and one target with
    Groups switches, his week is shown.
 3. Team coach: no Groups row; the strip of the team only; a search for another team's athlete → the team sentence.
 4. Weekly plan: from the calendar, open Ana's Monday, drill into Training · Main session, › → Ben on the same session;
-   an athlete without a plan → "No plan this week"; one Back → the calendar.
+   an athlete without a plan → "No plan this week"; *Back to calendar* → the calendar in one tap; again from the
+   session, the phone's Back steps up the levels and then lands on the calendar.
 5. K6-3: the event's panel → *See each athlete* → 3 / 5 in this event; the target without a link → "Not in this
    session"; Back → the event's panel.
 
@@ -413,10 +514,14 @@ view, no console error.
 - the roster intersection removed (the strip draws `GET /api/organization`'s list) → F-H2 fails;
 - the team filter on memberships removed (another club's team name drawn) → F-H2 fails;
 - `athleteIds` dropped from the URL → the read test fails;
+- `teamIds` sent with `athleteIds` → the URL-builder test fails;
+- the reduction of the organization answer removed (the raw answer stored) → F-H2's state check fails;
+- the fallback to the unfiltered answer kept while an athlete read is pending → the pending-read test fails;
+- the remembered athlete sent without the roster check → F-H7 fails;
 - the athlete part dropped from the cache key → the key test fails;
 - the Groups suspension removed → the club-wide event test fails;
 - the slot match replaced by the label match → the "labels differ" weekly test fails;
-- `pushState` instead of replace → the one-Back test fails;
+- `pushAppHistory()` on an athlete switch → the "no history entry" weekly test fails;
 - the K6-3 roster intersection removed → F-H4 fails.
 
 ### 6.4 Gates
@@ -450,8 +555,9 @@ backend change.
 - **Q5. The panel while an athlete is chosen: only that athlete, or everyone on the item?** **Recommend only that
   athlete** (the panel follows the cards it was opened from, the FE-D16 rule), with *Show everyone* to read the item
   again without the athlete.
-- **Q6. The Weekly plan: replace the history entry when moving between athletes?** **Recommend replace**, so one Back
-  returns to the calendar or the event (K4-0) however many athletes were seen.
+- **Q6. The Weekly plan: does moving between athletes add history entries?** **Recommend no entry**, so the number of
+  Backs (the drilled levels, then the calendar; or one tap on *Back to calendar*) does not grow with the athletes seen
+  (3.2). Today's app-wide Back, which steps up the drilled levels first, is not changed.
 - **Q7. K6-3 for a coach who only reads the event (no `sessionLinks`)?** **Recommend Open the week** (the day, no
   session) for readers in K6. Opening the session for them needs the slot in the reduced view, a backend change to an
   info-hiding contract (trigger 2).
@@ -467,3 +573,9 @@ backend change.
 - No change to K5; K6 and K5 share the green line (2.5) in whichever order they land.
 - No physical-device check in this contract; the e2e widths of 6.2 and `mobile-qa` cover the layout, and a device check
   is recorded as a follow-up.
+- **Recorded for the OptiMove manager, outside K6 (found by this contract's security review):** `GET /api/organization`
+  returns, for every athlete it lists, all of that athlete's memberships with the club's and team's names, other
+  clubs included (`backend/src/routes/organization.js:3670-3686`; the workspace filter at `:70-101` narrows the
+  athletes, not their memberships). So a team coach or club admin reading Settings sees the names of another club's
+  teams an athlete also belongs to. Whether that is intended is a separate decision; changing it is a backend change
+  to an info-hiding contract (trigger 2). K6 does not depend on it either way: it keeps only its reduced pairs (2.3).
