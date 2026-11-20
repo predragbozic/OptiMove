@@ -1,7 +1,7 @@
-// K3 (docs/ai/central-calendar-k3-plan.md 2.1 - 2.6) through the real action modules with a
+// K3 and K2c-3 (docs/ai/central-calendar-k3-plan.md 2.1 - 2.6 and 6.2 - 6.4) through the real action modules with a
 // fake fetch: which plan opens, the session memory (the manager's GO: ids and slot keys only, cleared on sign-out and on
 // a workspace change), Save and link's attaches (each part of up to 200 its own key and outcome; never "linked" without
-// a confirmed answer; a partial success said), and Check result with the same key and body.
+// a confirmed answer; a partial success said), Check result with the same key and body, and the Builder's Event: [▾].
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -20,7 +20,8 @@ globalThis.sessionStorage = {
 
 const { state, emptyBuilderState, emptyCentralCalendarState } = await import("../state.js");
 const k3 = await import("../central-calendar-k3-actions.js");
-const { centralCalendarUncertainWrites, clearCentralCalendarUncertainWrites } = await import("../central-calendar-actions.js");
+const row = await import("../builder-events-row.js");
+const { centralCalendarUncertainWrites, clearCentralCalendarUncertainWrites, openCentralCalendarAt } = await import("../central-calendar-actions.js");
 const { weekMondayIso, addDaysIso } = await import("../utils.js");
 
 const DAY = "2026-11-19";
@@ -105,7 +106,7 @@ test("2b. sign-out and a workspace change clear the K3 memory and end the band (
   const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
   const signOut = app.slice(app.indexOf("async function signOut()"), app.indexOf("async function signOut()") + 2400);
   assert.match(signOut, /clearAllViewCache\(\);\s*\/\/ K3[^\n]*\n\s*clearK3Memory\(\);/, "sign-out clears it");
-  assert.match(app, /resetBuilderCalendarEventForWorkspaceChange\(\);\s*\/\/ K3[^\n]*\n\s*clearK3Memory\(\);\s*if \(state\.builder\) state\.builder\.k3 = null;/, "a workspace change clears it and ends the band");
+  assert.match(app, /builderEventsResetForWorkspaceChange\(\);\s*\/\/ K3[^\n]*\n\s*clearK3Memory\(\);\s*if \(state\.builder\) state\.builder\.k3 = null;/, "a workspace change clears it and ends the band");
 });
 
 test("3. some athletes have a plan (case c): the sheet counts, names only the ones the coach may open, counts the rest; nothing is created", async () => {
@@ -270,6 +271,100 @@ test("7b. a new session on the event's day starts in its half; a time outside th
   assert.equal(k3.k3TimeRefusal("s1", "10:30"), "");
 });
 
+test("8. Event: [▾] on a saved plan: one attach with the session's ids for every athlete of the batch; No event detaches its links", async () => {
+  state.activeTab = "builder";
+  state.builder = emptyBuilderState({ draft: draftOf({ isEditDraft: true }) });
+  const linkedEvent = { ...EVENT, links: { planIds: ["p1", "p2"] } };
+  let linked = false;
+  const calls = installFetchMock((call) => {
+    if (call.url.startsWith("/api/calendar?")) return { status: 200, body: calendarAnswer(linked ? [linkedEvent] : [EVENT, planned(["l1", "l2"])]) };
+    if (call.url === "/api/calendar/events/e1") {
+      return { status: 200, body: { event: { id: "e1", sessionLinks: [
+        { id: "k1", planId: "p1", day: DAY, amPm: "AM", bta: "T", sessionName: "Main session", state: "linked" },
+        { id: "k2", planId: "p2", day: DAY, amPm: "AM", bta: "T", sessionName: "Main session", state: "linked" },
+      ] } } };
+    }
+    if (call.url === "/api/calendar/events/e1/sessions") { linked = true; return { status: 200, body: { attached: 2 } }; }
+    if (call.url === "/api/calendar/events/e1/sessions/detach") { linked = false; return { status: 200, body: { detached: 2 } }; }
+    return { status: 404, body: {} };
+  });
+  await row.loadBuilderEvents();
+  assert.equal(row.builderSessionEvent(DAY, state.builder.draft.blocks[0].sessions[0]), "");
+  await row.chooseSessionEvent(DAY, "s1", "e1");
+  const attach = calls.find((c) => c.url === "/api/calendar/events/e1/sessions");
+  assert.deepEqual(attach.body.logicalSessionIds, ["l1", "l2"]);
+  assert.equal(attach.body.expectedRevision, 3);
+  assert.equal(row.builderSessionEvent(DAY, state.builder.draft.blocks[0].sessions[0]), "e1");
+  assert.equal(state.builder.events.message.text, "Main session is in Team training 10:00.");
+  await row.chooseSessionEvent(DAY, "s1", "");
+  const detach = calls.find((c) => c.url === "/api/calendar/events/e1/sessions/detach");
+  assert.deepEqual(detach.body.linkIds, ["k1", "k2"]);
+  assert.equal(state.builder.events.message.text, "Main session is out of Team training 10:00.");
+});
+
+test("8b. a plan never saved: the selector asks first and sends nothing; Cancel leaves everything as it was", async () => {
+  state.activeTab = "builder";
+  state.builder = emptyBuilderState({ draft: draftOf() });
+  const calls = installFetchMock((call) => (call.url.startsWith("/api/calendar?") ? { status: 200, body: calendarAnswer([EVENT]) } : { status: 500, body: {} }));
+  await row.loadBuilderEvents();
+  const before = calls.length;
+  await row.chooseSessionEvent(DAY, "s1", "e1");
+  assert.equal(state.builder.events.ask.kind, "session");
+  assert.equal(calls.length, before, "nothing sent");
+  await row.answerSaveFirst(false, { submit: () => assert.fail("not saved"), reopen: () => assert.fail("not reopened") });
+  assert.equal(state.builder.events.ask, null);
+});
+
+test("8c. a session whose own time is outside the event cannot join it: the sentence and Use the event's time, nothing sent", async () => {
+  state.activeTab = "builder";
+  const draft = draftOf({ isEditDraft: true });
+  draft.blocks[0].sessions[0].time = "08:00";
+  state.builder = emptyBuilderState({ draft });
+  const calls = installFetchMock((call) => (call.url.startsWith("/api/calendar?") ? { status: 200, body: calendarAnswer([EVENT, planned(["l1"])]) } : { status: 500, body: {} }));
+  await row.loadBuilderEvents();
+  const before = calls.length;
+  await row.chooseSessionEvent(DAY, "s1", "e1");
+  assert.equal(calls.length, before);
+  assert.equal(state.builder.events.message.text, "Main session is at 08:00, outside the event (10:00–11:30). Change its time first.");
+  assert.equal(state.builder.events.message.useEventTime, "s1");
+});
+
+test("8d. an event the coach does not manage is never written, whatever the select sends: one session and the whole day send nothing", async () => {
+  // The selects list such an event disabled (6.4), but a handler never trusts
+  // the page: a value naming it - a stale page, a crafted change - is dropped.
+  state.activeTab = "builder";
+  state.builder = emptyBuilderState({ draft: draftOf({ isEditDraft: true }) });
+  const clubEvent = { ...EVENT, key: `event:e2:${DAY}`, eventId: "e2", title: "Club training", canManage: false };
+  const calls = installFetchMock((call) => (call.url.startsWith("/api/calendar?") ? { status: 200, body: calendarAnswer([clubEvent, planned(["l1", "l2"])]) } : { status: 500, body: {} }));
+  await row.loadBuilderEvents();
+  const before = calls.length;
+  await row.chooseSessionEvent(DAY, "s1", "e2");
+  assert.equal(calls.length, before, "one session: nothing sent");
+  await row.chooseWholeDay(DAY, "e2");
+  assert.equal(calls.length, before, "the whole day: nothing sent");
+  assert.equal(row.builderEventsBusy(), false);
+  assert.equal(row.builderSessionEvent(DAY, state.builder.draft.blocks[0].sessions[0]), "");
+});
+
+test("9. Q8: a team workspace's whole roster is the team target; otherwise the athletes", () => {
+  state.builder = emptyBuilderState({ draft: draftOf() });
+  assert.deepEqual(row.builderEventTargets(), [{ kind: "team", id: "t1", name: "First team" }]);
+  state.athletes.push({ athlete_id: "103", athlete_uuid: A[2], athlete: "Cara Example" });
+  assert.deepEqual(row.builderEventTargets().map((t) => t.kind), ["athlete", "athlete"]);
+});
+
+test("10. openCentralCalendarAt sets the calendar's day and opens the event's panel, never over an open form", () => {
+  openCentralCalendarAt({ date: DAY, key: EVENT.key });
+  assert.equal(state.centralCalendar.anchor, DAY);
+  assert.equal(state.centralCalendar.selectedDate, DAY);
+  assert.deepEqual({ open: state.centralCalendar.panel.open, key: state.centralCalendar.panel.key, date: state.centralCalendar.panel.date }, { open: true, key: EVENT.key, date: DAY });
+  state.centralCalendar = emptyCentralCalendarState();
+  state.centralCalendar.form = { mode: "create" };
+  openCentralCalendarAt({ date: DAY, key: EVENT.key });
+  assert.equal(state.centralCalendar.panel.open, false);
+  assert.equal(state.centralCalendar.anchor, DAY);
+});
+
 test("11. a save whose answer was lost: Try again reads the plan back - an applied edit draft is never sent again nor called 'not saved'", async () => {
   const context = k3Builder();
   state.builder.draft = draftOf({ isEditDraft: true });
@@ -336,7 +431,19 @@ test("13. an unnamed linked session is placed in its event (its name is empty, n
   assert.ok(placed.has(k3SessionKey(DAY, { amPm: "AM", bta: "T", name: "" })));
 });
 
-test("14. a band restored after a reload never hides a K2c-2 'Make an event' write in flight or not confirmed; an idle panel closes", async () => {
+test("14. Save and continue: the plan saved but not opened again releases the row and says it was saved", async () => {
+  state.activeTab = "builder";
+  state.builder = emptyBuilderState({ draft: draftOf() });
+  installFetchMock((call) => (call.url.startsWith("/api/calendar?") ? { status: 200, body: calendarAnswer([EVENT]) } : { status: 500, body: {} }));
+  await row.loadBuilderEvents();
+  await row.chooseSessionEvent(DAY, "s1", "e1");
+  await row.answerSaveFirst(true, { submit: async () => ({ plan: { id: "p1" } }), reopen: async () => { throw new TypeError("Failed to fetch"); } });
+  assert.equal(state.builder.events.ask, null);
+  assert.equal(row.builderEventsBusy(), false);
+  assert.match(state.builder.events.message.text, /^Saved\. The plan couldn't be opened again here/);
+});
+
+test("14b. a band restored after a reload never hides the events row's write in flight, its unconfirmed result or its question; an idle row gives way", async () => {
   installFetchMock((call) => {
     if (call.url === "/api/calendar/events/e1") {
       return { status: 200, body: { event: { id: "e1", title: "Team training", eventKind: "training", status: "scheduled", canManage: true, day: DAY, startTime: "10:00", endTime: "11:30", expects: [], targets: A.slice(0, 2).map((id) => ({ kind: "athlete", id })), athleteCount: 2 } } };
@@ -344,23 +451,21 @@ test("14. a band restored after a reload never hides a K2c-2 'Make an event' wri
     return { status: 404, body: {} };
   });
   const settle = async () => { for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
-  for (const [phase, expectBand] of [["ready", true], ["unconfirmed", false], ["sending", false]]) {
+  const busy = { write: { write: { at: "session:s1" } }, pending: { pending: { at: "session:s1", spec: {}, done: "" } }, ask: { ask: { kind: "session", day: DAY, sessionId: "s1", value: "e1" } } };
+  for (const [name, expectBand] of [["idle", true], ["write", false], ["pending", false], ["ask", false]]) {
     // The memory a band leaves behind, then a reload: the same plan opened without its band.
     k3Builder();
     k3.k3ToggleSession(`${DAY}|AM|T|main session`);
     assert.equal(store.size, 1);
     state.builder = emptyBuilderState({ draft: draftOf() });
-    const panel = { sessionId: "s1", date: DAY, phase };
-    state.builder.calendarEvent = panel;
+    state.builder.events = { ...row.emptyBuilderEvents(), ...(busy[name] || {}) };
     k3.k3AdoptDraft(state.builder.draft);
     await settle();
     if (expectBand) {
-      assert.equal(state.builder.k3?.eventId, "e1", `${phase}: the band is back`);
-      assert.equal(state.builder.calendarEvent, null, `${phase}: the idle panel closed`);
+      assert.equal(state.builder.k3?.eventId, "e1", `${name}: the band is back`);
     } else {
-      assert.equal(state.builder.k3, null, `${phase}: the band waits`);
-      assert.equal(state.builder.calendarEvent, panel, `${phase}: the panel and its result stay`);
-      assert.equal(store.size, 1, `${phase}: the memory stays for the next time`);
+      assert.equal(state.builder.k3, null, `${name}: the band waits`);
+      assert.equal(store.size, 1, `${name}: the memory stays for the next time`);
     }
     k3.clearK3Memory();
   }
@@ -373,4 +478,14 @@ test("15. another plan opened ends the band and drops its memory", () => {
   k3.k3AdoptDraft({ plan: { id: "other", planType: "weekly", weekStart: WEEK }, batch: { plans: [] }, blocks: [] });
   assert.equal(state.builder.k3, null);
   assert.equal(store.size, 0);
+});
+
+test("16. Create event → from the Builder: the form's band names the day and never promises a session it does not link", async () => {
+  const { renderK2c3FormBandHtml } = await import("../central-calendar-k3-view.js");
+  const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const call = app.slice(app.indexOf("async function openCalendarCreateFromBuilder"), app.indexOf("async function openCalendarCreateFromBuilder") + 1200);
+  assert.doesNotMatch(call, /sessionName/, "no session is named for a link the create does not make");
+  const html = renderK2c3FormBandHtml({ returnTo: { tab: "builder", day: DAY, sessionName: "" }, busy: false });
+  assert.match(html, /with this event in the day&#039;s row\./);
+  assert.doesNotMatch(html, /chosen for/);
 });

@@ -55,6 +55,7 @@ import {
   setCentralCalendarValue,
 } from "./central-calendar-event-details.js";
 import {
+  applyCentralCalendarEventType,
   buildCentralCalendarEventRequest,
   centralCalendarEditFormFromEvent,
   centralCalendarFormTypesLoaded,
@@ -808,6 +809,75 @@ async function loadCreateTypes(form, cal, render) {
   focusPanelStart(cal);
 }
 
+// K2c-3 (docs/ai/central-calendar-k3-plan.md 6.3): Create event → from the
+// Builder opens THIS form (one event form in the app), prefilled: the day,
+// the first training type, its title, the start time, the plan's athletes (or
+// the team, Q8). `form.returnTo` draws the band over it ("Creating an event
+// for the Builder") and, once the create is confirmed, takes the coach back
+// to the Builder (setCentralCalendarBuilderReturn). Nothing else of the form
+// changes for a coach who opens it from the calendar.
+let builderReturn = null;
+export function setCentralCalendarBuilderReturn(hook) {
+  builderReturn = hook;
+}
+
+function ownerOfWorkspace() {
+  const ws = state.currentUser?.activeWorkspace || {};
+  const label = ws.label || "";
+  if (ws.type === "club") return { scope: "club", id: String(ws.scopeId), name: label };
+  if (ws.type === "team") return { scope: "team", id: String(ws.scopeId), name: label };
+  return { scope: "user", id: String(state.currentUser?.id || ""), name: "" };
+}
+
+const trainingTypeOf = (types) => (types || []).find((type) => type?.kind === "training") || null;
+
+function prefillFromBuilder(form, cal, prefill) {
+  const training = trainingTypeOf(cal.eventTypes);
+  if (training) applyCentralCalendarEventType(form, training, cal.eventTypes ? centralCalendarCatalogOf(cal) : null);
+  if (prefill.title) {
+    form.draft.title = prefill.title;
+    form.titleAuto = false;
+  }
+  if (prefill.startTime) form.draft.startTime = prefill.startTime;
+  if (prefill.endTime) form.draft.endTime = prefill.endTime;
+}
+
+export async function openCentralCalendarCreateForBuilder(prefill, render) {
+  const cal = state.centralCalendar;
+  if (!cal || cal.form || !prefill?.day) return false;
+  if (pendingEntryFor({ mode: "create" })) return false;
+  dropStaleEventTypes(cal);
+  cal.anchor = prefill.day;
+  cal.selectedDate = prefill.day;
+  resetPanelReads(cal);
+  cal.panel = closedPanel();
+  const form = newCentralCalendarCreateForm({ day: prefill.day, owner: ownerOfWorkspace(), types: cal.eventTypes, targets: prefill.targets || [], catalog: cal.eventTypes ? centralCalendarCatalogOf(cal) : null });
+  form.returnTo = { tab: "builder", day: prefill.day, sessionName: prefill.sessionName || "" };
+  form.loading = !cal.eventTypes;
+  cal.form = form;
+  if (!form.loading) prefillFromBuilder(form, cal, prefill);
+  render?.();
+  if (form.loading) {
+    await loadCreateTypes(form, cal, render);
+    if (cal.form === form && !form.loadError) {
+      prefillFromBuilder(form, cal, prefill);
+      render?.();
+    }
+  }
+  return true;
+}
+
+// *Back to the Builder* (6.3): the form closes the way Close does (its own
+// question when something was typed); nothing is made.
+export function centralCalendarBackToBuilder(render) {
+  const cal = state.centralCalendar;
+  const form = cal?.form;
+  if (!form?.returnTo) return false;
+  if (!closeEventForm(render)) return false;
+  builderReturn?.({ created: null });
+  return true;
+}
+
 async function openCreateForm(render) {
   const cal = state.centralCalendar;
   if (!centralCalendarCanCreateEvents() || cal.form) return;
@@ -1280,6 +1350,12 @@ async function saved(form, data, render, { check = false } = {}) {
   forgetUncertainWrite(form.requestKey);
   const notice = savedText(form, data, { check });
   cal.form = null;
+  // K2c-3: made from the Builder - back to it, the new event in its day's row.
+  if (form.returnTo && form.mode === "create" && event && builderReturn) {
+    invalidateCentralCalendarCache();
+    builderReturn({ created: event, day: form.returnTo.day });
+    return;
+  }
   // The event's panel on the day the coach was on when it is still one of
   // the event's days, else its first day; the range follows that day.
   const eventId = event?.id || form.eventId;
@@ -1856,6 +1932,10 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
     if (!item || cal.form || cal.questionStep || linkLockedFor(cal, item)) return true;
     await k3StartFromPanel(cal, item, { openBuilder }, render);
+    return true;
+  }
+  if (type === "central-calendar-back-to-builder") {
+    centralCalendarBackToBuilder(render);
     return true;
   }
   if (type === "central-calendar-k3") {

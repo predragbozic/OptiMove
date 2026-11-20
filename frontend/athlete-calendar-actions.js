@@ -4,6 +4,7 @@
 import { state } from "./state.js";
 import { addDaysIso, localDateIso } from "./utils.js";
 import { athleteCalendarState, athleteCalendarWeek, loadAthleteCalendar } from "./athlete-calendar-data.js";
+import { athleteCalendarAnswerFor, athleteCalendarAnswersSettled } from "./athlete-calendar-answers.js";
 
 // The tab's entry (the rail, Home's See all): this week unless a week is asked for; read again on every entry, so an
 // answer given elsewhere shows (one read per entry).
@@ -73,6 +74,14 @@ export async function handleAthleteCalendarAction(action, handlers = {}) {
     render?.();
     return true;
   }
+  // K4b: Change on her own "RPE request" card. The form opens only from the row her own weekly read returned for that
+  // assignment and only while that row says it may change - never from the id on the page alone.
+  if (type === "athlete-calendar-rpe-change") {
+    const row = athleteCalendarAnswerFor(action.dataset.assignmentId || "", slice.weekStart);
+    if (!row || !row.changeable) return true;
+    await handlers.changeAnswer?.(row, { date: action.dataset.date || row.date, title: action.dataset.title || row.sessionName });
+    return true;
+  }
   if (type === "athlete-calendar-card") {
     const what = action.dataset.acAction || "";
     if (what === "rate-question" && action.dataset.questionId) {
@@ -93,12 +102,15 @@ export async function handleAthleteCalendarAction(action, handlers = {}) {
   return false;
 }
 
-// After a confirmed answer (contract 2.3): one sentence, and the week read again.
-export async function athleteCalendarAnswered({ render, loadQuestions } = {}) {
+// After a confirmed answer (contract 2.3): one sentence, and the week read again. K4b: a confirmed change says
+// "Your answer was changed."; a change refused as closed reads the week again with no sentence (the form said it).
+export async function athleteCalendarAnswered({ render, loadQuestions, notice = "Your answer was saved." } = {}) {
   const slice = athleteCalendarState();
-  slice.notice = "Your answer was saved.";
+  slice.notice = notice;
   render?.();
   await Promise.all([loadAthleteCalendar({ render, forceRefresh: true }), loadQuestions?.()]);
-  slice.notice = "Your answer was saved.";
+  // K4b: her answer's line too (its own read, started by loadAthleteCalendar).
+  await athleteCalendarAnswersSettled();
+  slice.notice = notice;
   render?.();
 }

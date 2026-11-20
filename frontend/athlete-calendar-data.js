@@ -10,6 +10,7 @@ import { api } from "./api.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { pickAthleteEventPlace } from "./athlete-home-events-data.js";
 import { athleteOpenQuestionRows } from "./athlete-questions-data.js";
+import { loadAthleteCalendarAnswers, resetAthleteCalendarAnswers } from "./athlete-calendar-answers.js";
 import { addDaysIso, localDateIso, weekMondayIso } from "./utils.js";
 import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 
@@ -37,6 +38,7 @@ export function resetAthleteCalendar() {
   generation += 1;
   slice = emptyAthleteCalendarState();
   returnMarker = null;
+  resetAthleteCalendarAnswers();
 }
 
 // K4a (contract 2.4): the Calendar's place for a history step - its week, the selected day and the page's scroll - so
@@ -230,6 +232,8 @@ export function athleteCalendarCard(item, { questions = [], today = localDateIso
     return {
       ...base,
       kind: "external",
+      // K4b: her own answer's line (athlete-calendar-answers.js) is matched by this id.
+      assignmentId,
       word: "RPE request",
       when: hhmm(item.startTime),
       title: base.title || "RPE request",
@@ -301,7 +305,11 @@ export async function loadAthleteCalendar({ render, weekStart, forceRefresh = fa
   const mine = slice;
   const current = () => run === generation && slice === mine;
   const contextKey = athleteCalendarContextKey(week.from, today);
-  return loadCachedView({
+  // K4b: her own RPE answers of the week (the line "Your RPE: 7 · Change"), read beside the calendar; its failure
+  // hides only that line (athlete-calendar-answers.js). Not awaited here: the calendar's own read finishes (and the
+  // scroll comes back) whatever that read does; it paints its line itself. athleteCalendarAnswersSettled() awaits it.
+  loadAthleteCalendarAnswers({ weekStart: week.from, render });
+  const read = loadCachedView({
     namespace: ATHLETE_CALENDAR_NAMESPACE,
     contextKey,
     forceRefresh,
@@ -326,4 +334,5 @@ export async function loadAthleteCalendar({ render, weekStart, forceRefresh = fa
     },
     getCurrentContextKey: () => (slice === mine ? athleteCalendarContextKey(slice.weekStart, localDateIso()) : ""),
   });
+  return read;
 }
