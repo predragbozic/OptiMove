@@ -47,38 +47,51 @@ test("3. nothing hidden (or an older answer without the field): exactly as befor
   assert.equal(content().querySelector("[data-builder-batch-hidden]"), null);
 });
 
-// #653 and #664 together: a reopened, published member of a group (an edit
-// draft) says its changes go to this athlete only, and the hidden members are
-// still counted.
-const editDraft = (plans, hiddenCount) => ({
-  plan: { id: "A-edit", status: "draft", planType: "weekly", isEditDraft: true, editSourcePlanId: "A", batchId: "g" },
+// #653, #664 and the batch edit (step 2) together. A reopened, published
+// WEEKLY member of a group asks at Save who gets the changes (step 2's panel
+// replaces #653's sentence); a reopened PROGRAM member keeps "Changes go to
+// this athlete only."; the hidden members are still counted in both.
+const editDraft = (plans, hiddenCount, planType = "weekly") => ({
+  plan: { id: "A-edit", status: "draft", planType, isEditDraft: true, editSourcePlanId: "A", batchId: "g", athleteName: "Athlete One" },
   batch: { id: "g", plans, hiddenCount }, blocks: [],
 });
 
-test("4. a reopened member with other visible members and one hidden: both sentences, no switcher, no checkbox", () => {
+test("4. a reopened weekly member with another visible member and one hidden: the step 2 panel counts the group, and the hidden sentence follows", () => {
   state.builder = emptyBuilderState({ draft: editDraft(two, 1) });
   renderBuilder();
   assert.equal(content().querySelector(".builder-batch-switcher"), null);
   assert.equal(content().querySelector('[data-action="builder-toggle-batch-sync"]'), null);
-  assert.equal(content().querySelector("[data-builder-batch-edit-note]")?.textContent, "Changes go to this athlete only.");
+  assert.equal(content().querySelector("[data-builder-batch-edit-note]"), null);
+  assert.match(content().querySelector("[data-builder-batch-edit]").textContent, /Athlete One is one of 3 athletes in this group\./);
   assert.equal(content().querySelector("[data-builder-batch-hidden]")?.textContent, "1 other athlete in this group has a plan you can't open.");
-});
-
-test("5. a reopened member that is the only one this coach may open: still a group member, so both sentences", () => {
-  state.builder = emptyBuilderState({ draft: editDraft([two[0]], 2) });
+  // The question counts only the athletes the change can reach.
+  state.builder.batchEditChoice = { stage: "scope" };
   renderBuilder();
-  assert.equal(content().querySelector("[data-builder-batch-edit-note]")?.textContent, "Changes go to this athlete only.");
-  assert.equal(content().querySelector("[data-builder-batch-hidden]")?.textContent, "2 other athletes in this group have plans you can't open.");
+  assert.match(content().querySelector("[data-builder-batch-edit]").textContent, /Apply these changes to all 2 athletes you can edit\?/);
 });
 
-test("6. a reopened member with nothing hidden: only #653's sentence, exactly as before", () => {
+test("5. a reopened member that is the only one this coach may open: no group question, both sentences", () => {
+  for (const planType of ["weekly", "program"]) {
+    state.builder = emptyBuilderState({ draft: editDraft([two[0]], 2, planType) });
+    renderBuilder();
+    assert.equal(content().querySelector("[data-builder-batch-edit]"), null, planType);
+    assert.equal(content().querySelector("[data-builder-batch-edit-note]")?.textContent, "Changes go to this athlete only.", planType);
+    assert.equal(content().querySelector("[data-builder-batch-hidden]")?.textContent, "2 other athletes in this group have plans you can't open.", planType);
+  }
+});
+
+test("6. nothing hidden: a weekly member gets the step 2 panel as before; a program member keeps #653's sentence; a plan alone gets neither", () => {
   state.builder = emptyBuilderState({ draft: editDraft(two, 0) });
   renderBuilder();
-  assert.equal(content().querySelector("[data-builder-batch-edit-note]")?.textContent, "Changes go to this athlete only.");
+  assert.match(content().querySelector("[data-builder-batch-edit]").textContent, /is one of 2 athletes in this group/);
   assert.equal(content().querySelector("[data-builder-batch-hidden]"), null);
-  // A reopened plan alone (no group, nothing hidden): neither sentence.
+  state.builder = emptyBuilderState({ draft: editDraft(two, 1, "program") });
+  renderBuilder();
+  assert.equal(content().querySelector("[data-builder-batch-edit-note]")?.textContent, "Changes go to this athlete only.");
+  assert.equal(content().querySelector("[data-builder-batch-hidden]")?.textContent, "1 other athlete in this group has a plan you can't open.");
   state.builder = emptyBuilderState({ draft: editDraft([two[0]], 0) });
   renderBuilder();
+  assert.equal(content().querySelector("[data-builder-batch-edit]"), null);
   assert.equal(content().querySelector("[data-builder-batch-edit-note]"), null);
   assert.equal(content().querySelector("[data-builder-batch-hidden]"), null);
 });

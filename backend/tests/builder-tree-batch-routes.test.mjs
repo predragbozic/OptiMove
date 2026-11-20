@@ -33,6 +33,8 @@ if (needsModuleMocksRelaunch()) {
       const clean = sql.replace(/\s+/g, " ").trim();
       calls.push({ sql: clean, params });
       if (["begin", "commit", "rollback"].includes(clean)) return result([]);
+      // docs/ai/builder-batch-edit-plan.md 10.2.3: the edit route's lock of the live plan, FOR SHARE.
+      if (clean.startsWith("select name, note,") && clean.endsWith("for share")) return result(source ? [{ ...source, id: params[0] }] : []);
       if (clean.startsWith("delete from plans.plan_")) return result([]);
       if (clean.startsWith("insert into plans.plans")) return result([{ id: "edit-draft" }]);
       if (clean.startsWith("insert into training_load.plan_workspace_ownership")) return result([]);
@@ -55,7 +57,9 @@ if (needsModuleMocksRelaunch()) {
       }
       const match = clean.match(/^insert into plans\.(plan_days|plan_sessions|plan_nodes|plan_items) \(([^)]+)\)/);
       if (match) {
-        const columns = match[2].split(", ");
+        // The insert's column list is not always ", "-separated (the media columns are joined
+        // without spaces since 9e6eb01d), so split on a comma with any whitespace around it.
+        const columns = match[2].split(/\s*,\s*/);
         const rows = [];
         for (let offset = 0; offset < params.length; offset += columns.length) {
           const row = Object.fromEntries(columns.map((column, i) => [column, params[offset + i]]));
@@ -122,6 +126,10 @@ if (needsModuleMocksRelaunch()) {
     let failure;
     await edit({ params: { planId: "source" }, user: { id: "coach" } }, response, (error) => { failure = error; });
     assert.equal(failure, undefined);
+    // 10.2.3: the live plan is locked FOR SHARE as the transaction's first statement, before anything is copied.
+    assert.equal(client.calls[0].sql, "begin");
+    assert.match(client.calls[1].sql, /^select name, note, .* from plans\.plans where id = \$1 and coalesce\(is_active, true\) for share$/);
+    assert.deepEqual(client.calls[1].params, ["source"]);
     assert.equal(client.inserts.plan_days.length, 7);
     assert.deepEqual(client.inserts.plan_sessions.map((row) => row.name), ["monday", "sunday"]);
     assert.deepEqual(client.inserts.plan_sessions.map((row) => row.logical_session_id), ["logical-monday", "logical-sunday"]);

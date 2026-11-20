@@ -41,15 +41,6 @@
       "messagePattern": "^a real platform_admin row must grant the full-visibility bypass regardless of role_hint",
       "since": "2026-10-11",
       "note": "fails on the local development database (shared kind) with plain node --test on origin/main 241765e, 2026-10-11; cause not established (a platform_admin visibility rule, possibly data-dependent); not part of test:pr"
-    },
-    {
-      "file": "builder-tree-batch-routes.test.mjs",
-      "test": "Builder tree batching route integration with isolated database mocks",
-      "failureType": "testCodeFailure",
-      "messagePattern": "^inner suite failed \\(exit 1\\): 14-session content copy drops from 56 sequential queries to four$",
-      "since": "2026-11-20",
-      "owner": "Builder (calendar flow)",
-      "note": "outdated mock, not a product regression (bisected on main: first bad 9e6eb01d, 2026-10-19). The mock rebuilds inserted rows by splitting the column list on ', '; since 9e6eb01d the inserts write 'video_source,video_asset_id,image_source,image_asset_id' without spaces, so the old per-session path counts 28 phantom rows for 14 real ones. Fix: split on /\\s*,\\s*/ in the mock; the file is being changed by #673, so the fix lands there. Hidden until 2026-11-20: the file was classified shared and its wrapper used a flag Node 22 rejects."
     }
   ],
   "knownNoExit": []

@@ -8730,6 +8730,12 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-batch-sync { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 13px; font-weight: 800; white-space: nowrap; }
 .builder-batch-sync input { width: 16px; height: 16px; margin: 0; accent-color: #287e77; }
 .builder-batch-mode small { color: #667085; font-size: 12px; }
+.builder-batch-edit { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 14px; overflow-wrap: anywhere; }
+.builder-batch-edit p { margin: 0; }
+.builder-batch-edit-list { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.builder-batch-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.builder-batch-edit-actions button { min-height: 44px; padding-top: 8px; padding-bottom: 8px; line-height: 1.25; }
+.builder-batch-edit-actions .builder-batch-edit-primary { background: #287e77; border-color: #287e77; color: #fff; }
 .builder-batch-hidden { display: block; color: #667085; font-size: 12px; overflow-wrap: anywhere; }
 .builder-batch-hidden-alone { margin: 0; padding: 8px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; }
 .builder-batch-edit-note { margin: 0; padding: 10px 12px; border: 1px solid #dce6ea; border-radius: 8px; background: #f7fafb; color: #344054; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }

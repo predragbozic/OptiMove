@@ -4425,7 +4425,7 @@ function renderCopyPlanSource() {
 
 async function handleBuilderAction(action) {
   if (state.builder.leaving || state.builder.batchSwitchPending || state.builder.openingDraftId) return;
-  const leaving = ["builder-submit-plan", "builder-cancel", "builder-discard-current-draft", "builder-k3-save-link"].includes(action.dataset.action);
+  const leaving = ["builder-submit-plan", "builder-cancel", "builder-discard-current-draft", "builder-k3-save-link", "builder-batch-edit-all", "builder-batch-edit-only", "builder-batch-edit-others", "builder-batch-edit-done"].includes(action.dataset.action);
   if (leaving) {
     state.builder.leaving = true;
     document.querySelector(".builder-workspace")?.setAttribute("inert", "");
