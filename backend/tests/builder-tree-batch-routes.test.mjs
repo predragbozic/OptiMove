@@ -60,7 +60,9 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
       }
       const match = clean.match(/^insert into plans\.(plan_days|plan_sessions|plan_nodes|plan_items) \(([^)]+)\)/);
       if (match) {
-        const columns = match[2].split(", ");
+        // The insert's column list is not always ", "-separated (the media columns are joined
+        // without spaces since 9e6eb01d), so split on a comma with any whitespace around it.
+        const columns = match[2].split(/\s*,\s*/);
         const rows = [];
         for (let offset = 0; offset < params.length; offset += columns.length) {
           const row = Object.fromEntries(columns.map((column, i) => [column, params[offset + i]]));
