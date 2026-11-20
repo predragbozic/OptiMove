@@ -2029,6 +2029,7 @@ const DENY_REASONS = {
 };
 
 const ASK_REASONS = {
+  pgControlNotTestCluster: "This stops, restarts, kills, promotes or reloads a PostgreSQL cluster that is not this session's test cluster (a data folder in its own temporary folder) — needs your explicit confirmation.",
   stageBroad: "This stages more than the files it names (git add -u/-f/a glob/a pathspec file, git commit -a) — needs your explicit confirmation.",
   pushNotOwnBranch: "Only 'git push [-u] origin <the branch checked out here>' (not main/master) goes without a question; this push is another form — needs your explicit confirmation.",
   fileOpOutsideScratch: "This deletes, moves or changes a path that is not plainly inside this session's own temporary folder (or touches a git work tree, a hard link, or the folder itself) — needs your explicit confirmation.",
@@ -2271,6 +2272,45 @@ export function scratchFileOpNeedsQuestion(segment, variables = new Map()) {
   return false;
 }
 
+// The local TEST database is a cluster whose data folder is in the session's own scratch folder
+// (`initdb -D $S/pg`, `pg_ctl -D $S/pg … start|stop`). Stopping, restarting, killing, promoting
+// or reloading any other cluster asks: nothing on the command line says it is a test one (on
+// another machine the default 16/main may hold a persistent database). pg_ctl without -D uses
+// PGDATA from the environment, which cannot be read here: it asks too. Starting is left alone.
+const PG_CTL_RISKY = new Set(["stop", "restart", "kill", "promote", "reload"]);
+export function pgControlNeedsQuestion(segment, variables = new Map()) {
+  const rawWords = withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment))));
+  const words = rawWords.map(shellWord);
+  const name = path.basename(words[0] ?? "");
+  if (name === "pg_ctlcluster") return words.slice(1).some((w) => ["stop", "restart", "reload"].includes(w));
+  if (name !== "pg_ctl") return false;
+  if (!words.slice(1).some((w) => PG_CTL_RISKY.has(w))) return false;
+  // `pg_ctl kill SIGNAL PID` signals a process by its id, whatever -D says
+  if (words.slice(1).includes("kill")) return true;
+  if (/`|\$\(/.test(segment)) return true;
+  let raw = null;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    if (w === "-D" || w === "--pgdata") { raw = rawWords[i + 1] ?? null; break; }
+    if (/^-D./.test(w)) { raw = rawWords[i].replace(/^(["']?)-D/, "$1"); break; }
+    if (w.startsWith("--pgdata=")) { raw = rawWords[i].replace(/^(["']?)--pgdata=/, "$1"); break; }
+  }
+  if (raw === null) return true;
+  for (const [n, v] of variables) raw = raw.split("${" + n + "}").join(v).split("$" + n).join(v);
+  if (/[$`{}~\\*?[\]]/.test(raw)) return true;
+  const dir = shellWord(raw);
+  if (!path.isAbsolute(dir) || dir.split(/[\\/]/).includes("..")) return true;
+  const real = realPlace(dir);
+  return !real || !insideOwnScratch(real) || insideGitWorkTreeOrGitDir(real);
+}
+
+// `su [-] user -c "…"` and `runuser`: the command they run is a string the hook does not read
+// here (sudo and doas are read through, as a prefix): they always ask.
+export function isSwitchUserWrapper(segment) {
+  const words = commandWords(segment);
+  return ["su", "runuser"].includes(path.basename(words[0] ?? ""));
+}
+
 // git add that stages more than named files, or ignored ones: -u/--update, -f/--force, a
 // pathspec with a glob or magic (":/", ":(top)"), a pathspec file. (`.`, -A, --all are denied.)
 export function gitAddNeedsQuestion(segment) {
@@ -2398,6 +2438,8 @@ export function classifyShellCommand(cmd, cwd) {
     if (gitCommitStagesAll(segment) || gitAddNeedsQuestion(segment)) return { decision: "ask", reason: ASK_REASONS.stageBroad };
     if (gitPushNeedsQuestion(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushNotOwnBranch };
     if (scratchFileOpNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map())) return { decision: "ask", reason: ASK_REASONS.fileOpOutsideScratch };
+    if (pgControlNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map())) return { decision: "ask", reason: ASK_REASONS.pgControlNotTestCluster };
+    if (isSwitchUserWrapper(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isDeployCommand(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };
     if (isMigrationRunner(segment)) return { decision: "ask", reason: ASK_REASONS.migration };
     if (isPersistentSqlWrite(segment)) return { decision: "ask", reason: ASK_REASONS.sqlWrite };

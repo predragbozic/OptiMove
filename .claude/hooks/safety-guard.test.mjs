@@ -1243,7 +1243,9 @@ test("settings.json: the wider allow list is exactly the read and test commands 
   // P3-P5 (owner, in the executor's session, 2026-11-20): these entries let the commands through by
   // name; the hook asks for every form outside the approved scope (tests "P3" and "P5" below).
   const approvedP3P5 = ["Bash(git add:*)", "Bash(git commit:*)", "Bash(git push -u origin:*)", "Bash(git push origin:*)", "Bash(rm:*)", "Bash(rmdir:*)",
-    "Bash(cp:*)", "Bash(mv:*)", "Bash(mkdir:*)", "Bash(ln:*)", "Bash(touch:*)", "Bash(pg_ctlcluster 16 main stop)"];
+    "Bash(cp:*)", "Bash(mv:*)", "Bash(mkdir:*)", "Bash(ln:*)", "Bash(touch:*)"];
+  // (g): stopping a cluster is decided by the hook (P4 test below), never by a settings entry
+  assert.ok(!allow.some((e) => /pg_ctlcluster .* stop/.test(e)), "no stop of a cluster by name");
   for (const entry of approvedP3P5) assert.ok(allow.includes(entry), `missing ${entry}`);
   const offending = allow.filter((entry) => forbidden.test(entry) && !approvedP3P5.includes(entry));
   assert.deepEqual(offending, []);
@@ -1949,5 +1951,34 @@ test("P3: commit and push to the own work branch without a question; everything 
   } finally {
     rmSync(repo, { recursive: true, force: true });
     rmSync(onMaster, { recursive: true, force: true });
+  }
+});
+
+test("P4: stopping a PostgreSQL cluster asks unless it is the session's own test cluster; su/runuser always ask", () => {
+  const repo = makeRepo("sg-p4-", "feature/x");
+  const { base, scratch } = makeScratch();
+  try {
+    mkdirSync(path.join(scratch, "pg"));
+    const pg = path.join(scratch, "pg");
+    const rows = [
+      [`pg_ctl -D ${pg} stop`, ALLOW], [`pg_ctl -D${pg} stop`, ALLOW], [`pg_ctl --pgdata=${pg} restart`, ALLOW], [`S=${scratch}; pg_ctl -D $S/pg stop`, ALLOW],
+      [`/usr/lib/postgresql/16/bin/pg_ctl -D ${pg} -o '-p 5544' start`, ALLOW], [`pg_ctl -D ${pg} status`, ALLOW], ["pg_ctlcluster 16 main start", ALLOW],
+      ["pg_ctl -D /var/lib/postgresql/16/main start", ALLOW], // starting is left alone
+      ["pg_ctl -D /var/lib/postgresql/16/main stop", ASK], ["/usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/16/main restart", ASK],
+      ["pg_ctl stop", ASK], ["pg_ctl -D $X stop", ASK], [`pg_ctl -D ${scratch} stop`, ASK], [`pg_ctl -D ${pg}/../.. stop`, ASK],
+      [`pg_ctl -D ${pg} kill INT 123`, ASK], [`pg_ctl -D ${pg} promote`, ALLOW], [`pg_ctl -D $(echo ${pg}) stop`, ASK],
+      // looks inside the own folder on the line, but bash computes the rest after the hook looked
+      [`pg_ctl -D ${pg}/$X stop`, ASK], [`pg_ctl -D ${pg}$(printf /../..) stop`, ASK], [`pg_ctl -D ${pg}/../pg stop`, ASK],
+      ["pg_ctlcluster 16 main stop", ASK], ["pg_ctlcluster 16 main restart", ASK], ["pg_ctlcluster 16 main reload", ASK],
+      ["sudo -u postgres pg_ctl -D /var/lib/postgresql/16/main stop", ASK], ["sudo -u postgres pg_ctlcluster 16 main stop", ASK],
+      ["su postgres -c 'pg_ctlcluster 16 main stop'", ASK], ["su - postgres", ASK], ["runuser -u postgres -- ls", ASK], ["/bin/su postgres -c id", ASK],
+    ];
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+    // another session's scratch folder is not this session's test cluster
+    assert.equal(verdictIn(`pg_ctl -D ${pg} stop`, repo, "ffffffff-0000-4000-8000-000000000000"), ASK);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
   }
 });

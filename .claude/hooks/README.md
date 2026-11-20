@@ -206,7 +206,8 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
 
 - P3-P5 (owner, in the executor's session, 2026-11-20). `.claude/settings.json` lets `git add`,
   `git commit`, `git push -u origin …`/`git push origin …`, `rm`, `rmdir`, `cp`, `mv`, `mkdir`,
-  `ln`, `touch` and `pg_ctlcluster 16 main stop` through by name; the hook asks for every form
+  `ln` and `touch` through by name (stopping a database is decided by the hook alone, below);
+  the hook asks for every form
   outside the approved scope:
   - `git add -u`/`--update`/`-f`/`--force`, a glob or magic pathspec (`*.js`, `:/`), a pathspec
     file; `git commit -a`/`--all` (and in clusters, `-am`), `git commit --amend` (it rewrites a
@@ -221,7 +222,19 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
     non-recursive `rm`. `cp` reads its sources and `ln -s` writes only a link's text, so those
     may be anywhere; `mv` deletes its sources, so they must be inside. A hard link (`ln` without
     `-s`, `cp -l`) always asks, and so does overwriting a hard-linked or symlinked file. Without a
-    `session_id` in the hook input there is no own folder, and all of these ask. Known limit
+    `session_id` in the hook input there is no own folder, and all of these ask.
+  - the local test database: `pg_ctl … stop|restart|kill|promote|reload` asks unless `-D` (or
+    `--pgdata`) names, literally or by a plain variable of the line, a data folder inside the
+    session's own temporary folder (realpath, not a git work tree); `pg_ctl` without `-D`
+    (PGDATA from the environment) asks; `pg_ctl kill` always asks (it signals a PID, whatever
+    `-D` says); every `pg_ctlcluster … stop|restart|reload` asks. Starting is left alone.
+    `su` and `runuser` always ask (their command is a string not read here); `sudo` is read
+    through. In a cloud container (root, a root-only temporary folder) a cluster cannot live in
+    the temporary folder, so stopping 16/main asks there — a deliberate choice (Rukovodilac,
+    2026-11-20): stopping is rare and the container is temporary. Possible extensions, not
+    built: a marker file `OPTIMOVE_TEST_CLUSTER` in a cluster's data folder (created once, with a
+    question) that makes stopping that cluster silent; and the environment's setup script
+    creating that marker at container start. Known limit
     (TOCTOU): the hook reads the file system before the command runs; a link swapped in by
     another process between that check and the command is not seen.
 

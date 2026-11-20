@@ -87,7 +87,6 @@
       "Bash(/usr/lib/postgresql/16/bin/pg_ctl:*)",
       "Bash(pg_ctlcluster 16 main start)",
       "Bash(pg_ctlcluster 16 main status)",
-      "Bash(pg_ctlcluster 16 main stop)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push -u origin:*)",

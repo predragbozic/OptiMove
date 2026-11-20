@@ -44,8 +44,10 @@ Executor sessions may, without asking each time:
 - commit on their own work branch (files staged by name; `git add -u`, `-f`, globs,
   `git commit -a` and `git commit --amend` still ask) and push it with `git push [-u] origin <the branch checked out
   there>` — never `main`/`master`, never a force push;
-- start and stop the local test database (`pg_ctlcluster 16 main start|stop|status`,
-  `pg_ctl`, `initdb`);
+- start the local test database (`pg_ctlcluster 16 main start|status`, `pg_ctl … start`,
+  `initdb`), and stop a test cluster whose data folder is in their own temporary folder.
+  Stopping, restarting or reloading any other cluster asks — in a cloud container that
+  includes 16/main, because nothing on the command line says it is a test cluster;
 - delete, move and change files in their own temporary folder (the session's scratchpad):
   `rm`, `rmdir`, `cp`, `mv`, `mkdir`, `ln -s`, `touch`, and writing over a file there. Not
   the folder itself, not a git worktree inside it, not a hard link, and not a path the hook
