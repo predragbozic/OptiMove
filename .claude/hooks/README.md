@@ -205,6 +205,24 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
   `.env.example`/`.sample`/`.template`.
 - An allowed read command used in a form that writes, deletes or runs something else (next
   section).
+- **Every git subcommand that is not on the hook's list.** The list (`GIT_POLICY` in
+  `safety-guard.mjs`) names each subcommand git work needs, with the options known for it:
+  the read commands (`status`, `diff`, `log`, `show`, `fetch`, `rev-parse`, `merge-base`,
+  `ls-remote`, `ls-tree`, `merge-tree`, `rev-list`, `shortlog`, `ls-files`, `blame`, `grep`,
+  `describe`, `cat-file`, `show-ref`, `for-each-ref`, `check-ignore`, `name-rev`, `version`),
+  the read forms of `symbolic-ref`, `reflog`, `tag`, `remote` and `config`, and the working
+  commands (`add`, `commit`, `push`, `pull`, `merge`, `rebase`, `branch`, `checkout`, `switch`,
+  `restore`, `reset`, `rm`, `clean`, `stash`, `worktree`, `init`, `clone`), which the rules
+  above judge further. Anything else asks: plumbing (`checkout-index`, `read-tree`,
+  `update-ref`, `update-index`, `reflog expire/delete`, `gc`, `prune`, `filter-branch`,
+  `replace`), a subcommand git adds later, a forced or renaming branch (`branch -f`, `-M`,
+  `-C`), `checkout -B`, `switch -C`, `rm -f`, a push with a refspec (`a:b`, `+b`), a writing
+  `config`/`tag`/`remote`, and any global option other than `-C`, `-c`, `--config-env`,
+  `--no-pager`, `-P`, `--no-optional-locks`, `--literal-pathspecs`, `--no-replace-objects`.
+  Each loss above was proven with real git in the tests. Measured cost: none of the 1,252
+  replayed Bash calls that ran silently before asks now.
+- `git restore --pathspec-from-file=<file>` (and every prefix of the option, `--pathspec-f=`)
+  names its targets in a file: it is judged like `git restore <path>`.
 
 ### How the hook reads a command line
 
@@ -278,7 +296,12 @@ while everything before is a plain assignment), with no `||`, pipe or background
 assignment comes before the redirect; and the name is not set or mentioned in any other way
 before it (`read S`, `for S in`, `S+=`, `${S:=x}`, `unset S`, `S=$(...)`, `S=x cmd`, a second
 assignment, `eval`, `source`, `declare`, a loop, a function ...). Otherwise the variable is
-unknown and the redirect asks. **An existing
+unknown and the redirect asks. A setter word (`read`, `printf`, `declare`, `mapfile`, `let`,
+...) at the command position of ANY part, after peeling `!`, `time [-p]`, `command`,
+`builtin`, `nohup`, `exec`, `env [options] [NAME=value]...` and leading `NAME=value` (again and
+again), or any indirection (`${!x}`, an assignment inside `$(( ))` or `(( ))`, which also covers
+`$(( $T = 5 ))`), makes EVERY variable of the line unknown: `T=S; time read $T` sets `S`
+without naming it, as the tests prove with real bash. **An existing
 file always asks**, whatever it is: rewriting or appending to it may change something that runs
 later — a script, a `package.json` (npm run), a SQL file (psql -f), a patch (git apply), a list
 (xargs), a `postgresql.conf` (pg_ctl start runs its commands). Measured on the replay: 29 of
