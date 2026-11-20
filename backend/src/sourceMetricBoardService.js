@@ -421,6 +421,14 @@ function matchingFieldIds(world, variableId, columns) {
   return [...(world.matches ?? new Map()).entries()]
     .filter(([k, m]) => m.ok && k.endsWith(`:${variableId}`) && placeable.has(k.split(":")[0])).map(([k]) => k.split(":")[0]);
 }
+// v80 step C0: the placeable columns whose setting in this session is the variable's condition and that wait only for the
+// owner's confirmation of GPEXE's events setting (event_setting_not_confirmed), so the board can say why no column fills it.
+function waitingFieldIds(world, variableId, columns) {
+  const placeable = new Set(columns.filter((c) => c.readable && c.reason === null).map((c) => c.field.id));
+  return [...(world.matches ?? new Map()).entries()]
+    .filter(([k, m]) => !m.ok && m.code === "event_setting_not_confirmed" && k.endsWith(`:${variableId}`) && placeable.has(k.split(":")[0]))
+    .map(([k]) => k.split(":")[0]);
+}
 // A refusal of a match names both settings in plain words (the board's sentence; never an id).
 function matchRefusalExtra(world, m, variable) {
   if (m.code !== "team_setting_mismatch") return {};
@@ -648,6 +656,8 @@ function boardOf(world, pairIndex) {
         condition: v.has_condition === true ? boardCondition(v.condition_raw) : null,
         // v80: the columns whose team setting in this session is the variable's condition.
         matchingFieldIds: v.has_condition === true ? matchingFieldIds(world, v.id, columns) : [],
+        // v80 step C0: the columns that would match once the owner confirms GPEXE's events setting.
+        waitingFieldIds: v.has_condition === true ? waitingFieldIds(world, v.id, columns) : [],
         filledByFieldIds: v.owner_scope === "system" ? fedBySystem.get(v.id) ?? [] : [],
       })),
       on: world.open.map((o) => ({

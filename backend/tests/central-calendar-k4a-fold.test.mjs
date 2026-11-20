@@ -274,6 +274,8 @@ test("7. the coach's card is unchanged: the coach's link read is the old stateme
     "eventKind", "eventTypeColorKey", "eventTypeIconKey", "eventTypeId", "eventTypeLabel", "expects", "gaps", "key", "kind", "links",
     "location", "notes", "place", "projected", "results", "revision", "rpe", "scheduleFold", "slot", "span", "startTime", "startsAt",
     "status", "teamIds", "timezone", "title", "canManage",
+    // K5-2 (docs/ai/central-calendar-k5-12-contract.md 2.2): the one key added since, on purpose.
+    "holdsImport",
   ].sort());
   assert.deepEqual([...card.links.logicalSessionIds].sort(), [a.logicalSessionId, b.logicalSessionId].sort());
   assert.equal(card.athleteCount, 2);

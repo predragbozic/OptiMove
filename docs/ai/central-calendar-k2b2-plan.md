@@ -1191,9 +1191,10 @@ Branch `claude/central-calendar-backend-followups` from `origin/main` `b08cfb7f`
      - kinds mode shows a panel only for a card it shows: an event created while only *RPE requests* is chosen gets
        its "created" line, but no open panel (its card is filtered out). Pinned by FE-D16h
        (`central-calendar-events.actions`): a fix changes that test on purpose;
-     - with an event type chosen next to *RPE requests* the read stays unfiltered, so a request folded into an event
-       of another type shows nowhere. A fix is a `kinds=external,event` read with the type filter in the browser, or a
-       server-side event-type filter; not part of FE-D16. Pinned by FE-D16i (`central-calendar.actions`): a fix changes
-       that test on purpose.
+     - ~~with an event type chosen next to *RPE requests* the read stays unfiltered, so a request folded into an event
+       of another type shows nowhere.~~ **Closed by K5-2** (`docs/ai/central-calendar-k5-12-contract.md` 2.5, Q3):
+       *Show only* takes one kind at a time and event types are a sub-filter of *Events*, so that combination can no
+       longer be chosen. FE-D16i (`central-calendar.actions`) changed on purpose: choosing *RPE requests* clears the
+       event types and reads `kinds=external`.
 
 Mutations: one per item, each killed (the executor's report has the details).

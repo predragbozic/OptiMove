@@ -40,8 +40,9 @@ call.
 - `/weekly` scopes by **current active** membership (`trainingLoad.js:1012-1033`).
 
 So an athlete who has left the team or club since the event (or was moved) stays on the card, but `/weekly` no longer
-returns her. Whether a club workspace's scope (an active `membership_type='club'` row, `:1017`) can also miss a
-team-only athlete of a club event is **not verified**; P3 checks it.
+returns her. A club workspace's scope (an active `membership_type='club'` row, `:1017`) and a club target (a club
+membership on the day) both need a club membership, so a team-only athlete of a club event is on neither the card nor
+`/weekly`: the two rules agree there (P3c, as built, section 9).
 
 The difference fails closed: such an athlete keeps her state, with no value (section 3). The other bases are covered:
 - the platform workspace scopes nothing (`:1014`);
@@ -322,3 +323,59 @@ which are now corrected.
   - the platform materialisation's load;
   - the workspace-switch race;
   - the manager-only rule is a UI rule.
+
+## 9. As built (the build pull request, branch `claude/central-calendar-event-panel`)
+
+The build follows sections 1–5. Where it differs from the words above, or fills in what they left open, it is recorded
+here. Each point comes from the build's internal reviews (`code-reviewer`, `security-reviewer`, `mobile-qa`,
+`ux-design-reviewer`) and is for the stream manager to accept with the pull request.
+
+**Backend (§1.3).** The two fields are on the live and orphaned planned rows only. External rows gain nothing (B2,
+with a real external row). The stream manager's build conditions are each tested:
+- **Byte-for-byte:** `central-calendar-event-panel-weekly-snapshot.test.mjs` pins the coach's and the athlete's whole
+  `/weekly` answer, normalised, with the two fields taken out. The same file passes on `main` before the package and
+  on the head.
+- **Membership:** P3a–P3c run through the real routes. **P3c's result:** a team-only athlete of a club event is on
+  neither the card nor the club workspace's `/weekly` (`{ onCard: false, inWeekly: false }`), so §1.2's open sentence
+  is settled.
+- **The comment** at the route's head no longer says "no materialization".
+
+**When the panel reads (§2, Q7).** A manager's panel reads only when the card has athletes and something that can carry
+a value: a linked session, or a folded request.
+- With no athletes there is no read. An empty `athleteIds` would mean no filter to `/weekly`, so the whole workspace.
+- With nothing linked or folded there is no read and no "answers" line. The summary, if anybody is counted, then
+  comes from the card's states alone, with no average.
+- The read goes in chunks of 150 athletes (`CC_ANSWERS_CHUNK`), so a large club event's request line stays below the
+  server's header limit. The chunks' rows are put together.
+
+**The words (§3, §4.1), from the UX review.**
+- Several entries read "Training: RPE 7 · 60 min; After: RPE 4 · 15 min". "·" stays inside an entry; ";" separates
+  entries; a request's label is "Request".
+- The partial average reads "average RPE 6.8 (from 11 answers)". "of 11 answers" could be read as "6.8 out of 11".
+- The note is shown when `n > 0` and a counted athlete has no row read at all, or is answered on the card with no
+  value read. That covers a partly answered former member too (P4f).
+- The summary line has `role="status"` in every state and a spoken label ("Answered 2 of 12, average RPE 6.5"). It
+  breaks only at "·".
+
+**A request's states (§3)** use the card's own sets (`calendarQuery.js` `CLOSED_ASSIGNMENT_STATUSES`):
+- `cancelled` or `excused`: not asked;
+- `missed`, or a window that has passed unrated: missed;
+- otherwise: missing (P4e).
+
+**"Weekly plan ›" (§4.2)** is on a manager's event rows only, as is the label with the values. A reader's panel, and
+every panel that is not a manager's event, stays exactly today's (§2, Q6; P1, P8). The UX review recommends the arrow
+on every viewer's row. That would be a change to §2 for the stream manager to decide, so it is not built.
+
+**Entries on the panel's day only.** Planned and request rows are taken from the panel's own day; an event day's links
+are built per day (`applyEventFold`).
+
+**e2e.** The changed answer is an RPE request's, changed through the athlete's real `/rpe/change` route (v83): a
+planned answer is an immutable snapshot and cannot change. The "Changed HH:MM" mark itself is covered by the unit test
+P5 only, since the e2e world asks no event question.
+
+**Recorded, not built:**
+- the state words "RPE missing" / "RPE missed" differ by one letter (UX, LOW; a follow-up for the card's words);
+- the card's status sentence ("Planned: nothing is due yet.") beside a summary that already counts answers, and the
+  Athletes block's place at the bottom of the panel (UX, outside this package; with Q2);
+- the static row's note inside `.cc-athlete-side` (mobile, LOW; existing markup, unchanged);
+- loading values for the platform workspace materialises every active schedule (security, LOW; §1.3, accepted).
