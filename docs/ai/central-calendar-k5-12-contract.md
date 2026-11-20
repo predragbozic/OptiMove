@@ -1,6 +1,7 @@
 # Central calendar — K5-1 and K5-2: UI contract
 
-Status: **Decided by the stream manager** (2026-11-20): Q1–Q10 as recommended, with his notes in section 5.
+Status: **Decided by the stream manager** (2026-11-20): Q1–Q10 as recommended, with his notes in section 5. Q11 was
+added after the code and security reviews and is open.
 Documents only: no code, no route, no migration.
 Written against `main` `ec467638`. Sources: `docs/ai/central-calendar-k5-plan.md` (H1–H5, K5-1, K5-2, section 3),
 the approved mockups `docs/design/calendar-k5/` (README, E1–E12), and the manager's condition for the one backend
@@ -35,7 +36,7 @@ Every file:line below was read at `ec467638`. Where something was not verified, 
   - several give *Open the day in Training Load*;
   - both are `central-calendar-open-training-load`, view :1099–1103.
 - **The athletes list** (`renderPanelAthletesHtml` :823). Each athlete row opens that athlete's Weekly plan on the
-  day (`openWeeklyPlanForAthleteOnDate`, `central-calendar-actions.js:2095`).
+  day (`openWeeklyPlanForAthleteOnDate`, `central-calendar-actions.js:2101`).
 - **An event:** Edit, Cancel, Enter details, links and questions, for a manager.
 - **Test and RPE cards** have no way into their module.
 
@@ -48,7 +49,7 @@ trailing arrow (Q5).
 |---|---|---|---|---|---|---|
 | Activity | *Open in Training Load →* (exists) | `openTrainingLoadFromCalendar({ activityId, date })`, `app.js:2518`; dispatches `training-load-results-view-activity-in-calendar` (`training-load-actions.js:2491`) | `links.activityIds[0]`, `date` | Training Load's calendar on that week and day with the activity open | **Yes**, `pushAppHistory()` at `app.js:2524` | Keep it; only the wording and placement change (mockup 01). |
 | Activity with `attendance.needsState > 0` | *Roster · N need a state →* (second button) | The same opener. The Roster tab already opens by itself when someone needs a state and the coach picked no tab (`maybeOpenRoster`, `activity-roster-actions.js:43`). | as above | The activity on its Roster tab | Yes | A caller cannot ask for the Roster tab. Add an optional `tab: "roster"` to `openTrainingLoadFromCalendar`; after the dispatch it sets `activityDetailTab = "roster"` and `roster.userPickedTab = true`. This is the same pair of assignments the GPEXE review hand-off already makes (`training-load-actions.js:2485`). |
-| RPE schedule (`kind: "external"`) | *Open in Training Load →* | `openExternalScheduleDetail(scheduleId, render)`, `training-load-actions.js:2631` (not exported), reached by action `training-load-open-external-schedule` (:2387) | `links.externalScheduleId` | Training Load › Schedule with that schedule's detail (`renderExternalScheduleDetailHtml`) | **No** | New `openTrainingLoadScheduleFromCalendar({ scheduleId, date })` in `app.js`, built like `openTrainingLoadFromCalendar`: `confirmLeaveTrainingLoad`, `pushAppHistory()`, the tab, `setTrainingLoadSection("schedule")`, the Schedule week to `weekMondayIso(date)`, then dispatch `{ action: "training-load-open-external-schedule", scheduleId }` through `handleTrainingLoadAction`. The detail is per schedule, not per day or occurrence; the hint names the schedule. |
+| RPE schedule (`kind: "external"`) | *Open in Training Load →* | `openExternalScheduleDetail(scheduleId, render)`, `training-load-actions.js:2631` (not exported), reached by action `training-load-open-external-schedule` (:2388) | `links.externalScheduleId` | Training Load › Schedule with that schedule's detail (`renderExternalScheduleDetailHtml`) | **No** | New `openTrainingLoadScheduleFromCalendar({ scheduleId, date })` in `app.js`, built like `openTrainingLoadFromCalendar`: `confirmLeaveTrainingLoad`, `pushAppHistory()`, the tab, `setTrainingLoadSection("schedule")`, the Schedule week to `weekMondayIso(date)`, then dispatch `{ action: "training-load-open-external-schedule", scheduleId }` through `handleTrainingLoadAction`. The detail is per schedule, not per day or occurrence; the hint names the schedule. |
 | Tests schedule (`kind: "test"`) | *Open in Tests →* | `openWeeklyTodaySession(scheduleId, date, render)`, `tests-actions.js:636` (not exported), action `tests-weekly-open-today-session`. Tests' week is `state.tests.weekly.today.weekStart/selectedDate` (`loadTestsWeekly`, `tests-data.js:209`). The app's openers `openTestsToday` / `openTestsResults` (`app.js:2893`, `:2907`) open only the section. | `links.testScheduleId`, `date` | Tests › Today on that week and day, with that schedule's day group (athletes, statuses, reminder) | **No**: neither opener calls `pushAppHistory()` | New `openTestsDayFromCalendar({ scheduleId, date })` in `app.js`: `pushAppHistory()`, `activeTab = "tests"`, `section = "today"`, `weekly.today.weekStart = weekMondayIso(date)` and `selectedDate = date`, `await loadTests(...)`, then dispatch the existing action `tests-weekly-open-today-session`. No occurrence id is needed. A coach does not type results here: in this module results come from the athletes' own forms, so the hint reads "Opens Tests on Tuesday, to see who has answered", **not** the plan's "to enter results" (Q4). |
 | Planned group (Builder training) | *Open in Builder →* | `builder-edit-plan` (`builder-actions.js:220`) → `POST /api/builder/plans/:planId/edit` (`backend/src/routes/builder.js:980`) | `links.planIds` (one per athlete's plan), `date`, `slot` | The whole plan in the Builder. It selects no week, day or session. | **No** | **Not in K5-1 (Q1).** Each click creates or reuses the coach's server-side edit draft of one athlete's plan. A group card holds many plans, and the card does not say whether a plan is a weekly plan or a specific program (`planType` is not in `publicCard`). The panel keeps today's athlete rows (each opens that athlete's Weekly plan on the day). |
 | Event | Its folded items' buttons in the plan's order: Builder (left out, Q1), RPE, Tests, then GPS / activities | The rows above, with the ids from the event card | Manager: `links.externalScheduleId`, `links.testScheduleId`, `links.activityIds`. Reader: `links.activityIds` only (`publicCard` :1438) | — | — | A reader of an event sees only the activity buttons: the server sends no schedule id to a reader, by design. One button per item (E2), under "In this event". |
@@ -84,12 +85,17 @@ push.
 
 ### 2.2 `holdsImport` (the one backend field)
 
-- **Definition.** `holdsImport` is `true` when at least one activity folded into the event card has an imported
-  origin. Both ways an activity folds count:
-  - linked to the event directly, `fold.activities[]` (`calendarQuery.js:1196`), which already carries `imported`;
-  - through a Builder session linked to the event, `fold.activityIds` (:1179), which today keeps **only the id**.
-    The fold must record `imported` there too; otherwise an import that came in through a linked session gets no
-    GPS mark.
+- **Definition.** `holdsImport` is `true` when any id in the event card's own `links.activityIds` is an activity
+  with an imported origin, read in the viewer's scoped activity read (`readActivityRows`, `calendarQuery.js:1165`).
+- **The three ways an id enters `links.activityIds`.** All three count:
+  - linked to the event directly, `fold.activities[]` (`:1196`), which already carries `imported`;
+  - through a Builder session linked to the event, `fold.activityIds` (`:1179`), which today keeps **only the id**;
+  - through the event's referenced RPE schedule when its card folds under the event (`:1297`, copying the RPE card's
+    ids, which come from `external_assignment_ids` at `:1186`).
+- **Recommended implementation.** One set of the imported ids from that read (`IMPORTED_ORIGINS.has(row.origin)`),
+  and at the end of the event's fold `holdsImport = links.activityIds.some((id) => importedIds.has(id))`. That counts
+  every path, today's and any later one, without recording `imported` per path. It never uses an id that the
+  viewer's read did not return.
 - **Not an import:** an event that only *waits* for device data (`expects` has `device_data`, nothing linked). It
   answers `false`, and its status line says what is missing, as today.
 - **Output** (`publicCard`, the event branch :1410):
@@ -99,16 +105,27 @@ push.
 
   It must not be conditional: the k2b2 questions suite asserts that folding adds no key to an event card
   (`central-calendar-k2b2-questions.test.mjs:1921`).
-- **What it reveals.** A reader already receives the folded activities' ids (`links.activityIds`) and may open
-  them. The boolean says only that one of them is an import, which the reader sees by opening it.
+- **What it reveals.** A reader already receives the folded activities' ids (`links.activityIds`, kept for a reader
+  at `:1438`) and may open them. The boolean says only that one of them is an import, which the reader sees by
+  opening it. It adds no difference between "missing" and "outside your scope" (ADR-006): such an activity never
+  enters the read, and the key is always present. The implementer confirms that the activity route's read scope
+  (`resolveActivityReadContext`, `routes/trainingActivity.js:225`) matches the calendar's, which the security review
+  assumed but did not read line by line.
 - **Tests (backend, disposable, the calendar fixture):**
   1. The manager's and the reader's event card each have **exactly** today's keys plus `holdsImport`, key by key.
      This is a new full allowlist of each card, not "contains", so any later key needs a deliberate change.
   2. The athlete's reduced card keeps its allowlist unchanged: the existing tests at `central-calendar-k2b-1d2.test.mjs:85`
      and `central-calendar-k2b-event-details.test.mjs:481` stay green and are not edited.
-  3. The value: `true` for an imported activity linked directly, `true` through a linked Builder session, `false`
-     for a coach-made activity linked, `false` for `expects: ["device_data"]` with nothing linked, `false` with no
-     activity.
+  3. The value:
+     - `true` for an imported activity linked directly;
+     - `true` through a linked Builder session;
+     - `true` through a folded RPE schedule: an imported activity whose participant carries the schedule's
+       `external_assignment_id`, with `scheduleFold.external === "folded"`;
+     - `false` for a coach-made activity linked;
+     - `false` for `expects: ["device_data"]` with nothing linked;
+     - `false` with no activity;
+     - `false` for a cancelled event (no fold);
+     - `false` for an imported activity outside the viewer's scope, which the read never returns.
   4. Non-event cards have no `holdsImport` key.
   5. The **whole** `--project backend --kind disposable` run on the head against a clean `origin/main`, compared
      file by file (the manager's condition).
@@ -208,7 +225,15 @@ The cache keys, the stale-answer rules and the panel-closing rules of FE-D16 (FE
 **Counts.** The counts come from the unfiltered answer over the displayed days (`centralCalendarChipCounts`):
 - **GPS imports** counts imported activities plus events with `holdsImport`;
 - **Other activities** counts the rest of the activities;
-- a kind read through `kinds` counts what it shows, as FE-D16 does.
+- a kind read through `kinds` counts what it shows, as FE-D16 does (the override after the kinds read,
+  `central-calendar-view.js:1186–1188`). Under Other activities the `kinds=activity` answer also holds imports, now
+  unfolded from their events. So the count written to `other_activity` is that answer's `kind === "activity"` items
+  that are **not** imported. The server kind `activity` is no longer a pill of its own.
+
+**Known limit (Q11): an import folded into a planned card or a lone RPE card.** Such an import has no card of its
+own, and those cards carry no `holdsImport`. So *Show only · GPS imports* does not show it, and the pill's count leaves
+it out. Its panel still opens it (*Open in Training Load*). A test pins this behaviour, so a later fix changes it on
+purpose.
 
 **Phone.**
 - The row scrolls sideways, and the chosen pill is scrolled into view after every paint
@@ -222,7 +247,7 @@ The cache keys, the stale-answer rules and the panel-closing rules of FE-D16 (FE
 
 | Viewer | Calendar | K5-1 buttons | GPS icon / H4 marks / chips / *Show only* |
 |---|---|---|---|
-| Club admin (club workspace), private coach | the central calendar | All of section 1.2 for the cards it reads. On an event it manages, the RPE and Tests rows; on a reader's event, only the activities. | Yes |
+| Club admin (club workspace), private coach | the central calendar | All of section 1.2 for the cards it reads. On an event it manages, the RPE and Tests rows; on a reader's event, only the activities. A private coach manages only its own events, and only as an independent coach (`isIndependentCoach`, `calendarEventAccess.js`); `canManage` on the card already says which. | Yes |
 | Team coach (team workspace) | the central calendar | The same. RPE and Tests rows only where the card carries the schedule id (manager), as above. | Yes |
 | Platform admin | the central calendar in the workspace it is in | as that workspace's role | Yes |
 | Athlete | the K4a athlete Calendar (`athlete-calendar-*.js`), **not** the central calendar | none of these (K4a has its own buttons) | **No**: her event card is the reduced one (no `expects`, `scheduleFold` or `holdsImport`), and K4a draws no marks, chips or filter |
@@ -242,7 +267,10 @@ FE-D16 pattern.
 - Chips: which items become a chip, and that a folded item is never one; the chip's text per kind; cards before
   chips in the list layouts; the hour cell in the time grid; the month's icon.
 - *Show only*: each pill's matching (the table in 2.5); the radio semantics (one at a time, a second tap switches,
-  *All* resets); event types setting Events and a kind clearing them; the green line; the counts.
+  *All* resets); event types setting Events and a kind clearing them; the green line; the counts. Two more:
+  - the Other activities count leaves out the imports of the `kinds=activity` answer;
+  - the Q11 pin: a planned card whose `links.activityIds` holds an import is hidden under GPS imports and not
+    counted.
 - FE-D16 with the new kinds: `gps` gives no `kinds` read, `other_activity` gives `kinds=activity`, and the existing
   FE-D16 to FE-D16i stay green, except FE-D16i, which changes on purpose (Q3).
 - K5-1: each button's presence per card and per viewer (manager or reader event); a click calls the right opener with
@@ -275,7 +303,9 @@ a lone RPE request and a lone test:
 - `other_activity` keeping imports;
 - an opener's `pushAppHistory()` moved after a guard or removed;
 - the Roster option ignored;
-- the scroll-into-view of the chosen pill removed (the e2e test at 360 px).
+- the scroll-into-view of the chosen pill removed (the e2e test at 360 px);
+- the folded-RPE path left out of `holdsImport` (the backend value test);
+- the Other activities count including imports (its unit test).
 
 ## 5. Questions, recommendations and decisions
 
@@ -329,6 +359,19 @@ The stream manager decided all ten as recommended (2026-11-20). His notes are un
     1. **Backend `holdsImport`**, covering both fold paths. It carries the full key-by-key allowlist of the manager's
        and the reader's cards and the whole disposable run against main.
     2. **The frontend.**
+  - **After the reviews:** the code and security reviews found a third path, an import that comes in through the
+    event's folded RPE schedule (`calendarQuery.js:1297`). Section 2.2 now covers all three, through one set of
+    imported ids checked against the event's `links.activityIds`. The backend PR covers every path.
+- **Q11. GPS imports and an import folded into a planned card or a lone RPE card** (new after the reviews; not yet
+  decided).
+  - Such an import has no card of its own, and the card it folds into carries no `holdsImport` (Q8). So it is not
+    found under *Show only · GPS imports* (section 2.5, "Known limit").
+  - **Recommendation:** accept this as a known limit for K5-2, pinned by a test. The import is still opened from its
+    card's panel.
+  - If the pilot finds GPS sessions missing there, the same set of imported ids gives a `holdsImport` on planned and
+    RPE cards too, with their own allowlist change. That is the stream manager's call, because it widens the "one
+    boolean on the event card" condition.
+  - The stream manager tells the owner, as for Q1, because E11 says many GPS sessions are folded into a training.
 
 ## 6. Not in this contract
 
