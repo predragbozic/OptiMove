@@ -479,7 +479,7 @@ The routes (grep of every write to `plans.plan_sessions` / `plan_days` in `backe
 | Route | Changes | Now |
 |---|---|---|
 | `POST /plans/:id/submit` of an edit draft (the Save) | removes / moves (12.2) | checked (12.2) |
-| `PATCH /sessions/:id` with a new `amPm` or `bta` | moves | checked; same value or no key: as before |
+| `PATCH /sessions/:id` with a new `amPm` or `bta` | moves | checked; same value or no key: as before. On a published plan every PATCH of name / time / half / phase runs under the plan lock and the session's row lock, and the fields it does not name come from the locked row (a rename can never write back a half-day a concurrent move changed - test 10b) |
 | `PATCH /sessions/:id` name / time / switches | content | unchanged |
 | `DELETE /sessions/:id` | removes | checked (one transaction under the plan lock) |
 | `POST /days/:dayId/copy-into/:targetDayId`, `POST /blocks/:blockId/copy-into/:targetDayId` with `confirmOverwrite` | removes the target day's sessions | checked, after `lockCopyTargetPlan` |

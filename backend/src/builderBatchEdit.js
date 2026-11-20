@@ -25,6 +25,8 @@ export const batchEditTestHooks = {
   afterLocks: null,
   // Task 5: runs after the source session rows are locked and their facts read, before any answer or write.
   afterSourceLocks: null,
+  // Task 5: runs in the session PATCH right after its unlocked rights read.
+  afterSessionRead: null,
 };
 
 const ITEM_CONTENT_FIELDS = [

@@ -482,6 +482,37 @@ test("10. the session routes on a published plan: a session with results or a li
   assert.equal(byName(await treeOf(plans[1]), "Wednesday"), undefined);
 });
 
+test("10b. a rename that read the session before a concurrent move (and a result after it) never moves the session back", async () => {
+  const s = await squad("stale");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const wed = byName(await treeOf(a), "Wednesday");
+  assert.notEqual(wed.am_pm, "PM");
+  const g = gate();
+  let held = false;
+  batchHooks.afterSessionRead = async () => {
+    if (held) return;
+    held = true;
+    g.reached();
+    await g.released;
+  };
+  try {
+    // B: a rename, held right after its unlocked read (it saw the old half-day).
+    const renaming = api(`/api/builder/sessions/${wed.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: "Wednesday renamed" } });
+    await g.arrived;
+    // A: the session moves (no result yet), then the athlete rates it.
+    ok(await api(`/api/builder/sessions/${wed.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }));
+    await rpeRow(s.athletes[0], wed.id);
+    g.release();
+    ok(await renaming);
+  } finally {
+    batchHooks.afterSessionRead = null;
+    g.release();
+  }
+  const now = byName(await treeOf(a), "Wednesday renamed");
+  assert.equal(now.am_pm, "PM", "the rename kept the half-day the session has now");
+});
+
 test("13. pasting a day over a published plan's day (same plan and another plan, confirmOverwrite): refused when a session there has results; a day without one is pasted as before", async () => {
   const s = await squad("dayoverwrite");
   const plans = await publishedBatch(s);

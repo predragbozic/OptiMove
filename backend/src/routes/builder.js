@@ -1573,22 +1573,34 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
     const touchesTrainingLoadFields = req.body?.trackingEnabled !== undefined || req.body?.rpeEnabled !== undefined;
 
     if (!touchesTrainingLoadFields) {
-      // Fast, unlocked path - name/time/amPm/bta only, exactly as before;
-      // these are freely editable on a live plan and never race against
-      // Submit/applyEditDraft, so no transaction/lock is needed here.
-      const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : session.session_time;
-      const name = req.body?.name !== undefined ? nullableText(req.body.name) : session.name;
-      const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
-      const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
-      // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a new half-day or
-      // phase moves the session to another slot. On a published plan a
-      // session with results or a live event link is never moved; a rename
-      // or a time change stays free.
-      const moves = (amPm ?? null) !== (session.am_pm ?? null) || (bta ?? null) !== (session.bta ?? null);
-      if (moves && !isDraftPlanRow(session.plan)) {
+      if (batchEditTestHooks.afterSessionRead) await batchEditTestHooks.afterSessionRead({ sessionId: session.id });
+      if (!isDraftPlanRow(session.plan)) {
+        // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a published
+        // plan's session. Under the plan lock and the session's own row lock,
+        // the fields this request does not name come from the row as it is
+        // NOW (never the unlocked read above, which a concurrent move could
+        // have outdated - code and db re-reviews); a new half-day or phase
+        // moves the session, and one with results or a live event link is
+        // never moved. A rename or a time change stays free.
         client = await pool.connect();
         await client.query("begin");
-        const locked = await directSessionsLocked(client, session.plan.id, (s) => String(s.id) === String(session.id), "moved");
+        await client.query("select id from plans.plans where id = $1 for no key update", [session.plan.id]);
+        const fresh = (await client.query(
+          "select id, session_time, name, am_pm, bta from plans.plan_sessions where id = $1 for update",
+          [session.id],
+        )).rows[0];
+        if (!fresh) {
+          await client.query("rollback");
+          client.release();
+          client = null;
+          return res.status(404).json({ error: "Program session not found" });
+        }
+        const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : fresh.session_time;
+        const name = req.body?.name !== undefined ? nullableText(req.body.name) : fresh.name;
+        const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : fresh.am_pm;
+        const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : fresh.bta;
+        const moves = (amPm ?? null) !== (fresh.am_pm ?? null) || (bta ?? null) !== (fresh.bta ?? null);
+        const locked = moves ? await directSessionsLocked(client, session.plan.id, (s) => String(s.id) === String(session.id), "moved") : null;
         if (locked) {
           await client.query("rollback");
           client.release();
@@ -1604,6 +1616,11 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
         client = null;
         return await respondWithDraft(req, res, req.user, session.plan);
       }
+      // A draft: the fast, unlocked path, exactly as before.
+      const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : session.session_time;
+      const name = req.body?.name !== undefined ? nullableText(req.body.name) : session.name;
+      const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
+      const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
       await query(
         "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
         [session.id, sessionTime, name, amPm, bta],
