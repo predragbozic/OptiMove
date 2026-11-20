@@ -393,7 +393,18 @@ export function sourceSessionChanges(before, after) {
 // logical_session_id_at_link is its own (an orphaned link names another
 // session and blocks nothing - the link identity guard's rule).
 export async function blockedSourceSessions(client, before, after) {
-  const changes = sourceSessionChanges(before, after);
+  return blockedSessions(client, before, sourceSessionChanges(before, after));
+}
+
+// Task 5 (12.6): deleting a published weekly plan removes every session; the
+// same check over all of them.
+export async function blockedPlanSessions(client, plan) {
+  const changes = plan.sessions.map((session) => ({ session, change: "removed" }))
+    .sort((x, y) => (String(x.session.id) < String(y.session.id) ? -1 : 1));
+  return blockedSessions(client, plan, changes);
+}
+
+async function blockedSessions(client, before, changes) {
   if (!changes.length) return [];
   await client.query(
     "select id from plans.plan_sessions where id = any($1::uuid[]) order by id for update",
@@ -409,11 +420,16 @@ export async function blockedSourceSessions(client, before, after) {
     sourceSlotKey({ day_date: l.day, am_pm: l.am_pm, bta: l.bta, session_order: l.session_order }),
     String(l.logical_session_id_at_link),
   ].join("#")));
+  // A live link that names no session (logical_session_id_at_link null: the
+  // column is nullable, information only in v49) blocks its slot's session -
+  // fail-closed, as step 2's slot check does (db review, MEDIUM).
+  const unnamed = new Set(links.filter((l) => l.logical_session_id_at_link == null)
+    .map((l) => sourceSlotKey({ day_date: l.day, am_pm: l.am_pm, bta: l.bta, session_order: l.session_order })));
   const blocked = [];
   for (const { session, change } of changes) {
     const reasons = [];
     if (results.has(String(session.id))) reasons.push("has_results");
-    if (linked.has([sourceSlotKey(session), String(session.logical_session_id)].join("#"))) reasons.push("linked_to_event");
+    if (linked.has([sourceSlotKey(session), String(session.logical_session_id)].join("#")) || unnamed.has(sourceSlotKey(session))) reasons.push("linked_to_event");
     if (reasons.length) {
       blocked.push({ name: session.name || "", day: dateString(session.day_date), amPm: session.am_pm || "", bta: session.bta || "", change, reasons });
     }

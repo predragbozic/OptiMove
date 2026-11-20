@@ -10,6 +10,7 @@ import { normalizeExerciseView, saveExerciseViewPreference } from "./exercise-vi
 import { planItemText } from "./exercise-text.js";
 import { k3AdoptDraft, k3DefaultAmPm, k3SetTimeMessage, k3TimeRefusal } from "./central-calendar-k3-actions.js";
 import { emptyBlockPicker, emptyBuilderState, state } from "./state.js";
+import { focusBuilderSessionsLocked, planSessionsLockedText } from "./builder-sessions-locked.js";
 import { localDateIso, weekMondayIso } from "./utils.js";
 
 // feature/mobile-builder-section-workflow: replaces the old post-add
@@ -1471,6 +1472,7 @@ export async function handleBuilderDraftAction(action, handlers) {
   if (type === "builder-sessions-locked-close") {
     state.builder.sessionsLocked = null;
     handlers.renderBuilder();
+    document.querySelector('[data-action="builder-submit-plan"]')?.focus?.();
     return true;
   }
   if (type === "builder-batch-edit-done") {
@@ -1575,6 +1577,7 @@ export async function handleBuilderDraftAction(action, handlers) {
         action.disabled = false;
         action.innerHTML = originalHTML;
         handlers.renderBuilder();
+        focusBuilderSessionsLocked();
         return true;
       }
       if (batchExtra) {
@@ -1649,7 +1652,18 @@ export async function handleBuilderDraftAction(action, handlers) {
     const objectLabel = action.dataset.objectLabel || "program";
     if (!planId || !window.confirm(`Delete this ${objectLabel} and all of its contents? This cannot be undone.`)) return true;
     action.disabled = true;
-    await api(`/api/builder/plans/${encodeURIComponent(planId)}`, { method: "DELETE" });
+    try {
+      await api(`/api/builder/plans/${encodeURIComponent(planId)}`, { method: "DELETE" });
+    } catch (error) {
+      // Task 5: a published plan with a session that has results or a link
+      // to an event is not deleted - say which sessions, not a generic error.
+      if (error?.status === 409 && error.data?.code === "plan_sessions_locked") {
+        action.disabled = false;
+        window.alert(planSessionsLockedText(error.data.sessions));
+        return true;
+      }
+      throw error;
+    }
     if (state.activeTab === "weekly") {
       state.weekSelectorOpen = false;
       // Just deleted this plan - the cached Calendar payload for this

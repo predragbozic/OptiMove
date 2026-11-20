@@ -108,7 +108,8 @@ for (const width of [1280, 390, 375, 360]) {
         const text = (await panel.textContent()).replace(/\s+/g, " ");
         assert.match(text, /Not saved\./);
         assert.match(text, /Main session · \w{3} \d{2}\.\d{2} · AM \(removed in this draft\)/);
-        assert.match(text, /Linked to the event “Team training” in the calendar\. First remove the link to the event, then save again\./);
+        assert.match(text, /Linked to the event “Team training” in the calendar\. To keep this change, first remove the link to the event, then save again\./);
+        assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute("data-builder-sessions-locked")), true, "focus is on the panel");
         assert.equal(await page.locator(".builder-workspace").count(), 1, "still in the Builder");
         const drafts = await call(world, "team_coach", "GET", `/api/builder/plans/${draftId}`);
         assert.equal(drafts.status, 200, "the draft is kept");

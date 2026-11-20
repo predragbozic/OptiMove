@@ -409,3 +409,88 @@ test("8. a Save racing the athlete's RPE submit on the session the edit removes,
     }
   }
 });
+
+test("9. a live link on the session's slot that names no session (logical_session_id_at_link null) blocks it, fail-closed", async () => {
+  const s = await squad("unnamed");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const ev = await teamEventFor(s, WEEK);
+  const main = byName(await treeOf(a), "Main");
+  const day = (await q(`select date from plans.plan_days where id = $1`, [main.plan_day_id]))[0].date;
+  await q(`insert into calendar.event_session_links (event_id, plan_id, day, am_pm, bta, session_order, logical_session_id_at_link, session_name_at_link, linked_by_user_id)
+           values ($1,$2,$3,$4,$5,$6,null,null,$7)`, [ev.id, a, day, main.am_pm, main.bta, main.session_order, s.coach.id]);
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Main");
+  await assertLocked(s, plans, draft, { name: "Main", day: WEEK, change: "removed", reasons: ["linked_to_event"] });
+});
+
+// A coach of another team, who may not edit these plans.
+async function outsider(label) {
+  const clubId = (await q(`insert into public.clubs (name) values ($1) returning id`, [`${label} Other Club ${uid()}`]))[0].id;
+  const teamId = (await q(`insert into public.teams (club_id, name) values ($1,$2) returning id`, [clubId, `${label} Other Team ${uid()}`]))[0].id;
+  const id = await makeUser(`${label} Outsider`);
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [id, teamId]);
+  await setWorkspace(id, "team", teamId);
+  return { id, cookie: await cookieOf(id) };
+}
+
+test("10. a published plan's session is never removed or moved through the session routes: the same 404, byte for byte, as a session the caller may not edit", async () => {
+  const s = await squad("direct");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const other = await outsider("direct");
+  const live = byName(await treeOf(a), "Main");
+  const before = await digestOf(plans);
+  const asOwner = {
+    delete: await api(`/api/builder/sessions/${live.id}`, { method: "DELETE", cookie: s.coach.cookie }),
+    patch: await api(`/api/builder/sessions/${live.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }),
+  };
+  const notYours = {
+    delete: await api(`/api/builder/sessions/${live.id}`, { method: "DELETE", cookie: other.cookie }),
+    patch: await api(`/api/builder/sessions/${live.id}`, { method: "PATCH", cookie: other.cookie, body: { amPm: "PM" } }),
+  };
+  const missing = await api(`/api/builder/sessions/${crypto.randomUUID()}`, { method: "DELETE", cookie: s.coach.cookie });
+  for (const kind of ["delete", "patch"]) {
+    assert.equal(asOwner[kind].status, 404, asOwner[kind].text);
+    assert.equal(notYours[kind].status, 404, notYours[kind].text);
+    assert.equal(asOwner[kind].text, notYours[kind].text, `${kind}: the same body as not yours`);
+    assert.equal(asOwner[kind].text, missing.text, `${kind}: the same body as a session that does not exist`);
+  }
+  assert.equal(await digestOf(plans), before, "nothing written");
+  // The same session through its edit draft is changed as before.
+  const draft = await reopen(s.coach.cookie, a);
+  await moveToPm(s.coach.cookie, draft, "Main");
+  ok(await save(s.coach.cookie, draft.plan.id));
+  assert.equal(byName(await treeOf(a), "Main").am_pm, "PM");
+});
+
+test("11. deleting a published plan with a session that has results or a live event link: 409 plan_sessions_locked naming them, nothing deleted; rights first", async () => {
+  const s = await squad("plandelete");
+  const plans = await publishedBatch(s);
+  const [a, b] = plans;
+  await rpeRow(s.athletes[0], byName(await treeOf(a), "Wednesday").id);
+  const ev = await teamEventFor(s, WEEK);
+  ok(await attach(s.coach.cookie, ev.id, [String(byName(await treeOf(a), "Main").logical_session_id)]));
+  const other = await outsider("plandelete");
+  const before = await digestOf(plans);
+  // Rights first: someone who may not edit the plan gets the plain 404, never the 409.
+  const notYours = await api(`/api/builder/plans/${a}`, { method: "DELETE", cookie: other.cookie });
+  const missing = await api(`/api/builder/plans/${crypto.randomUUID()}`, { method: "DELETE", cookie: other.cookie });
+  assert.equal(notYours.status, 404, notYours.text);
+  assert.equal(notYours.text, missing.text, "the same body as a plan that does not exist");
+  const refused = await api(`/api/builder/plans/${a}`, { method: "DELETE", cookie: s.coach.cookie });
+  assert.equal(refused.status, 409, refused.text);
+  assert.equal(refused.body.code, "plan_sessions_locked");
+  assert.deepEqual(refused.body.sessions.map((x) => [x.name, x.day, x.change, x.reasons]).sort(),
+    [["Main", WEEK, "removed", ["linked_to_event"]], ["Wednesday", WEDNESDAY, "removed", ["has_results"]]]);
+  assert.equal(await digestOf(plans), before, "nothing deleted");
+  // A published plan with no such session deletes as before.
+  const deleted = await api(`/api/builder/plans/${b}`, { method: "DELETE", cookie: s.coach.cookie });
+  assert.equal(deleted.status, 200, deleted.text);
+  assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [b]))[0].n, 0);
+  // A draft deletes as before (the edit draft of the locked plan: a discard).
+  const draft = await reopen(s.coach.cookie, a);
+  ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [draft.plan.id]))[0].n, 0);
+  assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [a]))[0].n, 1, "the published plan stays");
+});

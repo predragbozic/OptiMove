@@ -7,7 +7,7 @@ import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySes
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
-import { batchEditTestHooks, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
+import { batchEditTestHooks, blockedPlanSessions, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
@@ -1099,7 +1099,18 @@ router.delete("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
     if (!plan) return;
     client = await pool.connect();
     await client.query("begin");
-    await client.query("select id from plans.plans where id = $1 for update", [plan.id]);
+    const lockedRow = (await client.query("select id, status, plan_type from plans.plans where id = $1 for update", [plan.id])).rows[0];
+    // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6): a published weekly
+    // plan whose session has results or a live event link made for it is not
+    // deleted (rights first: requirePlan's 404 comes before this 409). A
+    // draft, and a published plan with no such session, delete as before.
+    if (lockedRow && lockedRow.status !== "draft" && lockedRow.plan_type === "weekly") {
+      const blocked = await blockedPlanSessions(client, await loadWeeklyTree(client, plan.id));
+      if (blocked.length) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "This plan has sessions that can't be removed.", code: "plan_sessions_locked", sessions: blocked });
+      }
+    }
     await deleteBuilderPlanContent(client, plan.id);
     await client.query("delete from plans.plans where id = $1", [plan.id]);
     await client.query("commit");
@@ -1504,7 +1515,10 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
   let client;
   try {
     const session = await getEditableSession(req, req.params.sessionId);
-    if (!session) return res.status(404).json({ error: "Program session not found" });
+    // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6): a session of a
+    // published plan changes only through its edit draft's Save, never here -
+    // the same 404 as a session the caller may not edit.
+    if (!session || !isDraftPlanRow(session.plan)) return res.status(404).json({ error: "Program session not found" });
 
     if (req.body?.trackingEnabled !== undefined && strictBoolean(req.body.trackingEnabled) === undefined) {
       return res.status(400).json({ error: "trackingEnabled must be true or false." });
@@ -1604,7 +1618,8 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
 router.delete("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const session = await getEditableSession(req, req.params.sessionId);
-    if (!session) return res.status(404).json({ error: "Program session not found" });
+    // Task 5: as the PATCH above - a published plan's session is never removed here.
+    if (!session || !isDraftPlanRow(session.plan)) return res.status(404).json({ error: "Program session not found" });
     await deleteSessionTree(session.id);
     return await respondWithDraft(req, res, req.user, session.plan);
   } catch (error) { next(error); }
@@ -2355,6 +2370,12 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
     apply,
     summary: { applied: apply.length + 1, notChanged: describe([...skip, ...ask]) },
   };
+}
+
+// A plan the Builder edits directly: a new draft or an edit draft (both have
+// status 'draft'); a published plan is edited only through its edit draft.
+function isDraftPlanRow(plan) {
+  return plan?.status === "draft";
 }
 
 // Task 5 (docs/ai/builder-batch-edit-plan.md section 12): under the Save's plan
@@ -3222,9 +3243,10 @@ async function requirePlan(req, planId, res) {
 // open edit-draft of an already-live plan (is_edit_draft=true). Anything
 // else - most importantly an already-published/active plan being edited
 // directly through Builder's general session-editing surface - is NOT
-// one, even though getEditablePlan/requirePlan happily return it for
-// every OTHER Builder field (name, time, amPm, bta, exercises: all
-// legitimately editable on a live plan). Scoped narrowly to just the two
+// one, even though getEditablePlan/requirePlan return it for every OTHER
+// Builder field. (Since task 5 the session PATCH and DELETE refuse a
+// published plan's session outright - isDraftPlanRow - so a live session
+// changes only through its edit draft's Save.) Scoped narrowly to just the two
 // call sites below that touch trackingEnabled/rpeEnabled/the plan-level
 // Training Load settings - not a general plan-status gate.
 function isEditableDraftPlan(plan) {

@@ -380,7 +380,8 @@ step 2's `slotKey`) is checked:
   state, a metric event participant);
 - **`linked_to_event`**: a live `calendar.event_session_links` row of the source plan on the session's slot whose
   `logical_session_id_at_link` is this session's logical id (the link identity guard's rule: an orphaned link in the
-  slot names another session and does not block).
+  slot names another session and does not block). A live link on the slot whose `logical_session_id_at_link` is null
+  (the column is nullable, information only in v49; the app always writes it) blocks too, fail-closed (db review).
 
 If any session is blocked, the Save answers **`409 edit_sessions_locked`** and writes nothing: the source, the
 siblings and the edit draft stay as they were, so the coach can change the draft and save again. A session changed
@@ -401,18 +402,25 @@ No event id or title is returned (ADR-006): the screen finds the event from what
 
 ### 12.3 The screen: say what blocks, and the way out
 
-The Save panel lists each blocked session ("Main · Mon 16.11 · AM") with plain words:
+The Save panel ("Not saved. N sessions can't be removed or moved:"; only that line is `role="alert"`; focus moves to
+the panel) lists each blocked session ("Main · Mon 16.11 · AM (removed in this draft)") with one way out:
 
-- **results**: "Has entered results, so it can't be removed or moved. Its content can still change." The way: put
-  the session back where it was in this draft, or discard the draft (*Discard changes*).
-- **a link to an event**: "Linked to an event in the calendar. First remove the link to the event, then save
-  again." The way: **Open the event**, the existing Builder → calendar hand-off (`builder-events-open`): the calendar
-  opens on that day with the event's panel, where *Unlink* is. The event is found by the Builder's own reads
-  (`builderSessionEvent`, the week's calendar answer). When the session is in an event the coach does not manage, the
-  sentence is "It is in an event you don't manage. Ask its organiser to remove the link." When the event is not
-  found, **Open the calendar** opens the calendar on that day.
+- **results**: "Athletes have already entered results for it (for example RPE), so it can't be removed / moved. You
+  can still change its content." A **moved** session: "Move it back to {day · half}, or discard your changes." A
+  **removed** session cannot be put back (a re-added session is a new one, with a new logical id): "To keep it,
+  discard your changes, then make your other edits again." with a *Discard changes* button (the existing discard,
+  with its confirmation). With results, removing a link would not help, so no event way is offered ("It is also
+  linked to an event.").
+- **a link to an event**: "Linked to the event “{title}” in the calendar. To keep this change, first remove the link
+  to the event, then save again." The way: **Open the event** (the panel's primary button), the existing Builder →
+  calendar hand-off (`builder-events-open`): the calendar opens on that day with the event's panel, where *Unlink* is,
+  and "Your draft is kept. After you remove the link, come back to Builder › Continue where you left off, and save
+  again." The event is found by the Builder's own reads (`builderSessionEvent`, the week's calendar answer). An event
+  the coach does not manage: "Linked to an event you can't change. Ask whoever manages that event (usually your
+  club's admin) to remove the link, then save again." An event not in that read: **Open the calendar** on that day.
+  Either way the alternative is said too ("Or: move it back… / discard…").
 
-The draft is kept; after the link is removed in the calendar, Back returns to the Builder and Save is pressed again.
+*Close* closes the panel and sends nothing.
 
 ### 12.4 Locks
 
@@ -422,6 +430,13 @@ source session rows the draft removes or moves are locked `FOR UPDATE` in ascend
 (`has_results`), or waits for the Save: a Save that blocks writes nothing and the submit goes on; a Save that removes
 the session (it had no results) makes the submit find the row gone (its existing 404). In the group Save the source
 session rows are locked before any sibling session row; every session lock is still taken after all plan locks.
+
+**Known limit (db review, MEDIUM, recorded):** only the RPE submit locks the session row. The other two result
+writers - an activity materialised for the planned session (`trainingActivityMaterialize.js`,
+`resolveAuthoritativeSource`, a plain read of the session) and a metric event participant - do not, so one that read
+the session just before a Save that removes it can still write a record naming the removed logical id. The window is
+narrow and the same as step 2's for the siblings. Closing it means those writers take `for share` on the weekly
+session row; that is a change of those writers, not of this PR.
 
 ### 12.5 The readers of the stale `session_date` snapshot
 
@@ -445,8 +460,30 @@ dangling row is made this way. Rows made before stay as they are (this change to
 - **Program plans:** no RPE (the submit route takes weekly plans only) and no calendar link (links name weekly
   sessions only), so nothing is checked there. Recorded: a program's Save (`copyProgramTree`) does not keep logical
   ids at all.
-- Other writers of a published plan's sessions: there is none outside the edit draft's Save and step 2.
 - Records left dangling or stale before this change.
+
+### 12.6a The other writers of a published plan's sessions (the stream manager's rulings, 2026-11-20)
+
+The plan's first claim, "no other writer", was wrong: `getEditablePlan` / `getEditableSession` check rights, never
+draft status. Two more writers are closed in the same pull request:
+
+- **The session routes** `PATCH` and `DELETE /api/builder/sessions/:sessionId` refuse a session of a plan that is
+  not a draft (`isDraftPlanRow`: `status = 'draft'`, which a new draft and an edit draft both have) with the same 404
+  as a session the caller may not edit, byte for byte. Their callers, all checked: the Builder screen
+  (`frontend/builder-actions.js`: the session form, the half / phase pickers, the RPE and Training Load switches,
+  *Use the event's time*, Delete session), every one on `state.builder.draft`, which is always a draft: a published
+  plan is opened only through `POST /plans/:id/edit` (`builder-edit-plan`, K3's `openPlanDraft`,
+  `reopenSavedPlanInBuilder`); `k3UseEventTimeRequest` is exported but called by nothing; no backend code calls these
+  routes. A published session now changes only through its edit draft's Save.
+- **Deleting a published plan** (`DELETE /api/builder/plans/:planId`, the plan views' *Delete this program*): a
+  published weekly plan with a session that has results or a live event link made for it (the same facts and the
+  same locks as 12.2, every session counted as removed) answers **`409 plan_sessions_locked`** with the same
+  `sessions` list, nothing deleted; the screen shows one sentence naming them ("This plan can't be deleted. … first
+  remove the link to the event, then delete again."). Rights first: a caller who may not edit the plan gets the
+  plain 404 before any 409. A draft (an edit draft's discard included) and a published plan with no such session
+  are deleted as before.
+- **A published plan with results cannot be deleted; whether it needs an archive is the owner's call.** No archive
+  or other way out is built.
 
 ### 12.7 Tests (through the real routes, disposable databases)
 
@@ -455,6 +492,11 @@ a metric event participant and with a live event link, a removal and a move each
 with the session named, and nothing is written (the source tree, the draft and the siblings are compared before and
 after); an in-place change of the same session saves; a session without results or a link is removed and moved as
 before; an orphaned link in the slot does not block; the group Save is stopped by a blocked source session before any
-sibling is written; the RPE submit race in both orders. Frontend: `frontend/tests/builder-source-session-guard.actions.test.mjs`
-(the panel's sentences, *Open the event* with the event's key, the unmanaged and the not-found cases, nothing sent by
-itself).
+sibling is written; the RPE submit race in both orders; a live link with no named session blocks; the session routes'
+404 for a published session equals the "not yours" and "missing" bodies byte for byte, nothing written, and the same
+change through the edit draft saves; deleting a published plan is refused for results and for a link (rights first),
+while a clean published plan and a draft delete. Frontend: `frontend/tests/builder-source-session-guard.actions.test.mjs`
+(the panel's sentences per case, *Open the event* with the event's key, the unmanaged and the not-found cases, focus,
+Close, the group Save, the plan-delete sentence; nothing sent by itself). Browser:
+`e2e/tests/builder-source-session-guard.test.mjs` at 1280, 390, 375 and 360 px (the panel, focus, no horizontal
+scroll, a 44 px Open the event, the calendar opened with the session's Unlink).
