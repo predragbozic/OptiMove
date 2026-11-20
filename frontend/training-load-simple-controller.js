@@ -21,7 +21,7 @@ export function simpleDraftFromWidget(widget, uuid) {
 
 export function createSimpleEditorController({ request, getContext, paint = () => {}, saved = async () => {}, uuid = () => crypto.randomUUID(), schedule = setTimeout, cancel = clearTimeout }) {
   let model = null, generation = 0, timer, previewInFlight = false, queuedPreview = false, searchGeneration = 0;
-  const contextKey = context => JSON.stringify([context.identity, context.dashboardId, context.period, context.runtimeFilter]);
+  const contextKey = context => JSON.stringify([context.identity, context.dashboardId, context.period, context.runtimeFilter, context.shellFilter ?? null]);
   const identityKey = context => JSON.stringify([context.identity, context.dashboardId]);
   const currentTarget = (target, run) => model === target && generation === run && identityKey(getContext()) === identityKey(target.context);
   const current = (target, run) => currentTarget(target, run) && contextKey(getContext()) === target.contextKey;
@@ -29,7 +29,7 @@ export function createSimpleEditorController({ request, getContext, paint = () =
   const redraw = () => { if (model) model.canSave = Boolean(contextKey(getContext()) === model.contextKey && model.saveState === 'idle' && !model.stale && model.preview?.status === 'valid' && model.preview.previewToken && model.capabilities?.capabilities?.atomicSave && !model.previewLoading && !locked(model)); paint(model); };
   const fail = error => ({ aggregation_not_allowed: model?.selectedMetric?.calculation?.kind === 'ratio' ? 'This metric cannot be totalled or averaged. Choose Ratio, Highest or Latest.' : 'Ratio is only for a calculated ratio. Choose another way to combine values.', calculation_changed_in_period: 'The calculation changed during this period. Choose a shorter period.', staleRevision: 'This widget changed. Reopen it before saving.', catalogChanged: 'The metric changed. Select it again and preview.', previewRequired: 'Preview again before saving.', previewBusy: 'Another preview is running. Try again shortly.', notFound: 'This dashboard or metric is no longer available.', previewTooLarge: 'Choose fewer athletes or a shorter period.', saveUnavailable: 'Saving is temporarily unavailable.' }[error?.data?.error ?? error?.message] ?? 'The request could not be completed. Please try again.');
   function input(target) {
-    return { contractVersion: 1, context: { kind: 'legacyDashboard', period: copy(target.context.period), runtimeFilter: copy(target.context.runtimeFilter ?? {}) },
+    return { contractVersion: 1, context: { kind: 'legacyDashboard', period: copy(target.context.period), runtimeFilter: copy(target.context.runtimeFilter ?? {}), shellFilter: copy(target.context.shellFilter ?? null) },
       draftRef: { draftId: target.draft.draftId, draftVersion: target.draft.draftVersion }, draft: copy(target.draft),
       editTarget: target.widgetId ? { widgetId: target.widgetId, expectedWidgetRevision: target.widgetRevision } : null };
   }

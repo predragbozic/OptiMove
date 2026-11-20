@@ -1,3 +1,4 @@
+import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // Training Load Analysis Dashboard — HTTP routes. Mounted at
 // /api/training-load/dashboards (see server.js), alongside the existing
 // /api/training-load, /api/training-load/metrics, and /api/training-
@@ -756,7 +757,7 @@ router.post("/:dashboardId/widgets/:widgetId/series/:seriesId/resolve", async (r
 // filter, using the current active data workspace.
 // ------------------------------------------------------------
 
-const QUERY_DASHBOARD_KEYS = ["dateFrom", "dateTo", "athleteIds", "activityId", "componentId", "widgetIds"];
+const QUERY_DASHBOARD_KEYS = ["dateFrom", "dateTo", "athleteIds", "activityId", "componentId", "widgetIds", "shellFilter"];
 router.post("/:dashboardId/query", async (req, res, next) => {
   try {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
@@ -821,7 +822,10 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     if (Object.prototype.hasOwnProperty.call(b, "activityId")) requestFilter.activityId = b.activityId;
     if (Object.prototype.hasOwnProperty.call(b, "componentId")) requestFilter.componentId = b.componentId;
 
-    const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter });
+    let shellFilter;
+    try { shellFilter = normalizeShellFilter(b.shellFilter); }
+    catch { return res.status(400).json({ error: "invalidRequest" }); }
+    const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter });
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
     res.json({ dashboardRevision: dashboard.revision, widgets: result.map((widget) => ({ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
   } catch (error) {

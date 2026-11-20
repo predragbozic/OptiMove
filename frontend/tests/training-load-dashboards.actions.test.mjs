@@ -151,7 +151,7 @@ test("moving the shared Data & Analysis week (from Overview, Activities or Athle
 // Dashboards must not present it as active; the coach's selection itself
 // stays in state for the other views; the runtime filter keeps working.
 
-test("on Dashboards the shell Filter is shown unavailable - disabled, no active count, with the visible note - even while a selection exists", () => {
+test("on Dashboards the shared shell Filter is enabled and shows the active selection", () => {
   resetState();
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.dashboards = [dashboard()];
@@ -159,11 +159,10 @@ test("on Dashboards the shell Filter is shown unavailable - disabled, no active 
   state.trainingLoad.filter.clubIds = ["club-1"];
   const html = renderTrainingLoadCoachHtml();
   const button = html.match(/<button[^>]*data-action="training-load-filter-open"[^>]*>[^<]*<\/button>/)[0];
-  assert.match(button, /\bdisabled\b/);
-  assert.match(button, /aria-disabled="true"/);
-  assert.doesNotMatch(button, /is-active/);
-  assert.doesNotMatch(button, /Filter \(/, "never a '(n)' count that would read as applied to the Dashboards data");
-  assert.match(html, /Club, team and athlete filters are not available for Dashboards yet\./);
+  assert.doesNotMatch(button, /\bdisabled\b/);
+  assert.match(button, /is-active/);
+  assert.match(button, /Filter \(2\)/);
+  assert.doesNotMatch(html, /filters are not available for Dashboards/);
 });
 
 test("the coach's shell filter selection survives visiting Dashboards and still applies on Overview/Activities/Athletes", async () => {
