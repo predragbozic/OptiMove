@@ -103,10 +103,23 @@ are the builder's and are not used for it. The screen lives in Settings → **Ta
 - **Storage.** A new table holds the exceptions: `training.participant_activity_types`. Its columns are
   `participant_id`, `activity_type_key`, `set_by`, `set_at`, `reason`, and `ended_at` / `ended_by` for history. There
   is one live row per participant. Clearing an exception ends the row: nothing is deleted.
-- **Merge and reparent.** An exception belongs to a participant row. If participants are merged, the canonical
-  participant keeps its own exception, if it has one, and the merged participant's exception ends. On a reparent to
-  another activity the exception ends, because the session around it changed. Both are written in the merge or
-  reparent transaction, and both are listed by the roster's "changed under you" mark.
+- **Merge and reparent** (the *Nezavisni revizor*'s LOW-2; ADR-001, trigger 3). An exception belongs to a participant
+  row.
+  - **Merge.** If participants are merged, the canonical participant keeps its own exception, if it has one, and the
+    merged participant's exception ends.
+  - **Reparent.** On a reparent to another activity, the exception ends, because the session around it changed.
+  - **Where.** Both are written inside the existing functions, `training.merge_activity_participants`
+    (`migrations_v2/202609071300_training_activity_v4_canonical_functions.sql:411`) and
+    `training.reparent_activity_participant` (`:91`). They are replaced with `CREATE OR REPLACE` under an md5 gate on
+    the bodies in force. The new lines run after the functions' existing locks:
+    1. the activities `FOR UPDATE`, ascending (`:146-147`, `:458-460`);
+    2. the participants `FOR UPDATE`, ascending (`:150`, `:466-467`);
+    3. the exception rows, new and last.
+  - **The exception write takes the same order:** the canonical activity, then the participant, then its exception
+    row. It can therefore never close a cycle with a merge or a reparent.
+  - **Test (ST-3):** a merge and an exception write on the same participant, run at once in both start orders. Both
+    end with one consistent state and no `40P01`. A recorded-SQL-order test of the exception write.
+  - The roster's "changed under you" mark lists an exception that a merge or a reparent ended.
 - An exception equal to the session's type is refused (`409 same_as_session`), so the roster never shows a
   meaningless exception.
 
@@ -130,11 +143,44 @@ The order, first match wins:
    - The check-time preview runs without a type: the column may be null, and the preview is rolled back.
    - The approval refuses a null type with `409 session_type_required` and writes nothing.
 
-The approval body carries `activityTypeKey` per candidate, single and batch. It is checked against the types offered
-to the team, before any lock (`400 invalid_session_type`). The chosen type goes into the plan and the preview's
-summary, so the preview hash binds it: a type changed after the review answers `preview_changed`. Every stored preview
-changes once, because the summary gains a field. A candidate reviewed before the deploy therefore needs *Update the
-review* once (the J20-A1 path, as after v62).
+**How a choice is bound (the hash contract; the *Nezavisni revizor*'s MEDIUM-1).** It reuses J20-B's subset pattern
+(`approveCandidate` and `previewCandidateSubset`, `backend/src/gpexeImportService.js:2594-2777`, `:3098`); no new
+mechanism is added.
+- **The stored `preview_hash`** is the candidate's preview with the team's suggestion: the suggested type, or `null`
+  for `session_type_required`, and no manual value replaced. The check computes it, as today. The client always sends
+  it back as `previewHash`, and the approval compares it with the stored one first, exactly as today
+  (`preview_changed` when they differ).
+- **The coach's choice** is, together:
+  - the excluded athletes;
+  - `activityTypeKey`, when it differs from the suggestion;
+  - `replaceManual` (section 8).
+
+  It is bound by the J20-B subset route, widened to take the two new fields: `POST …/candidates/:id/subset-preview`
+  `{ excludedAthleteIds?, activityTypeKey?, replaceManual? }`. That route answers the preview of the choice and its
+  hash, still called `subsetHash` for compatibility and documented as "the hash of the preview with the coach's
+  choices".
+- **The approval** sends `previewHash`, the same choice fields, and `subsetHash`. Under its locks it recomputes the
+  preview with the choice. It then compares:
+  - against `subsetHash`, as J20-B does for exclusions (`409 subset_changed` with the fresh choice preview);
+  - the chosen type, against the types offered to the team now, under the type row's `FOR SHARE` (below). A type
+    archived, or no longer the club's, since the choice preview gives `409 session_type_not_offered`, and nothing is
+    written.
+- **No choice** (the suggestion as it stands, no exclusion, no replacement) needs no `subsetHash`, as today. A
+  candidate with `session_type_required` always needs a choice, and is refused without one (`409
+  session_type_required`).
+- **Batch.**
+  - Each item carries `{ candidateId, previewHash }`, and, when it has a choice, `activityTypeKey`, `replaceManual`
+    and `subsetHash`.
+  - The review dialog fetches the choice preview for each item that has a choice, before the batch is sent.
+  - An item whose choice is stale stops with its own code, as the batch already does for `preview_changed`.
+- **Hash effect of the deploy.** The stored preview's summary gains `activityTypeKey`, so every stored preview hash
+  changes once. A candidate reviewed before the deploy needs *Update the review* once (the J20-A1 path, as after v62).
+- **Tests and mutations (section 11):**
+  - a choice different from the suggestion passes with its `subsetHash`;
+  - a stale choice gives `409`: a type archived, or the club changed;
+  - M: compare the chosen type's preview with the stored hash instead of the `subsetHash` → the "choice ≠ suggestion"
+    test fails;
+  - M: skip the offered-types check under the lock → the archived-type test fails.
 
 After a confirmed approval, the team's suggestion for that category is updated in its own short transaction. That
 write is best effort and never touches the import.
@@ -256,7 +302,8 @@ Today a re-import never replaces a manual value: it records the source's value a
 - When a re-import meets manual values (a manual entry or a correction), the review lists them in a block of their
   own: "<n> athletes have values you entered. Keep my values (default) / Use GPEXE's values". The answer is per
   session, with a per-athlete toggle under it.
-- The approval carries `replaceManual: [athleteIds]`, bound in the preview hash.
+- The approval carries `replaceManual: [athleteIds]`, bound by the choice hash of section 4 (`subsetHash`), never by
+  the stored preview hash. The default, keep everything, needs no choice.
   - **Keep** is today's path: the source's value is recorded but not current. The row stays marked.
   - **Use GPEXE's values** is a new writer path, `manual_replaced`: the imported occasion supersedes the manual one,
     and the manual one stays as history.
@@ -307,9 +354,28 @@ confirmation, the way O1 removes roster work.
 
 Each migration has a rollback that refuses once its data is used, plus a preflight, a post-check and a runbook.
 
+**The type's owner, guarded in the database (the *Nezavisni revizor*'s MEDIUM-2).** A foreign key does not know the
+owner, so ST-1 adds a guard. It covers `training.activities` (`BEFORE INSERT OR UPDATE OF activity_type_key`) and, in
+ST-3, `training.participant_activity_types` (`BEFORE INSERT`).
+- **The rule.** The type is a system type, or a type of the club that owns the activity. The owning club is
+  `owner_club_id`, or the owner team's club. A private coach's or a user's activity takes system types only.
+- **When a new key is set** (`INSERT`, or `UPDATE` with a different key), the type must also be active. A row that
+  keeps its key is never refused for an archive done later.
+- **Inside the guard.** It locks the type row `FOR SHARE`, so an archive or a restore (which locks the type row
+  `FOR UPDATE`) waits for a write in flight and never crosses it.
+- **Refusal.** A fixed message, `23514`. The routes map it to `409 session_type_not_offered`.
+- **Which paths it covers.** Every write path: the import's materialization, `correct_confirmed_activity_fields`, the
+  other materializers of `trainingActivityMaterialize.js` and `trainingActivityMetricsLink.js`, and a raw write. Those
+  paths write system types today, so they pass unchanged.
+- **Lock order.** The type row comes after the activity or participant row in every path. An archive takes only the
+  type row, so there is no cycle.
+- **Test.** A club-A type on an activity of a club-B team is refused, by the route and by a raw `UPDATE`. An archived
+  type cannot be newly set. A write in flight holds back an archive. M: drop the guard → the club-A-on-club-B test
+  fails.
+
 **The approval.**
-- The type is part of the body and the plan. It adds no lock: the offered types are read once outside the
-  transaction, and the foreign key is the backstop.
+- The type is part of the body and the plan. The approval checks the chosen type against the offered types under its
+  locks (section 4). The guard above is the database's guarantee for every other path.
 - The existing lock order (rights → candidate → team import lock → mapping) is unchanged.
 - `replaceManual` changes only what the writer does for the listed occasions, inside the identity locks it already
   takes.
@@ -366,6 +432,21 @@ calendar-stream follow-up; the candidate list gains `suggestedActivityTypeKey`.
    - `replaceManual` is bound in the hash.
    - M: ignore `replaceManual` → the test fails.
 8. **Migrations.** Apply, rollback and re-apply; the rollback refuses once its data is used.
+9. **The choice and the hash** (MEDIUM-1, section 4).
+   - A choice different from the suggestion passes with its `subsetHash`.
+   - A `session_type_required` candidate without a choice is refused.
+   - A stale choice is refused: a type archived, or no longer the club's.
+   - A batch item with a stale choice stops alone.
+   - M: compare the choice preview with the stored hash → the test fails.
+   - M: skip the offered-types check under the lock → the test fails.
+10. **The type's owner** (MEDIUM-2, section 10).
+    - A club-A type on a club-B activity is refused, by the route and by a raw `UPDATE`, and so is the same type on
+      an exception.
+    - An archived type cannot be newly set, but an untouched row keeps it.
+    - An archive waits for a write in flight.
+    - M: drop the guard → the test fails.
+11. **Merge or reparent against an exception** (LOW-2, section 3): run at once in both orders, with no `40P01`; the
+    recorded SQL order.
 
 Commands: `--kind disposable` for each new suite, `--preset gpexe`, `--preset frontend-fast` on the head and on a clean
 main (the frontend PR gate), and `test:backend:shared` for the training-activity routes (a per-session decision). The
@@ -395,15 +476,20 @@ ordinary pull request.
 
 The calendar column and K5-4's label go to the calendar stream, if it agrees.
 
-## 13. The owner's answers, and the open question
+## 13. The owner's answers, and the open questions
 
 Answered on 2026-11-20 (relayed by the *Rukovodilac*):
 - **Q1, "Exercise":** a whole session, only another name ("cele sesije su to, samo njihov naziv"). Key
   `exercise_session`, label "Exercise". The label of `training_session` is "Full training".
 - **Q2, D7:** option 1.
 
-Open:
-3. **Undo with manual values** (the *Rukovodilac* asks the owner; until the answer, the plan follows the
-   recommendation, with the same people as roster decisions): should deleting an imported session also remove the values the coach entered or
-   corrected, after a confirmation that lists them (recommended, like O1's roster work)? Or should it keep refusing
-   until they are removed by hand?
+Open (the second and third come from the *Nezavisni revizor*'s LOW-1):
+- **Q3, undo with manual values.** The *Rukovodilac* is asking the owner; until the answer, the plan follows the
+  recommendation, with the same people as roster decisions. Should deleting an imported session also remove the
+  values the coach entered or corrected, after a confirmation that lists them (recommended, like O1's roster work)?
+  Or should it keep refusing until they are removed by hand?
+- **Q4, renaming `training_session` to "Full training".** This renames every session of that type, including the
+  ones a coach planned by hand, not only the GPEXE ones. Is that wanted? The alternative is to keep "Training session"
+  and seed "Full training" as a type of its own.
+- **Q5, `testing_session` and `recovery_session`.** Archive them from the pickers (recommended; old sessions keep
+  them), or keep offering them beside the six?
