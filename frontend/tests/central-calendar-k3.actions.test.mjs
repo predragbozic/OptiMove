@@ -336,6 +336,36 @@ test("13. an unnamed linked session is placed in its event (its name is empty, n
   assert.ok(placed.has(k3SessionKey(DAY, { amPm: "AM", bta: "T", name: "" })));
 });
 
+test("14. a band restored after a reload never hides a K2c-2 'Make an event' write in flight or not confirmed; an idle panel closes", async () => {
+  installFetchMock((call) => {
+    if (call.url === "/api/calendar/events/e1") {
+      return { status: 200, body: { event: { id: "e1", title: "Team training", eventKind: "training", status: "scheduled", canManage: true, day: DAY, startTime: "10:00", endTime: "11:30", expects: [], targets: A.slice(0, 2).map((id) => ({ kind: "athlete", id })), athleteCount: 2 } } };
+    }
+    return { status: 404, body: {} };
+  });
+  const settle = async () => { for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
+  for (const [phase, expectBand] of [["ready", true], ["unconfirmed", false], ["sending", false]]) {
+    // The memory a band leaves behind, then a reload: the same plan opened without its band.
+    k3Builder();
+    k3.k3ToggleSession(`${DAY}|AM|T|main session`);
+    assert.equal(store.size, 1);
+    state.builder = emptyBuilderState({ draft: draftOf() });
+    const panel = { sessionId: "s1", date: DAY, phase };
+    state.builder.calendarEvent = panel;
+    k3.k3AdoptDraft(state.builder.draft);
+    await settle();
+    if (expectBand) {
+      assert.equal(state.builder.k3?.eventId, "e1", `${phase}: the band is back`);
+      assert.equal(state.builder.calendarEvent, null, `${phase}: the idle panel closed`);
+    } else {
+      assert.equal(state.builder.k3, null, `${phase}: the band waits`);
+      assert.equal(state.builder.calendarEvent, panel, `${phase}: the panel and its result stay`);
+      assert.equal(store.size, 1, `${phase}: the memory stays for the next time`);
+    }
+    k3.clearK3Memory();
+  }
+});
+
 test("15. another plan opened ends the band and drops its memory", () => {
   k3Builder();
   k3.k3ToggleSession(`${DAY}|AM|T|main session`);

@@ -4290,19 +4290,22 @@ async function openBuilderForK3(draft, context) {
   renderLibraryNav();
   // loadBuilder() draws the week before it waits for the exercises: the
   // event's day is brought into view (2.3), its column whole, as soon as it
-  // is drawn, and again once the load ends (a later render keeps the
-  // strip's scroll, but the layout may have changed meanwhile).
+  // is drawn (a later render keeps the strip's scroll). Only when it was not
+  // drawn yet is it brought into view once the load ends - never over a
+  // scroll the coach made meanwhile (code review LOW).
   const loading = loadBuilder();
-  showK3Day();
+  const shown = showK3Day();
   await loading;
-  showK3Day();
+  if (!shown) showK3Day();
 }
 
 function showK3Day() {
   const day = document.querySelector(".builder-block.is-k3-day");
-  const grid = day?.closest?.(".builder-block-grid");
-  if (grid && day) grid.scrollLeft = Math.max(0, grid.scrollLeft + day.getBoundingClientRect().left - grid.getBoundingClientRect().left - 8);
-  day?.scrollIntoView?.({ block: "start" });
+  if (!day) return false;
+  const grid = day.closest?.(".builder-block-grid");
+  if (grid) grid.scrollLeft = Math.max(0, grid.scrollLeft + day.getBoundingClientRect().left - grid.getBoundingClientRect().left - 8);
+  day.scrollIntoView?.({ block: "start" });
+  return true;
 }
 
 // Back to calendar (2.6): the app's Back when the step before was the

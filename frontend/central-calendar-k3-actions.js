@@ -49,9 +49,12 @@ const WEEKLY_PLANS_MAX = 200;
 const STORAGE_PREFIX = "optimove.k3.";
 
 const workspaceType = () => state.currentUser?.activeWorkspace?.type || "";
+// The workspace a memory belongs to: its type and scope id, as the server
+// names it (backend/src/workspace.js; a team workspace also carries its
+// club's id, which is not its own).
 const workspaceKey = () => {
   const ws = state.currentUser?.activeWorkspace;
-  return ws?.type ? `${ws.type}:${ws.clubId || ws.teamId || ws.id || ""}` : "";
+  return ws?.type ? `${ws.type}:${ws.scopeId || ""}` : "";
 };
 
 // ---------------------------------------------------------------------------
@@ -248,6 +251,12 @@ async function restoreK3({ key, entry }, draft) {
   }
   if (generation !== restoreGeneration || state.builder !== builder || builder.k3 || !view || view.status === "cancelled" || view.canManage !== true) return;
   if (!draftPlanIds(builder.draft).some((id) => entry.planIds.includes(id))) return;
+  // One way to an event at a time: a K2c-2 "Make an event" write that is in
+  // flight or not confirmed keeps its panel, and the band waits (the memory
+  // stays for the next time this plan opens); an idle panel closes.
+  const panel = builder.calendarEvent;
+  if (panel && (panel.phase === "sending" || panel.phase === "unconfirmed")) return;
+  builder.calendarEvent = null;
   const item = {
     key: entry.eventKey, eventId: entry.eventId, date: entry.date, title: view.title, eventKind: view.eventKind,
     startTime: view.startTime, endTime: view.endTime, place: view.place, location: view.location, expects: view.expects,
