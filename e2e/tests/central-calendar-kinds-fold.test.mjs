@@ -72,17 +72,17 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.waitForSelector(eventCard, { timeout: 20_000 });
       assert.equal(await page.locator(rpeCard).count(), 0, "folded into the event's card");
 
-      await page.click('[data-action="central-calendar-toggle-filters"]');
-      await page.click('[data-action="central-calendar-toggle-kind"][data-kind="external"]');
+      // K5-2: Show only is always in view (no need to open More filters).
+      await page.click('[data-action="central-calendar-show-only"][data-kind="external"]');
       await page.waitForSelector(rpeCard, { timeout: 20_000 });
       assert.equal(await page.locator(eventCard).count(), 0, "events are not chosen");
       assert.ok(kindsSent.includes("external"), `the screen asked for kinds=external (${JSON.stringify(kindsSent)})`);
       await page.locator(rpeCard).first().scrollIntoViewIfNeeded();
       await page.screenshot({ path: `${process.env.E2E_SHOTS || "/tmp"}/fe-d16-rpe-alone-${width}.png` }).catch(() => {});
 
-      // Events chosen too: the unfiltered answer again, the request folded.
+      // Events instead: the unfiltered answer again, the request folded.
       const sent = kindsSent.length;
-      await page.click('[data-action="central-calendar-toggle-kind"][data-kind="event"]');
+      await page.click('[data-action="central-calendar-show-only"][data-kind="event"]');
       await page.waitForSelector(eventCard, { timeout: 20_000 });
       assert.equal(await page.locator(rpeCard).count(), 0);
       assert.equal(kindsSent.length, sent, "no request: the unfiltered answer is on hand");

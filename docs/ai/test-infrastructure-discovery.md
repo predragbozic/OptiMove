@@ -278,6 +278,25 @@ executed directly, with the runner's reporter attached), serially, with:
   the first file of every database kind, the shared kind included. A run in another
   checkout at the same time shows in the diff as well — the message says so.
 
+Nothing is hidden (2026-11-20):
+- a file that replaces `backend/src/db.js` with node:test's `mock.module("../src/db.js", …)`
+  is classified by what is left: the import walk does not enter the mocked db.js (nor
+  `pg` behind it). With no other database use (its own `pg` import, a server or migrator it
+  starts, a `create database`) it is `unit`. Seven such files had been `shared` and so never
+  ran in a default run;
+- a file that needs module mocks runs itself again through
+  `backend/tests/support/relaunch-with-module-mocks.mjs`: the isolation flag is the one the
+  running node accepts (Node 22 rejects `--test-isolation=none` with exit 9; the hand-written
+  wrappers passed it and their real tests never ran), a child that runs no test or fails
+  fails the wrapper (never a pass), and the first line of the failure names the inner tests
+  that failed, so a known failure is listed by its real title;
+- every summary ends with "Not run": each file in the run's scope (after `--group`,
+  `--filter`, `--file`) that no step of the run ran or skipped, with the reason (`shared`
+  and `schema-clone` outside their own commands, or another kind than the one asked for).
+  The JSON report carries the same list as `notRun`. `--strict-not-run` makes a non-empty
+  list fail the run (exit 1) for a gate that must see everything; without it nothing
+  changes.
+
 Known limits: files run serially (no `--concurrency`; the shared-kind files could not
 run in parallel anyway, and the frontend takes under a minute); the static
 classification reads imports and spawn arguments, so a file that reaches a database in

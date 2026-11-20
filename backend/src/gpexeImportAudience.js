@@ -45,6 +45,8 @@ function projectBlock(blocked, level) {
   if (level === "club_admin") {
     return PLATFORM_ONLY_CODES.has(blocked.code) ? { code: "mapping_not_usable", message: BLOCK_MESSAGES.mapping_not_usable } : blocked;
   }
+  // v80 step C0: team_setting_changed too reads as the one coach sentence (J17 6.1): no numbers, variable or structured
+  // setting reach a coach; the two administrators read both settings.
   return BLOCKING_CODES.has(blocked.code) ? { code: STABLE_CODE, message: COACH_SENTENCE } : blocked;
 }
 

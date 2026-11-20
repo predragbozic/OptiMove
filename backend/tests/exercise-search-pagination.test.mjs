@@ -1,24 +1,33 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { needsModuleMocksRelaunch, relaunchWithModuleMocks } from "./support/relaunch-with-module-mocks.mjs";
 
 // Keep the normal test command working without enabling mocks for the whole suite.
-if (!process.execArgv.includes("--experimental-test-module-mocks")) {
+if (needsModuleMocksRelaunch()) {
   test("exercise search pagination with isolated database mocks", () => {
-    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", "--test-isolation=none", fileURLToPath(import.meta.url)], { encoding: "utf8" });
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
+    relaunchWithModuleMocks(import.meta.url);
   });
 } else {
 let captured;
+const mediaLookups = [];
 const exercises = Array.from({ length: 40 }, (_, index) => ({ id: `ex-${index}`, name: `Squat ${index}` }));
-mock.module("../src/db.js", { namedExports: { pool: {}, query: async (sql, params) => {
-  captured = { sql, params };
-  const limit = params.at(-2);
-  const offset = params.at(-1);
-  return { rows: exercises.slice(offset, offset + limit) };
-} } });
+// The library search runs through queryWithoutJit (933b0fae: JIT off for the search). The only
+// plain query() on that path is the media lookup of the found rows (decorateMediaRows); it finds
+// no media selection here. Any other plain query() fails the test.
+mock.module("../src/db.js", { namedExports: { pool: {},
+  query: async (sql, params) => {
+    if (/from library\.exercises m where id=any\(\$1::uuid\[\]\)/.test(sql)) {
+      mediaLookups.push(params[0]);
+      return { rows: [] };
+    }
+    throw new Error(`the exercise search must not use query() (JIT on): ${sql.slice(0, 80)}`);
+  },
+  queryWithoutJit: async (sql, params) => {
+    captured = { sql, params };
+    const limit = params.at(-2);
+    const offset = params.at(-1);
+    return { rows: exercises.slice(offset, offset + limit) };
+  } } });
 const { default: router } = await import("../src/routes/exercises.js");
 const handler = router.stack.find((layer) => layer.route?.path === "/" && layer.route.methods.get).route.stack[0].handle;
 async function search(query) {
@@ -37,6 +46,8 @@ test("exercise search passes stable ordering and page offsets to SQL", async () 
   const last = await search({ search: "Squat", limit: "18", offset: "36" });
   assert.deepEqual([...first.exercises, ...second.exercises, ...last.exercises], exercises);
   assert.equal(last.hasMore, false);
+  // the media lookup asks for exactly the ids of the returned page
+  assert.deepEqual(mediaLookups.at(-1), exercises.slice(36).map((e) => e.id));
 });
 
 test("invalid offsets use the first page", async () => {
@@ -49,7 +60,8 @@ test("invalid offsets use the first page", async () => {
 test("name/code exact matches and name prefixes precede substring matches", async () => {
   await search({ search: "knee", limit: "18", purpose: "Strength" });
   assert.deepEqual(captured.params, ["coach", "%knee%", "knee", "Strength", 19, 0]);
-  assert.match(captured.sql, /order by case\s+when lower\(e\.name\) = lower\(\$3\) or lower\(e\.exercise_code\) = lower\(\$3\) then 0\s+when left\(lower\(e\.name\), length\(\$3\)\) = lower\(\$3\) then 1\s+else 2\s+end,/);
+  // the English name ranks like the name (6e39b347)
+  assert.match(captured.sql, /order by case\s+when lower\(e\.name\) = lower\(\$3\) or lower\(e\.name_en\) = lower\(\$3\) or lower\(e\.exercise_code\) = lower\(\$3\) then 0\s+when left\(lower\(e\.name\), length\(\$3\)\) = lower\(\$3\) or left\(lower\(e\.name_en\), length\(\$3\)\) = lower\(\$3\) then 1\s+else 2\s+end,/);
   assert.match(captured.sql, /effective_classification\."purposes" \? \$4/);
   assert.match(captured.sql, /limit \$5 offset \$6/);
 });

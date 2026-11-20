@@ -300,6 +300,130 @@ try {
   });
   check("the whole self-test project ran within the time limits", () => assert.ok(elapsed < 60_000, `took ${elapsed} ms`));
 
+  // A file that replaces db.js with mock.module is unit; the same file without the mock, or
+  // with its own pg import, still needs a database.
+  check("classification: a db.js replaced by mock.module does not make a file need a database", () => {
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-test-runner-selftest-classify-"));
+    try {
+      fs.mkdirSync(path.join(proj, "src"), { recursive: true });
+      fs.mkdirSync(path.join(proj, "tests"), { recursive: true });
+      fs.writeFileSync(path.join(proj, "src", "db.js"), 'import pg from "pg";\nexport const query = () => {};\n');
+      fs.writeFileSync(path.join(proj, "src", "service.js"), 'import { query } from "./db.js";\nexport const run = () => query();\n');
+      fs.writeFileSync(path.join(proj, "src", "other.js"), 'import { query } from "./db.js";\nexport const other = () => query();\n');
+      const wrapper = (body) => `import { test, mock } from "node:test";\n${body}\nconst { run } = await import("../src/service.js");\ntest("x", () => {});\n`;
+      fs.writeFileSync(path.join(proj, "tests", "mocked.test.mjs"), wrapper('mock.module("../src/db.js", { namedExports: { query: () => {} } });'));
+      fs.writeFileSync(path.join(proj, "tests", "plain.test.mjs"), wrapper(""));
+      fs.writeFileSync(path.join(proj, "tests", "mocked-but-pg.test.mjs"), wrapper('import pg from "pg";\nmock.module("../src/db.js", { namedExports: { query: () => {} } });'));
+      fs.writeFileSync(path.join(proj, "tests", "mocks-other.test.mjs"), wrapper('mock.module("../src/other.js", { namedExports: { other: () => {} } });'));
+      const testsDirAbs = path.join(proj, "tests");
+      const kindOf = (file) => runnerModule.classifyFile({ project: "backend", file, testsDirAbs, cache: new Map(), manifest: {} }).kind;
+      assert.equal(kindOf("mocked.test.mjs"), "unit");
+      assert.equal(kindOf("plain.test.mjs"), "shared");
+      assert.equal(kindOf("mocked-but-pg.test.mjs"), "shared");
+      assert.equal(kindOf("mocks-other.test.mjs"), "shared");
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // The relaunch helper of backend/tests/support: a child that ran no test, or failed, fails
+  // the wrapper; the old hand-written wrapper with --test-isolation=none is never a pass on a
+  // node that rejects the flag.
+  check("relaunch: a file that cannot run its inner suite is FAIL, never a pass; a good one passes", () => {
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-test-runner-selftest-relaunch-"));
+    const helper = pathToFileURL(path.join(REPO_ROOT, "backend", "tests", "support", "relaunch-with-module-mocks.mjs")).href;
+    const relaunching = (inner) => `import { test, mock } from "node:test";\nimport assert from "node:assert/strict";\nimport { needsModuleMocksRelaunch, relaunchWithModuleMocks } from ${JSON.stringify(helper)};\nif (needsModuleMocksRelaunch()) {\n  test("wrapper", () => { relaunchWithModuleMocks(import.meta.url); });\n} else {\n${inner}\n}\n`;
+    try {
+      fs.mkdirSync(path.join(proj, "tests"), { recursive: true });
+      fs.writeFileSync(path.join(proj, "tests", "r-good.test.mjs"), relaunching('  test("inner passes", () => { assert.equal(typeof mock.module, "function"); });'));
+      fs.writeFileSync(path.join(proj, "tests", "r-inner-fails.test.mjs"), relaunching('  test("inner passes", () => {});\n  test("inner breaks", () => { assert.equal(1, 2); });'));
+      fs.writeFileSync(path.join(proj, "tests", "r-no-tests.test.mjs"), relaunching("  // no test at all"));
+      fs.writeFileSync(path.join(proj, "tests", "r-import-crash.test.mjs"), relaunching('  await import("./does-not-exist.mjs");\n  test("never reached", () => {});'));
+      fs.writeFileSync(path.join(proj, "tests", "r-all-skipped.test.mjs"), relaunching('  test.skip("s1", () => {});\n  test.todo("t1");'));
+      // a hung inner test: the child's own per-test limit ends it and the failure names it
+      fs.writeFileSync(path.join(proj, "tests", "r-hang.test.mjs"), relaunching("  test(\"stuck forever\", () => new Promise(() => { setInterval(() => {}, 1000); }));").replace("relaunchWithModuleMocks(import.meta.url)", "relaunchWithModuleMocks(import.meta.url, { timeoutMs: 4000 })"));
+      const rejectsNewFlag = spawnSync(process.execPath, ["--test-isolation=none", "-e", "0"], { stdio: "ignore" }).status !== 0;
+      if (rejectsNewFlag) {
+        fs.writeFileSync(path.join(proj, "tests", "r-old-wrapper.test.mjs"), `import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { spawnSync } from "node:child_process";\nimport { fileURLToPath } from "node:url";\nif (!process.execArgv.includes("--experimental-test-module-mocks")) {\n  test("old wrapper", () => {\n    const r = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", "--test-isolation=none", fileURLToPath(import.meta.url)], { encoding: "utf8" });\n    assert.equal(r.status, 0, r.stdout + r.stderr);\n  });\n} else {\n  test("inner", () => {});\n}\n`);
+      }
+      const report = path.join(proj, "report.json");
+      const r = runRunner(["--project", "frontend", "--project-dir", proj, "--timeout-ms", "60000", "--json", report, "--quiet", "--log-dir", path.join(proj, "logs")]);
+      assert.equal(r.status, 1, r.stderr);
+      const byFile = Object.fromEntries(JSON.parse(fs.readFileSync(report, "utf8")).steps.flatMap((s) => s.results).map((x) => [x.file, x]));
+      assert.equal(byFile["r-good.test.mjs"].status, "pass");
+      for (const bad of ["r-inner-fails.test.mjs", "r-no-tests.test.mjs", "r-import-crash.test.mjs", "r-all-skipped.test.mjs", "r-hang.test.mjs", ...(rejectsNewFlag ? ["r-old-wrapper.test.mjs"] : [])]) {
+        assert.equal(byFile[bad].ok, false, `${bad} must not be ok`);
+        assert.ok(["fail", "crash"].includes(byFile[bad].status), `${bad}: ${byFile[bad].status}`);
+      }
+      assert.match(byFile["r-inner-fails.test.mjs"].failureDetails[0].message, /^inner suite failed \(exit 1\): inner breaks/);
+      assert.match(byFile["r-no-tests.test.mjs"].failureDetails[0].message, /^inner suite ran no test/);
+      assert.match(byFile["r-all-skipped.test.mjs"].failureDetails[0].message, /^inner suite ran no test \(exit 0\): every test is skipped or todo/);
+      // a live timer keeps the child running after its test was cancelled: it ends at the call's
+      // limit, and the failure still names the hung test
+      assert.match(byFile["r-hang.test.mjs"].failureDetails[0].message, /^inner suite (failed \(exit 1\)|did not finish \(ETIMEDOUT\)): stuck forever$/);
+      // the same files under a plain `node --test` (the parent sets NODE_TEST_CONTEXT there)
+      const direct = (name) => spawnSync(process.execPath, ["--test", path.join(proj, "tests", name)], { encoding: "utf8", timeout: 60000 }).status;
+      assert.equal(direct("r-good.test.mjs"), 0, "a good relaunching file passes under plain node --test");
+      assert.notEqual(direct("r-inner-fails.test.mjs"), 0, "a failing inner suite fails under plain node --test");
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // The helper's TAP reading: node escapes `\` and `#` in names (a Windows path arrives doubled),
+  // a parent is printed after its children, and skip / todo results are not tests that ran.
+  {
+    const helperModule = await import(pathToFileURL(path.join(REPO_ROOT, "backend", "tests", "support", "relaunch-with-module-mocks.mjs")).href);
+    check("relaunch: TAP results are read unescaped, leaf by leaf, skip and todo not counted", () => {
+      const win = "C:\\Users\\coach\\x.test.mjs";
+      assert.equal(helperModule.countRanTests("ok 1 - C:\\\\Users\\\\coach\\\\x.test.mjs\n", win), 0, "the escaped Windows placeholder is not a test");
+      assert.equal(helperModule.countRanTests("ok 1 - real test\nok 2 - C:\\\\Users\\\\coach\\\\x.test.mjs\n", win), 1);
+      const nested = "    not ok 1 - leaf x\n    ok 2 - leaf ok\nnot ok 1 - Suite S\nok 2 - skipped # SKIP\nnot ok 3 - todo # TODO\nok 4 - back\\\\slash \\# hash\n";
+      assert.deepEqual(helperModule.failedInnerTests(nested), ["leaf x"]);
+      assert.equal(helperModule.countRanTests(nested, "/nowhere"), 3);
+      assert.deepEqual(helperModule.parseTapResults(nested).at(-1).name, "back\\slash # hash");
+      assert.equal(helperModule.countRanTests("ok 1 - a # SKIP\nok 2 - b # TODO\n", "/nowhere"), 0);
+    });
+  }
+
+  // Not run: every file of the run's scope that no step ran is named; --strict-not-run fails.
+  check("not run: files left out by kind are listed in the summary and the report; --strict-not-run makes the run fail", () => {
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-test-runner-selftest-notrun-"));
+    try {
+      fs.mkdirSync(path.join(proj, "tests"), { recursive: true });
+      fs.writeFileSync(path.join(proj, "tests", "u-unit.test.mjs"), FILES["a-pass.test.mjs"]);
+      fs.writeFileSync(path.join(proj, "tests", "s-needs-db.test.mjs"), `import pg from "pg";\n${FILES["a-pass.test.mjs"]}`);
+      const report = path.join(proj, "report.json");
+      const base = ["--project", "backend", "--kind", "unit", "--project-dir", proj, "--timeout-ms", "5000", "--quiet", "--log-dir", path.join(proj, "logs")];
+      const lenient = runRunner([...base, "--json", report]);
+      assert.equal(lenient.status, 0, lenient.stdout + lenient.stderr);
+      assert.match(lenient.stdout, /not run 1/);
+      assert.match(lenient.stdout, /Not run \(1\):\n {2}backend \/ kind shared: this step runs --kind unit only \(1\): s-needs-db\.test\.mjs/);
+      const parsed = JSON.parse(fs.readFileSync(report, "utf8"));
+      assert.deepEqual(parsed.notRun.map((n) => [n.file, n.kind]), [["s-needs-db.test.mjs", "shared"]]);
+      assert.equal(parsed.totals.notRun, 1);
+      const strict = runRunner([...base, "--strict-not-run"]);
+      assert.equal(strict.status, 1, strict.stdout);
+      assert.match(strict.stdout, /RESULT: FAILED \(--strict-not-run: 1 file\(s\) not run\)/);
+      // nothing left out: --strict-not-run changes nothing
+      fs.rmSync(path.join(proj, "tests", "s-needs-db.test.mjs"));
+      const clean = runRunner([...base, "--strict-not-run"]);
+      assert.equal(clean.status, 0, clean.stdout);
+      assert.match(clean.stdout, /not run 0/);
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  check("not run: a file another step of the same run ran (or skipped) is not listed", () => {
+    const steps = [
+      { project: "backend", results: [{ file: "a.test.mjs" }], notRun: [{ project: "backend", file: "b.test.mjs", kind: "disposable", reason: "r1" }, { project: "backend", file: "c.test.mjs", kind: "shared", reason: "r1" }] },
+      { project: "backend", results: [{ file: "b.test.mjs", status: "skipped" }], notRun: [{ project: "backend", file: "a.test.mjs", kind: "unit", reason: "r2" }, { project: "backend", file: "c.test.mjs", kind: "shared", reason: "r2" }] },
+      { project: "frontend", results: [], notRun: [{ project: "frontend", file: "c.test.mjs", kind: "unit", reason: "r3" }] },
+    ];
+    assert.deepEqual(runnerModule.mergeNotRun(steps).map((n) => `${n.project}/${n.file}/${n.reason}`), ["backend/c.test.mjs/r1", "frontend/c.test.mjs/r3"]);
+  });
+
   // Refusals: an unsafe DATABASE_URL never lets a database-kind step start.
   for (const [label, url] of [
     ["a remote host", "postgresql://user:pw@db.example.com:5432/optimove"],
