@@ -146,7 +146,7 @@ if (needsModuleMocksRelaunch()) {
       const f = fixture({ exactMetric });
       const request = await serve(t, createSimplePreviewRouter({ service: serviceFor(f) }));
       const result = await request(`/metrics?metricDefinitionId=${exactMetric.id.toUpperCase()}`);
-      assert.deepEqual(result, { status: 200, body: { metrics: [{ ...exactMetric, allowed_aggregations: value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'] }], nextCursor: null } });
+      assert.deepEqual(result, { status: 200, body: { metrics: [{ ...exactMetric, calculation: null, allowedAggregations: value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'], allowed_aggregations: value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'] }], nextCursor: null } });
       const metricCalls = f.calls.filter(call => call.sql.includes('from training_load.metric_definitions'));
       assert.equal(metricCalls.length, 1);
       assert.ok(metricCalls[0].sql.includes("d.state='active'"));

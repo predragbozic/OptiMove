@@ -145,3 +145,12 @@ test('Estimates only requires Advanced and preserves the stored source policy', 
   assert.equal(compile(d, s, context(), existing).status, 'advancedRequired');
   assert.deepEqual(existing, before);
 });
+
+test('ratio defaults, allowed choices and redacted inputs are enforced by compiler', () => {
+  const { d, s } = metricCase();s.metric.calculation = { kind: 'ratio', scale: 1, inputs: [{ definitionId: id(7) }, { definitionId: id(8) }] };
+  delete d.view.analyticalAggregation;
+  const created=compile(d,s);assert.equal(created.status,'valid',JSON.stringify(created));assert.equal(created.widget.series[0].analytical_aggregation,'ratio');assert.equal(created.widget.series[0].aggregation_role_policy,'all_including_derived');
+  for(const agg of ['ratio','max','last','none']){d.view.analyticalAggregation=agg;assert.equal(compile(d,s).status,'valid');}
+  for(const agg of ['sum','avg']){d.view.analyticalAggregation=agg;has(compile(d,s),'aggregation_not_allowed');}
+  d.view.analyticalAggregation='ratio';s.metric.calculation.inputs[0]={definitionId:null};has(compile(d,s),'calculationInputUnavailable');
+});

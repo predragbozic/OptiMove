@@ -3188,6 +3188,11 @@ async function handleContentClick(event) {
     });
     return;
   }
+  // K5-5: "Open in calendar" from Tests' week, the Training Load calendar and Coach Home's day.
+  if (type === "open-in-central-calendar") {
+    openCentralCalendarOnDay({ date: action.dataset.date, view: action.dataset.view });
+    return;
+  }
   if (type === "back") {
     if (state.appHistoryDepth > 0) window.history.back();
     else handleAppBack();
@@ -4664,6 +4669,23 @@ async function handleBuilderEventsAction(action) {
     return true;
   }
   return true;
+}
+
+// K5-5 (docs/ai/central-calendar-k5-plan.md, K5-5): the central calendar on a module's day - the week with that day
+// selected, or its Day view. The place is set first and the rail's opener follows (Training Load's leave check, the
+// Back entry of the module, the tab), the Builder's pattern below; a check that keeps the coach where they are puts
+// the calendar's place back as it was. Coach screens only: the athlete has her own calendar (K4a).
+function openCentralCalendarOnDay({ date, view = "week" } = {}) {
+  if (isAthleteMode() || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return;
+  const cal = state.centralCalendar;
+  // Everything the place change may clear (restoreCentralCalendarPlace, and resetPanelReads with an open panel).
+  const before = cal ? {
+    view: cal.view, anchor: cal.anchor, selectedDate: cal.selectedDate, panel: cal.panel, panelEvent: cal.panelEvent,
+    k3: cal.k3, linkMessage: cal.linkMessage, alignStep: cal.alignStep, questionStep: cal.questionStep, panelQuestions: cal.panelQuestions,
+  } : null;
+  restoreCentralCalendarPlace({ view: view === "day" ? "day" : "week", anchor: date, selectedDate: date });
+  openCentralCalendarFromRail();
+  if (state.activeTab !== "central-calendar" && cal && before) Object.assign(cal, before);
 }
 
 // K2c-2-F: "Open in calendar" from the Builder - the calendar on that day,

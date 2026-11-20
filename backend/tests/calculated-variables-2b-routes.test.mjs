@@ -666,7 +666,7 @@ test("10. v79: an athlete never sees a ratio or a difference - her catalog, one 
   }
 });
 
-test("11. v79: a coach's dashboard refuses a ratio in plain words (the dashboards do not combine one yet) and takes a difference; the database refuses totalling or averaging a ratio and 'ratio' on anything else; the query never adds or averages a ratio", async () => {
+test("11. v79: a coach's dashboard refuses invalid ratio aggregations and takes a difference; the database refuses totalling or averaging a ratio and 'ratio' on anything else; the query never adds or averages a ratio", async () => {
   const { perMin, rest } = await v79Variables();
   const team = await setupTeam();
   await importSession(team, 9852);
@@ -677,10 +677,10 @@ test("11. v79: a coach's dashboard refuses a ratio in plain words (the dashboard
   assert.equal(widget.status, 201, widget.text);
   const series = (def, revision, agg = "sum") => dapi(`/${made.body.dashboard.id}/widgets/${widget.body.widgetId}/series`, { method: "POST", cookie: team.coach.cookie,
     body: { expectedWidgetRevision: revision, seriesOrder: 0, metricDefinitionId: def, dataScopeLevel: "session", analyticalAggregation: agg, aggregationRolePolicy: "all_including_derived" } });
-  for (const agg of ["sum", "avg", "max", "last"]) {
+  for (const agg of ["sum", "avg"]) {
     const refused = await series(String(perMin.id), 1, agg);
     assert.equal(refused.status, 409, refused.text);
-    assert.deepEqual(refused.body, { error: "ratio_not_available", message: "Dashboards cannot show a ratio yet. Use the variables it divides for now." });
+    assert.deepEqual(refused.body, { error: "aggregation_not_allowed", message: "This metric cannot be totalled or averaged. Choose Ratio, Highest or Latest." });
   }
   const difference = await series(String(rest.id), 1);
   assert.equal(difference.status, 201, difference.text);
@@ -707,7 +707,7 @@ test("11. v79: a coach's dashboard refuses a ratio in plain words (the dashboard
   assert.equal(await tryUpdate(`update training_load.dashboard_widget_series set metric_definition_id = $2, analytical_aggregation = 'max' where id = $1`, [seriesId, perMin.id]), null, "max of a ratio is allowed");
   const notRatio = await tryUpdate(`update training_load.dashboard_widget_series set analytical_aggregation = 'ratio' where id = $1`, [seriesId]);
   assert.match(notRatio?.message ?? "", /the aggregation ratio is only for a calculated ratio/);
-  // The query: a ratio's day of several sessions is an error, never a sum or a mean; one value per day stays itself.
+  // The query pools stored inputs for ratio and refuses sum/avg.
   const { runDashboardBatchQuery } = await import("../src/trainingLoadDashboardQuery.js");
   for (const agg of ["sum", "avg", "ratio"]) {
     const [r] = await runDashboardBatchQuery(
@@ -716,7 +716,8 @@ test("11. v79: a coach's dashboard refuses a ratio in plain words (the dashboard
         coveragePolicy: "complete_and_partial", sourcePolicy: "all_with_conflicts", groupBy: "cohort", analyticalAggregation: agg }],
       { queryRunner: (sql, params) => admin.query(sql, params) },
     );
-    assert.deepEqual(r, { widgetId: "w", seriesId: "s", status: "error", error: "seriesQueryFailed" }, `${agg}: a ratio is never combined`);
+    if (agg === "ratio") assert.equal(r.status, "ok", JSON.stringify(r));
+    else assert.deepEqual(r, { widgetId: "w", seriesId: "s", status: "error", error: "aggregation_not_allowed" });
   }
   // Highest stays a stored ratio of one session (never a sum of them).
   const [highest] = await runDashboardBatchQuery(
@@ -728,15 +729,15 @@ test("11. v79: a coach's dashboard refuses a ratio in plain words (the dashboard
   assert.equal(highest.status, "ok", JSON.stringify(highest));
   const stored = (await admin.query(`select value_numeric::float8 as v from training_load.metric_values where metric_definition_id = $1`, [perMin.id])).rows.map((x) => x.v);
   for (const row of highest.data.current.filter((x) => x.value !== null && !x.error)) assert.ok(stored.includes(Number(row.value)), `${row.value} is a stored ratio`);
-  // The simple dashboard builder neither lists nor loads a ratio; it lists the difference.
+  // The Simple builder lists and loads ratios as well as differences.
   const { createSimpleCapabilityReader } = await import("../src/dashboardSimple/capabilities.js");
   const reader = createSimpleCapabilityReader({ query: (sql, params) => admin.query(sql, params), canManageDashboardRow: () => true, dataWorkspaceMatches: () => true });
   const req = { user: { id: team.coach.id } };
   const listed = async (search) => (await reader.listMetrics({ req, dataWorkspace: null, dashboardId: made.body.dashboard.id, search })).metrics.map((m) => String(m.id));
-  assert.deepEqual(await listed(perMin.label), [], "no ratio in the simple builder");
+  assert.deepEqual(await listed(perMin.label), [String(perMin.id)], "ratio is available in the simple builder");
   assert.deepEqual(await listed(rest.label), [String(rest.id)], "the difference is there");
-  await assert.rejects(reader.load({ req, dataWorkspace: null, dashboardId: made.body.dashboard.id, metricRef: { kind: "metric", metricDefinitionId: String(perMin.id) } }), (e) => e.code === "notFound");
-  // A template's key hint that names a ratio stays unresolved in a clone (the dashboards do not take one yet).
+  assert.equal((await reader.load({ req, dataWorkspace: null, dashboardId: made.body.dashboard.id, metricRef: { kind: "metric", metricDefinitionId: String(perMin.id) } })).metric.calculation.kind, "ratio");
+  // A bare ratio hint without an explicit compatible aggregation/policy stays unresolved.
   const { resolveTemplateSeriesBatchForWorkspace } = await import("../src/trainingLoadDashboardWidgets.js");
   const keyOf = async (d) => (await admin.query(`select key from training_load.metric_definitions where id = $1`, [d])).rows[0].key;
   const resolved = await resolveTemplateSeriesBatchForWorkspace((sql, params) => admin.query(sql, params),

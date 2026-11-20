@@ -114,7 +114,7 @@ function buildSeries(definition, results, groupBy, loading, querySkipped) {
   const result = results[0];
   if (result.status === "error") {
     series.status = "error";
-    series.reasons.push("seriesQueryFailed");
+    series.reasons.push(result.error === "aggregation_not_allowed" && definition.calculation === null && definition.analytical_aggregation === "ratio" ? "ratioOnAmount" : ["calculation_changed_in_period", "aggregation_not_allowed"].includes(result.error) ? result.error : "seriesQueryFailed");
     return series;
   }
   if (result.status !== "ok" || !object(result.data) || !Array.isArray(result.data.current)) {
@@ -122,6 +122,8 @@ function buildSeries(definition, results, groupBy, loading, querySkipped) {
     series.reasons.push("invalidResult");
     return series;
   }
+  series.calculation = copy(result.calculation);
+  series.coverage = copy(result.coverage);
   series.current = result.data.current.map((row, index) => normalizeRow(row, index, definition, groupBy));
   series.chartGroups = chartGroups(series.current);
   series.comparisonRange = copy(result.data.comparisonRange);
