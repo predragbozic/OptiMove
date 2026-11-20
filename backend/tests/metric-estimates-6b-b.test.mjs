@@ -329,7 +329,8 @@ test("3. the proposal: the session's variables (a max variable is not estimable,
   assert.equal(days.length, 3, JSON.stringify(days));
   assert.ok(days.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)), JSON.stringify(days));
   assert.deepEqual(days, [...days].sort().reverse());
-  assert.deepEqual(r.body.methods.proportional.comparesWith, { key: "training_session", label: "Training session" });
+  // v85 (Q4): training_session is labelled "Full training".
+  assert.deepEqual(r.body.methods.proportional.comparesWith, { key: "training_session", label: "Full training" });
   assert.equal(r.body.methods.copy_athlete.reason, "choose_source");
   assert.deepEqual(r.body.methods.copy_athlete.sources.map((x) => x.name).sort(), ["Ana", "Bea", "Cil"]);
   // The coach's own minutes and a source athlete.
