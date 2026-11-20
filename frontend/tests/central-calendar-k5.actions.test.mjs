@@ -419,7 +419,8 @@ const sourceOf = (start) => {
 
 // The three openers against recording fakes: every name they call that the scope does not name is recorded; the
 // state each step sees is recorded with it.
-function openerHarness({ leave = true, rosterLeave = true, staysOnTab = true } = {}) {
+// `afterHandOff`: the activity Training Load holds once the hand-off returns (another one: the coach chose it meanwhile).
+function openerHarness({ leave = true, rosterLeave = true, staysOnTab = true, afterHandOff = null } = {}) {
   const calls = [];
   const appState = {
     activeTab: "central-calendar", navStack: ["x"], selectedProgramId: "p", selectedTemplateId: "t",
@@ -437,7 +438,7 @@ function openerHarness({ leave = true, rosterLeave = true, staysOnTab = true } =
     handleTrainingLoadAction: async ({ dataset }) => {
       calls.push(`tl:${dataset.action}:${dataset.scheduleId || dataset.activityId || dataset.date}`);
       if (dataset.action === "training-load-results-view-activity-in-calendar") {
-        appState.trainingLoad.calendar.selectedActivityId = dataset.activityId;
+        appState.trainingLoad.calendar.selectedActivityId = afterHandOff || dataset.activityId;
         appState.trainingLoad.calendar.roster = { userPickedTab: false };
       }
     },
@@ -499,4 +500,27 @@ test("K5-1. Open in Training Load: the guards come before the push; the Roster o
   const plain = openerHarness();
   await plain.openTrainingLoadFromCalendar({ activityId: "act-gps", date: "2026-11-19" });
   assert.equal(plain.appState.trainingLoad.calendar.activityDetailTab, "overview", "without the option the tab is Training Load's own choice");
+});
+
+// The Nezavisni revizor's LOW 2 on #688: the Roster option applies only to the activity it was asked for.
+test("K5-1. the Roster option sets no tab when another activity is chosen after the hand-off", async () => {
+  const h = openerHarness({ afterHandOff: "act-other" });
+  await h.openTrainingLoadFromCalendar({ activityId: "act-gps", date: "2026-11-19", tab: "roster" });
+  assert.equal(h.appState.trainingLoad.calendar.selectedActivityId, "act-other");
+  assert.equal(h.appState.trainingLoad.calendar.activityDetailTab, "overview", "another activity keeps its own tab");
+  assert.equal(h.appState.trainingLoad.calendar.roster.userPickedTab, false, "and is not marked as the coach's pick");
+});
+
+// The Nezavisni revizor's LOW 1 on #688: only `holdsImport === true` is an import - a truthy string or number is not.
+test("K5-2. holdsImport \"true\" or 1 gives no GPS mark and stays out of GPS imports and its count", () => {
+  for (const value of ["true", 1]) {
+    for (const kind of ["event", "planned", "external"]) {
+      const card = item({ key: `${kind}:x`, kind, holdsImport: value });
+      assert.equal(view.centralCalendarItemImported(card), false, `${kind} ${JSON.stringify(value)}`);
+      assert.ok(!view.centralCalendarCardMarks(card).includes("gps"), `${kind} ${JSON.stringify(value)}: no GPS mark`);
+      assert.equal(view.centralCalendarVisibleItems([card], { teamIds: [], kinds: ["gps"], eventKinds: [] }).length, 0, `${kind} ${JSON.stringify(value)}: not under GPS imports`);
+      const counts = view.centralCalendarChipCounts(new Map([[DAY(0), [card]]]), [DAY(0)]);
+      assert.equal(counts.kinds.gps, 0, `${kind} ${JSON.stringify(value)}: not counted`);
+    }
+  }
 });
