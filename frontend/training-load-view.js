@@ -9,6 +9,7 @@ import { renderVariablesHtml } from "./metric-variables-view.js";
 import { renderSourceFieldsHtml } from "./source-fields-view.js";
 import { renderMappingsHtml } from "./metric-mappings-view.js";
 import { renderBoardHtml } from "./metric-board-view.js";
+import { RPE_CHANGE_COACH_SEES, renderRpeAnswerLineHtml, rpeChangeIsUnchanged, rpeChangeTimeText } from "./rpe-answer-change.js";
 
 // Training load (RPE/sRPE), first complete phase. Deliberately its own
 // visual language - white surfaces, neutral gray borders, dark text, muted
@@ -173,6 +174,7 @@ function renderAthleteSessionRowHtml(session) {
       <div class="training-load-list-row is-rated">
         <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
         <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
+        ${renderRpeAnswerLineHtml(session)}
       </div>
     `;
   }
@@ -266,6 +268,7 @@ function renderAthleteWeeklySessionRowHtml(session, date, todayIso) {
           <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
         </span>
         <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
+        ${renderRpeAnswerLineHtml(session)}
       </div>
     `;
   }
@@ -304,6 +307,7 @@ export function renderRpeFormHtml(form) {
   const livePreview = form.durationMinutes !== "" && Number.isFinite(durationNumber) && durationNumber > 0
     ? form.rpe * durationNumber
     : null;
+  if (form.mode === "change") return renderRpeChangeFormHtml(form, livePreview);
   if (form.savedFeedback) {
     return `
       <div class="training-load-overlay">
@@ -351,6 +355,68 @@ export function renderRpeFormHtml(form) {
         <div class="training-load-rpe-actions">
           <button type="button" class="plain-button compact-button" data-action="training-load-close-rpe-form" ${form.saving ? "disabled" : ""}>Cancel</button>
           <button type="button" class="plain-button compact-button training-load-rpe-save" data-action="training-load-rpe-submit" ${form.saving || !isRpeFormValid(form) ? "disabled" : ""}>${form.saving ? "Saving..." : "Save"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+// K4b: the change form (mockup 05, step 3). Filled in with the saved answer;
+// one primary action, Save change, off while nothing differs; a result not
+// confirmed offers only Check result (the same request again).
+function renderRpeChangeFormHtml(form, livePreview) {
+  const until = rpeChangeTimeText(form.closesAt);
+  if (form.savedFeedback) {
+    return `
+      <div class="training-load-overlay">
+        <button class="training-load-overlay-backdrop" type="button" data-action="training-load-close-rpe-form" aria-label="Close"></button>
+        <section class="panel training-load-rpe-panel" role="dialog" aria-modal="true" aria-label="Answer changed">
+          <p class="eyebrow">Saved</p>
+          <h3>${escapeHtml(`Your RPE: ${form.savedFeedback.rpe} · ${formatFeedbackSummary(form.savedFeedback).replace(/^RPE \d+ · /, "")}`)}</h3>
+          <p class="muted">${escapeHtml(sessionLabel(form))}${form.date ? ` · ${escapeHtml(formatDate(form.date))}` : ""}</p>
+          <button type="button" class="plain-button compact-button" data-action="training-load-close-rpe-form">Done</button>
+        </section>
+      </div>
+    `;
+  }
+  const frozen = form.saving || form.unconfirmed || form.locked;
+  const sentAt = form.original?.submittedAt ? rpeChangeTimeText(form.original.submittedAt) : "";
+  const primary = form.locked
+    ? `<button type="button" class="plain-button compact-button" data-action="training-load-close-rpe-form">Done</button>`
+    : form.unconfirmed
+      ? `<button type="button" class="plain-button compact-button training-load-rpe-save" data-action="training-load-rpe-submit" ${form.saving ? "disabled" : ""}>${form.saving ? "Checking..." : "Check result"}</button>`
+      : `<button type="button" class="plain-button compact-button training-load-rpe-save" data-action="training-load-rpe-submit" ${form.saving || !isRpeFormValid(form) || rpeChangeIsUnchanged(form) ? "disabled" : ""}>${form.saving ? "Saving..." : "Save change"}</button>`;
+  return `
+    <div class="training-load-overlay">
+      <button class="training-load-overlay-backdrop" type="button" data-action="training-load-close-rpe-form" aria-label="Close"></button>
+      <section class="panel training-load-rpe-panel" role="dialog" aria-modal="true" aria-label="Change your RPE">
+        <div class="training-load-rpe-head">
+          <div>
+            <p class="eyebrow">Change your RPE</p>
+            <h3>${escapeHtml(sessionLabel(form))}${renderOutsidePlanTagHtml(form)}</h3>
+            <p class="muted">${form.date ? `${escapeHtml(formatDate(form.date))} · ` : ""}Your answer: ${escapeHtml(String(form.original?.rpe ?? ""))}${sentAt ? `, sent at ${escapeHtml(sentAt)}` : ""}.</p>
+          </div>
+          <button class="plain-button icon-button" type="button" data-action="training-load-close-rpe-form" aria-label="Cancel">&times;</button>
+        </div>
+        <fieldset class="training-load-rpe-change-fields"${frozen ? " disabled" : ""}>
+          <div class="training-load-rpe-slider-block" data-training-load-slider-block>
+            ${renderRpeSliderInnerHtml(form)}
+          </div>
+          <label class="training-load-rpe-duration-label">
+            Duration (minutes)
+            <input type="number" inputmode="numeric" min="1" max="600" step="1" class="training-load-rpe-duration-input" data-action="training-load-rpe-duration-input" value="${escapeAttr(form.durationMinutes)}">
+          </label>
+          <p class="training-load-rpe-srpe-preview" data-training-load-srpe-preview>${livePreview != null ? `sRPE preview: <strong>${escapeHtml(formatSrpe(livePreview))}</strong>` : "sRPE preview: enter a duration"}</p>
+          <label class="training-load-rpe-note-label">
+            Note <span class="muted">(optional)</span>
+            <textarea class="training-load-rpe-note-input" data-action="training-load-rpe-note-input" maxlength="500" rows="2">${escapeHtml(form.note)}</textarea>
+          </label>
+        </fieldset>
+        ${form.locked ? "" : `<p class="muted training-load-rpe-change-until">${until ? `You can change it until ${escapeHtml(until)}. ` : ""}${escapeHtml(RPE_CHANGE_COACH_SEES)}</p>`}
+        ${form.error ? `<p class="builder-error" role="alert">${escapeHtml(form.error)}</p>` : ""}
+        <div class="training-load-rpe-actions">
+          ${form.locked ? "" : `<button type="button" class="plain-button compact-button" data-action="training-load-close-rpe-form" ${form.saving ? "disabled" : ""}>Cancel</button>`}
+          ${primary}
         </div>
       </section>
     </div>

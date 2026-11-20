@@ -1183,11 +1183,17 @@ Branch `claude/central-calendar-backend-followups` from `origin/main` `b08cfb7f`
      or *All types*, goes back to the unfiltered answer without a request; a panel whose card the new answer does not
      hold closes quietly (a refresh keeps its "no longer on this day" note); a failed refresh of the kinds read over
      cards on screen says so. Tests: `central-calendar.actions` FE-D16, FE-D16b, FE-D16c and FE-D16d; e2e
-     `central-calendar-kinds-fold.test.mjs` (1280 and 390 px). Known limits (`code-reviewer`'s LOWs, recorded):
+     `central-calendar-kinds-fold.test.mjs` (1280, 390, 375 and 360 px). The follow-up tests (branch
+     `claude/central-calendar-fe-d16-tests`): FE-D16e (a late kinds answer is dropped), FE-D16f and FE-D16f2 (a voided
+     kinds read is read exactly once more, never a third time), FE-D16g (a types change never closes a panel over an
+     open form, also from the cache; `central-calendar-events.actions`, whose fake now honours `kinds`), and the two
+     pins below. Known limits (`code-reviewer`'s LOWs, recorded):
      - kinds mode shows a panel only for a card it shows: an event created while only *RPE requests* is chosen gets
-       its "created" line, but no open panel (its card is filtered out);
+       its "created" line, but no open panel (its card is filtered out). Pinned by FE-D16h
+       (`central-calendar-events.actions`): a fix changes that test on purpose;
      - with an event type chosen next to *RPE requests* the read stays unfiltered, so a request folded into an event
        of another type shows nowhere. A fix is a `kinds=external,event` read with the type filter in the browser, or a
-       server-side event-type filter; not part of FE-D16.
+       server-side event-type filter; not part of FE-D16. Pinned by FE-D16i (`central-calendar.actions`): a fix changes
+       that test on purpose.
 
 Mutations: one per item, each killed (the executor's report has the details).

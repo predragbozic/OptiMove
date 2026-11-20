@@ -6,6 +6,7 @@ import {
   renderCentralCalendarEventPlaceHtml,
 } from "./central-calendar-event-details.js";
 import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
+import { renderK3PanelHtml, renderK3SheetHtml } from "./central-calendar-k3-view.js";
 import {
   CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED,
   CENTRAL_CALENDAR_LINK_EMPTY,
@@ -1119,6 +1120,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: item.canManage === true && formCtx.catalog?.questionsEnabled === true && ccPanelAskOffered(item, cal.panelQuestions, "rpe", questionChannelsOf(item, cal)) }) : ""}
       ${item.kind === "event" ? renderCentralCalendarEventDetailsHtml(item, cal.panelEvent) : ""}
+      ${item.kind === "event" ? renderK3PanelHtml(item, cal, { locked: linksLocked }) : ""}
       ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending, pendingQuestion) : ""}
       ${questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : ""}
       ${renderEventActionsHtml(item, { locked: linksLocked })}
@@ -1204,5 +1206,6 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
         <div class="cc-main">${cal.anchor ? renderBodyHtml(cal, layout, today) : renderStateHtml(cal)}</div>
         ${renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites)}
       </div>
+      ${cal.k3?.sheet && !cal.form && panelItemOf(cal)?.key === cal.k3.eventKey ? renderK3SheetHtml(cal, panelItemOf(cal)) : ""}
     </section>`;
 }

@@ -16,6 +16,7 @@ import {
   ccWindowWire,
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
+import { k3SheetAction, k3StartFromPanel } from "./central-calendar-k3-actions.js";
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
@@ -215,9 +216,16 @@ export function closeCentralCalendarPanel(render) {
     if (render) focusQuestionControl(".cc-question-button");
     return true;
   }
+  // K3: an open "Plan the training" sheet closes first (the panel stays).
+  if (cal.k3?.sheet && !cal.k3.busy) {
+    cal.k3 = null;
+    render?.();
+    return true;
+  }
   const key = cal.panel.key;
   cal.panel = closedPanel();
   cal.panelQuestions = null;
+  cal.k3 = null;
   render?.();
   if (render) focusCard(key);
   return true;
@@ -355,6 +363,16 @@ export function rememberCentralCalendarCreate({ sentBody, requestKey }) {
   return () => forgetUncertainWrite(requestKey);
 }
 
+// K3 (docs/ai/central-calendar-k3-plan.md 2.5): an attach sent by the
+// Builder's Save and link joins this memory as a link command from its send,
+// so the leave guards count it and the event's panel offers Check result
+// (the same path, body and key). Returns the function that forgets it once
+// its answer settled.
+export function rememberCentralCalendarLink(spec) {
+  rememberLinkWrite(spec);
+  return () => forgetUncertainWrite(spec.requestKey);
+}
+
 // K2c-2-F (2.1.8): "Open in calendar" from the Builder - the calendar on that
 // day, with the event's panel open when a key is given (and no form is open).
 export function openCentralCalendarAt({ date, key = "" } = {}) {
@@ -398,6 +416,7 @@ export function restoreCentralCalendarPlace(place) {
 // Later move no revision, so an old read is never trusted).
 function resetPanelReads(cal) {
   cal.panelEvent = null;
+  cal.k3 = null;
   cal.linkMessage = null;
   cal.alignStep = null;
   cal.questionStep = null;
@@ -1787,12 +1806,25 @@ export function handleCentralCalendarKeydown(event) {
   return true;
 }
 
-export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad } = {}) {
+export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad, openBuilder } = {}) {
   const type = action?.dataset?.action || "";
   if (!type.startsWith("central-calendar-")) return false;
   const cal = state.centralCalendar;
   const today = localDateIso();
   if (!cal.anchor) cal.anchor = today;
+  // K3 (docs/ai/central-calendar-k3-plan.md 2.1, 2.2): Plan the training, and
+  // its sheet. Off while a link, question or event write of the panel is in
+  // flight or not confirmed (one control at a time).
+  if (type === "central-calendar-plan-training") {
+    const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
+    if (!item || cal.form || cal.questionStep || linkLockedFor(cal, item)) return true;
+    await k3StartFromPanel(cal, item, { openBuilder }, render);
+    return true;
+  }
+  if (type === "central-calendar-k3") {
+    await k3SheetAction(cal, action.dataset.k3 || "", action.dataset, { openBuilder }, render);
+    return true;
+  }
 
   if (type === "central-calendar-prev" || type === "central-calendar-next") {
     cal.anchor = movedAnchor(cal, type === "central-calendar-prev" ? -1 : 1);

@@ -243,7 +243,8 @@ test("E7. the states: loading, empty, an error with one Try again, a lost sign-i
   gate.resolve({ status: 200, body: answer([]) });
   await pending;
   assert.match($(".athlete-home-events").textContent, /No events in the next 14 days\./);
-  assert.equal($("button"), null, "the empty state has no button");
+  // K4a (contract 2.5): the empty state's one button is See all (the Calendar); no Try again, no Show more.
+  assert.deepEqual([...dom.window.document.querySelectorAll("button")].map((b) => [b.textContent, b.dataset.action]), [["See all", "athlete-home-events-see-all"]], "the empty state's only button is See all");
 
   // An error, and Try again sends one new request.
   clearAllViewCache();

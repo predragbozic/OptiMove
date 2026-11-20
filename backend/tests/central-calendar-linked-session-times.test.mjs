@@ -171,6 +171,15 @@ test("3. a cancelled event's time is never used", async () => {
   assert.equal(rows[0].linked_event_start_time, undefined);
 });
 
+// The Independent's LOW on #649 asked for a test that kills dropping
+// `athlete_uuid` from slotKey (linkedSessionTimes.js). No reachable state
+// tells the two apart: both readers (plans.js, athletes.js) read
+// plans.v_weekly_plan_items, whose athlete_uuid is the plan's own
+// plans.plans.athlete_id, and the slot key starts with plan_id - so one
+// plan_id never carries two athletes, and two athletes in one slot are
+// always two plans (two keys), as here. The athlete in the key is redundant
+// with plan_id today; that mutation is equivalent, and no row the app could
+// never write is faked to "kill" it.
 test("4. an athlete who is no longer a target of the event is not shown its time; the athlete who still is, is", async () => {
   const w = await teamWorld("targets");
   const [a1, a2] = w.athletes;

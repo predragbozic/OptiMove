@@ -1,6 +1,6 @@
 // FE-D16 (central-calendar-k2b2-plan.md 9.4): an RPE request an event refers to is folded into the event's card on
 // the calendar; with "RPE requests" alone chosen the screen reads `kinds=external`, so the request is its own card.
-// At 1280 and 390 px, as the team coach.
+// At 1280, 390, 375 and 360 px, as the team coach.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
@@ -55,7 +55,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await world?.stop(); });
 
-for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.phone]]) {
+for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.phone], ["375 px", 375], ["360 px", 360]]) {
   test(`(${label}) RPE requests alone shows the request the event folds; Events back folds it again`, async () => {
     const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
     const kindsSent = [];

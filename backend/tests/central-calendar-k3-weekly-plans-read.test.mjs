@@ -11,6 +11,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import pg from "pg";
 import { addDays, calendarRoleMatrix, startCalendarApp } from "./support/calendar-fixture.mjs";
 
 // A Monday well in the future, and a Wednesday of that week.
@@ -39,6 +40,15 @@ before(async () => {
   await q(`alter table plans.plan_items add column if not exists plan_session_id uuid`);
   await q(`alter table plans.plan_nodes add column if not exists plan_session_id uuid`);
   await q(`alter table plans.plan_nodes add column if not exists name text`);
+  // The real user_team_roles' audit columns (migrations/20260804_scoped_role_audit.sql and the
+  // access schema's created_at / updated_at), which the app's own revocation route writes and
+  // answers with (test 10).
+  await q(`alter table public.user_team_roles
+    add column if not exists granted_by_user_id uuid references public.users(id) on delete set null,
+    add column if not exists revoked_at timestamptz,
+    add column if not exists revoked_by_user_id uuid references public.users(id) on delete set null,
+    add column if not exists created_at timestamptz not null default now(),
+    add column if not exists updated_at timestamptz not null default now()`);
   m = await calendarRoleMatrix(env, "k3r");
   ({ weeklyPlansReadAnswer, WEEKLY_PLANS_READ_MAX } = await import("../src/routes/builder.js"));
 });
@@ -205,6 +215,74 @@ test("8. the caller's own EMPTY Builder plan is skipped, as POST /plans skips it
   assert.equal(res.body.athletes[0].plan.mine, false);
   assert.equal(res.body.athletes[1].plan, null, "only the caller's own empty plan: none, as the create would make a new one");
   assert.equal(res.body.athletes[2].plan.planId, othersEmpty, "another creator's empty plan still blocks the create, so it is reported");
+});
+
+// The Independent's LOW on #650: the SQL `editable` predicate was never false
+// in a row the route answered. On every stable state the scope rule and the
+// access rule agree (a team workspace exists only for an active team_coach
+// role, and that role with the athlete's active team membership is exactly
+// athleteAccessPredicate's team branch). They differ only when the role is
+// revoked during the request: the workspace scope comes from the
+// authorization context loaded at the start of the request (req.authz),
+// `editable` from the roles as they are when the read runs. This test makes
+// that race deterministic with a real request and a real revocation - no row
+// the app could not write: another connection holds plans.plans, the
+// request's read waits on it, the club admin revokes the coach's role through
+// the app's own route (which never touches plans.plans), and releasing the
+// lock lets the read run.
+test("10. a team role revoked while the read waits: the athlete is still plannable (the request's workspace), the other coach's plan is { editable:false } only", async () => {
+  const team = await fx.makeTeam(m.clubs.c1, "k3r revoked mid-read");
+  const coach = await fx.coachOf(team, "k3r coach revoked mid-read");
+  const a = await fx.makeAthlete("k3r revoked mid-read athlete", { clubId: m.clubs.c1, teamId: team });
+  const p = await weeklyPlan({ athleteId: a.athleteId, createdBy: m.roles.clubAdmin.id });
+  // Before: the coach opens it.
+  const before = await read(coach.cookie, `weekStart=${MONDAY}&${ids([a.athleteId])}`);
+  assert.equal(before.status, 200, before.text);
+  assert.equal(before.body.athletes[0].plan?.editable, true, "the coach may open the plan before the revocation");
+
+  const holder = new pg.Client({ connectionString: env.db.url });
+  await holder.connect();
+  let pending = null;
+  try {
+    await holder.query("begin");
+    await holder.query("lock table plans.plans in access exclusive mode");
+    pending = read(coach.cookie, `weekStart=${MONDAY}&${ids([a.athleteId])}`);
+    // The route's read is waiting on the lock (its sign-in and workspace reads are done).
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const waiting = (await q(
+        `select count(*)::int as n from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock' and query like 'select k.athlete_id::text as athlete_id%'`,
+      ))[0].n;
+      if (waiting > 0) break;
+      if (Date.now() > deadline) {
+        const lockWaits = await q(`select left(query, 160) as q from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`);
+        throw new Error(`the weekly-plans read never waited on plans.plans; waiting: ${JSON.stringify(lockWaits)}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const revoked = await api(`/api/organization/users/${coach.id}/team-roles/${team}/team_coach`, { method: "DELETE", cookie: m.roles.clubAdmin.cookie });
+    assert.equal(revoked.status, 200, revoked.text);
+    await holder.query("rollback");
+  } catch (error) {
+    await holder.query("rollback").catch(() => {});
+    await holder.end().catch(() => {});
+    await pending?.catch(() => {});
+    throw error;
+  }
+  await holder.end().catch(() => {});
+  // The row the app's own revocation writes.
+  assert.deepEqual(
+    (await q(`select is_active, revoked_at is not null as revoked from public.user_team_roles where user_id = $1 and team_id = $2`, [coach.id, team]))[0],
+    { is_active: false, revoked: true },
+  );
+  const res = await pending;
+  assert.equal(res.status, 200, res.text);
+  assert.deepEqual(res.body.athletes, [{ athleteId: a.athleteId, plannable: true, plan: { editable: false } }]);
+  for (const hidden of [p, m.roles.clubAdmin.id, "Secret week name"]) assert.ok(!res.text.includes(hidden), `${hidden} is not answered`);
+  // After the revocation the coach has no team workspace at all.
+  const after = await read(coach.cookie, `weekStart=${MONDAY}&${ids([a.athleteId])}`);
+  assert.equal(after.status, 403, after.text);
 });
 
 test("9. ids are answered once each, in the order sent, lower-cased", async () => {

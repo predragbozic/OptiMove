@@ -11,10 +11,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { addDays, calendarRoleMatrix, newKey, startCalendarApp, uid } from "./support/calendar-fixture.mjs";
+import { utcDateOf, waitOutUtcMidnight } from "./support/utc-day-guard.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
-const TODAY = new Date().toISOString().slice(0, 10);
+// The server reads the real clock (Postgres current_date, new Date()), all in UTC, so this file must not run across
+// UTC midnight: TODAY would fall a day behind the server's and today's 00:00-23:59 windows close in the last minute
+// (it failed 33/9 in a run near midnight). It starts only once no midnight is within reach (utc-day-guard.mjs).
+const TODAY = await waitOutUtcMidnight();
 const ALL_DAY = { kind: "custom", date: TODAY, from: "00:00", to: "23:59" };
 
 let env;
@@ -45,6 +49,8 @@ before(async () => {
 
 after(async () => {
   if (env) await env.stop();
+  // The guard above decides only when the file starts: a run longer than its margin could still cross midnight.
+  assert.equal(utcDateOf(Date.now()), TODAY, "this run crossed UTC midnight; failures in it are not real (utc-day-guard.mjs)");
 });
 
 const role = (name) => m.roles[name];
