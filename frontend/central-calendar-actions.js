@@ -1992,6 +1992,10 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
 
+  // K7: the Day list "+N more" opened lasts until the next view, day or mode change.
+  if (["central-calendar-prev", "central-calendar-next", "central-calendar-today", "central-calendar-view", "central-calendar-mode", "central-calendar-open-day"].includes(type)) {
+    cal.dayList = type === "central-calendar-open-day" && action.dataset.dayList === "1" && isIsoDate(action.dataset.date);
+  }
   if (type === "central-calendar-prev" || type === "central-calendar-next") {
     cal.anchor = movedAnchor(cal, type === "central-calendar-prev" ? -1 : 1);
     cal.selectedDate = cal.anchor;

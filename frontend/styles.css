@@ -21311,6 +21311,144 @@ body.exercise-header-pinned #viewToolbar {
   display: none;
 }
 
+/* K7 (docs/ai/central-calendar-k7-timegrid-contract.md 2, 4): the hours as positioned day columns, like a
+   professional calendar. Every box takes its top and height in minutes and its left and width as fractions of the
+   column (central-calendar-timegrid.js); one custom property turns minutes into pixels. */
+.cc-timegrid {
+  --cc-hour-px: 48px;
+}
+
+.cc-timegrid-day .cc-timegrid-row {
+  grid-template-columns: 56px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.cc-timegrid-body {
+  align-items: start;
+}
+
+.cc-tg-gutter,
+.cc-tg-col {
+  position: relative;
+  height: calc(var(--cc-hour-px) * var(--cc-tg-hours));
+}
+
+/* The hour lines are one repeating background, not one element per hour. */
+.cc-tg-col {
+  min-width: 0;
+  background-image: repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px var(--cc-hour-px));
+}
+
+.cc-tg-col.is-today {
+  background-color: rgba(31, 111, 104, 0.05);
+}
+
+.cc-tg-hour {
+  position: absolute;
+  top: calc(var(--cc-hour-px) * var(--cc-tg-top) / 60);
+  right: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.cc-tg-box {
+  position: absolute;
+  top: calc(var(--cc-hour-px) * var(--cc-tg-top) / 60);
+  left: calc(var(--cc-tg-left) * 100%);
+  width: calc(var(--cc-tg-width) * 100% - 2px);
+  height: calc(var(--cc-hour-px) * var(--cc-tg-height) / 60);
+  display: flex;
+  min-width: 0;
+  padding: 1px 0;
+  box-sizing: border-box;
+}
+
+.cc-tg-box > .cc-card {
+  min-height: 0;
+  height: 100%;
+  gap: 6px;
+}
+
+.cc-tg-box .cc-card-body {
+  align-content: start;
+  gap: 2px;
+  padding: 3px 6px 3px 0;
+  overflow: hidden;
+}
+
+/* A box shows its time first and its title on one line; the rest is in its tooltip and label. */
+.cc-tg-box .cc-card-top {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.cc-tg-box .cc-card-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-size: 13px;
+}
+
+.cc-tg-box .cc-card-place,
+.cc-tg-box .cc-card-note,
+.cc-tg-box .cc-card-meta,
+.cc-tg-box .cc-card-span,
+.cc-tg-box .cc-card-marks {
+  display: none;
+}
+
+/* A narrow box (a shared cluster) keeps its colour stripe and time; the icon goes. */
+.cc-tg-box.is-narrow .cc-card-icon {
+  display: none;
+}
+
+/* No end time (Q2): the lower edge fades instead of claiming a length the calendar does not know. */
+.cc-tg-box.is-open-end > .cc-card {
+  border-bottom-color: transparent;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+}
+
+/* A chip with a time: one chip high (at least 24 px), at its minute. */
+.cc-tg-box.is-chip {
+  height: auto;
+}
+
+.cc-tg-box.is-chip > .cc-daychip {
+  width: 100%;
+  min-height: 24px;
+}
+
+.cc-tg-more {
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+  align-self: stretch;
+  cursor: pointer;
+}
+
+.cc-tg-more:hover {
+  background: var(--accent-soft);
+}
+
+.cc-timegrid-untimed .cc-tg-more {
+  min-height: 30px;
+}
+
 /* The month grid. */
 .cc-month {
   display: grid;
