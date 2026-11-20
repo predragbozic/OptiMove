@@ -1395,12 +1395,34 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   for (const who of [W.caA, W.paA]) assert.deepEqual(shape(await post(url, who, body("2.5", "0.3"))), NOT_FOUND);
   // Not compared through route O yet.
   refused(await post(url, W.pa, body("2.5", "0.3")), 409, "not_compared");
+  // v80 step C0: the field detail says the state of the confirmation, to the field read's audience only.
+  const detailOf = async (who) => ok(await get(`/fields/${fAcc.fieldId}`, who));
+  for (const who of [W.pa, W.caA]) {
+    assert.deepEqual((await detailOf(who)).eventSetting, { event: "acceleration", revisionId: fAcc.revId, compared: false, sessionKept: false, confirmation: null });
+  }
+  const coach = { id: await user("coach") };
+  await k.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [coach.id, t.teamId]);
+  await workspace(coach.id, "team", t.teamId);
+  coach.cookie = await cookieFor(coach.id);
+  assert.deepEqual(shape(await get(`/fields/${fAcc.fieldId}`, coach)), NOT_FOUND, "a coach gets the identical 404");
+  assert.equal("eventSetting" in (await detailOf(W.pa)) && "eventSetting" in ok(await get(`/fields/${(await field("time")).fieldId}`, W.pa)), false, "only an events column carries it");
   // The revision proven by a comparison (route O) in a session of this team (planted as route O leaves it).
   const fTime = await field("time");
   const vMin = await variable(W.caA, { unit: "min" });
   const compared = ok(await save(W.caA, t, cand, [await newRow(W.caA, t, cand, fTime, vMin)])).confirmation.id;
   await planted(() => k.query(`update training_load.source_metric_definition_versions set evidence_status = 'source_stated', evidence_ref = null,
     unit_evidence_ref = null, unit_observation_id = $2, meaning_evidence_ref = null, meaning_observation_id = $2 where id = $1`, [fAcc.revId, compared]));
+  // Compared, not confirmed: the detail never carries the compared session's setting before Confirm (the Rukovodilac's
+  // condition on C1: not shown, and not in the answer either); the board names the column that waits for the confirmation.
+  const waiting = await get(`/fields/${fAcc.fieldId}`, W.pa);
+  assert.deepEqual(ok(waiting).eventSetting, { event: "acceleration", revisionId: fAcc.revId, compared: true, sessionKept: true, confirmation: null });
+  assert.equal(/\b2\.5\b|\b0\.3\b|teamThresholds|duration_seconds/.test(waiting.text), false, waiting.text);
+  const accOnBoard = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board.variables.find((x) => x.id === acc.id);
+  assert.deepEqual([accOnBoard.placeable, accOnBoard.matchingFieldIds, accOnBoard.waitingFieldIds], [false, [], [fAcc.fieldId]]);
+  // A save sent past the screen onto the waiting column is refused by the server all the same (the screen's drop filter is
+  // only help; C2's condition).
+  const pastScreen = await placementRaw(W.caA, t, cand, fAcc, acc);
+  assert.deepEqual([pastScreen.placeable, pastScreen.code], [false, "event_setting_not_confirmed"]);
   // The body.
   for (const bad of [{}, body("x", "0.3"), body("2.5", "-1"), { ...body("2.5", "0.3"), extra: 1 }, { ...body("2.5", "0.3"), requestKey: "nope" }]) {
     refused(await post(url, W.pa, bad), 400, "invalid_body");
@@ -1420,6 +1442,12 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   refused(await post(url, W.pa, body("2.5", "0.30001", requestKey)), 409, "request_key_reused");
   const stored = await one(`select event_kind, trim_scale(threshold_value)::text as v, trim_scale(duration_seconds)::text as d, observation_confirmation_id, threshold_set_id, confirmed_by_user_id from training_load.source_metric_event_setting_confirmations where id = $1`, [first.id]);
   assert.deepEqual(stored, { event_kind: "acceleration", v: "2.5", d: "0.3", observation_confirmation_id: compared, threshold_set_id: "1473", confirmed_by_user_id: W.pa.id });
+  // The detail shows the owner's own confirmed numbers; the board offers the column (no longer waiting).
+  const confirmedDetail = (await detailOf(W.caA)).eventSetting;
+  assert.deepEqual({ ...confirmedDetail, confirmation: { ...confirmedDetail.confirmation, confirmedAt: Boolean(confirmedDetail.confirmation?.confirmedAt) } },
+    { event: "acceleration", revisionId: fAcc.revId, compared: true, sessionKept: true, confirmation: { thresholdValue: "2.5", durationSeconds: "0.3", confirmedAt: true } });
+  const accNow = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board.variables.find((x) => x.id === acc.id);
+  assert.deepEqual([accNow.placeable, accNow.matchingFieldIds.includes(fAcc.fieldId), accNow.waitingFieldIds], [true, true, []]);
   // Now the column fills the variable with that setting, and not the one of 0.5 s.
   const p = await placementRaw(W.caA, t, cand, fAcc, acc);
   assert.equal(p.placeable, true, JSON.stringify(p));
@@ -1503,7 +1531,7 @@ test("V80-4c. the owner's confirmation, the COMMIT's answer: lost after the COMM
 });
 
 test("V80-5. the importer through its real activation read: a team's next session whose zone 3 is 25-65 W/kg is blocked whole (team_setting_changed) by the candidate preview, while a session with the matched setting is not; the club's version is switched on for the team from the board as a pre-placed row", async () => {
-  const { t, cand } = await plantedTeam();
+  const { t, cand, name } = await plantedTeam();
   // The club's version of V80-1, pre-placed on this team's board and saved: the activation records its match.
   const saved = ok(await save(W.caA, t, cand, [await preplacedRow(W.caA, t, cand, V80.zone)]));
   assert.deepEqual((await activationRow(saved.confirmation.rows[0].activationId)).matched_source_range, { max: "60", min: "25", operator: "between", unit: "W/kg" });
@@ -1519,6 +1547,30 @@ test("V80-5. the importer through its real activation read: a team's next sessio
   const blocked = await recompute(changed);
   assert.equal(blocked.status, 200, blocked.text);
   assert.equal(blocked.body.candidate.preview.blocked?.code, "team_setting_changed", blocked.text);
+  // v80 step C0: the two administrators read both settings, the variable and the team (section 5's sentence); no id.
+  const label = V80.zone.variable.label;
+  const sentence = `${name}'s setting in GPEXE counts the zone 25–65 W/kg for this session; ${label} counts the zone 25–60 W/kg. Nothing of this session is imported. Set it back in GPEXE, or switch ${label} off for ${name}.`;
+  assert.deepEqual(blocked.body.candidate.preview.blocked, {
+    code: "team_setting_changed", message: sentence,
+    setting: { teamName: name, variableLabel: label, current: { max: "65", min: "25", operator: "between", unit: "W/kg" }, matched: { max: "60", min: "25", operator: "between", unit: "W/kg" } },
+  });
+  const candidateRead = async (who) => {
+    const res = await fetch(`${apiBase}/api/training-load/gpexe/teams/${t.teamId}/candidates/${changed.id}`, { headers: { Cookie: who.cookie } });
+    const text = await res.text();
+    return { status: res.status, body: JSON.parse(text), text };
+  };
+  const asClubAdmin = await candidateRead(W.caA);
+  assert.equal(asClubAdmin.status, 200, asClubAdmin.text);
+  assert.deepEqual(asClubAdmin.body.candidate.preview.blocked.setting, blocked.body.candidate.preview.blocked.setting);
+  // A coach reads a sentence without the numbers, the variable or the structured setting.
+  const coach = { id: await user("coach") };
+  await k.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [coach.id, t.teamId]);
+  await workspace(coach.id, "team", t.teamId);
+  coach.cookie = await cookieFor(coach.id);
+  const asCoach = await candidateRead(coach);
+  assert.equal(asCoach.status, 200, asCoach.text);
+  assert.deepEqual(asCoach.body.candidate.preview.blocked, { code: "data_setup_incomplete", message: "The team's setting in GPEXE changed for this session, so nothing of it is imported. Ask an administrator, or set it back in GPEXE." });
+  assert.equal(/25–6[05]|"setting"/.test(asCoach.text), false, "no range or structured setting reaches a coach");
   const fine = await recompute(cand);
   assert.equal(fine.status, 200, fine.text);
   assert.notEqual(fine.body.candidate.preview.blocked?.code, "team_setting_changed", fine.text);

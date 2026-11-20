@@ -35,6 +35,7 @@ export const PLATFORM_ONLY_CODES = Object.freeze(new Set(["source_instance_held"
 export const LEFT_OUT_ADMIN_CODES = Object.freeze(new Set(["required_value_missing", "canonical_value_out_of_range"]));
 export const STABLE_CODE = "data_setup_incomplete";
 export const COACH_SENTENCE = "This session can't be imported until an administrator finishes its data setup.";
+export const COACH_SETTING_SENTENCE = "The team's setting in GPEXE changed for this session, so nothing of it is imported. Ask an administrator, or set it back in GPEXE.";
 export const CLUB_VARIABLE_LABEL = "Club variable";
 
 const ADMIN_VALUE_FIELDS = ["activationId", "mappingVersionId", "sourceParameterFingerprint"];
@@ -45,6 +46,9 @@ function projectBlock(blocked, level) {
   if (level === "club_admin") {
     return PLATFORM_ONLY_CODES.has(blocked.code) ? { code: "mapping_not_usable", message: BLOCK_MESSAGES.mapping_not_usable } : blocked;
   }
+  // v80 step C0: a session blocked by a changed team setting says so to a coach, without the numbers, the variable or the
+  // structured setting (the administrators read both settings).
+  if (blocked.code === "team_setting_changed") return { code: STABLE_CODE, message: COACH_SETTING_SENTENCE };
   return BLOCKING_CODES.has(blocked.code) ? { code: STABLE_CODE, message: COACH_SENTENCE } : blocked;
 }
 
