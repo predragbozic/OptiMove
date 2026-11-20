@@ -92,6 +92,7 @@ test('zero denominator is left out, component ratios and percentage scale use ex
   const r=await query('ratio','cohort',{}, {dateFrom:'2026-09-15',dateTo:'2026-09-15'});assert.equal(r.status,'ok',JSON.stringify(r));assert.deepEqual(r.coverage,{includedOccasions:2,leftOutOccasions:1});
   const components=await query('ratio','component',{dataScopeLevel:'component'},{dateFrom:'2026-09-15',dateTo:'2026-09-15'});assert.equal(components.status,'ok',JSON.stringify(components));
   const percent=await query('ratio','cohort',{metricDefinitionId:share.body.variable.id},{dateFrom:'2026-09-15',dateTo:'2026-09-15'});assert.equal(percent.status,'ok',JSON.stringify(percent));assert.equal(percent.calculation.scale,100);assert.equal(percent.data.current[0].value,10);
+  const oldShare=await query('ratio','day',{metricDefinitionId:share.body.variable.id});assert.deepEqual(oldShare.data.current,[]);assert.deepEqual(oldShare.coverage,{includedOccasions:0,leftOutOccasions:3});
 });
 test('numeric rounding is PostgreSQL half-away-from-zero at six places and last uses the occasion tie-break',async()=>{
   await importAt(5095,'2026-09-18',false,values=>{for(const part of values[0].parts){part.distance=2.000001;part.time=120;}});
@@ -145,4 +146,49 @@ test('a valid ratio template clones without changing aggregation or policy',asyn
   const clone=await api('/api/training-load/dashboards/'+id+'/clone',{ownerScope:'user',isTemplate:false});assert.equal(clone.status,201,JSON.stringify(clone));
   const detail=await api('/api/training-load/dashboards/'+clone.body.dashboard.id);assert.equal(detail.status,200,JSON.stringify(detail));
   const series=detail.body.widgets[0].series[0];assert.equal(series.resolution_status,'resolved');assert.equal(series.metric_definition_id,ratio.id);assert.equal(series.analytical_aggregation,'ratio');assert.equal(series.aggregation_role_policy,'all_including_derived');
+});
+
+test('two sources on one ratio target are conflicts, never pooled or selected',async()=>{
+  await client.query('begin');
+  try {
+    const original=(await client.query(`select r.computed_by_ref,o.id,p.athlete_id,e.source_connection_id,l.activity_id,pl.activity_participant_id
+      from training_load.metric_values r join training_load.metric_measurement_occasions o on o.id=r.occasion_id
+      join training_load.metric_event_participants p on p.id=o.event_participant_id join training_load.metric_events e on e.id=p.event_id
+      join training.activity_metric_event_links l on l.metric_event_id=e.id and l.link_status='confirmed'
+      join training.activity_participant_metric_participant_links pl on pl.metric_event_participant_id=p.id and pl.link_status='confirmed'
+      where r.metric_definition_id=$1 and e.occurred_date='2026-09-14' and o.segment_id is null and p.athlete_id=$2 limit 1`,[ratio.id,org.athleteIds[0]])).rows[0];
+    await client.query('update training_load.metric_definitions set current_version_id=$2 where id=$1',[ratio.id,original.computed_by_ref.formulaVersionId]);
+    const connection=(await client.query("insert into training_load.metric_source_connections(source_system,owner_scope,owner_team_id) values('test-import','team',$1) returning id",[org.teamId])).rows[0].id;
+    const event=(await client.query("insert into training_load.metric_events(event_name,occurred_date,occurred_instant,scope_level,owner_scope,owner_team_id,source_connection_id,created_by_user_id) values('Second source','2026-09-14','2026-09-14T18:08:12Z','session','team',$1,$2,$3) returning id",[org.teamId,connection,org.userId])).rows[0].id;
+    const participant=(await client.query("insert into training_load.metric_event_participants(event_id,athlete_id,athlete_timezone_snapshot) values($1,$2,'UTC') returning id",[event,original.athlete_id])).rows[0].id;
+    await client.query("insert into training.activity_metric_event_links(activity_id,metric_event_id,link_method,link_status) values($1,$2,'manual','confirmed')",[original.activity_id,event]);
+    await client.query("insert into training.activity_participant_metric_participant_links(activity_participant_id,metric_event_participant_id,link_method,link_status) values($1,$2,'manual','confirmed')",[original.activity_participant_id,participant]);
+    const occasion=(await client.query("insert into training_load.metric_measurement_occasions(event_participant_id,entry_method) values($1,'manual') returning id",[participant])).rows[0].id;
+    await client.query(`insert into training_load.metric_values(occasion_id,metric_definition_id,metric_definition_version_id,value_numeric,unit_at_capture,is_derived,aggregation_role,coverage)
+      select $1,metric_definition_id,metric_definition_version_id,case when metric_definition_id=$3 then value_numeric*2 else value_numeric end,unit_at_capture,false,'standalone','not_applicable' from training_load.metric_values where occasion_id=$2 and not is_derived and value_numeric is not null`,[occasion,original.id,world.gpexe_total_distance.variableId]);
+    const {writeCalculatedValues}=await import('../src/calculatedValues.js');await writeCalculatedValues(client,{occasionId:occasion,level:'full',ownerTeamId:org.teamId});
+    const stored=(await client.query('select value_numeric::float8 as value from training_load.metric_values where occasion_id=$1 and metric_definition_id=$2',[occasion,ratio.id])).rows[0];assert.ok(stored,'second source has a real stored ratio');
+    for(const agg of ['ratio','max','last']){
+      const r=await query(agg);assert.equal(r.status,'ok',JSON.stringify(r));assert.equal(r.data.current.length,1);assert.equal(r.data.current[0].conflict,true);assert.equal(r.data.current[0].value,null);assert.deepEqual(r.coverage,{includedOccasions:2,leftOutOccasions:0});
+    }
+    const none=await query('none','athlete');assert.equal(none.data.current.find(r=>r.athleteId===org.athleteIds[0]).conflict,true);
+    const single=await query('ratio','cohort',{athleteIds:[org.athleteIds[0]]});assert.equal(single.data.current[0].conflict,true);assert.deepEqual(single.coverage,{includedOccasions:0,leftOutOccasions:0});
+    const selected=await query('ratio','cohort',{sourcePolicy:'source_connection',sourceConnectionId:connection});assert.equal(selected.data.current[0].value,stored.value);assert.deepEqual(selected.coverage,{includedOccasions:1,leftOutOccasions:0});
+  } finally {await client.query('rollback');}
+});
+
+
+const reviewSpec=()=>({widgetId:'w',seriesId:'s',metricDefinitionId:ratio.id,dataScopeLevel:'session',aggregationRolePolicy:'all_including_derived',sourcePolicy:'all_with_conflicts',groupBy:'cohort',analyticalAggregation:'ratio'});
+test('athlete workspace returns seriesQueryFailed with no row',async()=>{
+  const [athlete]=await run({dataWorkspaceType:'athlete',athleteWorkspaceAthleteId:org.athleteIds[0],dateFrom:'2026-09-14',dateTo:'2026-09-14'},[reviewSpec()],{queryRunner:(sql,params)=>client.query(sql,params)});
+  assert.deepEqual(athlete,{widgetId:'w',seriesId:'s',status:'error',error:'seriesQueryFailed'});
+});
+test('ratio cache separates widgets differing only by groupBy',async()=>{
+  const spec=reviewSpec();const results=await run({dataWorkspaceType:'team',dataWorkspaceScopeId:org.teamId,dateFrom:'2026-09-14',dateTo:'2026-09-14'},[spec,{...spec,widgetId:'w2',seriesId:'s2',groupBy:'athlete'}],{queryRunner:(sql,params)=>client.query(sql,params)});
+  assert.equal(results[0].data.current.length,1);assert.equal(results[0].data.current[0].athleteId,null);assert.equal(results[1].data.current.length,3);assert.deepEqual(new Set(results[1].data.current.map(r=>r.athleteId)),new Set(org.athleteIds));
+});
+test('ratio query casts scale to integer before min aggregation',async()=>{
+  let checked=false;
+  const [result]=await run({dataWorkspaceType:'team',dataWorkspaceScopeId:org.teamId,dateFrom:'2026-09-14',dateTo:'2026-09-14'},[reviewSpec()],{queryRunner:(sql,params)=>{if(sql.includes('jsonb_to_recordset')){checked=true;assert.match(sql,/min\(\(calculation->>'scale'\)::int\)/);}return client.query(sql,params);}});
+  assert.equal(checked,true);assert.equal(result.status,'ok');
 });

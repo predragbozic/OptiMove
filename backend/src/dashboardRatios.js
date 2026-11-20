@@ -16,7 +16,7 @@ export function assertDashboardAggregation(calculation, aggregation, rolePolicy)
 export async function queryRatioBuckets(queryRunner, seeds, definitionId, aggregation, expectedVersionId) {
   const { rows } = await queryRunner(`select (
     with seeds as (select * from jsonb_to_recordset($1::jsonb)
-      as s("occasionId" uuid, "athleteId" uuid, "bucketKey" text, instant timestamptz)),
+      as s("occasionId" uuid, "athleteId" uuid, "bucketKey" text, instant timestamptz, "ratioValueAllowed" boolean)),
     current_formula as (
       select v.id, to_jsonb(v.*)->'calculation' as calculation from training_load.metric_definitions d
       join training_load.metric_definition_versions v on v.id=d.current_version_id where d.id=$2),
@@ -34,7 +34,7 @@ export async function queryRatioBuckets(queryRunner, seeds, definitionId, aggreg
             and (not iv.is_derived or to_jsonb(sv.*)->'calculation'->>'kind'='sum')) as has_input
       from seeds s
       left join training_load.metric_values r on r.occasion_id=s."occasionId" and r.metric_definition_id=$2
-        and r.is_derived and r.aggregation_role='derived_rollup'
+        and s."ratioValueAllowed" and r.is_derived and r.aggregation_role='derived_rollup'
       left join training_load.metric_definition_versions f on f.id=(r.computed_by_ref->>'formulaVersionId')::uuid
       left join training_load.metric_values n on n.id=(r.computed_by_ref->'inputValueIds'->>0)::uuid and n.occasion_id=s."occasionId"
       left join training_load.metric_values d on d.id=(r.computed_by_ref->'inputValueIds'->>1)::uuid and d.occasion_id=s."occasionId"
@@ -42,7 +42,7 @@ export async function queryRatioBuckets(queryRunner, seeds, definitionId, aggreg
     grouped as (
       select "bucketKey", "athleteId", unit,
         case when $3='none' then "occasionId" else null end as occasion,
-        case $3 when 'ratio' then round(sum(numerator)*(min(calculation->>'scale'))::numeric/nullif(sum(denominator),0),6)
+        case $3 when 'ratio' then round(sum(numerator)*min((calculation->>'scale')::int)/nullif(sum(denominator),0),6)
           when 'max' then max(stored_value)
           when 'last' then (array_agg(stored_value order by instant desc nulls last,"occasionId" desc))[1]
           when 'none' then max(stored_value) end as value,

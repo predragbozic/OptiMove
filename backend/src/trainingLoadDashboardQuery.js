@@ -758,22 +758,45 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
       if (calculation?.kind === 'ratio') {
         if (dataWorkspaceType === 'athlete') throw new Error('Calculated variable unavailable');
         const allFacts = spec.dataScopeLevel === 'day' ? ctx.dayLevelFactsByDefinition : ctx.metricFactsByDefinition;
-        const inputFacts = (calculation.inputs ?? []).flatMap(id => allFacts.get(id) ?? []);
-        const candidates = resolveFactsToRows([...(allFacts.get(spec.metricDefinitionId) ?? []), ...inputFacts], {
+        const options = {
           dataScopeLevel: spec.dataScopeLevel, athleteIds: effectiveAthleteIds, aggregationRolePolicy: 'all_including_derived', coveragePolicy: spec.coveragePolicy,
           sourcePolicy: spec.sourcePolicy === 'derived' ? 'all_with_conflicts' : spec.sourcePolicy, sourceConnectionId: spec.sourceConnectionId,
-        });
-        const seeds = new Map();
-        for (const f of candidates.flatMap(r => [...r.values, ...r.targetConflicts.flatMap(c => c.candidates)])) {
-          let bucketKey = groupBy === 'day' ? f.date : groupBy === 'week' ? isoWeekKey(f.date) : groupBy === 'athlete' ? f.athleteId : groupBy === 'cohort' ? 'all'
+        };
+        // Target identity does not include a definition: never resolve different metrics together.
+        const ratioRows = resolveFactsToRows(allFacts.get(spec.metricDefinitionId) ?? [], options);
+        const inputRows = (calculation.inputs ?? []).flatMap(id => resolveFactsToRows(allFacts.get(id) ?? [], options));
+        const seedFor = f => {
+          const bucketKey = groupBy === 'day' ? f.date : groupBy === 'week' ? isoWeekKey(f.date) : groupBy === 'athlete' ? f.athleteId : groupBy === 'cohort' ? 'all'
             : groupBy === 'session' ? (f.grain === 'component' ? f.activityId : f.grain === 'session' ? f.grainKey : null) : f.grain === 'component' ? f.grainKey : null;
-          if (bucketKey == null) continue;
-          seeds.set(f.occasionId, { occasionId: f.occasionId, athleteId: groupBy === 'athlete' || analyticalAggregation === 'none' ? f.athleteId : null, bucketKey, instant: f.occasionStart ?? f.startedAt });
+          return bucketKey == null ? null : { occasionId: f.occasionId, athleteId: groupBy === 'athlete' || analyticalAggregation === 'none' ? f.athleteId : null, bucketKey, instant: f.occasionStart ?? f.startedAt };
+        };
+        const blockedOccasions = new Set();
+        const conflicts = new Map();
+        const rowKey = row => JSON.stringify([row.bucketKey, row.athleteId, row.unit]);
+        for (const conflict of ratioRows.flatMap(row => row.targetConflicts)) {
+          for (const fact of conflict.candidates) {
+            blockedOccasions.add(fact.occasionId);
+            const seed = seedFor(fact);
+            if (seed) { const row = { bucketKey: seed.bucketKey, athleteId: seed.athleteId, unit: fact.unit, value: null,
+              numerator: null, denominator: null, includedOccasions: 0, leftOutOccasions: 0, conflict: true };
+              conflicts.set(rowKey(row), row); }
+          }
+        }
+        const eligibleRatios = ratioRows.flatMap(row => row.values);
+        const eligibleOccasions = new Set(eligibleRatios.map(fact => fact.occasionId));
+        // Inputs nominate occasions for coverage, not arithmetic. A current input
+        // may exist on an occasion without a stored ratio even if another source disagrees.
+        const coverageInputs = inputRows.flatMap(row => [...row.values, ...row.targetConflicts.flatMap(conflict => conflict.candidates)]);
+        const seeds = new Map();
+        for (const f of [...eligibleRatios, ...coverageInputs]) {
+          if (blockedOccasions.has(f.occasionId)) continue;
+          const seed = seedFor(f);
+          if (seed) seeds.set(f.occasionId, { ...seed, ratioValueAllowed: eligibleOccasions.has(f.occasionId) });
         }
         const ratioKey = JSON.stringify([rDateFrom,rDateTo,filterKeyFor(spec.athleteIds,spec.activityId,spec.componentId),spec.metricDefinitionId,spec.dataScopeLevel,analyticalAggregation,groupBy,spec.sourcePolicy,spec.sourceConnectionId,spec.coveragePolicy]);
         if (!ratioCache.has(ratioKey)) ratioCache.set(ratioKey, queryRatioBuckets(queryRunner, [...seeds.values()], spec.metricDefinitionId, analyticalAggregation, definition.id));
         const result = await ratioCache.get(ratioKey);
-        return { ratio: true, calculationKey: result.calculationKey, current: result.rows, coverage: result.coverage,
+        return { ratio: true, calculationKey: result.calculationKey, current: [...result.rows.filter(row => !conflicts.has(rowKey(row))), ...conflicts.values()], coverage: result.coverage,
           calculation: result.calculation ?? { kind: 'ratio', scale: calculation.scale, unit: definition.unit } };
       }
       return { ordinary: true, current: reduceRows(rows, { groupBy, analyticalAggregation }), calculation: calculation ? { kind: calculation.kind, unit: definition.unit } : null };

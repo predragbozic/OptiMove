@@ -524,7 +524,7 @@ function renderWidgetBodyHtml(widget, results) {
   const unavailable = widget.series.some(series => definitions.find(d => d.id === series.metric_definition_id)?.calculation?.inputs?.some(input => input.definitionId === null));
   if (unavailable) return '<p role="status">An input you cannot see is needed. Choose another metric.</p>';
   const ratioNotes = model.series.map(series => (series.calculation && !definitions.find(d => d.id === series.definition.metric_definition_id)?.calculated ? renderCalculationFormula({ calculation: series.calculation }) : '') + renderRatioCoverage(series, series.definition.data_scope_level)).join('');
-  if (model.series.length === 1 && model.series[0].calculation?.kind === 'ratio' && model.series[0].coverage?.includedOccasions === 0) return ratioNotes + calculatedNoteHtml(widget);
+  if (model.series.length === 1 && model.series[0].calculation?.kind === 'ratio' && model.series[0].coverage?.includedOccasions === 0 && !model.series[0].current.length) return ratioNotes + calculatedNoteHtml(widget);
   if (widget.widget_type === "kpi") return renderKpiHtml(model) + calculatedNoteHtml(widget) + ratioNotes;
   if (widget.widget_type === "table") {
     if (model.series.length === 1 && model.series[0].status === "ready" && ["day", "athlete"].includes(model.groupBy)) {

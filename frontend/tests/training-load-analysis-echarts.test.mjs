@@ -159,3 +159,16 @@ test("axis is DD.MM. while tooltip category retains DD.MM.YYYY", async () => {
   assert.equal(option.xAxis.axisLabel.formatter("Session 1"), "Session 1");
   fixture.window.close();
 });
+
+for(const ratioUnit of ['m/min','%']) test('a ratio in '+ratioUnit+' and an amount in m never share a chart axis, even when both request primary',()=>{
+  const definitions=[{id:'ratio',metric_definition_id:'intensity',axis:'primary'},{id:'amount',metric_definition_id:'distance',axis:'primary'}];
+  const display=buildDashboardWidgetDisplayModel({id:'widget',widget_type:'line_chart',group_by:'day',series:definitions},{widgetId:'widget',series:[
+    {seriesId:'ratio',status:'ok',calculation:{kind:'ratio',scale:ratioUnit==='%'?100:1,unit:ratioUnit},data:{current:[row(4,'2026-10-01',{unit:ratioUnit})]}},
+    {seriesId:'amount',status:'ok',data:{current:[row(200,'2026-10-01',{unit:'m'})]}}
+  ]});
+  const before=structuredClone(display);const result=dashboardChartPlots(display,definition=>definition.id,()=> 'Alex');
+  assert.equal(result.length,2);assert.deepEqual(result.map(plot=>plot.option.yAxis.name),[ratioUnit,'m']);
+  assert.deepEqual(result.map(plot=>plot.option.series[0].data[0].value),[4,200]);
+  for(const plot of result){assert.equal(plot.option.yAxis.type,'value');assert.equal(plot.option.series.length,1);assert.equal(plot.option.series[0].stack,undefined);}
+  assert.deepEqual(display,before);
+});

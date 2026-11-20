@@ -18,5 +18,5 @@ export function renderRatioCoverage(series, scope) {
   if (series.calculation?.kind !== 'ratio' || !series.coverage) return '';
   const noun = scope === 'component' ? 'drills' : 'sessions';
   const count = series.coverage.leftOutOccasions;
-  return `${series.coverage.includedOccasions === 0 ? `<p class="muted">No ${noun} with a value.</p>` : ''}${Number.isSafeInteger(count) && count > 0 ? `<p class="muted">${count} ${count === 1 ? noun.slice(0, -1) : noun} without a value</p>` : ''}`;
+  return `${series.coverage.includedOccasions === 0 && !(series.current ?? series.data?.current ?? []).length ? `<p class="muted">No ${noun} with a value.</p>` : ''}${Number.isSafeInteger(count) && count > 0 ? `<p class="muted">${count} ${count === 1 ? noun.slice(0, -1) : noun} without a value</p>` : ''}`;
 }

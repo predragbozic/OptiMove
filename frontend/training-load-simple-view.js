@@ -153,7 +153,7 @@ function previewHtml(model, technical) {
   const sharedTable = preview.normalizedWidget?.widget_type === "table" && ["day", "athlete"].includes(preview.normalizedWidget.group_by) && result?.series?.length === 1;
   if (sharedTable) {
     const display = buildDashboardWidgetDisplayModel(preview.normalizedWidget, result, { period: preview.resolvedPeriod });
-    if (!(display.series[0]?.calculation?.kind === "ratio" && display.series[0]?.coverage?.includedOccasions === 0)) tables.push(renderDashboardMetricTable(display, model.athletes, preview.normalizedWidget.series?.[0]?.display_label || model.selectedMetric?.label || model.selectedMetric?.name || "Metric"));
+    if (!(display.series[0]?.calculation?.kind === "ratio" && display.series[0]?.coverage?.includedOccasions === 0 && !display.series[0]?.current.length)) tables.push(renderDashboardMetricTable(display, model.athletes, preview.normalizedWidget.series?.[0]?.display_label || model.selectedMetric?.label || model.selectedMetric?.name || "Metric"));
   }
   function visit(value, path) {
     if (Array.isArray(value)) tables.push(resultTable(value, path, model.athletes ?? [], technical));
@@ -162,7 +162,7 @@ function previewHtml(model, technical) {
   for (const [index, series] of (sharedTable ? [] : result?.series ?? []).entries()) {
     const label = model.selectedMetric?.label ?? model.selectedMetric?.name ?? series.label ?? series.displayLabel ?? (technical ? `Series ${index + 1}` : "Metric");
     tables.push(message(`${label}: ${friendlyStatus(series.status ?? "status not specified")}`));
-    if (!(series.calculation?.kind === "ratio" && series.coverage?.includedOccasions === 0)) visit(series.data, label);
+    if (!(series.calculation?.kind === "ratio" && series.coverage?.includedOccasions === 0 && !series.data?.current?.length)) visit(series.data, label);
   }
   if (result && !result.series?.length) visit(result, "Result");
   return `${model.previewLoading ? message("Loading preview… Previous results are shown below.") : ""}
