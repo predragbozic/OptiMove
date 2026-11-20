@@ -1647,8 +1647,10 @@ export async function attachSessions(ctx, eventId, body) {
     const orphans = sessions.filter((x) => x.linked_event_id && x.slot_link_orphaned);
     if (orphans.length) {
       await client.query(
-        `update calendar.event_session_links set ended_at = now(), ended_by_user_id = $2 where id = any($1::uuid[]) and ended_at is null`,
-        [[...new Set(orphans.map((x) => String(x.slot_link_id)))].sort(), ctx.userId],
+        // event_id repeats the judge's rule here: only THIS event's link is ever ended.
+        `update calendar.event_session_links set ended_at = now(), ended_by_user_id = $2
+          where id = any($1::uuid[]) and event_id = $3 and ended_at is null`,
+        [[...new Set(orphans.map((x) => String(x.slot_link_id)))].sort(), ctx.userId, row.id],
       );
     }
     const fresh = sessions.filter((x) => !x.linked_event_id || x.slot_link_orphaned);
@@ -1669,6 +1671,7 @@ export async function attachSessions(ctx, eventId, body) {
     const details = {
       sessions: fresh.length, alreadyAttached: sessions.length - fresh.length,
       planIds: [...new Set(fresh.map((x) => String(x.plan_id)))].sort(),
+      ...(orphans.length ? { orphansEnded: orphans.length, endedLinkIds: [...new Set(orphans.map((x) => String(x.slot_link_id)))].sort() } : {}),
       ...(liveRpe ? { questionsEnded: [String(liveRpe.id)], rpeReplacedBySessions: true } : {}),
     };
     if (alignment) Object.assign(details, { align: alignment.direction, aligned: alignment.changed, notAllowed: alignment.notAllowed, switchOff: alignment.switchOff });

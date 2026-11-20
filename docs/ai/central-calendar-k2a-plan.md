@@ -215,8 +215,19 @@ the link stays keyed by its slot, and the session in the slot must ALSO be the o
   *Align* never writes to a session the link was not made for (two layers: its read, and the orphan flag after
   the plans' locks).
 - **Re-linking:** attaching the new session to the **same** event ends that event's orphan of the slot (by the
-  coach, in the same command) and links the new one. A slot that holds **another** event's orphan stays
+  coach, in the same command; the UPDATE also names the event, and the change record carries `orphansEnded` and
+  `endedLinkIds`) and links the new one. A slot that holds **another** event's orphan stays
   `409 session_already_attached` until that event's organiser detaches it.
+- **In the UI, no frontend change:** the orphan is the event panel's "N linked training(s) deleted in the Builder"
+  row with *Unlink*; the new session, no longer folded, is a planned card of its own, so the link picker offers it.
+  The row's wording ("deleted") also covers a replaced or moved-in session; a sharper sentence is a later copy
+  change.
+- **Where the slot was really taken over** (the tests that fail on `main` `02846829`): a delete and add in the
+  same slot, also under the same name; a day pasted over the linked day from the same plan or from another plan
+  (the paste copies the orders as they are); a session cut from another day and pasted into the linked slot. A
+  session moved to another half-day was already orphaned before the guard (its slot holds nothing). There is no
+  week paste onto an existing plan: copying a week makes a new plan (`/plans/:id/duplicate`), whose sessions no
+  link names.
 - The batch-sync reason above does not apply to links: a sync re-mints ids only on **draft** siblings
   (`builder.js`, the batch-sync header), and a link always names a published session; an edit of a published
   plan keeps its logical ids (`preserveLogicalId`).

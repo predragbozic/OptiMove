@@ -106,11 +106,13 @@ async function addSession(cookie, blockId, name, { bta = "T" } = {}) {
 }
 
 // A published weekly plan with Monday "Main" (Training), linked to a planned training event that asks RPE.
-async function linkedWorld(label) {
+async function linkedWorld(label, { mondayBefore = [], tuesday = [] } = {}) {
   const w = await world(label);
   const created = ok(await api("/api/builder/plans", { method: "POST", cookie: w.cookie, body: { planType: "weekly", weekStart: WEEK, athleteIds: [w.ext], athleteExternalIds: [w.ext], name: "Guard week" } }), 201);
   const draft = ok(await api(`/api/builder/plans/${created.plan.id}`, { cookie: w.cookie }));
+  for (const name of mondayBefore) await addSession(w.cookie, draft.blocks[0].id, name);
   await addSession(w.cookie, draft.blocks[0].id, "Main");
+  for (const name of tuesday) await addSession(w.cookie, draft.blocks[1].id, name);
   ok(await api(`/api/builder/plans/${created.plan.id}/submit`, { method: "POST", cookie: w.cookie, body: { responseMode: "summary" } }));
   const planId = (await q(`select id from plans.plans where athlete_id = $1 and plan_type = 'weekly' and status = 'active' and not coalesce(is_edit_draft,false)`, [w.athleteId]))[0].id;
   const main = await sessionNamed(planId, "Main");
@@ -204,6 +206,81 @@ test("3. the linked session moved to another slot: orphaned; the moved session g
   assert.equal(String(r.session.logical_session_id), String(w.main.logical_session_id), "a move keeps the logical id");
   assert.equal(r.session.am_pm, "PM");
   assertOrphaned(r, "moved");
+  // Align on the event whose only link is orphaned: 409 nothing_to_align, and NO session of the plan changes - the
+  // old (moved) session included.
+  const before = await flagsOf(w.planId);
+  const aligned = await align(w);
+  assert.equal(aligned.status, 409, aligned.text);
+  assert.equal(aligned.body.error, "nothing_to_align");
+  assert.deepEqual(await flagsOf(w.planId), before, "align wrote nothing");
+});
+
+// Every session of the plan with its flags, for "align wrote nothing".
+const flagsOf = async (planId) => q(
+  `select ps.logical_session_id, ps.rpe_enabled, ps.training_load_enabled, ps.updated_at
+     from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 order by ps.logical_session_id`, [planId]);
+
+// A plan with Monday "Main" (linked) and Tuesday "Tue" (Training), both published.
+async function linkedWorldWithTuesday(label) {
+  const w = await linkedWorld(label);
+  await editAndSave(w, async (edit) => { await addSession(w.cookie, edit.blocks[1].id, "Tue"); });
+  const live = await q(`select logical_session_id_at_link from calendar.event_session_links where event_id = $1 and ended_at is null`, [w.ev.id]);
+  assert.equal(String(live[0].logical_session_id_at_link), String(w.main.logical_session_id), "still linked to Main");
+  return w;
+}
+
+test("3b. a DAY paste over the linked day (Tuesday pasted onto Monday, its orders copied as they are): orphaned; align writes nothing", async () => {
+  const w = await linkedWorldWithTuesday("daypaste");
+  await editAndSave(w, async (edit) => {
+    ok(await api(`/api/builder/days/${edit.blocks[1].id}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: { confirmOverwrite: true } }));
+  });
+  const pasted = (await q(`select ps.name, ps.am_pm, ps.bta, ps.session_order, ps.logical_session_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id
+                          where pd.plan_id = $1 and pd.date = $2`, [w.planId, WEEK]));
+  assert.deepEqual(pasted.map((s) => s.name), ["Tue"], "Monday now holds the pasted Tue");
+  assert.equal(Number(pasted[0].session_order), Number(w.main.session_order), "the pasted session took the linked slot");
+  const r = await readsOf(w, "Tue");
+  assert.equal(r.links[0].state, "orphaned");
+  assert.deepEqual(r.card.links.logicalSessionIds, []);
+  assert.ok(r.rows.filter((row) => String(row.date).slice(0, 10) === WEEK).every((row) => row.linked_event_start_time == null), "no event time on Monday's Tue");
+  const before = await flagsOf(w.planId);
+  assert.equal((await align(w)).status, 409);
+  assert.deepEqual(await flagsOf(w.planId), before, "align wrote nothing");
+});
+
+test("3c. a day pasted from ANOTHER plan onto the linked day: orphaned", async () => {
+  const w = await linkedWorld("crossplan");
+  // Another published weekly plan of the athlete (the next week), whose Monday holds "Other".
+  const created = ok(await api("/api/builder/plans", { method: "POST", cookie: w.cookie, body: { planType: "weekly", weekStart: "2026-11-09", athleteIds: [w.ext], athleteExternalIds: [w.ext], name: "Other week" } }), 201);
+  const otherDraft = ok(await api(`/api/builder/plans/${created.plan.id}`, { cookie: w.cookie }));
+  await addSession(w.cookie, otherDraft.blocks[0].id, "Other");
+  ok(await api(`/api/builder/plans/${created.plan.id}/submit`, { method: "POST", cookie: w.cookie, body: { responseMode: "summary" } }));
+  const otherMonday = (await q(`select pd.id from plans.plan_days pd join plans.plans p on p.id = pd.plan_id where p.athlete_id = $1 and pd.date = '2026-11-09' and p.status = 'active' and not coalesce(p.is_edit_draft,false)`, [w.athleteId]))[0].id;
+  await editAndSave(w, async (edit) => {
+    ok(await api(`/api/builder/blocks/${otherMonday}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: { confirmOverwrite: true } }));
+  });
+  const r = await readsOf(w, "Other");
+  assert.equal(r.links[0].state, "orphaned");
+  assert.deepEqual(r.card.links.logicalSessionIds, []);
+  assert.ok(r.rows.filter((row) => String(row.date).slice(0, 10) === WEEK).every((row) => row.linked_event_start_time == null));
+});
+
+test("3d. a session moved in from another day into the linked slot (Monday holds A then the linked Main; Main deleted, Tuesday's session cut and pasted onto Monday): orphaned", async () => {
+  const w = await linkedWorld("movein", { mondayBefore: ["A"], tuesday: ["Tue"] });
+  await editAndSave(w, async (edit) => {
+    const mainInDraft = sessionsOf(edit).find((s) => s.name === "Main");
+    const tueInDraft = sessionsOf(edit).find((s) => s.name === "Tue");
+    ok(await api(`/api/builder/sessions/${mainInDraft.id}`, { method: "DELETE", cookie: w.cookie }));
+    ok(await api(`/api/builder/sessions/${tueInDraft.id}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: {} }));
+    ok(await api(`/api/builder/sessions/${tueInDraft.id}`, { method: "DELETE", cookie: w.cookie }));
+  });
+  const r = await readsOf(w, "Tue");
+  assert.equal(r.session.am_pm, w.main.am_pm);
+  assert.equal(r.session.bta, w.main.bta);
+  assert.equal(Number(r.session.session_order), Number(w.main.session_order), "the moved-in session took the linked slot");
+  assertOrphaned(r, "moved in");
+  const before = await flagsOf(w.planId);
+  assert.equal((await align(w)).status, 409);
+  assert.deepEqual(await flagsOf(w.planId), before, "align wrote nothing");
 });
 
 test("4. an in-place change (same logical id, same slot) stays linked: folded, timed, aligned", async () => {
@@ -238,10 +315,29 @@ test("5. re-linking the new session to the same event replaces the orphan: one l
   assert.equal(live[0].session_name_at_link, "Gym");
   const ended = (await q(`select ended_at, ended_by_user_id from calendar.event_session_links where id = $1`, [orphanId]))[0];
   assert.ok(ended.ended_at && ended.ended_by_user_id, "the orphan is ended, by the coach");
+  const change = (await q(`select details from calendar.event_changes where event_id = $1 order by revision desc limit 1`, [w.ev.id]))[0];
+  assert.equal(change.details.orphansEnded, 1, "the change record names the ended orphan");
+  assert.deepEqual(change.details.endedLinkIds, [String(orphanId)]);
   const r = await readsOf(w, "Gym");
   assert.equal(r.links[0].state, "linked");
   assert.deepEqual(r.card.links.logicalSessionIds, [String(gym.logical_session_id)]);
   assert.ok(r.rows.every((row) => row.linked_event_start_time === "10:00"));
+});
+
+test("5b. a mixed attach (an orphaned slot's new session and a session already linked, in one command): one re-link, one already attached", async () => {
+  const w = await linkedWorld("mixed");
+  await removeMainAddNew(w, "Gym");
+  await editAndSave(w, async (edit) => { await addSession(w.cookie, edit.blocks[0].id, "Second"); });
+  const second = await sessionNamed(w.planId, "Second");
+  ok(await api(`/api/calendar/events/${w.ev.id}/sessions`, { method: "POST", cookie: w.cookie, body: { requestKey: crypto.randomUUID(), expectedRevision: await revisionOf(w.ev.id), logicalSessionIds: [String(second.logical_session_id)] } }));
+  const gym = await sessionNamed(w.planId, "Gym");
+  const orphanId = (await q(`select id from calendar.event_session_links where event_id = $1 and ended_at is null and logical_session_id_at_link = $2`, [w.ev.id, w.main.logical_session_id]))[0].id;
+  const res = ok(await api(`/api/calendar/events/${w.ev.id}/sessions`, { method: "POST", cookie: w.cookie, body: { requestKey: crypto.randomUUID(), expectedRevision: await revisionOf(w.ev.id), logicalSessionIds: [String(gym.logical_session_id), String(second.logical_session_id)] } }));
+  assert.equal(res.attached, 1);
+  assert.equal(res.alreadyAttached, 1);
+  const live = await q(`select logical_session_id_at_link::text as l from calendar.event_session_links where event_id = $1 and ended_at is null order by 1`, [w.ev.id]);
+  assert.deepEqual(live.map((x) => x.l), [String(gym.logical_session_id), String(second.logical_session_id)].sort());
+  assert.ok((await q(`select ended_at from calendar.event_session_links where id = $1`, [orphanId]))[0].ended_at, "the orphan is ended");
 });
 
 test("6. another event's orphan still holds the slot: linking the new session there is a 409, nothing written", async () => {
