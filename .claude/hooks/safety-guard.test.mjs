@@ -1935,7 +1935,7 @@ test("P3: commit and push to the own work branch without a question; everything 
   const onMaster = makeRepo("sg-p3-master-", "master");
   try {
     expectAll([
-      ["git add src/a.js", ALLOW], ["git add -- a.js b.js", ALLOW], ["git commit -m x", ALLOW], ["git commit --amend --no-edit", ALLOW],
+      ["git add src/a.js", ALLOW], ["git add -- a.js b.js", ALLOW], ["git commit -m x", ALLOW], ["git commit --amend --no-edit", ASK], ["git commit --amen -m y", ASK], ["git commit --no-verify -m x", ASK],
       ["git push -u origin feature/own", ALLOW], ["git push origin feature/own", ALLOW], ["git push -q --set-upstream origin feature/own", ALLOW],
       [`git -C ${repo} push -u origin feature/own`, ALLOW],
       ["git add -u", ASK], ["git add --update", ASK], ["git add -f .env.example", ASK], ["git add --force x", ASK], ["git add 'src/*.js'", ASK],

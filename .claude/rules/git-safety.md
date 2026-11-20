@@ -41,8 +41,8 @@ git diff --staged   # if there are staged changes
 
 Executor sessions may, without asking each time:
 
-- commit on their own work branch (files staged by name; `git add -u`, `-f`, globs and
-  `git commit -a` still ask) and push it with `git push [-u] origin <the branch checked out
+- commit on their own work branch (files staged by name; `git add -u`, `-f`, globs,
+  `git commit -a` and `git commit --amend` still ask) and push it with `git push [-u] origin <the branch checked out
   there>` — never `main`/`master`, never a force push;
 - start and stop the local test database (`pg_ctlcluster 16 main start|stop|status`,
   `pg_ctl`, `initdb`);

@@ -2299,6 +2299,8 @@ export function gitCommitStagesAll(segment) {
   for (const t of parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes)) {
     if (t === "--") break;
     if (/^--/.test(t) && longOptionIs(t, "--all")) return true;
+    // --amend rewrites a commit that may already be pushed (a later push then needs force)
+    if (/^--/.test(t) && longOptionIs(t, "--amend")) return true;
     // a short cluster up to its first option that takes a value (-am "x": a, then m)
     if (/^-[A-Za-z]+$/.test(t)) {
       for (const ch of t.slice(1)) {

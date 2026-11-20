@@ -209,7 +209,8 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
   `ln`, `touch` and `pg_ctlcluster 16 main stop` through by name; the hook asks for every form
   outside the approved scope:
   - `git add -u`/`--update`/`-f`/`--force`, a glob or magic pathspec (`*.js`, `:/`), a pathspec
-    file; `git commit -a`/`--all` (and in clusters, `-am`); a commit on `main` or `master`;
+    file; `git commit -a`/`--all` (and in clusters, `-am`), `git commit --amend` (it rewrites a
+    commit that may already be pushed); a commit on `main` or `master`;
   - every push except `git push [-u|--set-upstream] [-q] origin <B>` where `<B>` is the branch
     checked out where the push runs (read from git, as a full ref) and not `main`/`master`: a bare
     `git push`, another remote or branch, a refspec, tags, `--no-verify`, any other option;
@@ -220,7 +221,9 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
     non-recursive `rm`. `cp` reads its sources and `ln -s` writes only a link's text, so those
     may be anywhere; `mv` deletes its sources, so they must be inside. A hard link (`ln` without
     `-s`, `cp -l`) always asks, and so does overwriting a hard-linked or symlinked file. Without a
-    `session_id` in the hook input there is no own folder, and all of these ask.
+    `session_id` in the hook input there is no own folder, and all of these ask. Known limit
+    (TOCTOU): the hook reads the file system before the command runs; a link swapped in by
+    another process between that check and the command is not seen.
 
 - `git stash pop`; `git branch -D` (and `-d -f`, `--delete --force`); a push that deletes a
   remote branch (`--delete`, `-d`, `origin :branch`, `--prune`, `--mirror`); `git pull
