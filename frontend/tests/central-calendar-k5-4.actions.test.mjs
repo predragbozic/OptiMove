@@ -335,10 +335,13 @@ test("R5. with no kind chosen the marks show; another Show only choice, an event
   await openCalendar({ gpsRoute: route });
   assert.equal(marks().length, 1);
   const cal = state.centralCalendar;
-  // K5-2's "GPS imports" kind keeps them (its chip and pill come with K5-2's frontend).
-  cal.filters.kinds = ["gps"];
-  render();
+  const gpsPill = () => dom().querySelector('.cc-showonly-pill[data-kind="gps"] .cc-chip-count')?.textContent;
+  assert.equal(gpsPill(), "2", "the GPS imports pill counts the waiting sessions");
+  // K5-2's Show only · GPS imports keeps them.
+  await act({ action: "central-calendar-show-only", kind: "gps" });
   assert.equal(marks().length, 1, "Show only GPS imports keeps them");
+  assert.equal(gpsPill(), "2");
+  assert.match(dom().querySelector(".cc-showonly-line").textContent, /Showing only GPS imports · 2 this week/);
   cal.filters.kinds = ["event"];
   render();
   assert.equal(marks().length, 0, "another kind hides them");

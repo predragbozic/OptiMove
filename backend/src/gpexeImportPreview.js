@@ -21,6 +21,7 @@ import { ImportBindingNotActiveError, prepareImportMapping } from "./gpexeImport
 import { importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "./gpexeImportWriter.js";
 import { calculatedForOccasions } from "./calculatedValues.js";
 import { canonicalDecimal, compareDecimal } from "./sourceMetricExtractors.js";
+import { rangeWords } from "./sourceConditionRules.js";
 
 // 2: changesToImported (phase F2). 3: values through mapping activations (9-B,
 // J17 section 4): each value names its activation, mapping version, canonical
@@ -180,6 +181,14 @@ export const BLOCK_MESSAGES = Object.freeze({
   source_instance_changed: "This team's GPEXE source instance names another GPEXE team.",
   session_imported_under_another_instance: "This session was imported earlier under another GPEXE source instance.",
 });
+
+// v80 step C0: the plan's section 5 sentence of a session blocked by team_setting_changed, naming both settings.
+export function teamSettingChangedText({ teamName, variableLabel, current, matched }) {
+  const team = teamName ? `${teamName}'s` : "The team's";
+  const owner = teamName ?? "this team";
+  const now = current ? `counts ${rangeWords(current)} for this session` : "has no such setting for this session";
+  return `${team} setting in GPEXE ${now}; ${variableLabel} counts ${rangeWords(matched)}. Nothing of this session is imported. Set it back in GPEXE, or switch ${variableLabel} off for ${owner}.`;
+}
 
 // The plain words of a value left out (C110, form B): the same for every
 // viewer; the code itself is for the two administrators only.
@@ -435,6 +444,21 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     if (!spec) return block("source_shape_mismatch");
     return { code: "source_shape_mismatch", message: `GPEXE sent "${spec.sourceLabel}" (it fills ${spec.label}) in another shape or unit than its field has. Switch that mapping off for this team to import the other values, or ask a platform administrator to check that GPEXE field.` };
   };
+  // v80 step C0: a session whose team setting is not the one a column was matched with names both settings, the variable
+  // and the team, in the plan's section 5 sentence (for the two administrators; a coach reads gpexeImportAudience's
+  // sentence without numbers or a variable's name). The ranges are GPEXE team settings: no id of any kind.
+  const settingBlock = async (all, activationId) => {
+    const spec = (all || []).find((x) => x.activationId === activationId) ?? null;
+    const changed = (plan.settingChanged || []).find((x) => x.activationId === activationId) ?? null;
+    if (!spec || !changed) return block("team_setting_changed");
+    const teamName = (await client.query(`select name from public.teams where id = $1`, [ownerTeamId])).rows[0]?.name ?? null;
+    const team = typeof teamName === "string" && teamName.trim() !== "" ? teamName : null;
+    return {
+      code: "team_setting_changed",
+      message: teamSettingChangedText({ teamName: team, variableLabel: spec.label, current: changed.current, matched: changed.matched }),
+      setting: { teamName: team, variableLabel: spec.label, current: changed.current ?? null, matched: changed.matched ?? null },
+    };
+  };
   if (!mapping || mapping.block) {
     blocked = block(mapping?.block ?? "mapping_not_usable");
   } else {
@@ -468,7 +492,9 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
 
   if (!blocked) {
     const classified = classifyMappedPlan(plan, { importableIds: importable.map((p) => p.gpexeAthleteId), activationCount: mapping.rows.length });
-    if (classified.block) blocked = classified.block === "source_shape_mismatch" ? shapeBlock(specs, classified.activationId) : block(classified.block);
+    if (classified.block === "source_shape_mismatch") blocked = shapeBlock(specs, classified.activationId);
+    else if (classified.block === "team_setting_changed") blocked = await settingBlock(specs, classified.activationId);
+    else if (classified.block) blocked = block(classified.block);
   }
 
   let outcomes = new Map();

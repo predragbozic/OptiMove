@@ -20671,6 +20671,10 @@ body.exercise-header-pinned #viewToolbar {
   --cc-team-11: #7a4fd0;
 }
 .central-calendar {
+  /* K5-2 (H4): what a card holds - RPE amber, GPS blue, a test violet (the approved mockups). */
+  --cc-mark-rpe: #b07a0a;
+  --cc-mark-gps: #2c5aa0;
+  --cc-mark-test: #8a4c8f;
   --cc-team-none: #9aa4b2;
   --cc-done: #2f7d3a;
   --cc-done-soft: #e4f3e6;
@@ -29255,3 +29259,165 @@ body.athlete-questions-prompt-open {
 .cc-imports-back { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .cc-imports-back-button { min-height: 44px; }
 .cc-imports-back-day { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* ===== Central calendar K5-1 / K5-2 (docs/ai/central-calendar-k5-12-contract.md) ===== */
+/* The marks' colours (--cc-mark-*) are with the calendar's other tokens above. */
+
+/* H4: what a card holds - one 14 px icon per kind, after the type's icon. */
+.cc-card-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.cc-mark { flex: none; }
+.cc-mark-rpe { color: var(--cc-mark-rpe); }
+.cc-mark-gps { color: var(--cc-mark-gps); }
+.cc-mark-test { color: var(--cc-mark-test); }
+.cc-mini-title .cc-card-marks { margin-right: 4px; vertical-align: -2px; }
+/* An imported activity's `gps` icon on its chip wears the GPS mark's blue. */
+.cc-daychip.is-imported .cc-daychip-icon { color: var(--cc-mark-gps); }
+
+/* H5: a test, an RPE request or an activity as a small chip under its day. */
+.cc-daychips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cc-day-cards .cc-daychips { margin-top: 2px; }
+.cc-daychip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--cc-team-color, var(--cc-team-none));
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  text-align: left;
+  cursor: pointer;
+}
+.cc-daychip:hover { background: var(--accent-soft); }
+.cc-daychip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cc-daychip.is-open { box-shadow: 0 0 0 2px var(--accent); }
+.cc-daychip.is-cancelled .cc-daychip-text { text-decoration: line-through; color: var(--muted); }
+.cc-daychip-icon { flex: none; color: var(--muted); }
+.cc-daychip-test .cc-daychip-icon { color: var(--cc-mark-test); }
+.cc-daychip-external .cc-daychip-icon { color: var(--cc-mark-rpe); }
+.cc-daychip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-daychip-status {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+}
+.cc-timegrid-cell .cc-daychip { width: 100%; }
+/* Touch: at least 44 px (frontend.md); a pointer screen of 1024 px and up keeps the small chip. */
+@media (max-width: 1023px), (pointer: coarse) {
+  .cc-daychip { min-height: 44px; font-size: 13px; }
+}
+
+/* H3 *Show only*: one row of pills (a radio group) over the calendar, the green line above it. */
+.cc-showonly {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.cc-showonly-gps .cc-chip-icon { color: var(--cc-mark-gps); }
+.cc-showonly-external .cc-chip-icon { color: var(--cc-mark-rpe); }
+.cc-showonly-test .cc-chip-icon { color: var(--cc-mark-test); }
+.cc-showonly-pill.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.cc-showonly-pill.is-active .cc-chip-icon { color: #fff; }
+.cc-showonly-pill.is-active .cc-chip-count { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.cc-showonly-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cc-showonly-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--cc-done-soft);
+  color: var(--text);
+  font-size: 14px;
+}
+.cc-showonly-line-icon { flex: none; color: var(--cc-done); }
+.cc-showonly-all { min-height: 44px; }
+@media (max-width: 760px) {
+  /* A phone: the row scrolls sideways; the chosen pill is brought into view after every paint. */
+  .cc-showonly {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: 2px 2px 4px;
+    scrollbar-width: none;
+  }
+  /* More pills past the right edge: the row fades out there (the reveal sets data-more after every paint and the row's
+     own scroll keeps it current), so a coach sees that GPS imports and the rest are a swipe away. */
+  .cc-showonly[data-more="true"] {
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+  }
+  .cc-showonly::-webkit-scrollbar { display: none; }
+  .cc-showonly-pill {
+    flex: 0 0 auto;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+}
+
+/* K5-1 *Go there*: below a thin line, full-width buttons that leave the calendar (a trailing arrow), a short line. */
+.cc-go {
+  display: grid;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.cc-go .cc-go-button {
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+}
+/* The trailing arrow (Q5) is drawn, never read: its alternative text is empty. */
+.cc-go-button::after {
+  content: "\2192";
+  content: "\2192" / "";
+  margin-left: 6px;
+}
+.cc-go-hint { margin: 0; }
+.cc-go-warn { margin: 4px 0 0; color: var(--cc-awaiting); font-weight: 700; }
+.cc-go-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cc-go-row {
+  display: grid;
+  gap: 4px;
+}
+.cc-go-name {
+  margin: 0;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.cc-go-meta { color: var(--muted); font-weight: 600; }
