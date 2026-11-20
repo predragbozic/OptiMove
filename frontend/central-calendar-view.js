@@ -1,5 +1,5 @@
 import { calendarColorIndex, calendarTeamColorIndexes } from "./calendar-colors.js";
-import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS, centralCalendarTeamLabel } from "./central-calendar-data.js";
+import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_KINDS, centralCalendarServerKinds, centralCalendarShownData, centralCalendarTeamLabel } from "./central-calendar-data.js";
 import {
   centralCalendarCatalogOf,
   renderCentralCalendarEventDetailsHtml,
@@ -802,7 +802,7 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
 function renderBodyHtml(cal, layout, today) {
   if (!cal.data) return renderStateHtml(cal);
   const teams = cal.data.teams || [];
-  const byDate = centralCalendarItemsByDate(cal.data);
+  const byDate = centralCalendarItemsByDate(centralCalendarShownData(cal));
   const days = centralCalendarDisplayedDays(cal.view, cal.anchor);
   const anyVisible = days.some((date) => centralCalendarVisibleItems(byDate.get(date), cal.filters).length > 0);
   const scope = cal.view === "month" ? "this month" : cal.view === "day" ? "on this day" : "this week";
@@ -859,7 +859,7 @@ function renderPanelAthletesHtml(item, cal, roster) {
 
 function panelItemOf(cal) {
   if (!cal.panel.open || !cal.data) return null;
-  return centralCalendarItemsByDate(cal.data).get(cal.panel.date)?.find((entry) => entry.key === cal.panel.key) || null;
+  return centralCalendarItemsByDate(centralCalendarShownData(cal)).get(cal.panel.date)?.find((entry) => entry.key === cal.panel.key) || null;
 }
 
 // A declared expectation with no channel (K2a plan 3.2): a quiet note, never
@@ -1183,6 +1183,12 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   const byDate = centralCalendarItemsByDate(cal.data);
   const days = cal.anchor ? centralCalendarDisplayedDays(cal.view, cal.anchor) : [];
   const counts = centralCalendarChipCounts(byDate, days);
+  // FE-D16: a chosen kind read on its own counts what it shows (an RPE request no longer folded into its event).
+  const shown = centralCalendarShownData(cal);
+  if (shown && shown !== cal.data) {
+    const own = centralCalendarChipCounts(centralCalendarItemsByDate(shown), days).kinds;
+    for (const kind of centralCalendarServerKinds(cal.filters).split(",")) counts.kinds[kind] = own[kind] || 0;
+  }
   // The panel column exists only while the open item is really in the answer,
   // or while the event form is open.
   const panelOpen = Boolean(cal.form) || Boolean(panelItemOf(cal));

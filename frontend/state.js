@@ -688,6 +688,15 @@ export const emptyRpeForm = (overrides = {}) => ({
   saving: false,
   error: "",
   savedFeedback: null,
+  // K4b: "submit" (the first answer) or "change" (the athlete changes her
+  // own external answer while the question is open; rpe-answer-change.js).
+  mode: "submit",
+  original: null,
+  expectedRevision: null,
+  closesAt: "",
+  requestKey: "",
+  unconfirmed: false,
+  locked: false,
   ...overrides,
 });
 

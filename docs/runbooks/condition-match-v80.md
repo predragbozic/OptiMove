@@ -75,11 +75,13 @@ screen for it is step C.
   orders (S1 and A1: LO-1; the board save: section 4.4 of its contract); the match reads the newest stored session of the
   team inside the transaction after the binding and its team are locked. The candidate is never locked: a stored bundle is
   immutable, and a session stored later with another setting is blocked by the importer.
-* **Rollback** (`condition-match-v80-rollback.sql`; rehearsed apply -> rollback -> the catalog before v80 exactly -> re-apply,
+* **Rollback** (`condition-match-v80-rollback.sql`; it locks the three tables `ACCESS EXCLUSIVE` before its row checks; rehearsed apply -> rollback -> the catalog before v80 exactly -> re-apply,
   on a migrated database and on one built from the legacy schema snapshot): refuses while the migrator runs, without v80, and
   once a version carries a rule, an activation records a match or a confirmation exists. It drops what v80 added and the v80
-  record; it changes no row of another table. It does not refuse because a later migration is recorded (v81, the calendar's,
-  touches none of v80's objects); a later migration that uses v80's columns must add that refusal to this file.
+  record; it changes no row of another table. It refuses once any later migration whose file name contains `training_load` is recorded, since it may build on
+  v80's columns. That includes the calendar's v83 (`202611201200_training_load_v83_rpe_answer_change.sql`): once v83 is
+  applied, v80 is forward-only, or v83 is rolled back first. A later migration whose name does not contain `training_load`
+  (the calendar's v81, `calendar_v81_…`) does not stop it.
 * **What the database does not bind** (the v35 limit: the guards keep accidents out, not code that sets the actor): that a
   rule belongs to the field's key (a zone rule on any column without parameters passes the shape and fit checks), and that a
   confirmation's `event_kind`, `observation_confirmation_id` and `threshold_set_id` belong to its revision. The service sets

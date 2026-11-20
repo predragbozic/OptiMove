@@ -319,9 +319,16 @@ function stepHtml(step, { ev, today, busy, question = null }) {
     </div>`;
 }
 
+// K4b: an RPE answer the athlete changed reads "Changed 21:40" beside the name.
+function changedAtText(iso) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "Changed";
+  return `Changed ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+}
 function namesHtml(label, people, open) {
   const list = Array.isArray(people) ? people : [];
-  const body = list.length ? `<ul class="cc-question-names" role="list">${list.map((p) => `<li>${escapeHtml(p?.name || "Athlete")}</li>`).join("")}</ul>` : `<p class="cc-panel-note">Nobody.</p>`;
+  const name = (p) => `${escapeHtml(p?.name || "Athlete")}${p?.changed ? ` <span class="cc-question-changed">· ${escapeHtml(changedAtText(p.lastChangedAt))}</span>` : ""}`;
+  const body = list.length ? `<ul class="cc-question-names" role="list">${list.map((p) => `<li>${name(p)}</li>`).join("")}</ul>` : `<p class="cc-panel-note">Nobody.</p>`;
   return `<details class="cc-question-list"${open ? " open" : ""}><summary>${escapeHtml(`${label} (${list.length})`)}</summary>${body}</details>`;
 }
 
