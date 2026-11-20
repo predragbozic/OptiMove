@@ -1,8 +1,9 @@
 # Central calendar — K6 UI contract: the team and athlete switcher
 
 Status: **Decided by the stream manager** (2026-11-20): Q1–Q9 of section 7 as recommended, so K6 stays ★, with no
-backend and no new read. Next: the OptiMove manager's GO. Documents only: no code, no route, no migration. Written against `main` `ec467638`, on the K6 plan (`docs/ai/central-calendar-k6-plan.md`,
-the owner's S1–S5) and the approved mockups (`docs/design/calendar-k6/`, F1–F6 as recommended). Where this contract
+backend and no new read; Q10 (Back, after the owner's S6) is open. Next: the OptiMove manager's GO. Documents only:
+no code, no route, no migration. Written against `main` `ec467638`, on the K6 plan (`docs/ai/central-calendar-k6-plan.md`,
+the owner's S1–S6) and the approved mockups (`docs/design/calendar-k6/`, F1–F6 as recommended). Where this contract
 and a mockup differ, this contract says why.
 
 **The manager's condition** (relayed 2026-11-20): the lists show only what the workspace already shows (S4, S5), and a
@@ -297,8 +298,20 @@ in a club workspace the Groups row above it (S2).
   (4.2). An athlete not in `state.athletes` is never in it (the plan's own route reads by the roster's id).
 - It is not drawn for an athlete's own workspace, and not when the plan was opened from the Athletes list or Coach
   Home (the switcher belongs to the calendar's flow; Q8, decided).
+- **At every level (S6).** It stays drawn when the coach drills in: on the week and day view
+  (`renderWeeklyRoot`) and on every node view (`renderNode`: the session, a domain, a category, a section). A node
+  view already has its own ‹ › for the node's siblings (`node-prev` / `node-next`, `nodeSiblingState`); the two pairs
+  never look alike: the athlete's arrows sit in the switcher with the athlete's name and photo, and their
+  `aria-label`s are "Previous athlete" / "Next athlete", while the node arrows keep theirs.
 
-### 3.2 Moving to another athlete keeps the week, the day and the open session
+### 3.2 Moving to another athlete keeps the week, the day, the session and the open node (S1, S6)
+
+**The owner's S6** (2026-11-20, relayed by the stream manager; also in the plan's section 0): „Weekly kalendaru
+trenera treba da ima filter po sportistima kao i da taj filter postoji unutar domena, kategorije ili sekcije (ako je
+naziv isti za vise od njih) da odmah prebacuje kako bi trener efikasno mogao da vodi vise sportista i da brzo
+proverava sadržaj treninga". Read as: the switcher is drawn at **every** level the coach drills into (the week or day,
+the session, and inside a domain, a category or a section: the `navStack` nodes of `type === "node"` and
+`node-prev` / `node-next`), and ‹ › opens the same place in the next athlete's plan.
 
 The plan is selected by `state.selectedAthleteId` (the roster's `athlete_id`) and drawn from
 `GET /api/athletes/:athleteId/program-data?program=__weekly__` (cached per athlete, `weekly-data.js`). The place the
@@ -317,22 +330,40 @@ coach is at is:
 - `bta` → (`amPm` of its items, or "" when none, `bta`);
 - `session` → the blank group: ("", "").
 
-Matching goes **no deeper than the session level**: below it (domains, categories, sections) the nodes are each
-athlete's own content, with no shared key, and labels are not used to match (they carry a session's own name and
-time, which may differ between athletes; today's sibling match by type and label, `app.js:4523-4525`, is not used
-here). Two sessions in one slot are one `bta` node, so "the session" kept is that slot's node.
+At the session levels the **slot key** is used, never the label: a session's label carries its own name and time,
+which may differ between athletes. Two sessions in one slot are one `bta` node, so "the session" kept is that slot's
+node.
+
+- **The blank group across shapes** (`program-structure.js:78-91`): a day with any AM/PM item puts its blank-AM/PM
+  items into one `session` node; a day with none puts them into `bta` nodes keyed ("", x). So a `session` node of A
+  matches B's top-level `bta("", x)` node when B's day has exactly one such node, and the reverse; with two or more
+  it is ambiguous (below).
+
+**Below the session level (S6): matched by name.** The domain, category and section nodes (`program-structure.js`
+`structureNodes` and below) carry each athlete's own content and random ids, so they are matched by **type and
+name** at each level: the node's type, and its name compared after trimming, collapsing inner spaces and case
+folding (`toLocaleLowerCase()`), accents kept. This is the match today's sibling arrows use (`sameNodePosition`,
+`app.js:4523-4525`), here applied across athletes.
+- **Missing:** B has no node of that type and name at a level → the path stops at the deepest level that matched.
+  It never jumps to a different node.
+- **Ambiguous:** two or more nodes of one type and name at the same level (in A's day or in B's) → stop at the
+  parent, never guess.
+- An exercise open in the detail view is not kept: B's view opens at the deepest matched node, with the exercise list.
 
 Moving to athlete B:
-1. Remember A's place as **slot facts**: the week, the day, and the slot keys of `navStack`'s session levels (at most
-   two: `amPm`, then `bta`; or one).
+1. Remember A's place: the week, the day, the slot keys of `navStack`'s session levels, then the (type, name) of
+   each deeper node.
 2. Set `state.selectedAthleteId` to B, load B's weekly data (cached if seen this session), and set
    `viewedWeekStart` and `selectedWeekDay` to A's.
-3. Rebuild `navStack` for B from B's nodes of that day, level by level, matching the slot key. Stop at the deepest
-   level that matches, never below the session level.
-4. A quiet line under the header says what is kept: "Monday 12.10 · Training · Main session" (B's own names). If the
-   path stopped early, the line says what B does not have: "Ben has no Training (PM) on Monday 12.10." The day stays
-   open. If A was deeper than the session level, B's view stops at the session level, and the line says so ("Opened
-   at Training · PM").
+3. Rebuild `navStack` for B from B's nodes of that day, level by level: slot keys at the session levels, then type
+   and name. Stop at the deepest level that matches.
+4. A quiet line under the header says what is kept, in B's own names: "Monday 12.10 · Training · Main session ·
+   Strength · Power". If the path stopped early, a calm line names what is missing, and nothing else:
+   - a slot: "Ben has no Training (PM) on Monday 12.10.";
+   - a node: "Ben has no ‘Power’ section on this day." (the type's word: domain, category or section);
+   - ambiguous: "Ben has two ‘Power’ sections here. Choose one below." (or "You have two …" when A's own day is
+     ambiguous), with the parent open.
+   The day stays open in every case.
 
 **History.** Moving between athletes pushes **no** history entry and replaces `navStack` without
 `pushAppHistory()`. The rebuilt path therefore holds no per-level entries. Back works as it does today, which
@@ -341,15 +372,19 @@ Moving to athlete B:
   (each drill-in pushed one entry, `app.js:3221-3227`), and then return to where the plan was opened from (the
   calendar's place, or the event's panel, K4-0). After a switch, B's path may be shorter than A's, so some of A's
   drill-in entries find no level left to pop; today's code then takes the newest app-history entry, and a stale entry
-  of the same tab is skipped (`skipStaleAppBackEntry`). The contract's requirement is the outcome, not a press count:
-  every Back either steps up one open level or moves on, never shows the same view twice, and the last one lands on
-  the calendar's place. The weekly test pins the exact count for A two levels deep and B one level deep;
-- **the visible *Back to calendar* control** returns to the calendar's place in one tap, whatever the depth: it
-  clears `navStack` and goes back through the app history to the entry the calendar left (`takeAppBackEntry` /
-  `restoreAppPlace`).
+  of the same tab is skipped (`skipStaleAppBackEntry`, `app.js:2339-2341`). The contract's requirement is the
+  outcome, not a press count: every Back either steps up one open level or moves on, never shows the same view
+  twice, and the last one lands on the calendar's place. The weekly tests pin the exact count for A two levels deep
+  and B one level deep, and for A three levels deep (a section) and B one;
+- **the visible *Back to calendar* control** (new on the Weekly plan, `data-action="weekly-back-to-calendar"`)
+  returns to the calendar's place in one tap, whatever the depth: it clears `navStack`, then calls
+  `window.history.back()` (the `exercise-back` pattern, `app.js:3215-3219`); the popstate runs `handleAppBack`, and
+  the remaining drill-in entries of the Weekly tab are skipped by `skipStaleAppBackEntry` until the calendar's entry
+  is restored. (`takeAppBackEntry` answers only inside a popstate press, so the click handler never calls it.)
 
-So ten athletes are never ten Backs (Q6, decided). Changing the phone's Back to skip the session levels would change
-the app-wide Back and is not part of K6.
+So ten athletes are never ten Backs (Q6, decided): switching adds no entry. **Q10** below is about the stream
+manager's reading "one Back leaves the plan": with today's app-wide Back, the phone's Back steps up the drilled
+levels first, so that holds for *Back to calendar*, not for the phone's Back from a section.
 
 **A write in flight.** The Weekly plan's own writes (the copy modal, the more-menu actions) keep their existing
 guards; while one is in flight the switcher's buttons are disabled, the Builder's pattern
@@ -391,7 +426,8 @@ manager in the panel; it is shown to a manager only (a reader has no switcher he
   event's links on that day name more than one slot (two trainings in different slots linked to one event), the panel
   shows one button per slot: "See each athlete · Main session", "See each athlete · Gym".
 - **How it opens.** The plan opens on the day, then on the slot's node, by the same drill-in as a tap (one history
-  entry per level, 3.2), so Back steps up from the slot and then returns to the panel.
+  entry per level, 3.2), so Back steps up from the slot and then returns to the panel. If that athlete's day has no
+  node of the slot (the plan changed since the link), the day opens with "Not in this session" (F6, below).
 - **F6: a target with no linked session.** The athlete is in the switcher. When the coach reaches them, the plan
   opens on the day and says "**Not in this session** · Ben has no Main session linked to this event on Monday 12.10."
   The strip marks the pill with a small "–" once known. Before the coach reaches them, the switcher knows only who
@@ -435,9 +471,10 @@ Backend (disposable database, through the real routes; no new route, so these pi
   **not** assert anything about `GET /api/organization`: a team coach does not read it for K6, and that answer does
   carry x1's other-club membership names today (2.3, recorded in section 8).
 - **H5, no new content.** For the team coach of A and for the club admin: `GET /api/calendar?athleteIds=<x1>` for a
-  range returns a **subset** of the unfiltered read of the same range: every card's key, title, `teams` and
-  `canManage` also appear in the unfiltered answer (x1 is in the other club's team too, so items of that club that
-  target x1 are in both or in neither).
+  range returns a **subset** of the unfiltered read of the same range: for every card `c` of the athlete read, a card
+  `u` with the same key exists in the unfiltered read; `c.teams ⊆ u.teams`; `c.title === u.title`;
+  `c.canManage === u.canManage`; and `c`'s counts are no larger than `u`'s (the athlete's own numbers are smaller by
+  design, 2.5). x1 is in the other club's team too, so items of that club that target x1 are in both or in neither.
 - **H2.** A club admin of the club: the roster lists a1, b1 and x1, no athlete of the other club;
   `athleteIds=<an athlete of the other club>` returns nothing.
 - **H3.** A private coach: only their own relationship's athletes; no `GET /api/organization` read is needed.
@@ -456,8 +493,8 @@ Frontend (JSDOM, through the real handlers, with a fake API that keeps the route
 - **F-H4.** K6-3: a panel athlete not in the roster is not in the switcher, and the event sentence counts them.
 - **F-H5.** The platform workspace: no strip, no search, no `GET /api/organization` read for K6, no "Showing …" line,
   and an athlete chosen in another workspace is cleared on entering it.
-- **F-H6.** A workspace switch clears the chosen athlete, the search and the cached organization pairs; the next
-  workspace's first render shows none of them.
+- **F-H6.** A workspace switch and a sign-out clear the chosen (remembered) athlete and team, the search and the
+  cached organization pairs together; the next workspace's first render shows none of them.
 - **F-H7.** A coach with roles in two workspaces: a slow `GET /api/organization`, athlete read, kinds read or panel
   day read of W1 that answers after the switch to W2 is dropped and drawn nowhere; a remembered athlete is checked
   against W2's roster before the first read, so its id is never sent in W2.
@@ -467,7 +504,8 @@ Frontend (JSDOM, through the real handlers, with a fake API that keeps the route
 ### 6.1 Unit (frontend, T1 runner, `--project frontend`)
 
 - `athlete-switcher.test.mjs`: the strip with and without *All*, the dot and the group label; the caption rule; the
-  disabled ends; the scroll helper; the search's ranking, accents, the 8-result cap and the empty sentences.
+  disabled ends with `wrapArrows: false` (‹ disabled on the first pill, so on *Everyone* when `allItem` is given; ›
+  disabled on the last); the scroll helper; the search's ranking, accents, the 8-result cap and the empty sentences.
 - `builder-batch-switcher-golden.test.mjs` (1.4): committed first, unchanged by the extraction.
 - `central-calendar-k6.actions.test.mjs`, through the real handlers:
   - the list per workspace type (2.3), the 60 rule (2.4), the order by team then name, x1 once with *All groups*;
@@ -479,12 +517,22 @@ Frontend (JSDOM, through the real handlers, with a fake API that keeps the route
   - search → another team sets Groups and reads the week;
   - remembered across a view switch, cleared by a workspace switch;
   - the F-H tests of 5.2.
-- `weekly-k6.actions.test.mjs`: › keeps the week, the day and the slot path; A and B with differently named sessions
-  in the same T slot reach the `bta` level; A deeper than the session level → B stops at it, with the sentence; a
-  missing slot and its sentence; "No plan this week"; switching athletes pushes no history entry
-  (`state.appHistoryDepth` unchanged); through `handleBrowserBack()` from a real drill-in: Back steps up A's drilled
-  levels, then lands on the calendar (`state.activeTab === "central-calendar"`), and *Back to calendar* lands there
-  in one tap.
+- `weekly-k6.actions.test.mjs`:
+  - › keeps the week, the day and the slot path; A and B with differently named sessions in the same T slot reach
+    the `bta` level; a missing slot and its sentence; the blank group across shapes (A on a `session` node, B with
+    one top-level `bta("", "T")` → B's `bta` node; with two → stop, ambiguous);
+  - S6, matching by name at each level: A in Strength › Power (domain › section) → B's Strength › Power, with names
+    differing only by case and spaces still matched; B with no "Power" section → B stops at Strength and the line
+    says "Ben has no ‘Power’ section on this day."; B with two "Power" sections → stops at Strength, "Ben has two
+    ‘Power’ sections here."; A's own day ambiguous → stop at the parent; never a different node;
+  - "No plan this week";
+  - switching athletes pushes no history entry (`state.appHistoryDepth` unchanged);
+  - through `handleBrowserBack()` from a real drill-in: Back steps up A's drilled levels, never shows a view twice,
+    then lands on the calendar (`state.activeTab === "central-calendar"`); for A two levels deep and B one, and for
+    A three levels deep and B one;
+  - *Back to calendar*: drill A two levels, switch to B, click `weekly-back-to-calendar`, fire popstate as many
+    times as `history.back()` was called → the calendar, `state.appHistoryDepth` back to its value before the
+    drill-in, `cal.selectedDate` kept.
 - `central-calendar-k6-3.actions.test.mjs`: the action offered to a manager only; one button per slot; the list,
   roster-intersected, with its sentence (a manager only); "Not in this session" for a target without a link; Back to
   the panel, with `selectedDate` kept and the chosen athlete still chosen.
@@ -500,7 +548,8 @@ a private coach, three events (one with five linked athletes and one target with
 2. Club admin, *All groups*: the mixed strip with team labels and dots; search "mar" → Marko of the First team →
    Groups switches, his week is shown.
 3. Team coach: no Groups row; the strip of the team only; a search for another team's athlete → the team sentence.
-4. Weekly plan: from the calendar, open Ana's Monday, drill into Training · Main session, › → Ben on the same session;
+4. Weekly plan: from the calendar, open Ana's Monday, drill into Training · Main session › Strength › Power, › → Ben
+   on the same section; an athlete without a "Power" section → the calm line, Strength open;
    an athlete without a plan → "No plan this week"; *Back to calendar* → the calendar in one tap; again from the
    session, the phone's Back steps up the levels and then lands on the calendar.
 5. K6-3: the event's panel → *See each athlete* → 3 / 5 in this event; the target without a link → "Not in this
@@ -521,6 +570,8 @@ view, no console error.
 - the athlete part dropped from the cache key → the key test fails;
 - the Groups suspension removed → the club-wide event test fails;
 - the slot match replaced by the label match → the "labels differ" weekly test fails;
+- the name match below the session level replaced by "first node of that type" → the missing-section test fails;
+- the ambiguity check removed (the first of two same-named nodes taken) → the two-sections test fails;
 - `pushAppHistory()` on an athlete switch → the "no history entry" weekly test fails;
 - the K6-3 roster intersection removed → F-H4 fails.
 
@@ -565,6 +616,15 @@ backend change.
   **Recommend not in K6**: S1 asks for it inside the calendar's flow. It can follow with the same component.
 - **Q9. The 60 of F3: a constant, or per club?** **Recommend a constant** in `athlete-switcher.js`, changed by a pull
   request if the pilot shows another number.
+- **Q10 (open, after S6). The phone's Back from deep inside a plan.** The stream manager's reading of S6 is "one
+  Back leaves the plan". Today's app-wide Back does not do that: each drill-in pushes a history entry
+  (`app.js:3221-3227`) and Back steps up one level per press before it leaves (`app.js:2285-2289`); with S6 the coach
+  will often be three levels deep (session › domain › section). Options:
+  - (a) **Recommended:** keep today's Back (one level per press, the same everywhere in the app), and give the
+    Weekly plan the visible *Back to calendar*, one tap from any depth (3.2). No app-wide change.
+  - (b) A plan opened from the calendar pushes no per-level entries, and the phone's Back from it clears `navStack`
+    and returns to the calendar in one press. It changes the Back of one screen against the rest of the app, and the
+    drill-in code shared with every Weekly plan, so it needs its own decision and tests.
 
 ## 8. Not in K6
 
