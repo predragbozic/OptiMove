@@ -129,6 +129,13 @@ export const MENU_CACHE_POLICIES = {
     rationale:
       "Wired into view-cache.js in feature/athlete-home-mvp. GET /api/athlete-home is filtered exclusively by the caller's own req.authz.athleteId (never a client-supplied id) - the backend always computes \"today\"/\"this week\" itself from the server clock, so account+workspace is the whole context key (athlete-home-data.js's athleteHomeContextKey), the exact same shape as coach-home's. Invalidated at the same two builder-actions.js exit points weekly/programs already use (exitBuilderToPlanContext, builder-delete-source-plan) - both the weekly AND the programs branches now call invalidateAthleteHomeCache(), since this one view aggregates both today/this-week training AND active specific programs in a single payload, unlike coach-home (today/this-week only) or programs (specific programs only) individually. Since K2b-1e (docs/ai/central-calendar-k2b-plan.md section 22) Home also reads her Upcoming events: her own GET /api/calendar for today and the 13 days after it with kinds=event, under the sibling namespace athlete-home-events, keyed [...workspace parts, her local date] (athlete-home-events-data.js's athleteHomeEventsContextKey - the range follows from the date, and a tab left open past midnight reads again), default TTL. No write of hers changes an event; a coach's change (in another browser) is covered by the TTL. Cleared on a workspace switch (resetAthleteHomeEvents in app.js onWorkspaceChanged, which also drops an answer on its way) and on sign-out (clearAllViewCache). Show N more / Show fewer never sends.",
   },
+  "athlete-calendar": {
+    label: "Calendar (athlete shell)",
+    policy: "always-refresh",
+    namespace: "athlete-calendar",
+    rationale:
+      "K4a (docs/ai/central-calendar-k4a-contract.md section 2): her week by days, one GET /api/calendar per shown week with include=athletes (athlete-calendar-data.js), keyed [...workspace parts, the week's Monday, her local date]. Read again on every entry of the tab (enterAthleteCalendar's forceRefresh), so an answer given on Home or a coach's change shows at once; moving between weeks inside the tab reads each week once within the default TTL. After a confirmed RPE answer from the tab the week is read again. Cleared on a workspace switch (resetAthleteCalendar in app.js onWorkspaceChanged, which also drops an answer on its way) and on sign-out (clearAllViewCache).",
+  },
   "my-training": {
     label: "My training (athlete shell)",
     policy: "always-refresh",

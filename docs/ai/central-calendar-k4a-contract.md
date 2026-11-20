@@ -165,6 +165,27 @@ without one is byte-for-byte today's card):
 "Rate RPE" · "Wellness" · "Open in maps" · "Cancelled" · "Back to calendar" · "See all" · "Before" / "Training" /
 "After" · "The calendar could not be read." with *Try again* · "Your answer was saved." (after a confirmed RPE answer).
 
+### 2.8 As built (K4a-F, branch `claude/central-calendar-k4a-ui`)
+
+- Modules `athlete-calendar-{data,view,actions}.js`; the slice lives in `athlete-calendar-data.js`, not `state.js`. The
+  card model is an explicit pick (`athleteCalendarCard`): event (with or without `sessions`), her planned card (her row
+  under `include=athletes`), her RPE request, her test, her activity ("Recorded session", no button).
+- The week is read again on every entry of the tab (one read); the arrows read each week once within the TTL.
+- `questions/mine` rows now carry `eventId` (`athlete-questions-data.js`), so *Rate RPE* sits on its event's card.
+- *Rate RPE* of a planned session or an RPE request opens the Training Load form **over the Calendar** (the overlay
+  Home uses, Q4); after its confirmed answer: "Your answer was saved." and the week read again. An event question opens
+  its form as Home's list does; a test opens Tests.
+- *Open training* (wired after K4-0 #657 and K4a-B #660 merged): `openWeeklyPlanOnDate(date)` - one history step whose
+  entry holds the Calendar's place (`appHistoryEntryOf(state, { athleteCalendar })`: week, selected day, scroll). The
+  Weekly plan opens on that day and scrolls to it. **Not the session's own block:** the Weekly plan's items carry no
+  session id (`backend/src/utils/grouping.js` `toPlanItem`), so `pendingScrollSessionId` has nothing to find; the
+  day scroll is the contract's stated fallback. A per-session scroll needs `plan_session_id` on the weekly items (a
+  small backend follow-up, not in K4a-F).
+- *Back to calendar* shows on that Weekly plan step only (the step's own history entry, claimed by the push after
+  Open training - never another step at the same depth, nor the Weekly plan opened from the rail). It and the phone's
+  or browser's Back go one step back; the Calendar is restored from the step: its week, day and scroll.
+- Home's *See all* (under the list and in the empty state) opens the Calendar on the current week.
+
 ## 3. What K4b adds later (the card leaves room)
 
 - K4b (changing an RPE answer while the question is open) adds one line on the card, under the sessions: **"Your RPE: 7

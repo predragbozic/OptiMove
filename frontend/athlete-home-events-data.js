@@ -47,7 +47,7 @@ const text = (value) => (typeof value === "string" && value.trim() ? value : nul
 const isoDay = (value) => (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null);
 
 // The place as the list shows it: a library place's name, address and note, or a one-off text. Its id is not kept.
-function pickPlace(place, location) {
+export function pickAthleteEventPlace(place, location) {
   if (place && typeof place === "object") {
     if (place.source === "library") {
       const picked = { source: "library", name: text(place.name), address: text(place.address), note: text(place.note) };
@@ -87,7 +87,7 @@ export function athleteHomeEventRows(answer) {
         startTime: text(item.startTime),
         endTime: text(item.endTime),
         timezone: text(item.timezone),
-        place: pickPlace(item.place, item.location),
+        place: pickAthleteEventPlace(item.place, item.location),
         cancelled: item.cancelled === true,
       });
     }
