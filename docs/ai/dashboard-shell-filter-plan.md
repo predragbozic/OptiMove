@@ -1,273 +1,291 @@
 # Dashboard shell Club / Team / Athletes filter plan
 
-Status: proposal only, 2026-11-20. Review regime: **two-star (access / cross-workspace)**.
-Both the independent reviewer and Claude must approve this contract before code.
-Base inspected: `66cae9fc9265e314eb9704e8c317bd3726e8db54`. PR #648 remains frozen
-and untouched; integrate its accepted ratio code only after its review outcome is known.
-This PR contains this document only. **No migration is expected:** membership and dashboard
-scope already exist; this adds request validation, scoped selection and query/cache wiring.
-No production reads, writes, activation, merge or deploy are part of this task.
+Status: revised proposal, 2026-11-20; Claude's first-round changes incorporated.
+Review regime: **two-star (access / cross-workspace)**. Both Claude and the independent
+reviewer must approve before implementation. Inspected base:
+`66cae9fc9265e314eb9704e8c317bd3726e8db54`. #648 and its branch remain untouched.
+This PR changes this document only. **No migration is expected.** Existing membership,
+workspace and dashboard schema suffice. No implementation, production operation, merge
+or deploy is authorized by this plan.
 
-## 1. Existing behavior and invariants
+## 1. Verified existing behavior
 
-Sources inspected:
-
-- `docs/ai/CURRENT_STATE.md`, Open risks, "Dashboards ignores the shell Club/Team/Athletes filter".
-- `backend/src/routes/trainingLoad.js`: `coachWorkspaceScopeSqlForWorkspace`,
-  `athleteExtraFilterSql`, GET `/weekly` and `/calendar`.
-- `backend/src/routes/trainingLoadDashboard.js`: `QUERY_DASHBOARD_KEYS`, POST
-  `/api/training-load/dashboards/:dashboardId/query`.
+- `backend/src/routes/trainingLoadDashboard.js`, QUERY_DASHBOARD_KEYS and POST
+  `/api/training-load/dashboards/:dashboardId/query`: runtime athlete/activity/component
+  filters; absent top-level athleteIds inherits, null/[] clears, a list overrides.
+- `backend/src/routes/trainingLoad.js`, athleteExtraFilterSql and weekly/calendar:
+  clubs OR teams OR individual athletes, AND mandatory active-workspace athlete scope.
+  No individual existence/visibility rejection for a foreign or stale shell ID.
 - `backend/src/trainingLoadDashboardAccess.js`: request-memoized active workspace,
-  `dataWorkspaceMatches`, dashboard view/manage checks.
-- `backend/src/trainingLoadDashboardQuery.js`: `mergeFilters`, `queryDashboard`,
-  canonical contexts, request-local caches and built-in/metric branches.
-- `frontend/training-load-analysis-data.js`: `analysisRuntimeFilterPayload`,
-  `queryContextKey`, query generation/context checks; `training-load-data.js` shell filter.
-- ADR-002 (ownership and data scope are separate) and ADR-006 (info-hiding).
+  dashboard visibility and dataWorkspaceMatches (ADR-002).
+- `backend/src/trainingLoadDashboardQuery.js`: mergeFilters, canonical context construction,
+  widget overrides, built-in and metric branches, request-local caches.
+- `frontend/training-load-analysis-data.js`: analysisRuntimeFilterPayload(), queryContextKey(),
+  generation/context checks; `training-load-data.js`: shared state.trainingLoad.filter.
+- `backend/src/dashboardSimple/schema.js`, contextSchema/runtimeFilterSchema/envelopeSchema;
+  previewService.js, previewContext.js and previewBinding.js: preview contracts/binding.
+- `docs/ai/CURRENT_STATE.md`, Open risks "Dashboards ignores the shell
+  Club/Team/Athletes filter"; ADR-002 and ADR-006.
 
-Today the query accepts runtime athlete/activity/component filters. Absent runtime fields
-inherit defaults; explicit null/[] clears the existing athlete restriction. Widget filters
-have their own precedence. An empty internal athlete list currently means unrestricted,
-not "match nobody". The shell control is disabled on Dashboards, so simply enabling it or
-sending a client-expanded roster would be incorrect.
+The shell control is disabled on Dashboards today. An empty internal athleteIds array
+currently means unrestricted: it cannot represent a resolved, constrained-empty cohort.
 
-## 2. Proposed request contract
+## 2. Request contract: a separate shellFilter
 
-Add top-level `clubIds` and `teamIds` alongside `athleteIds` to the existing POST /query.
-Each is null or an array of UUIDs, maximum 500 entries per kind (same athlete limit);
-validate shape before use, normalize UUID case, deduplicate. Invalid syntax/oversize gives
-400 `invalidRequest`, without an existence lookup. Dates, widgetIds, activityId and
-componentId keep their existing validation. Authentication remains unchanged.
-
-The new frontend always sends **all three arrays**, including empty arrays. Example:
+POST /query adds one optional top-level field; existing fields keep their exact meanings:
 
 ```json
-{"dateFrom":"2026-11-01","dateTo":"2026-11-07",
- "clubIds":["<club UUID>"],"teamIds":[],"athleteIds":["<athlete UUID>"],
- "activityId":null,"componentId":null}
+{
+  "dateFrom": "2026-11-01",
+  "dateTo": "2026-11-07",
+  "athleteIds": null,
+  "shellFilter": { "clubIds": ["<club UUID>"], "teamIds": [], "athleteIds": [] },
+  "activityId": null,
+  "componentId": null
+}
 ```
 
-For a shell request, selected clubs' active member athletes OR selected teams' active
-member athletes OR explicitly selected athletes form one union. Deduplicate athletes;
-never intersect the three kinds. An athlete selected directly and through two groups
-contributes once. All-empty/null arrays mean no extra shell restriction. A selected,
-authorized group with zero eligible members means **zero athletes**, never unrestricted.
+Top-level athleteIds retains today's exact inherit/clear/override behavior. It never
+changes meaning based on the presence or values of another field. shellFilter is a
+separate additional constraint; it never enters the legacy mergeFilters precedence.
 
-Expansion is entirely server-side, using parameterized EXISTS/union predicates with the
-same `athleteExtraFilterSql` semantics, inside the mandatory active-workspace scope.
-The client sends selection IDs, never an expanded roster as authority. Prefer a small
-shared pure SQL-fragment helper over importing a router or duplicating the weekly rule;
-if extracted, preserve weekly/calendar output and test them unchanged. No N+1 membership
-queries or per-widget roster fetches; resolve once per request, then reuse.
+- shellFilter absent or null means no shell restriction (including old clients).
+- A present object has exactly clubIds/teamIds/athleteIds, arrays of UUIDs, each maximum
+  500 entries. Require all three arrays; allow empty arrays. Reject unknown keys inside
+  the object just as unknown top-level keys are rejected. Invalid object/list/UUID syntax,
+  null lists, missing lists or oversize lists return 400 invalidRequest, without ID
+  existence lookups. Normalize UUID case and deduplicate after validation.
+- A present object means a hard narrowing constraint: union within each kind and OR
+  across kinds, then AND with workspace scope and every widget's effective saved/runtime
+  filters. A widget override cannot escape it. Activity/component remain separate AND
+  constraints, never terms in the union. Do not change or persist default/widget filters.
+- Preserve constrained-empty explicitly. A present all-empty object has an empty union
+  and yields no athletes. Clearing the UI's shared selection therefore serializes
+  shellFilter:null, not an all-empty constrained object. This matches weekly/calendar's
+  no-filter UI state while giving an explicit empty object an unambiguous API meaning.
+  Nonempty selections whose resolved union is empty also return no rows, never all.
 
-### Saved filters and compatibility (decision requested)
+The client sends selected IDs only. Server expansion uses parameterized membership
+predicates with athleteExtraFilterSql's union semantics, not a client-expanded roster.
+Resolve once per request and reuse across widgets; no per-ID or per-widget N+1 queries.
+Represent the result as a scoped predicate or `{ constrained, athleteIds }`, so
+constrained+[] cannot collapse into the legacy unrestricted empty athlete list.
 
-Recommendation: the shell is an additional **hard narrowing constraint** on every widget,
-not a mutation of stored dashboard/widget/default filters. Existing effective saved
-athlete/activity/component selection stays intact, then the shell union is ANDed with it
-and with workspace scope. Widget overrides cannot escape the shell. Activity/component
-are separate runtime constraints, not terms in the club/team/athlete union.
+## 3. Access, weekly parity and info-hiding
 
-Avoid giving athleteIds two meanings in one request: presence of clubIds or teamIds marks
-the new shell contract; in that mode all three lists belong only to the shell union and
-must not also feed the legacy athlete override (which would turn club OR athlete into
-club AND athlete). Old callers with neither new property retain existing athleteIds
-inherit/clear/override behavior. New frontend always sends both new properties, even [].
-This compatibility discriminator is explicit, not based on non-empty values. Do not
-silently overwrite a nonempty legacy runtime athlete selection with shell athletes:
-review whether any caller still needs both, and agree a distinct additional runtime
-field before implementation if it does. Do not repurpose persisted filter JSON.
+Resolve the caller's active workspace once with the existing request-memoized dashboard
+resolver. No role_hint, body-supplied workspace, or unrelated role held by the account.
+A platform-admin account active in a club workspace has that workspace's scope.
 
-Represent resolved selection as `{ constrained, athleteIds }` or a scoped SQL predicate,
-so constrained+[] cannot normalize to "all" in queryDashboard/context/cache code.
-Missing selections mean no added constraint; an authorized empty selection result stays
-constrained for built-ins, metrics, ratios and comparisons alike.
+Keep three independent gates: (1) dashboard visibility/owner permission; (2) the
+dashboard's bound data_workspace matching the active workspace (ADR-002); (3) the final
+shell cohort constrained to that workspace's authorized athletes. Gate 3 is set scoping,
+**not** individual shell-ID authorization/existence lookups. Existing canonical fact,
+source and metric access checks remain independently enforced.
 
-## 3. Access and info-hiding
+For staff organizational scopes, the shell cohort is (selected-club members OR
+selected-team members OR direct athlete IDs) AND the existing active-workspace athlete
+scope; private_coach and athlete workspaces give organizational selections no members,
+private coaches retain active own ties, and athlete workspaces remain pinned to self.
+A disallowed kind contributes nobody; it does not invalidate another allowed term in
+the union. No new organizational visibility is granted by having an athlete in a club.
+This replaces the earlier per-kind access matrix and strict-rejection proposal.
 
-Resolve the active workspace once via the dashboard request-memoized resolver; reuse it
-for dashboard access, selection validation and expansion. Do not use role_hint, all roles
-held by the account, or a workspace supplied in the body. A platform administrator active
-in a club/team/private workspace has that workspace's boundaries, not platform scope.
+A well-formed foreign, missing or stale ID contributes nobody. No separate existence or
+visibility query and no filter-specific 404/403. An otherwise authorized query returns
+the ordinary 200 query envelope: an empty result if the union resolves to nobody, or the
+same remaining permitted cohort if mixed with valid terms. It never echoes which term
+was unknown/foreign/stale, any entity name, or per-ID rejection counts. Foreign and
+nonexistent selection probes must have identical response bytes/status/application
+headers under otherwise identical fixtures; ignore only transport Date/request IDs.
+No timing-side-channel guarantee is claimed.
 
-Keep three independent gates: dashboard visibility/owner permission; dashboard's bound
-data workspace matching the active workspace (ADR-002); every submitted selection ID
-being visible/selectable in that active workspace. A filter cannot grant either of the
-first two. Existing canonical fact authorization remains in force after selection.
+Existing dashboard authentication/access errors stay as they are: missing session uses
+the router's authentication response; missing/inaccessible dashboard follows ADR-006;
+data-workspace mismatch retains its existing notFound response. Do not turn a harmless
+stale shared selection into "dashboard not found", and do not align unrelated legacy
+404 message differences in this slice.
 
-Proposed selectable-entity matrix (review/owner confirmation required for private/self):
+No concrete data leak was found that the former strict per-ID rejection prevents while
+this scoped-set approach allows. It is the final workspace intersection, not evidence
+that a submitted ID exists, that protects data. Rejected syntax remains 400; unavailable
+IDs never widen the result. The UI uses the ordinary "No data for this selection." state,
+without auto-dropping terms and rerunning a broader query.
 
-| Active workspace | Clubs | Teams | Individual athletes |
-| --- | --- | --- | --- |
-| platform | existing clubs visible under current platform predicates | existing visible teams | existing visible athletes |
-| club | own club | teams belonging to own club under existing visibility predicates | active members of own club |
-| team | own team's parent club only | own team | active members of own team |
-| private_coach | none | none | own active public.user_athletes ties |
-| athlete | none | none | authenticated athlete only |
+## 4. Membership in time (decided)
 
-Accepting a team's parent club never exposes sibling teams' athletes: expansion is still
-ANDed with own-team scope. Private/self workspaces must not acquire organizational
-visibility just because one of their athletes belongs to a club. Use existing shared
-visibility predicates/relations, not dashboard manage rights as a substitute for entity
-read rights; align picker eligibility with this matrix. Disabled/archived entities follow
-the existing entity visibility rule, not a new bypass. An authorized group may be empty.
+Keep weekly's **current active membership**, not membership at each activity's date:
+public.athlete_memberships status='active' plus membership_type club/team; private coaches
+use active public.user_athletes ties. The predicates contain no event-date interval join.
+Membership changes may therefore change a later query of a historical period. Plan
+ownership snapshots and historical metric ownership are not membership evidence; their
+existing authorization remains unchanged.
 
-Reject the **entire query**, before any widget calculation, if even one well-formed ID
-is missing or outside scope (including one hidden ID among valid IDs). For these failures
-use exactly `404 {"error":"notFound"}`; no message, kind, index, ID, name, missing count,
-partial result or per-widget distinction. Foreign and nonexistent IDs get identical
-status, body bytes and application headers (ignore only transport-generated Date/request
-IDs in comparisons). No 403 or existence-dependent custom header. Never return which ID
-failed, and never partially execute valid selections. Do not promise timing side-channel
-elimination, but avoid an unrestricted existence probe before a permission lookup.
+`public.athlete_membership_periods` already exists (v25). **Event-time membership** is a
+named follow-up using that history, not part of this slice and not a reason for a new
+migration here. Comparisons use the same current selection on both periods.
 
-This adds a strict ID-validation rule for dashboards; weekly's union predicate alone
-currently does not prove each submitted group's visibility, and weekly's athlete branch
-ignores the shell params. Keep weekly unchanged. Dashboard athlete requests validate any
-submitted IDs and remain pinned to self; do not expand athlete access or calculated
-variable access. Missing session keeps the router's existing authentication response.
-Do not normalize unrelated pre-existing dashboard 404 message differences in this slice.
+## 5. Simple preview parity: included in this slice
 
-## 4. Membership in time
+Verified on the inspected base: POST
+`/api/training-load/dashboards/:dashboardId/simple/preview` does **not** accept
+shellFilter today (runtime.js SIMPLE_RUNTIME_PATH + previewRouter.js).
+schema.js uses additionalProperties:false; runtimeFilterSchema accepts only athleteIds,
+activityId, componentId, and contextSchema has no shellFilter. previewService queries with
+compiled.effectiveFilter, while previewBinding fingerprints the existing context/filter.
+Sending the proposed field today would fail validation; dashboard-only wiring is not enough.
 
-Keep **current active membership**, as weekly uses: public.athlete_memberships with
-status='active' and matching membership_type club/team; private coaches use active
-public.user_athletes ties. These predicates have no per-activity date interval join.
-This is current query-time membership, not membership on each event's date. Changing
-membership can therefore change which historical activity rows pass a later query.
-Do not use plan ownership snapshots to infer membership or reinterpret historical metric
-ownership. Existing fact/workspace/source authorization still decides which facts may
-be read for those athletes. Historical membership reporting is a separate product/schema
-question, not an implicit change here.
+Add context.shellFilter to the existing Simple legacyDashboard preview context as the
+same optional nullable object defined in section 2, with identical strict nested schema,
+normalization, union/workspace intersection and constrained-empty semantics. It is a
+sibling of context.runtimeFilter, not another meaning for runtimeFilter.athleteIds.
+Do not implement or activate the dormant page context/D2 contract in this slice.
 
-## 5. Frontend and caches
+The frontend captures the same shared selection for query and preview. The server applies
+it after compiled draft/default/runtime/widget athlete filters, before query arithmetic,
+and before chart-athlete-count decisions. Retain the existing 65536-byte Simple request
+limit in addition to per-list limits; adding shellFilter does not widen parser/admission limits. Preview and saved-widget queries for the same
+metric/config/period/viewer/selection must use the same cohort, including built-ins,
+ratio coverage, empty groups and self scope. Use one shared scope implementation.
 
-Feed state.trainingLoad.filter into analysisRuntimeFilterPayload() explicitly. Serialize
-normalized clubIds/teamIds/athleteIds from the shell and the existing runtime
-activityId/componentId; never derive group athletes from a locally loaded roster.
-Inspect all callers, including Simple preview actions, so none accidentally combines the
-legacy athlete list with the new union or claims preview equals a differently scoped
-saved result. If Simple's separate preview endpoint cannot accept the same scope, propose
-that endpoint change for review before code; do not silently show an unfiltered preview.
-The runtime shell selection is not saved into widget config. Any preview-token scope binding
-must follow the approved preview/save contract; it must not turn a temporary view filter
-into saved athlete configuration.
+Include normalized shellFilter and the resolved authorized cohort/context in preview
+fingerprints/token binding. Save must revalidate against its existing active-workspace
+and preview binding, so changing the selection or effective membership cannot reuse an
+older preview as though it represented the new scope. Reuse the current plain-language
+preview-again flow on mismatch. Changing shellFilter invalidates outstanding frontend
+preview state. Preserve receipt replay semantics; do not add persistence, store a shell
+selection as widget configuration, or modify the atomic database save function. Test
+preview/save/replay boundaries explicitly before claiming parity.
 
-Re-enable the existing control on Dashboards and remove its disabled-only note. Reuse
-existing selection/apply/clear interactions and invoke dashboard query invalidation/refetch
-instead of only weekly/calendar loading. Do not fetch once per widget. Keep legitimate
-no-data and authorization-error states distinct: no empty-result fallback to all athletes.
+## 6. Frontend and cache behavior
 
-queryContextKey() must include a deterministic signature of all three normalized ID sets,
-plus existing user/workspace, dashboard/revision, widget revisions, period and runtime
-activity/component. Sort copied arrays, never mutate state; equivalent selections in a
-different click order have the same key. The query payload and key use the same snapshot.
-On apply/clear or workspace change, clear old rendered results and invalidate/increment
-the generation before starting the next request. Retain both generation and context-key
-checks so a late A response cannot repaint B. No stale-while-revalidate display from a
-different selection. A hit for B may only reuse B's authorized-context result.
+state.trainingLoad.filter feeds a normalized shellFilter via analysisRuntimeFilterPayload().
+Keep existing runtime top-level athleteIds/activityId/componentId intact. Reuse the same
+selection serializer for Simple's context.shellFilter; do not copy shell athletes into
+legacy runtime athleteIds and never expand club/team members on the client.
 
-Server request-local canonical-context and ratio caches include the resolved shell scope
-and its constrained/empty distinction, in addition to existing filters. No persistent
-membership-expansion cache is introduced. Requery after normal membership invalidation;
-no new real-time membership subscription is promised.
+Re-enable the Dashboards control and remove its disabled-only note. Reuse the shared
+picker/apply/clear interactions; applying triggers dashboard query invalidation/refetch,
+not merely weekly/calendar loading. No request per widget. Clear maps to null as above.
+Do not alter shell state or cohort semantics when navigating between Overview, Activities,
+Athletes and Dashboards.
 
-## 6. Ratios and built-ins
+queryContextKey() includes canonical shellFilter (or null), existing user/workspace,
+dashboard/revision, widget revisions, period and legacy runtime constraints. Sort copied
+normalized arrays without mutating state; click order does not change meaning. Payload
+and cache signature come from the same snapshot. A selection/workspace change clears old
+rendered results and advances generation before requesting the new result. Keep both
+generation and context checks; a late A response cannot repaint B. A cached B result is
+reusable only for B's complete authorized context. Server request-local canonical/ratio
+cache keys include scoped selection and its empty distinction. No persistent expansion
+cache or new real-time membership subscription; use normal membership invalidation.
 
-Coordinate with the accepted outcome of #648 without changing its frozen branch. Apply
-selection before canonical facts/seeds and coverage, identically for measured variables,
-calculated sums/differences, and all built-ins (including session count/last session).
-No client-side filtering after pooling. A ratio pools exact paired inputs only for selected
-authorized athletes/occasions; independent included/left-out coverage must use the same
-scope, including omitted buckets. Preserve real conflicts, formula-change errors,
-source/estimate policies and athlete exclusion of calculated variables. For comparisons,
-use the same current-membership selection on both periods (not historical membership).
-Retain groupBy and all other #648 cache-key dimensions. Empty selection yields no values,
-not a cohort-wide aggregate; zero remains a real value. No aggregation/axis/unit change.
+## 7. Ratios and built-ins
 
-## 7. Planned tests and acceptance evidence
+Integrate the accepted outcome of #648 later, without changing its frozen branch. Filter
+before canonical context/seeds and pooling, not after aggregates return. Apply identically
+to measured variables, calculated sums/differences and built-ins (including session count
+and last session). Ratios include exact paired inputs only from selected authorized
+occasions, with independent included/left-out coverage using the same scope, including
+omitted buckets. Preserve real conflicts, formula-change errors, estimates/source rules
+and athlete exclusion of calculated metrics. Keep groupBy and all other ratio cache
+keys. Constrained-empty has no values, never an all-athlete cohort; zero remains a value.
+No aggregation, axis or unit redesign.
 
-Use the repository runner on Node 22, real routes and fresh disposable databases. Create
-fixtures for all five workspace types, multiple roles on one account, own/foreign clubs
-and teams, directly selected athletes, dual memberships, private ties and a self profile.
-No production fixtures or persistent database writes.
+## 8. Tests and exact planned commands
 
-- For **each workspace type and each ID kind**, test allowed (where the matrix permits),
-  foreign and nonexistent UUIDs. For matrix cells allowing none, both existing organizational
-  IDs and missing IDs must give the same 404. Include platform missing IDs, platform-admin
-  account active elsewhere, inactive memberships and valid+hidden mixed lists.
-- Compare foreign vs missing response bytes/status/application headers for each kind;
-  prove dashboard ownership permission and data-workspace match independently. Missing
-  session follows existing 401. Assert rejected selections never invoke query arithmetic.
-- Mutation per club, team and athlete visibility check; per active-workspace scope and
-  dataWorkspaceMatches/owner gate. Removing any must fail its relevant fixture; no
-  surviving bypass mutation accepted. Also mutate union OR to AND, remove final workspace
-  intersection, and normalize constrained-empty to unrestricted; all must be killed.
-- Union across and within kinds, deduplication, own empty team, all-empty shell, malformed
-  lists, limits, absent/null/[] legacy inheritance, stored widget filters vs shell,
-  activity/component constraints, and old clients with no new fields.
-- Membership transfer/deactivation: query an old period before/after a current membership
-  change, prove weekly's rule is retained. Include team-parent-club and private-coach ties.
-- Two widgets with differing overrides cannot escape shell; source/unit conflicts remain
-  visible. Built-ins and ratio pooled arithmetic/coverage/comparison/cache isolation use
-  the same scoped athletes; athlete workspace never gains calculated metrics.
-- Frontend unit/action tests inspect exact raw selection payload, all-empty clearing,
-  canonicalized cache signatures for each of club/team/athlete changes, A-to-B-to-A cache
-  hits, workspace changes and late A response after B. Assert no client-expanded roster.
-- One real browser scenario: platform pilot selects club+team+athlete on Dashboards,
-  applies and clears, sees an excluded athlete disappear/reappear across built-in and
-  metric widgets, and switches filters during a delayed response without a stale repaint.
-  Check the existing picker at 390 and 1280 px; no clipped/dead filter controls.
+Use real mounted routes and disposable databases on Node 22. Fixtures cover platform,
+club, team, private_coach and athlete workspaces, multiple roles on one account, dual
+memberships, membership transfers, private ties and self. No production fixtures.
 
-Planned commands (results supplied only by the later implementation PR):
-`node scripts/test-runner.mjs --project backend --filter dashboard`, targeted new disposable
-route file via --project backend --file, relevant weekly/calendar regression files if a
-helper is extracted, --preset backend-fast, --preset frontend-fast, --preset e2e (or agreed
-focused dashboard browser file plus declared full-suite omissions), and frontend build.
-Compare any failure with a clean exact-main baseline; report exact heads/commands/counts,
-mutations and omissions. Neither implementation nor these application tests ran for this
-docs-only PR; its checks are document review, one-file diff and git diff --check.
+- Each workspace type: own/valid selections, foreign/missing/stale club, team and athlete
+  IDs, individually and mixed with valid terms. Foreign/missing paired probes must have
+  byte-identical envelopes/status/application headers and never widen the cohort. On
+  platform, a visible existing ID may legitimately match; test missing IDs and proper
+  results rather than inventing a foreign platform boundary.
+- Exercise dashboard visibility and data-workspace match independently. Mutation per
+  independent gate, final workspace intersection (including platform-admin active
+  elsewhere), private/self group exclusion and athlete-self pinning. Remove each gate:
+  its relevant test must fail. No per-ID rejection/check mutation exists anymore.
+- Mutate union OR to AND, remove shell hard intersection with widget/default filters,
+  or collapse constrained-empty to unrestricted: each must fail. Dedup union terms,
+  authorized empty groups, null/absent/all-empty object, unknown nested keys, syntax,
+  required arrays and max lengths; legacy athleteIds inherit/null/[]/override unchanged.
+- Membership changes affect old periods by today's active rule; no event-time join.
+  Private/self group-only selection has no rows; adding permitted direct athletes
+  returns only those, with self pin intact. Activity/component constraints remain ANDed.
+- Two widgets cannot override shell; built-ins and ratios share cohort/coverage,
+  comparisons and cache isolation. No calculated metrics become visible to athletes.
+- Preview and saved query parity; shell change invalidates preview/token; stale membership
+  binding prompts re-preview; replay remains idempotent and saves no shell configuration.
+- Frontend: exact separate payload, no expanded roster, no overloaded athleteIds; null
+  clear; cache-key changes for each kind; canonical order; A/B/A and workspace switching;
+  delayed A after B; Simple payload/binding context. Normal no-data state for zero cohort.
+- Real browser: apply club+team+athlete, clear, switch filters during a delayed response,
+  navigate between shared-filter views, and verify permitted athletes/built-ins/metric
+  results with no stale repaint. Check existing picker at 390 and 1280 px.
+- **If a SQL helper is extracted, weekly/calendar output unchanged is an explicit
+  regression test:** the same fixtures and selections produce identical cohorts and
+  response content before/after extraction (including foreign/stale terms and no-filter).
+  No change to those endpoints' athlete-special-case behavior.
 
-## 8. Expected implementation files and exclusions
+Use the runner's exact --file selection, not an unverified --filter shortcut. Proposed
+new files dashboard-shell-filter-disposable.test.mjs and dashboard-shell-preview.test.mjs
+will be registered with actual DB requirements (never labelled mock/unit to avoid DB):
 
-Expected: backend/src/routes/trainingLoadDashboard.js; a small dashboard shell-selection
-access/resolution module; backend/src/trainingLoadDashboardQuery.js and its canonical
-context argument boundary; optionally an extracted pure filter SQL helper and
-backend/src/routes/trainingLoad.js to consume it with unchanged behavior.
-Frontend: frontend/training-load-analysis-data.js, training-load-actions.js,
-training-load-view.js, possibly training-load-simple-actions.js for shared payload callers;
-new/updated backend dashboard route tests, frontend/tests/training-load-dashboards.actions.test.mjs
-and related analysis cache tests, e2e/tests/dashboard-simple.test.mjs or a focused new file.
-Canonical context construction currently lives inside trainingLoadDashboardQuery.js;
-keep its scope boundary explicit rather than inventing a second query engine. No schema edit.
+```text
+node scripts/test-runner.mjs --project backend --file dashboard-shell-filter-disposable.test.mjs
+node scripts/test-runner.mjs --project backend --file dashboard-shell-preview.test.mjs
+node scripts/test-runner.mjs --project backend --file training-load-dashboard.test.mjs
+node scripts/test-runner.mjs --project backend --file training-load-calendar.test.mjs
+node scripts/test-runner.mjs --project frontend --file training-load-dashboards.actions.test.mjs
+node scripts/test-runner.mjs --project frontend --file training-load-simple-actions.test.mjs
+node scripts/test-runner.mjs --preset backend-fast
+node scripts/test-runner.mjs --preset frontend-fast
+node scripts/test-runner.mjs --preset e2e
+npm --prefix frontend run build
+```
 
-Out of scope: D2/pages/v75, ratio math redesign, mapping writer/calculatedValues.js,
-GPS/import files, migrations, per-page permissions, historical membership schema,
-athlete builder UX, unrelated weekly/calendar behavior, authz redesign, persistent cache
-infrastructure, production configuration and deployment. Any newly discovered need to
-change a shared access rule or add a migration returns to both reviewers before code.
+--project/--file and backend-fast/frontend-fast/e2e are verified in scripts/test-runner.mjs
+(selectFiles and PRESETS). New test filenames are planned, not present or claimed run.
+Use --list to verify exact selection after creating them; list and run any additional
+identified weekly/calendar fixture file by its exact name if extraction touches its path.
+Report exact frozen head, Node/Postgres/browser versions, commands/counts, baseline
+comparisons for failures, mutations and omissions in the implementation PR. No application
+tests ran for this docs-only revision; check document and one-file diff only.
 
-## 9. Owner/reviewer decisions before implementation
+## 9. Expected implementation files and exclusions
 
-1. **Saved selection precedence and legacy contract:** approve shell as a hard intersection
-   with saved widget/default filters and the presence-based compatibility mode in section 2.
-   Recommendation: yes; clearing shell restores saved defaults and never silently clears
-   a widget's intentional athlete selection. If a legacy runtime athlete filter must also
-   coexist, approve its separate field rather than overloading athleteIds.
-2. **Private coach/self organizational selectors:** allow clubs/teams by intersection,
-   or reject them? Recommendation: reject as in the matrix; individual authorized athletes
-   only. Keep athlete self restriction and no calculated variables. Team parent club is
-   allowed only as a selector narrowed to that team.
-3. **Membership history expectation:** recommendation: keep current active membership,
-   exactly weekly, and explain "Filters use current club and team membership" in existing
-   help if needed. Event-time membership requires a separate contract.
-4. **Simple preview parity:** recommendation: the same shell scope must apply to preview
-   and saved query. Review existing preview contract before code and explicitly approve
-   any added preview request keys; never widen preview silently or persist a temporary
-   shell restriction into saved config.
-5. **Unavailable selection UX:** recommendation: for a rejected selection, clear stale
-   chart data and show "This selection is unavailable. Choose athletes again." with a
-   "Choose athletes" action. Keep raw IDs/codes and existence detail out of coach/admin
-   text and folded panels. Do not auto-drop an inaccessible ID and execute a broader query.
+Expected backend: routes/trainingLoadDashboard.js; a shared dashboard shell-cohort helper;
+trainingLoadDashboardQuery.js (canonical context boundary/caches); dashboardSimple/schema.js,
+previewContext.js, previewService.js, previewBinding.js and saveService.js binding plumbing
+as needed. Keep the shell outside compiler's persisted widget semantics; compiler context
+may need the resolved cohort for chart limits. If extracted, shared pure SQL helper plus
+routes/trainingLoad.js with unchanged weekly/calendar behavior. New disposable tests and
+relevant Simple contract/binding tests; test-manifest entry reflects actual DB use.
 
-No code starts until both reviewers confirm these decisions and the access matrix.
+Expected frontend: training-load-analysis-data.js, training-load-actions.js,
+training-load-view.js, training-load-simple-actions.js and Simple controller/data payload
+plumbing as needed; payload/cache/action tests; e2e/tests/dashboard-simple.test.mjs or a
+focused shell-filter file. Confirm exact files in implementation packet, avoid a second
+query engine and no new persistent membership cache.
+
+Out of scope: D2/pages/v75, mapping writer/calculatedValues.js, GPS/import code,
+migrations, authorization redesign, per-page rights, event-time membership implementation,
+unrelated weekly/calendar output changes, athlete builder UX and production configuration.
+If a schema/shared-access-rule change is discovered, return to both reviewers before code.
+
+## 10. Decisions and remaining questions
+
+**Taken by reviewer, not questions for the owner again:** separate shellFilter;
+legacy athleteIds unchanged; shell hard intersection with saved/default/widget filters;
+weekly scoped-union parity rather than per-ID rejection; private/self organizational
+terms contribute nobody; self pin; current active membership; Simple preview parity
+(included above). Empty cohort shows normal no-data UI, not dashboard-not-found.
+
+No new owner decision is required for those points, and no concrete leak justifying strict
+per-ID rejection was identified. Remaining work is review confirmation of this written
+preview/token contract and explicit constrained-empty serialization. Recommendation:
+accept absent/null as clear and a present empty union as zero cohort; retain current
+preview-again behavior for a changed binding. These are reviewer contract confirmations,
+not permission to begin implementation. Code waits for both reviews to pass.
