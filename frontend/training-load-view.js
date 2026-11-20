@@ -67,6 +67,20 @@ export function formatFeedbackSummary(feedback) {
   return `RPE ${feedback.rpe} · ${feedback.durationMinutes} min · sRPE ${formatSrpe(feedback.srpe)}`;
 }
 
+// The athlete's own words for the same summary (K4 follow-ups): "RPE 7 · 60 min · Load 420" - no sRPE or AU on her
+// screens. The coach's screens keep formatFeedbackSummary.
+export function formatAthleteFeedbackSummary(feedback) {
+  if (!feedback) return "";
+  return `RPE ${feedback.rpe} · ${feedback.durationMinutes} min · Load ${feedback.srpe}`;
+}
+
+// The RPE forms' live preview, in her words: "Training load (RPE × minutes): 420".
+export function athleteLoadPreviewHtml(livePreview) {
+  return livePreview != null
+    ? `Training load (RPE × minutes): <strong>${escapeHtml(String(livePreview))}</strong>`
+    : "Training load: enter the minutes";
+}
+
 function sessionLabel(session) {
   const parts = [];
   if (session.sessionName) parts.push(session.sessionName);
@@ -86,8 +100,10 @@ function sessionRowId(session) {
 // existing status-pill convention) distinguishing a session scheduled
 // outside any Weekly plan from a planned one, wherever the two can appear
 // side by side.
-function renderOutsidePlanTagHtml(session) {
-  return session.source === "scheduled_external" ? `<span class="training-load-outside-plan-tag">Outside plan</span>` : "";
+// The athlete's screens call it an "RPE request" (the Calendar card's word, K4 follow-ups); the coach's keep
+// "Outside plan".
+function renderOutsidePlanTagHtml(session, { word = "RPE request" } = {}) {
+  return session.source === "scheduled_external" ? `<span class="training-load-outside-plan-tag">${escapeHtml(word)}</span>` : "";
 }
 
 // ------------------------------------------------------------
@@ -173,7 +189,7 @@ function renderAthleteSessionRowHtml(session) {
     return `
       <div class="training-load-list-row is-rated">
         <span class="training-load-list-row-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
-        <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
+        <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatAthleteFeedbackSummary(session.feedback))}</span>
         ${renderRpeAnswerLineHtml(session)}
       </div>
     `;
@@ -267,7 +283,7 @@ function renderAthleteWeeklySessionRowHtml(session, date, todayIso) {
         <span class="training-load-session-main">
           <span class="training-load-session-name">${escapeHtml(sessionLabel(session))}${renderOutsidePlanTagHtml(session)}</span>
         </span>
-        <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>
+        <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatAthleteFeedbackSummary(session.feedback))}</span>
         ${renderRpeAnswerLineHtml(session)}
       </div>
     `;
@@ -314,7 +330,7 @@ export function renderRpeFormHtml(form) {
         <button class="training-load-overlay-backdrop" type="button" data-action="training-load-close-rpe-form" aria-label="Close"></button>
         <section class="panel training-load-rpe-panel" role="dialog" aria-modal="true" aria-label="Session rated">
           <p class="eyebrow">Saved</p>
-          <h3>${escapeHtml(formatFeedbackSummary(form.savedFeedback))}</h3>
+          <h3>${escapeHtml(formatAthleteFeedbackSummary(form.savedFeedback))}</h3>
           <p class="muted">${escapeHtml(sessionLabel(form))}${form.date ? ` · ${escapeHtml(formatDate(form.date))}` : ""}</p>
           <button type="button" class="plain-button compact-button" data-action="training-load-close-rpe-form">Done</button>
         </section>
@@ -343,7 +359,7 @@ export function renderRpeFormHtml(form) {
           <input type="number" inputmode="numeric" min="1" max="600" step="1" class="training-load-rpe-duration-input" data-action="training-load-rpe-duration-input" value="${escapeAttr(form.durationMinutes)}" placeholder="e.g. 60">
         </label>
 
-        <p class="training-load-rpe-srpe-preview" data-training-load-srpe-preview>${livePreview != null ? `sRPE preview: <strong>${escapeHtml(formatSrpe(livePreview))}</strong>` : "sRPE preview: enter a duration"}</p>
+        <p class="training-load-rpe-srpe-preview" data-training-load-srpe-preview>${athleteLoadPreviewHtml(livePreview)}</p>
 
         <label class="training-load-rpe-note-label">
           Note <span class="muted">(optional)</span>
@@ -372,7 +388,7 @@ function renderRpeChangeFormHtml(form, livePreview) {
         <button class="training-load-overlay-backdrop" type="button" data-action="training-load-close-rpe-form" aria-label="Close"></button>
         <section class="panel training-load-rpe-panel" role="dialog" aria-modal="true" aria-label="Answer changed">
           <p class="eyebrow">Saved</p>
-          <h3>${escapeHtml(`Your RPE: ${form.savedFeedback.rpe} · ${formatFeedbackSummary(form.savedFeedback).replace(/^RPE \d+ · /, "")}`)}</h3>
+          <h3>${escapeHtml(`Your RPE: ${form.savedFeedback.rpe} · ${formatAthleteFeedbackSummary(form.savedFeedback).replace(/^RPE \d+ · /, "")}`)}</h3>
           <p class="muted">${escapeHtml(sessionLabel(form))}${form.date ? ` · ${escapeHtml(formatDate(form.date))}` : ""}</p>
           <button type="button" class="plain-button compact-button" data-action="training-load-close-rpe-form">Done</button>
         </section>
@@ -405,7 +421,7 @@ function renderRpeChangeFormHtml(form, livePreview) {
             Duration (minutes)
             <input type="number" inputmode="numeric" min="1" max="600" step="1" class="training-load-rpe-duration-input" data-action="training-load-rpe-duration-input" value="${escapeAttr(form.durationMinutes)}">
           </label>
-          <p class="training-load-rpe-srpe-preview" data-training-load-srpe-preview>${livePreview != null ? `sRPE preview: <strong>${escapeHtml(formatSrpe(livePreview))}</strong>` : "sRPE preview: enter a duration"}</p>
+          <p class="training-load-rpe-srpe-preview" data-training-load-srpe-preview>${athleteLoadPreviewHtml(livePreview)}</p>
           <label class="training-load-rpe-note-label">
             Note <span class="muted">(optional)</span>
             <textarea class="training-load-rpe-note-input" data-action="training-load-rpe-note-input" maxlength="500" rows="2">${escapeHtml(form.note)}</textarea>
@@ -820,7 +836,7 @@ function renderResultsSessionRowHtml(session) {
     <div class="training-load-session-row">
       <span class="training-load-session-time">${escapeHtml((session.sessionTime || "").slice(0, 5))}</span>
       <span class="training-load-session-main">
-        <span class="training-load-session-name">${escapeHtml(session.athleteName)}${renderOutsidePlanTagHtml(session)}</span>
+        <span class="training-load-session-name">${escapeHtml(session.athleteName)}${renderOutsidePlanTagHtml(session, { word: "Outside plan" })}</span>
         <span class="training-load-session-subtitle">${escapeHtml(sessionLabel(session))}${session.historical ? " · from a since-changed plan" : ""}</span>
       </span>
       <span class="training-load-status-pill training-load-status-rated">${escapeHtml(formatFeedbackSummary(session.feedback))}</span>

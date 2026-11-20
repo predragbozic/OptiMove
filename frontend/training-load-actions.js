@@ -92,7 +92,7 @@ import {
 } from "./training-load-calendar-data.js";
 import { isHiddenInClub } from "./metric-picker-visibility.js";
 import { athleteQuestionsAnswered } from "./athlete-questions-data.js";
-import { externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
+import { athleteLoadPreviewHtml, externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 let analysisLayoutPointer = null;
 let analysisLayoutWindowCleanup = null;
@@ -2833,7 +2833,7 @@ function patchSrpePreview(form) {
   if (!el) return;
   const duration = Number(form.durationMinutes);
   const live = form.durationMinutes !== "" && Number.isFinite(duration) && duration > 0 ? form.rpe * duration : null;
-  el.innerHTML = live != null ? `sRPE preview: <strong>${live} AU</strong>` : "sRPE preview: enter a duration";
+  el.innerHTML = athleteLoadPreviewHtml(live);
 }
 
 function patchSaveButtonDisabled(form) {

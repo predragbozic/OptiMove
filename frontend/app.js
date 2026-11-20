@@ -2535,7 +2535,9 @@ function renderCentralCalendar() {
 // confirmed (phase 5a3b): its own question is asked BEFORE the tab changes,
 // so a "No" leaves the calendar exactly as it was; after a "Yes" the roster
 // state is dropped here, so the reused TL branches never ask twice.
-async function openTrainingLoadFromCalendar({ activityId, date }) {
+// K5-1: `tab: "roster"` opens the activity on its Roster tab (the pair of
+// assignments the GPEXE review hand-off makes, training-load-actions.js).
+async function openTrainingLoadFromCalendar({ activityId, date, tab = "" }) {
   if (!confirmLeaveTrainingLoad("training-load")) return;
   const cal = state.trainingLoad.calendar;
   if (!activityId || activityId !== cal.selectedActivityId) {
@@ -2554,6 +2556,13 @@ async function openTrainingLoadFromCalendar({ activityId, date }) {
   renderLibraryNav();
   if (activityId) {
     await handleTrainingLoadAction({ dataset: { action: "training-load-results-view-activity-in-calendar", activityId, date } }, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
+    const tlCal = state.trainingLoad.calendar;
+    // The coach may have left meanwhile, or another roster's own question kept Training Load where it was.
+    if (tab === "roster" && state.activeTab === "training-load" && tlCal.selectedActivityId === activityId && tlCal.roster) {
+      tlCal.activityDetailTab = "roster";
+      tlCal.roster.userPickedTab = true;
+      renderTrainingLoad();
+    }
     return;
   }
   // The day: Activities' own day selection (its week change and shared-week
@@ -2562,6 +2571,50 @@ async function openTrainingLoadFromCalendar({ activityId, date }) {
   await handleTrainingLoadAction({ dataset: { action: "training-load-calendar-select-day", date } }, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
   await loadTrainingLoadSectionData("today", renderTrainingLoad);
   renderTrainingLoad();
+}
+
+// K5-1 (central-calendar-k5-12-contract.md 1.2): an RPE request's schedule in
+// Training Load › Schedule, on the week of its day. Training Load's leave
+// guard first, then the calendar's place for Back, then the tab.
+async function openTrainingLoadScheduleFromCalendar({ scheduleId, date }) {
+  if (!confirmLeaveTrainingLoad("training-load")) return;
+  pushAppHistory();
+  state.activeTab = "training-load";
+  state.navStack = [];
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  els.context.textContent = "Training load";
+  els.title.textContent = "Training load";
+  els.toolbar.innerHTML = "";
+  renderTabs();
+  renderLibraryNav();
+  setTrainingLoadSection("schedule");
+  const nav = state.trainingLoad.weekly.schedule;
+  nav.weekStart = weekMondayIso(date);
+  nav.selectedDate = date;
+  renderTrainingLoad();
+  // The section's own reads, as loadTrainingLoad makes them for Schedule.
+  await Promise.all([loadTrainingLoadSectionData("schedule", renderTrainingLoad), loadPlannedRpeSetting()]);
+  if (state.activeTab !== "training-load" || state.trainingLoad.section !== "schedule") return;
+  await handleTrainingLoadAction({ dataset: { action: "training-load-open-external-schedule", scheduleId } }, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
+}
+
+// K5-1: a test schedule's day in Tests › Today - the week and the day, then
+// that schedule's day group (who has answered, the reminder).
+async function openTestsDayFromCalendar({ scheduleId, date }) {
+  pushAppHistory();
+  state.activeTab = "tests";
+  state.tests.section = "today";
+  state.tests.scheduleDetail = null;
+  state.tests.form = null;
+  state.navStack = [];
+  state.tests.weekly.today.weekStart = weekMondayIso(date);
+  state.tests.weekly.today.selectedDate = date;
+  renderTabs();
+  renderLibraryNav();
+  await loadTests({ setLoading, renderTests });
+  if (state.activeTab !== "tests" || state.tests.section !== "today") return;
+  await handleTestsAction({ dataset: { action: "tests-weekly-open-today-session", scheduleId, date } }, { renderTests: renderActiveTestsSurface });
 }
 
 function renderCoachHome({ rows, error, clubs = [] }) {
@@ -3129,7 +3182,10 @@ async function handleContentClick(event) {
     return;
   }
   if (type.startsWith("central-calendar-")) {
-    await handleCentralCalendarAction(action, { render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar, openBuilder: openBuilderForK3 });
+    await handleCentralCalendarAction(action, {
+      render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar,
+      openTrainingLoadSchedule: openTrainingLoadScheduleFromCalendar, openTests: openTestsDayFromCalendar, openBuilder: openBuilderForK3,
+    });
     return;
   }
   if (type === "back") {

@@ -12,7 +12,15 @@ import { launch } from "../lib/browser.mjs";
 
 let world;
 let browser;
-before(async () => { world = await startWorld(); browser = await launch(); });
+before(async () => {
+  world = await startWorld();
+  browser = await launch();
+  // Her device's zone, reported as her browser does (POST /api/tests/athlete/timezone), before the first request: the
+  // seed's Europe/Sarajevo would otherwise make the first request close at Sarajevo's 23:59 (22:59 in a UTC browser).
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const reported = await call("athlete", "POST", "/api/tests/athlete/timezone", { timezone: zone });
+  assert.equal(reported.status, 200, reported.text);
+});
 after(async () => { await browser?.close(); await world?.stop(); });
 
 const cookieOf = (role) => `optimove_session=${world.accounts.find((a) => a.role === role).sessionToken}`;
@@ -44,7 +52,7 @@ async function answeredRequest(name) {
   return row.externalAssignmentId;
 }
 
-async function openCalendar(width) {
+async function openCalendar(width, { prepare = null, ready = ".athlete-calendar .ac-card" } = {}) {
   const account = world.accounts.find((a) => a.role === "athlete");
   const phone = width < 600;
   const context = await browser.newContext({ viewport: { width, height: phone ? 800 : 900 }, isMobile: phone, hasTouch: phone });
@@ -52,11 +60,12 @@ async function openCalendar(width) {
   const page = await context.newPage();
   const pageErrors = [];
   page.on("pageerror", (e) => pageErrors.push(String(e)));
+  await prepare?.(page);
   await page.goto(`${world.baseUrl}/athlete`, { waitUntil: "load" });
   await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
   if (phone) await page.locator("#mobileNavToggle").click();
   await page.locator('.sidebar [data-athlete-tab="athlete-calendar"]').first().click();
-  await page.locator(".athlete-calendar .ac-card").first().waitFor({ timeout: 20_000 });
+  await page.locator(ready).first().waitFor({ timeout: 20_000 });
   return { context, page, pageErrors, phone };
 }
 
@@ -74,7 +83,8 @@ for (const width of [1280, 390, 375, 360]) {
       const change = card.locator(`[data-action="athlete-calendar-rpe-change"][data-assignment-id="${assignmentId}"]`);
       await change.waitFor({ timeout: 20_000 });
       const line = (await card.locator("[data-ac-answer]").textContent()).replace(/\s+/g, " ").trim();
-      assert.match(line, /^Your RPE: 7 Change You can change it until \S+( \S+)?\.$/, line);
+      // 23:59 exactly: the request closes at 23:59 in her own (the browser's) zone.
+      assert.equal(line, "Your RPE: 7 Change You can change it until 23:59.");
       assert.deepEqual(await small(a.page, ".athlete-calendar"), [], "44 px targets on the Calendar");
       assert.equal(await a.page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0, "no horizontal scroll");
       await a.page.screenshot({ path: `${process.env.E2E_SHOTS || "/tmp"}/k4b-calendar-line-${width}.png`, fullPage: true }).catch(() => {});
@@ -82,8 +92,8 @@ for (const width of [1280, 390, 375, 360]) {
       await change.click();
       const heading = a.page.locator(".training-load-rpe-form h3, [role=dialog] h3").filter({ hasText: "Change your RPE" }).first();
       await heading.waitFor({ timeout: 10_000 });
-      // The heading names the request; the form's existing "Outside plan" tag follows it.
-      assert.ok((await heading.textContent()).replace(/\s+/g, " ").trim().startsWith(`Change your RPE · ${name}`));
+      // The heading names the request; her tag "RPE request" follows it (K4 follow-ups, 2c).
+      assert.equal((await heading.textContent()).replace(/\s+/g, " ").trim(), `Change your RPE · ${name}RPE request`);
       const sheet = await a.page.evaluate(() => {
         const root = [...document.querySelectorAll("h3")].find((h) => /Change your RPE/.test(h.textContent))?.closest("form, [role=dialog], section, .panel");
         const inputs = [...(root?.querySelectorAll("input:not([type=range]):not([type=hidden]), textarea, select") || [])].filter((el) => el.getBoundingClientRect().width > 0);
@@ -186,3 +196,38 @@ test("(390 px) a change refused as closed: the form says so, the week is read ag
     await a.context.close();
   }
 });
+
+// K4 follow-ups, item 1: signed out (her calendar read answers 401), the Calendar offers Sign in, a 44 px target that
+// goes to the login (the app's entry at "/").
+for (const width of [1280, 390, 375, 360]) {
+  test(`(${width} px) signed out: 'Please sign in again.' with a 44 px Sign in that goes to the login`, async () => {
+    const a = await openCalendar(width, {
+      prepare: (page) => page.route((url) => url.pathname === "/api/calendar", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) })),
+      ready: '.athlete-calendar [data-action="athlete-calendar-sign-in"]',
+    });
+    try {
+      const look = await a.page.evaluate(() => {
+        const box = document.querySelector('[data-action="athlete-calendar-sign-in"]').getBoundingClientRect();
+        return {
+          text: document.querySelector(".athlete-calendar .ac-state p").textContent.trim(),
+          label: document.querySelector('[data-action="athlete-calendar-sign-in"]').textContent.trim(),
+          width: box.width, height: box.height,
+          retry: document.querySelectorAll('[data-action="athlete-calendar-retry"]').length,
+          overflow: document.documentElement.scrollWidth - innerWidth,
+        };
+      });
+      assert.deepEqual([look.text, look.label], ["Please sign in again.", "Sign in"]);
+      assert.ok(look.height >= 43.5 && look.width >= 43.5, `Sign in is a 44 px target (${look.width}x${look.height})`);
+      assert.equal(look.retry, 0, "no Try again when signed out");
+      assert.equal(look.overflow, 0, "no horizontal scroll");
+      await a.page.screenshot({ path: `${process.env.E2E_SHOTS || "/tmp"}/k4fu-signed-out-${width}.png` }).catch(() => {});
+      await Promise.all([
+        a.page.waitForURL((url) => url.pathname === "/", { timeout: 20_000 }),
+        a.page.click('[data-action="athlete-calendar-sign-in"]'),
+      ]);
+      assert.deepEqual(a.pageErrors, []);
+    } finally {
+      await a.context.close();
+    }
+  });
+}

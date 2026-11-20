@@ -120,7 +120,7 @@ test("5. Save change: one request with a fresh key, the values and expectedRevis
   assert.match(sent[0].body.requestKey, /^[0-9a-f-]{36}$/);
   assert.deepEqual({ ...sent[0].body, requestKey: null }, { requestKey: null, rpe: 5, durationMinutes: 75, note: "first", expectedRevision: 0 });
   assert.match(html(), /Saved/);
-  assert.match(html(), /Your RPE: 5 · 75 min · sRPE 375/);
+  assert.match(html(), /Your RPE: 5 · 75 min · Load 375/);
   await act({ action: "training-load-close-rpe-form" });
   assert.equal(form(), null);
   assert.ok(calls.some((c) => c.url.includes("/api/training-load/athlete/today")), "Done reads today again");

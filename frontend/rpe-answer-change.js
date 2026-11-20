@@ -11,7 +11,7 @@ import { escapeAttr, escapeHtml, localDateIso } from "./utils.js";
 export const RPE_CHANGE_UNCONFIRMED = "We can't tell yet whether your change was saved.";
 export const RPE_CHANGE_LOCKED = "This answer can no longer be changed. The question is closed.";
 export const RPE_CHANGE_BUSY = "Nothing was saved. Try again.";
-export const RPE_CHANGE_NOT_FOUND = "Training session not found.";
+export const RPE_CHANGE_NOT_FOUND = "This RPE request is no longer available.";
 export const RPE_CHANGE_COACH_SEES = "Your coach sees that it was changed.";
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -25,13 +25,23 @@ export function rpeChangeTimeText(iso, now = new Date()) {
   return localDateIso(at) === localDateIso(now) ? time : `${WEEKDAYS[at.getDay()]} ${time}`;
 }
 
+// The closed line's time: "at 22:00" on the device's today, "on 12.10 at 22:00" on another day (a past week's card
+// names its date, never a weekday that could be read as the next one).
+export function rpeClosedTimeText(iso, now = new Date()) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  return localDateIso(at) === localDateIso(now) ? `at ${time}` : `on ${pad(at.getDate())}.${pad(at.getMonth() + 1)} at ${time}`;
+}
+
 function isExternalRated(session) {
   return Boolean(session?.rated && session.source === "scheduled_external" && session.externalAssignmentId && session.feedback);
 }
 
 // The answer line of a rated external row: "Your RPE: 7 · Change" with the
-// deadline while it may change; "Your RPE: 7 · Answers closed at 22:00." once
-// the window has passed; "" for every other row (the caller keeps its own
+// deadline while it may change; "Your RPE: 7 · Answers closed at 22:00." (on
+// another day "closed on 12.10 at 22:00.") once the window has passed; "" for
+// every other row (the caller keeps its own
 // summary).
 // `action`: the button's data-action (the Calendar's own, which opens the form from its own read; extra: its dataset).
 export function renderRpeAnswerLineHtml(session, { now = new Date(), action = "training-load-rpe-change-open", extra = "" } = {}) {
@@ -47,7 +57,7 @@ export function renderRpeAnswerLineHtml(session, { now = new Date(), action = "t
   }
   const closes = session.closesAt ? new Date(session.closesAt) : null;
   if (closes && !Number.isNaN(closes.getTime()) && closes.getTime() <= now.getTime()) {
-    return `<div class="training-load-rpe-answer"><span class="training-load-rpe-answer-value">Your RPE: ${rpe}</span> <span class="muted">· Answers closed at ${escapeHtml(rpeChangeTimeText(session.closesAt, now))}.</span></div>`;
+    return `<div class="training-load-rpe-answer"><span class="training-load-rpe-answer-value">Your RPE: ${rpe}</span> <span class="muted">· Answers closed ${escapeHtml(rpeClosedTimeText(session.closesAt, now))}.</span></div>`;
   }
   return "";
 }

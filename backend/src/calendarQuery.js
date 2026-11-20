@@ -88,6 +88,8 @@ export function isSelfReportCard(row, participantCount, hasRoster) {
 }
 // An imported activity IS the device data (expects ["device_data"], met).
 const IMPORTED_ORIGINS = new Set(["api_import", "source_import"]);
+// K5-2: the card kinds that say whether they hold an import (`holdsImport`), for a coach's or a reader's answer only.
+const HOLDS_IMPORT_KINDS = new Set(["event", "planned", "external"]);
 // An assignment that still asks for something.
 const CLOSED_ASSIGNMENT_STATUSES = new Set(["cancelled", "excused"]);
 
@@ -859,6 +861,9 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   const cards = new Map();
   const logicalSessionToKey = new Map();
   const assignmentToKey = new Map();
+  // K5-2 (`holdsImport`, contract docs/ai/central-calendar-k5-12-contract.md 2.2): the ids of the imported activities
+  // this viewer's scoped read returned, and nothing else; a card's ids are checked against it once every fold is done.
+  const importedActivityIds = new Set();
 
   // Events (K2a) are read first, whatever `kinds` asks: a referenced external
   // or test schedule's day card folds under its event, so those kinds are
@@ -1163,6 +1168,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     const own = [];
     const linkedToEvents = [];
     for (const row of await readActivityRows(ctx, { from, to, filters })) {
+      if (IMPORTED_ORIGINS.has(row.origin)) importedActivityIds.add(String(row.id));
       let linkedKey = null;
       for (const linkedEventId of activityToEventIds.get(String(row.id)) || []) {
         linkedKey = foldsInto(linkedEventId, dateStr(row.day));
@@ -1341,12 +1347,15 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
     if (!bucket) continue;
     card.status = card.kind === "event" ? deriveEventStatus(card, today) : deriveStatus(card, today);
     if (card.links.activityIds) card.links.activityIds = uniq(card.links.activityIds);
+    // K5-2: every way an activity reaches an event, planned or RPE card ends in its `links.activityIds` (an event's
+    // direct link, its linked session, its folded RPE schedule; a planned card's session; an RPE card's assignment).
+    if (HOLDS_IMPORT_KINDS.has(card.kind)) card.holdsImport = (card.links.activityIds || []).some((id) => importedActivityIds.has(String(id)));
     bucket.push(card);
   }
   const days = [];
   for (const [date, items] of byDate) {
     items.sort(compareCards);
-    days.push({ date, items: items.map((card) => publicCard(card, includeAthletes)) });
+    days.push({ date, items: items.map((card) => publicCard(card, includeAthletes, { athleteViewer: ctx.type === "athlete" })) });
   }
   return { from, to, today, workspace: { type: ctx.workspace.type, scopeId: ctx.workspace.scopeId ?? null }, teams, days };
 }
@@ -1373,7 +1382,9 @@ async function readQuestionTestFolds(cards) {
   return folds;
 }
 
-function publicCard(card, includeAthletes) {
+// `athleteViewer`: the athlete workspace's answer. Its event cards return early below, but its planned and RPE cards
+// share the generic branch with a coach's, so `holdsImport` is gated on the viewer, never on the card (K5-2, Q11).
+function publicCard(card, includeAthletes, { athleteViewer = false } = {}) {
   // The athlete's own view of an event (D21): name, kind, date, time, place,
   // status (planned / cancelled) and teams — never a count, a teammate, a
   // note or a link beyond the event's id. K2b-1d2: the type's icon and colour
@@ -1438,6 +1449,9 @@ function publicCard(card, includeAthletes) {
       out.links = { eventId: card.links.eventId, activityIds: card.links.activityIds };
     }
   }
+  // K5-2: whether one of the activities this card already lists is an import. Always a boolean on these three kinds
+  // (never a key that comes and goes), never in the athlete's answer.
+  if (!athleteViewer && HOLDS_IMPORT_KINDS.has(card.kind)) out.holdsImport = card.holdsImport === true;
   if (includeAthletes) out.athletes = card.athletes;
   return out;
 }
