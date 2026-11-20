@@ -28713,141 +28713,6 @@ body.athlete-mode:not(.login-mode) .brand-mark {
 }
 /* End of My training. */
 
-/* K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.1.9): the Builder's "Make an
-   event" - the button in a weekly session's row and its inline panel. Under
-   the calendar's prefix; the Builder's own rules are not changed. The body
-   prefix out-ranks the Builder's mobile blocks that shrink row controls. */
-body:not(.athlete-mode):not(.login-mode) .cc-builder-event-trigger {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-body:not(.athlete-mode):not(.login-mode) .cc-builder-event-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 44px;
-  padding: 0 12px;
-  white-space: nowrap;
-}
-.cc-builder-event-icon {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
-.cc-builder-event-badge {
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 800;
-}
-.cc-builder-event-note {
-  color: var(--muted);
-  font-size: 13px;
-}
-.cc-builder-event {
-  display: grid;
-  gap: 10px;
-  margin: 6px 0 10px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-left: 4px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--surface);
-  min-width: 0;
-}
-.cc-builder-event-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.cc-builder-event-title {
-  margin: 0;
-  font-size: 15px;
-}
-.cc-builder-event-line,
-.cc-builder-event-quiet {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.cc-builder-event-line:focus,
-.cc-builder-event-title:focus {
-  outline: none;
-}
-.cc-builder-event-line:focus-visible,
-.cc-builder-event-title:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.cc-builder-event-quiet {
-  color: var(--muted);
-  font-size: 14px;
-}
-.cc-builder-event-form {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-.cc-builder-event-field {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  font-weight: 700;
-}
-body:not(.athlete-mode):not(.login-mode) .cc-builder-event-field input,
-body:not(.athlete-mode):not(.login-mode) .cc-builder-event-field select {
-  min-height: 44px;
-  width: 100%;
-  font-size: 16px;
-  box-sizing: border-box;
-}
-/* One column at every width: the panel sits in a Builder day column, which is
-   narrow on a computer too (ux review: the End input overflowed at 1280 px). */
-.cc-builder-event-times {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-}
-.cc-builder-event-who summary {
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  font-weight: 700;
-}
-.cc-builder-event-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-body:not(.athlete-mode):not(.login-mode) .cc-builder-event .plain-button {
-  min-height: 44px;
-  white-space: normal;
-  text-align: left;
-}
-.cc-builder-event-primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
-}
-.cc-builder-event-primary:disabled,
-.cc-builder-event-secondary:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-@media (max-width: 430px) {
-  body:not(.athlete-mode):not(.login-mode) .cc-builder-event-actions .plain-button {
-    width: 100%;
-    justify-content: center;
-    text-align: center;
-  }
-}
-
 /* ============================================================
    K3 (docs/ai/central-calendar-k3-plan.md 2.1 - 2.7; the owner-approved
    mockup docs/design/calendar-k4/01): Plan the training in the event's
@@ -28883,6 +28748,8 @@ body:has(.k3-sheet-layer) { overflow: hidden; }
 .k3-band-title .k3-type-icon { color: var(--k3-c); flex: none; }
 .k3-band-meta { color: var(--muted); font-weight: 600; }
 .k3-band-line { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.cc-sheet .k3-band-form { position: static; margin: 0 0 12px; box-shadow: none; }
+.k3-band.k3-band-form { --k3-c: #b07a0a; background: #fbf6e9; border-color: #ecdcae; border-left-color: #b07a0a; }
 .k3-band-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; white-space: nowrap; }
 
 .builder-block.is-k3-day { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
@@ -28925,7 +28792,29 @@ button.k3-chip { cursor: pointer; }
 .k3-outcome-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .k3-outcome-button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
 
+/* K2c-3 (6.2 - 6.6; mockup docs/design/calendar-k4/02): the day's events row, Whole day and Event: [▾]. */
+.b-ev-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-soft); }
+.b-ev-label, .b-ev-session-label { font-size: 13px; font-weight: 800; color: var(--muted); }
+.b-ev-chip {
+  display: inline-flex; --k3-c: var(--k3-color, var(--accent)); flex-wrap: wrap; align-items: center; gap: 4px 6px; min-height: 44px; max-width: 100%; padding: 4px 12px 4px 10px;
+  border: 1px solid var(--line); border-left: 5px solid var(--k3-c); border-radius: var(--radius); background: var(--surface, #fff);
+  color: var(--text, #20242a); font: inherit; font-size: 14px; text-align: left; cursor: pointer; overflow-wrap: anywhere;
+}
+.b-ev-chip .k3-type-icon { color: var(--k3-c); flex: none; }
+.b-ev-chip.is-locked { border-style: dashed; border-left-style: solid; border-left-color: var(--muted); background: var(--surface-soft); }
+.b-ev-meta { color: var(--muted); font-weight: 600; }
+.b-ev-quiet { margin: 0; color: var(--muted); font-size: 13px; }
+.b-ev-create { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: auto; }
+.b-ev-whole { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; font-weight: 800; }
+.b-ev-select { min-height: 44px; max-width: 100%; font-size: 16px; }
+.b-ev-session { --k3-c: var(--k3-color, var(--accent)); display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; max-width: 100%; }
+.b-ev-session.is-linked .b-ev-select { border-left: 4px solid var(--k3-c); }
+.b-ev-locked { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 700; }
+
 @media (max-width: 760px) {
+  .b-ev-create { width: 100%; justify-content: center; margin-left: 0; }
+  .b-ev-session { width: 100%; margin-left: 0; }
+  .b-ev-session .b-ev-select, .b-ev-whole .b-ev-select { width: 100%; }
   .k3-sheet-layer { place-items: end stretch; padding: 48px 0 0; }
   .k3-sheet { width: 100%; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); border-radius: 16px 16px 0 0; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
   .k3-save-bar { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
