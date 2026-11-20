@@ -1,0 +1,411 @@
+// Task 5: the athlete on screen (docs/ai/builder-batch-edit-plan.md section 12).
+// The Save of a weekly edit draft never removes or moves a session of the plan
+// itself that has results or a live event link made for it; its content can
+// still change.
+//
+// One disposable database (optimove_tests_builder_sourceguard_*): the committed
+// legacy-schema snapshot plus every migration of migrations_v2 through the real
+// runner; the real Express app in-process over HTTP with real session cookies;
+// dropped at the end. Synthetic names only.
+import { after, before, test } from "node:test";
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import pg from "pg";
+import { createDisposableDatabase, dropDisposableDatabase } from "./support/disposable-db.mjs";
+import { bootstrapLegacySnapshot } from "./support/legacy-bootstrap.mjs";
+import { runMigrations } from "../src/migrate.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS = path.resolve(__dirname, "../../migrations_v2");
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (a local PostgreSQL server; a disposable database is created on it).");
+const BASE_URL = process.env.DATABASE_URL;
+
+// A past Monday, so an athlete may rate its sessions (the RPE route refuses a future day).
+const WEEK = "2026-11-02";
+const WEDNESDAY = "2026-11-04";
+
+let db;
+let admin;
+let server;
+let apiBase;
+let appPool;
+let createSession;
+let batchHooks;
+let tree;
+
+const uid = () => crypto.randomBytes(4).toString("hex");
+const q = async (sql, params = []) => (await admin.query(sql, params)).rows;
+
+async function api(pathname, { method = "GET", body, cookie } = {}) {
+  const res = await fetch(`${apiBase}${pathname}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* not JSON */ }
+  return { status: res.status, body: json, text };
+}
+const ok = (res, status = 200) => { assert.equal(res.status, status, res.text); return res.body; };
+
+async function makeUser(label) {
+  const [first, ...rest] = label.split(" ");
+  return (await q(`insert into public.users (email, first_name, last_name, full_name, display_name) values ($1,$2,$3,$4,$4) returning id`, [`${label.replace(/\W+/g, ".")}-${uid()}@example.invalid`, first, rest.join(" ") || "Example", label]))[0].id;
+}
+async function setWorkspace(userId, type, scopeId) {
+  await q(`insert into public.user_workspace_preferences (user_id, workspace_type, scope_id) values ($1,$2,$3)
+           on conflict (user_id) do update set workspace_type = excluded.workspace_type, scope_id = excluded.scope_id`, [userId, type, scopeId]);
+}
+async function cookieOf(userId) { return `optimove_session=${await createSession(userId)}`; }
+async function makeAthlete(name, clubId, teamId) {
+  const userId = await makeUser(name);
+  const [first, last] = name.split(" ");
+  const row = (await q(
+    `insert into public.athletes (athlete_id, user_id, first_name, last_name, full_name, display_name, device_timezone)
+     values (nextval('public.athlete_generated_id_seq')::text, $1, $2, $3, $4, $4, 'UTC') returning id, athlete_id`,
+    [userId, first, last, name]))[0];
+  await q(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,null,'club','active','2026-01-01T00:00:00Z')`, [row.id, clubId]);
+  await q(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [row.id, clubId, teamId]);
+  await setWorkspace(userId, "athlete", null);
+  return { name, athleteId: row.id, externalId: row.athlete_id, userId, cookie: await cookieOf(userId) };
+}
+
+// A team of two athletes and its coach, planned RPE switched on.
+async function squad(label) {
+  const clubId = (await q(`insert into public.clubs (name) values ($1) returning id`, [`${label} Club ${uid()}`]))[0].id;
+  await q(`select calendar.seed_club_event_types($1)`, [clubId]);
+  const teamId = (await q(`insert into public.teams (club_id, name) values ($1,$2) returning id`, [clubId, `${label} Team ${uid()}`]))[0].id;
+  const coachId = await makeUser(`${label} Coach`);
+  await q(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_coach',true)`, [coachId, teamId]);
+  await setWorkspace(coachId, "team", teamId);
+  const coach = { id: coachId, cookie: await cookieOf(coachId) };
+  const athletes = [];
+  for (const n of ["One", "Two"]) athletes.push(await makeAthlete(`${label} Athlete${n}`, clubId, teamId));
+  await q(`insert into training_load.planned_rpe_workspace_settings (owner_scope, owner_team_id, enabled, enabled_at, updated_by_user_id)
+           values ('team', $1, true, '2026-01-01T00:00:00Z', $2)`, [teamId, coach.id]);
+  return { clubId, teamId, coach, athletes };
+}
+
+const sessionsOf = (draft) => (draft.blocks || []).flatMap((b) => (b.sessions || []).map((s) => ({ ...s, blockId: b.id })));
+const nodesOf = (session) => session.nodes || [];
+
+// A published weekly batch of the two athletes: Monday "Main" and Wednesday
+// "Wednesday" (Training), each with one exercise, tracked, with RPE. Returns
+// the plan ids in athlete order; the first athlete's plan is the one on screen.
+async function publishedBatch(s) {
+  const ids = s.athletes.map((a) => a.externalId);
+  const created = ok(await api("/api/builder/plans", { method: "POST", cookie: s.coach.cookie, body: { planType: "weekly", weekStart: WEEK, athleteIds: ids, athleteExternalIds: ids, name: "Group week" } }), 201);
+  const planId = created.plan.id;
+  let draft = ok(await api(`/api/builder/plans/${planId}`, { cookie: s.coach.cookie }));
+  const addSession = async (blockIndex, name) => {
+    draft = ok(await api(`/api/builder/blocks/${draft.blocks[blockIndex].id}/sessions`, { method: "POST", cookie: s.coach.cookie, body: { bta: "T", name, syncBatch: true } }), 201);
+    const session = sessionsOf(draft).find((x) => x.name === name);
+    draft = ok(await api(`/api/builder/sessions/${session.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { trackingEnabled: true, rpeEnabled: true, syncBatch: true } }));
+    draft = ok(await api(`/api/builder/sessions/${session.id}/nodes`, { method: "POST", cookie: s.coach.cookie, body: { nodeType: "domain", name: "Strength", syncBatch: true } }), 201);
+    const domain = nodesOf(sessionsOf(draft).find((x) => x.id === session.id)).find((n) => n.type === "domain");
+    draft = ok(await api(`/api/builder/sessions/${session.id}/nodes`, { method: "POST", cookie: s.coach.cookie, body: { nodeType: "section", name: "Lower body", parentId: domain.id, syncBatch: true } }), 201);
+    const section = nodesOf(sessionsOf(draft).find((x) => x.id === session.id)).find((n) => n.type === "section");
+    const res = await api(`/api/builder/nodes/${section.id}/custom-exercise`, { method: "POST", cookie: s.coach.cookie, body: { name: `${name} squat`, syncBatch: true } });
+    assert.ok(res.status < 300, res.text);
+    draft = res.body;
+  };
+  await addSession(0, "Main");
+  await addSession(2, "Wednesday");
+  ok(await api(`/api/builder/plans/${planId}/submit`, { method: "POST", cookie: s.coach.cookie, body: { syncBatch: true, responseMode: "summary" } }));
+  const rows = await q(`select p.id, p.athlete_id, p.status from plans.plans p where p.builder_batch_id = (select builder_batch_id from plans.plans where id = $1) and not coalesce(p.is_edit_draft,false) order by p.id`, [planId]);
+  assert.ok(rows.every((r) => r.status === "active"));
+  return s.athletes.map((a) => rows.find((r) => String(r.athlete_id) === String(a.athleteId)).id);
+}
+
+const reopen = async (cookie, planId) => ok(await api(`/api/builder/plans/${planId}/edit`, { method: "POST", cookie }));
+const save = (cookie, draftId, extra = {}) => api(`/api/builder/plans/${draftId}/submit`, { method: "POST", cookie, body: { responseMode: "summary", ...extra } });
+const removeIn = async (cookie, draft, name) => ok(await api(`/api/builder/sessions/${sessionsOf(draft).find((x) => x.name === name).id}`, { method: "DELETE", cookie }));
+const moveToPm = async (cookie, draft, name) => ok(await api(`/api/builder/sessions/${sessionsOf(draft).find((x) => x.name === name).id}`, { method: "PATCH", cookie, body: { amPm: "PM" } }));
+const renameIn = async (cookie, draft, name, to) => ok(await api(`/api/builder/sessions/${sessionsOf(draft).find((x) => x.name === name).id}`, { method: "PATCH", cookie, body: { name: to } }));
+
+async function treeOf(planId) {
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  try { return await tree.loadWeeklyTree(c, planId); } finally { await c.end(); }
+}
+const byName = (t, name) => t.sessions.find((x) => x.name === name);
+
+// Everything a Save could write (the plans, their edit drafts and trees), for "nothing written".
+async function digestOf(planIds) {
+  const r = await q(`
+    select md5(coalesce((select string_agg(x::text, '|' order by x::text) from plans.plans x where id = any($1::uuid[]) or edit_source_plan_id = any($1::uuid[])), '')
+      || coalesce((select string_agg(x::text, '|' order by x::text) from plans.plan_days x join plans.plans p on p.id = x.plan_id where p.id = any($1::uuid[]) or p.edit_source_plan_id = any($1::uuid[])), '')
+      || coalesce((select string_agg(x::text, '|' order by x::text) from plans.plan_sessions x join plans.plan_days d on d.id = x.plan_day_id join plans.plans p on p.id = d.plan_id where p.id = any($1::uuid[]) or p.edit_source_plan_id = any($1::uuid[])), '')
+      || coalesce((select string_agg(x::text, '|' order by x::text) from plans.plan_nodes x join plans.plan_sessions s on s.id = x.plan_session_id join plans.plan_days d on d.id = s.plan_day_id join plans.plans p on p.id = d.plan_id where p.id = any($1::uuid[]) or p.edit_source_plan_id = any($1::uuid[])), '')
+      || coalesce((select string_agg(x::text, '|' order by x::text) from plans.plan_items x join plans.plan_sessions s on s.id = x.plan_session_id join plans.plan_days d on d.id = s.plan_day_id join plans.plans p on p.id = d.plan_id where p.id = any($1::uuid[]) or p.edit_source_plan_id = any($1::uuid[])), '')
+      || coalesce((select string_agg(x::text, '|' order by x::text) from calendar.event_session_links x where x.plan_id = any($1::uuid[])), '')) as d`, [planIds]);
+  return r[0].d;
+}
+
+// An RPE row as the athlete's own submit writes it.
+async function rpeRow(athlete, sessionId) {
+  const s = (await q(`select ps.logical_session_id, pd.date, p.name, p.week_start from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id join plans.plans p on p.id = pd.plan_id where ps.id = $1`, [sessionId]))[0];
+  await q(`insert into training_load.session_feedback (athlete_id, plan_session_id, logical_session_id, session_date, plan_name, plan_week_start, rpe, duration_minutes)
+           values ($1,$2,$3,$4,$5,$6,6,60)`, [athlete.athleteId, sessionId, s.logical_session_id, s.date, s.name, s.week_start]);
+}
+
+// A metric event shaped as the GPEXE writer writes one (team-owned, session level).
+async function metricEventFor(s, date, athleteId, logicalSessionId) {
+  const eventId = (await q(
+    `insert into training_load.metric_events (event_name, occurred_date, scope_level, owner_scope, owner_team_id, source_external_id, event_timezone_snapshot)
+     values ('GPS session', $1, 'session', 'team', $2, $3, 'UTC') returning id`, [date, s.teamId, `test:${uid()}`]))[0].id;
+  await q(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot, logical_session_id) values ($1,$2,'UTC',$3)`,
+    [eventId, athleteId, logicalSessionId]);
+}
+
+async function teamEventFor(s, day) {
+  const types = ok(await api("/api/calendar/events/types", { cookie: s.coach.cookie }));
+  const type = types.types.find((t) => t.kind === "training");
+  return ok(await api("/api/calendar/events", { method: "POST", cookie: s.coach.cookie, body: { requestKey: crypto.randomUUID(), timezone: "UTC", eventTypeId: type.id, title: "Team training", day, targets: [{ kind: "team", id: s.teamId }] } }), 201).event;
+}
+const attach = (cookie, eventId, logicalSessionIds) => api(`/api/calendar/events/${eventId}/sessions`, { method: "POST", cookie, body: { requestKey: crypto.randomUUID(), expectedRevision: 1, logicalSessionIds } });
+
+async function waitForLockWait(predicate = () => true) {
+  for (let i = 0; i < 400; i += 1) {
+    const rows = await q(`select pid, query from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'`);
+    if (rows.some(predicate)) return rows;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("no statement waited on a lock");
+}
+function gate() {
+  let release; let reached;
+  const released = new Promise((r) => { release = r; });
+  const arrived = new Promise((r) => { reached = r; });
+  return { released, arrived, release: () => release(), reached: () => reached() };
+}
+
+// The edit draft's Save, refused for `name` with `change` and `reasons`; nothing of the plans, the draft or the links written.
+async function assertLocked(s, plans, draft, { name, day, change, reasons, scope = "this" }) {
+  const before = await digestOf(plans);
+  const res = await save(s.coach.cookie, draft.plan.id, scope === "all" ? { batchScope: "all" } : {});
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.code, "edit_sessions_locked");
+  assert.equal(res.body.sessions.length, 1, res.text);
+  const [locked] = res.body.sessions;
+  assert.deepEqual({ name: locked.name, day: locked.day, change: locked.change, reasons: locked.reasons }, { name, day, change, reasons });
+  assert.equal(locked.bta, "T");
+  assert.ok(["AM", "PM"].includes(locked.amPm) || locked.amPm === "", locked.amPm);
+  assert.deepEqual(Object.keys(locked).sort(), ["amPm", "bta", "change", "day", "name", "reasons"], "no event id, title or other plan's fact");
+  assert.equal(await digestOf(plans), before, "nothing written: the plan, the draft and the links");
+  return res;
+}
+
+before(async () => {
+  const snapshotSql = fs.readFileSync(path.join(__dirname, "support/legacy-schema.sql"), "utf8");
+  const last = snapshotSql.match(/^-- Last migration contained in the dump: (\S+)\.$/m)[1];
+  db = await createDisposableDatabase({ prefix: "builder", label: "sourceguard", baseDatabaseUrl: BASE_URL });
+  await bootstrapLegacySnapshot({ databaseUrl: db.url, snapshotSql, migrationsRoot: MIGRATIONS, lastMigration: last });
+  await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
+  admin = new pg.Client({ connectionString: db.url });
+  await admin.connect();
+  assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: the disposable database");
+  process.env.DATABASE_URL = db.url;
+  const serverModule = await import("../src/server.js");
+  ({ createSession } = await import("../src/auth.js"));
+  ({ pool: appPool } = await import("../src/db.js"));
+  tree = await import("../src/builderBatchEdit.js");
+  batchHooks = tree.batchEditTestHooks;
+  assert.equal((await appPool.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: the app pool is on the disposable database");
+  server = http.createServer(serverModule.app);
+  await new Promise((r) => server.listen(0, r));
+  apiBase = `http://localhost:${server.address().port}`;
+});
+
+after(async () => {
+  if (server) await new Promise((r) => server.close(r));
+  if (appPool) await appPool.end().catch(() => {});
+  if (admin) await admin.end().catch(() => {});
+  if (db) await dropDisposableDatabase({ name: db.name, adminUrl: db.adminUrl, baseDatabaseUrl: BASE_URL }).catch(() => {});
+});
+
+test("1. the athlete's own RPE: removing or moving the session is refused (has_results), nothing written; a change in place saves and the RPE stays on it", async () => {
+  const s = await squad("rpe");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  await rpeRow(s.athletes[0], byName(await treeOf(a), "Wednesday").id);
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Wednesday");
+  await assertLocked(s, plans, draft, { name: "Wednesday", day: WEDNESDAY, change: "removed", reasons: ["has_results"] });
+  ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const draft2 = await reopen(s.coach.cookie, a);
+  await moveToPm(s.coach.cookie, draft2, "Wednesday");
+  await assertLocked(s, plans, draft2, { name: "Wednesday", day: WEDNESDAY, change: "moved", reasons: ["has_results"] });
+  ok(await api(`/api/builder/plans/${draft2.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const was = byName(await treeOf(a), "Wednesday");
+  const draft3 = await reopen(s.coach.cookie, a);
+  await renameIn(s.coach.cookie, draft3, "Wednesday", "Wednesday easy");
+  ok(await save(s.coach.cookie, draft3.plan.id));
+  const now = byName(await treeOf(a), "Wednesday easy");
+  assert.equal(String(now.logical_session_id), String(was.logical_session_id), "the same session, changed in place");
+  assert.equal((await q(`select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`, [now.logical_session_id]))[0].n, 1);
+});
+
+test("2. an activity linked to the session (no RPE): removing and moving are refused (has_results)", async () => {
+  const s = await squad("activity");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const main = byName(await treeOf(a), "Main");
+  const made = await api("/api/training-activity/materialize", { method: "POST", cookie: s.coach.cookie, body: { requestKey: uid(), planLogicalSessionId: String(main.logical_session_id), athleteId: s.athletes[0].athleteId } });
+  assert.equal(made.status, 201, made.text);
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Main");
+  await assertLocked(s, plans, draft, { name: "Main", day: WEEK, change: "removed", reasons: ["has_results"] });
+  ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const draft2 = await reopen(s.coach.cookie, a);
+  await moveToPm(s.coach.cookie, draft2, "Main");
+  await assertLocked(s, plans, draft2, { name: "Main", day: WEEK, change: "moved", reasons: ["has_results"] });
+});
+
+test("3. a metric event naming the session (no RPE): removing it is refused (has_results)", async () => {
+  const s = await squad("metric");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  await metricEventFor(s, WEDNESDAY, s.athletes[0].athleteId, String(byName(await treeOf(a), "Wednesday").logical_session_id));
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Wednesday");
+  await assertLocked(s, plans, draft, { name: "Wednesday", day: WEDNESDAY, change: "removed", reasons: ["has_results"] });
+});
+
+test("4. a live event link made for the session: removing and moving are refused (linked_to_event); a change in place saves and keeps the link", async () => {
+  const s = await squad("link");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const ev = await teamEventFor(s, WEEK);
+  ok(await attach(s.coach.cookie, ev.id, [String(byName(await treeOf(a), "Main").logical_session_id)]));
+  const draft = await reopen(s.coach.cookie, a);
+  await moveToPm(s.coach.cookie, draft, "Main");
+  await assertLocked(s, plans, draft, { name: "Main", day: WEEK, change: "moved", reasons: ["linked_to_event"] });
+  ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const draft2 = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft2, "Main");
+  await assertLocked(s, plans, draft2, { name: "Main", day: WEEK, change: "removed", reasons: ["linked_to_event"] });
+  ok(await api(`/api/builder/plans/${draft2.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const draft3 = await reopen(s.coach.cookie, a);
+  await renameIn(s.coach.cookie, draft3, "Main", "Main renamed");
+  ok(await save(s.coach.cookie, draft3.plan.id));
+  const live = await q(`select logical_session_id_at_link from calendar.event_session_links where event_id = $1 and ended_at is null`, [ev.id]);
+  assert.equal(live.length, 1);
+  assert.equal(String(live[0].logical_session_id_at_link), String(byName(await treeOf(a), "Main renamed").logical_session_id), "the link stays on the session");
+});
+
+test("5. both reasons on one session, and the RPE with the link: the answer names both", async () => {
+  const s = await squad("both");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const main = byName(await treeOf(a), "Main");
+  await rpeRow(s.athletes[0], main.id);
+  const ev = await teamEventFor(s, WEEK);
+  ok(await attach(s.coach.cookie, ev.id, [String(main.logical_session_id)]));
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Main");
+  await assertLocked(s, plans, draft, { name: "Main", day: WEEK, change: "removed", reasons: ["has_results", "linked_to_event"] });
+});
+
+test("6. an orphaned link in the slot (made for another session) blocks nothing; a session without results or a link is removed and moved as before", async () => {
+  const s = await squad("free");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const ev = await teamEventFor(s, WEEK);
+  const main = byName(await treeOf(a), "Main");
+  const day = (await q(`select date from plans.plan_days where id = $1`, [main.plan_day_id]))[0].date;
+  // A link left on Main's slot by an earlier session (an orphan): its logical id is another session's.
+  await q(`insert into calendar.event_session_links (event_id, plan_id, day, am_pm, bta, session_order, logical_session_id_at_link, session_name_at_link, linked_by_user_id)
+           values ($1,$2,$3,$4,$5,$6,$7,'Earlier',$8)`, [ev.id, a, day, main.am_pm, main.bta, main.session_order, crypto.randomUUID(), s.coach.id]);
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Main");
+  await moveToPm(s.coach.cookie, draft, "Wednesday");
+  ok(await save(s.coach.cookie, draft.plan.id));
+  const t = await treeOf(a);
+  assert.equal(byName(t, "Main"), undefined, "removed");
+  assert.equal(byName(t, "Wednesday").am_pm, "PM", "moved");
+});
+
+test("7. the group Save: a blocked session of the athlete on screen stops it before any sibling is classified or written", async () => {
+  const s = await squad("group");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  await rpeRow(s.athletes[0], byName(await treeOf(a), "Wednesday").id);
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Wednesday");
+  let classified = false;
+  batchHooks.afterLocks = async () => { classified = true; };
+  try {
+    await assertLocked(s, plans, draft, { name: "Wednesday", day: WEDNESDAY, change: "removed", reasons: ["has_results"], scope: "all" });
+  } finally {
+    batchHooks.afterLocks = null;
+  }
+  assert.equal(classified, false, "no sibling was classified");
+  // The sibling's own Wednesday (no results) stays too.
+  assert.ok(byName(await treeOf(plans[1]), "Wednesday"));
+});
+
+test("8. a Save racing the athlete's RPE submit on the session the edit removes, both orders", async () => {
+  // Submit first: it holds the session row; the Save waits on it, then sees the result: refused, nothing written.
+  {
+    const s = await squad("raceA");
+    const plans = await publishedBatch(s);
+    const [a] = plans;
+    const wed = byName(await treeOf(a), "Wednesday");
+    const draft = await reopen(s.coach.cookie, a);
+    await removeIn(s.coach.cookie, draft, "Wednesday");
+    const holder = new pg.Client({ connectionString: db.url });
+    await holder.connect();
+    try {
+      await holder.query("begin");
+      await holder.query(`select id from training_load.planned_rpe_workspace_settings where owner_scope = 'team' and owner_team_id = $1 for update`, [s.teamId]);
+      const rating = api(`/api/training-load/sessions/${wed.id}/rpe`, { method: "POST", cookie: s.athletes[0].cookie, body: { rpe: 7, durationMinutes: 45 } });
+      await waitForLockWait((r) => /training_load\.plan_workspace_ownership/.test(r.query));
+      const before = await digestOf(plans);
+      const saving = save(s.coach.cookie, draft.plan.id);
+      await waitForLockWait((r) => /plan_sessions where id = any/.test(r.query));
+      await holder.query("commit");
+      const rated = await rating;
+      assert.ok(rated.status < 300, rated.text);
+      const refused = await saving;
+      assert.equal(refused.status, 409, refused.text);
+      assert.equal(refused.body.code, "edit_sessions_locked");
+      assert.deepEqual(refused.body.sessions.map((x) => x.reasons), [["has_results"]]);
+      assert.equal(await digestOf(plans), before, "nothing written");
+    } finally {
+      await holder.end();
+    }
+  }
+  // Save first, paused under its session lock: the submit waits on the row, the Save removes the session, the submit answers 404.
+  {
+    const s = await squad("raceB");
+    const plans = await publishedBatch(s);
+    const [a] = plans;
+    const wed = byName(await treeOf(a), "Wednesday");
+    const draft = await reopen(s.coach.cookie, a);
+    await removeIn(s.coach.cookie, draft, "Wednesday");
+    const g = gate();
+    batchHooks.afterSourceLocks = async () => { g.reached(); await g.released; };
+    try {
+      const saving = save(s.coach.cookie, draft.plan.id);
+      await g.arrived;
+      const rating = api(`/api/training-load/sessions/${wed.id}/rpe`, { method: "POST", cookie: s.athletes[0].cookie, body: { rpe: 6, durationMinutes: 50 } });
+      const early = await Promise.race([rating.then((r) => r), waitForLockWait((r) => /select ps.id as session_id/.test(r.query)).then(() => null)]);
+      assert.equal(early, null, `the submit answered before waiting: ${early?.status} ${early?.text}`);
+      g.release();
+      ok(await saving);
+      const rated = await rating;
+      assert.equal(rated.status, 404, rated.text);
+      assert.equal(byName(await treeOf(a), "Wednesday"), undefined);
+      assert.equal((await q(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [s.athletes[0].athleteId]))[0].n, 0);
+    } finally {
+      batchHooks.afterSourceLocks = null;
+      g.release();
+    }
+  }
+});

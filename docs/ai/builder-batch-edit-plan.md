@@ -345,3 +345,116 @@ and the `builder-batch-edit-*` actions (`frontend/builder-actions.js`).
   reasons; no group button when nobody else can take the change; *Not saved* / *Your changes may already be saved*
   after *Check result*, which only reads. With only the reopened plan visible there is no question: "Changes go to
   this athlete only." Program batches keep that sentence (Q7).
+
+## 12. Task 5: the athlete on screen (plan and as built, one pull request)
+
+**The owner's decision (2026-11-20, relayed by the calendar stream manager):** „„Da" na pitanje: sesija koja ima unete
+rezultate ili je vezana za događaj ne može da se obriše ni premesti, a sadržaj može da se menja." A session that has
+entered results or is linked to an event cannot be deleted or moved; its content can change. The OptiMove manager had
+ruled option (a): the same fail-closed refusal for the athlete on screen as for the siblings (sections 1.1 and 10.1,
+Q5).
+
+### 12.1 What happens today
+
+The Save of an edit draft (`applyEditDraft`) rewrites the source plan's whole tree: `copyWeeklyPlanTree(..., {
+preserveLogicalId: true })` deletes every day, session, node and item of the source and re-inserts the draft's tree,
+keeping each session's `logical_session_id`. Step 2's facts are read for the siblings only; the source has no check.
+So for the athlete on screen:
+
+- **Removed** session: its RPE (`training_load.session_feedback`), linked activities
+  (`training.activity_participant_session_links`, an imported GPEXE activity merged with it included) and metric
+  event participants (`training_load.metric_event_participants`) are left naming a logical id no session has
+  (nothing has a foreign key to it, by design). A calendar event link stays on the empty slot (orphaned).
+- **Moved** session (another day, half-day, phase or order): those records follow the logical id, but the RPE's
+  `session_date` snapshot keeps the old day, and the calendar link stays on the old slot (orphaned since the link
+  identity guard; before it, the session that took the slot was read as the linked one).
+
+### 12.2 The rule
+
+On the Save of a **weekly** edit draft, under the source plan's lock and **before anything is written**, every source
+session the draft removes or moves (a move is any change of slot: weekday, half-day, phase or order, exactly as
+step 2's `slotKey`) is checked:
+
+- **`has_results`**: anything recorded names its logical id, by the same fail-closed union as step 2
+  (`readSiblingFacts`: the athlete's RPE, an activity link `confirmed` or `suggested` whatever the participant's merge
+  state, a metric event participant);
+- **`linked_to_event`**: a live `calendar.event_session_links` row of the source plan on the session's slot whose
+  `logical_session_id_at_link` is this session's logical id (the link identity guard's rule: an orphaned link in the
+  slot names another session and does not block).
+
+If any session is blocked, the Save answers **`409 edit_sessions_locked`** and writes nothing: the source, the
+siblings and the edit draft stay as they were, so the coach can change the draft and save again. A session changed
+**in place** (content, name, time, RPE and Training Load switches) is always allowed, with results or a link.
+
+This applies to both Saves: "this athlete only" and "all athletes". In the group Save the source is checked first;
+a blocked source session stops the Save before any sibling is classified (the siblings keep step 2's own rule).
+
+The answer names only the coach's own plan:
+
+```json
+{ "code": "edit_sessions_locked", "error": "Some sessions can't be removed or moved.",
+  "sessions": [{ "name": "Main", "day": "2026-11-16", "amPm": "AM", "bta": "T",
+                 "change": "removed" | "moved", "reasons": ["has_results", "linked_to_event"] }] }
+```
+
+No event id or title is returned (ADR-006): the screen finds the event from what the coach already reads.
+
+### 12.3 The screen: say what blocks, and the way out
+
+The Save panel lists each blocked session ("Main · Mon 16.11 · AM") with plain words:
+
+- **results**: "Has entered results, so it can't be removed or moved. Its content can still change." The way: put
+  the session back where it was in this draft, or discard the draft (*Discard changes*).
+- **a link to an event**: "Linked to an event in the calendar. First remove the link to the event, then save
+  again." The way: **Open the event**, the existing Builder → calendar hand-off (`builder-events-open`): the calendar
+  opens on that day with the event's panel, where *Unlink* is. The event is found by the Builder's own reads
+  (`builderSessionEvent`, the week's calendar answer). When the session is in an event the coach does not manage, the
+  sentence is "It is in an event you don't manage. Ask its organiser to remove the link." When the event is not
+  found, **Open the calendar** opens the calendar on that day.
+
+The draft is kept; after the link is removed in the calendar, Back returns to the Builder and Save is pressed again.
+
+### 12.4 Locks
+
+After the plan locks of either Save (the source alone `FOR UPDATE`, or every live member in ascending id), the
+source session rows the draft removes or moves are locked `FOR UPDATE` in ascending id before results are read, as
+10.2.5 does for the siblings. An RPE submit (it locks its session row first) either commits first and is then seen
+(`has_results`), or waits for the Save: a Save that blocks writes nothing and the submit goes on; a Save that removes
+the session (it had no results) makes the submit find the row gone (its existing 404). In the group Save the source
+session rows are locked before any sibling session row; every session lock is still taken after all plan locks.
+
+### 12.5 The readers of the stale `session_date` snapshot
+
+`training_load.session_feedback.session_date` is copied from the plan day at submit and cannot be changed (the
+immutability triggers of v2, v5 and v83). Readers:
+
+- **Results and the Training Load calendar, "orphaned" results** (`backend/src/routes/trainingLoad.js`, the
+  `orphanedResult` query, `sf.session_date between $1 and $2`, then bucketed by that date): a result whose logical id
+  no live session has, shown on its snapshot day. A result whose session still exists is read through the live plan
+  day instead (`pd.date as session_date`), so a moved session's RPE shows on its new day there.
+- **The activity materialised at submit** (`localDate: session.session_date`, the same route): the activity's
+  `occurred_local_date` keeps the submit day, and it is what Dashboards read (`trainingLoadDashboardQuery.js`, the
+  activity reads by `occurred_local_date`) and what the calendar's activity cards are dated by. After a move the plan
+  shows the session on the new day while its activity and its Dashboards values stay on the old one.
+
+With this rule a session with results can no longer be moved or removed by the Builder Save, so no new stale or
+dangling row is made this way. Rows made before stay as they are (this change touches no data).
+
+### 12.6 Out of scope
+
+- **Program plans:** no RPE (the submit route takes weekly plans only) and no calendar link (links name weekly
+  sessions only), so nothing is checked there. Recorded: a program's Save (`copyProgramTree`) does not keep logical
+  ids at all.
+- Other writers of a published plan's sessions: there is none outside the edit draft's Save and step 2.
+- Records left dangling or stale before this change.
+
+### 12.7 Tests (through the real routes, disposable databases)
+
+`backend/tests/builder-source-session-guard.test.mjs`: for a session with an RPE, with a materialised activity, with
+a metric event participant and with a live event link, a removal and a move each answer `409 edit_sessions_locked`
+with the session named, and nothing is written (the source tree, the draft and the siblings are compared before and
+after); an in-place change of the same session saves; a session without results or a link is removed and moved as
+before; an orphaned link in the slot does not block; the group Save is stopped by a blocked source session before any
+sibling is written; the RPE submit race in both orders. Frontend: `frontend/tests/builder-source-session-guard.actions.test.mjs`
+(the panel's sentences, *Open the event* with the event's key, the unmanaged and the not-found cases, nothing sent by
+itself).

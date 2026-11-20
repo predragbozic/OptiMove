@@ -23,6 +23,8 @@ export const batchEditTestHooks = {
   visibleMemberIds: null,
   // Runs after the plan and session locks and the classification, before the token check and any write.
   afterLocks: null,
+  // Task 5: runs after the source session rows are locked and their facts read, before any answer or write.
+  afterSourceLocks: null,
 };
 
 const ITEM_CONTENT_FIELDS = [
@@ -310,7 +312,29 @@ export async function readSiblingFacts(client, before, after, sibling) {
   if (risky.length) {
     await client.query("select id from plans.plan_sessions where id = any($1::uuid[]) order by id for update", [risky]);
   }
-  const logicals = sibling.sessions.map((s) => s.logical_session_id).filter(Boolean);
+  const results = await sessionIdsWithResults(client, sibling.plan.athlete_id, sibling.sessions);
+  const linkedSlots = new Set();
+  const links = (await client.query(
+    `select day, am_pm, bta, session_order from calendar.event_session_links
+     where plan_id = $1 and ended_at is null`,
+    [sibling.plan.id],
+  )).rows;
+  const dayWeekday = new Map(sibling.days.map((d) => [dateString(d.date), d.weekday]));
+  for (const link of links) {
+    const weekday = dayWeekday.get(dateString(link.day));
+    if (weekday) linkedSlots.add(slotKey({ weekday, am_pm: link.am_pm, bta: link.bta, session_order: link.session_order }));
+  }
+  const openDraft = (await client.query(
+    `select 1 from plans.plans where edit_source_plan_id = $1 and is_edit_draft = true limit 1`,
+    [sibling.plan.id],
+  )).rowCount > 0;
+  return { results, linkedSlots, openDraft };
+}
+
+// The ids of `sessions` (one plan's, its athlete `athleteId`) that have
+// results, fail-closed: see the comment inside.
+async function sessionIdsWithResults(client, athleteId, sessions) {
+  const logicals = sessions.map((s) => s.logical_session_id).filter(Boolean);
   const results = new Set();
   if (logicals.length) {
     // has_results, fail-closed (the manager's ruling on #673): a session counts
@@ -335,27 +359,67 @@ export async function readSiblingFacts(client, before, after, sibling) {
        union
        select logical_session_id from training_load.metric_event_participants
         where logical_session_id = any($2::uuid[])`,
-      [sibling.plan.athlete_id || null, logicals],
+      [athleteId || null, logicals],
     )).rows;
     const withResults = new Set(rows.map((r) => String(r.logical_session_id)));
-    for (const s of sibling.sessions) if (withResults.has(String(s.logical_session_id))) results.add(String(s.id));
+    for (const s of sessions) if (withResults.has(String(s.logical_session_id))) results.add(String(s.id));
   }
-  const linkedSlots = new Set();
+  return results;
+}
+
+// Task 5 (docs/ai/builder-batch-edit-plan.md section 12): the source plan's
+// own slot - its day's date, not the weekday (the edit draft keeps the
+// source's dates).
+function sourceSlotKey(session) {
+  return [dateString(session.day_date), session.am_pm ?? "", session.bta ?? "", String(Number(session.session_order ?? -1))].join("|");
+}
+
+// The source sessions the edit draft removes or moves, each with how.
+export function sourceSessionChanges(before, after) {
+  const aByLogical = new Map(after.sessions.map((s) => [String(s.logical_session_id), s]));
+  const changes = [];
+  for (const b of before.sessions) {
+    const a = aByLogical.get(String(b.logical_session_id));
+    if (!a) changes.push({ session: b, change: "removed" });
+    else if (sourceSlotKey(a) !== sourceSlotKey(b)) changes.push({ session: b, change: "moved" });
+  }
+  return changes.sort((x, y) => (String(x.session.id) < String(y.session.id) ? -1 : 1));
+}
+
+// Under the Save's plan locks: lock the source session rows the draft removes
+// or moves (ascending id, plan 12.4), then answer which of them may not go.
+// A session is blocked by its results (the same fail-closed reading as the
+// siblings) or by a live event link made for it: the link on its slot whose
+// logical_session_id_at_link is its own (an orphaned link names another
+// session and blocks nothing - the link identity guard's rule).
+export async function blockedSourceSessions(client, before, after) {
+  const changes = sourceSessionChanges(before, after);
+  if (!changes.length) return [];
+  await client.query(
+    "select id from plans.plan_sessions where id = any($1::uuid[]) order by id for update",
+    [changes.map((c) => String(c.session.id))],
+  );
+  const results = await sessionIdsWithResults(client, before.plan.athlete_id, changes.map((c) => c.session));
   const links = (await client.query(
-    `select day, am_pm, bta, session_order from calendar.event_session_links
+    `select day, am_pm, bta, session_order, logical_session_id_at_link from calendar.event_session_links
      where plan_id = $1 and ended_at is null`,
-    [sibling.plan.id],
+    [before.plan.id],
   )).rows;
-  const dayWeekday = new Map(sibling.days.map((d) => [dateString(d.date), d.weekday]));
-  for (const link of links) {
-    const weekday = dayWeekday.get(dateString(link.day));
-    if (weekday) linkedSlots.add(slotKey({ weekday, am_pm: link.am_pm, bta: link.bta, session_order: link.session_order }));
+  const linked = new Set(links.map((l) => [
+    sourceSlotKey({ day_date: l.day, am_pm: l.am_pm, bta: l.bta, session_order: l.session_order }),
+    String(l.logical_session_id_at_link),
+  ].join("#")));
+  const blocked = [];
+  for (const { session, change } of changes) {
+    const reasons = [];
+    if (results.has(String(session.id))) reasons.push("has_results");
+    if (linked.has([sourceSlotKey(session), String(session.logical_session_id)].join("#"))) reasons.push("linked_to_event");
+    if (reasons.length) {
+      blocked.push({ name: session.name || "", day: dateString(session.day_date), amPm: session.am_pm || "", bta: session.bta || "", change, reasons });
+    }
   }
-  const openDraft = (await client.query(
-    `select 1 from plans.plans where edit_source_plan_id = $1 and is_edit_draft = true limit 1`,
-    [sibling.plan.id],
-  )).rowCount > 0;
-  return { results, linkedSlots, openDraft };
+  if (batchEditTestHooks.afterSourceLocks) await batchEditTestHooks.afterSourceLocks({ client, blocked });
+  return blocked;
 }
 
 // The token a 409 hands out: the classification of every member. A resend

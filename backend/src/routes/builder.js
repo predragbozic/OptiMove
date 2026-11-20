@@ -7,7 +7,7 @@ import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySes
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
-import { batchEditTestHooks, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
+import { batchEditTestHooks, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
@@ -649,6 +649,10 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
         return res.status(409).json({ error: "This draft was already saved or discarded.", code: "edit_draft_already_applied" });
       }
       if (updated?.needsChoice) return res.status(409).json(updated.needsChoice);
+      if (updated?.sessionsLocked) {
+        // Task 5: nothing written; the draft stays for the coach to change.
+        return res.status(409).json({ error: "Some sessions can't be removed or moved.", code: "edit_sessions_locked", sessions: updated.sessionsLocked });
+      }
       if (updated?.sourceChanged) {
         return res.status(409).json({ error: "This plan was saved by someone else after you opened it.", code: "source_changed" });
       }
@@ -2353,6 +2357,16 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
   };
 }
 
+// Task 5 (docs/ai/builder-batch-edit-plan.md section 12): under the Save's plan
+// locks, before anything is written - the source sessions a weekly edit draft
+// removes or moves that have results or a live event link made for them. The
+// list, or null when nothing blocks.
+async function sourceSessionsLocked(client, source, freshDraft) {
+  if (freshDraft.plan_type !== "weekly") return null;
+  const blocked = await blockedSourceSessions(client, await loadWeeklyTree(client, source.id), await loadWeeklyTree(client, freshDraft.id));
+  return blocked.length ? blocked : null;
+}
+
 async function applyEditDraft(req, draftPlan, timing) {
   let client;
   let committed = false;
@@ -2415,6 +2429,13 @@ async function applyEditDraft(req, draftPlan, timing) {
         client = null;
         return { sourceChanged: true };
       }
+      const locks = await sourceSessionsLocked(client, source, freshDraft);
+      if (locks) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return { sessionsLocked: locks };
+      }
       batch = await prepareBatchEdit(req, client, source, freshDraft, locked.siblingRows);
       if (batch.needsChoice) {
         await client.query("rollback");
@@ -2424,6 +2445,13 @@ async function applyEditDraft(req, draftPlan, timing) {
       }
     } else {
       await client.query("select id from plans.plans where id=$1 for update", [source.id]);
+      const locks = await sourceSessionsLocked(client, source, freshDraft);
+      if (locks) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return { sessionsLocked: locks };
+      }
     }
     const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
       from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
