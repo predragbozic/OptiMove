@@ -1,12 +1,20 @@
 # Central calendar — K5-1 and K5-2: UI contract
 
-Status: **Decided by the stream manager** (2026-11-20): Q1–Q10 as recommended, with his notes in section 5. Q11 was
-added after the code and security reviews and is open.
+Status: **Decided** (2026-11-20).
+- The stream manager decided Q1–Q10 as recommended; his notes are in section 5.
+- Q11 was added after the code and security reviews. It was decided by the OptiMove manager: **widen**.
+  `holdsImport` also goes on planned and RPE cards.
+
 Documents only: no code, no route, no migration.
 Written against `main` `ec467638`. Sources: `docs/ai/central-calendar-k5-plan.md` (H1–H5, K5-1, K5-2, section 3),
-the approved mockups `docs/design/calendar-k5/` (README, E1–E12), and the manager's condition for the one backend
-field: `holdsImport` is **one boolean** in the event card's output (`publicCard`, `backend/src/calendarQuery.js`),
-proven by a key-by-key allowlist test of the card and the whole disposable backend run.
+the approved mockups `docs/design/calendar-k5/` (README, E1–E12), and the managers' conditions for the one backend
+field:
+- `holdsImport` is **one boolean** on the event, planned and RPE cards of a coach's or a reader's answer
+  (`publicCard`, `backend/src/calendarQuery.js`), never in the athlete's answer;
+- it is proven by a key-by-key allowlist test of each of those cards, a test that the athlete's answer carries it on
+  no card, a test that a viewer without the right to the activity never gets `true`, and the whole disposable
+  backend run;
+- the backend PR's tier is ★, with the *Nezavisni revizor*.
 
 Every file:line below was read at `ec467638`. Where something was not verified, the text says so.
 
@@ -21,7 +29,8 @@ Every file:line below was read at `ec467638`. Where something was not verified, 
   K5-1.
 - **K5-2** covers several pieces:
   - the `gps` icon for an imported activity;
-  - the H4 marks on an event card, which need one new boolean, `holdsImport`;
+  - the H4 marks on an event card, and the GPS mark wherever an import lives (an event, a planned training or an RPE
+    request). These need one new boolean, `holdsImport`, on those three card kinds;
   - the H5 day chips;
   - *Show only*, with **GPS imports** as a client-side kind.
 
@@ -76,7 +85,7 @@ push.
 - **One helper replaces the inline test:** `centralCalendarItemImported(item)`, exported from
   `central-calendar-view.js`. It answers `true` for:
   - an activity whose origin is in that set;
-  - an event with `holdsImport === true`.
+  - an event, planned or RPE card with `holdsImport === true`.
 - **Not `measuredSource`.** The plan names it, but `publicCard` does not output it (it is internal, :1214). An
   activity card's `expects` holds `device_data` exactly when it is imported (:1201), but `origin` is the plainer
   reading.
@@ -85,50 +94,73 @@ push.
 
 ### 2.2 `holdsImport` (the one backend field)
 
-- **Definition.** `holdsImport` is `true` when any id in the event card's own `links.activityIds` is an activity
-  with an imported origin, read in the viewer's scoped activity read (`readActivityRows`, `calendarQuery.js:1165`).
-- **The three ways an id enters `links.activityIds`.** All three count:
-  - linked to the event directly, `fold.activities[]` (`:1196`), which already carries `imported`;
-  - through a Builder session linked to the event, `fold.activityIds` (`:1179`), which today keeps **only the id**;
-  - through the event's referenced RPE schedule when its card folds under the event (`:1297`, copying the RPE card's
-    ids, which come from `external_assignment_ids` at `:1186`).
-- **Recommended implementation.** One set of the imported ids from that read (`IMPORTED_ORIGINS.has(row.origin)`),
-  and at the end of the event's fold `holdsImport = links.activityIds.some((id) => importedIds.has(id))`. That counts
-  every path, today's and any later one, without recording `imported` per path. It never uses an id that the
-  viewer's read did not return.
+- **Definition.** On an event, planned or RPE (`external`) card, `holdsImport` is `true` when any id in that card's
+  own `links.activityIds` is an activity with an imported origin. Only rows of the viewer's scoped activity read
+  count (`readActivityRows`, `calendarQuery.js:1165`).
+- **How an id enters `links.activityIds`:**
+  - **an event card,** three ways:
+    - linked to the event directly, `fold.activities[]` (`:1196`), which already carries `imported`;
+    - through a Builder session linked to the event, `fold.activityIds` (`:1179`), which keeps **only the id**;
+    - through the event's referenced RPE schedule when its card folds under the event (`:1297`, copying the RPE
+      card's ids);
+  - **a planned card:** an activity whose session is one of the card's (`:1180`);
+  - **an RPE card:** an activity whose assignment is one of the card's (`:1186`).
+- **Recommended implementation.**
+  - One set of the imported ids from that read (`IMPORTED_ORIGINS.has(row.origin)`).
+  - Once every fold is done (after the event fold of `:1290–1310`, so an RPE card's ids are already copied),
+    `card.holdsImport = card.links.activityIds.some((id) => importedIds.has(id))` for each event, planned and RPE
+    card.
+  - That counts every path, today's and any later one, without recording `imported` per path. It never uses an id
+    the viewer's read did not return.
 - **Not an import:** an event that only *waits* for device data (`expects` has `device_data`, nothing linked). It
   answers `false`, and its status line says what is missing, as today.
-- **Output** (`publicCard`, the event branch :1410):
-  - `out.holdsImport = card.holdsImport === true` on **every** manager and reader event card, always a boolean;
-  - never on another kind;
-  - never on the athlete's reduced card (the early return at :1381 stays as it is).
-
-  It must not be conditional: the k2b2 questions suite asserts that folding adds no key to an event card
-  (`central-calendar-k2b2-questions.test.mjs:1921`).
+- **Output** (`publicCard`). The same boolean, `out.holdsImport = card.holdsImport === true`, always present:
+  - on **every** event card of a coach or a reader (the event branch at `:1410`);
+  - on **every** planned card and RPE card of a coach or a reader;
+  - **never** on an activity or test card;
+  - **never in the athlete's answer**, on no card at all.
+- **Gate on the viewer, not on the card.**
+  - The athlete's event card already returns early (`:1381`, `athleteView`).
+  - But the athlete workspace's **planned and RPE cards go through the same generic branch** as a coach's (no
+    `athleteView` on them).
+  - So `publicCard` must be told the viewer, for example `publicCard(card, includeAthletes, { athleteViewer:
+    ctx.type === "athlete" })` at the call (`:1349`). It emits `holdsImport` only when `athleteViewer` is false.
+- **No conditional key.** On those three kinds the key must never be left out, even when its value is false. The
+  k2b2 questions suite asserts that folding adds no key to an event card (`central-calendar-k2b2-questions.test.mjs:1921`).
 - **What it reveals.** A reader already receives the folded activities' ids (`links.activityIds`, kept for a reader
-  at `:1438`) and may open them. The boolean says only that one of them is an import, which the reader sees by
+  of an event at `:1438`; planned and RPE cards keep their whole `links`) and may open them. The boolean says only that one of them is an import, which the reader sees by
   opening it. It adds no difference between "missing" and "outside your scope" (ADR-006): such an activity never
   enters the read, and the key is always present. The implementer confirms that the activity route's read scope
   (`resolveActivityReadContext`, `routes/trainingActivity.js:225`) matches the calendar's, which the security review
   assumed but did not read line by line.
 - **Tests (backend, disposable, the calendar fixture):**
-  1. The manager's and the reader's event card each have **exactly** today's keys plus `holdsImport`, key by key.
-     This is a new full allowlist of each card, not "contains", so any later key needs a deliberate change.
-  2. The athlete's reduced card keeps its allowlist unchanged: the existing tests at `central-calendar-k2b-1d2.test.mjs:85`
-     and `central-calendar-k2b-event-details.test.mjs:481` stay green and are not edited.
-  3. The value:
-     - `true` for an imported activity linked directly;
-     - `true` through a linked Builder session;
-     - `true` through a folded RPE schedule: an imported activity whose participant carries the schedule's
-       `external_assignment_id`, with `scheduleFold.external === "folded"`;
-     - `false` for a coach-made activity linked;
+  1. **Allowlists.** The manager's event card, the reader's event card, a planned card and an RPE card each have
+     **exactly** today's keys plus `holdsImport`, key by key. That is exactly one new key, always present, a boolean.
+     These are new full allowlists, not "contains", so any later key needs a deliberate change.
+  2. **The athlete's answer has the key on no card.** Read the athlete workspace's answer with an event, a planned
+     card and an RPE card that hold an import, and assert that no card of any kind has `holdsImport`. The athlete's
+     event allowlists stay unchanged: `central-calendar-k2b-1d2.test.mjs:85` and
+     `central-calendar-k2b-event-details.test.mjs:481` stay green and are not edited.
+  3. **The value:**
+     - `true` for an imported activity linked to the event directly;
+     - `true` through a Builder session linked to the event;
+     - `true` through the event's folded RPE schedule: an imported activity whose participant carries the
+       schedule's `external_assignment_id`, with `scheduleFold.external === "folded"`;
+     - `true` on a planned card holding an import through its session;
+     - `true` on a lone RPE card holding an import through its assignment;
+     - `false` for a coach-made activity;
      - `false` for `expects: ["device_data"]` with nothing linked;
      - `false` with no activity;
-     - `false` for a cancelled event (no fold);
-     - `false` for an imported activity outside the viewer's scope, which the read never returns.
-  4. Non-event cards have no `holdsImport` key.
-  5. The **whole** `--project backend --kind disposable` run on the head against a clean `origin/main`, compared
-     file by file (the manager's condition).
+     - `false` for a cancelled event (no fold).
+  4. **No right, never `true`.** A viewer with no right to the imported activity (another club's coach, or a team
+     coach outside its scope) reads the same day. For that viewer, the event, planned or RPE card that holds the
+     import answers `false`, or is not in the answer at all. The value comes only from what the scoped read returns.
+  5. Activity and test cards have no `holdsImport` key.
+  6. The **whole** `--project backend --kind disposable` run on the head against a clean `origin/main`, compared
+     file by file.
+
+  Each path gets a mutation: the direct link, the Builder session, the folded RPE schedule, the planned card's
+  session, the RPE card's assignment, the viewer gate, and the key always being present.
 
 ### 2.3 H4 — what an event holds (marks on the card)
 
@@ -144,10 +176,15 @@ test (mockup 07). Each mark is only a mark: no number and no state.
 - **The `separate` clause.** It refines the plan's wording to match its own rule: "a schedule shown beside the event
   (`separate`) keeps its own chip and gives the event no icon". Such an event usually also lists `rpe` /
   `test_result` in `expects`.
-- **One helper:** `centralCalendarEventMarks(item)` returns `["rpe", "gps", "test"]` in that order, only the ones
-  that apply. It answers `[]` for any non-event, a cancelled event (Q6) and the athlete's reduced card. The reduced
-  card has no `expects`, `scheduleFold` or `holdsImport`, so it yields `[]` without a special case, and the athlete
-  never sees the central calendar (section 3).
+- **The GPS mark wherever an import lives** (Q11, widened): a planned card and an RPE card with `holdsImport` carry the
+  `gps` mark too, in the same place after their own icon. They get no RPE or test mark: their own icon already says
+  what they are. On an RPE day chip (2.4) the mark sits after the chip's icon.
+- **One helper:** `centralCalendarCardMarks(item)` returns, in this order and only the ones that apply:
+  - for an event, `["rpe", "gps", "test"]` by the table above;
+  - for a planned or RPE card, `["gps"]` when `holdsImport` is true;
+  - `[]` for every other kind, a cancelled card (Q6) and anything without the fields. The athlete's answer has no
+    `holdsImport`, `expects` or `scheduleFold` on her event card, so it yields `[]` without a special case, and the
+    athlete never sees the central calendar (section 3).
 - **Markup:** a `<span class="cc-card-marks" role="img" aria-label="Holds RPE, GPS data and a test">` with the icons
   `aria-hidden`. The same words are added to `cardAriaLabel`. The month's mini card shows the marks too, at 12 px, on
   wide and medium screens; on a phone the month cell stays a count, as today.
@@ -205,7 +242,7 @@ pins it, changes on purpose (Q3).
 | All | always (the groups still apply) |
 | Events | `kind === "event"`, and its `eventKind` is chosen when event types are chosen |
 | Planned training | `kind === "planned"` |
-| GPS imports | `centralCalendarItemImported(item)`: an imported activity, or an event with `holdsImport` (E11). After K5-4: the "to review" marks. |
+| GPS imports | `centralCalendarItemImported(item)`: an imported activity, or an event, planned or RPE card with `holdsImport` (E11, Q11). After K5-4: the "to review" marks. |
 | Other activities | `kind === "activity"` and not imported |
 | RPE requests | `kind === "external"` |
 | Scheduled tests | `kind === "test"` |
@@ -214,7 +251,7 @@ pins it, changes on purpose (Q3).
 
 | *Show only* | Server read | Why |
 |---|---|---|
-| All, Events, GPS imports | unfiltered (no `kinds`) | GPS imports needs the events that hold an import, and folding works only with `event` in the read |
+| All, Events, GPS imports | unfiltered (no `kinds`) | GPS imports needs the event, planned and RPE cards that hold an import, and an event folds only with `event` in the read |
 | Planned training | `kinds=planned` | as today |
 | RPE requests | `kinds=external` | an RPE request an event folds is its own card again, as today |
 | Scheduled tests | `kinds=test` | the same for a test schedule an event folds |
@@ -223,17 +260,12 @@ pins it, changes on purpose (Q3).
 The cache keys, the stale-answer rules and the panel-closing rules of FE-D16 (FE-D16c, e, f, g) are unchanged.
 
 **Counts.** The counts come from the unfiltered answer over the displayed days (`centralCalendarChipCounts`):
-- **GPS imports** counts imported activities plus events with `holdsImport`;
+- **GPS imports** counts imported activities plus the event, planned and RPE cards with `holdsImport`;
 - **Other activities** counts the rest of the activities;
 - a kind read through `kinds` counts what it shows, as FE-D16 does (the override after the kinds read,
   `central-calendar-view.js:1186–1188`). Under Other activities the `kinds=activity` answer also holds imports, now
   unfolded from their events. So the count written to `other_activity` is that answer's `kind === "activity"` items
   that are **not** imported. The server kind `activity` is no longer a pill of its own.
-
-**Known limit (Q11): an import folded into a planned card or a lone RPE card.** Such an import has no card of its
-own, and those cards carry no `holdsImport`. So *Show only · GPS imports* does not show it, and the pill's count leaves
-it out. Its panel still opens it (*Open in Training Load*). A test pins this behaviour, so a later fix changes it on
-purpose.
 
 **Phone.**
 - The row scrolls sideways, and the chosen pill is scrolled into view after every paint
@@ -250,7 +282,7 @@ purpose.
 | Club admin (club workspace), private coach | the central calendar | All of section 1.2 for the cards it reads. On an event it manages, the RPE and Tests rows; on a reader's event, only the activities. A private coach manages only its own events, and only as an independent coach (`isIndependentCoach`, `calendarEventAccess.js`); `canManage` on the card already says which. | Yes |
 | Team coach (team workspace) | the central calendar | The same. RPE and Tests rows only where the card carries the schedule id (manager), as above. | Yes |
 | Platform admin | the central calendar in the workspace it is in | as that workspace's role | Yes |
-| Athlete | the K4a athlete Calendar (`athlete-calendar-*.js`), **not** the central calendar | none of these (K4a has its own buttons) | **No**: her event card is the reduced one (no `expects`, `scheduleFold` or `holdsImport`), and K4a draws no marks, chips or filter |
+| Athlete | the K4a athlete Calendar (`athlete-calendar-*.js`), **not** the central calendar | none of these (K4a has its own buttons) | **No**: her answer carries `holdsImport` on no card (2.2, the viewer gate), her event card is the reduced one, and K4a draws no marks, chips or filter |
 
 Module rights are unchanged. A target the viewer may not open answers there as it does today; the calendar adds no
 check of its own. For example, Training Load's leave guard and the route's 404 stay the authority.
@@ -261,16 +293,17 @@ check of its own. For example, Training Load's leave guard and the route's 404 s
 `central-calendar-k5.actions` for the new suites). The fakes honour `kinds` as the real route does, the
 FE-D16 pattern.
 - `centralCalendarItemImported` and `centralCalendarItemIconKey`: `api_import` and `source_import` give `gps`;
-  `manual` and the self-report origins give `activity`; an event uses `holdsImport`.
-- `centralCalendarEventMarks`: each row of 2.3, including both `separate` cases, a cancelled event, a non-event and
-  the reduced card. Also the order, and the `aria-label` words.
+  `manual` and the self-report origins give `activity`; an event, planned or RPE card uses `holdsImport`.
+- `centralCalendarCardMarks`: each row of 2.3, including both `separate` cases, a cancelled card, the GPS mark on a
+  planned and an RPE card (never an RPE or test mark there), another kind and the reduced card. Also the order, and
+  the `aria-label` words.
 - Chips: which items become a chip, and that a folded item is never one; the chip's text per kind; cards before
   chips in the list layouts; the hour cell in the time grid; the month's icon.
 - *Show only*: each pill's matching (the table in 2.5); the radio semantics (one at a time, a second tap switches,
   *All* resets); event types setting Events and a kind clearing them; the green line; the counts. Two more:
   - the Other activities count leaves out the imports of the `kinds=activity` answer;
-  - the Q11 pin: a planned card whose `links.activityIds` holds an import is hidden under GPS imports and not
-    counted.
+  - Q11: a planned card and an RPE card with `holdsImport` pass under GPS imports and are counted; without it they
+    do not.
 - FE-D16 with the new kinds: `gps` gives no `kinds` read, `other_activity` gives `kinds=activity`, and the existing
   FE-D16 to FE-D16i stay green, except FE-D16i, which changes on purpose (Q3).
 - K5-1: each button's presence per card and per viewer (manager or reader event); a click calls the right opener with
@@ -281,7 +314,7 @@ FE-D16 pattern.
 
 **e2e at 1280, 390, 375 and 360 px**, on the e2e world with an imported activity linked to an event, a lone import,
 a lone RPE request and a lone test:
-- the GPS mark on the event, and the chips under the day;
+- the GPS mark on the event and on a planned card holding an import, and the chips under the day;
 - *Show only* GPS imports, then Scheduled tests, then *Show all*: the chosen pill is in view on a phone, there is no
   horizontal overflow, every target is at least 44 px and the green line is present;
 - *Open in Tests* and *Open in Training Load* from a panel, then Back by button and by `page.goBack()`: the same day,
@@ -289,10 +322,13 @@ a lone RPE request and a lone test:
 - the athlete's K4a Calendar shows no mark.
 
 **Mutations, each to be killed by a named test:**
-- `holdsImport` dropped from `publicCard` (allowlist);
+- `holdsImport` dropped from `publicCard`, from each of the event, planned and RPE branches (the allowlists);
 - `holdsImport` emitted only when true (the "no new key" and allowlist tests);
-- `holdsImport` on the athlete's card (the athlete allowlist);
-- the linked-session path not recording `imported` (backend value test);
+- the viewer gate removed, so the athlete's planned or RPE card gets the key (the "no card in the athlete's answer"
+  test);
+- each path left out of the imported-id check: the direct link, the Builder session, the folded RPE schedule, the
+  planned card's session, the RPE card's assignment (the backend value tests);
+- the imported-id set built from every activity row, not the viewer's scoped read (the "no right, never true" test);
 - `source_import` missing from the frontend helper;
 - the `separate` clause dropped from either mark;
 - the mark order changed;
@@ -304,8 +340,8 @@ a lone RPE request and a lone test:
 - an opener's `pushAppHistory()` moved after a guard or removed;
 - the Roster option ignored;
 - the scroll-into-view of the chosen pill removed (the e2e test at 360 px);
-- the folded-RPE path left out of `holdsImport` (the backend value test);
-- the Other activities count including imports (its unit test).
+- the Other activities count including imports (its unit test);
+- planned or RPE cards left out of GPS imports (the Q11 unit test).
 
 ## 5. Questions, recommendations and decisions
 
@@ -347,6 +383,7 @@ The stream manager decided all ten as recommended (2026-11-20). His notes are un
   - An imported activity can fold into a planned card through its session.
   - H4 names events only. **Recommendation:** no mark on a planned card in K5-2. If the pilot asks for it, the same
     boolean is added to the planned card by the same pattern.
+  - **Superseded by Q11:** planned and RPE cards carry `holdsImport` and the GPS mark (only the GPS mark).
 - **Q9. Remembering *Show only* (E10).** **Recommendation:** for the session only, as the filters are kept today.
   The green line shows whenever it is not *All*.
 - **Q10. Splitting the work.** **Recommendation:** two pull requests in one package:
@@ -356,22 +393,29 @@ The stream manager decided all ten as recommended (2026-11-20). His notes are un
 
   The backend PR first, so the frontend reads a field that exists on main.
   - **Decided:** two PRs.
-    1. **Backend `holdsImport`**, covering both fold paths. It carries the full key-by-key allowlist of the manager's
-       and the reader's cards and the whole disposable run against main.
+    1. **Backend `holdsImport`**, covering every fold path and, after Q11, the planned and RPE cards too. It carries
+       the full key-by-key allowlists (section 2.2) and the whole disposable run against main. Tier ★, with the
+       *Nezavisni revizor* (Q11).
     2. **The frontend.**
   - **After the reviews:** the code and security reviews found a third path, an import that comes in through the
     event's folded RPE schedule (`calendarQuery.js:1297`). Section 2.2 now covers all three, through one set of
     imported ids checked against the event's `links.activityIds`. The backend PR covers every path.
-- **Q11. GPS imports and an import folded into a planned card or a lone RPE card** (new after the reviews; not yet
-  decided).
-  - Such an import has no card of its own, and the card it folds into carries no `holdsImport` (Q8). So it is not
-    found under *Show only · GPS imports* (section 2.5, "Known limit").
-  - **Recommendation:** accept this as a known limit for K5-2, pinned by a test. The import is still opened from its
-    card's panel.
-  - If the pilot finds GPS sessions missing there, the same set of imported ids gives a `holdsImport` on planned and
-    RPE cards too, with their own allowlist change. That is the stream manager's call, because it widens the "one
-    boolean on the event card" condition.
-  - The stream manager tells the owner, as for Q1, because E11 says many GPS sessions are folded into a training.
+- **Q11. GPS imports and an import folded into a planned card or a lone RPE card** (new after the reviews).
+  - Such an import has no card of its own. Without `holdsImport` on the card it folds into, it would not be found
+    under *Show only · GPS imports*, and it would have no GPS mark.
+  - The first recommendation was a pinned known limit. The stream manager recommended widening instead: the owner's
+    H2 wants the GPS icon wherever an import lives.
+  - **Decided by the OptiMove manager, 2026-11-20: widen.** The same `holdsImport` boolean, from the same imported-id
+    set of the viewer's scoped read, also goes on the planned (Builder) and RPE (`external`) cards of a coach or a
+    reader. It never goes in the athlete's answer.
+  - **His conditions** (section 2.2 carries them):
+    - the key-by-key allowlist test extended to those two card kinds: still exactly one new key, always present, a
+      boolean;
+    - a test that the athlete's answer has the key on no card;
+    - a test that a viewer with no right to the activity never gets `true`;
+    - the whole backend disposable run;
+    - the backend PR's tier is ★, with the *Nezavisni revizor*.
+  - The known-limit pin is not written. Sections 2.2–2.5 and the tests are updated.
 
 ## 6. Not in this contract
 
