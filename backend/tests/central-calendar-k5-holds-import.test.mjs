@@ -19,6 +19,7 @@ const DAY = TODAY;
 const FROM = addDays(TODAY, -7);
 const TO = addDays(TODAY, 7);
 const TZ = "UTC";
+const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 
 // The keys of today's cards (publicCard, backend/src/calendarQuery.js), read without include=athletes.
 const COMMON = ["key", "kind", "date", "title", "slot", "startTime", "startsAt", "teamIds", "athleteIds", "athleteCount", "expects", "status", "rpe", "attendance", "results", "cancelled", "projected", "links"];
@@ -251,6 +252,11 @@ test("6. allowlists: the manager's and the reader's event card, a planned card a
   const sch = await rpeSchedule(s);
   const lone = await activity({ teamId: s.teamX, name: "Lone GPS" });
   await participant(lone, s.ben.athleteId);
+  const tests = await api("/api/tests/schedules", {
+    method: "POST", cookie: s.coachX.cookie,
+    body: { testVersionId: WELLNESS, scheduleKind: "one_time", timezone: TZ, startDate: DAY, opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "team", id: s.teamX }] },
+  });
+  assert.equal(tests.status, 201, tests.text);
   const res = await read(s.coachX.cookie);
   const manager = eventCard(res, teamEvent);
   assert.equal(manager.canManage, true);
@@ -265,6 +271,7 @@ test("6. allowlists: the manager's and the reader's event card, a planned card a
     else assert.equal("holdsImport" in card, false, `${card.key}: no key on a ${card.kind} card`);
   }
   assert.ok(items(res).some((c) => c.kind === "activity"), "an activity card was checked");
+  assert.ok(items(res).some((c) => c.kind === "test"), "a test card was checked");
 });
 
 test("7. the athlete's answer carries holdsImport on no card, while the same day's event, planned and RPE cards hold an import for the coach", async () => {
@@ -289,6 +296,7 @@ test("7. the athlete's answer carries holdsImport on no card, while the same day
     const mine = await read(s.ana.cookie, extra);
     const kinds = new Set(items(mine).map((c) => c.kind));
     assert.ok(kinds.has("planned") && kinds.has("external"), `${extra}: her planned and RPE cards are in her answer (${[...kinds]})`);
+    if (!extra.includes("kinds=")) assert.ok(eventCard(mine, ev), `${extra}: her reduced event card is in her answer, so its early return ran`);
     for (const card of items(mine)) assert.equal("holdsImport" in card, false, `${extra}: ${card.key} carries no holdsImport for the athlete`);
     assert.equal(mine.text.includes("holdsImport"), false, `${extra}: the word is nowhere in her answer`);
   }
@@ -314,4 +322,30 @@ test("8. no right, never true: a team coach reading the club's event does not ge
   const theirs = await read(stranger.cookie);
   assert.equal(eventCard(theirs, clubEvent), null, "another club's admin does not see the event at all");
   assert.equal(theirs.text.includes(imported), false);
+});
+
+// A planned or RPE card of team X can never list another workspace's activity, so "no right, never true" holds there
+// by construction: the database refuses the link itself (the session link must resolve to a same-workspace published
+// session; the assignment link must share the schedule's owner scope). This test pins those refusals: if either one is
+// ever removed, a planned or RPE card could hold an out-of-scope import and holdsImport's scope must be proven again.
+test("9. no right, never true, on a planned and an RPE card: the database refuses linking another workspace's activity to them", async () => {
+  const s = await squad();
+  const ses = await plannedSession(s, s.ana, { name: "Her session" });
+  const sch = await rpeSchedule(s, { name: "Her RPE" });
+  const outside = await activity({ teamId: s.teamY, name: "Team Y GPS" });
+  const ap = await participant(outside, s.ana.athleteId);
+  await assert.rejects(
+    () => linkParticipant(ap, s.ana.athleteId, { logicalSessionId: ses.logicalSessionId }),
+    /same-workspace Weekly plan session/,
+    "team Y's activity cannot be linked to team X's planned session",
+  );
+  await assert.rejects(
+    () => linkParticipant(ap, s.ana.athleteId, { externalAssignmentId: sch.assignmentOf(s.ana) }),
+    /owner scope does not match/,
+    "team Y's activity cannot be linked to team X's RPE assignment",
+  );
+  const coach = await read(s.coachX.cookie);
+  assert.equal(plannedWith(coach, ses.logicalSessionId).holdsImport, false);
+  assert.equal(externalOf(coach, sch.scheduleId).holdsImport, false);
+  assert.equal(coach.text.includes(outside), false, "team Y's activity is nowhere in team X's coach's answer");
 });
