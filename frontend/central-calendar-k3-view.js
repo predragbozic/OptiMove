@@ -198,29 +198,3 @@ export function renderK3SavedHtml(context) {
       ${renderK3OutcomeHtml(context)}
     </section>`;
 }
-
-// ---------------------------------------------------------------------------
-// K2c-3 (6.3; mockup 03): the band over the calendar's own form opened from
-// the Builder. Amber, a detour: the event does not exist yet.
-// ---------------------------------------------------------------------------
-const longDay = (iso) => {
-  const d = new Date(`${iso}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return "";
-  const day = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()];
-  return `${day} ${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
-};
-
-export function renderK2c3FormBandHtml(form) {
-  if (!form?.returnTo) return "";
-  const busy = form.busy;
-  const after = form.returnTo.sessionName
-    ? `After Create event you go back to the Builder, with this event chosen for ${form.returnTo.sessionName}.`
-    : "After Create event you go back to the Builder, with this event in the day's row.";
-  return `<section class="k3-band k3-band-form" role="region" aria-label="Creating an event for the Builder">
-      <div class="k3-band-text">
-        <p class="k3-band-title">${ICON_LIST}<strong>Creating an event for the Builder</strong><span class="k3-band-meta">${escapeHtml(longDay(form.returnTo.day))}</span></p>
-        <p class="k3-band-line">${escapeHtml(after)}</p>
-      </div>
-      <button type="button" class="plain-button k3-band-back" data-action="central-calendar-back-to-builder"${busy ? " disabled" : ""}>${ICON_BACK}<span>Back to the Builder</span></button>
-    </section>`;
-}
