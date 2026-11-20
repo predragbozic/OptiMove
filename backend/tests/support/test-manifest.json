@@ -10,6 +10,7 @@
     "permissions-r1.test.mjs": "unit",
     "production-static-serving.test.mjs": "disposable",
     "rpe-answer-change-v83-rehearsal-guards.test.mjs": "unit",
+    "session-types-v85-rehearsal-guards.test.mjs": "unit",
     "source-metric-access-7a-context.test.mjs": "unit"
   },
   "kindOverrideNotes": {
@@ -21,6 +22,7 @@
     "http-parser-security.test.mjs": "imports the real app with an unreachable loopback URL solely to construct its lazy pool; pool.query is replaced before app import with a fail-fast counter and asserted unused; only parser rejection and unauthenticated routes, no database connection",
     "permissions-r1.test.mjs": "imports permissions.js (its authz.js imports db.js) with an unreachable loopback URL solely to construct the lazy pool; pool.query and pool.connect are replaced before the import with fail-fast counters and asserted unused; can() and the catalog are pure, and the rest reads source files as text, so no database connection",
     "rpe-answer-change-v83-rehearsal-guards.test.mjs": "imports backend/scripts/rpe-answer-change-v83-rehearsal.mjs only for its pure guards (parseArgs, assertOwnName, urlFor, falseOkColumns); the script connects only when invoked as a command, so no database connection is opened",
+    "session-types-v85-rehearsal-guards.test.mjs": "imports backend/scripts/session-types-v85-rehearsal.mjs only for its pure guards (parseArgs, assertOwnName, urlFor); the script connects only when invoked as a command, and the bash wrapper is run with a non-loopback host it refuses before node starts, so no database connection is opened",
     "production-static-serving.test.mjs": "spawns the real src/server.js in production mode, whose /api/health runs select now(); it needs a reachable local server and nothing else, so it runs with the maintenance database as its target and creates nothing",
     "source-metric-access-7a-context.test.mjs": "imports sourceMetricAccess.js (its authz.js and workspace.js import db.js) with an unreachable loopback URL solely to construct the lazy pool; pool.query and pool.connect are replaced before the import with fail-fast counters and asserted unused; the resolver is called with an explicit workspace and a fake read, so no database connection"
   },

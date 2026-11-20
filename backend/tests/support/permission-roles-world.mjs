@@ -1,6 +1,6 @@
 // A disposable world for the roles R2 suites: a database built from the legacy
-// snapshot and the real runner (every migration of migrations_v2, v84
-// included, or every one before v84), the real server on it, and helpers for
+// snapshot and the real runner (every migration of migrations_v2 up to v84,
+// v84 included, or every one before v84), the real server on it, and helpers for
 // users, clubs, teams, sessions, the Roles API and direct SQL as an acting
 // user. Disposable optimove_tests_* databases on a loopback server only.
 import assert from "node:assert/strict";
@@ -35,7 +35,9 @@ export function migrationsWithout(skip) {
   const dir = path.join(root, "migrations_v2");
   fs.mkdirSync(dir);
   for (const f of fs.readdirSync(MIGRATIONS)) {
-    if (!f.endsWith(".sql") || skip.includes(f)) continue;
+    // The world is v84's own: migrations that sort after v84 (v85 on) are left out, so the v84 rollback is never
+    // refused for a migration applied after it (that refusal is test 1b's own case, planted on purpose).
+    if (!f.endsWith(".sql") || skip.includes(f) || f > V84_FILE) continue;
     fs.copyFileSync(path.join(MIGRATIONS, f), path.join(dir, f));
   }
   return { dir, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
@@ -47,12 +49,8 @@ export async function buildDatabase({ label, baseDatabaseUrl = process.env.DATAB
   const db = await createDisposableDatabase({ prefix: "roles", label, baseDatabaseUrl });
   try {
     await bootstrapLegacySnapshot({ databaseUrl: db.url, snapshotSql, migrationsRoot: MIGRATIONS, lastMigration: last });
-    if (withoutV84) {
-      const tmp = migrationsWithout([V84_FILE]);
-      try { await runMigrations({ databaseUrl: db.url, migrationsRoot: tmp.dir }); } finally { tmp.cleanup(); }
-    } else {
-      await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
-    }
+    const tmp = migrationsWithout(withoutV84 ? [V84_FILE] : []);
+    try { await runMigrations({ databaseUrl: db.url, migrationsRoot: tmp.dir }); } finally { tmp.cleanup(); }
   } catch (error) {
     await db.drop().catch(() => {});
     throw error;

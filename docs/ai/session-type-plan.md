@@ -483,13 +483,43 @@ Answered on 2026-11-20 (relayed by the *Rukovodilac*):
   `exercise_session`, label "Exercise". The label of `training_session` is "Full training".
 - **Q2, D7:** option 1.
 
-Open (the second and third come from the *Nezavisni revizor*'s LOW-1):
-- **Q3, undo with manual values.** The *Rukovodilac* is asking the owner; until the answer, the plan follows the
-  recommendation, with the same people as roster decisions. Should deleting an imported session also remove the
-  values the coach entered or corrected, after a confirmation that lists them (recommended, like O1's roster work)?
-  Or should it keep refusing until they are removed by hand?
-- **Q4, renaming `training_session` to "Full training".** This renames every session of that type, including the
-  ones a coach planned by hand, not only the GPEXE ones. Is that wanted? The alternative is to keep "Training session"
-  and seed "Full training" as a type of its own.
-- **Q5, `testing_session` and `recovery_session`.** Archive them from the pickers (recommended; old sessions keep
-  them), or keep offering them beside the six?
+Answered later on 2026-11-20 (relayed by the *Rukovodilac*; for Q3-Q5 the owner said to follow the recommendation
+until he says otherwise; real data starts next year, today's data is trial data, and the 15 sessions are deleted and
+imported again):
+- **Who changes a session's type:** the team's coach, the club's admin and a platform admin (section 5, as
+  recommended).
+- **Q3, undo with manual values:** allowed after a confirmation that lists them (★★, in the same transaction); without
+  the confirmation the undo still refuses. A later ★★ pull request, with ST-4.
+- **Q4:** `training_session` is renamed "Full training" everywhere, hand-planned sessions included. Built in v85.
+- **Q5:** `testing_session` and `recovery_session` are archived from the pickers; old sessions keep them. Built in v85.
+
+## 14. ST-1 as built (migration v85, `migrations_v2/202611201500_training_load_v85_session_types.sql`)
+
+- **Seed.** `training.activity_types` gains an owner (`system` / `club`), its club, the creator, the archive (who, when;
+  `is_active` is the archive flag), a sort order and `updated_at`. The six system types carry the owner's labels;
+  `testing_session` and `recovery_session` are archived without a user.
+- **Log and guards.** `training.activity_type_changes` is the append-only log and the routes' request record (unique
+  per user and `requestKey`, with the body's hash). The acting user is `optimove.session_type_actor` (the v35 pattern).
+  The rights are locked users first (PR #346): `training.session_type_basis`. A type change without its log row is
+  refused at COMMIT (deferred). A type is never deleted; key, owner and creator are write-once.
+- **The owner guard on `training.activities`** (MEDIUM-2): `BEFORE INSERT OR UPDATE OF activity_type_key, owner_scope,
+  owner_club_id, owner_team_id`, through `training.session_type_offered`, which locks the type row FOR SHARE.
+- **`training_load.source_session_types`:** the team's suggestion per source category. It is seeded with
+  `FULL TRAINING` → `training_session` for every team with an active gpexe binding. Its guard asks for a team manager,
+  and for a type offered to the team and active. ST-2 writes it.
+- **Routes** (`backend/src/routes/sessionTypes.js`, `backend/src/sessionTypeService.js`), mounted before the
+  training-activity router:
+  - `GET /api/training-activity/session-types`;
+  - `POST /`, `POST /:key/rename` (with `expectedLabel`), `POST /:key/archive`, `POST /:key/restore`.
+
+  System types are written in the platform workspace by a platform admin, club types in the club's workspace by its
+  admin (a platform admin in a club's workspace writes as that club's admin, T6). Everyone else gets the identical 404.
+  The key is generated (`s_<8 hex>_<slug>`, `c_<8 hex>_<slug>`).
+- **Not in ST-1:**
+  - the screen (ST-5);
+  - the mapper, preview and approval (ST-2);
+  - per-athlete exceptions (ST-3);
+  - manual values (ST-4).
+
+  The Training Load calendar still shows the raw key words ("training session") until ST-5 reads the labels.
+- **Runbook:** `docs/runbooks/session-types-v85.md`, with its preflight, post-check, rollback and the rehearsal tool.
