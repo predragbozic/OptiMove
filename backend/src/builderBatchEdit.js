@@ -310,13 +310,32 @@ export async function readSiblingFacts(client, before, after, sibling) {
   if (risky.length) {
     await client.query("select id from plans.plan_sessions where id = any($1::uuid[]) order by id for update", [risky]);
   }
-  const logicals = sibling.sessions.map((s) => s.logical_session_id);
+  const logicals = sibling.sessions.map((s) => s.logical_session_id).filter(Boolean);
   const results = new Set();
-  if (logicals.length && sibling.plan.athlete_id) {
+  if (logicals.length) {
+    // has_results, fail-closed (the manager's ruling on #673): a session counts
+    // as having results - never removed, never moved - when anything recorded
+    // names its logical id:
+    //   - the athlete's RPE (training_load.session_feedback);
+    //   - an activity linked to it: a recorded, materialised or imported
+    //     activity's participant link (training.activity_participant_session_links),
+    //     confirmed or still suggested, whatever the participant's merge state -
+    //     a participant merged into an imported GPEXE activity keeps its link
+    //     row (training.merge_activity_participants does not move it);
+    //   - a metric event (training_load.metric_event_participants; the event
+    //     table itself holds no logical id).
+    // A logical id is one plan session's, so the link tables are matched by it
+    // alone, not narrowed by athlete.
     const rows = (await client.query(
       `select logical_session_id from training_load.session_feedback
-       where athlete_id = $1 and logical_session_id = any($2::uuid[])`,
-      [sibling.plan.athlete_id, logicals],
+        where athlete_id = $1 and logical_session_id = any($2::uuid[])
+       union
+       select logical_session_id from training.activity_participant_session_links
+        where logical_session_id = any($2::uuid[]) and link_status in ('confirmed', 'suggested')
+       union
+       select logical_session_id from training_load.metric_event_participants
+        where logical_session_id = any($2::uuid[])`,
+      [sibling.plan.athlete_id || null, logicals],
     )).rows;
     const withResults = new Set(rows.map((r) => String(r.logical_session_id)));
     for (const s of sibling.sessions) if (withResults.has(String(s.logical_session_id))) results.add(String(s.id));

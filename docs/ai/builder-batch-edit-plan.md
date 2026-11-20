@@ -314,6 +314,23 @@ and the `builder-batch-edit-*` actions (`frontend/builder-actions.js`).
   through the real routes (step 2 test 13).
 - **A move** carries a sibling's session only while it is still as before (content and fields); otherwise the member
   is asked about (`changed_separately`).
+- **`has_results` is fail-closed over every recorded link** (the OptiMove manager's ruling of 2026-11-20, after the
+  *Nezavisni revizor*'s observation on `5fd31143`). A sibling session is never removed or moved when anything recorded
+  names its `logical_session_id` (`readSiblingFacts`, one statement, a `union` per kind):
+  - the athlete's RPE: `training_load.session_feedback` (by athlete and logical id, as before);
+  - an activity linked to it: `training.activity_participant_session_links` with `link_status` `confirmed` or
+    `suggested`, whatever the participant's merge state. This covers an activity materialised for the planned session
+    and an imported GPEXE activity merged with it: `training.merge_activity_participants` leaves the link row on the
+    merged-away participant, so the link is not narrowed to canonical participants;
+  - a metric event: `training_load.metric_event_participants.logical_session_id` (the event row
+    `training_load.metric_events` has no logical id; the participant row carries it).
+
+  A logical id belongs to one plan session, so the two link tables are matched by it alone, not by athlete. The reason
+  stays `has_results`. Tests (step 2, each athlete without any RPE): 20 an activity materialised for the session
+  (removal and move), 21 a metric event's participant, 22 an imported activity merged with the planned participant.
+  Mutations: each branch dropped, and the activity links narrowed to canonical participants, each fail a test.
+- **The edit route's `FOR SHARE` (10.2.3)** is the transaction's first statement; `builder-tree-batch-routes.test.mjs`
+  test 4 asserts it (its mock client now knows that read).
 - **The choice token** is compared whenever `applyTo` or `choiceToken` is sent, even if nobody is asked any more.
 - **Rights first**, on the transaction's own connection (`getEditablePlan(req, id, client.query)`): a member the coach
   may not change is only `not_editable`, nothing more about it.

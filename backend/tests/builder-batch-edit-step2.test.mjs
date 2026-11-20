@@ -773,3 +773,94 @@ test("19. a Save that started before another coach reopened the plan still marks
   assert.equal(moved.body.code, "source_changed");
   assert.equal(await digestOf([a, b, c]), before);
 });
+
+// ---------------------------------------------------------------------------
+// has_results, fail-closed (the manager's ruling on #673): a recorded link to a
+// session counts as a result even without an RPE. Each athlete below has NO
+// session_feedback row; the link alone must stop the removal or the move.
+// ---------------------------------------------------------------------------
+
+// A metric event shaped as the GPEXE writer writes one (gpexeImportWriter.js:
+// team-owned, session level), on the session's day.
+async function importedMetricEvent(s, date, participants) {
+  const eventId = (await q(
+    `insert into training_load.metric_events (event_name, occurred_date, scope_level, owner_scope, owner_team_id, source_external_id, event_timezone_snapshot)
+     values ('GPS session', $1, 'session', 'team', $2, $3, 'UTC') returning id`, [date, s.teamId, `test:${uid()}`]))[0].id;
+  for (const p of participants) {
+    await q(`insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot, logical_session_id) values ($1,$2,'UTC',$3)`,
+      [eventId, p.athleteId, p.logicalSessionId || null]);
+  }
+  return eventId;
+}
+// The removal of B's Wednesday and the move of B's Main: both are asked about with has_results, nothing written.
+async function assertResultsBlock(s, [a, b, c], label) {
+  const athleteB = s.athletes[1];
+  assert.equal((await q(`select count(*)::int as n from training_load.session_feedback where athlete_id = $1`, [athleteB.athleteId]))[0].n, 0, `${label}: B has no RPE`);
+  const draft = await reopen(s.coach.cookie, a);
+  const wed = sessionsOf(draft).find((x) => x.name === "Wednesday");
+  ok(await api(`/api/builder/sessions/${wed.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const before = await digestOf([a, b, c]);
+  const asked = await save(s.coach.cookie, draft.plan.id, { batchScope: "all" });
+  assert.equal(asked.status, 409, `${label}: ${asked.text}`);
+  assert.equal(asked.body.code, "batch_members_need_choice");
+  assert.deepEqual(asked.body.cannot, { named: [{ name: athleteB.name, reasons: ["has_results"] }], unnamedCount: 0 }, label);
+  assert.equal(await digestOf([a, b, c]), before, `${label}: nothing written`);
+  const done = ok(await save(s.coach.cookie, draft.plan.id, { batchScope: "all", applyTo: asked.body.applyTo, choiceToken: asked.body.choiceToken }));
+  assert.equal(done.batchEdit.applied, 2, label);
+  assert.ok(byName(await treeOf(b), "Wednesday"), `${label}: B's linked session stays`);
+  assert.equal(byName(await treeOf(c), "Wednesday"), undefined, `${label}: C's goes`);
+}
+
+test("20. an activity linked to the session (materialised for the planned session, no RPE): removing or moving it is asked about (has_results)", async () => {
+  const s = await squad("activitylink");
+  const plans = await publishedBatch(s, { extraSessions: [{ day: 2, name: "Wednesday" }] });
+  const [a, b, c] = plans;
+  const wedB = byName(await treeOf(b), "Wednesday");
+  const mainB = byName(await treeOf(b), "Main");
+  for (const session of [wedB, mainB]) {
+    const made = await api("/api/training-activity/materialize", { method: "POST", cookie: s.coach.cookie, body: { requestKey: uid(), planLogicalSessionId: String(session.logical_session_id), athleteId: s.athletes[1].athleteId } });
+    assert.equal(made.status, 201, made.text);
+  }
+  assert.equal((await q(`select count(*)::int as n from training.activity_participant_session_links where logical_session_id = any($1::uuid[]) and link_status = 'confirmed'`,
+    [[wedB.logical_session_id, mainB.logical_session_id]]))[0].n, 2, "the links exist");
+  await assertResultsBlock(s, plans, "activity");
+  // A move of Main (Monday AM -> PM) is asked about the same way.
+  const draft = await reopen(s.coach.cookie, a);
+  const main = sessionsOf(draft).find((x) => x.name === "Main");
+  ok(await api(`/api/builder/sessions/${main.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }));
+  const before = await digestOf(plans);
+  const asked = await save(s.coach.cookie, draft.plan.id, { batchScope: "all" });
+  assert.equal(asked.status, 409, asked.text);
+  assert.deepEqual(asked.body.cannot.named, [{ name: s.athletes[1].name, reasons: ["has_results"] }]);
+  assert.equal(await digestOf(plans), before);
+});
+
+test("21. a metric event naming the session (an imported GPS session's participant, no RPE): removing it is asked about (has_results)", async () => {
+  const s = await squad("metricevent");
+  const plans = await publishedBatch(s, { extraSessions: [{ day: 2, name: "Wednesday" }] });
+  const wedB = byName(await treeOf(plans[1]), "Wednesday");
+  await importedMetricEvent(s, "2026-11-04", [{ athleteId: s.athletes[1].athleteId, logicalSessionId: String(wedB.logical_session_id) }]);
+  await assertResultsBlock(s, plans, "metric event");
+});
+
+test("22. an imported GPEXE activity merged with the planned session (the planned participant merged into the import, no RPE): removing it is asked about (has_results)", async () => {
+  const s = await squad("importmerge");
+  const plans = await publishedBatch(s, { extraSessions: [{ day: 2, name: "Wednesday" }] });
+  const athleteB = s.athletes[1];
+  const wedB = byName(await treeOf(plans[1]), "Wednesday");
+  // The import: a GPEXE-shaped metric event without a session link, materialised through the real route.
+  const eventId = await importedMetricEvent(s, "2026-11-04", [{ athleteId: athleteB.athleteId }]);
+  const imported = await api(`/api/training-activity/materialize/metric-event/${eventId}`, { method: "POST", cookie: s.coach.cookie, body: { activityTypeKey: "training_session", name: "GPS session" } });
+  assert.equal(imported.status, 201, imported.text);
+  const importedParticipant = (await q(`select id from training.activity_participants where activity_id = $1 and athlete_id = $2`, [imported.body.activityId, athleteB.athleteId]))[0].id;
+  // The planned session's participant, then merged into the import: its link row stays on the merged-away participant.
+  const planned = await api("/api/training-activity/materialize", { method: "POST", cookie: s.coach.cookie, body: { requestKey: uid(), planLogicalSessionId: String(wedB.logical_session_id), athleteId: athleteB.athleteId } });
+  assert.equal(planned.status, 201, planned.text);
+  const merged = await api(`/api/training-activity/participants/${planned.body.participantId}/merge`, { method: "POST", cookie: s.coach.cookie, body: { targetParticipantId: importedParticipant, reason: "Same training" } });
+  assert.equal(merged.status, 200, merged.text);
+  const link = await q(`select ap.merge_status from training.activity_participant_session_links l join training.activity_participants ap on ap.id = l.activity_participant_id
+                         where l.logical_session_id = $1 and l.link_status = 'confirmed'`, [wedB.logical_session_id]);
+  assert.equal(link.length, 1);
+  assert.notEqual(link[0].merge_status, "canonical", "the link is held by the merged-away participant");
+  await assertResultsBlock(s, plans, "merged import");
+});

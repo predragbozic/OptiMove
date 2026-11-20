@@ -36,6 +36,8 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
       const clean = sql.replace(/\s+/g, " ").trim();
       calls.push({ sql: clean, params });
       if (["begin", "commit", "rollback"].includes(clean)) return result([]);
+      // docs/ai/builder-batch-edit-plan.md 10.2.3: the edit route's lock of the live plan, FOR SHARE.
+      if (clean.startsWith("select name, note,") && clean.endsWith("for share")) return result(source ? [{ ...source, id: params[0] }] : []);
       if (clean.startsWith("delete from plans.plan_")) return result([]);
       if (clean.startsWith("insert into plans.plans")) return result([{ id: "edit-draft" }]);
       if (clean.startsWith("insert into training_load.plan_workspace_ownership")) return result([]);
@@ -125,6 +127,10 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     let failure;
     await edit({ params: { planId: "source" }, user: { id: "coach" } }, response, (error) => { failure = error; });
     assert.equal(failure, undefined);
+    // 10.2.3: the live plan is locked FOR SHARE as the transaction's first statement, before anything is copied.
+    assert.equal(client.calls[0].sql, "begin");
+    assert.match(client.calls[1].sql, /^select name, note, .* from plans\.plans where id = \$1 and coalesce\(is_active, true\) for share$/);
+    assert.deepEqual(client.calls[1].params, ["source"]);
     assert.equal(client.inserts.plan_days.length, 7);
     assert.deepEqual(client.inserts.plan_sessions.map((row) => row.name), ["monday", "sunday"]);
     assert.deepEqual(client.inserts.plan_sessions.map((row) => row.logical_session_id), ["logical-monday", "logical-sunday"]);
