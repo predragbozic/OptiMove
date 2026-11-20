@@ -2188,11 +2188,84 @@ export function classifyShellCommand(cmd, cwd) {
 // decides, as before). Never "allow by similarity".
 // ---------------------------------------------------------------------------
 
-const SAFE_PREFIX_RE = /^(TZ|LANG|LC_[A-Z]+|NODE_ENV|CI|FORCE_COLOR|NO_COLOR|(?:[A-Za-z0-9_]*_)?DATABASE_URL)=/;
-const KEYWORD_ONLY_RE = /^(done|fi|do|then|else|break|continue|true|false|:|wait)$/;
+// Principle (Rukovodilac, 2026-11-20, after three findings of the Nezavisni): "allow" only for a
+// line that CANNOT run anything but the harmless built-in actions listed here. Wherever bash
+// itself would compute text (an expansion other than $NAME / ${NAME}, arithmetic, an index, a
+// pattern), wherever a program file is run from disk, and wherever a path could mean another
+// file after a `cd`, the hook gives no decision and Claude Code's own flow decides.
+// Settings deny and ask rules still apply over this "allow" (hooks docs, PreToolUse decision
+// control: "Deny and ask rules are still evaluated regardless of what the hook returns").
 
-function substitutionsVerified(text, cwd, depth) {
-  return extractSubstitutions(text).every((inner) => isVerifiedSilentLine(inner, cwd, depth + 1));
+const SAFE_PREFIX_RE = /^(TZ|LANG|LC_[A-Z]+|NODE_ENV|CI|FORCE_COLOR|NO_COLOR|(?:[A-Za-z0-9_]*_)?DATABASE_URL)=/;
+const KEYWORD_ONLY_RE = /^(done|fi|do|then|else|break|continue|true|false|:)$/;
+// read-only commands of the allow list whose verified options run no program
+const VERIFIED_READERS = new Set(["grep", "rg", "cat", "head", "tail", "ls", "wc", "cut", "diff", "sort", "uniq", "find", "sed"]);
+const TEST_UNARY = new Set(["-f", "-d", "-e", "-s", "-r", "-z", "-n"]);
+const TEST_BINARY = new Set(["=", "!="]);
+const STRING_TESTS = new Set(["-z", "-n", "=", "!="]);
+
+// The whole raw line, quotes included: the only expansions are $NAME and ${NAME}; no backtick,
+// no $(...), no $((...)), no ${x@P} / ${!x} / ${x:-...} / ${a[i]}, no $'...', no (( )), [[ ]],
+// array or index, no brace expansion, no process substitution. A quoted '$(...)' is refused
+// too: an expansion operator elsewhere could run it (${x@P}).
+export function lineIsLexicallyPlain(text) {
+  if (typeof text !== "string") return false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "`") return false;
+    if (ch !== "$") continue;
+    const m = /^(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})/.exec(text.slice(i + 1));
+    if (!m) return false;
+    i += m[0].length;
+    if (text[i + 1] === "[") return false; // $a[0]
+  }
+  if (/\(\(|\)\)|\[\[|\]\]/.test(text)) return false;
+  if (/[<>]\(/.test(text)) return false;
+  if (/[A-Za-z0-9_\]]\[/.test(text)) return false; // a[...]: an index (and test -v 'a[...]')
+  if (/[A-Za-z_][A-Za-z0-9_]*\+?=\(/.test(text)) return false; // a=( ... )
+  // braces only as ${NAME} or as a group word { ... }
+  const withoutNames = text.replace(/\$\{[A-Za-z_][A-Za-z0-9_]*\}/g, "");
+  for (let i = 0; i < withoutNames.length; i++) {
+    const ch = withoutNames[i];
+    if (ch !== "{" && ch !== "}") continue;
+    const before = withoutNames[i - 1];
+    const after = withoutNames[i + 1];
+    const standalone = (before === undefined || /[\s;&|(]/.test(before)) && (after === undefined || /[\s;&|)]/.test(after));
+    if (!standalone) return false;
+  }
+  return true;
+}
+
+// test / [ : `[ ! ] -op OPERAND`, `OPERAND = OPERAND`, `OPERAND != OPERAND`, `OPERAND`. Every
+// argument is a fixed operator, a plain literal, or one whole double-quoted string, so no
+// expansion can split into more arguments or become an operator (-v, -R, -eq, -a, -o, -nt ...).
+function testArguments(words) {
+  const args = words.slice(1);
+  if (shellWord(words[0]) === "[") {
+    if (args.at(-1) !== "]") return null;
+    args.pop();
+  }
+  const argOk = (w) => /^[A-Za-z0-9_./@:+,=%-]+$/.test(w) || /^"[^"`\\]*"$/.test(w);
+  let a = args;
+  if (a[0] === "!") a = a.slice(1);
+  if (!a.every(argOk)) return null;
+  const operand = (w) => w !== undefined && !shellWord(w).startsWith("-") && w !== "!";
+  if (a.length === 1 && operand(a[0])) return { ops: [] };
+  if (a.length === 2 && TEST_UNARY.has(a[0]) && operand(a[1])) return { ops: [a[0]], operands: [a[1]] };
+  if (a.length === 3 && operand(a[0]) && TEST_BINARY.has(a[1]) && operand(a[2])) return { ops: [a[1]], operands: [a[0], a[2]] };
+  return null;
+}
+
+function isAbsolutePlainPath(word) {
+  const w = shellWord(word);
+  return w.startsWith("/") && PLAIN_PATH_RE.test(w) && !/(^|\/)\.\.(\/|$)/.test(w);
+}
+
+// Input redirections of a part (< file, <> file): after a cd, a relative one is another file.
+function inputRedirectTargets(segment) {
+  const out = [];
+  for (const m of segment.matchAll(/(?:^|[\s;])\d*<(?![<(&])>?\s*("[^"]*"|'[^']*'|[^\s;&|<>]+)/g)) out.push(m[1]);
+  return out;
 }
 
 function peelGroups(segment) {
@@ -2210,53 +2283,79 @@ function peelGroups(segment) {
   return t;
 }
 
-function isVerifiedSilentSegment(segment, variables, cwd, depth) {
+// state: { afterCd } for the parts that follow a cd in the same line
+function isVerifiedSilentSegment(segment, state, depth) {
   if (depth > 4) return false;
   const t = peelGroups(segment);
   if (t === "") return true;
   if (KEYWORD_ONLY_RE.test(t)) return true;
-  if (!substitutionsVerified(t, cwd, depth)) return false;
-  // every write of this part must be harmless (a device, or a new file in the temp dir)
-  if (!outputRedirectTargets(t).every((target) => isHarmlessRedirectTarget(target, variables))) return false;
+  // writes: only to /dev/null (and duplications such as 2>&1, which are not files)
+  if (!outputRedirectTargets(t).every((target) => shellWord(target) === "/dev/null")) return false;
+  if (state.afterCd && !inputRedirectTargets(t).every(isAbsolutePlainPath)) return false;
   let m = /^for\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+(.*)$/.exec(t);
-  if (m) return true; // the list of words: its substitutions were verified above
+  if (m) return true; // a word list: plain by the line check
   m = /^(while|until|if|elif)\s+(.*)$/.exec(t);
-  if (m) return isVerifiedSilentSegment(m[2], variables, cwd, depth + 1);
-  // plain assignments (P1)
-  m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(t);
-  if (m && !/\s/.test(m[2].replace(/\$\([^)]*\)/g, "").replace(/"[^"]*"/g, "").replace(/'[^']*'/g, ""))) {
-    if (DANGEROUS_ENV_RE.test(m[1])) return false;
-    return true; // the value's substitutions were verified above
-  }
+  if (m) return isVerifiedSilentSegment(m[2], state, depth + 1);
+  // plain assignments (P1): the value is plain by the line check
+  m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\S*)$/.exec(t);
+  if (m) return !DANGEROUS_ENV_RE.test(m[1]);
   const words = tokenizeWords(t);
   const first = shellWord(words[0] ?? "");
+  if (first !== "[" && /[*?[\]]/.test(words[0] ?? "")) return false; // a glob as the command
   if (first === "sleep") return words.length === 2 && /^\d+(\.\d+)?[smh]?$/.test(shellWord(words[1]));
-  if (first === "test" || first === "[") return true;
+  if (first === "test" || first === "[") {
+    const parsed = testArguments(words);
+    if (!parsed) return false;
+    // after a cd, a file test on a relative path asks about another file
+    if (state.afterCd && !parsed.ops.every((op) => STRING_TESTS.has(op))) return parsed.operands.every(isAbsolutePlainPath);
+    return true;
+  }
   if (first === "echo") return true;
   if (first === "printf") return !words.slice(1).some((w) => /^-[a-zA-Z]*v/.test(shellWord(w)));
-  if (first === "cd") return words.length <= 2;
   if (first === "pwd") return words.length === 1;
+  if (first === "cd") {
+    // only a folder the hook can name itself; everything after it in the line is judged as
+    // being somewhere else
+    if (words.length !== 2 || !PLAIN_PATH_RE.test(words[1]) || !isAbsolutePlainPath(words[1])) return false;
+    state.afterCd = true;
+    return true;
+  }
   // P2: timeout around a verified command
   if (first === "timeout") {
     let k = 1;
     while (k < words.length && shellWord(words[k]).startsWith("-")) k += /^-[sk]$/.test(shellWord(words[k])) ? 2 : 1;
     if (!/^\d+(\.\d+)?[smhd]?$/.test(shellWord(words[k] ?? ""))) return false;
-    return isVerifiedSilentSegment(words.slice(k + 1).join(" "), variables, cwd, depth + 1);
+    return isVerifiedSilentSegment(words.slice(k + 1).join(" "), state, depth + 1);
   }
-  // P6: safe environment prefixes in front of a verified command (a non-local database URL asks earlier)
+  // P6: safe environment prefixes in front of a verified command
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
     let k = 0;
     while (k < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k])) {
-      if (!SAFE_PREFIX_RE.test(words[k]) || /[$`]/.test(words[k])) return false;
+      if (!SAFE_PREFIX_RE.test(words[k]) || /\$/.test(words[k])) return false;
       k++;
     }
-    return k < words.length && isVerifiedSilentSegment(words.slice(k).join(" "), variables, cwd, depth + 1);
+    return k < words.length && isVerifiedSilentSegment(words.slice(k).join(" "), state, depth + 1);
   }
-  // the allow list's own commands, judged by their option lists
+  // The allow list's read-only commands. No program file is run: node, npm, interpreters and
+  // scripts never get "allow" here (the settings list still decides for them, as before). An
+  // argument with $ could be any option once expanded (rg --pre=...), so it is not verified.
+  if (/\$/.test(t)) return false;
   const cw = commandWords(t);
-  if (cw[0] === "node" && cw[1] === "scripts/test-runner.mjs") return true; // on the allow list as it stands
-  if (cw[0] === "git" && cw[1] === "branch" && cw[2] === "--show-current" && cw.length === 3) return true;
-  return allowedCommandOptionsAreKnown(cw) === true && sedRawScriptsAreReadOnly(t);
+  if (cw[0] === "git") {
+    // git reads the configuration of the repository it runs in (fsmonitor, pager, hooks): only
+    // in the session's own folder, with no global option and never after a cd
+    if (state.afterCd || (cw[1] ?? "").startsWith("-")) return false;
+    if (cw[1] === "branch" && cw[2] === "--show-current" && cw.length === 3) return true;
+    return allowedCommandOptionsAreKnown(cw) === true;
+  }
+  if (!VERIFIED_READERS.has(cw[0])) return false;
+  if (allowedCommandOptionsAreKnown(cw) !== true || !sedRawScriptsAreReadOnly(t)) return false;
+  if (state.afterCd) {
+    // after a cd every operand must name its file absolutely; no operand means "this folder"
+    const operands = cw.slice(1).filter((w) => !w.startsWith("-"));
+    if (!operands.length || !operands.every(isAbsolutePlainPath)) return false;
+  }
+  return true;
 }
 
 // True only when every part of the line is one of the verified forms above.
@@ -2264,11 +2363,12 @@ export function isVerifiedSilentLine(cmd, cwd, depth = 0) {
   if (typeof cmd !== "string" || !cmd.trim() || depth > 4) return false;
   const { text, shellBodies } = extractHeredocs(cmd);
   if (shellBodies.length || text !== cmd.replace(/\r\n/g, "\n")) return false; // a heredoc: not verified
+  if (!lineIsLexicallyPlain(text)) return false;
   if (hasBackgroundJob(text)) return false;
   const topLevel = splitCommandSegments(text);
   if (!topLevel.length) return false;
-  const known = redirectVariables(text, topLevel);
-  return topLevel.every((segment, i) => isVerifiedSilentSegment(segment, known[i] ?? new Map(), cwd, depth));
+  const state = { afterCd: false };
+  return topLevel.every((segment) => isVerifiedSilentSegment(segment, state, depth));
 }
 
 // ---------------------------------------------------------------------------

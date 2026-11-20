@@ -1,6 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
@@ -1881,14 +1881,19 @@ test("verified allow never overrides a deny or ask rule inside a P1/P2/P6 wrappe
 
 test("verified allow: the newly silent forms (P1, P2, P6)", () => {
   expectFull([
-    ["S=/tmp/x; echo $S", ALLOWED], ["export S=/tmp/x && ls $S", ALLOWED], ["for f in a b; do wc -l $f; done", ALLOWED], ["sleep 2", ALLOWED],
+    ["S=/tmp/x; echo $S", ALLOWED], ["for f in a b; do echo $f; done", ALLOWED], ["sleep 2", ALLOWED],
     ["[ -f x ] && echo yes", ALLOWED], ["test -d x || echo no", ALLOWED], ["timeout 60 git status --short", ALLOWED],
-    ["timeout 400 node scripts/test-runner.mjs --project backend --kind disposable", ALLOWED], ["X=$(git rev-parse HEAD); echo $X", ALLOWED],
-    ["DATABASE_URL=postgresql://postgres:postgres@localhost:5432/x node --test backend/tests/a.test.mjs", ALLOWED], ["cd /tmp && ls -la", ALLOWED],
     ["git status --short | wc -l && git log --oneline -3", ALLOWED], ["if [ -f x ]; then cat x; fi", ALLOWED], ["while true; do sleep 1; break; done", ALLOWED],
-    ["printf '%s\\n' a b | sort -u", ALLOWED], ["(cd backend && ls)", ALLOWED], ["{ echo a; echo b; } | sort", ALLOWED], ["git branch --show-current", ALLOWED],
-    ["TZ=UTC NODE_ENV=test node --test frontend/tests/a.test.mjs", ALLOWED], ["timeout -k 5 60 grep -rn x src", ALLOWED], ["pwd", ALLOWED],
-    ["S=/tmp/x\ngrep -n y f\nsleep 1", ALLOWED], ["for f in $(ls); do echo $f; done", ALLOWED], ["echo done", ALLOWED],
+    ["printf '%s\\n' a b | sort -u", ALLOWED], ["{ echo a; echo b; } | sort", ALLOWED], ["git branch --show-current", ALLOWED],
+    ["timeout -k 5 60 grep -rn x src", ALLOWED], ["pwd", ALLOWED], ["S=/tmp/x\ngrep -n y f\nsleep 1", ALLOWED], ["echo done", ALLOWED],
+    ["cd /tmp && ls -la /tmp", ALLOWED], ["cd /tmp && echo here", ALLOWED], ["git status 2>&1 | head -3", ALLOWED], ["cat x > /dev/null", ALLOWED],
+    // narrowed after the second review (2026-11-20): no decision any more
+    ["timeout 400 node scripts/test-runner.mjs --project backend --kind disposable", null], // runs a program file from disk
+    ["DATABASE_URL=postgresql://postgres:postgres@localhost:5432/x node --test backend/tests/a.test.mjs", null],
+    ["TZ=UTC NODE_ENV=test node --test frontend/tests/a.test.mjs", null],
+    ["X=$(git rev-parse HEAD); echo $X", null], ["for f in $(ls); do echo $f; done", null], // a substitution
+    ["cd /tmp && ls -la", null], ["(cd backend && ls)", null], // after a cd: a relative path or "this folder"
+    ["export S=/tmp/x && ls $S", null], ["for f in a b; do wc -l $f; done", null], // $ in an argument of a read command
   ]);
 });
 
@@ -1904,10 +1909,10 @@ test("verified allow (real execution): every newly silent line leaves the reposi
   writeFileSync(path.join(repo, "x"), "content\n");
   execFileSync("git", ["add", "x"], { cwd: repo }); execFileSync("git", ["commit", "-qm", "x"], { cwd: repo });
   mkdirSync(path.join(repo, "backend"));
-  const lines = ["S=/tmp/x; echo $S", "for f in x x; do wc -l $f; done", "sleep 0", "[ -f x ] && echo yes", "test -d x || echo no",
-    "timeout 60 git status --short", "X=$(git rev-parse HEAD); echo $X", "git status --short | wc -l && git log --oneline -3",
-    "if [ -f x ]; then cat x; fi", "while true; do sleep 0; break; done", "printf '%s\\n' a b | sort -u", "(cd backend && ls)",
-    "{ echo a; echo b; } | sort", "git branch --show-current", "timeout -k 5 60 grep -rn content .", "pwd", "for f in $(ls); do echo $f; done"];
+  const lines = ["S=/tmp/x; echo $S", "for f in x x; do echo $f; done", "sleep 0", "[ -f x ] && echo yes", "test -d x || echo no",
+    "timeout 60 git status --short", "git status --short | wc -l && git log --oneline -3",
+    "if [ -f x ]; then cat x; fi", "while true; do sleep 0; break; done", "printf '%s\\n' a b | sort -u",
+    "{ echo a; echo b; } | sort", "git branch --show-current", "timeout -k 5 60 grep -rn content .", "pwd", "cd /tmp && echo here"];
   try {
     for (const line of lines) {
       assert.equal(fullVerdict(line, repo), ALLOWED, line);
@@ -1917,4 +1922,69 @@ test("verified allow (real execution): every newly silent line leaves the reposi
       assert.equal(after, before, `the repository changed after: ${line}`);
     }
   } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------
+// Second review of #672 (Nezavisni, 2026-11-20): three lines that ran a command under "allow".
+// Real bash proves each runs; the hook must not answer "allow" for any of them.
+// ------------------------------------------------------------------
+
+test("HIGH-1/2/3 (proof by execution): each line runs a command; the hook gives no allow", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-nzp-"));
+  const marker = (n) => path.join(tmp, `marker-${n}`);
+  mkdirSync(path.join(tmp, "evil", "scripts"), { recursive: true });
+  writeFileSync(path.join(tmp, "evil", "scripts", "test-runner.mjs"), `require("node:fs").writeFileSync(${JSON.stringify(marker(5))}, "ran");\n`.replace("require(\"node:fs\")", "(await import('node:fs'))"));
+  const cases = [
+    [1, `x='$(touch ${marker(1)})'; echo \${x@P}`],
+    [2, `x='$(touch ${marker(2)})'; echo "\${x@P}"`],
+    [3, `test -v 'a[$(touch ${marker(3)})]'`],
+    [4, `[ -v 'a[$(touch ${marker(4)})]' ]`],
+    [5, `cd ${path.join(tmp, "evil")} && node scripts/test-runner.mjs`],
+  ];
+  try {
+    for (const [n, line] of cases) {
+      spawnSync("bash", ["-c", `declare -a a; ${line}`], { cwd: tmp, stdio: "ignore" }); // the exit status does not matter, the side effect does
+      assert.ok(existsSync(marker(n)), `bash did not run the command of: ${line}`);
+      assert.notEqual(fullVerdict(line, featureRepo), ALLOWED, line);
+    }
+    // the second half of the HIGH-3 chain: writing the script into a temp folder is not "allow" either
+    assert.notEqual(fullVerdict(`printf 'x' > ${path.join(tmp, "new-script.mjs")}`, featureRepo), ALLOWED);
+    assert.notEqual(fullVerdict(`echo x > ${path.join(tmp, "new.txt")}`, featureRepo), ALLOWED);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("verified allow: every form where bash computes text gets no allow, in every verified shape", () => {
+  const fragments = ["${x@P}", "${x@E}", "${x@A}", "${!x}", "${x:-y}", "${x:=y}", "${x#y}", "${x%y}", "${x/a/b}", "${x^}", "${x,}", "${#x}", "${a[0]}",
+    "$((1))", "$(true)", "`true`", "$'a'", '$"a"', "{a,b}", "{1..3}", "a[0]", "<(true)", ">(true)", '"${x@P}"', "'$(true)'", '"$(true)"',
+    "$1", "$@", "$*", "$?", "$$", "$#", "$!", "$-", "$a[0]"];
+  const shapes = [(f) => `echo ${f}`, (f) => `printf '%s' ${f}`, (f) => `X=${f}; echo ok`, (f) => `[ ${f} ]`, (f) => `test -n ${f}`,
+    (f) => `for f in ${f}; do echo x; done`, (f) => `cat ${f}`, (f) => `grep -n x ${f}`, (f) => `sleep 1; echo ${f}`, (f) => `cd /tmp && echo ${f}`,
+    (f) => `if [ -f x ]; then echo ${f}; fi`, (f) => `timeout 5 echo ${f}`, (f) => `TZ=UTC echo ${f}`, (f) => `echo x > /dev/null; echo ${f}`];
+  const wrong = [];
+  for (const f of fragments) for (const shape of shapes) {
+    const line = shape(f);
+    if (fullVerdict(line, featureRepo) === ALLOWED) wrong.push(line);
+  }
+  const commandForms = ["(( 1 ))", "[[ -f x ]]", "a=(1 2)", "x[1]=2", "*", "?x", "test -v x", "test x -eq 1", "test -R x", "test -a x", "test x -nt y",
+    "[ -f x -o -f y ]", "[ x -lt 2 ]", "declare -n r=x", "let x=1", "read x", "eval echo", "source x", ". x", "node x.mjs", "node --test backend/tests/a.test.mjs",
+    "npm test", "python3 x.py", "bash x.sh", "./x.sh", "git -C /tmp status", "git --git-dir=x log", "cd ~", "cd ..", "cd x", "echo x > /tmp/f", "echo x >> /tmp/f",
+    "cat < /etc/hostname > /tmp/f", "git log > /tmp/f", "rg --pre=x y", "sort --compress-program=x f",
+    // arithmetic and arrays outside a $: bash computes them too
+    "echo ((1))", "S=(a)", "TZ=(x) echo y",
+    // test operands: an unquoted expansion could split into an operator (-v 'a[$(...)]')
+    "test -f $X", "[ -n $X ]", "[ $X = y ]", "test $X", '[ -n "$X"x ]',
+    // second layers (caught earlier too): a glob as the command, PATH and friends
+    "ech? hi", "e*o hi", "PATH=/tmp/evil; ls", "export PATH=/tmp/evil; ls", "BASH_ENV=/tmp/x; echo"];
+  for (const line of commandForms) if (fullVerdict(line, featureRepo) === ALLOWED) wrong.push(line);
+  assert.deepEqual(wrong, []);
+});
+
+test("verified allow: after a cd, a relative path or 'this folder' is never verified", () => {
+  expectFull([
+    ["cd /tmp && cat notes.txt", null], ["cd /tmp && ls", null], ["cd /tmp && git status", null], ["cd /tmp && grep -rn x", null],
+    ["cd /tmp && [ -f notes.txt ]", null], ["cd /tmp && cat < notes.txt", null], ["cd /tmp; sed -n 1p f", null], ["cd /tmp && find .", null],
+    ["cd /tmp && echo x < notes.txt", null], ["cd /tmp && sort -u /etc/hostname < notes.txt", null],
+    ["cd /tmp && cat /etc/hostname", ALLOWED], ["cd /tmp && [ -n \"$X\" ] && echo y", ALLOWED], ["cd /tmp && [ -f /etc/hostname ]", ALLOWED],
+    ["cat notes.txt", ALLOWED], ["cat < notes.txt", ALLOWED], ["git status", ALLOWED], ["ls", ALLOWED],
+  ]);
 });

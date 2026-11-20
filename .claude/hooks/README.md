@@ -70,9 +70,8 @@ named, exported function), and writes one of three outcomes:
   permission flow (including anything already allowed in `settings.local.json`) decides,
   same as if this hook didn't exist.
 
-There is no fourth option — this hook never emits `"allow"` itself. Forcing an explicit
-allow would let it silently override a user's own `settings.local.json` rules, which is
-the opposite of what a safety layer should do.
+The one exception is `"allow"` for a line the hook can prove harmless (section "ALLOW — a
+verified line" below); settings deny and ask rules still apply over it.
 
 ### DENY (Bash + PowerShell)
 
@@ -195,20 +194,35 @@ across projects/instances:
 
 ### ALLOW — a verified line (Bash only)
 
-The one decision that opens a door: `permissionDecision: "allow"` for a Bash command line whose
-EVERY part the hook has verified itself. It is computed only after the whole line produced no
-deny and no ask; deny and ask rules in `settings.json` still apply on top (Claude Code evaluates
-them regardless of the hook). Verified parts: a plain assignment (`S=/tmp/x`, `export S=…`,
-`X=$(<verified command>)`, never a name like `PATH`, `NODE_OPTIONS`, `GIT_*`); `for NAME in …`,
-`while/until/if <verified>`, `do`, `then`, `else`, `done`, `fi`, `break`, `continue`, `true`,
-`false`, `:`; `( … )` and `{ …; }` groups; `sleep N`; `test`/`[ … ]`; `echo`; `printf` (not `-v`);
-`cd`; `pwd`; `timeout [-k N|-s SIG] N <verified>`; the prefixes `TZ`, `LANG`, `LC_*`, `NODE_ENV`, `CI`,
-`FORCE_COLOR`, `NO_COLOR` and a local `*DATABASE_URL` in front of a verified command; and the
-allow list's own commands with known options (`git status/diff/log/show/…`, `grep`, `sed -n`,
-`node --test backend|frontend/tests/…`, `node scripts/test-runner.mjs …`). Every substitution
-inside must be verified too, and every redirect must be harmless. A heredoc, a background `&`,
-or ANY part it does not know: no decision at all, as before. The PowerShell tool never gets one.
-Measured on the replay: lines without any question 377 → 449 of 1,252.
+The one decision that opens a door: `permissionDecision: "allow"` for a Bash command line that
+CANNOT run anything but the harmless built-in actions below (second review, 2026-11-20). It is
+computed only after the whole line produced no deny and no ask; deny and ask rules in
+`settings.json` still apply on top (hooks docs, "PreToolUse decision control": "Deny and ask
+rules are still evaluated regardless of what the hook returns").
+
+- The raw line, quotes included, may expand only `$NAME` and `${NAME}`. Any other `$` form
+  (`$(…)`, `$((…))`, `${x@P}`, `${!x}`, `${x:-…}`, `$'…'`, `$1`, `$?` …), a backtick, `(( ))`,
+  `[[ ]]`, an index or array (`a[0]`, `a=(…)`), brace expansion (`{a,b}`) or process
+  substitution: no decision. A quoted `'$(…)'` counts too (`${x@P}` would run it).
+- Verified parts: a plain assignment (never `PATH`, `NODE_OPTIONS`, `GIT_*` …); `for NAME in …`;
+  `while/until/if <verified>`; the keywords; `( … )` and `{ …; }`; `sleep N`; `echo`; `printf`
+  (not `-v`); `pwd`; `timeout [-k N|-s SIG] N <verified>`; the prefixes `TZ`, `LANG`, `LC_*`,
+  `NODE_ENV`, `CI`, `FORCE_COLOR`, `NO_COLOR` and a local `*DATABASE_URL`.
+- `test` / `[ … ]`: only `[!] -f|-d|-e|-s|-r|-z|-n X`, `X = Y`, `X != Y`, `X`, every argument a
+  literal or one whole double-quoted string. Never `-v`, `-R`, numeric operators, `-a`, `-o`.
+- Read commands of the allow list with known options (`grep`, `rg`, `cat`, `head`, `tail`, `ls`,
+  `wc`, `cut`, `diff`, `sort`, `uniq`, `find`, `sed -n`), with no `$` in their arguments (an
+  expansion could become any option). `git` read commands only without a global option and never
+  after a `cd` (git runs the configuration of the repository it is in).
+- No program file from disk ever gets "allow": `node` (the test runner and `node --test`
+  included), npm, interpreters, scripts. The settings list decides for them, as before.
+- `cd` only to an absolute plain path; after it, a part is verified only when every path it
+  touches is absolute (operands, input redirects, file tests) — "this folder" is not.
+- Writes only to `/dev/null` (and `2>&1`-style duplications). A new temp file: no decision.
+
+A heredoc, a background `&`, or ANY part it does not know: no decision at all. The PowerShell
+tool never gets one. Measured on the replay: the hook says "allow" for 107 of 1,252 calls, all
+of which the settings list already let through; lines without any question stay 377.
 
 ### ALLOW (no decision — everything else)
 
