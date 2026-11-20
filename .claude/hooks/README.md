@@ -237,6 +237,14 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
     `rmdir -p` asks (it climbs past the folder). In a line where another part makes links or work
     trees (`ln`, `mv`, `cp -r`, `git init/clone/worktree add`), every scratch exemption of the
     other parts is off: the hook reads the file system before the line runs.
+    Closed after the Nezavisni's #698 HIGH-1 (a real deletion outside the folder): the line's
+    variables are kept by the POSITION of a part, not by its text (two identical `rm -rf $S`
+    with S reassigned between them shared the first one's value); a name assigned more than once
+    anywhere in the line (or by `for`, `read`, `select`…) is never put in; and a fail-closed
+    backstop counts `rm`/`rmdir`/`cp`/`mv`/`mkdir`/`ln`/`touch`/`pg_ctl` at every command
+    position of the raw line (after `;`, `&&`, `|`, `(`, `)`, `{`, `}`, `!`, a keyword, a case
+    branch, `coproc`, common prefixes; quotes not read): if there are more than the parts the
+    rules judged, the line asks. A `cp` source that is a link or a `/proc`, `/dev` path asks.
   - the local test database: `pg_ctl … stop|restart|kill|promote|reload` asks unless `-D` (or
     `--pgdata`) names, literally or by a plain variable of the line, a data folder inside the
     session's own temporary folder (realpath, not a git work tree); `pg_ctl` without `-D`

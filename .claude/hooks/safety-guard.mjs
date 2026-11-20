@@ -2237,7 +2237,7 @@ function reachedThroughOperandAdder(segment) {
 // is a link asks; into an existing folder, the entry that would be written is judged. Hard links
 // (ln without -s, cp -l), link copies (cp -a/-P/-d) and ln -s to a target outside always ask.
 // lineMakesLinks: another part of the line makes links or work trees (see above).
-export function scratchFileOpNeedsQuestion(segment, variables = new Map(), { lineMakesLinks = false } = {}) {
+export function scratchFileOpNeedsQuestion(segment, variables = new Map(), { lineMakesLinks = false, cwd = process.cwd() } = {}) {
   // the raw words (quotes kept, for the variables) and the words as the command receives them
   const rawWords = withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment))));
   const words = rawWords.map(shellWord);
@@ -2278,6 +2278,15 @@ export function scratchFileOpNeedsQuestion(segment, variables = new Map(), { lin
   if (changed.some((p) => !path.isAbsolute(p) || p.split(/[\\/]/).includes(".."))) return true;
   if (name === "ln" && !flags.has("-s") && !flags.has("--symbolic")) return true;
   const recursive = flags.has("-r") || flags.has("-R") || flags.has("--recursive");
+  // a cp source that is a link (cp -r copies a link argument as a link) or a /proc or /dev path
+  // (`/proc/self/cwd` is a link to the folder the command runs in) brings a link to outside in
+  if (name === "cp") {
+    for (const src of resolved.slice(0, -1)) {
+      const full = path.resolve(cwd, src.replace(/([\\/]\.?)+$/, "") || "/");
+      if (/^\/(proc|dev)(\/|$)/.test(full)) return true;
+      try { if (fs.lstatSync(full).isSymbolicLink()) return true; } catch { /* missing: cp fails */ }
+    }
+  }
   const noTargetDir = flags.has("-T") || flags.has("--no-target-directory");
   for (const p of changed) {
     const dirPart = path.dirname(p);
@@ -2480,15 +2489,58 @@ export function gitPushNeedsQuestion(segment, cwd) {
   return false;
 }
 
+// Names a line assigns more than once, or in a way whose value changes per run: NAME=, export /
+// local / declare / readonly NAME=, NAME+=, `for NAME in`, `read … NAME`, `select NAME`.
+export function namesAssignedMoreThanOnce(text) {
+  const counts = new Map();
+  const add = (n) => counts.set(n, (counts.get(n) ?? 0) + 1);
+  for (const m of text.matchAll(/(?:^|[\s;&|(){}`])(?:(?:export|local|declare|typeset|readonly)\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)\+?=/g)) add(m[1]);
+  for (const m of text.matchAll(/\b(?:for|select)\s+([A-Za-z_][A-Za-z0-9_]*)\b/g)) { add(m[1]); add(m[1]); }
+  for (const m of text.matchAll(/\b(?:read|mapfile|readarray|getopts|printf\s+-v)\b([^;&|\n]*)/g)) {
+    for (const n of m[1].match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) ?? []) { add(n); add(n); }
+  }
+  return new Set([...counts].filter(([, c]) => c > 1).map(([n]) => n));
+}
+
+const FILE_OP_NAMES = new Set([...Object.keys(SCRATCH_OPS), "pg_ctl"]);
+// File-operation command words at a command position of the raw text (after a separator, an
+// opening bracket or substitution, a keyword, and common prefixes), quotes not read: a mention
+// inside a string counts too (fail-closed).
+export function fileOpWordsAtCommandPosition(text) {
+  const re = /(?:^|[\n;&|(){}`!]|\$\(|\b(?:do|then|else|elif|if|while|until|coproc|in)\s)\s*(?:(?:sudo|doas|nohup|time|command|builtin|exec|nice|xargs|env|timeout)(?:\s+-\S+)*\s+(?:\d+\S*\s+)?|[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\S*\/)?(rm|rmdir|cp|mv|mkdir|ln|touch|pg_ctl)(?=[\s;&|)]|$)/g;
+  return [...String(text).matchAll(re)].length;
+}
+
+// The file operations the rules judged: parts whose command is one of them, one per top-level
+// part and command text (a wrapper and the command it wraps are the same operation).
+function judgedFileOps(segments, segmentTop) {
+  const seen = new Set();
+  segments.forEach((seg, i) => {
+    const words = commandWords(seg);
+    const name = path.basename(words[0] ?? "");
+    if (FILE_OP_NAMES.has(name)) seen.add(`${segmentTop[i] ?? "h"}:${words.join(" ")}`);
+  });
+  return seen.size;
+}
+
 export function classifyShellCommand(cmd, cwd) {
   const { text, shellBodies } = extractHeredocs(cmd);
   const topLevel = splitCommandSegments(text);
-  const segments = expandSegments(topLevel);
-  // A redirect may use a variable only when its value is certain. See redirectVariables.
-  const variablesBefore = new Map();
+  // A redirect may use a variable only when its value is certain. See redirectVariables. The
+  // values are kept by POSITION: two parts with the same text (`rm -rf $S` twice, with S assigned
+  // in between) are two different moments.
   const known = shellBodies.length ? topLevel.map(() => new Map()) : redirectVariables(text, topLevel);
+  // a name assigned more than once anywhere in the line (or in a loop) is never put in
+  const assignedTwice = namesAssignedMoreThanOnce(text);
+  const segments = [];
+  const segmentVariables = [];
+  const segmentTop = [];
   for (let i = 0; i < topLevel.length; i++) {
-    for (const piece of expandSegments([topLevel[i]])) if (!variablesBefore.has(piece)) variablesBefore.set(piece, known[i]);
+    for (const piece of expandSegments([topLevel[i]])) {
+      segments.push(piece);
+      segmentVariables.push(new Map([...known[i]].filter(([n]) => !assignedTwice.has(n))));
+      segmentTop.push(i);
+    }
   }
   const background = hasBackgroundJob(text);
   const createsWorkTree = segments.some(createsGitWorkTree);
@@ -2509,6 +2561,11 @@ export function classifyShellCommand(cmd, cwd) {
     if (isGitStashDestructive(segment)) return { decision: "deny", reason: DENY_REASONS.gitStashDestructive };
   }
 
+  // (after every deny) Fail-closed: every file operation and pg_ctl at a command position of the raw line must be one
+  // the rules below judged; one the hook cannot place (a function body, an alias, quoting it does
+  // not read) asks, because settings let these commands through by name.
+  if (fileOpWordsAtCommandPosition(cmd) > judgedFileOps(segments, segmentTop)) return { decision: "ask", reason: ASK_REASONS.fileOpOutsideScratch };
+
   // Every segment is judged on its own and the strictest verdict wins: any deny above
   // already ended the call, and here the first segment that needs a confirmation ends it,
   // wherever in the chain it stands. The one merge that does not ask only removes ITS OWN
@@ -2527,7 +2584,7 @@ export function classifyShellCommand(cmd, cwd) {
     if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     // `cat >(sh)`, `x <(bash)`: a shell inside a process substitution reads what it is fed
     if (processSubstitutions(segment).some((inner) => isUnreadableShellInput(inner, true))) return { decision: "ask", reason: ASK_REASONS.unreadable };
-    if (allowedCommandNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { noTempExemption: createsWorkTree || lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (allowedCommandNeedsQuestion(segment, segmentVariables[index] ?? new Map(), { noTempExemption: createsWorkTree || lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
     if (setsDangerousEnvironment(segment)) return { decision: "ask", reason: ASK_REASONS.dangerousEnv };
     if (definesAlias(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isGitConfigOverride(segment)) return { decision: "ask", reason: ASK_REASONS.gitConfigOverride };
@@ -2540,8 +2597,8 @@ export function classifyShellCommand(cmd, cwd) {
     if (isCommitOnMain(segment, cwd) || isCommitOnProtectedBranch(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };
     if (gitCommitStagesAll(segment) || gitAddNeedsQuestion(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.stageBroad };
     if (gitPushNeedsQuestion(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushNotOwnBranch };
-    if (scratchFileOpNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.fileOpOutsideScratch };
-    if (pgControlNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.pgControlNotTestCluster };
+    if (scratchFileOpNeedsQuestion(segment, segmentVariables[index] ?? new Map(), { lineMakesLinks, cwd })) return { decision: "ask", reason: ASK_REASONS.fileOpOutsideScratch };
+    if (pgControlNeedsQuestion(segment, segmentVariables[index] ?? new Map(), { lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.pgControlNotTestCluster };
     if (lineMovesDir && (extractGitSubcommandArgs(segment, "commit") || extractGitSubcommandArgs(segment, "push"))) return { decision: "ask", reason: ASK_REASONS.commitMain };
     if (isSwitchUserWrapper(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isDeployCommand(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };

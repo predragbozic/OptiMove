@@ -1565,7 +1565,7 @@ test("a redirect sees only the assignments made before it in the line", () => {
   try {
     expectAll([
       [`cat x > $S/a; S=${tmp}`, ASK], [`cat x > $S/a && S=${tmp} && cat y > $S/b`, ASK], [`S=${tmp}; cat x > $S/a`, ALLOW],
-      [`S=${tmp} && grep -n y f > $S/b.txt && S=/etc`, ALLOW], [`S=${tmp}; S=/etc; cat x > $S/a`, ASK], [`S=/etc; cat x > $S/a; S=${tmp}`, ASK],
+      [`S=${tmp} && grep -n y f > $S/b.txt && S=/etc`, ASK], // P5 review: a name assigned twice in the line is never put in [`S=${tmp}; S=/etc; cat x > $S/a`, ASK], [`S=/etc; cat x > $S/a; S=${tmp}`, ASK],
       [`bash -c "cat x > \\$S/a"; S=${tmp}`, ASK],
     ]);
   } finally { rmSync(tmp, { recursive: true, force: true }); }
@@ -2086,5 +2086,65 @@ test("P3 review: broad add/commit forms, a cd on the line, push redirected by gi
     assert.equal(verdict("git push origin feature/own", repo), ASK);
   } finally {
     for (const d of [repo, onMaster]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------
+// Nezavisni, #698 HIGH-1 (2026-11-20): the variables were kept by the TEXT of a part, so two
+// identical parts shared the first one's values. Proven with real deletion in a test folder.
+// ------------------------------------------------------------------
+
+test("#698 HIGH-1 (proof by execution): a repeated part with a reassigned variable is never silent", () => {
+  const repo = makeRepo("sg-698-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const victim = mkdtempSync(path.join(tmpdir(), "sg-698-victim-"));
+  const s = scratch;
+  try {
+    mkdirSync(path.join(s, "pg"));
+    // the attack runs for real: the second rm deletes the victim folder
+    writeFileSync(path.join(victim, "keep.txt"), "x");
+    mkdirSync(path.join(s, "d"));
+    const attack = `S=${s}/d; rm -rf $S; S=${victim}; rm -rf $S`;
+    execFileSync("bash", ["-c", attack]);
+    assert.equal(existsSync(victim), false, "bash did not delete the victim");
+    mkdirSync(victim);
+    const lines = [
+      attack, `S=${s}/d; rm -rf $S && S=${victim} && rm -rf $S`, `S=${s}/d; rm -rf $S || S=${victim}; rm -rf $S`,
+      `S=${s}/d\nrm -f $S\nS=${victim}/keep.txt\nrm -f $S`, `{ S=${s}/d; rm -rf $S; S=${victim}; rm -rf $S; }`,
+      `for S in ${s}/d ${victim}; do rm -rf $S; done`, `S=${s}/d; cp README.md $S; S=${victim}/x; cp README.md $S`,
+      `S=${s}/d; cp README.md $S.bak; S=${victim}/x; cp README.md $S.bak`, `S=${s}/d; mkdir -p $S; S=${victim}/n; mkdir -p $S`,
+      `S=${s}/d; touch $S; S=${victim}/t; touch $S`, `S=${s}/a; mv $S ${s}/b; S=${victim}; mv $S ${s}/c`,
+      `S=${s}/l; ln -s ${s}/pg $S; S=${victim}/l; ln -s ${s}/pg $S`, `S=${s}/o; cat README.md > $S; S=${victim}/o; cat README.md > $S`,
+      `D=${s}/pg; pg_ctl -D $D stop; D=/var/lib/postgresql/16/main; pg_ctl -D $D stop`,
+      `B=feature/x; git push origin $B; B=main; git push origin $B`, `S=${s}/x; read S < list; rm -rf $S`,
+    ];
+    const silent = lines.filter((c) => verdictIn(c, repo) !== ASK);
+    assert.deepEqual(silent, []);
+    // a name assigned once still works
+    assert.equal(verdictIn(`S=${s}/d; rm -rf $S/old; rm -rf $S/older`, repo), ALLOW);
+  } finally {
+    for (const d of [base, repo, victim]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("#698: a file operation the hook cannot place asks (fail-closed backstop); cp of a link or /proc path asks", () => {
+  const repo = makeRepo("sg-698b-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const s = scratch;
+  try {
+    expectAll([]);
+    const rows = [
+      [`f() { rm -rf /home/user/x; }; f`, ASK], [`alias r=rm; r -rf /x`, ASK], [`echo ok; rm -rf ${s}/a`, ALLOW],
+      [`cp -r /proc/self/cwd ${s}/x`, ASK], [`cp /dev/stdin ${s}/x`, ASK], [`cp /proc/self/environ ${s}/env`, ASK], [`cp README.md ${s}/x`, ALLOW],
+      // forms whose rm the part parser does not place: only the backstop sees them
+      ["case x in x) rm -rf /home/user/x;; esac", ASK], ["case $x in a|b) cp a /home/user/b ;; esac", ASK], ["coproc rm -rf /home/user/x", ASK],
+      ['cmd=(rm -rf /home/user/x); "${cmd[@]}"', ASK], ['git commit -m "docs: note about rm"', ALLOW], ["grep -n rm README.md", ALLOW],
+    ];
+    execFileSync("ln", ["-s", repo, path.join(s, "repolink")]);
+    rows.push([`cp -r ${s}/repolink ${s}/copy`, ASK]);
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+  } finally {
+    for (const d of [base, repo]) rmSync(d, { recursive: true, force: true });
   }
 });
