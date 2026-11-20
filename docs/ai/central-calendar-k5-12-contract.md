@@ -1,6 +1,7 @@
 # Central calendar — K5-1 and K5-2: UI contract
 
-Status: **Proposed** (2026-11-20), for the calendar stream manager. Documents only: no code, no route, no migration.
+Status: **Decided by the stream manager** (2026-11-20): Q1–Q10 as recommended, with his notes in section 5.
+Documents only: no code, no route, no migration.
 Written against `main` `ec467638`. Sources: `docs/ai/central-calendar-k5-plan.md` (H1–H5, K5-1, K5-2, section 3),
 the approved mockups `docs/design/calendar-k5/` (README, E1–E12), and the manager's condition for the one backend
 field: `holdsImport` is **one boolean** in the event card's output (`publicCard`, `backend/src/calendarQuery.js`),
@@ -276,7 +277,9 @@ a lone RPE request and a lone test:
 - the Roster option ignored;
 - the scroll-into-view of the chosen pill removed (the e2e test at 360 px).
 
-## 5. Open questions, each with a recommendation
+## 5. Questions, recommendations and decisions
+
+The stream manager decided all ten as recommended (2026-11-20). His notes are under Q1, Q3, Q7 and Q10.
 
 - **Q1. The Builder target (K5-1, *Open in Builder*).**
   - Opening a plan in the Builder creates or reuses the coach's edit draft on the server (`POST …/edit`).
@@ -285,6 +288,10 @@ a lone RPE request and a lone test:
     that athlete's Weekly plan on the day.
   - Agree the Builder entry later with E's Builder batch edit (#673, step 2), which edits a group's plans together.
     It is its own small step with E's GO and needs at least `planType` (or a "the group's batch" id) on the card.
+  - **Decided:** the Builder stays out of K5-1.
+    - For an event, K3's *Plan the training* (#678) is already the way into the Builder.
+    - A planned card's *Open in Builder* waits for #673 and for a decision on the edit draft.
+    - The approved mockups show *Open in Builder* on the planned card, so the stream manager tells the owner.
 - **Q2. *Go there* for an activity folded into a planned or RPE card.**
   - **Recommendation:** the existing *Open in Training Load* stays on those panels as today.
   - No new rows: the Builder and RPE rows come first, and the activity's button follows them (the plan's order).
@@ -292,6 +299,7 @@ a lone RPE request and a lone test:
   - **Recommendation:** accept that event types become a sub-filter of Events, so the combination cannot be chosen.
   - FE-D16i is rewritten on purpose to assert that choosing RPE requests clears the event types.
   - Plan 9.4's limit 2 is marked closed by K5-2.
+  - **Decided** as recommended. #677 pins the current limit in FE-D16i, so the K5 frontend PR updates that test.
 - **Q4. "To enter results" in Tests.**
   - The Tests coach screen shows who has answered and offers reminders; results come from the athletes' own forms.
   - **Recommendation:** the hint says "to see who has answered", and the plan's wording is corrected in the same PR.
@@ -304,6 +312,7 @@ a lone RPE request and a lone test:
     approved mockups draw `clipboard` for tests.
   - **Recommendation:** one icon per kind everywhere. Switch the test kind to `clipboard` with K5-2 (card, chip,
     filter, mark).
+  - **Decided:** `clipboard` everywhere, as in the approved mockups.
 - **Q8. A planned training (Builder card) that holds an import.**
   - An imported activity can fold into a planned card through its session.
   - H4 names events only. **Recommendation:** no mark on a planned card in K5-2. If the pilot asks for it, the same
@@ -316,6 +325,10 @@ a lone RPE request and a lone test:
     check at the four widths and the Frontend PR gate.
 
   The backend PR first, so the frontend reads a field that exists on main.
+  - **Decided:** two PRs.
+    1. **Backend `holdsImport`**, covering both fold paths. It carries the full key-by-key allowlist of the manager's
+       and the reader's cards and the whole disposable run against main.
+    2. **The frontend.**
 
 ## 6. Not in this contract
 
