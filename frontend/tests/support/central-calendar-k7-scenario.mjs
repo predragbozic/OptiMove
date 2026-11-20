@@ -1,7 +1,8 @@
 // K7's "unchanged" proof (docs/ai/central-calendar-k7-timegrid-contract.md section 6, DOM): one fixed calendar answer
 // rendered in every layout and view K7 must not change - phone and medium in every view and mode, the wide week as
 // a List and the wide Month. The snapshot `central-calendar-k7-unchanged.json` beside this file was made with this
-// module on the main before K7 (de16eccf); the test renders the same with the head's code and compares byte for byte.
+// module on the main before K7 (5a36b057, with K5-2 and K5-4); the test renders the same with the head's code and
+// compares byte for byte.
 // The scenario is invented data only.
 
 const TEAMS = [

@@ -204,6 +204,30 @@ test("D4. the band: multi-day events, cards without a time, then chips; more tha
   assert.equal(more.dataset.date, "2026-10-14");
 });
 
+test("D4b. K5-4's GPS mark is the band's last entry and counts toward its 3", async () => {
+  const gps = await import("../central-calendar-gps-review.js");
+  const cal = k7State({ view: "week", mode: "grid" });
+  // Thursday gets one more card without a time: the camp's day, that card and the RPE chip fill its 3.
+  const thu = cal.data.days.find((d) => d.date === "2026-10-15");
+  thu.items.push({ ...thu.items[0], key: "planned:p8", kind: "planned", title: "Spare", startTime: null, endTime: null, slot: null, span: { from: "2026-10-15", to: "2026-10-15" } });
+  const waiting = (day) => ({ day, chips: ["ready"], counts: { needs: 0, ready: 2, imported: 0, out: 0 } });
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ from: cal.data.from, to: cal.data.to, days: [waiting("2026-10-14"), waiting("2026-10-15")], truncated: false }) });
+  state.currentUser = { id: "coach-1" };
+  state.centralCalendar = cal;
+  gps.clearGpsReview();
+  try {
+    await gps.ensureGpsReview(cal, () => {});
+    const cells = [...draw(cal).querySelectorAll(".cc-timegrid-untimed")];
+    const entries = (cell) => [...cell.querySelectorAll("[data-key], .cc-daymark, .cc-tg-more")].map((el) => el.dataset.key || (el.classList.contains("cc-daymark") ? "mark" : el.textContent));
+    // Wednesday: the camp's day, the slot-only training, then the mark, last.
+    assert.deepEqual(entries(cells[2]), ["event:camp:2", "planned:p1", "mark"]);
+    // Thursday: three entries before it, so the mark is the fourth and goes into "+1 more".
+    assert.deepEqual(entries(cells[3]), ["event:camp:3", "planned:p8", "external:x1:d", "+1 more"]);
+  } finally {
+    gps.clearGpsReview();
+  }
+});
+
 test("D5. the Day time grid only on wide with the switch on Time grid; six columns before '+N'", () => {
   const cal = k7State({ view: "day", mode: "grid" });
   cal.anchor = "2026-10-13";

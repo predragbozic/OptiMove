@@ -321,7 +321,8 @@ test("11. a failed event-time read never fails the plan: GET /api/plans/:planId/
 });
 
 test("12. linkedSessionTimes on a query that throws returns the rows unchanged and logs one line with no data", async () => {
-  const rows = [{ plan_id: crypto.randomUUID(), athlete_uuid: crypto.randomUUID(), date: DAY, am_pm: "AM", bta: "T", session_order: 1, session_time: null, session_name: "Secret name" }];
+  // A row as plans.v_weekly_plan_items gives it (plan_session_id included: the link identity guard reads it).
+  const rows = [{ plan_id: crypto.randomUUID(), plan_session_id: crypto.randomUUID(), athlete_uuid: crypto.randomUUID(), date: DAY, am_pm: "AM", bta: "T", session_order: 1, session_time: null, session_name: "Secret name" }];
   const before = JSON.stringify(rows);
   const warnings = [];
   const originalWarn = console.warn;

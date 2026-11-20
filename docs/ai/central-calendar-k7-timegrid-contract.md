@@ -11,7 +11,7 @@ to uskladi kako bi profi kalendar to prikazivao". So: no mockups; the grid behav
 
 **Tier:** ordinary (frontend only, a screen, no access change). Reviews: `code-reviewer`, `mobile-qa`,
 `ux-design-reviewer` in one round; a real browser at 1280 and 1024 px with overlapping cards; the Frontend PR gate.
-A pairwise `git merge-tree` against B's K5-4 branch (`claude/central-calendar-k5-4`) before the freeze.
+K5-4 merged first (#695): the build merges `main` and places its mark (section 9).
 
 ## 1. Facts before K7 (file:line on `de16eccf`)
 
@@ -37,8 +37,9 @@ A pairwise `git merge-tree` against B's K5-4 branch (`claude/central-calendar-k5
   `:84`), about a third of a card high. In the time grid a chip sits in its hour's cell like a card, and a chip with no
   time in the No set time row (`renderDayItemHtml` in `:809` and `:815`; `docs/ai/central-calendar-k5-12-contract.md`
   2.4).
-- **K5-4** (B's branch, not merged) draws a day **mark** for GPS sessions waiting; "in the wide time grid it sits in
-  the No set time row: it has no hour" (`docs/ai/central-calendar-k5-4-contract.md` 2.1).
+- **K5-4** (#695, merged after these facts were taken, at `5a36b057`) draws a day **mark** for GPS sessions waiting;
+  "in the wide time grid it sits in the No set time row: it has no hour" (`docs/ai/central-calendar-k5-4-contract.md`
+  2.1).
 
 ## 2. The layout rule
 
@@ -219,8 +220,9 @@ a "now" line; spanning multi-day bars; dragging to move or resize.
 - **"+N more" opens the Day list even with the switch on Time grid:** the button carries `data-day-list="1"`, which
   sets `cal.dayList`; the Day view then draws its list and the switch shows List, until the next view, day or mode
   change. Without it, the Day time grid's own "+N more" would open itself.
-- **K5-4's mark** is not on `main` yet, so the band has no mark here; K5-4, merging second, puts its mark last in the
-  band (2.5).
+- **K5-4's mark** (#695) merged first, so K7 adapted (2.5): the mark is the band's last entry and counts toward its
+  3 (a fourth entry goes into the band's "+N more", and the Day list shows the mark).
 - **Unchanged layouts:** `frontend/tests/support/central-calendar-k7-unchanged.json` is the HTML of 15 cases (phone and
-  medium in every view and mode, the wide week as a List, the wide Month) rendered on `de16eccf` before K7, from the
-  fixed answer of `central-calendar-k7-scenario.mjs`; the suite compares the head's HTML with it byte for byte.
+  medium in every view and mode, the wide week as a List, the wide Month) rendered on `5a36b057` (main with K5-2 and
+  K5-4) before K7, from the fixed answer of `central-calendar-k7-scenario.mjs`; the suite compares the head's HTML with
+  it byte for byte.

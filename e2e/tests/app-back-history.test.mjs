@@ -87,7 +87,9 @@ async function showDay(page) {
 // A card of DAY, opened (its panel drawn).
 async function openCard(page, filter) {
   const card = page.locator(`[data-action="central-calendar-open-item"][data-date="${DAY}"]`, filter).first();
-  await card.scrollIntoViewIfNeeded();
+  // The GPS marks' read (K5-4) can land and repaint the week between finding the card and scrolling to it; the click
+  // re-finds a replaced card by itself, the scroll does not, so it is tried once more.
+  await card.scrollIntoViewIfNeeded().catch(() => card.scrollIntoViewIfNeeded());
   await card.click();
   await page.waitForSelector('[data-action="central-calendar-close-panel"]', { timeout: 20_000 });
 }
