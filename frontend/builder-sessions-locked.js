@@ -23,6 +23,11 @@ export function sessionsLockedDayLabel(day) {
 }
 const whereOf = (session) => [sessionsLockedDayLabel(session.day), session.amPm].filter(Boolean).join(" · ");
 const countLine = (n, what) => (n === 1 ? `This session can't be ${what}:` : `${n} sessions can't be ${what}:`);
+// "removed" or "moved" when every row is that kind; "removed or moved" for a mix.
+function headingVerb(sessions) {
+  const kinds = new Set(sessions.map((s) => (s.change === "moved" ? "moved" : "removed")));
+  return kinds.size === 1 ? [...kinds][0] : "removed or moved";
+}
 const discardButton = `<button type="button" class="plain-button" data-action="builder-discard-current-draft">Discard changes</button>`;
 
 // The way out for one session the draft removes or moves.
@@ -40,9 +45,10 @@ function wayOutHtml(session) {
   }
   const target = { amPm: session.amPm, bta: session.bta, name: session.name };
   const value = builderSessionEvent(session.day, target);
+  const orLine = `<p class="builder-sessions-locked-why">Or: ${back.charAt(0).toLowerCase()}${back.slice(1)}</p>${moved ? "" : `<div class="builder-sessions-locked-actions">${discardButton}</div>`}`;
   if (value === "other") {
     return `<p class="builder-sessions-locked-why">Linked to an event you can't change. Ask whoever manages that event (usually your club's admin) to remove the link, then save again.</p>
-      <p class="builder-sessions-locked-why">Or: ${back.charAt(0).toLowerCase()}${back.slice(1)}</p>`;
+      ${orLine}`;
   }
   const event = value ? builderDayEvents(session.day).find((e) => String(e.eventId) === String(value)) : null;
   const named = event?.title ? `the event “${escapeHtml(event.title)}”` : "an event";
@@ -52,7 +58,7 @@ function wayOutHtml(session) {
   return `<p class="builder-sessions-locked-why">Linked to ${named} in the calendar. To keep this change, first remove the link to the event, then save again.</p>
     <div class="builder-sessions-locked-actions">${open}</div>
     <p class="builder-sessions-locked-why muted">${ROUND_TRIP}</p>
-    <p class="builder-sessions-locked-why">Or: ${back.charAt(0).toLowerCase()}${back.slice(1)}</p>`;
+    ${orLine}`;
 }
 
 export function renderBuilderSessionsLockedHtml() {
@@ -64,7 +70,7 @@ export function renderBuilderSessionsLockedHtml() {
     return `<li class="builder-sessions-locked-item"><p><strong>${escapeHtml(session.name || "Session")}</strong> · ${escapeHtml(whereOf(session))} <span class="muted">(${verb} in this draft)</span></p>${wayOutHtml(session)}</li>`;
   }).join("");
   return `<section class="builder-sessions-locked" data-builder-sessions-locked tabindex="-1" aria-labelledby="builder-sessions-locked-title">
-      <p id="builder-sessions-locked-title" role="alert"><strong>Not saved.</strong> ${countLine(sessions.length, "removed or moved")}</p>
+      <p id="builder-sessions-locked-title" role="alert"><strong>Not saved.</strong> ${countLine(sessions.length, headingVerb(sessions))}</p>
       <ul class="builder-sessions-locked-list">${rows}</ul>
       <p>Your changes are still here.</p>
       <div class="builder-sessions-locked-actions"><button type="button" class="text-action builder-sessions-locked-close" data-action="builder-sessions-locked-close">Close</button></div>
@@ -95,5 +101,9 @@ export function planSessionsLockedText(sessions) {
       : "it is linked to an event in the calendar - first remove the link to the event, then delete again";
     return `• ${session.name || "Session"} · ${whereOf(session)}: ${why}.`;
   });
-  return [`This plan can't be deleted. ${list.length === 1 ? "A session" : "Sessions"} with entered results or a link to an event can't be removed:`, ...list].join("\n");
+  return [
+    `This plan can't be deleted. ${list.length === 1 ? "A session" : "Sessions"} with entered results or a link to an event can't be removed:`,
+    ...list,
+    "The plan stays as it is. You can still edit it.",
+  ].join("\n");
 }

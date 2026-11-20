@@ -422,6 +422,11 @@ test("9. a live link on the session's slot that names no session (logical_sessio
   const draft = await reopen(s.coach.cookie, a);
   await removeIn(s.coach.cookie, draft, "Main");
   await assertLocked(s, plans, draft, { name: "Main", day: WEEK, change: "removed", reasons: ["linked_to_event"] });
+  // The same link stops deleting the plan.
+  ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const refused = await api(`/api/builder/plans/${a}`, { method: "DELETE", cookie: s.coach.cookie });
+  assert.equal(refused.status, 409, refused.text);
+  assert.deepEqual(refused.body.sessions.map((x) => [x.name, x.reasons]), [["Main", ["linked_to_event"]]]);
 });
 
 // A coach of another team, who may not edit these plans.
@@ -493,4 +498,35 @@ test("11. deleting a published plan with a session that has results or a live ev
   ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
   assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [draft.plan.id]))[0].n, 0);
   assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [a]))[0].n, 1, "the published plan stays");
+});
+
+test("12. a session whose only record is a SUGGESTED activity link counts as having results: the Save refuses removing and moving it, and the plan is not deleted", async () => {
+  const s = await squad("suggested");
+  const plans = await publishedBatch(s);
+  const [a] = plans;
+  const main = byName(await treeOf(a), "Main");
+  // An activity recorded for Wednesday (its participant's confirmed link names Wednesday), and an automatic SUGGESTED
+  // link of that participant to Main: nothing confirmed names Main.
+  const wed = byName(await treeOf(a), "Wednesday");
+  const made = await api("/api/training-activity/materialize", { method: "POST", cookie: s.coach.cookie, body: { requestKey: uid(), planLogicalSessionId: String(wed.logical_session_id), athleteId: s.athletes[0].athleteId } });
+  assert.equal(made.status, 201, made.text);
+  await q(`insert into training.activity_participant_session_links (activity_participant_id, athlete_id, logical_session_id, link_method, link_status, confidence)
+           values ($1, $2, $3, 'automatic', 'suggested', 0.5)`, [made.body.participantId, s.athletes[0].athleteId, main.logical_session_id]);
+  const links = await q(`select link_status from training.activity_participant_session_links where logical_session_id = $1 and link_status in ('confirmed', 'suggested')`, [main.logical_session_id]);
+  assert.deepEqual(links.map((l) => l.link_status), ["suggested"], "the only record is a suggested link");
+  assert.equal((await q(`select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`, [main.logical_session_id]))[0].n, 0, "no RPE");
+  const draft = await reopen(s.coach.cookie, a);
+  await removeIn(s.coach.cookie, draft, "Main");
+  await assertLocked(s, plans, draft, { name: "Main", day: WEEK, change: "removed", reasons: ["has_results"] });
+  ok(await api(`/api/builder/plans/${draft.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const draft2 = await reopen(s.coach.cookie, a);
+  await moveToPm(s.coach.cookie, draft2, "Main");
+  await assertLocked(s, plans, draft2, { name: "Main", day: WEEK, change: "moved", reasons: ["has_results"] });
+  ok(await api(`/api/builder/plans/${draft2.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  const before = await digestOf(plans);
+  const refused = await api(`/api/builder/plans/${a}`, { method: "DELETE", cookie: s.coach.cookie });
+  assert.equal(refused.status, 409, refused.text);
+  assert.equal(refused.body.code, "plan_sessions_locked");
+  assert.deepEqual(refused.body.sessions.map((x) => [x.name, x.reasons]).sort(), [["Main", ["has_results"]], ["Wednesday", ["has_results"]]]);
+  assert.equal(await digestOf(plans), before, "nothing deleted");
 });

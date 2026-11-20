@@ -82,7 +82,7 @@ test("1. results on a removed session: refused, nothing else sent, the draft sta
   assert.equal(state.builder.draft.plan.id, "A-edit", "still in the draft");
   assert.equal(save.disabled, false, "Save can be pressed again");
   assert.equal(save.innerHTML, "<svg></svg>");
-  assert.match(text(), /Not saved\. This session can't be removed or moved:/);
+  assert.match(text(), /Not saved\. This session can't be removed:/);
   assert.match(text(), /Main · Mon 07\.12 · AM \(removed in this draft\)/);
   assert.match(text(), /Athletes have already entered results for it \(for example RPE\), so it can't be removed\. You can still change its content\./);
   assert.match(text(), /To keep it, discard your changes, then make your other edits again\./);
@@ -109,6 +109,8 @@ test("3. a link to an event the coach manages: first remove the link, Open the e
   assert.match(text(), /Linked to the event “Team training” in the calendar\. To keep this change, first remove the link to the event, then save again\./);
   assert.match(text(), /Your draft is kept\. After you remove the link, come back to Builder › Continue where you left off, and save again\./);
   assert.match(text(), /Or: move it back to Mon 07\.12 · AM, or discard your changes\./);
+  assert.match(text(), /Not saved\. This session can't be moved:/);
+  assert.equal(panel().querySelector('[data-action="builder-discard-current-draft"]'), null, "a move is undone by moving back");
   const open = panel().querySelector('[data-action="builder-events-open"]');
   assert.equal(open.textContent, "Open the event");
   assert.ok(open.classList.contains("builder-sessions-locked-primary"));
@@ -133,6 +135,8 @@ test("5. the event is not in the week the Builder read: Open the calendar on tha
   assert.equal(open.textContent, "Open the calendar");
   assert.equal(open.dataset.date, MONDAY);
   assert.equal(open.dataset.key, undefined);
+  assert.match(text(), /Or: to keep it, discard your changes, then make your other edits again\./);
+  assert.ok(panel().querySelector('[data-action="builder-discard-current-draft"]'), "a removed session's discard is a button");
 });
 
 test("6. both reasons and two sessions: a count, results win over the link, names are escaped", async () => {
@@ -183,4 +187,5 @@ test("9. deleting a published plan refused (409 plan_sessions_locked): one sente
   assert.match(alerts[0], /^This plan can't be deleted\./);
   assert.match(alerts[0], /• Main · Mon 07\.12 · AM: it is linked to an event in the calendar - first remove the link to the event, then delete again\./);
   assert.match(alerts[0], /• Gym · Wed 09\.12 · PM: athletes have already entered results for it\./);
+  assert.match(alerts[0], /The plan stays as it is\. You can still edit it\.$/);
 });
