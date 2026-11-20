@@ -11,8 +11,12 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { addDays, newKey, startCalendarApp } from "./support/calendar-fixture.mjs";
+import { utcDateOf, waitOutUtcMidnight } from "./support/utc-day-guard.mjs";
 
-const TODAY = new Date().toISOString().slice(0, 10);
+// The server reads the real clock (all in UTC here), so this file must not run across UTC midnight: TODAY would fall
+// a day behind the server's, and the RPE schedule's assignments would not be made. It starts only once no midnight is
+// within reach (utc-day-guard.mjs), and the after() tripwire names a crossing if a run still makes one.
+const TODAY = await waitOutUtcMidnight();
 // Every fixture lives on today: an RPE schedule's assignments are made only on their own day in the athlete's time
 // (training_load.materialize_external_assignments_for_occurrence, v81), and the RPE cards are built from them.
 const DAY = TODAY;
@@ -41,6 +45,7 @@ before(async () => {
 
 after(async () => {
   if (env) await env.stop();
+  assert.equal(utcDateOf(Date.now()), TODAY, "this run crossed UTC midnight; failures in it are not real (utc-day-guard.mjs)");
 });
 
 // ---------------------------------------------------------------------------
