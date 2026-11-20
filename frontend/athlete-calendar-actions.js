@@ -69,6 +69,13 @@ export async function handleAthleteCalendarAction(action, handlers = {}) {
     await handlers.back?.();
     return true;
   }
+  // Signed out (401): to the login, the app's entry at "/" (a deliberate navigation, as signing out is).
+  if (type === "athlete-calendar-sign-in") {
+    state.deliberateNavigation = true;
+    if (handlers.signIn) handlers.signIn();
+    else globalThis.location?.assign?.("/");
+    return true;
+  }
   if (type === "athlete-calendar-retry") {
     await Promise.all([loadAthleteCalendar({ render, forceRefresh: true }), handlers.loadQuestions?.()]);
     render?.();

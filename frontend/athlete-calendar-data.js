@@ -283,8 +283,8 @@ export function athleteCalendarDays(answer, { from, questions = [], today = loca
 
 function describeError(error) {
   const status = Number(error?.status) || 0;
-  if (status === 401) return { message: "Please sign in again.", canRetry: false };
-  return { message: "The calendar could not be read.", canRetry: true };
+  if (status === 401) return { message: "Please sign in again.", canRetry: false, signedOut: true };
+  return { message: "The calendar could not be read.", canRetry: true, signedOut: false };
 }
 
 // Reads the week of `weekStart` (her local today by default). `render` paints at every change of what is shown.
@@ -321,15 +321,17 @@ export async function loadAthleteCalendar({ render, weekStart, forceRefresh = fa
     },
     applyData: (data) => {
       if (!current()) return;
-      Object.assign(slice, { status: "ready", data, error: "" });
+      Object.assign(slice, { status: "ready", data, error: "", signedOut: false });
       render?.();
     },
     applyError: (error) => {
       if (!current()) return;
       const described = describeError(error);
       // The week already on screen stays; only a week with nothing to show gets the error.
-      if (slice.data) slice.notice = `${described.message} Showing the last loaded calendar.`;
-      else Object.assign(slice, { status: "error", error: described.message, canRetry: described.canRetry });
+      // Signed out offers Sign in in both views: the empty week's error and the loaded week's notice.
+      // The loaded week stays on screen (status back to ready: showLoading set it to loading).
+      if (slice.data) Object.assign(slice, { status: "ready", notice: `${described.message} Showing the last loaded calendar.`, signedOut: described.signedOut });
+      else Object.assign(slice, { status: "error", error: described.message, canRetry: described.canRetry, signedOut: described.signedOut });
       render?.();
     },
     getCurrentContextKey: () => (slice === mine ? athleteCalendarContextKey(slice.weekStart, localDateIso()) : ""),
