@@ -6,6 +6,8 @@ import { renderCentralCalendarEventPlaceHtml } from "./central-calendar-event-de
 import { centralCalendarItemColorIndex, centralCalendarItemIconKey } from "./central-calendar-view.js";
 import { renderIconSvg } from "./icon-render.js";
 import { escapeAttr, escapeHtml, localDateIso, weekMondayIso } from "./utils.js";
+import { athleteCalendarAnswerFor } from "./athlete-calendar-answers.js";
+import { renderRpeAnswerLineHtml } from "./rpe-answer-change.js";
 
 // An event wears its type's colour (the calendar's palette); her own plan the plan colour.
 function stripeStyle(card) {
@@ -35,13 +37,21 @@ function buttonHtml(button, card) {
   return `<button type="button" class="plain-button ac-button${button.primary ? " cc-primary ac-button-primary" : ""}" ${data} aria-label="${escapeAttr(`${button.label}: ${card.title}`)}">${escapeHtml(button.label)}</button>`;
 }
 
-// K4b's room (contract 3): the "your answer" row, the card's last block; K4a writes only "RPE given" (no value).
-function answerHtml(card) {
+// K4b's room (contract 3): the "your answer" row, the card's last block. K4a writes "RPE given" (no value). K4b, on her
+// own "RPE request" card only (Q-A: the card that holds the answer), writes "Your RPE: 7 · Change" while the question is
+// open and "Your RPE: 7 · Answers closed at 22:00." once it closed - only from a row her own weekly read returned for
+// that assignment (athlete-calendar-answers.js); without one, K4a's "RPE given" stays.
+function answerHtml(card, weekStart) {
   if (card.answer !== "rpe-given") return `<div class="ac-answer" data-ac-answer hidden></div>`;
+  const row = card.kind === "external" && !card.cancelled ? athleteCalendarAnswerFor(card.assignmentId, weekStart) : null;
+  const line = row ? renderRpeAnswerLineHtml({ ...row, sessionName: card.title || row.sessionName }, {
+    action: "athlete-calendar-rpe-change", extra: ` data-date="${escapeAttr(card.date)}" data-title="${escapeAttr(card.title || "")}"`,
+  }) : "";
+  if (line) return `<div class="ac-answer ac-answer-rpe" data-ac-answer>${line}</div>`;
   return `<div class="ac-answer" data-ac-answer><span class="ac-answer-mark" aria-hidden="true">✓</span> RPE given</div>`;
 }
 
-export function renderAthleteCalendarCardHtml(card) {
+export function renderAthleteCalendarCardHtml(card, { weekStart = "" } = {}) {
   const top = [
     iconHtml(card),
     card.when ? `<span class="ac-card-when">${escapeHtml(card.when)}</span>` : "",
@@ -56,7 +66,7 @@ export function renderAthleteCalendarCardHtml(card) {
         <p class="ac-card-title">${escapeHtml(card.title || "")}</p>
         ${place}
         ${sessionsHtml(card)}
-        ${answerHtml(card)}
+        ${answerHtml(card, weekStart)}
         ${card.buttons.length ? `<div class="ac-card-actions">${card.buttons.map((button) => buttonHtml(button, card)).join("")}</div>` : ""}
       </div>
     </article>`;
@@ -98,7 +108,7 @@ function bodyHtml(slice, days, today) {
   }
   return `<div class="ac-days">${days.map((day) => `<section class="ac-day" data-ac-day="${escapeAttr(day.date)}" aria-labelledby="ac-day-${escapeAttr(day.date)}">
       <h4 class="ac-day-label" id="ac-day-${escapeAttr(day.date)}"><b>${escapeHtml(day.label)}</b>${day.today ? " · today" : ""}</h4>
-      ${day.cards.map(renderAthleteCalendarCardHtml).join("")}
+      ${day.cards.map((card) => renderAthleteCalendarCardHtml(card, { weekStart: slice.weekStart })).join("")}
     </section>`).join("")}</div>`;
 }
 
@@ -108,7 +118,7 @@ export function renderAthleteCalendarHtml(slice, { questions = [], today = local
   return `<section class="athlete-calendar" aria-label="Calendar">
       ${headHtml(slice, today)}
       ${stripHtml(slice, days, today)}
-      ${slice?.notice ? (slice.notice === "Your answer was saved."
+      ${slice?.notice ? (slice.notice === "Your answer was saved." || slice.notice === "Your answer was changed."
         ? `<p class="ac-notice is-saved" role="status"><span aria-hidden="true">✓</span> ${escapeHtml(slice.notice)}</p>`
         : `<p class="ac-notice" role="status">${escapeHtml(slice.notice)}</p>`) : ""}
       ${bodyHtml(slice, days, today)}

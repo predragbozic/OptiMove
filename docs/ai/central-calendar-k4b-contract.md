@@ -406,6 +406,34 @@ value (ADR-004) with no mark. **Q4** asks whether a mark is wanted there later.
 - One request at a time; a double tap sends one. The planned (Builder) rows never show *Change*.
 - **Coach:** the event panel's answered athlete reads "Changed 21:40" (4.3).
 
+### 6.1 As built on the athlete's Calendar (K4b-UI, 2026-11-20; the stream manager's decisions of that day)
+
+Departures from the text above and from mockup 05 (`docs/design/calendar-k4/05-k4b-change-rpe.html`), all accepted by
+the stream manager before the code:
+
+- **Q-A: the line is on her own "RPE request" card (`kind: "external"`), not on the event card.** The athlete's
+  Calendar never folds an event's RPE question into the event card (`backend/src/calendarQuery.js:1287`, the fold runs
+  only when `ctx.type !== "athlete"`), and the athlete's card allowlist (D21) carries no answer value. The event card
+  keeps K4a's behaviour. No backend fold was added.
+- **The data: her own weekly read, not a wider `/api/calendar` card (section 4.2).** For the shown week the Calendar
+  also reads `GET /api/training-load/weekly` (her athlete-workspace read; no new route, no new field) and keeps its
+  rated `scheduled_external` rows by `externalAssignmentId` (`frontend/athlete-calendar-answers.js`). A card gets the
+  line, and Change opens the form, only from a row that read returned for that assignment while it says
+  `changeable` - never from an id in the page. A failed read hides only the line (the card keeps "✓ RPE given"); an
+  older read's answer is dropped (a generation counter); a workspace switch or sign-out clears it. The calendar's own
+  read never waits for it.
+- **The lines:** open: "Your RPE: 7" · *Change* · "You can change it until 22:00."; closed: "Your RPE: 7 · Answers
+  closed at 22:00."; neither (a stopped question) or no row: "✓ RPE given".
+- **The form's heading on every entry point** (Home, the weekly sheet and the Calendar share the form): "Change your
+  RPE · <title>", the eyebrow removed; the line under it "<day> · Your answer: 7, sent at 12:04." (the Calendar passes
+  its day label, "Friday 20.11").
+- **After the form:** a confirmed change reads the week again with "Your answer was changed."; `answer_locked` reads
+  it again once without a sentence (the form said it), so the card shows "Answers closed at"; a change closed while
+  its result was not confirmed reads it again once without a sentence, so the card never keeps the value from before
+  the request.
+- **Phones and touch tablets:** the form's own buttons are 44 px targets (`(max-width: 760px), (pointer: coarse)`,
+  the query of its 16 px fields).
+
 ## 7. Test plan
 
 Backend, disposable databases (T1 runner, `--kind disposable`), new suite

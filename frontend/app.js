@@ -97,7 +97,7 @@ import { renderMyTrainingHtml } from "./my-training-view.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
 import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
-import { athleteCalendarPlace, athleteCalendarReturnFor, athleteCalendarState, claimAthleteCalendarReturn, resetAthleteCalendar, restoreAthleteCalendarPlace, setAthleteCalendarReturn } from "./athlete-calendar-data.js";
+import { athleteCalendarDayLabel, athleteCalendarPlace, athleteCalendarReturnFor, athleteCalendarState, claimAthleteCalendarReturn, resetAthleteCalendar, restoreAthleteCalendarPlace, setAthleteCalendarReturn } from "./athlete-calendar-data.js";
 import { athleteCalendarAnswered, enterAthleteCalendar, handleAthleteCalendarAction } from "./athlete-calendar-actions.js";
 import { renderAthleteCalendarBackBarHtml, renderAthleteCalendarHtml } from "./athlete-calendar-view.js";
 import { loadAthleteQuestions, resetAthleteQuestions } from "./athlete-questions-data.js";
@@ -111,7 +111,7 @@ import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { handleTimezoneInput } from "./gpexe-timezone-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, openRpeFormOnDate, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, openRpeChangeFormFromRow, openRpeFormOnDate, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteHomeWeek, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
 import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import "./training-load-analysis-echarts.js";
@@ -2685,13 +2685,29 @@ async function loadAthleteCalendarTab({ weekStart = "" } = {}) {
 // again once. Only a form the Calendar opened counts - one saved on Home and left open does not.
 const athleteCalendarOpenedForms = new WeakSet();
 const athleteCalendarSavedForms = new WeakSet();
+let athleteCalendarLastForm = null; // the Calendar-opened form drawn last (K4b: an unconfirmed change closed)
 function renderAthleteCalendar() {
   if (state.activeTab !== "athlete-calendar") return;
   const form = state.trainingLoad.rpeForm;
   els.content.innerHTML = `${renderAthleteCalendarHtml(athleteCalendarState(), { questions: state.athleteQuestions?.rows || [] })}${renderTrainingLoadAthleteOverlaysHtml()}`;
   if (form?.savedFeedback && athleteCalendarOpenedForms.has(form) && !athleteCalendarSavedForms.has(form)) {
     athleteCalendarSavedForms.add(form);
-    detached(athleteCalendarAnswered({ render: renderAthleteCalendar, loadQuestions: () => loadAthleteQuestions() }), "athlete-calendar-answered");
+    const notice = form.mode === "change" ? "Your answer was changed." : "Your answer was saved.";
+    detached(athleteCalendarAnswered({ render: renderAthleteCalendar, loadQuestions: () => loadAthleteQuestions(), notice }), "athlete-calendar-answered");
+  }
+  // K4b: a change refused as closed (answer_locked) reads the week again once, with no sentence (the form said it),
+  // so the card shows "Answers closed at …".
+  if (form?.mode === "change" && form.locked && athleteCalendarOpenedForms.has(form) && !athleteCalendarSavedForms.has(form)) {
+    athleteCalendarSavedForms.add(form);
+    detached(athleteCalendarAnswered({ render: renderAthleteCalendar, loadQuestions: () => loadAthleteQuestions(), notice: "" }), "athlete-calendar-locked");
+  }
+  // K4b: a change form the Calendar opened and closed while its result was not confirmed (the server may have written
+  // it): the week is read again once, so the card never keeps a value read before the request.
+  const left = athleteCalendarLastForm;
+  athleteCalendarLastForm = form && athleteCalendarOpenedForms.has(form) ? form : null;
+  if (left && left !== form && left.mode === "change" && left.unconfirmed && !athleteCalendarSavedForms.has(left)) {
+    athleteCalendarSavedForms.add(left);
+    detached(athleteCalendarAnswered({ render: renderAthleteCalendar, loadQuestions: () => loadAthleteQuestions(), notice: "" }), "athlete-calendar-unconfirmed");
   }
 }
 
@@ -2718,6 +2734,11 @@ function athleteCalendarHandlers() {
     },
     rateSession: rateById,
     rateAssignment: rateById,
+    // K4b: Change on her own RPE request card opens the change form from her own weekly row (athlete-calendar-actions.js).
+    changeAnswer: (row, { date, title } = {}) => {
+      if (openRpeChangeFormFromRow(row, { date, title, dateLabel: date ? athleteCalendarDayLabel(date) : "" })) opened();
+      renderAthleteCalendar();
+    },
     openTest: async (assignmentId) => {
       pushAppHistory();
       await openTestAssignment(assignmentId);

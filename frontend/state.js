@@ -694,6 +694,8 @@ export const emptyRpeForm = (overrides = {}) => ({
   requestKey: "",
   unconfirmed: false,
   locked: false,
+  // The day as the screen that opened the form names it ("Monday 12.10" on the Calendar); else the date is formatted.
+  dateLabel: "",
   ...overrides,
 });
 

@@ -392,9 +392,8 @@ function renderRpeChangeFormHtml(form, livePreview) {
       <section class="panel training-load-rpe-panel" role="dialog" aria-modal="true" aria-label="Change your RPE">
         <div class="training-load-rpe-head">
           <div>
-            <p class="eyebrow">Change your RPE</p>
-            <h3>${escapeHtml(sessionLabel(form))}${renderOutsidePlanTagHtml(form)}</h3>
-            <p class="muted">${form.date ? `${escapeHtml(formatDate(form.date))} · ` : ""}Your answer: ${escapeHtml(String(form.original?.rpe ?? ""))}${sentAt ? `, sent at ${escapeHtml(sentAt)}` : ""}.</p>
+            <h3>${escapeHtml(`Change your RPE · ${sessionLabel(form)}`)}${renderOutsidePlanTagHtml(form)}</h3>
+            <p class="muted">${form.dateLabel ? `${escapeHtml(form.dateLabel)} · ` : form.date ? `${escapeHtml(formatDate(form.date))} · ` : ""}Your answer: ${escapeHtml(String(form.original?.rpe ?? ""))}${sentAt ? `, sent at ${escapeHtml(sentAt)}` : ""}.</p>
           </div>
           <button class="plain-button icon-button" type="button" data-action="training-load-close-rpe-form" aria-label="Cancel">&times;</button>
         </div>
