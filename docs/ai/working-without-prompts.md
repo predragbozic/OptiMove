@@ -58,6 +58,19 @@ sessions will have other proportions; the causes are the same.
    default permission flow and these rules cannot help. Project allow rules also apply only after
    the folder is trusted.
 
+9. **The local test database: start it, and do not stop it unless you must.** In a cloud
+   container the session runs as root, PostgreSQL refuses to run as root, and the session's
+   temporary folder is readable only by root, so a test cluster cannot live there. The local
+   database is the system cluster: `pg_ctlcluster 16 main start` and `pg_ctlcluster 16 main
+   status` run without a question; stopping or restarting it (`pg_ctlcluster … stop`,
+   `pg_ctl … stop`) asks, because nothing on the command line says it is a test cluster (on
+   another machine the same cluster may hold a persistent database). The container is
+   temporary: leave the database running. Use disposable `optimove_tests_*` databases inside
+   it, never `/var/lib` or `/var/tmp` paths of your own. Where a cluster can live in your
+   temporary folder (not root, a readable folder), `initdb -D <scratchpad>/pg`, then
+   `pg_ctl -D <scratchpad>/pg -o "-p 5544 -k <scratchpad>/pg" start` and `… stop` run without a
+   question.
+
 ## What always asks or is denied (by design)
 
 A push to `main`/`master`, any force push (`-f`, `--force`, `--force-with-lease`, `+branch`, and

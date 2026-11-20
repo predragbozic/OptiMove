@@ -914,6 +914,29 @@ test("Z4 (v80 step A): an event column shows the team's event setting; a variabl
   assert.match(odd.textContent, /<img src=x onerror=alert\(1\)>/);
 });
 
+test("Z4b (v80 step C2, the Independent's LOW-1 on #690): a variable with a condition is a drop target only for its matching columns (data-mb-only-fields); one whose column waits for the confirmation names it", async () => {
+  asUser("platform", null);
+  const b = platformBoard();
+  b.columns.push({ ...b.columns[0], fieldId: "f-acc", key: "details.players.acceleration_events", label: "Acceleration events per athlete", placeable: true, reason: null });
+  const condition = { kind: "event_threshold", operator: ">=", value: "2.5", durationSeconds: "0.3", unit: "m/s2" };
+  b.variables.push({ id: "v-acc", ownerScope: "system", key: "accelerations", label: "Accelerations", versionId: "vv-acc", unit: "count",
+    placeable: true, condition, matchingFieldIds: ["f-acc"], waitingFieldIds: [], filledByFieldIds: [] });
+  b.variables.push({ id: "v-dec", ownerScope: "system", key: "decelerations", label: "Decelerations", versionId: "vv-dec", unit: "count",
+    placeable: false, condition: { ...condition, operator: "<=", value: "-2.5" }, matchingFieldIds: [], waitingFieldIds: ["f-acc"], filledByFieldIds: [] });
+  platformWorld(b);
+  state.trainingLoad.board = { ...data.emptyBoardState(), teamId: TEAM };
+  await actions.loadBoardSection(render);
+  const acc = content.querySelector('[data-mb-drop-variable][data-variable-id="v-acc"]');
+  assert.ok(acc, "a matching variable is a drop target");
+  assert.equal(acc.getAttribute("data-mb-only-fields"), "f-acc");
+  // A variable without a condition takes every column: no filter attribute.
+  const free = [...content.querySelectorAll("[data-mb-drop-variable]")].find((li) => li.dataset.variableId !== "v-acc");
+  if (free) assert.equal(free.hasAttribute("data-mb-only-fields"), false);
+  const dec = [...content.querySelectorAll(".mb-slot")].find((li) => li.textContent.includes("Decelerations"));
+  assert.match(dec.textContent.replace(/\s+/g, " "), /Acceleration events per athlete has this setting and waits for GPEXE's setting to be confirmed in Source fields\./);
+  assert.equal(dec.hasAttribute("data-mb-drop-variable"), false);
+});
+
 test("Z5 (v80 step A, the independent review's UNKNOWN): a variable with a condition that a column already fills shows that it is on, not its condition", async () => {
   asUser("platform", null);
   const b = platformBoard();
