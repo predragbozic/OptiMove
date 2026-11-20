@@ -3,6 +3,7 @@ import { athleteQuestionHoldsAssignment } from "./athlete-questions-data.js";
 import { renderAthleteQuestionsCardHtml } from "./athlete-questions-view.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
+import { renderRpeAnswerChangeHomeHtml } from "./rpe-answer-change.js";
 import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadHomeCardHtml, renderTrainingLoadWeekButtonHtml } from "./training-load-view.js";
 import { renderMyTrainingHomeEntryHtml } from "./my-training-view.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, programInitials } from "./utils.js";
@@ -67,6 +68,7 @@ export function renderAthleteHomeHtml({ data, error }) {
       ${renderAthleteQuestionsCardHtml(state.athleteQuestions)}
       ${renderWellnessCard(wellness)}
       ${renderTrainingLoadHomeCardHtml(state.trainingLoad.athleteToday)}
+      ${renderRpeAnswerChangeHomeHtml(state.trainingLoad.athleteToday)}
       ${renderTodayCard(today)}
       ${renderWeekStrip(week)}
       ${renderAthleteHomeEventsHtml(state.athleteHomeEvents)}

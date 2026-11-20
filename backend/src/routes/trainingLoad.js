@@ -16,6 +16,7 @@ import {
 } from "../trainingLoadAccess.js";
 import { ensureCurrentExternalOccurrence, ensureCurrentExternalOccurrencesForAthlete, ensureCurrentExternalOccurrencesForCoach } from "../trainingLoadOccurrenceService.js";
 import { emitRealtimeEvent } from "../realtime.js";
+import { changeExternalRpe, NOT_FOUND as RPE_CHANGE_NOT_FOUND } from "../rpeAnswerChangeService.js";
 import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMaterialize.js";
 import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace, athleteOwnParticipationSql } from "../trainingActivityAccess.js";
 import { recordedByOf, recordedBySql } from "../trainingActivityResults.js";
@@ -136,6 +137,29 @@ function parseUuidListParam(raw) {
   return { ids, invalid: false };
 }
 
+// K4b (v83): whether the change function exists here (a database migrated
+// before v83 has no history table); cached once true.
+let rpeChangeInstalledCache = false;
+async function rpeChangeInstalled() {
+  if (rpeChangeInstalledCache) return true;
+  const ok = (await query(`select to_regprocedure('training_load.change_external_rpe(uuid,uuid,uuid,integer,integer,text,integer)') is not null as ok`)).rows[0].ok;
+  if (ok) rpeChangeInstalledCache = true;
+  return ok;
+}
+// The athlete's own external row: may the answer still be changed (a display
+// hint - training_load.change_external_rpe() decides), and its revision.
+function externalChangeColumnsSql(installed) {
+  return installed
+    ? `, o.status as occurrence_status, (now() between asg.opens_at and asg.closes_at) as in_window,
+       coalesce((select max(h.revision) from training_load.session_feedback_changes h where h.session_feedback_id = sf.id), 0) as revision`
+    : `, o.status as occurrence_status, false as in_window, 0 as revision`;
+}
+function externalChangeFields(row) {
+  const changeable = row.feedback_id != null && row.in_window === true && row.schedule_status === "active"
+    && row.occurrence_status !== "cancelled" && row.assignment_status === "completed";
+  return { changeable, revision: Number(row.revision ?? 0) };
+}
+
 function formatFeedback(row) {
   if (row.feedback_id == null && row.rpe == null) return null;
   return {
@@ -230,6 +254,7 @@ router.get("/athlete/today", async (req, res, next) => {
       `select asg.id as assignment_id, asg.opens_at, asg.closes_at, asg.status as assignment_status,
               s.id as schedule_id, s.event_name, s.status as schedule_status,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
+              ${externalChangeColumnsSql(await rpeChangeInstalled())}
        from training_load.external_assignments asg
        join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
        join training_load.external_schedules s on s.id = o.schedule_id
@@ -279,6 +304,8 @@ router.get("/athlete/today", async (req, res, next) => {
           // unrated row entirely, so any row reaching this branch is
           // actionable unless it's already rated.
           actionable: row.feedback_id == null,
+          // K4b: the athlete may still change her answer (Your RPE: 7 · Change).
+          ...externalChangeFields(row),
         })),
       ],
     });
@@ -1089,6 +1116,7 @@ router.get("/weekly", async (req, res, next) => {
     const ownershipMembershipCache = new Map();
 
     const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const athleteWeekly = workspace?.type === "athlete";
     if (workspace?.type === "athlete") {
       if (!req.authz.athleteId) return res.status(403).json({ error: "This account has no athlete profile." });
       params.push(req.authz.athleteId);
@@ -1213,6 +1241,7 @@ router.get("/weekly", async (req, res, next) => {
               s.id as schedule_id, s.event_name, s.status as schedule_status,
               a.id as athlete_id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               sf.id as feedback_id, sf.rpe, sf.duration_minutes, sf.srpe, sf.athlete_note, sf.submitted_at
+              ${athleteWeekly ? externalChangeColumnsSql(await rpeChangeInstalled()) : ""}
        from training_load.external_assignments asg
        join training_load.external_schedule_occurrences o on o.id = asg.occurrence_id
        join training_load.external_schedules s on s.id = o.schedule_id
@@ -1415,6 +1444,8 @@ router.get("/weekly", async (req, res, next) => {
         scheduleStatus: row.schedule_status,
         assignmentStatus: row.assignment_status,
         actionable: row.feedback_id == null && row.schedule_status === "active" && ["pending", "open", "in_progress"].includes(row.assignment_status),
+        // K4b: only on the athlete's own weekly overlay; a coach's rows are unchanged.
+        ...(athleteWeekly ? externalChangeFields(row) : {}),
         ownershipUnresolved: false,
         canResolveOwnership: false,
       });
@@ -2653,6 +2684,48 @@ router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) =>
     next(error);
   } finally {
     if (client) client.release();
+  }
+});
+
+// K4b (contract docs/ai/central-calendar-k4b-contract.md, migration v83): the
+// athlete changes their own external RPE answer (RPE, duration, note - her own
+// entries) while the question is open. Every decision is the sanctioned
+// function training_load.change_external_rpe(); a caller who is not an athlete,
+// a malformed id, another athlete's or a missing assignment all get the one
+// 404. The submit above keeps its contract: a different second answer through
+// it is still 409.
+router.post("/external-assignments/:assignmentId/rpe/change", async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const assignmentId = req.params.assignmentId;
+    if (!req.authz?.isAthlete || !UUID_PATTERN.test(assignmentId)) return res.status(404).json(RPE_CHANGE_NOT_FOUND);
+    const body = req.body || {};
+    const { rpe, durationMinutes, requestKey, expectedRevision } = body;
+    if (typeof rpe !== "number" || !Number.isInteger(rpe) || rpe < 0 || rpe > 10) {
+      return res.status(400).json({ error: "invalid", message: "RPE must be a whole number from 0 to 10." });
+    }
+    if (typeof durationMinutes !== "number" || !Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 600) {
+      return res.status(400).json({ error: "invalid", message: "Duration must be a whole number of minutes, from 1 to 600." });
+    }
+    if (body.note !== undefined && body.note !== null && typeof body.note !== "string") {
+      return res.status(400).json({ error: "invalid", message: "Note must be text." });
+    }
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+    if (note.length > 500) return res.status(400).json({ error: "invalid", message: "Note is too long (500 characters max)." });
+    if (typeof requestKey !== "string" || !UUID_PATTERN.test(requestKey)) {
+      return res.status(400).json({ error: "invalid", message: "requestKey must be a UUID." });
+    }
+    if (expectedRevision !== undefined && expectedRevision !== null
+        && (typeof expectedRevision !== "number" || !Number.isInteger(expectedRevision) || expectedRevision < 0)) {
+      return res.status(400).json({ error: "invalid", message: "expectedRevision must be a whole number from 0." });
+    }
+    const out = await changeExternalRpe({
+      userId: req.user.id, assignmentId, requestKey: requestKey.toLowerCase(), rpe, durationMinutes, note: note || null,
+      expectedRevision: expectedRevision ?? null,
+    });
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    next(error);
   }
 });
 
