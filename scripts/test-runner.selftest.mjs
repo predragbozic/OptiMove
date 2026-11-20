@@ -339,6 +339,9 @@ try {
       fs.writeFileSync(path.join(proj, "tests", "r-inner-fails.test.mjs"), relaunching('  test("inner passes", () => {});\n  test("inner breaks", () => { assert.equal(1, 2); });'));
       fs.writeFileSync(path.join(proj, "tests", "r-no-tests.test.mjs"), relaunching("  // no test at all"));
       fs.writeFileSync(path.join(proj, "tests", "r-import-crash.test.mjs"), relaunching('  await import("./does-not-exist.mjs");\n  test("never reached", () => {});'));
+      fs.writeFileSync(path.join(proj, "tests", "r-all-skipped.test.mjs"), relaunching('  test.skip("s1", () => {});\n  test.todo("t1");'));
+      // a hung inner test: the child's own per-test limit ends it and the failure names it
+      fs.writeFileSync(path.join(proj, "tests", "r-hang.test.mjs"), relaunching("  test(\"stuck forever\", () => new Promise(() => { setInterval(() => {}, 1000); }));").replace("relaunchWithModuleMocks(import.meta.url)", "relaunchWithModuleMocks(import.meta.url, { timeoutMs: 4000 })"));
       const rejectsNewFlag = spawnSync(process.execPath, ["--test-isolation=none", "-e", "0"], { stdio: "ignore" }).status !== 0;
       if (rejectsNewFlag) {
         fs.writeFileSync(path.join(proj, "tests", "r-old-wrapper.test.mjs"), `import { test } from "node:test";\nimport assert from "node:assert/strict";\nimport { spawnSync } from "node:child_process";\nimport { fileURLToPath } from "node:url";\nif (!process.execArgv.includes("--experimental-test-module-mocks")) {\n  test("old wrapper", () => {\n    const r = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", "--test-isolation=none", fileURLToPath(import.meta.url)], { encoding: "utf8" });\n    assert.equal(r.status, 0, r.stdout + r.stderr);\n  });\n} else {\n  test("inner", () => {});\n}\n`);
@@ -348,12 +351,16 @@ try {
       assert.equal(r.status, 1, r.stderr);
       const byFile = Object.fromEntries(JSON.parse(fs.readFileSync(report, "utf8")).steps.flatMap((s) => s.results).map((x) => [x.file, x]));
       assert.equal(byFile["r-good.test.mjs"].status, "pass");
-      for (const bad of ["r-inner-fails.test.mjs", "r-no-tests.test.mjs", "r-import-crash.test.mjs", ...(rejectsNewFlag ? ["r-old-wrapper.test.mjs"] : [])]) {
+      for (const bad of ["r-inner-fails.test.mjs", "r-no-tests.test.mjs", "r-import-crash.test.mjs", "r-all-skipped.test.mjs", "r-hang.test.mjs", ...(rejectsNewFlag ? ["r-old-wrapper.test.mjs"] : [])]) {
         assert.equal(byFile[bad].ok, false, `${bad} must not be ok`);
         assert.ok(["fail", "crash"].includes(byFile[bad].status), `${bad}: ${byFile[bad].status}`);
       }
       assert.match(byFile["r-inner-fails.test.mjs"].failureDetails[0].message, /^inner suite failed \(exit 1\): inner breaks/);
       assert.match(byFile["r-no-tests.test.mjs"].failureDetails[0].message, /^inner suite ran no test/);
+      assert.match(byFile["r-all-skipped.test.mjs"].failureDetails[0].message, /^inner suite ran no test \(exit 0\): every test is skipped or todo/);
+      // a live timer keeps the child running after its test was cancelled: it ends at the call's
+      // limit, and the failure still names the hung test
+      assert.match(byFile["r-hang.test.mjs"].failureDetails[0].message, /^inner suite (failed \(exit 1\)|did not finish \(ETIMEDOUT\)): stuck forever$/);
       // the same files under a plain `node --test` (the parent sets NODE_TEST_CONTEXT there)
       const direct = (name) => spawnSync(process.execPath, ["--test", path.join(proj, "tests", name)], { encoding: "utf8", timeout: 60000 }).status;
       assert.equal(direct("r-good.test.mjs"), 0, "a good relaunching file passes under plain node --test");
@@ -362,6 +369,22 @@ try {
       fs.rmSync(proj, { recursive: true, force: true });
     }
   });
+
+  // The helper's TAP reading: node escapes `\` and `#` in names (a Windows path arrives doubled),
+  // a parent is printed after its children, and skip / todo results are not tests that ran.
+  {
+    const helperModule = await import(pathToFileURL(path.join(REPO_ROOT, "backend", "tests", "support", "relaunch-with-module-mocks.mjs")).href);
+    check("relaunch: TAP results are read unescaped, leaf by leaf, skip and todo not counted", () => {
+      const win = "C:\\Users\\coach\\x.test.mjs";
+      assert.equal(helperModule.countRanTests("ok 1 - C:\\\\Users\\\\coach\\\\x.test.mjs\n", win), 0, "the escaped Windows placeholder is not a test");
+      assert.equal(helperModule.countRanTests("ok 1 - real test\nok 2 - C:\\\\Users\\\\coach\\\\x.test.mjs\n", win), 1);
+      const nested = "    not ok 1 - leaf x\n    ok 2 - leaf ok\nnot ok 1 - Suite S\nok 2 - skipped # SKIP\nnot ok 3 - todo # TODO\nok 4 - back\\\\slash \\# hash\n";
+      assert.deepEqual(helperModule.failedInnerTests(nested), ["leaf x"]);
+      assert.equal(helperModule.countRanTests(nested, "/nowhere"), 3);
+      assert.deepEqual(helperModule.parseTapResults(nested).at(-1).name, "back\\slash # hash");
+      assert.equal(helperModule.countRanTests("ok 1 - a # SKIP\nok 2 - b # TODO\n", "/nowhere"), 0);
+    });
+  }
 
   // Not run: every file of the run's scope that no step ran is named; --strict-not-run fails.
   check("not run: files left out by kind are listed in the summary and the report; --strict-not-run makes the run fail", () => {

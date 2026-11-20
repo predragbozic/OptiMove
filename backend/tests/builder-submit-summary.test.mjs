@@ -15,6 +15,7 @@ if (needsModuleMocksRelaunch()) {
   let isolationLevel;
   let reuseLocks;
   let restricted;
+  let reuseScopes;
   const rows = (values) => ({ rows: values, rowCount: values.length });
   async function query(sql, params = []) {
     calls.push({ sql, params });
@@ -25,7 +26,12 @@ if (needsModuleMocksRelaunch()) {
     if (normalized === "set local lock_timeout = '2s'") return rows([]);
     if (normalized === "select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))") { reuseLocks++; return rows([{}]); }
     // assertExerciseReuseAllowed: exercises of the plan the user may no longer reuse
-    if (normalized.startsWith("with recursive selected_nodes as")) return rows(restricted);
+    // ($2 = the plan ids the route asks about): it answers only for the plan being saved, so a
+    // route that stops sending its plan would no longer be refused, and the test sees it
+    if (normalized.startsWith("with recursive selected_nodes as")) {
+      reuseScopes.push(params[1]);
+      return rows(Array.isArray(params[1]) && params[1].includes("plan-1") ? restricted : []);
+    }
     if (normalized.startsWith("select pi.id")) return rows([{ id: "item-1", plan_id: "plan-1", plan_node_id: "node-1" }]);
     if (normalized.startsWith("update plans.plan_items")) return rows([{ id: params[0], exercise_id: "exercise-1", title: "Squat (library text)", sets: params[1], reps: params[2], load: params[3], description: params[4] }]);
     // plan items in the reader's language (3ccf6149): the item still equals its exercise's text
@@ -71,7 +77,7 @@ if (needsModuleMocksRelaunch()) {
   const updateItem = handler("/items/:itemId", "patch");
   const deletePlan = handler("/plans/:planId", "delete");
   const plan = (extra = {}) => ({ id: "plan-1", plan_type: "program", name: "Program", is_template: true, status: "draft", source_type: "builder", ...extra });
-  beforeEach(() => { plans = new Map([["plan-1", plan()]]); calls = []; failWrite = false; failDelete = false; hasContent = true; isolationLevel = "read committed"; reuseLocks = 0; restricted = []; });
+  beforeEach(() => { plans = new Map([["plan-1", plan()]]); calls = []; failWrite = false; failDelete = false; hasContent = true; isolationLevel = "read committed"; reuseLocks = 0; restricted = []; reuseScopes = []; });
   async function invoke(route, id = "plan-1", body = {}) {
     const result = { status: 200, headers: {} };
     const res = { status(value) { result.status = value; return this; }, setHeader(name, value) { result.headers[name] = value; }, json(value) { result.body = value; return this; } };
@@ -111,6 +117,7 @@ if (needsModuleMocksRelaunch()) {
     const result = await invoke(submit, "plan-1", { responseMode: "summary" });
     assert.equal(result.error?.status, 409);
     assert.equal(result.error.message, "exerciseAccessRevoked");
+    assert.deepEqual(reuseScopes.at(-1), ["plan-1"], "the guard is asked about exactly the plan being saved");
     // The empty-draft check commits its own short transaction first (by design). The activation
     // transaction (the last begin) runs the guard after its UPDATE and must end in rollback.
     const activation = calls.slice(calls.findLastIndex(({ sql }) => sql === "begin"));
