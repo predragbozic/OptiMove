@@ -202,6 +202,18 @@ test("C1-5. a lost answer is Result not confirmed; Check result sends the very s
   assert.match(text(), /Confirmed: acceleration events/);
 });
 
+test("C1-7 (the Independent's LOW-2 on #690). a negative duration with a valid threshold is refused on the screen: nothing is sent, and the duration is marked", async () => {
+  await loadSourceField(F, render);
+  await click('[data-action="source-fields-event-open"]');
+  type("thresholdValue", "2.5");
+  type("durationSeconds", "-0.3");
+  await submit();
+  assert.equal(posts().length, 0);
+  assert.equal($('[data-sf-field="durationSeconds"]').getAttribute("aria-invalid"), "true");
+  assert.equal($('[data-sf-field="thresholdValue"]').getAttribute("aria-invalid"), null);
+  assert.match(text(), /A number of seconds, for example 0\.3\./);
+});
+
 test("C1-6. typedDecimal: the server's number rule; a comma is a decimal point; anything else is refused before sending", () => {
   assert.equal(typedDecimal("2,5"), "2.5");
   assert.equal(typedDecimal(" -2.5 "), "-2.5");
