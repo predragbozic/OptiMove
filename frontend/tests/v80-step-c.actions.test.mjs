@@ -122,6 +122,13 @@ test("C1-2. a club admin reads the block without the form; a forged click opens 
   forged.dataset.action = "source-fields-event-open";
   await handleSourceFieldsAction(forged, { render });
   assert.equal($('[data-source-fields-form="event"]'), null);
+  // Even an answer that says the session is kept opens no form for a club admin (the screen's own guard).
+  resetSourceFields();
+  eventSetting = waiting({ sessionKept: true });
+  await loadSourceField(F, render);
+  assert.equal($('[data-action="source-fields-event-open"]'), null);
+  await handleSourceFieldsAction(forged, { render });
+  assert.equal($('[data-source-fields-form="event"]'), null);
 });
 
 test("C1-3. the form shows no value of its own, reads a comma as the decimal point, and sends the body exactly; saved, the field is read again", async () => {
