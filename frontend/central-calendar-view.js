@@ -38,6 +38,7 @@ import {
   ccChangedText,
   ccSpokenAnswerText,
 } from "./central-calendar-answers.js";
+import { gpsReviewMark, gpsReviewMarksShown, gpsReviewWords } from "./central-calendar-gps-review.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import { addDaysIso, escapeAttr, escapeHtml, monthLabel, monthWeeksIso, weekMondayIso } from "./utils.js";
 
@@ -635,6 +636,32 @@ function renderEmptyHtml(cal, scope) {
     </div>`;
 }
 
+// K5-4 (docs/ai/central-calendar-k5-4-contract.md 2.1): a day's GPS mark, "N GPS sessions to review". It is not an
+// item: no panel, no key, never in the visible items; its click opens Imports on the day. A mini mark (the month grid)
+// shows the icon and the number only.
+function gpsMarkFor(cal, date) {
+  return gpsReviewMarksShown(cal) ? gpsReviewMark(cal, date) : null;
+}
+
+function renderGpsMarkHtml(cal, date, { mini = false } = {}) {
+  const mark = gpsMarkFor(cal, date);
+  if (!mark) return "";
+  const words = gpsReviewWords(mark);
+  const shown = mini ? (mark.uncertain ? "" : `${mark.count}${mark.plus ? "+" : ""}`) : words;
+  return `<button type="button" class="cc-daymark cc-daymark-gps${mini ? " cc-daymark-mini" : ""}" data-action="central-calendar-gps-review" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(`${words} on ${centralCalendarLongDate(date)}, open Imports`)}">${renderIconSvg("gps", { size: 16, className: "cc-daymark-icon" })}${shown ? `<span class="cc-daymark-words">${escapeHtml(shown)}</span>` : ""}</button>`;
+}
+
+// Where a day is one button (a phone's strip and month cells), the mark is a sign inside it and part of its label;
+// the mark itself is in the selected day's list.
+function gpsMarkLabel(cal, date) {
+  const mark = gpsMarkFor(cal, date);
+  return mark ? `, ${gpsReviewWords(mark)}` : "";
+}
+
+function gpsMarkSignHtml(cal, date) {
+  return gpsMarkFor(cal, date) ? `<span class="cc-daymark-sign" aria-hidden="true">${renderIconSvg("gps", { size: 12, className: "cc-daymark-icon" })}</span>` : "";
+}
+
 function renderDayCardsHtml(items, teams, openKey, today, { emptyText = "—", emptyAction = "", shortKind = false } = {}) {
   if (!items.length && emptyAction) return `<div class="om-empty cc-day-empty" role="status"><p class="om-empty__text">${escapeHtml(emptyText)}</p><div class="om-empty__actions">${emptyAction}</div></div>`;
   if (!items.length) return `<p class="cc-day-empty">${escapeHtml(emptyText)}</p>`;
@@ -655,7 +682,8 @@ function renderWeekColumnsHtml(days, byDate, cal, teams, today, layout = "") {
     const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
     return `<section class="cc-day-column${date === today ? " is-today" : ""}" aria-label="${escapeAttr(centralCalendarLongDate(date))}">
         ${dayHeadHtml(date, today, items.length)}
-        <div class="cc-day-cards">${renderDayCardsHtml(items, teams, cal.panel.key, today, { shortKind: layout === "wide" })}</div>
+        ${items.length || !gpsMarkFor(cal, date) ? `<div class="cc-day-cards">${renderDayCardsHtml(items, teams, cal.panel.key, today, { shortKind: layout === "wide" })}</div>` : ""}
+        ${renderGpsMarkHtml(cal, date)}
       </section>`;
   });
   return `<div class="cc-week" role="group" aria-label="Week of ${escapeAttr(shortDate(days[0], { year: true }))}">${columns.join("")}</div>`;
@@ -685,7 +713,7 @@ function renderWeekGridHtml(days, byDate, cal, teams, today) {
   const heads = days.map((date) => `<div class="cc-timegrid-head${date === today ? " is-today" : ""}">${dayHeadHtml(date, today, visible.get(date).length)}</div>`).join("");
   const untimed = days.map((date) => {
     const items = visible.get(date).filter((item) => hourOf(item) === null);
-    return `<div class="cc-timegrid-cell cc-timegrid-untimed${date === today ? " is-today" : ""}">${items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey: cal.panel.key, today })).join("")}</div>`;
+    return `<div class="cc-timegrid-cell cc-timegrid-untimed${date === today ? " is-today" : ""}">${items.map((item) => renderCentralCalendarCardHtml(item, { teams, openKey: cal.panel.key, today })).join("")}${renderGpsMarkHtml(cal, date)}</div>`;
   }).join("");
   const rows = hours.map((hour) => {
     const label = `${String(hour).padStart(2, "0")}:00`;
@@ -723,10 +751,11 @@ function renderStripHtml(days, byDate, cal, today, teams) {
         // Four marks at most in a phone's narrow day: four dots, or three and "+N".
         const dotIds = allIds.slice(0, allIds.length > 4 ? 3 : 4);
         const names = allIds.map((id) => teamName(id, teams)).join(", ");
-        return `<button type="button" class="cc-strip-day${isSelected ? " is-selected" : ""}${date === today ? " is-today" : ""}" data-action="central-calendar-select-day" data-date="${escapeAttr(date)}" aria-pressed="${isSelected ? "true" : "false"}"${date === today ? ' aria-current="date"' : ""} aria-label="${escapeAttr(`${centralCalendarLongDate(date)}${date === today ? ", today" : ""}${count ? `, ${count} item${count === 1 ? "" : "s"}` : ""}${names ? `, ${names}` : ""}`)}">
+        return `<button type="button" class="cc-strip-day${isSelected ? " is-selected" : ""}${date === today ? " is-today" : ""}" data-action="central-calendar-select-day" data-date="${escapeAttr(date)}" aria-pressed="${isSelected ? "true" : "false"}"${date === today ? ' aria-current="date"' : ""} aria-label="${escapeAttr(`${centralCalendarLongDate(date)}${date === today ? ", today" : ""}${count ? `, ${count} item${count === 1 ? "" : "s"}` : ""}${names ? `, ${names}` : ""}${gpsMarkLabel(cal, date)}`)}">
           <span class="cc-strip-name">${escapeHtml(weekdayShort(date))}</span>
           <span class="cc-strip-number">${dayNumber(date)}</span>
           ${count ? `<span class="cc-strip-count" aria-hidden="true">${count}</span>` : ""}
+          ${gpsMarkSignHtml(cal, date)}
           ${dotIds.length ? `<span class="cc-strip-dots" aria-hidden="true">${dotIds.map((id) => `<span class="cc-team-dot"${teamColorStyle(id, teams)}></span>`).join("")}${allIds.length > dotIds.length ? `<span class="cc-strip-more">+${allIds.length - dotIds.length}</span>` : ""}</span>` : ""}
         </button>`;
       }).join("")}
@@ -768,7 +797,8 @@ function renderSelectedDayListHtml(date, byDate, cal, teams, today, { heading = 
   return `<section class="cc-day-list" aria-label="${escapeAttr(centralCalendarLongDate(date))}">
       ${heading ? `<h4 class="cc-day-title">${escapeHtml(centralCalendarLongDate(date))}${date === today ? ` <span class="cc-day-today-tag">Today</span>` : ""}</h4>` : ""}
       ${renderDayTeamsHtml(items, cal, teams)}
-      ${renderDayListCardsHtml(items, teams, cal.panel.key, today, emptyText, emptyAction)}
+      ${items.length || !gpsMarkFor(cal, date) ? renderDayListCardsHtml(items, teams, cal.panel.key, today, emptyText, emptyAction) : ""}
+      ${renderGpsMarkHtml(cal, date)}
     </section>`;
 }
 
@@ -789,9 +819,11 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
     if (phone && date === selected) classes.push("is-selected");
     const label = `${centralCalendarLongDate(date)}${date === today ? ", today" : ""}${items.length ? `, ${items.length} item${items.length === 1 ? "" : "s"}` : ""}`;
     if (phone) {
-      return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-select-day" data-date="${escapeAttr(date)}" aria-pressed="${date === selected ? "true" : "false"}"${date === today ? ' aria-current="date"' : ""} aria-label="${escapeAttr(label)}">
+      const phoneLabel = `${label}${gpsMarkLabel(cal, date)}`;
+      return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-select-day" data-date="${escapeAttr(date)}" aria-pressed="${date === selected ? "true" : "false"}"${date === today ? ' aria-current="date"' : ""} aria-label="${escapeAttr(phoneLabel)}">
           <span class="cc-month-number">${dayNumber(date)}</span>
           ${items.length ? `<span class="cc-month-count" aria-hidden="true">${items.length}</span>` : ""}
+          ${gpsMarkSignHtml(cal, date)}
         </button>`;
     }
     const shown = items.slice(0, MONTH_CELL_CARDS);
@@ -800,6 +832,7 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
         <button type="button" class="cc-month-number" data-action="central-calendar-open-day" data-date="${escapeAttr(date)}"${date === today ? ' aria-current="date"' : ""} aria-label="${escapeAttr(`Open ${label}`)}">${dayNumber(date)}</button>
         <div class="cc-month-cards">
           ${shown.map((item) => renderMiniCardHtml(item, teams, cal.panel.key, today)).join("")}
+          ${renderGpsMarkHtml(cal, date, { mini: true })}
           ${more > 0 ? `<button type="button" class="cc-month-more" data-action="central-calendar-open-day" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(`${more} more on ${centralCalendarLongDate(date)}`)}">+${more} more</button>` : ""}
         </div>
       </div>`;
@@ -816,7 +849,8 @@ function renderBodyHtml(cal, layout, today) {
   const teams = cal.data.teams || [];
   const byDate = centralCalendarItemsByDate(centralCalendarShownData(cal));
   const days = centralCalendarDisplayedDays(cal.view, cal.anchor);
-  const anyVisible = days.some((date) => centralCalendarVisibleItems(byDate.get(date), cal.filters).length > 0);
+  // A GPS mark (K5-4) is something to show too: a week or month with one never reads as empty.
+  const anyVisible = days.some((date) => centralCalendarVisibleItems(byDate.get(date), cal.filters).length > 0 || Boolean(gpsMarkFor(cal, date)));
   const scope = cal.view === "month" ? "this month" : cal.view === "day" ? "on this day" : "this week";
   // A month with nothing to show says so once: a phone then skips the
   // selected day's own "Nothing on this day." under the grid.

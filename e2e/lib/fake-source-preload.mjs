@@ -3,7 +3,7 @@
 // no network); every other request goes where it would have gone. Nothing here changes the application's code,
 // its host allowlist or its catalog.
 import { createFakeSource } from "../../backend/tests/support/gpexe-fake-source.mjs";
-import { boardBundles, importsBundles, inventoryBundles, mixedTimezoneBundles, multiTrackBundles, seriesBundles } from "./imports-fixture.mjs";
+import { boardBundles, calendarMarkBundles, importsBundles, inventoryBundles, mixedTimezoneBundles, multiTrackBundles, seriesBundles } from "./imports-fixture.mjs";
 
 const fake = createFakeSource();
 for (const id of (process.env.E2E_FAKE_VISIBLE_TEAMS || "").split(",").filter(Boolean)) fake.show(id);
@@ -19,6 +19,8 @@ if (process.env.E2E_FAKE_SESSIONS === "board") fake.serve("7001", boardBundles(7
 if (process.env.E2E_FAKE_SESSIONS === "multitrack") fake.serve("7001", multiTrackBundles(7001));
 // PR #587: one session whose GPS units report two time zones.
 if (process.env.E2E_FAKE_SESSIONS === "mixedtz") fake.serve("7001", mixedTimezoneBundles(7001));
+// K5-4: two sessions waiting on one day and one to import, for the calendar's GPS marks.
+if (process.env.E2E_FAKE_SESSIONS === "calendarmarks") fake.serve("7001", calendarMarkBundles(7001));
 // A shorter batch time budget for this server process only (E2E_BATCH_BUDGET_MS), so one click's import goes in several rounds.
 if (process.env.E2E_BATCH_BUDGET_MS !== undefined) {
   // The same order as server.js: the backend's .env first, then the application's modules.

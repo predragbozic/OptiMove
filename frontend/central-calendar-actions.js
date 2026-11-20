@@ -18,6 +18,7 @@ import {
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { k3SheetAction, k3StartFromPanel } from "./central-calendar-k3-actions.js";
 import { ccAnswersPaths, ccAnswersReadable, ccMergeWeekly } from "./central-calendar-answers.js";
+import { ensureGpsReview, gpsReviewMark } from "./central-calendar-gps-review.js";
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
@@ -641,7 +642,13 @@ function syncPanelEventOnly(cal, render) {
   panelRead = loadPanelEvent(cal, render);
   return panelRead;
 }
-setCentralCalendarAppliedHook(syncPanelEvent);
+// After every calendar answer drawn: the open panel's reads, and K5-4's one GPS read for the shown range (it never
+// holds the cards up; its marks appear when it lands).
+setCentralCalendarAppliedHook((cal, render) => {
+  const marks = ensureGpsReview(cal, render);
+  const panel = syncPanelEvent(cal, render);
+  return marks || panel ? Promise.all([marks, panel]) : null;
+});
 
 // K2b-2a-2b (contract 4.1): the open panel of a manager's event reads its
 // questions once, only while the club's switch is on (B1, from the catalog
@@ -1919,7 +1926,7 @@ export function handleCentralCalendarKeydown(event) {
   return true;
 }
 
-export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad, openBuilder } = {}) {
+export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad, openBuilder, openImports } = {}) {
   const type = action?.dataset?.action || "";
   if (!type.startsWith("central-calendar-")) return false;
   const cal = state.centralCalendar;
@@ -2243,6 +2250,16 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     const date = action.dataset.date;
     if (!isIsoDate(date)) return true;
     await openTrainingLoad?.({ activityId: action.dataset.activityId || null, date });
+    return true;
+  }
+  // K5-4: a GPS mark opens Imports on its day, for the workspace's team (contract 3.1). Only a day that carries a mark
+  // now: a forged click on another day does nothing.
+  if (type === "central-calendar-gps-review") {
+    const date = action.dataset.date;
+    const cal = state.centralCalendar;
+    const workspace = cal?.data?.workspace;
+    if (!isIsoDate(date) || workspace?.type !== "team" || !gpsReviewMark(cal, date)) return true;
+    await openImports?.({ teamId: String(workspace.scopeId), day: date });
     return true;
   }
   if (type === "central-calendar-open-athlete") {

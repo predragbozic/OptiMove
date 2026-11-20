@@ -90,7 +90,8 @@ import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsRe
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
-import { renderCentralCalendarHtml } from "./central-calendar-view.js";
+import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn } from "./central-calendar-gps-review.js";
+import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
@@ -108,6 +109,7 @@ import { answerAthleteQuestion, athleteQuestionsBack, beginAthleteHomeLoad, clos
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
+import { enterImportsOnDay, IMPORTS_PHONE_QUERY } from "./central-calendar-imports-entry.js";
 import { trapPeriodSheetTab } from "./gpexe-period-drag.js";
 import { closeFixFromKey } from "./gpexe-import-actions.js";
 import { handleUndoReasonInput } from "./gpexe-undo-data.js";
@@ -1814,6 +1816,8 @@ async function signOut() {
     clearAllViewCache();
     // K3: the event-planning memory of this tab (ids and slot keys) goes too.
     clearK3Memory();
+    // K5-4: the GPS marks read for this sign-in (numbers only) go with it.
+    clearGpsReview();
     // The unconfirmed GPEXE name loads (a request key per team, memory only)
     // belong to this sign-in alone.
     clearPendingIdentityLoads();
@@ -2044,6 +2048,11 @@ async function handleGlobalClick(event) {
   }
   if (action.dataset.action === "close-media") closeMedia();
   if (action.dataset.action === "home") goHome();
+  if (action.dataset.action === "imports-back-to-calendar") {
+    // K5-4 3.2: the band exists only on the step the mark pushed, so the app's Back returns to the calendar's place.
+    if (state.appHistoryDepth > 0 && importsReturnFor(appHistoryTopEntry())) window.history.back();
+    return;
+  }
   if (action.dataset.action === "brand-home") {
     closeMobileNav();
     if (document.body.classList.contains("athlete-mode")) {
@@ -2175,6 +2184,8 @@ function pushAppHistory() {
   pushAppHistoryEntry(entry);
   // K4a: the step Open training pushes is the one that shows Back to calendar.
   claimAthleteCalendarReturn(entry);
+  // K5-4: and so is the step a GPS mark's click pushes.
+  claimImportsReturn(entry);
 }
 
 function ensureBackGuard() {
@@ -2564,6 +2575,45 @@ async function openTrainingLoadFromCalendar({ activityId, date }) {
   renderTrainingLoad();
 }
 
+// K5-4 (docs/ai/central-calendar-k5-4-contract.md 3.1): a GPS mark opens Training Load > Imports with its day chosen
+// in Imports' own period chooser. Here: the leave question, the history step with its Back to calendar marker, and
+// Training Load; central-calendar-imports-entry.js does the rest (Imports' own loader, chooseDay, the phone's sheet,
+// the chosen day's read). The calendar writes nothing into Imports and never starts a search.
+async function openImportsOnDay({ teamId, day }) {
+  if (!confirmLeaveTrainingLoad("training-load")) return;
+  setImportsReturn({ day });
+  pushAppHistory();
+  state.activeTab = "training-load";
+  state.navStack = [];
+  state.selectedProgramId = null;
+  state.selectedTemplateId = null;
+  els.context.textContent = "Training load";
+  els.title.textContent = "Training load";
+  els.toolbar.innerHTML = "";
+  renderTabs();
+  renderLibraryNav();
+  await enterImportsOnDay({
+    teamId, day, render: renderTrainingLoad,
+    phone: Boolean(window.matchMedia?.(IMPORTS_PHONE_QUERY)?.matches),
+    scrollToChooser: () => els.content.querySelector("#imports-period")?.scrollIntoView?.({ block: "start" }),
+    stillThere: () => state.activeTab === "training-load",
+  });
+}
+
+// Back to calendar on Imports (contract 3.2): drawn on every Training Load paint from the step's marker, so a reload of
+// Training Load draws it again and a later step never keeps it.
+function renderImportsBackBand() {
+  const back = importsReturnFor(appHistoryTopEntry());
+  const existing = els.toolbar.querySelector(".cc-imports-back");
+  if (!back) {
+    existing?.remove();
+    return;
+  }
+  const html = `<div class="cc-imports-back"><button type="button" class="plain-button cc-imports-back-button" data-action="imports-back-to-calendar"><span aria-hidden="true">‹</span> Back to calendar</button><span class="cc-imports-back-day">${escapeHtml(centralCalendarLongDate(back.day))}</span></div>`;
+  if (existing) existing.outerHTML = html;
+  else els.toolbar.insertAdjacentHTML("beforeend", html);
+}
+
 function renderCoachHome({ rows, error, clubs = [] }) {
   coachHomeRows = rows || [];
   // A late answer (the roster, the clubs) never draws Home over the screen the user opened meanwhile;
@@ -2851,6 +2901,7 @@ function renderTrainingLoad() {
   // brought into view only when it is not.
   const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
   els.content.innerHTML = renderTrainingLoadCoachHtml();
+  renderImportsBackBand();
   if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {
     bindTrainingLoadAnalysisLayoutInteractions(els.content, renderActiveTrainingLoadSurface);
@@ -3129,7 +3180,7 @@ async function handleContentClick(event) {
     return;
   }
   if (type.startsWith("central-calendar-")) {
-    await handleCentralCalendarAction(action, { render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar, openBuilder: openBuilderForK3 });
+    await handleCentralCalendarAction(action, { render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar, openBuilder: openBuilderForK3, openImports: openImportsOnDay });
     return;
   }
   if (type === "back") {

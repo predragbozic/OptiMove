@@ -53,6 +53,21 @@ export function seriesBundles(sourceTeam = 7001) {
   }));
 }
 
+// K5-4, the calendar's GPS marks: two sessions waiting on 05.11.2026 (one Ready, one that needs athlete 121 linked)
+// and one on 04.11.2026 the scenario imports, so that day has nothing waiting.
+export const K54_SESSIONS = { ready: 9161, needs: 9162, imported: 9163 };
+export function calendarMarkBundles(sourceTeam = 7001) {
+  const mk = (sessionId, start, ids) => makeBundle({
+    sessionId, gpexeTeamId: Number(sourceTeam), start, updatedOn: `${start.slice(0, 10)}T20:18:09.337`,
+    category: "FULL TRAINING", athletes: ids.map((id) => athlete(id, sessionId)), detailsDrills: [0, 1],
+  });
+  return [
+    mk(K54_SESSIONS.ready, "2026-11-05T09:08:12", [101, 102, 103]),
+    mk(K54_SESSIONS.needs, "2026-11-05T17:08:12", [101, 102, 121]),
+    mk(K54_SESSIONS.imported, "2026-11-04T09:08:12", [101, 102, 103]),
+  ];
+}
+
 // J18, the board: one Ready session whose three linked athletes have different values, so the board finds two
 // athletes it can tell apart (the Imports scenario's athletes are copies of one).
 export const SESSION_BOARD = 9121;

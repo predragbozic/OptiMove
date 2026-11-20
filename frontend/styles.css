@@ -29218,3 +29218,40 @@ body.athlete-questions-prompt-open {
   color: var(--muted);
   font-size: 13px;
 }
+
+/* ===== K5-4: GPS sessions waiting for import (docs/ai/central-calendar-k5-4-contract.md 2.1, 3.2) ===== */
+/* Dashed amber: "waiting for you". Not an item: a button straight to Imports on the day. */
+.cc-daymark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 36px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: 1px dashed color-mix(in srgb, var(--om-warning, #8a5300) 55%, transparent);
+  border-radius: 8px;
+  background: var(--om-warning-soft, #fdf1dc);
+  color: var(--om-warning, #8a5300);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.cc-daymark:hover { border-style: solid; }
+.cc-daymark:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cc-daymark-icon { flex: none; }
+.cc-daymark-words { min-width: 0; }
+.cc-daymark-mini { min-height: 28px; margin-top: 2px; padding: 2px 6px; font-size: 12px; }
+.cc-layout-medium .cc-daymark { min-height: 44px; }
+.cc-daymark-sign { display: inline-flex; color: var(--om-warning, #8a5300); }
+@media (pointer: coarse), (max-width: 760px) {
+  .cc-daymark,
+  .cc-daymark-mini { min-height: 44px; }
+}
+.cc-imports-back { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.cc-imports-back-button { min-height: 44px; }
+.cc-imports-back-day { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }

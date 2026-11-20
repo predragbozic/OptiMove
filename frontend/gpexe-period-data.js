@@ -66,12 +66,18 @@ export function periodRange(gx = g()) {
 }
 
 // A day that can't be picked now: in the future, or - while the first day is waiting for the second - more than 31
-// days (both counted) away from it.
-export function dayOff(day, gx = g(), now = new Date()) {
+// days (both counted) away from it. `anchor: false` (K5-4's chooseDay) skips only that last clause: a day chosen whole
+// replaces a waiting first tap, so the tap can't refuse it.
+export function dayOff(day, gx = g(), now = new Date(), { anchor = true } = {}) {
   if (!isDay(day)) return true;
   if (day > todayDay(now)) return true;
   const s = p(gx);
-  return Boolean(s.anchor) && daysInPeriod(s.anchor, day) > PERIOD_MAX_DAYS;
+  return anchor && Boolean(s.anchor) && daysInPeriod(s.anchor, day) > PERIOD_MAX_DAYS;
+}
+
+// The chosen days, set in one place for every way of choosing them (a tap here, a day from the central calendar).
+function setDays(s, { anchor, from, to }) {
+  Object.assign(s, { anchor, from, to });
 }
 
 // A tap (or Enter) on a day: the first picks one day and waits for the second; the second closes the period. A day that
@@ -81,9 +87,9 @@ export function pickDay(day, gx = g(), now = new Date()) {
   if (dayOff(day, gx, now)) return false;
   if (s.anchor) {
     const [from, to] = [s.anchor, day].sort();
-    Object.assign(s, { anchor: "", from, to });
+    setDays(s, { anchor: "", from, to });
   } else {
-    Object.assign(s, { anchor: day, from: day, to: day });
+    setDays(s, { anchor: day, from: day, to: day });
   }
   return true;
 }
@@ -107,6 +113,17 @@ export function endDrag(gx = g()) {
 
 export function clearPeriod(gx = g()) {
   Object.assign(p(gx), { anchor: "", from: "", to: "" });
+}
+
+// K5-4 (docs/ai/central-calendar-k5-4-contract.md 3.3): the central calendar opens Imports with one day chosen whole.
+// The same dayOff (a future day or a non-date is refused; a waiting first tap is not in the way) and the same setDays as
+// a tap; the month turns to the day. It never opens the phone's sheet: whoever calls it decides that by the layout.
+export function chooseDay(day, gx = g(), now = new Date()) {
+  const s = p(gx);
+  if (dayOff(day, gx, now, { anchor: false })) return false;
+  setDays(s, { anchor: "", from: day, to: day });
+  s.month = day.slice(0, 7);
+  return true;
 }
 
 // The phone's sheet: open or closed (on a computer the chooser is always on the page).
