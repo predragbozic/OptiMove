@@ -290,3 +290,41 @@ export function can(authz, permission, scope) {
   }
   return false;
 }
+
+// The permission words the account holds in its ACTIVE workspace, for `/me`
+// (roles R3 PR-A; plan section 3.2: navigation follows the permissions the
+// server returns). Never a second rule: each word is asked of can() itself,
+// against the scope the workspace names. On top of can():
+//   - an account that is not a platform admin is offered only the honoured
+//     words (HONOURED_PERMISSIONS), and only in a club or team workspace: no
+//     call site checks a word at another scope today, so no other word can be
+//     granted by the server (the database guard keeps every role's items
+//     honoured, so for a club or team this filter changes nothing);
+//   - the athlete workspace and no workspace name no scope: nothing;
+//   - the role tables unreadable for this request: nothing, flagged
+//     (`unavailable: true`), for a platform admin as well (fail closed: the
+//     list is navigation, the routes still decide);
+//   - a role the account holds through a non-basic assignment counts as can()
+//     says. Such an account reaches a club or team workspace only through a
+//     role of the old tables (loadAvailableWorkspaces), so a word listed here
+//     is never one that requireCoach (O8 (a), until R4) stands in front of.
+// Pure: no query. Returns { permissions: string[], unavailable: boolean }.
+const WORKSPACE_SCOPE_TYPES = Object.freeze({ platform: "global", club: "club", team: "team", private_coach: "private" });
+
+export function permissionsForWorkspace(authz, workspace) {
+  if (authz?.rolePermissions && !Array.isArray(authz.rolePermissions)) {
+    return { permissions: [], unavailable: true };
+  }
+  const scopeType = workspace ? WORKSPACE_SCOPE_TYPES[workspace.type] : undefined;
+  if (!scopeType) return { permissions: [], unavailable: false };
+  const platform = isPlatformAdministrator(authz);
+  // The platform workspace exists only for a platform admin; anyone else
+  // could only reach "global" through a forged workspace object.
+  if (scopeType === "global" && !platform) return { permissions: [], unavailable: false };
+  if (!platform && scopeType !== "club" && scopeType !== "team") return { permissions: [], unavailable: false };
+  const scope = scopeType === "global"
+    ? GLOBAL_SCOPE
+    : { type: scopeType, id: scopeType === "private" ? authz.userId : workspace.scopeId };
+  const candidates = platform ? Object.keys(PERMISSIONS) : HONOURED_PERMISSIONS;
+  return { permissions: candidates.filter((word) => can(authz, word, scope)), unavailable: false };
+}
