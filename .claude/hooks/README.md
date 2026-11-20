@@ -91,6 +91,9 @@ the opposite of what a safety layer should do.
   PowerShell-named-parameter forms (`Remove-Item`/`ri`), not the Unix commands, where a
   combined short cluster like `-rf`/`-fr` genuinely does mean "each letter is its own
   flag" and is matched by letter-containment on purpose.
+- (`git checkout --detach <ref>`, `--orphan <name>`, `-t`/`--track <branch>`, `-b`/`-B <name>`
+  take a commit or a branch, never a path, and are never read as a discard, even when the ref
+  cannot be verified from the hook — for example in a worktree that does not exist yet.)
 - `git checkout -- <path>` / `git checkout .` / `git checkout ./` — the *discard* meaning
   of `checkout` (restoring a path to its committed state, losing uncommitted changes to
   it). `git checkout <branch>` (switching branches) is a different, safe meaning and is
@@ -113,6 +116,13 @@ the opposite of what a safety layer should do.
 
 ### ASK (Bash + PowerShell)
 
+- **Every long git option is read as a possible prefix.** git accepts any unique prefix of a long
+  option (`--forc`, `--for`, even `--f` are `--force` to `git checkout`; `--har` is `--hard`;
+  `--force-w` is `--force-with-lease`), so every rule compares through `longOptionIs`, and an
+  ambiguous prefix git would refuse counts as the dangerous option too. `git checkout` and
+  `git switch` go further: a long option not on their list of known options asks. `git push origin
+  +branch` (a forced refspec) and `-uf` clusters are a force push; `git worktree remove --force`
+  asks.
 - `git merge` / `git rebase` — except a plain `git merge [--no-edit|--no-ff|--no-commit|-q] origin/main`
   (or `origin/master`) while the current branch is known and is not `main`/`master` (read as a full
   ref, see below), alone or after read-only commands (`git status/fetch/rev-parse/log/diff/show/
@@ -195,6 +205,24 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
   `.env.example`/`.sample`/`.template`.
 - An allowed read command used in a form that writes, deletes or runs something else (next
   section).
+- **Every git subcommand that is not on the hook's list.** The list (`GIT_POLICY` in
+  `safety-guard.mjs`) names each subcommand git work needs, with the options known for it:
+  the read commands (`status`, `diff`, `log`, `show`, `fetch`, `rev-parse`, `merge-base`,
+  `ls-remote`, `ls-tree`, `merge-tree`, `rev-list`, `shortlog`, `ls-files`, `blame`, `grep`,
+  `describe`, `cat-file`, `show-ref`, `for-each-ref`, `check-ignore`, `name-rev`, `version`),
+  the read forms of `symbolic-ref`, `reflog`, `tag`, `remote` and `config`, and the working
+  commands (`add`, `commit`, `push`, `pull`, `merge`, `rebase`, `branch`, `checkout`, `switch`,
+  `restore`, `reset`, `rm`, `clean`, `stash`, `worktree`, `init`, `clone`), which the rules
+  above judge further. Anything else asks: plumbing (`checkout-index`, `read-tree`,
+  `update-ref`, `update-index`, `reflog expire/delete`, `gc`, `prune`, `filter-branch`,
+  `replace`), a subcommand git adds later, a forced or renaming branch (`branch -f`, `-M`,
+  `-C`), `checkout -B`, `switch -C`, `rm -f`, a push with a refspec (`a:b`, `+b`), a writing
+  `config`/`tag`/`remote`, and any global option other than `-C`, `-c`, `--config-env`,
+  `--no-pager`, `-P`, `--no-optional-locks`, `--literal-pathspecs`, `--no-replace-objects`.
+  Each loss above was proven with real git in the tests. Measured cost: none of the 1,252
+  replayed Bash calls that ran silently before asks now.
+- `git restore --pathspec-from-file=<file>` (and every prefix of the option, `--pathspec-f=`)
+  names its targets in a file: it is judged like `git restore <path>`.
 
 ### How the hook reads a command line
 
@@ -259,7 +287,21 @@ worktrees live under the temporary directory too; the search for a `.git` goes u
 of the file system, so a TMPDIR inside a repository counts too) and no part of its path, existing
 or not yet, is `.git`. A line that creates a work tree (`git init`, `git clone`,
 `git worktree add`) gets no temporary-directory exemption at all: the folder it creates is not a
-work tree yet when the hook looks. **An existing
+work tree yet when the hook looks. If `git worktree move`, `git submodule add`, `cp -r`, `tar x` or any
+other command that can create or move a work tree is ever added to the allow list, it must be
+added to `createsGitWorkTree` too. A redirect may use a variable only when its value is certain: the
+line consists only of plain assignments `NAME=value` (no `$`, backtick, quotes or substitution in
+the value; `export NAME=value` too) and plain commands, joined by `;` or a newline (or by `&&`
+while everything before is a plain assignment), with no `||`, pipe or background job; the
+assignment comes before the redirect; and the name is not set or mentioned in any other way
+before it (`read S`, `for S in`, `S+=`, `${S:=x}`, `unset S`, `S=$(...)`, `S=x cmd`, a second
+assignment, `eval`, `source`, `declare`, a loop, a function ...). Otherwise the variable is
+unknown and the redirect asks. A setter word (`read`, `printf`, `declare`, `mapfile`, `let`,
+...) at the command position of ANY part, after peeling `!`, `time [-p]`, `command`,
+`builtin`, `nohup`, `exec`, `env [options] [NAME=value]...` and leading `NAME=value` (again and
+again), or any indirection (`${!x}`, an assignment inside `$(( ))` or `(( ))`, which also covers
+`$(( $T = 5 ))`), makes EVERY variable of the line unknown: `T=S; time read $T` sets `S`
+without naming it, as the tests prove with real bash. **An existing
 file always asks**, whatever it is: rewriting or appending to it may change something that runs
 later — a script, a `package.json` (npm run), a SQL file (psql -f), a patch (git apply), a list
 (xargs), a `postgresql.conf` (pg_ctl start runs its commands). Measured on the replay: 29 of

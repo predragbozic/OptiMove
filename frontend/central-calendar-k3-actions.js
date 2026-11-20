@@ -251,12 +251,12 @@ async function restoreK3({ key, entry }, draft) {
   }
   if (generation !== restoreGeneration || state.builder !== builder || builder.k3 || !view || view.status === "cancelled" || view.canManage !== true) return;
   if (!draftPlanIds(builder.draft).some((id) => entry.planIds.includes(id))) return;
-  // One way to an event at a time: a K2c-2 "Make an event" write that is in
-  // flight or not confirmed keeps its panel, and the band waits (the memory
-  // stays for the next time this plan opens); an idle panel closes.
-  const panel = builder.calendarEvent;
-  if (panel && (panel.phase === "sending" || panel.phase === "unconfirmed")) return;
-  builder.calendarEvent = null;
+  // One way to an event at a time: while the Builder's events row (K2c-3)
+  // has a write in flight, a result not confirmed or its question open, it
+  // stays and the band waits (the memory stays for the next time this plan
+  // opens) - the band would hide the row and its Check result.
+  const row = builder.events;
+  if (row && (row.write || row.pending || row.ask)) return;
   const item = {
     key: entry.eventKey, eventId: entry.eventId, date: entry.date, title: view.title, eventKind: view.eventKind,
     startTime: view.startTime, endTime: view.endTime, place: view.place, location: view.location, expects: view.expects,

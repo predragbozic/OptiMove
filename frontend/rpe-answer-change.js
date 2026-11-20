@@ -33,14 +33,15 @@ function isExternalRated(session) {
 // deadline while it may change; "Your RPE: 7 · Answers closed at 22:00." once
 // the window has passed; "" for every other row (the caller keeps its own
 // summary).
-export function renderRpeAnswerLineHtml(session, { now = new Date() } = {}) {
+// `action`: the button's data-action (the Calendar's own, which opens the form from its own read; extra: its dataset).
+export function renderRpeAnswerLineHtml(session, { now = new Date(), action = "training-load-rpe-change-open", extra = "" } = {}) {
   if (!isExternalRated(session)) return "";
   const rpe = escapeHtml(String(session.feedback.rpe));
   if (session.changeable) {
     const until = rpeChangeTimeText(session.closesAt, now);
     return `<div class="training-load-rpe-answer">
         <span class="training-load-rpe-answer-value">Your RPE: ${rpe}</span>
-        <button type="button" class="plain-button compact-button training-load-rpe-change" data-action="training-load-rpe-change-open" data-assignment-id="${escapeAttr(session.externalAssignmentId)}" aria-label="${escapeAttr(`Change your RPE, ${session.sessionName || "session"}`)}">Change</button>
+        <button type="button" class="plain-button compact-button training-load-rpe-change" data-action="${escapeAttr(action)}" data-assignment-id="${escapeAttr(session.externalAssignmentId)}"${extra} aria-label="${escapeAttr(`Change your RPE, ${session.sessionName || "session"}`)}">Change</button>
         ${until ? `<span class="muted training-load-rpe-answer-until">You can change it until ${escapeHtml(until)}.</span>` : ""}
       </div>`;
   }

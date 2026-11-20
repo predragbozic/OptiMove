@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1137,10 +1137,10 @@ test("new ASK rules: stash pop, branch -D, deleting a remote branch, pull --reba
   expectAll([
     ["git stash pop", ASK], ["git stash pop stash@{1}", ASK], ["git stash", ALLOW], ["git stash list", ALLOW], ["git stash show -p", ALLOW], ["git stash apply", ALLOW],
     ["git branch -D x", ASK], ["git branch -d -f x", ASK], ["git branch --delete --force x", ASK], ["git branch -df x", ASK], ["git branch -Dq x", ASK],
-    ["git branch -d x", ALLOW], ["git branch --show-current", ALLOW], ["git branch -f x HEAD", ALLOW], ["git branch", ALLOW],
+    ["git branch -d x", ALLOW], ["git branch --show-current", ALLOW], ["git branch -f x HEAD", ASK], ["git branch", ALLOW],
     ["git push origin --delete x", ASK], ["git push -d origin x", ASK], ["git push origin :x", ASK], ["git push origin +:x", ASK],
     ["git push --prune origin", ASK], ["git push --mirror", ASK],
-    ["git push origin x:y", ALLOW], ["git push -u origin fix/x", ALLOW], ["git push --dry-run origin x", ALLOW],
+    ["git push origin x:y", ASK], ["git push -u origin fix/x", ALLOW], ["git push --dry-run origin x", ALLOW],
     ["git pull --rebase", ASK], ["git pull --rebase=merges", ASK], ["git pull --rebase=interactive origin main", ASK], ["git pull -r", ASK], ["git pull -qr", ASK],
     ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW], ["git pull", ALLOW], ["git pull --ff-only", ALLOW],
   ]);
@@ -1480,4 +1480,236 @@ test("LOW-2: a temporary directory that lies inside a repository is a work tree"
     if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+// ------------------------------------------------------------------
+// A false deny from practice (2026-11-19): `git -C <wt> checkout -q --detach <ref> && git diff
+// ... -- path > x.patch` was denied as "checkout -- <path>". The cause was not the later
+// segment's `--`: `--detach <ref>` alone was read as a possible path whenever the ref could
+// not be verified from the hook (no repository there yet). Forms that take a commit or a
+// branch, never a path, are not a discard.
+// ------------------------------------------------------------------
+
+test("checkout: --detach, --orphan and --track take a ref, never a path; the discard forms stay denied", () => {
+  const nowhere = path.join(tmpdir(), "sg-no-such-worktree");
+  expectAll([
+    [`git -C ${nowhere} checkout -q --detach origin/docs/x && git diff 10eeff5 origin/docs/x -- docs/ai/a.md > ${nowhere}/new-r2.patch`, ALLOW], // the line from practice: a new file outside any work tree, and a checkout that cannot discard
+    [`git -C ${nowhere} checkout -q --detach origin/docs/x`, ALLOW], ["git checkout -q --detach origin/docs/x", ALLOW], ["git checkout --detach no-such-ref", ALLOW],
+    ["git checkout --orphan gh-pages", ALLOW], ["git checkout -t origin/feature/x", ALLOW], ["git checkout --track origin/feature/x", ALLOW],
+    ["git checkout --track=direct origin/x", ALLOW], ["git checkout -b x", ALLOW], ["git checkout -q -B x origin/main", ASK], ["git checkout -", ALLOW],
+    ["git checkout -q --detach HEAD && git diff -- a.md", ALLOW], ["git checkout -b x && git diff -- y", ALLOW],
+    // still denied, in every position and wrapper
+    ["git checkout -- a.js", DENY], ["git checkout .", DENY], ["git -C dir checkout -- .", DENY], ["git checkout HEAD -- path", DENY],
+    ["cd x && git checkout -- .", DENY], ['bash -c "git checkout -- ."', DENY], ["git status; git checkout -- a.js", DENY], ["git status; git checkout .", DENY],
+    ["git checkout --detach HEAD -- path", DENY], ["git checkout -q -- .", DENY], ["git checkout no-such-file-or-ref", DENY], ["git checkout a b", DENY],
+  ]);
+});
+
+test("rules that look at more than one part of a line: tokens of one part never count for another", () => {
+  expectAll([
+    ["git restore --staged a && git diff -- b", ALLOW], ["git stash list && git diff -- x", ALLOW], ["git clean -n && echo -f", ALLOW],
+    ["git reset HEAD a && echo --hard", ALLOW], ["git push origin feature/x && echo --force", ALLOW], ["git branch -d x && echo -D", ALLOW],
+    ["git restore a && git diff --staged", DENY], ["git stash drop && git status", DENY], ["echo -n && git clean -f", DENY], ["echo x; git reset --hard", DENY],
+  ]);
+});
+
+test("a redirect sees only the assignments made before it in the line", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-order-"));
+  try {
+    expectAll([
+      [`cat x > $S/a; S=${tmp}`, ASK], [`cat x > $S/a && S=${tmp} && cat y > $S/b`, ASK], [`S=${tmp}; cat x > $S/a`, ALLOW],
+      [`S=${tmp} && grep -n y f > $S/b.txt && S=/etc`, ALLOW], [`S=${tmp}; S=/etc; cat x > $S/a`, ASK], [`S=/etc; cat x > $S/a; S=${tmp}`, ASK],
+      [`bash -c "cat x > \\$S/a"; S=${tmp}`, ASK],
+    ]);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------
+// Review of #665, HIGH-1: a variable the hook resolves to a temp path that the shell sets
+// somewhere else first. Real execution proves the loss; the hook must ask.
+// ------------------------------------------------------------------
+
+test("HIGH-1 (proof by execution): read/for/$(...)/eval set the variable before the redirect; the hook asks", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-var-"));
+  const y = path.join(tmp, "y");
+  try {
+    for (const line of [`S=${y}; read S < list; cat g.txt > $S`, `S=${y}; for S in f.txt; do :; done; cat g.txt > $S`,
+      `S=${y}; S=$(echo f.txt); cat g.txt > $S`, `S=${y}; eval S=f.txt; cat g.txt > $S`]) {
+      writeFileSync(path.join(tmp, "f.txt"), "precious\n");
+      writeFileSync(path.join(tmp, "g.txt"), "overwritten\n");
+      writeFileSync(path.join(tmp, "list"), "f.txt\n");
+      execFileSync("bash", ["-c", line], { cwd: tmp });
+      assert.equal(readFileSync(path.join(tmp, "f.txt"), "utf8"), "overwritten\n", `the shell wrote elsewhere: ${line}`);
+      assert.equal(verdict(line, tmp), ASK, line);
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("HIGH-1: every other way of setting the variable, or an assignment that may not run, makes it unknown", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-var2-"));
+  const y = path.join(tmp, "y");
+  try {
+    expectAll([
+      [`S=${y}; unset S; cat g > $S`, ASK], [`S=${y}; S+=x; cat g > $S`, ASK], [`S=${y}; declare S=f; cat g > $S`, ASK], [`S=${y}; typeset S=f; cat g > $S`, ASK],
+      [`S=${y}; readonly S=f; cat g > $S`, ASK], [`f() { local S=x; }; S=${y}; cat g > $S`, ASK], [`S=${y}; printf -v S f; cat g > $S`, ASK],
+      [`S=${y}; mapfile S < l; cat g > $S`, ASK], [`S=${y}; let S=1; cat g > $S`, ASK], [`S=${y}; getopts a S; cat g > $S`, ASK],
+      [`S=${y}; if true; then S=f; fi; cat g > $S`, ASK], [`S=${y}; : \${S:=f}; cat g > $S`, ASK], [`S=${y}; source x.sh; cat g > $S`, ASK],
+      [`S=${y}; . x.sh; cat g > $S`, ASK], [`false && S=${y}; cat g > $S`, ASK], [`true || S=${y}; cat g > $S`, ASK], [`S=${y} | true; cat g > $S`, ASK],
+      [`S=${y}; select S in a; do break; done; cat g > $S`, ASK], [`S=${y}; S=x cat a; cat g > $S`, ASK], [`S=${y}; export S=f; cat g > $S`, ASK],
+      [`S=${y}; echo "$S" & cat g > $S`, ASK], [`S="${y}"; cat g > $S`, ASK], [`S=${y}/$X; cat g > $S`, ASK],
+      // certain: plain assignments and plain commands joined by ; or a newline (or && from the start)
+      [`S=${y}; cat g > $S/new1.txt`, ALLOW], [`S=${y}\ncat g > $S/new2.txt`, ALLOW], [`S=${y} && cat g > $S/new3.txt`, ALLOW],
+      [`export S=${y}; grep -n x f > \${S}/new4.txt`, ALLOW], [`A=1 && S=${y} && cat g > $S/new5.txt`, ALLOW],
+      [`S=${y}; echo $S; cat g > $S/new6.txt`, ALLOW], [`S=${y}; git status && cat g > $S/new7.txt`, ALLOW],
+    ], tmp);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------
+// Review of #665, HIGH-2: abbreviated long options. Real execution proves git accepts them.
+// ------------------------------------------------------------------
+
+test("HIGH-2 (proof by execution): abbreviated force options discard a change; the hook stops each", () => {
+  const repo = makeRepo("sg-abbr-", "main");
+  const git = (...a) => execFileSync("git", a, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(path.join(repo, "f.txt"), "a\n");
+  git("add", "f.txt"); git("commit", "-qm", "f"); git("branch", "other");
+  try {
+    for (const [cmd, args] of [["git checkout --forc other", ["checkout", "--forc", "other"]], ["git checkout --f other", ["checkout", "--f", "other"]],
+      ["git switch --disc other", ["switch", "--disc", "other"]], ["git reset --har", ["reset", "--har", "-q"]]]) {
+      writeFileSync(path.join(repo, "f.txt"), "dirty\n");
+      git(...args);
+      assert.equal(readFileSync(path.join(repo, "f.txt"), "utf8"), "a\n", `git did not discard with ${cmd}`);
+      git("checkout", "-q", "main");
+      const v = verdict(cmd, repo);
+      assert.ok(v === ASK || v === DENY, `${cmd}: ${v}`);
+    }
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+test("HIGH-2: every git rule reads a long option as a possible prefix", () => {
+  expectAll([
+    // `other` and `x` are no revisions here, so checkout is denied by the discard rule before the forcing rule asks
+    ["git checkout --forc other", DENY], ["git checkout --for other", DENY], ["git checkout --f other", DENY], ["git checkout --bogus x", DENY],
+    ["git checkout --forc HEAD", ASK], ["git checkout --f HEAD", ASK], ["git checkout --bogus HEAD", ASK],
+    ["git switch --disc other", ASK], ["git switch --dis other", ASK], ["git switch --force other", ASK], ["git switch --forc other", ASK],
+    // an abbreviation of a SAFE option is not on the list either: it asks (strict)
+    ["git switch --force-c x origin/main", ASK], ["git switch --force-create x origin/main", ASK], ["git switch --cre x", ASK], ["git checkout --det HEAD", ASK], ["git switch --create x", ALLOW], ["git checkout --detach HEAD", ALLOW],
+    ["git checkout --quiet -b x", ALLOW], ["git switch --no-guess x", ALLOW],
+    ["git reset --har", DENY], ["git reset --h HEAD~1", DENY], ["git reset --mer", ASK], ["git reset --kee HEAD~1", ASK], ["git reset --soft HEAD~1", ALLOW],
+    ["git clean --forc", DENY], ["git clean -d --fo", DENY], ["git clean --forc --dry", ASK], ["git clean -n -d", ALLOW],
+    ["git push --force-w origin x", DENY], ["git push --forc origin x", DENY], ["git push -uf origin x", DENY], ["git push origin +x", DENY], ["git push origin +x:y", DENY],
+    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ALLOW], ["git push --follow-tags origin x", ASK],
+    ["git branch --del --forc x", ASK], ["git branch --del x", ASK], ["git branch --delete x", ALLOW],
+    ["git restore --work f", DENY], ["git restore --stag f", ASK], ["git restore --staged f", ALLOW], ["git restore --stag --work f", DENY],
+    ["git pull --reb", ASK], ["git pull --reb=false", ASK], ["git pull --no-reb", ASK], ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW],
+    ["git worktree remove --forc ../w", ASK], ["git worktree remove -f ../w", ASK], ["git worktree remove ../w", ALLOW],
+  ]);
+});
+
+// ------------------------------------------------------------------
+// Second review of #665, HIGH-1: a setter behind `!`, `time`, `command`, `builtin`, `env`, or any
+// indirect name. Real bash proves each writes somewhere else than the plain reading says.
+// ------------------------------------------------------------------
+
+test("HIGH-1 (proof by execution): a setter behind a prefix or an indirect name moves the redirect; the hook asks", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-indirect-"));
+  const safe = path.join(tmp, "safe");
+  const other = path.join(tmp, "other.txt");
+  mkdirSync(safe);
+  writeFileSync(path.join(tmp, "list"), `${other}\n`);
+  writeFileSync(path.join(tmp, "g"), "hi\n");
+  try {
+    const lines = [
+      `S=${safe}/n.txt; T=S; time read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; ! read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time -p read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; command read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; builtin read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time printf -v $T %s ${other}; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time declare $T=${other}; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time mapfile -t $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; ! time command builtin read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; echo $(( $T = 5 )) >/dev/null; cat g > $S`,
+      `S=${safe}/n.txt; X=$(read S < list; echo); cat g > $S`,
+      `S=; T=S; : \${!T:=${other}}; cat g > $S`,
+    ];
+    for (const line of lines) {
+      rmSync(other, { force: true });
+      rmSync(path.join(tmp, "5"), { force: true });
+      execFileSync("bash", ["-c", line], { cwd: tmp, stdio: ["ignore", "pipe", "pipe"] });
+      const moved = existsSync(other) || existsSync(path.join(tmp, "5"));
+      const expectedTarget = existsSync(path.join(safe, "n.txt"));
+      // a subshell assignment does not leak: that line proves only that the hook does not trust it
+      if (!line.includes("X=$(")) assert.ok(moved && !expectedTarget, `bash did not move the redirect: ${line}`);
+      rmSync(path.join(safe, "n.txt"), { force: true });
+      assert.equal(verdict(line, tmp), ASK, line);
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("HIGH-1: indirection in any form makes every variable unknown", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-indirect2-"));
+  const y = path.join(tmp, "y");
+  try {
+    expectAll([
+      [`S=${y}; env A=1 read S < l; cat g > $S`, ASK], [`S=${y}; echo \${!S}; cat g > $S`, ASK], [`S=${y}; T=S; echo \${!T}; cat g > $S/new0.txt`, ASK], [`S=${y}; declare -n R=S; cat g > $S`, ASK],
+      [`S=${y}; (( S = 1 )); cat g > $S`, ASK], [`S=${y}; echo $(( S = 1 )); cat g > $S`, ASK], [`S=${y}; { read S; } < l; cat g > $S`, ASK],
+      [`S=${y}; nohup read S < l; cat g > $S`, ASK], [`S=${y}; A=1 read S < l; cat g > $S`, ASK],
+      // comparisons in arithmetic are not assignments
+      [`S=${y}; echo $(( 1 == 1 )); cat g > $S/new1.txt`, ALLOW], [`S=${y}; echo $(( 2 >= 1 )); cat g > $S/new2.txt`, ALLOW],
+    ], tmp);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------
+// HIGH-3 and the old silent losses: each proven by real git, each stopped by the hook.
+// ------------------------------------------------------------------
+
+test("HIGH-3 and the git list (proof by execution): every command that loses data asks or is denied", () => {
+  const cases = [
+    ["git restore --pathspec-from-file=list", (g, r) => { writeFileSync(path.join(r, "list"), "f.txt\n"); g("restore", "--pathspec-from-file=list"); }, "work"],
+    ["git restore --pathspec-from=list", (g, r) => { writeFileSync(path.join(r, "list"), "f.txt\n"); g("restore", "--pathspec-from=list"); }, "work"],
+    ["git rm -f f.txt", (g) => g("rm", "-qf", "f.txt"), "work"],
+    ["git checkout-index -f -a", (g) => g("checkout-index", "-f", "-a"), "work"],
+    ["git read-tree -u --reset HEAD", (g) => g("read-tree", "-u", "--reset", "HEAD"), "work"],
+    ["git checkout -B main HEAD~1", (g) => { g("checkout", "-q", "-b", "w"); g("checkout", "-q", "-B", "main", "HEAD~1"); }, "commit"],
+    ["git switch -C main HEAD~1", (g) => { g("checkout", "-q", "-b", "w"); g("switch", "-q", "-C", "main", "HEAD~1"); }, "commit"],
+    ["git branch -f main HEAD~1", (g) => { g("checkout", "-q", "-b", "w"); g("branch", "-f", "main", "HEAD~1"); }, "commit"],
+    ["git branch -M w main", (g) => { g("checkout", "-q", "-b", "w", "HEAD~1"); g("branch", "-M", "w", "main"); }, "commit"],
+    ["git branch --mov --forc w main", (g) => { g("checkout", "-q", "-b", "w", "HEAD~1"); g("branch", "--mov", "--forc", "w", "main"); }, "commit"],
+    ["git update-ref -d refs/heads/main", (g) => { g("checkout", "-q", "--detach", "HEAD~1"); g("update-ref", "-d", "refs/heads/main"); }, "commit"],
+    ["git reflog expire --expire-unreachable=now --all", (g, r) => { writeFileSync(path.join(r, "f.txt"), "stash\n"); g("stash", "-q"); g("update-ref", "-d", "refs/stash"); g("reflog", "expire", "--expire-unreachable=now", "--all"); g("gc", "-q", "--prune=now"); }, "stash"],
+  ];
+  for (const [cmd, run, kind] of cases) {
+    const repo = makeRepo("sg-loss-", "main");
+    const g = (...a) => execFileSync("git", a, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] }).toString();
+    try {
+      writeFileSync(path.join(repo, "f.txt"), "a\n");
+      g("add", "f.txt"); g("commit", "-qm", "two");
+      const tip = g("rev-parse", "main").trim();
+      if (kind === "work") writeFileSync(path.join(repo, "f.txt"), "dirty\n");
+      let stashSha = "";
+      run(g, repo);
+      if (kind === "work") assert.notEqual(existsSync(path.join(repo, "f.txt")) ? readFileSync(path.join(repo, "f.txt"), "utf8") : "", "dirty\n", `git kept the change: ${cmd}`);
+      if (kind === "commit") { let now = ""; try { now = g("rev-parse", "--verify", "-q", "main").trim(); } catch { now = "(gone)"; } assert.notEqual(now, tip, `git kept main: ${cmd}`); }
+      if (kind === "stash") assert.equal(g("fsck", "--lost-found", "--no-reflogs").includes("dangling commit"), false, `the stash survived: ${cmd} ${stashSha}`);
+      const v = verdict(cmd, repo);
+      assert.ok(v === ASK || v === DENY, `${cmd}: ${v}`);
+    } finally { rmSync(repo, { recursive: true, force: true }); }
+  }
+});
+
+test("the git list: plumbing and unknown subcommands ask; listed read forms stay silent", () => {
+  expectAll([
+    ["git checkout-index -a", ASK], ["git read-tree HEAD", ASK], ["git update-ref refs/heads/x HEAD", ASK], ["git reflog expire --all", ASK],
+    ["git reflog delete HEAD@{1}", ASK], ["git gc", ASK], ["git prune", ASK], ["git filter-branch", ASK], ["git replace a b", ASK],
+    ["git notes add -m x", ASK], ["git am p.patch", ASK], ["git apply p.patch", ASK], ["git config user.name x", ASK],
+    ["git tag v1", ASK], ["git tag -d v1", ASK], ["git remote add x y", ASK], ["git symbolic-ref HEAD refs/heads/x", ASK],
+    ["git --git-dir=x status", ASK], ["git --work-tree=x checkout .", DENY], ["git frobnicate", ASK], ["git update-index --assume-unchanged f", ASK],
+    ["git restore --pathspec-from-file=list", DENY], ["git restore --pathspec-f=list", DENY], ["git restore --staged --pathspec-from-file=list", ASK],
+    ["git status", ALLOW], ["git log --oneline -5", ALLOW], ["git reflog -5", ALLOW], ["git tag -l", ALLOW], ["git tag --list 'v*'", ALLOW],
+    ["git remote -v", ALLOW], ["git config --get user.name", ALLOW], ["git symbolic-ref HEAD", ALLOW], ["git cat-file -p HEAD", ALLOW],
+    ["git -C . status", ALLOW], ["git --no-pager log -1", ALLOW], ["git rev-list --count HEAD", ALLOW],
+  ]);
 });
