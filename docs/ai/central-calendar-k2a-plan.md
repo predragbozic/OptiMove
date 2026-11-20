@@ -201,6 +201,29 @@ Two keys could identify a linked session:
   (the audit keeps the attach). `logical_session_id_at_link` and `session_name_at_link` are kept as
   information only.
 
+**Amended 2026-11-20: the link identity guard** (the calendar stream's item 5, after a reproduction on `main`
+`c2cc1560`; GO by the stream manager). The slot alone was not enough: `session_order` is the day's maximum plus
+one (`builder.js`, the add and paste routes), so removing a day's last session and adding a new one in the same
+half-day and phase reuses the slot, and every slot-keyed read then took the NEW session as the linked one (the
+fold, RPE x/y, the manager view's state, the event's time in the Weekly plan) and *Align* wrote its flags. Now
+the link stays keyed by its slot, and the session in the slot must ALSO be the one it was made for:
+`ps.logical_session_id = l.logical_session_id_at_link` in the four slot reads (`calendarQuery.js`
+`readEventSessionLinks`; `linkedSessionTimes.js`, through the row's own `plan_session_id`; `calendarEventService.js`
+`EVENT_VIEW_SQL` and `alignSessions`). No migration: the column has been written by every attach since v49.
+- A session removed, replaced (also by one of the same name) or moved to another slot leaves the link
+  **orphaned**: counted on the card, shown in the manager view, detachable; never read as another session.
+  *Align* never writes to a session the link was not made for (two layers: its read, and the orphan flag after
+  the plans' locks).
+- **Re-linking:** attaching the new session to the **same** event ends that event's orphan of the slot (by the
+  coach, in the same command) and links the new one. A slot that holds **another** event's orphan stays
+  `409 session_already_attached` until that event's organiser detaches it.
+- The batch-sync reason above does not apply to links: a sync re-mints ids only on **draft** siblings
+  (`builder.js`, the batch-sync header), and a link always names a published session; an edit of a published
+  plan keeps its logical ids (`preserveLogicalId`).
+- **Known effect, fail-closed:** a replacement the coach meant to keep linked (a whole-week or a day paste over
+  the plan, a session deleted and re-made) now shows as an orphaned link; the coach re-links it.
+- Tests: `backend/tests/central-calendar-link-identity-guard.test.mjs` (through the real routes).
+
 ### 2.3 What the card shows for an event with linked plans
 
 - Title, kind and type from the event; `athletes` = the targets on the day; per athlete `rpe` from the linked

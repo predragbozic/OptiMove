@@ -370,6 +370,8 @@ const EVENT_VIEW_SQL = `
                where p.id = l.plan_id and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
                  and pd.date = l.day and ps.am_pm is not distinct from l.am_pm and ps.bta is not distinct from l.bta
                  and ps.session_order = l.session_order
+                 -- The link identity guard: only the session the link was made for; another session in the slot leaves it orphaned.
+                 and ps.logical_session_id = l.logical_session_id_at_link
                order by ps.id
                limit 1
             ) s on true
@@ -1475,13 +1477,20 @@ async function readLinkableSessions(client, ctx, eventId, logicalSessionIds, { l
             pwo.owner_scope, pwo.owner_user_id, pwo.owner_club_id, pwo.owner_team_id, ot.club_id as owner_team_club_id,
             (${scope}) as in_scope, (${targeted}) as targeted,
             coalesce(training_load.planned_rpe_effective_for_plan(p.id, pd.date), false) as switch_on,
-            (select l.event_id from calendar.event_session_links l
-              where l.plan_id = p.id and l.day = pd.date and l.am_pm is not distinct from ps.am_pm
-                and l.bta is not distinct from ps.bta and l.session_order = ps.session_order and l.ended_at is null) as linked_event_id
+            sl.event_id as linked_event_id, sl.id as slot_link_id,
+            (sl.id is not null and sl.logical_session_id_at_link is distinct from ps.logical_session_id) as slot_link_orphaned
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
        join plans.plans p on p.id = pd.plan_id
        join public.athletes ath on ath.id = p.athlete_id
+       -- The live link of the session's slot (at most one, event_session_links_one_live_per_slot). Its
+       -- logical_session_id_at_link tells whether it is this session's link or an orphan of a session that
+       -- was removed or moved (the link identity guard).
+       left join lateral (
+         select l.id, l.event_id, l.logical_session_id_at_link from calendar.event_session_links l
+          where l.plan_id = p.id and l.day = pd.date and l.am_pm is not distinct from ps.am_pm
+            and l.bta is not distinct from ps.bta and l.session_order = ps.session_order and l.ended_at is null
+       ) sl on true
        left join training_load.plan_workspace_ownership pwo on pwo.plan_id = p.id
        left join public.teams ot on ot.id = pwo.owner_team_id
       where ps.logical_session_id = any($1::uuid[]) and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
@@ -1600,7 +1609,11 @@ async function alignLinkedSessions(client, ctx, eventRow, sessions, confirmDisab
 // 2.2), the session's athlete a target of the event on that day, the session
 // on one of the event's days, inside the caller's calendar scope and of a
 // plan inside the event owner's tree (withinEventOwner); a slot already
-// linked to this event is kept (idempotent), to another event is a 409. `alignSessions: true` aligns the named sessions' flags (D20).
+// linked to this event for this same session is kept (idempotent), a slot
+// that holds this event's link of another session (an orphan: the linked one
+// was removed or moved, the link identity guard) is re-linked to the session
+// named, and a slot linked to another event is a 409. `alignSessions: true`
+// aligns the named sessions' flags (D20).
 export async function attachSessions(ctx, eventId, body) {
   if (!isUuid(eventId)) throw notFound();
   const { requestKey, canonical } = validateAttachSessionsBody(body);
@@ -1627,7 +1640,18 @@ export async function attachSessions(ctx, eventId, body) {
     await lockPlansForShare(client, unlocked.map((x) => x.plan_id));
     const sessions = await readLinkableSessions(client, ctx, row.id, canonical.logicalSessionIds, { lockSessions: canonical.alignSessions });
     judgeSessionsForLink(owner, row, sessions, canonical.logicalSessionIds, row.id);
-    const fresh = sessions.filter((x) => !x.linked_event_id);
+    // The link identity guard: a slot that still holds THIS event's link of a
+    // session removed or moved since (an orphan) is re-linked to the session
+    // now named: the orphan is ended by this coach in the same command, then the
+    // new link is written. A live link of this very session stays (idempotent).
+    const orphans = sessions.filter((x) => x.linked_event_id && x.slot_link_orphaned);
+    if (orphans.length) {
+      await client.query(
+        `update calendar.event_session_links set ended_at = now(), ended_by_user_id = $2 where id = any($1::uuid[]) and ended_at is null`,
+        [[...new Set(orphans.map((x) => String(x.slot_link_id)))].sort(), ctx.userId],
+      );
+    }
+    const fresh = sessions.filter((x) => !x.linked_event_id || x.slot_link_orphaned);
     if (fresh.length) await insertSessionLinks(client, row.id, ctx.userId, fresh);
     const alignment = canonical.alignSessions ? await alignLinkedSessions(client, ctx, row, sessions, canonical.confirmDisableWithResults) : null;
     if (liveRpe) {
@@ -1707,6 +1731,8 @@ export async function alignSessions(ctx, eventId, body) {
          join plans.plan_days pd on pd.plan_id = p.id and pd.date = l.day
          join plans.plan_sessions ps on ps.plan_day_id = pd.id and ps.am_pm is not distinct from l.am_pm
                                     and ps.bta is not distinct from l.bta and ps.session_order = l.session_order
+                                    -- The link identity guard: never align a session the link was not made for.
+                                    and ps.logical_session_id = l.logical_session_id_at_link
          join calendar.events e on e.id = l.event_id
         where l.event_id = $1 and l.ended_at is null and l.day between e.day and coalesce(e.end_day, e.day)
           and ${WEEKLY_PLAN_SESSION_FILTER_SQL}`,
@@ -1717,7 +1743,7 @@ export async function alignSessions(ctx, eventId, body) {
     const logicalIds = [...new Set(linked.map((r) => String(r.logical_session_id)))].sort();
     // Under the plan locks: only the sessions still linked to this event.
     const sessions = (await readLinkableSessions(client, ctx, row.id, logicalIds, { lockSessions: true }))
-      .filter((x) => String(x.linked_event_id) === String(row.id));
+      .filter((x) => String(x.linked_event_id) === String(row.id) && !x.slot_link_orphaned);
     if (!sessions.length) throw conflict("nothing_to_align", "This event has no linked session to align.");
     const alignment = await alignLinkedSessions(client, ctx, row, sessions, canonical.confirmDisableWithResults);
     await bumpRevision(client, row.id);
