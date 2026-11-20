@@ -28,8 +28,10 @@ import {
 import { CC_WAITING_SENTENCE, ccPanelAskOffered, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
 import {
   ccAnswerEntries,
+  ccAnswersReadable,
   ccAnswersSummary,
-  ccAnswersSummaryText,
+  ccAnswersSummaryParts,
+  ccAnswersSummarySpoken,
   ccAnswersWanted,
   ccAthleteAnswerText,
   ccChangedAtOf,
@@ -862,11 +864,16 @@ function renderPanelAthletesHtml(item, cal, roster) {
   const questionsRead = cal.panelQuestions && cal.panelQuestions.key === item.key ? cal.panelQuestions.read : null;
   let summaryHtml = "";
   if (manager) {
-    if (!answersView || answersView.loading) summaryHtml = `<p class="cc-panel-note cc-answers-summary" role="status">Loading answers…</p>`;
-    else if (answersView.error) summaryHtml = `<p class="cc-panel-note cc-answers-summary">Answers could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-answers-retry">Try again</button>`;
+    // A panel with nothing that can carry a value reads nothing: its summary
+    // (if anybody is counted) comes from the card's states alone.
+    const reads = ccAnswersReadable(item);
+    if (reads && (!answersView || answersView.loading)) summaryHtml = `<p class="cc-panel-note cc-answers-summary" role="status">Loading answers…</p>`;
+    else if (reads && answersView.error) summaryHtml = `<p class="cc-panel-note cc-answers-summary" role="status">Answers could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-answers-retry">Try again</button>`;
     else {
-      const text = ccAnswersSummaryText(ccAnswersSummary(athletes, entries));
-      if (text) summaryHtml = `<p class="cc-answers-summary">${text.split(" · ").map((part) => `<span>${escapeHtml(part)}</span>`).join(`<span aria-hidden="true"> · </span>`)}</p>`;
+      const summary = ccAnswersSummary(athletes, entries);
+      const parts = ccAnswersSummaryParts(summary);
+      // A line breaks only at "·" (each part stays whole); the spoken label says "2 of 12".
+      if (parts.length) summaryHtml = `<p class="cc-answers-summary" role="status" aria-label="${escapeAttr(ccAnswersSummarySpoken(summary))}">${parts.map((part) => `<span class="cc-answers-part">${escapeHtml(part)}</span>`).join(` <span aria-hidden="true">·</span> `)}</p>`;
     }
   }
   return `${head}${summaryHtml}<ul class="cc-athletes" role="list">
@@ -886,11 +893,15 @@ function renderPanelAthletesHtml(item, cal, roster) {
             ${side}<span class="cc-athlete-note">Not in this workspace's roster</span></span>
           </div></li>`;
         }
-        const spoken = [athlete.name || "Athlete", ccSpokenAnswerText(answerText || ""), changedText, excluded ? "no longer in this event" : "", `open the weekly plan on ${centralCalendarLongDate(item.date)}`].filter(Boolean).join(", ");
+        // A reader's row is exactly today's (contract section 2, Q6); a manager's
+        // names its values in the label and shows where it leads.
+        const spoken = manager
+          ? [athlete.name || "Athlete", ccSpokenAnswerText(answerText || stateLabel), changedText, excluded ? "no longer in this event" : "", `open the weekly plan on ${centralCalendarLongDate(item.date)}`].filter(Boolean).join(", ")
+          : `${athlete.name || "Athlete"}, open the weekly plan on ${centralCalendarLongDate(item.date)}`;
         return `<li><button type="button" class="cc-athlete" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(athlete.athleteId)}" data-date="${escapeAttr(item.date)}" aria-label="${escapeAttr(spoken)}">
             <span class="cc-athlete-name">${escapeHtml(athlete.name || "Athlete")}</span>
-            ${side}</span>
-            <span class="cc-athlete-go" aria-hidden="true">Weekly plan ›</span>
+            ${side}</span>${manager ? `
+            <span class="cc-athlete-go" aria-hidden="true">Weekly plan ›</span>` : ""}
           </button></li>`;
       }).join("")}
     </ul>${rosterNote}`;

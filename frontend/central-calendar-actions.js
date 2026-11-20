@@ -17,7 +17,7 @@ import {
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { k3SheetAction, k3StartFromPanel } from "./central-calendar-k3-actions.js";
-import { ccAnswersPath, ccAnswersWanted } from "./central-calendar-answers.js";
+import { ccAnswersPaths, ccAnswersReadable, ccMergeWeekly } from "./central-calendar-answers.js";
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
@@ -604,7 +604,9 @@ function syncPanelAnswers(cal, render, { force = false } = {}) {
   if (state.centralCalendar !== cal || !cal.panel.open) return null;
   const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
   const current = cal.panelAnswers;
-  if (!ccAnswersWanted(item)) {
+  // Only a panel that can carry a value reads (no athletes, or nothing linked
+  // or folded that asks: no read and no "answers" line).
+  if (!ccAnswersReadable(item)) {
     if (current) cal.panelAnswers = null;
     return null;
   }
@@ -612,13 +614,15 @@ function syncPanelAnswers(cal, render, { force = false } = {}) {
   const view = { panel: cal.panel, key: item.key, loading: true, error: "", weekly: null, promise: null };
   cal.panelAnswers = view;
   render?.();
-  view.promise = fetchCentralCalendarAnswers(ccAnswersPath(item)).then((weekly) => ({ weekly }), () => ({ failed: true })).then(({ weekly, failed }) => {
-    if (state.centralCalendar !== cal || cal.panelAnswers !== view || cal.panel !== view.panel) return;
-    view.loading = false;
-    if (failed || !weekly || !Array.isArray(weekly.days)) view.error = "failed";
-    else view.weekly = weekly;
-    render?.();
-  });
+  view.promise = Promise.all(ccAnswersPaths(item).map((path) => fetchCentralCalendarAnswers(path)))
+    .then((answers) => ({ weekly: ccMergeWeekly(answers) }), () => ({ failed: true }))
+    .then(({ weekly, failed }) => {
+      if (state.centralCalendar !== cal || cal.panelAnswers !== view || cal.panel !== view.panel) return;
+      view.loading = false;
+      if (failed || !weekly) view.error = "failed";
+      else view.weekly = weekly;
+      render?.();
+    });
   return view.promise;
 }
 function syncPanelEventOnly(cal, render) {

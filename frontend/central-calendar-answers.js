@@ -15,6 +15,18 @@ export function ccAnswersWanted(item) {
   return Boolean(item && item.kind === "event" && item.canManage === true && /^\d{4}-\d{2}-\d{2}$/.test(String(item.date || "")));
 }
 
+const cardAthleteIds = (item) => [...new Set((item?.athleteIds || []).map(String).filter(Boolean))];
+
+// Whether a manager's panel reads at all: only when the card has athletes (an
+// empty athleteIds would be "no filter" to /weekly, the whole workspace) and
+// something that can carry a value - a linked session or a folded request.
+export function ccAnswersReadable(item) {
+  if (!ccAnswersWanted(item) || !cardAthleteIds(item).length) return false;
+  const sessions = (item.links?.logicalSessionIds || []).length > 0;
+  const request = item.scheduleFold?.external === "folded" && Boolean(item.links?.externalScheduleId);
+  return sessions || request;
+}
+
 export function ccMondayOf(iso) {
   const d = new Date(`${iso}T00:00:00Z`);
   const back = (d.getUTCDay() + 6) % 7;
@@ -22,22 +34,45 @@ export function ccMondayOf(iso) {
   return d.toISOString().slice(0, 10);
 }
 
-// The read of the panel's day only (Q7): its Monday, the card's athletes.
-export function ccAnswersPath(item) {
-  const ids = [...new Set((item.athleteIds || []).map(String).filter(Boolean))];
-  const params = new URLSearchParams({ weekStart: ccMondayOf(item.date) });
-  if (ids.length) params.set("athleteIds", ids.join(","));
-  return `/api/training-load/weekly?${params.toString()}`;
+// The read of the panel's day only (Q7): its Monday, the card's athletes - in
+// chunks, so a large club event's request line stays short (a URL of every
+// athlete of a big club would pass the server's header limit). Never a path
+// without athleteIds.
+export const CC_ANSWERS_CHUNK = 150;
+export function ccAnswersPaths(item) {
+  const ids = cardAthleteIds(item);
+  const paths = [];
+  for (let i = 0; i < ids.length; i += CC_ANSWERS_CHUNK) {
+    const params = new URLSearchParams({ weekStart: ccMondayOf(item.date), athleteIds: ids.slice(i, i + CC_ANSWERS_CHUNK).join(",") });
+    paths.push(`/api/training-load/weekly?${params.toString()}`);
+  }
+  return paths;
+}
+
+// The chunks' answers as one: each chunk names different athletes, so the
+// day's rows are simply put together.
+export function ccMergeWeekly(answers) {
+  const days = new Map();
+  for (const answer of answers) {
+    if (!answer || !Array.isArray(answer.days)) return null;
+    for (const day of answer.days) {
+      if (!days.has(day.date)) days.set(day.date, { date: day.date, sessions: [] });
+      days.get(day.date).sessions.push(...(Array.isArray(day.sessions) ? day.sessions : []));
+    }
+  }
+  return { days: [...days.values()] };
 }
 
 const AM_PM_RANK = { AM: 0, PM: 1 };
 const BTA_RANK = { B: 0, T: 1, A: 2 };
 const numberOr = (value, fallback) => (Number.isFinite(Number(value)) && value !== null && value !== "" ? Number(value) : fallback);
 
-// An RPE request's row is closed once its window passed or its assignment
-// is no longer open; a row not rated by then is missed (section 3).
+// The card's own sets (calendarQuery.js CLOSED_ASSIGNMENT_STATUSES): a
+// cancelled or excused assignment is not asked; a missed one, or one whose
+// window passed, unrated, is missed (section 3).
+const NOT_ASKED_ASSIGNMENT = new Set(["cancelled", "excused"]);
 function requestClosed(row, nowMs) {
-  if (["missed", "expired", "closed"].includes(String(row.assignmentStatus || ""))) return true;
+  if (String(row.assignmentStatus || "") === "missed") return true;
   const closes = Date.parse(row.closesAt || "");
   return Number.isFinite(closes) && closes <= nowMs;
 }
@@ -50,12 +85,12 @@ function entryOf(row, kind, nowMs) {
     asked = row.rpeEnabled !== false && row.workspacePlannedRpeEnabled === true;
     state = rated ? "submitted" : "missing";
   } else {
-    asked = String(row.assignmentStatus || "") !== "cancelled";
+    asked = !NOT_ASKED_ASSIGNMENT.has(String(row.assignmentStatus || ""));
     state = rated ? "submitted" : requestClosed(row, nowMs) ? "missed" : "missing";
   }
   return {
     kind,
-    label: kind === "session" ? String(row.sessionName || "").trim() || "Session" : "RPE request",
+    label: kind === "session" ? String(row.sessionName || "").trim() || "Session" : "Request",
     asked,
     state,
     rpe: rated ? Number(row.feedback.rpe) : null,
@@ -121,19 +156,26 @@ export function ccAnswersSummary(athletes, entries) {
       sum += e.rpe;
       n += 1;
     }
-    // Answered on the card, but no value read (section 1.2's membership gap).
-    if (entries && athlete.rpe === "submitted" && !values.length) unread = true;
+    // A counted athlete the read returned nothing for (section 1.2's membership
+    // gap: a former member), or answered on the card with no value read: the
+    // average may leave answers out, so the line says how many it covers.
+    if (entries && (!list.length || (athlete.rpe === "submitted" && !values.length))) unread = true;
   }
   return { answered, total: counted.length, average: n ? ccRoundAverage(sum, n) : null, values: n, partial: unread && n > 0 };
 }
 
-export function ccAnswersSummaryText(summary) {
-  if (!summary) return "";
-  const head = `Answered ${summary.answered}/${summary.total}`;
-  if (summary.average == null) return head;
-  const of = summary.partial ? ` of ${summary.values} ${summary.values === 1 ? "answer" : "answers"}` : "";
-  return `${head} · average RPE ${summary.average.toFixed(1)}${of}`;
+// The summary's parts, split at "·" (a line breaks only there).
+export function ccAnswersSummaryParts(summary) {
+  if (!summary) return [];
+  const parts = [`Answered ${summary.answered}/${summary.total}`];
+  if (summary.average == null) return parts;
+  const from = summary.partial ? ` (from ${summary.values} ${summary.values === 1 ? "answer" : "answers"})` : "";
+  parts.push(`average RPE ${summary.average.toFixed(1)}${from}`);
+  return parts;
 }
+export const ccAnswersSummaryText = (summary) => ccAnswersSummaryParts(summary).join(" · ");
+// For a screen reader: "2 of 12", never "2/12".
+export const ccAnswersSummarySpoken = (summary) => ccAnswersSummaryParts(summary).join(", ").replace(/Answered (\d+)\/(\d+)/, "Answered $1 of $2");
 
 function entryWords(entry) {
   if (!entry.asked) return entry.state === "submitted" ? `Not asked (RPE ${entry.rpe})` : "";
@@ -143,12 +185,13 @@ function entryWords(entry) {
 }
 
 // The row's words (section 4.1): one entry bare, several each named by its
-// session (or "RPE request"); "" when the read gave nothing to say.
+// session (or "Request") with a colon and set apart by ";", since "·" is
+// already used inside an entry; "" when the read gave nothing to say.
 export function ccAthleteAnswerText(list) {
   const shown = (list || []).map((entry) => ({ entry, words: entryWords(entry) })).filter((x) => x.words);
   if (!shown.length) return "";
   if (shown.length === 1) return shown[0].words;
-  return shown.map(({ entry, words }) => `${entry.label} ${words}`).join(" · ");
+  return shown.map(({ entry, words }) => `${entry.label}: ${words}`).join("; ");
 }
 
 // "Changed HH:MM" comes from the questions read only (section 4.1): the

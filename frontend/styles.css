@@ -21647,12 +21647,25 @@ body.exercise-header-pinned #viewToolbar {
   color: var(--muted);
 }
 
+.cc-answers-part {
+  white-space: nowrap;
+}
+
+.cc-athlete-side:empty {
+  display: none;
+}
+
+/* Quiet beside the values the coach came for; the accent on hover / focus. */
 .cc-athlete-go {
   flex: none;
-  color: var(--accent);
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
   white-space: nowrap;
+}
+
+.cc-athlete:hover .cc-athlete-go,
+.cc-athlete:focus-visible .cc-athlete-go {
+  color: var(--accent);
 }
 
 /* Below 480 px a row wraps: the name and "Weekly plan ›" on the first line,

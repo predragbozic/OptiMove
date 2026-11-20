@@ -195,6 +195,54 @@ test("P1. a manager's panel issues ONE weekly read for the panel's day (its Mond
   assert.equal(summary(), null, "no summary for a reader");
   assert.equal(valuesOf("Ben Example"), "RPE entered", "the state, as today");
   assert.equal(valuesOf("Cyra Example"), "RPE missing");
+  assert.equal(dom().querySelector(".cc-athlete-go"), null, "a reader's row is today's: no Weekly plan ›");
+  assert.match(rowOf("Ben Example").getAttribute("aria-label"), /^Ben Example, open the weekly plan on /, "a reader's label is today's");
+});
+
+test("P1c. no read without athletes (no athleteIds would mean the whole workspace) or without anything that can carry a value", async () => {
+  const empty = await openPanel({ items: [eventItem(E1, { athletes: [] })], weekly: weeklyOf({}) });
+  assert.equal(weeklyReads(empty.calls).length, 0, "an event with no athletes reads nothing");
+  assert.equal(summary(), null);
+
+  const meeting = eventItem(E1, { athletes: [card(BEN, null)], expects: [], links: { eventId: E1, planIds: [], logicalSessionIds: [], activityIds: [], externalScheduleId: null, testScheduleId: null } });
+  const none = await openPanel({ items: [meeting], weekly: weeklyOf({}) });
+  assert.equal(weeklyReads(none.calls).length, 0, "nothing linked or folded: no read");
+  assert.equal(summary(), null, "no 'answers' line");
+  assert.doesNotMatch(rendered, /Loading answers|Answers could not/);
+
+  const separate = eventItem(E1, { athletes: [card(BEN, "submitted")], scheduleFold: { external: "separate", test: null }, links: { eventId: E1, planIds: [], logicalSessionIds: [], activityIds: [], externalScheduleId: S1, testScheduleId: null } });
+  const apart = await openPanel({ items: [separate], weekly: weeklyOf({}) });
+  assert.equal(weeklyReads(apart.calls).length, 0, "a separate request alone: no read");
+  assert.equal(summary(), "Answered 1/1", "the summary from the card's states, with no average");
+});
+
+test("P1c. each guard on its own: no readable panel without athletes, and never a path without athleteIds", () => {
+  const item = eventItem(E1, { athletes: [] });
+  assert.equal(answers.ccAnswersReadable(item), false, "no athletes: not readable");
+  assert.deepEqual(answers.ccAnswersPaths(item), [], "no athletes: no path at all");
+  assert.equal(answers.ccAnswersReadable(eventItem(E1, { athletes: [card(BEN, "missing")] })), true);
+});
+
+test("P1d. a large event reads in chunks, each with its athletes, and the answers are put together", async () => {
+  const many = Array.from({ length: 320 }, (_, i) => ({ athleteId: `b0000000-0000-4000-8000-${String(i).padStart(12, "0")}`, name: `Athlete ${String(i).padStart(3, "0")}`, teamIds: [U17] }));
+  const athletes = many.map((a) => card(a, "missing"));
+  athletes[0] = card(many[0], "submitted");
+  athletes[319] = card(many[319], "submitted");
+  const weekly = (call) => {
+    const ids = new URL(call.url, "http://localhost").searchParams.get("athleteIds").split(",");
+    const rows = [];
+    if (ids.includes(many[0].athleteId)) rows.push(plannedRow(many[0].athleteId, L1, { rpe: 6, minutes: 60 }));
+    if (ids.includes(many[319].athleteId)) rows.push(plannedRow(many[319].athleteId, L1, { rpe: 8, minutes: 60 }));
+    for (const id of ids) if (id !== many[0].athleteId && id !== many[319].athleteId) rows.push(plannedRow(id, L1));
+    return { status: 200, body: weeklyOf({ [EV_DAY]: rows }) };
+  };
+  const { calls } = await openPanel({ items: [eventItem(E1, { athletes })], weekly });
+  const reads = weeklyReads(calls);
+  assert.equal(reads.length, Math.ceil(320 / answers.CC_ANSWERS_CHUNK));
+  assert.ok(reads.every((r) => r.url.length < 8000), "every request line stays short");
+  const asked = reads.flatMap((r) => new URL(r.url, "http://localhost").searchParams.get("athleteIds").split(","));
+  assert.deepEqual([...asked].sort(), many.map((a) => a.athleteId).sort(), "every athlete once");
+  assert.equal(summary(), "Answered 2/320 · average RPE 7.0");
 });
 
 test("P1b. not cached: close the panel, the answer changes, reopen - a second read, the new value shows", async () => {
@@ -227,10 +275,10 @@ test("P2. values match by logicalSessionId + athlete and by scheduleId + day + a
     [DAY(2)]: [requestRow(CYRA.athleteId, S1, { rpe: 9, minutes: 50 })],
   });
   await openPanel({ items, weekly });
-  assert.equal(valuesOf("Ana Example"), "Training one RPE 7 · 60 min · Training two RPE 5 · 30 min", "slot order, each its own value");
+  assert.equal(valuesOf("Ana Example"), "Training one: RPE 7 · 60 min; Training two: RPE 5 · 30 min", "slot order, each its own value");
   assert.equal(valuesOf("Ben Example"), "RPE 6 · 90 min", "the folded request's row; the unlinked session is not used");
   assert.equal(valuesOf("Cyra Example"), "RPE entered", "another day's row and another schedule are not used");
-  assert.equal(summary(), "Answered 3/3 · average RPE 6.0 of 3 answers");
+  assert.equal(summary(), "Answered 3/3 · average RPE 6.0 (from 3 answers)");
 });
 
 test("P2b. a request that stays a separate card is not the event's: its submitted row shows no value and is not averaged", async () => {
@@ -239,7 +287,7 @@ test("P2b. a request that stays a separate card is not the event's: its submitte
   const weekly = weeklyOf({ [EV_DAY]: [plannedRow(ANA.athleteId, L1, { rpe: 4, minutes: 60 }), requestRow(BEN.athleteId, S1, { rpe: 10, minutes: 60 })] });
   await openPanel({ items: [eventItem(E1, { athletes, links, scheduleFold: { external: "separate", test: null } })], weekly });
   assert.equal(valuesOf("Ben Example"), "RPE entered");
-  assert.equal(summary(), "Answered 2/2 · average RPE 4.0 of 1 answer");
+  assert.equal(summary(), "Answered 2/2 · average RPE 4.0 (from 1 answer)");
 });
 
 // --- P4: the summary --------------------------------------------------------------
@@ -275,9 +323,9 @@ test("P4b. a rated row whose RPE is now off reads 'Not asked (RPE 6)' and is not
     ],
   });
   await openPanel({ items: [eventItem(E1, { athletes })], weekly });
-  assert.equal(valuesOf("Ana Example"), "Training RPE 8 · 60 min · After Not asked (RPE 6)");
+  assert.equal(valuesOf("Ana Example"), "Training: RPE 8 · 60 min; After: Not asked (RPE 6)");
   assert.equal(valuesOf("Ben Example"), "Not asked (RPE 6)", "the workspace switch off: not asked either");
-  assert.equal(summary(), "Answered 2/2 · average RPE 8.0 of 1 answer");
+  assert.equal(summary(), "Answered 2/2 · average RPE 8.0 (from 1 answer)");
 });
 
 test("P4c. an athlete with one entry submitted (8) and one missing is not answered, and 8 is in the average", async () => {
@@ -290,7 +338,7 @@ test("P4c. an athlete with one entry submitted (8) and one missing is not answer
     ],
   });
   await openPanel({ items: [eventItem(E1, { athletes })], weekly });
-  assert.equal(valuesOf("Ana Example"), "Training RPE 8 · 60 min · After RPE missing");
+  assert.equal(valuesOf("Ana Example"), "Training: RPE 8 · 60 min; After: RPE missing");
   assert.equal(summary(), "Answered 1/2 · average RPE 6.5");
 });
 
@@ -298,10 +346,46 @@ test("P4d. a counted, answered athlete with no value read (no longer a member) k
   const athletes = [card(ANA, "submitted"), card(BEN, "submitted"), card(CYRA, "missing")];
   await openPanel({ items: [eventItem(E1, { athletes })], weekly: weeklyOf({ [EV_DAY]: [plannedRow(ANA.athleteId, L1, { rpe: 7, minutes: 60 }), plannedRow(CYRA.athleteId, L1)] }) });
   assert.equal(valuesOf("Ben Example"), "RPE entered");
-  assert.equal(summary(), "Answered 2/3 · average RPE 7.0 of 1 answer");
+  assert.equal(summary(), "Answered 2/3 · average RPE 7.0 (from 1 answer)");
 
   await openPanel({ items: [eventItem(E1, { athletes })], weekly: weeklyOf({}) });
   assert.equal(summary(), "Answered 2/3", "no value read: no average");
+});
+
+test("P4e. the card's own status sets: an excused or cancelled request is not asked, a missed one or one whose window passed is missed", async () => {
+  const links = { eventId: E1, planIds: [], logicalSessionIds: [], activityIds: [], externalScheduleId: S1, testScheduleId: null };
+  const athletes = [card(ANA, "not_asked"), card(BEN, "not_asked"), card(CYRA, "missed"), card(DORA, "missed"), card(ELI, "missing")];
+  const weekly = weeklyOf({
+    [EV_DAY]: [
+      requestRow(ANA.athleteId, S1, { assignmentStatus: "excused" }),
+      requestRow(BEN.athleteId, S1, { assignmentStatus: "cancelled" }),
+      requestRow(CYRA.athleteId, S1, { assignmentStatus: "missed" }),
+      requestRow(DORA.athleteId, S1, { assignmentStatus: "open", closesAt: "2000-01-01T00:00:00Z" }),
+      requestRow(ELI.athleteId, S1, { assignmentStatus: "open" }),
+    ],
+  });
+  await openPanel({ items: [eventItem(E1, { athletes, links, scheduleFold: { external: "folded", test: null } })], weekly });
+  assert.equal(valuesOf("Ana Example"), "Not asked", "excused: the card's word, never RPE missing");
+  assert.equal(valuesOf("Ben Example"), "Not asked");
+  assert.equal(valuesOf("Cyra Example"), "RPE missed");
+  assert.equal(valuesOf("Dora Example"), "RPE missed");
+  assert.equal(valuesOf("Eli Example"), "RPE missing");
+});
+
+test("P4f. a counted athlete the read returned nothing for (a former member, partly answered) makes the line say how many answers it averages", async () => {
+  const athletes = [card(ANA, "submitted"), card(BEN, "missing")];
+  await openPanel({ items: [eventItem(E1, { athletes })], weekly: weeklyOf({ [EV_DAY]: [plannedRow(ANA.athleteId, L1, { rpe: 7, minutes: 60 })] }) });
+  assert.equal(summary(), "Answered 1/2 · average RPE 7.0 (from 1 answer)");
+});
+
+test("P4g. the summary is announced: role status in every state, a spoken label ('2 of 3'), and its parts read apart", async () => {
+  await openPanel(ordinary());
+  const line = dom().querySelector(".cc-answers-summary");
+  assert.equal(line.getAttribute("role"), "status");
+  assert.equal(line.getAttribute("aria-label"), "Answered 2 of 3, average RPE 6.3");
+  const clone = line.cloneNode(true);
+  for (const hidden of clone.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+  assert.equal(clone.textContent.replace(/\s+/g, " ").trim(), "Answered 2/3 average RPE 6.3", "a space between the parts outside the hidden dot");
 });
 
 // --- P5: a changed answer --------------------------------------------------------
@@ -411,4 +495,5 @@ test("P8. no weekly read and no values outside a manager's event panel: a reader
   assert.equal(weeklyReads(calls).length, 0);
   assert.equal(summary(), null);
   assert.equal(valuesOf("Ben Example"), "RPE entered");
+  assert.equal(dom().querySelector(".cc-athlete-go"), null, "no Weekly plan › outside a manager's event");
 });

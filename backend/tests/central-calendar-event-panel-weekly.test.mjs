@@ -152,6 +152,20 @@ test("B2. the scope is unchanged: the planned rows' keys are exactly the earlier
   await session(anaPlan);
   await session(benPlan);
   await session(strangerPlan);
+  // An answered RPE request of the team, so external rows are in the answer too.
+  const scheduleId = (await q(
+    `insert into training_load.external_schedules (schedule_kind, timezone, start_date, opens_time, closes_time, status, event_name, event_type, created_by_user_id, owner_scope, owner_team_id)
+     values ('one_time','UTC',$1,'17:00','23:59','active','Away match','match',$2,'team',$3) returning id`, [PAST, s.coach.id, s.teamId]))[0].id;
+  await q(`insert into training_load.external_schedule_targets (schedule_id, target_kind, target_team_id) values ($1,'team',$2)`, [scheduleId, s.teamId]);
+  const occurrenceId = (await q(
+    `insert into training_load.external_schedule_occurrences (schedule_id, scheduled_date, opens_at, closes_at, status) values ($1,$2,$3,$4,'closed') returning id`,
+    [scheduleId, PAST, `${PAST}T17:00:00Z`, `${PAST}T23:59:00Z`]))[0].id;
+  const assignmentId = (await q(
+    `insert into training_load.external_assignments (occurrence_id, athlete_id, timezone, local_scheduled_date, opens_at, closes_at, status, started_at, completed_at)
+     values ($1,$2,'UTC',$3,$4,$5,'completed',$6,$6) returning id`,
+    [occurrenceId, s.ana.athleteId, PAST, `${PAST}T17:00:00Z`, `${PAST}T23:59:00Z`, `${PAST}T18:30:00Z`]))[0].id;
+  await q(`insert into training_load.session_feedback (athlete_id, session_date, external_assignment_id, source, event_name, rpe, duration_minutes) values ($1,$2,$3,'scheduled_external','Away match',6,90)`,
+    [s.ana.athleteId, PAST, assignmentId]);
 
   for (const [who, cookie, expected] of [
     ["team coach", s.coach.cookie, [s.ana.athleteId, s.ben.athleteId]],
@@ -167,6 +181,7 @@ test("B2. the scope is unchanged: the planned rows' keys are exactly the earlier
       assert.deepEqual(Object.keys(row).sort(), [...PLANNED_KEYS_BEFORE, ...ADDED].sort(), `${who}: the keys`);
       assert.deepEqual(Object.keys(without(row)).sort(), PLANNED_KEYS_BEFORE, `${who}: nothing else`);
     }
+    assert.ok(rows(res).some((r) => r.source === "scheduled_external" && r.athleteId === s.ana.athleteId), `${who}: the external row is there`);
     for (const row of rows(res).filter((r) => r.source === "scheduled_external")) {
       for (const k of ADDED) assert.ok(!(k in row), `${who}: an external row gains no ${k}`);
     }
