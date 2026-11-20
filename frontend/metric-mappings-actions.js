@@ -542,6 +542,12 @@ const CHAIN_STOP = {
 // Why a stated refusal stopped the chain, never "Nothing was saved. Try
 // again." after steps that did save (the ux-design-reviewer's UX-1), and a
 // refused team by name (UX-5); then the next step, when one is the user's.
+// v80: a team refused because its GPEXE setting is not the variable's condition - the server's own sentence, which names
+// both settings; nothing for any other code.
+function settingSentence(info) {
+  return info?.code === "team_setting_mismatch" && typeof info.message === "string" && info.message.trim() ? info.message.trim() : "";
+}
+
 function chainStopText(w, info, chain, reasonOverride = null) {
   // The item is no longer what the screen showed: no claim about what is left,
   // and for a lost item no teams sentence either (the re-review's UX-R5).
@@ -558,6 +564,9 @@ function chainStopText(w, info, chain, reasonOverride = null) {
       const name = cleanName(team?.teamName || teamNameOf(team?.teamId) || "");
       // A real name in quotes; otherwise no invented one (UX-R6).
       reason = name ? `“${name}” ${TEAM_CODE_TEXT[info.code]}.` : `One of the chosen teams ${TEAM_CODE_TEXT[info.code]}.`;
+      // v80: the server's sentence names both settings (the team's in GPEXE and the variable's).
+      const both = settingSentence(info);
+      if (both) reason = `${reason} ${both}`;
       next = "teams";
     } else {
       const text = refusalText(w.act, info);
@@ -759,7 +768,7 @@ async function refused(w, info, { render, check }) {
     const chooser = s.panel.chooser;
     if (chooser) delete chooser.selected[info.current.bindingId];
     if (s.panel.kept) delete s.panel.kept[info.current.bindingId];
-    s.panel.refusedTeam = { bindingId: info.current.bindingId, name, text: TEAM_CODE_TEXT[info.code] };
+    s.panel.refusedTeam = { bindingId: info.current.bindingId, name, text: TEAM_CODE_TEXT[info.code], detail: settingSentence(info) };
     s.write = null;
     render();
     return;

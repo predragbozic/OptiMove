@@ -274,7 +274,7 @@ async function proportional(client, ctx, minutes) {
   const byEvent = new Map();
   for (const r of rows) {
     const id = String(r.event_id);
-    if (!byEvent.has(id)) byEvent.set(id, { at: r.occurred_instant ? new Date(r.occurred_instant).getTime() : Date.parse(`${r.occurred_date}T00:00:00Z`), id, values: new Map() });
+    if (!byEvent.has(id)) byEvent.set(id, { at: r.occurred_instant ? new Date(r.occurred_instant).getTime() : Date.parse(`${r.occurred_date}T00:00:00Z`), id, day: dayText(r.occurred_date), values: new Map() });
     byEvent.get(id).values.set(String(r.metric_definition_id), { value: Number(r.value), unit: r.unit_at_capture ?? null });
   }
   const events = [...byEvent.values()].sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
@@ -285,7 +285,7 @@ async function proportional(client, ctx, minutes) {
       const dur = e.values.get(durationId);
       const val = e.values.get(v.metricDefinitionId);
       if (!dur || !val || !(dur.value > 0) || !sameUnit(dur.unit, d.unit) || !sameUnit(val.unit, v.unit)) continue;
-      used.push({ dur: dur.value, val: val.value });
+      used.push({ dur: dur.value, val: val.value, day: e.day, eventId: e.id });
       if (used.length === PROPORTIONAL_SESSIONS) break;
     }
     if (used.length < PROPORTIONAL_MIN_SESSIONS) return { variable: v, value: null, reason: "too_few_sessions", basis: null };
@@ -293,8 +293,18 @@ async function proportional(client, ctx, minutes) {
     const ratePerMinute = round(rate, 6);
     // A negative history (a source's negative values) gives no rate (v63's basis holds ratePerMinute >= 0).
     if (!(ratePerMinute >= 0)) return { variable: v, value: null, reason: "invalid_history", basis: null };
-    return { variable: v, value: round(ratePerMinute * minutes, 3), reason: null, basis: { minutes, ratePerMinute, sessions: used.length } };
+    // The days of the sessions used ride beside the basis (the saved basis keeps v63's shape): the proposal shows them.
+    return { variable: v, value: round(ratePerMinute * minutes, 3), reason: null, basis: { minutes, ratePerMinute, sessions: used.length }, usedSessions: used.map((u) => ({ id: u.eventId, day: u.day })) };
   });
+}
+// A session's day as YYYY-MM-DD (a date column reads as a Date or a text).
+const dayText = (value) => (value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? "").slice(0, 10));
+// The day of each session Own average used, over all its variables: one entry per session (two on one day are two
+// entries), newest first. Only the days leave the server, never a session's id.
+export function proportionalDays(entries) {
+  const byId = new Map();
+  for (const e of entries) for (const u of e.usedSessions ?? []) if (u.day) byId.set(String(u.id), u.day);
+  return [...byId.values()].sort().reverse();
 }
 
 // MT-D (plan sections 10 and 13): the recorded part of a short recording scaled to the target the coach chose before the
@@ -391,6 +401,10 @@ export async function getEstimateProposal(ctx, activityId, query) {
     } else {
       copy = methodView(copyAthlete(ectx, input.sourceAthleteId), "nothing_to_estimate");
     }
+    const own = await proportional(client, ectx, minutes);
+    // The kind of session Own average compares with: this session's type (its key and label), or null without one.
+    const typeKey = target.activity?.activity_type_key ?? null;
+    const typeLabel = typeKey ? (await client.query(`select label from training.activity_types where key = $1`, [typeKey])).rows[0]?.label ?? null : null;
     const answer = {
       activityId: target.canonicalId,
       athleteId: input.athleteId,
@@ -398,7 +412,8 @@ export async function getEstimateProposal(ctx, activityId, query) {
       minutes: { default: fallback, used: minutes },
       variables: ectx.variables.map(({ versionId, ...v }) => v),
       methods: {
-        proportional: methodView(await proportional(client, ectx, minutes), "nothing_to_estimate"),
+        // The days of the sessions it used, and the session type it compares with (read only; the saved basis is unchanged).
+        proportional: { ...methodView(own, "nothing_to_estimate"), sessionDays: proportionalDays(own), comparesWith: typeKey ? { key: typeKey, label: typeLabel } : null },
         copy_athlete: { ...copy, sourceAthleteId: input.sourceAthleteId, sources },
         team_average: methodView(teamAverage(ectx), "nothing_to_estimate"),
         // MT-D: only where a scale was chosen before the import; otherwise not available with the reason.

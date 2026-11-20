@@ -327,15 +327,49 @@ function valueText(value, unit) {
   return `${num(value)}${unit ? ` ${unit}` : ""}`;
 }
 
+// A variable's name as a coach reads it, never a key: its short label, else its label; a name that is only a key
+// ("total_distance") is passed over, and read as words ("Total distance") only when nothing else is there.
+const KEY_LIKE = /^[a-z0-9]+(_[a-z0-9]+)+$/;
+export function variableName(v) {
+  const named = [v?.shortLabel, v?.label].map((t) => String(t ?? "").trim()).filter(Boolean);
+  const plain = named.find((t) => !KEY_LIKE.test(t));
+  if (plain) return plain;
+  const key = named[0] || String(v?.key ?? "").trim();
+  if (!key) return "Value";
+  const words = key.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function methodValuesText(proposal, view) {
   const byId = new Map((proposal?.variables || []).map((v) => [v.metricDefinitionId, v]));
   return (view?.values || [])
     .filter((x) => x.value !== null)
     .map((x) => {
       const v = byId.get(x.metricDefinitionId);
-      return `${v?.shortLabel || v?.label || "Value"} ${valueText(x.value, v?.unit)}`;
+      return `${variableName(v)} ${valueText(x.value, v?.unit)}`;
     })
     .join(" · ");
+}
+
+// Own average: the sessions it used ("From 3 sessions: 17.11.2026, 14.11.2026 and 12.11.2026", newest first) and the kind of session it compares with.
+const shortDay = (day) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day ?? ""));
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : "";
+};
+export function ownAverageBasisText(view) {
+  const days = (view?.sessionDays || []).map(shortDay).filter(Boolean);
+  const parts = [];
+  if (days.length) {
+    // Two sessions on one day read once, with their count ("14.09.2026 (2)").
+    const counted = new Map();
+    for (const d of days) counted.set(d, (counted.get(d) ?? 0) + 1);
+    const shown = [...counted].map(([d, n]) => (n > 1 ? `${d} (${n})` : d));
+    const list = shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}`;
+    parts.push(`From ${days.length} session${days.length === 1 ? "" : "s"}: ${list}`);
+  }
+  const type = view?.comparesWith?.label || view?.comparesWith?.key || "";
+  if (type) parts.push(`Compares with: ${type}`);
+  return parts.join(" · ");
 }
 
 function methodHtml(e, method) {
@@ -346,6 +380,8 @@ function methodHtml(e, method) {
   const chosen = e.method === method;
   const reason = !view.available ? (REASONS[view.reason] ?? REASONS.nothing_to_estimate) : chosen && method === "copy_athlete" && !e.sourceAthleteId ? REASONS.choose_source : "";
   const values = view.available ? methodValuesText(e.proposal, view) : "";
+  // Own average says which sessions it used and what kind of session it compares with (also when not available).
+  const ownBasis = method === "proportional" ? ownAverageBasisText(view) : "";
   let extra = "";
   if (method === "proportional" && chosen) {
     extra = `
@@ -372,6 +408,7 @@ function methodHtml(e, method) {
         <input type="radio" id="${id}" name="tl-estimate-method" value="${escapeAttr(method)}" data-action="training-load-roster-estimate-method" data-method="${escapeAttr(method)}" ${chosen ? "checked" : ""} ${disabled ? "disabled" : ""}>
         <span><strong>${escapeHtml(METHOD_TITLES[method])}</strong><small>${escapeHtml(METHOD_HINTS[method])}</small>
           ${values ? `<small class="tl-estimate-values">${escapeHtml(values)}</small>` : ""}
+          ${ownBasis ? `<small class="tl-estimate-basis">${escapeHtml(ownBasis)}</small>` : ""}
           ${reason ? `<small class="tl-estimate-reason">${escapeHtml(reason)}</small>` : ""}</span>
       </label>
       ${extra}
