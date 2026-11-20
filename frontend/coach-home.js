@@ -2,6 +2,7 @@ import { renderImage } from "./media.js";
 import { athleteMatches, sortAthletes } from "./athlete-list-tools.js";
 import { renderExerciseThumb } from "./exercise-view-modes.js";
 import { ICON_ADD_ATHLETE } from "./organization-view.js";
+import { renderOpenInCalendarHtml } from "./open-in-calendar.js";
 import { emptyCoachHomeState } from "./state.js";
 import { exerciseText } from "./exercise-text.js";
 import { escapeAttr, escapeHtml, localDateIso, monthLabel, monthWeeksIso, programInitials } from "./utils.js";
@@ -258,7 +259,10 @@ export function renderCoachHomeDayHtml({ rows = [], home = emptyCoachHomeState()
           <h3 class="coach-home-panel-title" id="coachHomeDayTitle">${day.isToday ? `Today <span class="coach-home-day-date">${escapeHtml(shortDateLabel(day.date, today))}</span>` : escapeHtml(shortDateLabel(day.date, today))}</h3>
           ${count ? `<p class="coach-home-day-count">${count}</p>` : ""}
         </div>
-        ${day.isToday && !home.calendar.cursor ? "" : `<button class="plain-button coach-home-inline-button" type="button" data-action="coach-home-day-today">Today</button>`}
+        <div class="coach-home-day-actions">
+          ${day.isToday && !home.calendar.cursor ? "" : `<button class="plain-button coach-home-inline-button" type="button" data-action="coach-home-day-today">Today</button>`}
+          ${renderOpenInCalendarHtml(day.date)}
+        </div>
       </header>
       <div class="coach-home-day-body">
         ${renderCalendarHtml(home, today, day.date)}

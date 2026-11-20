@@ -13754,6 +13754,61 @@ button.tests-assignment-card {
   flex-wrap: wrap;
 }
 
+/* K5-5 "Open in calendar" (open-in-calendar.js): the way to the central calendar from Tests' week, the Training Load
+   calendar and Coach Home's day. A 44 px button in each nav row; on a phone it takes a row of its own under the full
+   nav. Tests' quiet "Open this day in calendar" sits under the day's agenda. */
+.open-in-calendar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  white-space: nowrap;
+}
+.open-in-calendar-icon {
+  flex: none;
+}
+.open-in-calendar.is-quiet {
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+.open-in-calendar.is-quiet:hover span {
+  text-decoration: underline;
+}
+.tests-weekly-day-link {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+.coach-home-day-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (max-width: 760px) {
+  .tests-weekly-nav {
+    flex-wrap: wrap;
+  }
+  .tests-weekly-nav .open-in-calendar,
+  .tl-calendar-nav .open-in-calendar {
+    flex: 1 0 100%;
+  }
+  .coach-home-day .coach-home-panel-head {
+    flex-wrap: wrap;
+  }
+  /* Wrapped under the heading, the buttons stay at the card's right edge (mobile review). */
+  .coach-home-day-actions {
+    margin-left: auto;
+  }
+}
+
 .tl-calendar-month-grid {
   display: grid;
   gap: 4px;
