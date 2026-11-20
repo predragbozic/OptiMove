@@ -100,8 +100,11 @@ import { renderMyTrainingHtml } from "./my-training-view.js";
 import { invalidateAthleteHomeCache, loadAthleteHome as loadAthleteHomeData } from "./athlete-home-data.js";
 import { loadAthleteHomeEvents, resetAthleteHomeEvents } from "./athlete-home-events-data.js";
 import { handleAthleteHomeEventsAction } from "./athlete-home-events-actions.js";
+import { athleteCalendarPlace, athleteCalendarReturnFor, athleteCalendarState, claimAthleteCalendarReturn, resetAthleteCalendar, restoreAthleteCalendarPlace, setAthleteCalendarReturn } from "./athlete-calendar-data.js";
+import { athleteCalendarAnswered, enterAthleteCalendar, handleAthleteCalendarAction } from "./athlete-calendar-actions.js";
+import { renderAthleteCalendarBackBarHtml, renderAthleteCalendarHtml } from "./athlete-calendar-view.js";
 import { loadAthleteQuestions, resetAthleteQuestions } from "./athlete-questions-data.js";
-import { athleteQuestionsBack, beginAthleteHomeLoad, closeAthleteQuestionsPrompt, setAthleteQuestionsPromptHandlers, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
+import { answerAthleteQuestion, athleteQuestionsBack, beginAthleteHomeLoad, closeAthleteQuestionsPrompt, setAthleteQuestionsPromptHandlers, handleAthleteQuestionsAction, handleAthleteQuestionsKeydown, maybeShowAthleteQuestionsPrompt, openCalendarQuestion } from "./athlete-questions-actions.js";
 import { clearPendingIdentityLoads, importSettingsToggled, importsChooseToggled } from "./gpexe-import-data.js";
 import { bindPeriodDrag } from "./gpexe-period-drag.js";
 import { closeImportsOverlays, closePeriodSheet } from "./gpexe-period-data.js";
@@ -111,9 +114,9 @@ import { handleUndoReasonInput } from "./gpexe-undo-data.js";
 import { handleTimezoneInput } from "./gpexe-timezone-data.js";
 import { activityRosterDisclosureToggled, closeActivityRosterOverlay, rosterMayBeLeft } from "./activity-roster-actions.js";
 import { resetActivityRoster } from "./activity-roster-data.js";
-import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
+import { bindTrainingLoadAnalysisLayoutInteractions, closeTrainingLoadAnalysisOverlay, confirmLeaveTrainingLoad, discardTrainingLoadLeaveDrafts, handleTrainingLoadAction, handleTrainingLoadBeforeUnload, loadTrainingLoadSectionData, setTrainingLoadAnalysisEditorText, openExternalAssignmentFromNotification, openRpeFormOnDate, resetTrainingLoadForWorkspaceChange, setTrainingLoadAnalysisSearch, setTrainingLoadSection, syncDataAnalysisSharedWeek } from "./training-load-actions.js";
 import { loadPlannedRpeSetting, loadTrainingLoadAthleteHomeWeek, loadTrainingLoadAthleteToday, loadTrainingLoadWeekly } from "./training-load-data.js";
-import { renderTrainingLoadCoachHtml } from "./training-load-view.js";
+import { renderTrainingLoadAthleteOverlaysHtml, renderTrainingLoadCoachHtml } from "./training-load-view.js";
 import "./training-load-analysis-echarts.js";
 import { els } from "./dom.js";
 import { statusState } from "./status-state.js";
@@ -2168,7 +2171,10 @@ function pushAppHistory() {
   window.history.pushState({ optimove: true }, "", window.location.href);
   state.appHistoryDepth += 1;
   // Where the user was, for Back (app-history.js): one entry per history state.
-  pushAppHistoryEntry(appHistoryEntryOf(state));
+  const entry = appHistoryEntryOf(state, { athleteCalendar: state.activeTab === "athlete-calendar" ? athleteCalendarPlace() : null });
+  pushAppHistoryEntry(entry);
+  // K4a: the step Open training pushes is the one that shows Back to calendar.
+  claimAthleteCalendarReturn(entry);
 }
 
 function ensureBackGuard() {
@@ -2247,6 +2253,8 @@ function restoreAppPlace(place) {
   state.weekSelectorOpen = false;
   state.openWeekCalendarOnLoad = false;
   if (place.calendar) restoreCentralCalendarPlace(place.calendar);
+  // K4a: the athlete's Calendar as it was left (its week, day and scroll), never its defaults.
+  if (place.athleteCalendar) restoreAthleteCalendarPlace(place.athleteCalendar);
   renderAthleteListState();
   renderTabs();
   renderLibraryNav();
@@ -2464,6 +2472,7 @@ async function loadActiveTab() {
   if (state.activeTab === "central-calendar") return loadCentralCalendar();
   if (state.activeTab === "athlete-home") return loadAthleteHome();
   if (state.activeTab === "my-training") return loadMyTraining();
+  if (state.activeTab === "athlete-calendar") return loadAthleteCalendarTab();
   if (state.activeTab === "weekly") return loadWeekly();
   if (state.activeTab === "programs") return loadPrograms();
   if (state.activeTab === "templates") return loadTemplates();
@@ -2673,6 +2682,70 @@ function athleteQuestionHandlers() {
   };
 }
 
+// The athlete's Calendar (K4a, docs/ai/central-calendar-k4a-contract.md section 2): her week by days. `weekStart`
+// (Home's See all) opens a given week; the rail opens the week last shown, this week at first.
+async function loadAthleteCalendarTab({ weekStart = "" } = {}) {
+  state.navStack = [];
+  els.context.textContent = "Your week";
+  els.title.textContent = "Calendar";
+  els.toolbar.innerHTML = "";
+  return enterAthleteCalendar({ render: renderAthleteCalendar, weekStart, loadQuestions: () => loadAthleteQuestions() });
+}
+
+// A confirmed RPE answer given from the Calendar (the Training Load form it opened over itself): the week is read
+// again once. Only a form the Calendar opened counts - one saved on Home and left open does not.
+const athleteCalendarOpenedForms = new WeakSet();
+const athleteCalendarSavedForms = new WeakSet();
+function renderAthleteCalendar() {
+  if (state.activeTab !== "athlete-calendar") return;
+  const form = state.trainingLoad.rpeForm;
+  els.content.innerHTML = `${renderAthleteCalendarHtml(athleteCalendarState(), { questions: state.athleteQuestions?.rows || [] })}${renderTrainingLoadAthleteOverlaysHtml()}`;
+  if (form?.savedFeedback && athleteCalendarOpenedForms.has(form) && !athleteCalendarSavedForms.has(form)) {
+    athleteCalendarSavedForms.add(form);
+    detached(athleteCalendarAnswered({ render: renderAthleteCalendar, loadQuestions: () => loadAthleteQuestions() }), "athlete-calendar-answered");
+  }
+}
+
+// The Calendar's buttons (contract 2.3). A planned session's or an RPE request's RPE opens the Training Load form over
+// the Calendar (the form Home opens, Q4); an event question opens its form as Home's list does; a test opens Tests.
+// Open training opens her Weekly plan on the card's day (one history step that holds the Calendar's place); the plan
+// shows Back to calendar on that step.
+function athleteCalendarHandlers() {
+  const opened = () => {
+    if (state.trainingLoad.rpeForm) athleteCalendarOpenedForms.add(state.trainingLoad.rpeForm);
+  };
+  const rateById = async (id, date) => {
+    if (await openRpeFormOnDate(id, date)) opened();
+    else athleteCalendarState().notice = "This session can't be rated right now.";
+    renderAthleteCalendar();
+  };
+  return {
+    render: renderAthleteCalendar,
+    loadQuestions: () => loadAthleteQuestions(),
+    rateQuestion: async (questionId) => {
+      const answered = await answerAthleteQuestion(questionId, { ...athleteQuestionHandlers(), render: renderAthleteCalendar, reload: () => loadAthleteQuestions() });
+      if (answered) opened();
+      return answered;
+    },
+    rateSession: rateById,
+    rateAssignment: rateById,
+    openTest: async (assignmentId) => {
+      pushAppHistory();
+      await openTestAssignment(assignmentId);
+    },
+    openTraining: async ({ date, title }) => {
+      // openWeeklyPlanOnDate pushes the one step (its entry holds the Calendar's place).
+      setAthleteCalendarReturn({ date, title });
+      await openWeeklyPlanOnDate(date);
+    },
+    // Back to calendar: the same step back as the phone's Back.
+    back: () => {
+      if (state.appHistoryDepth > 0) window.history.back();
+      else handleAppBack();
+    },
+  };
+}
+
 // The athlete's own recorded sessions and values (owner, 2026-11-16), read-only.
 async function loadMyTraining() {
   state.navStack = [];
@@ -2776,6 +2849,7 @@ function keepImportsTabRow(left) {
 // convention as renderActiveTestsSurface below.
 function renderActiveTrainingLoadSurface() {
   if (state.activeTab === "athlete-home") return renderAthleteHomeFromCache();
+  if (state.activeTab === "athlete-calendar") return renderAthleteCalendar();
   if (state.activeTab === "training-load") return renderTrainingLoad();
 }
 
@@ -3185,6 +3259,21 @@ async function handleContentClick(event) {
   }
   // Home's Upcoming events (K2b-1e): Try again, Show N more / Show fewer. Gated by its prefix, so every other click
   // keeps reaching the handlers below without an await.
+  // K4a: Home's See all opens the Calendar on the current week.
+  if (type === "athlete-home-events-see-all") {
+    if (state.activeTab !== "athlete-calendar") pushAppHistory();
+    state.activeTab = "athlete-calendar";
+    state.navStack = [];
+    renderTabs();
+    renderLibraryNav();
+    await loadAthleteCalendarTab({ weekStart: localDateIso() });
+    return;
+  }
+  // K4a: the athlete's Calendar (its week, its day strip and its cards' buttons).
+  if (type?.startsWith("athlete-calendar-")) {
+    await handleAthleteCalendarAction(action, athleteCalendarHandlers());
+    return;
+  }
   if (type?.startsWith("athlete-home-events-")) {
     await handleAthleteHomeEventsAction(action, { render: renderAthleteHomeFromCache });
     return;
@@ -3355,6 +3444,7 @@ function renderCurrentNode() {
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
   if (state.activeTab === "tests") return renderTests();
   if (state.activeTab === "my-training") return renderMyTraining();
+  if (state.activeTab === "athlete-calendar") return renderAthleteCalendar();
 }
 
 function moveWeek(delta) {
@@ -3586,10 +3676,12 @@ async function onWorkspaceChanged() {
   resetMyTraining();
   // So are Home's Upcoming events (K2b-1e): the list and an answer on its way are dropped.
   resetAthleteHomeEvents();
+  // And her Calendar (K4a): the week shown and an answer on its way.
+  resetAthleteCalendar();
   // And her open questions (K2b-2a-3): the prompt closes, the list and the app session's prompt memory are dropped.
   closeAthleteQuestionsPrompt();
   resetAthleteQuestions();
-  if (state.activeTab === "my-training") state.activeTab = isAthleteMode() ? "athlete-home" : "coach-home";
+  if (state.activeTab === "my-training" || state.activeTab === "athlete-calendar") state.activeTab = isAthleteMode() ? "athlete-home" : "coach-home";
   renderTabs();
   renderLibraryNav();
   if (["organization", "coach-home", "central-calendar", "coaches", "templates", "exercises", "tests", "training-load"].includes(state.activeTab)) setLoading("Loading workspace...");
@@ -3816,7 +3908,9 @@ function renderWeeklyRoot(data) {
   const activeWeek = matchedIndex >= 0 ? weeks[matchedIndex] : buildBlankWeek(viewedStart);
   const weekSelectorMarkup = state.weekSelectorOpen ? renderWeekCalendarPicker(weeks, activeWeek) : "";
 
-  els.content.innerHTML = renderWeeklyRootHtml({
+  // K4a: Back to calendar, only on the step Open training pushed (athlete-calendar-data.js).
+  const calendarBack = isAthleteMode() ? renderAthleteCalendarBackBarHtml(athleteCalendarReturnFor(appHistoryTopEntry()), activeWeek.weekStart) : "";
+  els.content.innerHTML = calendarBack + renderWeeklyRootHtml({
     activeWeek,
     copyPlanModal: renderCopyPlanModal(state),
     makeNode,

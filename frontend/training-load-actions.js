@@ -2810,6 +2810,24 @@ export async function openExternalAssignmentFromNotification(assignmentId) {
   openRpeFormForSessionId(assignmentId);
 }
 
+// K4a (contract 2.3, Q4): the RPE form for a session or an RPE request of a known day. The athlete's Calendar shows any
+// week, so the lookup reads that day's week; the weekly overlay's own week (shared state) is put back afterwards. True
+// only when the form now open is the one asked for (a form left from elsewhere does not count).
+export async function openRpeFormOnDate(id, date) {
+  const nav = state.trainingLoad.athleteWeekly;
+  const kept = { weekStart: nav.weekStart, selectedDate: nav.selectedDate, data: nav.data };
+  const weekStart = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? weekMondayIso(date) : "";
+  const moved = Boolean(weekStart) && nav.weekStart !== weekStart;
+  if (moved) Object.assign(nav, { weekStart, selectedDate: date, data: null });
+  try {
+    await openExternalAssignmentFromNotification(id);
+  } finally {
+    if (moved) Object.assign(nav, kept);
+  }
+  const form = state.trainingLoad.rpeForm;
+  return Boolean(form) && (String(form.sessionId || "") === String(id) || String(form.externalAssignmentId || "") === String(id));
+}
+
 function patchSrpePreview(form) {
   const el = document.querySelector("[data-training-load-srpe-preview]");
   if (!el) return;
