@@ -1,7 +1,8 @@
 # Central calendar — K6 UI contract: the team and athlete switcher
 
 Status: **Decided by the stream manager** (2026-11-20): Q1–Q9 of section 7 as recommended, so K6 stays ★, with no
-backend and no new read; Q10 (Back, after the owner's S6) is open. Next: the OptiMove manager's GO. Documents only:
+backend and no new read; Q10 (Back, after the owner's S6) is open, and until it is decided K6 builds its option (a).
+Next: the OptiMove manager's GO. Documents only:
 no code, no route, no migration. Written against `main` `ec467638`, on the K6 plan (`docs/ai/central-calendar-k6-plan.md`,
 the owner's S1–S6) and the approved mockups (`docs/design/calendar-k6/`, F1–F6 as recommended). Where this contract
 and a mockup differ, this contract says why.
@@ -341,9 +342,12 @@ node.
 
 **Below the session level (S6): matched by name.** The domain, category and section nodes (`program-structure.js`
 `structureNodes` and below) carry each athlete's own content and random ids, so they are matched by **type and
-name** at each level: the node's type, and its name compared after trimming, collapsing inner spaces and case
-folding (`toLocaleLowerCase()`), accents kept. This is the match today's sibling arrows use (`sameNodePosition`,
-`app.js:4523-4525`), here applied across athletes.
+name** at each level, by a **new helper** (for example `sameNodeName`): the node's type equal, and its label (a
+structure node's label is its plain name, `program-structure.js:138, 174`; counts are in its subtitle) compared
+after trimming, collapsing inner whitespace and `toLowerCase()` (no locale, so a device's locale never changes the
+answer), accents kept. An unnamed group's label is "GENERAL", so two athletes' unnamed groups match each other.
+Today's `sameNodePosition` (`app.js:4523-4525`: type and `clean(label)`, which only trims, case-sensitive), which the
+node footer's ‹ Previous / Next › arrows use, **stays unchanged**.
 - **Missing:** B has no node of that type and name at a level → the path stops at the deepest level that matched.
   It never jumps to a different node.
 - **Ambiguous:** two or more nodes of one type and name at the same level (in A's day or in B's) → stop at the
@@ -353,17 +357,20 @@ folding (`toLocaleLowerCase()`), accents kept. This is the match today's sibling
 Moving to athlete B:
 1. Remember A's place: the week, the day, the slot keys of `navStack`'s session levels, then the (type, name) of
    each deeper node.
-2. Set `state.selectedAthleteId` to B, load B's weekly data (cached if seen this session), and set
-   `viewedWeekStart` and `selectedWeekDay` to A's.
+2. Set `state.selectedAthleteId` to B, load B's weekly data (cached if seen this session, under the weekly cache's
+   existing rules: the same freshness and the same invalidation after a Builder save, so a "has no …" line reflects
+   the plan as last read), and set `viewedWeekStart` and `selectedWeekDay` to A's.
 3. Rebuild `navStack` for B from B's nodes of that day, level by level: slot keys at the session levels, then type
    and name. Stop at the deepest level that matches.
 4. A quiet line under the header says what is kept, in B's own names: "Monday 12.10 · Training · Main session ·
    Strength · Power". If the path stopped early, a calm line names what is missing, and nothing else:
    - a slot: "Ben has no Training (PM) on Monday 12.10.";
-   - a node: "Ben has no ‘Power’ section on this day." (the type's word: domain, category or section);
-   - ambiguous: "Ben has two ‘Power’ sections here. Choose one below." (or "You have two …" when A's own day is
-     ambiguous), with the parent open.
-   The day stays open in every case.
+   - a node: "Ben has no ‘Power’ section in Strength." (the type's word: domain, category or section; and where:
+     the deepest matched node, or the session, never "on this day", since B may have a "Power" elsewhere that day);
+   - ambiguous in B's plan: "Ben has two ‘Power’ sections in Strength. Choose one below.";
+   - ambiguous in A's plan: "Ana has two ‘Power’ sections here, so Ben's plan opens at Strength.";
+   with the parent open. The day stays open in every case. Every athlete and node name in these lines goes through
+   the existing HTML escaping (`escapeHtml`), like every other name on the screen.
 
 **History.** Moving between athletes pushes **no** history entry and replaces `navStack` without
 `pushAppHistory()`. The rebuilt path therefore holds no per-level entries. Back works as it does today, which
@@ -377,7 +384,10 @@ Moving to athlete B:
   twice, and the last one lands on the calendar's place. The weekly tests pin the exact count for A two levels deep
   and B one level deep, and for A three levels deep (a section) and B one;
 - **the visible *Back to calendar* control** (new on the Weekly plan, `data-action="weekly-back-to-calendar"`)
-  returns to the calendar's place in one tap, whatever the depth: it clears `navStack`, then calls
+  returns to the calendar's place in one tap, whatever the depth: it clears `navStack` and every other layer
+  `handleAppBack` closes before it reaches the history entries (an open exercise detail, `state.exerciseDetail`;
+  the week selector, `state.weekSelectorOpen`; the expanded athlete list, `state.athletesExpanded`; `app.js:2270`,
+  `:2313-2323`), then calls
   `window.history.back()` (the `exercise-back` pattern, `app.js:3215-3219`); the popstate runs `handleAppBack`, and
   the remaining drill-in entries of the Weekly tab are skipped by `skipStaleAppBackEntry` until the calendar's entry
   is restored. (`takeAppBackEntry` answers only inside a popstate press, so the click handler never calls it.)
@@ -493,8 +503,9 @@ Frontend (JSDOM, through the real handlers, with a fake API that keeps the route
 - **F-H4.** K6-3: a panel athlete not in the roster is not in the switcher, and the event sentence counts them.
 - **F-H5.** The platform workspace: no strip, no search, no `GET /api/organization` read for K6, no "Showing …" line,
   and an athlete chosen in another workspace is cleared on entering it.
-- **F-H6.** A workspace switch and a sign-out clear the chosen (remembered) athlete and team, the search and the
-  cached organization pairs together; the next workspace's first render shows none of them.
+- **F-H6.** A workspace switch and a sign-out clear the chosen (remembered) athlete and team, the search, the
+  cached organization pairs and the switcher's cached weekly data together; the next workspace's first render shows
+  none of them.
 - **F-H7.** A coach with roles in two workspaces: a slow `GET /api/organization`, athlete read, kinds read or panel
   day read of W1 that answers after the switch to W2 is dropped and drawn nowhere; a remembered athlete is checked
   against W2's roster before the first read, so its id is never sent in W2.
@@ -521,10 +532,16 @@ Frontend (JSDOM, through the real handlers, with a fake API that keeps the route
   - › keeps the week, the day and the slot path; A and B with differently named sessions in the same T slot reach
     the `bta` level; a missing slot and its sentence; the blank group across shapes (A on a `session` node, B with
     one top-level `bta("", "T")` → B's `bta` node; with two → stop, ambiguous);
-  - S6, matching by name at each level: A in Strength › Power (domain › section) → B's Strength › Power, with names
-    differing only by case and spaces still matched; B with no "Power" section → B stops at Strength and the line
-    says "Ben has no ‘Power’ section on this day."; B with two "Power" sections → stops at Strength, "Ben has two
-    ‘Power’ sections here."; A's own day ambiguous → stop at the parent; never a different node;
+  - S6, matching by name at each level: A in Strength › Power (domain › section) → B's Strength › Power, with
+    B's " power " (case and spaces differ) still matched; B's Strength holding a section "Speed" and no "Power" → B
+    stops at Strength (`type === "domain"`), no node labelled "Speed" in `navStack`, and the line says "Ben has no
+    ‘Power’ section in Strength."; B with "Power" under Gym but not under Strength → the same stop, and the line
+    never says "on this day"; B with two "Power" sections → stops at Strength, "Ben has two ‘Power’ sections in
+    Strength."; A's own day ambiguous → stop at the parent, the line names A ("Ana has two …"), never "You have";
+    never a different node; a node named `<img src=x onerror=alert(1)>` renders as text in the line;
+  - `sameNodePosition` unchanged: a session with two sibling sections "Power" and "power"; open the second,
+    press `node-next` / `node-prev` → `nodeSiblingState().index` still points as today;
+  - *Back to calendar* with the week selector open or an exercise detail open still lands on the calendar;
   - "No plan this week";
   - switching athletes pushes no history entry (`state.appHistoryDepth` unchanged);
   - through `handleBrowserBack()` from a real drill-in: Back steps up A's drilled levels, never shows a view twice,
@@ -626,6 +643,8 @@ backend change.
     and returns to the calendar in one press. It changes the Back of one screen against the rest of the app, and the
     drill-in code shared with every Weekly plan, so it needs its own decision and tests.
 
+  Until Q10 is decided, K6 builds (a); (b) would be its own change.
+
 ## 8. Not in K6
 
 - No new route, no backend change, no migration (Q4 and Q7 decided: the light reads are not taken).
@@ -639,3 +658,6 @@ backend change.
   athletes, not their memberships). So a team coach or club admin reading Settings sees the names of another club's
   teams an athlete also belongs to. Whether that is intended is a separate decision; changing it is a backend change
   to an info-hiding contract (trigger 2). K6 does not depend on it either way: it keeps only its reduced pairs (2.3).
+- **Also recorded, outside K6:** `GET /api/athletes/:athleteId/program-data` answers `403 {"error":"Forbidden"}` for
+  an athlete the caller may not access, not the identical 404 of ADR-006. K6 calls it only with roster ids, so it
+  adds no exposure; whether to align it is a separate decision.
