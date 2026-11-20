@@ -1,22 +1,19 @@
-// Permissions (roles plan, step R1): the closed catalog of permission words,
-// the groups a role editor will work with, the basic roles' starting sets and
-// can(authz, permission, scope).
+// Permissions (roles plan, steps R1 and R2): the closed catalog of permission
+// words, the groups a role editor will work with, and can(authz, permission,
+// scope).
 //
-// R1 changes no behaviour. can() is built from the role predicates of authz.js
-// and answers, for every permission routes/organization.js uses, exactly what
-// the predicate it replaced answered. A permission no module has moved to yet
-// is in nobody's set but the platform admin's, so it fails closed.
+// R1 built can() from the role predicates of authz.js. R2 (migration v84)
+// moves the basic roles' items to the database: can() reads the role items
+// loadAuthorizationContext loaded (authz.rolePermissions) and, for every
+// existing account, answers what R1 answered apart from roles.manage, which the
+// seed gives to the Club admin role (roles R2 contract section 6). A permission
+// no module has moved to yet is in no role, so it fails closed.
 //
 // can() answers only "who may" for the RESOURCE's scope (the club or team the
 // row belongs to). It never reads the active workspace: the workspace is the
 // data context and the presentation and never grants a permission
 // (workspace.js). Ownership (owner_scope, ADR-002) stays a separate check.
-import {
-  holdsClubAdminRole,
-  holdsTeamCoachRole,
-  isPlatformAdministrator,
-  managesTeamThroughClub,
-} from "./authz.js";
+import { isPlatformAdministrator } from "./authz.js";
 
 const CLUB_TEAM = Object.freeze(["club", "team"]);
 const CLUB = Object.freeze(["club"]);
@@ -184,19 +181,11 @@ export const PERMISSION_GROUPS = Object.freeze([
   ]),
 ]);
 
-// The basic roles' starting sets, as a code constant until R2 moves them to
-// the database. platform_admin: everything. club_admin and team_coach: ONLY
-// the permissions routes/organization.js checks through can() today, each
-// derived from the predicate it replaced:
-//   - canManageClub(club)        -> the word is in club_admin;
-//   - canManageTeamById(team)    -> the word is in club_admin AND team_coach
-//                                   (the team's own coach passes today);
-//   - canAssignClubRole(club),
-//     canAssignTeamRole(team)    -> the word is in club_admin and NOT in
-//                                   team_coach (a coach never assigns roles).
-// Every other permission is deliberately absent from these two sets: it is
-// derived in the step that moves its module (plan section 4.1), and until
-// then can() refuses it for anyone but a platform admin.
+// The basic roles' starting sets of R1, kept as a code constant ONLY as the
+// oracle of R2's old-vs-new test (backend/tests/support/permissions-r1-oracle.mjs).
+// Since R2 (migration v84) the basic roles' items live in the database
+// (public.permission_role_items) and can() never reads this constant: it is not
+// on the request path.
 export const BASIC_ROLE_PERMISSIONS = Object.freeze({
   platform_admin: Object.freeze(Object.keys(PERMISSIONS)),
   club_admin: Object.freeze([
@@ -214,10 +203,23 @@ export const BASIC_ROLE_PERMISSIONS = Object.freeze({
   ]),
 });
 
-const CLUB_ADMIN_SET = new Set(BASIC_ROLE_PERMISSIONS.club_admin);
-const TEAM_COACH_SET = new Set(BASIC_ROLE_PERMISSIONS.team_coach);
+// The honoured words (roles R2 contract 3.3): the words some can() call site
+// checks at a club or a team scope - the only words a role may hold in R2. Its
+// database twin is public.permission_word_honoured() (v84); a test asserts the
+// two agree and that this list equals R1's call-site table taken by (word,
+// scope type) with scope type club or team, plus roles.manage (the Roles API).
+export const HONOURED_PERMISSIONS = Object.freeze([
+  "org.view",
+  "org.teams.manage",
+  "org.club.edit",
+  "athletes.manage",
+  "athletes.remove",
+  "staff.assign",
+  "roles.manage",
+]);
 
-// Resource scopes. A scope names the club or team the row belongs to, or
+// Resource scopes. A scope names the club or team the row belongs to, the
+// independent coach's own workspace ("private", the coach's user id), or
 // "global" for something that belongs to no club or team.
 export const GLOBAL_SCOPE = Object.freeze({ type: "global" });
 export function clubScope(id) {
@@ -226,48 +228,65 @@ export function clubScope(id) {
 export function teamScope(id) {
   return { type: "team", id };
 }
+export function privateScope(userId) {
+  return { type: "private", id: userId };
+}
 
-// May this account do `permission` on a resource of `scope`?
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
+// The role tables could not be read for this request (loadAuthorizationContext
+// marks authz.rolePermissions unavailable). can() then throws this for anyone
+// but a platform admin; the global error handler answers 503
+// permissions_unavailable. Never a fallback to a code constant.
+export class PermissionsUnavailableError extends Error {
+  constructor() {
+    super("The permission tables could not be read.");
+    this.name = "PermissionsUnavailableError";
+    this.status = 503;
+    this.code = "permissions_unavailable";
+  }
+}
+
+// May this account do `permission` on a resource of `scope`? (Roles R2
+// contract section 6; the SQL twin is public.user_has_permission, v84.)
 //   - an unknown permission word or scope type is a programming error: throws;
-//   - a platform admin passes every check;
-//   - global scope: a platform admin only;
-//   - club scope: the club's admin, when the Club admin set holds the word;
-//   - team scope: the team's coach when the Team coach set holds the word, or
-//     the admin of the team's club (authz.managedTeamIds) when the Club admin
-//     set holds it.
-// A platform-only word never passes for anyone else, whatever the sets say.
-// A club or team scope without an id (null, undefined, "") is no resource:
-// nobody but a platform admin passes it.
+//   - a platform admin passes every check (it reads platformRoles only, so the
+//     platform can repair even when the role tables cannot be read);
+//   - the role tables unreadable for this request: throws
+//     PermissionsUnavailableError (fail closed, loudly);
+//   - global scope and platform-only words: a platform admin only;
+//   - a scope without an id (null, undefined, "", the nil uuid) is no resource;
+//   - otherwise: true when a role the account holds for that scope has the word
+//     in its items (authz.rolePermissions, loaded from the database: the basic
+//     roles of the old tables and the active non-basic assignments). A club's
+//     entry also holds at that club's teams.
+// A context without rolePermissions (built by hand) answers false: there is no
+// fallback to the R1 constant.
 //
-// Three conventions about the scope, which the SQL twin of R2
-// (public.user_has_permission) must copy exactly:
-//   1. global scope = a platform admin only, WHATEVER the word. A club or
-//      team word checked at global scope ("accounts.manage", "athletes.remove"
-//      in routes/organization.js) means "this resource belongs to no club or
-//      team", so no club's or team's role reaches it.
-//   2. a club's word holds at a team under that club. A word that may be
-//      assigned only for a club ("staff.assign") can therefore be checked at
-//      team scope; it then passes for the admin of the team's club and never
-//      for the team's own coach, unless the Team coach set holds the word too.
-//   3. a club or team scope without an id (null, undefined, "") is no
-//      resource: only a platform admin passes it, whatever rows the account
-//      holds. The twin must refuse a NULL scope id the same way, never match
-//      it against a role row.
-// The catalog's `scopeTypes` say where a role may be ASSIGNED, not which
-// resource scopes a check may name.
+// The three conventions of R1 stay; the SQL twin of R2
+// (public.user_has_permission, v84) must copy exactly:
+//   1. global scope = a platform admin only, WHATEVER the word;
+//   2. a club's word holds at a team under that club;
+//   3. a club or team scope without an id is no resource.
+// It never reads the active workspace or any other field of authz.
 export function can(authz, permission, scope) {
   const entry = Object.hasOwn(PERMISSIONS, permission) ? PERMISSIONS[permission] : null;
   if (!entry) throw new Error(`Unknown permission: ${String(permission)}`);
   const type = scope?.type;
-  if (type !== "global" && type !== "club" && type !== "team") {
+  if (type !== "global" && type !== "club" && type !== "team" && type !== "private") {
     throw new Error(`Unknown permission scope type: ${String(type)}`);
   }
   if (isPlatformAdministrator(authz)) return true;
+  const entries = authz.rolePermissions;
+  if (entries && !Array.isArray(entries)) throw new PermissionsUnavailableError();
   if (entry.platformOnly || type === "global") return false;
-  if (scope.id == null || scope.id === "") return false;
-  if (type === "club") {
-    return CLUB_ADMIN_SET.has(permission) && holdsClubAdminRole(authz, scope.id);
+  if (scope.id == null || scope.id === "" || String(scope.id) === NIL_UUID) return false;
+  if (!Array.isArray(entries)) return false;
+  const id = String(scope.id);
+  for (const e of entries) {
+    if (!e.words.includes(permission)) continue;
+    if (e.scopeType === type && String(e.scopeId) === id) return true;
+    if (type === "team" && e.scopeType === "club" && e.teamIds.some((t) => String(t) === id)) return true;
   }
-  return (TEAM_COACH_SET.has(permission) && holdsTeamCoachRole(authz, scope.id))
-    || (CLUB_ADMIN_SET.has(permission) && managesTeamThroughClub(authz, scope.id));
+  return false;
 }

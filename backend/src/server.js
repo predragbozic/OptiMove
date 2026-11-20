@@ -20,6 +20,7 @@ import exercisesRouter from "./routes/exercises.js";
 import exerciseCollectionsRouter from "./routes/exerciseCollections.js";
 import builderRouter from "./routes/builder.js";
 import organizationRouter from "./routes/organization.js";
+import permissionRolesRouter from "./routes/permissionRoles.js";
 import coachesRouter from "./routes/coaches.js";
 import notificationsRouter from "./routes/notifications.js";
 import messagesRouter from "./routes/messages.js";
@@ -135,6 +136,10 @@ app.use("/api/templates", requireAuth, templatesRouter);
 app.use("/api/exercises", requireAuth, requireCoach, exercisesRouter);
 app.use("/api/exercise-collections", requireAuth, requireCoach, exerciseCollectionsRouter);
 app.use("/api/builder", requireAuth, requireCoach, builderRouter);
+// The Roles API (roles R2) before the organization router, behind requireAuth
+// only: its service answers the identical 404 for every caller it does not
+// serve, so it never answers 403 (contract section 5).
+app.use("/api/organization/roles", requireAuth, permissionRolesRouter);
 app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
 app.use("/api/taxonomy", requireAuth, requireCoach, taxonomyRouter);
 app.use("/api/coaches", requireAuth, coachesRouter);
@@ -277,6 +282,12 @@ app.use((error, req, res, next) => {
     console.error(`[http] request body refused: ${String(error.type || "entity.parse.failed").replace(/[^a-z._-]/gi, "")} (${status})`);
     const tooLarge = error.type === "entity.too.large";
     return res.status(status).json({ error: tooLarge ? "body_too_large" : "invalid_json", message: tooLarge ? "The request body is larger than this server accepts." : "The request body could not be read as JSON." });
+  }
+  // The role tables could not be read for this request (roles R2, can() fails
+  // closed): a stable 503, never a fallback and never a wrong 404.
+  if (error && error.code === "permissions_unavailable" && error.status === 503) {
+    console.error(`[authz] permissions_unavailable: ${req.method} ${String(req.baseUrl || "")}${String(req.route?.path || "")}`);
+    return res.status(503).json({ error: "permissions_unavailable", message: "Permissions could not be checked right now. Try again in a moment." });
   }
   error = mediaRetentionDatabaseError(error) || error;
   if (error instanceof MediaStorageError) return res.status(error.status).json({error:error.code,code:error.code,retryable:Boolean(error.retryable),details:error.details});

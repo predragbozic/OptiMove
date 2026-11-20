@@ -100,6 +100,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611181100_training_load_v78_calculated_variables_additive.sql",
   "202611191200_training_load_v79_calculated_ratio_difference.sql",
   "202611201100_training_load_v80_condition_match.sql",
+  "202611201300_roles_v84_permission_roles.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
