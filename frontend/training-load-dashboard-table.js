@@ -22,7 +22,7 @@ export function renderDashboardMetricTable(model, athletes = [], label = "Metric
     const id = athleteId ?? (uuid.test(bucketKey ?? "") && model.groupBy === "athlete" ? bucketKey : null);
     const name = names.get(String(id).toLowerCase());
     const date = dateKey.test(bucketKey ?? "") ? bucketKey : "";
-    const key = JSON.stringify([id, date]);
+    const key = JSON.stringify([id, date, ...(series.definition.analytical_aggregation === "none" ? [row.rowIndex] : [])]);
     const existing = rowsByBucket.get(key);
     if (existing) {
       const reason = existing.row.identity.unit !== row.identity.unit ? "unitConflict" : "conflict";

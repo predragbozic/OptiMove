@@ -560,6 +560,8 @@ export function setMetricPanelMetric(panel, metric) {
     panel.aggregation = BUILT_IN_DEFAULTS[metric.key].aggregation;
     panel.scope = BUILT_IN_DEFAULTS[metric.key].scope;
   }
+  const definition = (state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === metric?.id);
+  if (definition?.calculation?.kind === 'ratio') panel.aggregation = 'ratio';
   if (!panel.titleTouched) panel.title = metric?.label || "";
 }
 
@@ -651,7 +653,9 @@ export async function saveAnalysisMetricPanel(onPainted) {
   // A best-effort compensating call: true when it went through.
   const tryQuietly = async (fn) => { try { await fn(); return true; } catch { return false; } };
   const failure = (message, cause) => { const err = new Error(message); err.status = cause?.status; err.cause = cause; err.userFacing = true; return err; };
-  const seriesSettings = { dataScopeLevel: panel.scope, analyticalAggregation: panel.aggregation };
+  const definition = (a.metricPicker.definitions ?? []).find(d => d.id === panel.metric?.id);
+  const seriesSettings = { dataScopeLevel: panel.scope, analyticalAggregation: panel.aggregation,
+    ...(definition?.calculation?.kind === 'ratio' ? { aggregationRolePolicy: 'all_including_derived' } : {}) };
   // The new-widget branch may stage widgetId mid-flight (see createdInFlight
   // below), so "new vs edit" is decided up front.
   const wasNew = !panel.widgetId || Boolean(panel.createdInFlight);
@@ -1025,6 +1029,8 @@ export function setEditorSeriesMetric(entry, metric) {
   // code-reviewer (MEDIUM): settings the catalog makes impossible for the
   // new metric are moved to the nearest allowed value (text values only
   // take last/none; a catalog metric only its configured data levels).
+  const definition = (state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === metric?.id);
+  if (definition?.calculation?.kind === 'ratio') { entry.fields.analyticalAggregation = 'ratio'; entry.fields.aggregationRolePolicy = 'all_including_derived'; }
   const facts = editorMetricFacts(metric);
   if (facts.textual && !NON_NUMERIC_AGGREGATIONS.has(entry.fields.analyticalAggregation)) {
     entry.fields.analyticalAggregation = (metric.kind === "builtin" && BUILT_IN_DEFAULTS[metric.key]?.aggregation) || "last";
@@ -1585,6 +1591,7 @@ async function fetchAnalysisMetricDefinitions(picker, contextKey) {
       hiddenInClub: d.hiddenInClub === true,
       // J21: a calculated variable's widget says from when it has values.
       calculated: d.calculated === true,
+      calculation: d.calculation ?? null, allowedAggregations: d.allowedAggregations,
       ...(structureByDefId.get(d.id) || {}),
     }));
     metricDefinitionsWorkspaceKey = contextKey;

@@ -1,10 +1,21 @@
 // Isolated read port. Caller supplies a server-owned query runner and the
 // existing DashboardAccess predicates, not booleans or claims from a request body.
 // Deliberately not imported/registered by any production route in S2a.
+import { allowedDashboardAggregations as allowedAggregations } from '../dashboardRatios.js';
 import { isUuid, validateContract } from './schema.js';
 const TYPES = ['numeric', 'boolean', 'text'];
 // v79: a ratio is never totalled or averaged, and dashboards do not combine it yet: the simple builder neither lists nor loads one.
-const withAggregations = row => ({ ...row, allowed_aggregations: row.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'] });
+const withAggregations = row => ({ ...row, allowedAggregations: allowedAggregations(row.value_type, row.calculation?.kind), allowed_aggregations: allowedAggregations(row.value_type, row.calculation?.kind) });
+async function withMetadata(query, dashboard, rows) {
+  const ids = [...new Set(rows.flatMap(row => row.calculation?.inputs ?? []))];
+  const inputs = ids.length ? (await query(`select d.*, v.unit from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id=d.current_version_id where d.id=any($1::uuid[])`, [ids])).rows : [];
+  const named = new Map(inputs.filter(row => bindingVisible(dashboard, row)).map(row => [row.id, row]));
+  return rows.map(row => withAggregations({ ...row, calculation: row.calculation ? { kind: row.calculation.kind,
+    ...(row.calculation.kind === 'ratio' ? { scale: row.calculation.scale } : {}),
+    inputs: (row.calculation.inputs ?? []).map(id => { const input = named.get(id); return input
+      ? { definitionId: input.id, name: input.label, shortName: input.short_label ?? null, unit: input.unit ?? null }
+      : { definitionId: null, name: null, shortName: null, unit: null }; }) } : null }));
+}
 export class SimpleContractError extends Error {
   constructor(code, status = 404) { super(code); this.code = code; this.status = status; }
 }
@@ -35,17 +46,17 @@ export function createSimpleCapabilityReader({ query, canManageDashboardRow, dat
   async function listMetrics({ req, dataWorkspace, dashboardId, search = '', afterId = null, limit = 100, dataScopeLevel = null }) {
     const d = await target(req, dataWorkspace, dashboardId);
     if (typeof search !== 'string' || search.length > 200 || !Number.isInteger(limit) || limit < 1 || limit > 100 || afterId !== null && !isUuid(afterId) || dataScopeLevel !== null && !['day', 'session', 'component'].includes(dataScopeLevel)) throw new SimpleContractError('invalidRequest', 400);
-    const { rows } = await query(`select d.id, d.key, d.label, d.current_version_id, v.value_type, v.unit, v.daily_aggregation_method,
+    const { rows } = await query(`select d.id, d.key, d.label, d.current_version_id, v.value_type, v.unit, v.daily_aggregation_method, to_jsonb(v.*)->'calculation' as calculation,
       coalesce((select json_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id), '[]'::json) as scope_capabilities
       from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id=d.current_version_id
-      where d.state='active' and ${visibleSql('d')} and coalesce(to_jsonb(v.*)->'calculation'->>'kind', '') <> 'ratio' and v.value_type = any($5::text[])
+      where d.state='active' and ${visibleSql('d')} and v.value_type = any($5::text[])
       and ($6::text = '' or d.key ilike '%' || $6 || '%' or d.label ilike '%' || $6 || '%')
       and ($7::uuid is null or d.id > $7::uuid)
       and ($9::text is null or not exists(select 1 from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id)
         or exists(select 1 from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id and c.scope_level=$9))
       order by d.id limit $8`, [...targetParams(d), TYPES, search, afterId, limit + 1, dataScopeLevel]);
     const page = rows.slice(0, limit);
-    return { metrics: page.map(withAggregations), nextCursor: rows.length > limit ? page.at(-1).id : null };
+    return { metrics: await withMetadata(query, d, page), nextCursor: rows.length > limit ? page.at(-1).id : null };
   }
   async function load({ req, dataWorkspace, dashboardId, metricRef, sourceConnectionId = null, existingWidgetId = null }) {
     const d = await target(req, dataWorkspace, dashboardId);
@@ -55,11 +66,12 @@ export function createSimpleCapabilityReader({ query, canManageDashboardRow, dat
     const builtins = (await query('select key, label, unit, value_type, default_analytical_aggregation, fixed_data_scope_level, is_active from training_load.dashboard_builtin_series where is_active = true order by key', [])).rows.map(withAggregations);
     let metric;
     if (metricRef.kind === 'builtin') metric = builtins.find(b => b.key === metricRef.key);
-    else metric = (await query(`select d.*, v.value_type, v.unit, v.daily_aggregation_method,
+    else metric = (await query(`select d.*, v.value_type, v.unit, v.daily_aggregation_method, to_jsonb(v.*)->'calculation' as calculation,
       coalesce((select json_agg(c.scope_level order by c.scope_level) from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id), '[]'::json) as scope_capabilities
       from training_load.metric_definitions d join training_load.metric_definition_versions v on v.id=d.current_version_id
-      where d.state='active' and ${visibleSql('d')} and coalesce(to_jsonb(v.*)->'calculation'->>'kind', '') <> 'ratio' and d.id=$5`, [...targetParams(d), metricRef.metricDefinitionId])).rows[0];
+      where d.state='active' and ${visibleSql('d')} and d.id=$5`, [...targetParams(d), metricRef.metricDefinitionId])).rows[0];
     if (!metric || !TYPES.includes(metric.value_type)) throw new SimpleContractError('notFound');
+    if (metricRef.kind !== 'builtin') metric = (await withMetadata(query, d, [metric]))[0];
     let retainedPin = null;
     if (existingWidgetId !== null) {
       if (!isUuid(existingWidgetId)) throw new SimpleContractError('notFound');

@@ -5,6 +5,7 @@
 // taking an already-resolved dashboard row (the caller — routes/
 // trainingLoadDashboard.js — has already authorized it via
 // canManageDashboardRow before any of these are reached).
+import { assertDashboardAggregation } from "./dashboardRatios.js";
 import { query } from "./db.js";
 import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
@@ -50,15 +51,12 @@ async function assertOwnsWidget(dashboardId, widgetId) {
 // message must never reach the client). A metric must also be ACTIVE —
 // same "may only be NEWLY bound to an active metric" rule the trigger
 // itself enforces.
-// v79: a ratio is combined over a period as the sum of its numerators over the sum of its denominators - never totalled or
-// averaged. Until the dashboards compute that (the dashboard contract, docs/ai/calculated-variables-v79-plan.md section 6),
-// a ratio is refused on a dashboard rather than shown wrong. A difference is an amount and stays allowed.
-export const RATIO_NOT_AVAILABLE = "Dashboards cannot show a ratio yet. Use the variables it divides for now.";
+// v79: the service checks aggregation compatibility before sanctioned writes.
 async function assertMetricReferenceOk(dashboardRow, metricDefinitionId) {
   if (!metricDefinitionId) return;
   const { visible, def } = await isMetricVisibleToDashboard(dashboardRow, metricDefinitionId);
   if (!visible || !def || def.state !== "active") throw httpError(404, "Metric not found.");
-  if (def.calculation_kind === "ratio") throw httpError(409, RATIO_NOT_AVAILABLE, "ratio_not_available");
+  return def;
 }
 async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionId) {
   if (!sourceConnectionId) return;
@@ -109,15 +107,13 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
   // Statement 1/2: every candidate definition for every distinct key this
   // batch could possibly need, already filtered by workspace visibility.
   const candidateRows = await q(
-    `select d.id, d.key, mdv.value_type, mdv.unit, d.owner_scope,
+    `select d.id, d.key, mdv.value_type, mdv.unit, d.owner_scope, to_jsonb(mdv.*)->'calculation'->>'kind' as calculation_kind,
        (d.owner_scope = 'system' and $2 = 'club'
           and exists (select 1 from training_load.metric_definition_club_hides ch
                        where ch.club_id = $3 and ch.metric_definition_id = d.id and ch.shown_at is null)) as hidden_in_club
      from training_load.metric_definitions d
      join training_load.metric_definition_versions mdv on mdv.id = d.current_version_id
      where d.key = any($1::text[]) and d.state = 'active'
-       -- v79: a ratio is not on a dashboard yet (RATIO_NOT_AVAILABLE): a hint that names one stays unresolved.
-       and coalesce(to_jsonb(mdv.*) -> 'calculation' ->> 'kind', '') <> 'ratio'
        and ($2 <> 'athlete' or not ${calculatedDefinitionSql("d")})
        and (
          d.owner_scope = 'system'
@@ -152,7 +148,9 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
     let outcome = { status: "unresolved", candidateIds: [] };
     for (const hint of spec.hints) {
       const key = typeof hint === "string" ? hint : hint.key;
-      let rows = candidatesByKey.get(key) || [];
+      let rows = (candidatesByKey.get(key) || []).filter(row => row.calculation_kind === 'ratio'
+        ? ['ratio','max','last','none'].includes(spec.analyticalAggregation) && spec.aggregationRolePolicy === 'all_including_derived'
+        : spec.analyticalAggregation !== 'ratio');
       if (typeof hint === "object") {
         if (hint.valueType) rows = rows.filter((r) => r.value_type === hint.valueType);
         if (Object.prototype.hasOwnProperty.call(hint, "unit")) rows = rows.filter((r) => r.unit === hint.unit);
@@ -287,7 +285,10 @@ export async function deleteWidget(dashboardId, widgetId, { expectedWidgetRevisi
 // alongside a real binding.
 export async function addSeries(dashboardId, widgetId, body, createdByUserId, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
-  await assertMetricReferenceOk(dashboardRow, body.metricDefinitionId);
+  const metric = await assertMetricReferenceOk(dashboardRow, body.metricDefinitionId);
+  const aggregation = body.analyticalAggregation ?? (metric?.calculation_kind === 'ratio' ? 'ratio' : 'sum');
+  const rolePolicy = body.aggregationRolePolicy ?? (metric?.calculation_kind === 'ratio' ? 'all_including_derived' : 'standalone_and_source_rollup');
+  assertDashboardAggregation(metric?.calculation_kind ? { kind: metric.calculation_kind } : null, aggregation, rolePolicy);
   await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
   // A built-in series has no Metrics-Core provenance concept at all — the
   // table's own CHECK requires source_policy='not_applicable' (and no
@@ -304,8 +305,8 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
         body.templateMetricKeyHints ? JSON.stringify(body.templateMetricKeyHints) : null,
         body.axis ?? "primary", body.color ?? null, body.displayLabel ?? null,
         body.sourcePolicy ?? defaultSourcePolicy, body.sourceConnectionId ?? null,
-        body.dataScopeLevel ?? "session", body.analyticalAggregation ?? "sum",
-        body.aggregationRolePolicy ?? "standalone_and_source_rollup", body.coveragePolicy ?? "complete_and_partial",
+        body.dataScopeLevel ?? "session", aggregation,
+        rolePolicy, body.coveragePolicy ?? "complete_and_partial",
         body.comparisonPeriod ?? null, createdByUserId,
       ],
     );
@@ -318,6 +319,11 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
 export async function updateSeries(dashboardId, widgetId, seriesId, body, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
   if (body.sourceConnectionId) await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
+  const existing = (await query('select metric_definition_id, analytical_aggregation, aggregation_role_policy from training_load.dashboard_widget_series where id=$1 and widget_id=$2', [seriesId, widgetId])).rows[0];
+  if (!existing) throw httpError(404, 'Series not found.');
+  const visible = existing.metric_definition_id ? await isMetricVisibleToDashboard(dashboardRow, existing.metric_definition_id) : null;
+  assertDashboardAggregation(visible?.def?.calculation_kind ? { kind: visible.def.calculation_kind } : null,
+    body.analyticalAggregation ?? existing.analytical_aggregation, body.aggregationRolePolicy ?? existing.aggregation_role_policy);
   // PATCH semantics (finding #3): absent = no change, explicit null =
   // clear, value = replace — derived here, never a client-facing flag.
   const hasColor = Object.prototype.hasOwnProperty.call(body, "color");
@@ -367,7 +373,10 @@ export async function reorderSeries(dashboardId, widgetId, { expectedWidgetRevis
 
 export async function resolveSeriesBinding(dashboardId, widgetId, seriesId, { expectedWidgetRevision, metricDefinitionId }, dashboardRow) {
   await assertOwnsWidget(dashboardId, widgetId);
-  await assertMetricReferenceOk(dashboardRow, metricDefinitionId);
+  const metric = await assertMetricReferenceOk(dashboardRow, metricDefinitionId);
+  const existing = (await query("select analytical_aggregation, aggregation_role_policy from training_load.dashboard_widget_series where id=$1 and widget_id=$2", [seriesId, widgetId])).rows[0];
+  if (!existing) throw httpError(404, "Series not found.");
+  assertDashboardAggregation(metric?.calculation_kind ? { kind: metric.calculation_kind } : null, existing.analytical_aggregation, existing.aggregation_role_policy);
   try {
     const r = await query(`select * from training_load.resolve_series_binding($1, $2, $3, $4)`, [seriesId, widgetId, expectedWidgetRevision, metricDefinitionId]);
     return { seriesId: r.rows[0].series_id, widgetRevision: r.rows[0].widget_revision };

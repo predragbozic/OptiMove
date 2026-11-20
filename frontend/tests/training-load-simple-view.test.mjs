@@ -339,3 +339,11 @@ test("twenty-athlete limit names the choice and offers it directly", () => {
   assert.match(html, /Choose up to 20 athletes for this chart/);
   assert.match(html, /data-action="training-load-simple-choose-athletes"/);
 });
+
+test('ratio choices use the server contract and formula names never leak redacted ids',()=>{
+  const metric={id:metricId,label:'Metres per minute',unit:'m/min',allowedAggregations:['ratio','max','last','none'],calculation:{kind:'ratio',scale:1,inputs:[{definitionId:'secret-id',name:'Distance'},{definitionId:null,name:null,shortName:null,unit:null}]}};
+  const html=renderSimpleEditorHtml(model({step:3,selectedMetric:metric,draft:{title:'Ratio',metricRef:{kind:'metric',metricDefinitionId:metricId},view:{type:'table',groupBy:'day',dataScopeLevel:'session',analyticalAggregation:'ratio'},athleteSelection:{mode:'inherit'}}}));
+  const options=html.match(/data-action="training-load-simple-aggregation"[\s\S]*?<\/select>/)[0];
+  for(const value of ['ratio','max','last','none'])assert.ok(options.includes('value="'+value+'"'));
+  assert.doesNotMatch(options,/value="sum"|value="avg"/);assert.match(html,/Calculated/);assert.match(html,/Distance ÷ an input you cannot see/);assert.doesNotMatch(html,/secret-id/);assert.match(html,/Current formula:/);assert.match(html,/Earlier sessions keep their saved calculation/);
+});
