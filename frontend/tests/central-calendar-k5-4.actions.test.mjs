@@ -231,6 +231,22 @@ test("R2. a 404, a 403, a 500, a lost answer and a malformed answer each give no
   }
 });
 
+test("R2b. only an answer with something to show repaints the calendar: a refusal or nothing waiting changes nothing on screen", async () => {
+  const cal = { data: { workspace: { type: "team", scopeId: U17 }, from: PAST_MONDAY, to: PDAY(6) }, filters: { kinds: [], eventKinds: [], teamIds: [] } };
+  const paints = async (route) => {
+    gps.clearGpsReview();
+    installFetchMock(route);
+    state.centralCalendar = cal;
+    let count = 0;
+    await gps.ensureGpsReview(cal, () => { count += 1; });
+    return count;
+  };
+  assert.equal(await paints(() => ({ status: 404, body: { error: "notFound" } })), 0, "a refusal: no repaint");
+  assert.equal(await paints((call) => ({ status: 200, body: gpsAnswer(call.url, [gpsDay({ day: PDAY(2), imported: 3, out: 1 })]) })), 0, "nothing waiting: no repaint");
+  assert.equal(await paints((call) => ({ status: 200, body: gpsAnswer(call.url, [gpsDay({ day: PDAY(2), ready: 1 })]) })), 1, "a mark to draw: one repaint");
+  assert.equal(await paints((call) => ({ status: 200, body: gpsAnswer(call.url, [], { truncated: true }) })), 1, "a cut answer (uncertain marks): one repaint");
+});
+
 // --- R3: counts ----------------------------------------------------------------
 
 test("R3a. needs + ready is counted; imported and out alone make no mark; one vs several; odd keys and words are ignored", async () => {

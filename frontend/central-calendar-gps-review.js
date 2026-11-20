@@ -68,7 +68,10 @@ export function ensureGpsReview(cal, render) {
     entry.status = answer ? "ok" : "none";
     // A dropped range (another workspace, a refresh) is never drawn.
     if (asked !== generation || cache.get(ctx.key) !== entry) return;
-    if (state.centralCalendar === cal) render?.();
+    // Only an answer with something to show repaints the calendar: a refusal, an error or a range with nothing waiting
+    // leaves the screen exactly as it is (no repaint under the coach's pointer for nothing).
+    const somethingToShow = Boolean(answer) && (answer.truncated || [...answer.days.values()].some((n) => n > 0));
+    if (somethingToShow && state.centralCalendar === cal) render?.();
   });
   return entry.promise;
 }
