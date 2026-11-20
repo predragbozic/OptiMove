@@ -91,7 +91,7 @@ export class RunnerRefusal extends Error {}
 
 // ---------------------------------------------------------------- arguments
 export function parseArgs(argv) {
-  const args = { filters: [], files: [] };
+  const args = { filters: [], files: [], strictNotRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -110,6 +110,7 @@ export function parseArgs(argv) {
     else if (a === "--log-dir") args.logDir = next();
     else if (a === "--project-dir") args.projectDir = next();
     else if (a === "--list") args.list = true;
+    else if (a === "--strict-not-run") args.strictNotRun = true;
     else if (a === "--quiet") args.quiet = true;
     else if (a === "--help" || a === "-h") args.help = true;
     else throw new RunnerRefusal(`unknown option ${/:\/\/|@/.test(a) ? "(a value that looks like a URL or credential)" : a}`);
@@ -130,7 +131,9 @@ Frontend files are all unit. --kind all is accepted with --list only.
 
 Options: --timeout-ms <n> (per file), --json <path> (machine-readable report),
 --log-dir <dir> (where every file's full output is kept), --quiet (no per-file lines),
---project-dir <dir> (a throwaway project for the runner's own self-test).
+--project-dir <dir> (a throwaway project for the runner's own self-test),
+--strict-not-run (exit 1 when any file in the run's scope was not run, e.g. kind shared
+without --shared-db; without it such files are only listed under "Not run").
 `;
 
 // ------------------------------------------------------------- env parsing
@@ -199,13 +202,25 @@ function readText(file) {
   }
 }
 
-function moduleClosure(entry, cache) {
+// The modules a test file replaces with node:test's `mock.module("<relative path>", ...)`.
+// Only relative specifiers that resolve to a file count.
+const MOCK_MODULE_RE = /\bmock\.module\(\s*["'](\.{1,2}\/[^"']+)["']/g;
+export function mockedModules(file, text) {
+  const mocked = new Set();
+  for (const m of text.matchAll(MOCK_MODULE_RE)) mocked.add(path.resolve(path.dirname(file), m[1]));
+  return mocked;
+}
+
+// `mocked`: files the test replaces with a mock. The walk does not enter them (their real
+// imports, pg among them, never load), and the entry file itself is always read.
+function moduleClosure(entry, cache, mocked = new Set()) {
   const seen = new Set();
   let barePg = false;
   const stack = [entry];
   while (stack.length) {
     const file = stack.pop();
     if (seen.has(file)) continue;
+    if (file !== entry && mocked.has(file)) continue;
     seen.add(file);
     let info = cache.get(file);
     if (!info) {
@@ -233,7 +248,13 @@ function moduleClosure(entry, cache) {
 export function classifyFile({ project, file, testsDirAbs, cache, manifest }) {
   const abs = path.join(testsDirAbs, file);
   const text = readText(abs);
-  const closure = moduleClosure(abs, cache);
+  // A file that replaces the project's db.js (<project>/src/db.js, for the backend
+  // backend/src/db.js) with mock.module never opens a connection through it: it is judged by
+  // what is left (its own pg import, a server or migrator it starts, a `create database`). Only
+  // db.js is taken out this way; any other mocked module is walked as before.
+  const projectDb = path.join(path.dirname(testsDirAbs), "src", "db.js");
+  const mockedDb = [...mockedModules(abs, text)].filter((f) => f === projectDb);
+  const closure = moduleClosure(abs, cache, new Set(mockedDb));
   const closureTexts = [...closure.files].map((f) => cache.get(f)?.text || "");
   const closureNames = [...closure.files].map((f) => path.relative(REPO_ROOT, f).replace(/\\/g, "/"));
   // A file that starts the real server or the migrator as a child process
@@ -657,16 +678,46 @@ function selectFiles({ project, projectDirAbs, kind, group, filters, files }) {
   const manifest = readManifest(projectDirAbs);
   const cache = new Map();
   const all = listTestFiles(testsDirAbs).map((file) => classifyFile({ project, file, testsDirAbs, cache, manifest }));
-  let selected = all;
-  if (kind && kind !== "all") selected = selected.filter((f) => f.kind === kind);
+  // inScope: every file the group / filter / file options name, whatever its kind; selected: the
+  // ones of the asked kind. The difference is what a run leaves out by kind (see notRunOfStep).
+  let inScope = all;
   if (group) {
     const re = GROUPS[group]?.[project];
     if (!re) throw new RunnerRefusal(`unknown group "${group}" for ${project}`);
-    selected = selected.filter((f) => re.test(f.file));
+    inScope = inScope.filter((f) => re.test(f.file));
   }
-  if (filters.length) selected = selected.filter((f) => filters.some((s) => f.file.includes(s)));
-  if (files.length) selected = selected.filter((f) => files.includes(f.file));
-  return { all, selected, manifest, testsDirAbs };
+  if (filters.length) inScope = inScope.filter((f) => filters.some((s) => f.file.includes(s)));
+  if (files.length) inScope = inScope.filter((f) => files.includes(f.file));
+  const selected = kind && kind !== "all" ? inScope.filter((f) => f.kind === kind) : inScope;
+  return { all, inScope, selected, manifest, testsDirAbs };
+}
+
+// Why a file in a step's scope was not run: its kind is not one the step runs.
+function notRunReason(kind, askedKind) {
+  if (askedKind) return `kind ${kind}: this step runs --kind ${askedKind} only`;
+  if (kind === "shared") return "kind shared writes to a persistent development database: it runs only with --kind shared --shared-db <name>";
+  if (kind === "schema-clone") return "kind schema-clone runs only with --kind schema-clone (and LOCAL_OPTIMOVE_SCHEMA_SOURCE_URL)";
+  return `kind ${kind} is not run by default`;
+}
+
+export function notRunOfStep({ project, inScope, ranKinds, askedKind }) {
+  return inScope.filter((f) => !ranKinds.includes(f.kind)).map((f) => ({ project, file: f.file, kind: f.kind, reason: notRunReason(f.kind, askedKind) }));
+}
+
+// Files no step of the run ran or skipped: a file another step ran is not "not run".
+export function mergeNotRun(stepResults) {
+  const touched = new Set(stepResults.flatMap((s) => s.results.map((r) => `${s.project}/${r.file}`)));
+  const seen = new Set();
+  const merged = [];
+  for (const s of stepResults) {
+    for (const n of s.notRun || []) {
+      const key = `${n.project}/${n.file}`;
+      if (touched.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(n);
+    }
+  }
+  return merged;
 }
 
 function formatDuration(ms) {
@@ -690,7 +741,7 @@ async function runStep(step, args, io) {
   const projectDirAbs = args.projectDir ? path.resolve(args.projectDir) : path.join(REPO_ROOT, projectCfg.dir);
   const kind = step.kind || (step.project === "frontend" ? "unit" : undefined);
   if (kind && kind !== "all" && !projectCfg.kinds.includes(kind)) throw new RunnerRefusal(`kind "${kind}" does not exist for ${step.project} (kinds: ${projectCfg.kinds.join(", ")})`);
-  const { all, selected, manifest, testsDirAbs } = selectFiles({ project: step.project, projectDirAbs, kind, group: step.group, filters: args.filters, files: args.files });
+  const { all, inScope, selected, manifest, testsDirAbs } = selectFiles({ project: step.project, projectDirAbs, kind, group: step.group, filters: args.filters, files: args.files });
 
   if (args.list) {
     io.out(`\n${step.project}: ${all.length} test files${kind && kind !== "all" ? `, ${selected.length} of kind ${kind}` : ""}${step.group ? `, group ${step.group}` : ""}`);
@@ -704,6 +755,7 @@ async function runStep(step, args, io) {
 
   if (kind === "all") throw new RunnerRefusal("--kind all is only for --list; run one kind at a time");
   const kinds = kind ? [kind] : projectCfg.kinds.filter((k) => k !== "shared" && k !== "schema-clone");
+  const notRun = notRunOfStep({ project: step.project, inScope, ranKinds: kinds, askedKind: kind });
   const results = [];
   let ok = true;
   for (const k of kinds) {
@@ -796,11 +848,12 @@ async function runStep(step, args, io) {
       }
     }
   }
-  return { project: step.project, kind, group: step.group, ok, results, leftoverDatabases: results.leftoverDatabases ?? null };
+  return { project: step.project, kind, group: step.group, ok, results, notRun, leftoverDatabases: results.leftoverDatabases ?? null };
 }
 
-function summarize(stepResults, io) {
+function summarize(stepResults, io, { strictNotRun = false } = {}) {
   const results = stepResults.flatMap((s) => s.results);
+  const notRun = mergeNotRun(stepResults);
   const by = (pred) => results.filter(pred).length;
   const totals = {
     files: results.length,
@@ -815,18 +868,33 @@ function summarize(stepResults, io) {
     testsPassed: results.reduce((n, r) => n + (r.pass || 0), 0),
     testsFailed: results.reduce((n, r) => n + (r.fail || 0), 0),
     durationMs: results.reduce((n, r) => n + (r.durationMs || 0), 0),
+    notRun: notRun.length,
   };
-  const ok = stepResults.every((s) => s.ok);
-  io.out(`\nFiles: ${totals.files} — pass ${totals.pass}, known-fail ${totals.xfail}, fail ${totals.fail}, timeout ${totals.timeout}, crash ${totals.crash}, did-not-exit ${totals.noExit}, skipped ${totals.skipped}`);
+  const stepsOk = stepResults.every((s) => s.ok);
+  const ok = stepsOk && !(strictNotRun && notRun.length > 0);
+  io.out(`\nFiles: ${totals.files} — pass ${totals.pass}, known-fail ${totals.xfail}, fail ${totals.fail}, timeout ${totals.timeout}, crash ${totals.crash}, did-not-exit ${totals.noExit}, skipped ${totals.skipped}, not run ${totals.notRun}`);
   io.out(`Tests: ${totals.testsPassed} passed, ${totals.testsFailed} failed of ${totals.tests}; ${formatDuration(totals.durationMs)} in total`);
   const bad = results.filter((r) => !r.ok);
   if (bad.length) {
     io.out("Not ok:");
     for (const r of bad) io.out(`  ${statusLabel(r)}  ${r.file}  (${r.logPath})`);
   }
+  // No file disappears silently: every file in the run's scope that no step ran is named here.
+  if (notRun.length) {
+    io.out(`Not run (${notRun.length}):`);
+    const groups = new Map();
+    for (const n of notRun) {
+      const key = `${n.project} / ${n.reason}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(n.file);
+    }
+    for (const [key, list] of groups) io.out(`  ${key} (${list.length}): ${list.join(", ")}`);
+  }
   io.out(`Logs: ${io.logRoot}`);
-  io.out(ok ? "RESULT: OK" : "RESULT: FAILED");
-  return { ok, totals };
+  if (ok) io.out("RESULT: OK");
+  else if (stepsOk) io.out(`RESULT: FAILED (--strict-not-run: ${notRun.length} file(s) not run)`);
+  else io.out("RESULT: FAILED");
+  return { ok, totals, notRun };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -861,9 +929,9 @@ export async function main(argv = process.argv.slice(2)) {
     if (args.json) await fsp.writeFile(args.json, JSON.stringify({ runId, steps: stepResults.map((s) => ({ project: s.project, kind: s.kind, group: s.group, files: s.listed })) }, null, 2));
     return 0;
   }
-  const { ok, totals } = summarize(stepResults, io);
+  const { ok, totals, notRun } = summarize(stepResults, io, { strictNotRun: args.strictNotRun });
   if (args.json) {
-    await fsp.writeFile(args.json, JSON.stringify({ runId, node: process.version, platform: process.platform, logRoot, ok, totals, steps: stepResults }, null, 2));
+    await fsp.writeFile(args.json, JSON.stringify({ runId, node: process.version, platform: process.platform, logRoot, ok, strictNotRun: args.strictNotRun, totals, notRun, steps: stepResults }, null, 2));
   }
   return ok ? 0 : 1;
 }

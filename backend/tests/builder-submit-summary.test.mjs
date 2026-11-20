@@ -1,13 +1,10 @@
 import { beforeEach, test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { needsModuleMocksRelaunch, relaunchWithModuleMocks } from "./support/relaunch-with-module-mocks.mjs";
 
-if (!process.execArgv.includes("--experimental-test-module-mocks")) {
+if (needsModuleMocksRelaunch()) {
   test("Builder summary response with isolated database mocks", () => {
-    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", "--test-isolation=none", fileURLToPath(import.meta.url)], { encoding: "utf8" });
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
+    relaunchWithModuleMocks(import.meta.url);
   });
 } else {
   let plans;
@@ -15,12 +12,26 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   let failWrite;
   let hasContent;
   let failDelete;
+  let isolationLevel;
+  let reuseLocks;
+  let restricted;
   const rows = (values) => ({ rows: values, rowCount: values.length });
   async function query(sql, params = []) {
     calls.push({ sql, params });
     const normalized = sql.replace(/\s+/g, " ").trim();
+    // Exercise reuse guard (afd31f09, lockExerciseReuse) and copied images (d9506ef6): both read
+    // the transaction isolation first; reuse is allowed only under READ COMMITTED.
+    if (normalized === "select current_setting('transaction_isolation') as isolation") return rows([{ isolation: isolationLevel }]);
+    if (normalized === "set local lock_timeout = '2s'") return rows([]);
+    if (normalized === "select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))") { reuseLocks++; return rows([{}]); }
+    // assertExerciseReuseAllowed: exercises of the plan the user may no longer reuse
+    if (normalized.startsWith("with recursive selected_nodes as")) return rows(restricted);
     if (normalized.startsWith("select pi.id")) return rows([{ id: "item-1", plan_id: "plan-1", plan_node_id: "node-1" }]);
-    if (normalized.startsWith("update plans.plan_items")) return rows([{ id: params[0], sets: params[1], reps: params[2], load: params[3], description: params[4] }]);
+    if (normalized.startsWith("update plans.plan_items")) return rows([{ id: params[0], exercise_id: "exercise-1", title: "Squat (library text)", sets: params[1], reps: params[2], load: params[3], description: params[4] }]);
+    // plan items in the reader's language (3ccf6149): the item still equals its exercise's text
+    if (normalized.startsWith("select id, name, instruction, name_en, instruction_en from library.exercises")) {
+      return rows(params[0].includes("exercise-1") ? [{ id: "exercise-1", name: "Squat (library text)", instruction: "Controlled", name_en: "Back squat", instruction_en: "Slow and controlled" }] : []);
+    }
     if (normalized.startsWith("select p.id")) return rows(plans.has(params[0]) ? [plans.get(params[0])] : []);
     if (normalized.startsWith("select id from plans.plans")) return rows(plans.has(params[0]) ? [{ id: params[0] }] : []);
     if (normalized.startsWith("select id, created_by_user_id")) return rows([plans.get(params[0])]);
@@ -60,7 +71,7 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
   const updateItem = handler("/items/:itemId", "patch");
   const deletePlan = handler("/plans/:planId", "delete");
   const plan = (extra = {}) => ({ id: "plan-1", plan_type: "program", name: "Program", is_template: true, status: "draft", source_type: "builder", ...extra });
-  beforeEach(() => { plans = new Map([["plan-1", plan()]]); calls = []; failWrite = false; failDelete = false; hasContent = true; });
+  beforeEach(() => { plans = new Map([["plan-1", plan()]]); calls = []; failWrite = false; failDelete = false; hasContent = true; isolationLevel = "read committed"; reuseLocks = 0; restricted = []; });
   async function invoke(route, id = "plan-1", body = {}) {
     const result = { status: 200, headers: {} };
     const res = { status(value) { result.status = value; return this; }, setHeader(name, value) { result.headers[name] = value; }, json(value) { result.body = value; return this; } };
@@ -78,13 +89,43 @@ if (!process.execArgv.includes("--experimental-test-module-mocks")) {
     assert.ok(calls.some(({ sql }) => sql === "commit"));
     assert.ok(!calls.some(({ sql }) => sql.includes("select pd.id as block_id") || sql.includes("where p.builder_batch_id")));
     assert.match(result.headers["Server-Timing"], /access;dur=.*response;dur=.*total;dur=/);
+    assert.ok(reuseLocks > 0, "Save takes the exercise reuse lock (afd31f09)");
+  });
+
+  // The exercise reuse guard on Save (afd31f09): the mock answers its checks, so they are tested.
+  test("Save outside READ COMMITTED is refused by the exercise reuse guard and nothing commits", async () => {
+    isolationLevel = "repeatable read";
+    const result = await invoke(submit, "plan-1", { responseMode: "summary" });
+    assert.equal(result.error?.status, 409);
+    assert.match(result.error.message, /READ COMMITTED/);
+    // The empty-draft check commits its own short transaction first (by design). The activation
+    // transaction (the last begin) runs the guard after its UPDATE and must end in rollback.
+    const activation = calls.slice(calls.findLastIndex(({ sql }) => sql === "begin"));
+    assert.ok(activation.some(({ sql }) => /^\s*update plans\.plans\b/.test(sql)));
+    assert.ok(activation.some(({ sql }) => sql === "rollback"));
+    assert.ok(!activation.some(({ sql }) => sql === "commit"));
+  });
+
+  test("Save with an exercise the coach may no longer reuse is refused and nothing commits", async () => {
+    restricted = [{ id: "exercise-revoked", uses: 1 }];
+    const result = await invoke(submit, "plan-1", { responseMode: "summary" });
+    assert.equal(result.error?.status, 409);
+    assert.equal(result.error.message, "exerciseAccessRevoked");
+    // The empty-draft check commits its own short transaction first (by design). The activation
+    // transaction (the last begin) runs the guard after its UPDATE and must end in rollback.
+    const activation = calls.slice(calls.findLastIndex(({ sql }) => sql === "begin"));
+    assert.ok(activation.some(({ sql }) => /^\s*update plans\.plans\b/.test(sql)));
+    assert.ok(activation.some(({ sql }) => sql === "rollback"));
+    assert.ok(!activation.some(({ sql }) => sql === "commit"));
   });
 
   test("item response updates dose fields without reading the full draft", async () => {
     const result = await invoke(updateItem, "plan-1", { responseMode: "item", sets: "3", reps: "12", load: "20 kg", description: "Controlled" });
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.body, { planId: "plan-1", item: { id: "item-1", sets: "3", reps: "12", load: "20 kg", description: "Controlled" } });
-    assert.equal(calls.length, 3);
+    // the English of the item's exercise comes along (3ccf6149), from one lookup of that exercise
+    assert.deepEqual(result.body, { planId: "plan-1", item: { id: "item-1", sets: "3", reps: "12", load: "20 kg", description: "Controlled", titleEn: "Back squat", descriptionEn: "Slow and controlled" } });
+    assert.equal(calls.length, 4);
+    assert.equal(calls.filter(({ sql }) => sql.includes("from library.exercises where id = any")).length, 1);
     assert.ok(!calls.some(({ sql }) => sql.includes("select pd.id as block_id")));
   });
 

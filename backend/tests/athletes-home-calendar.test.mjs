@@ -1,18 +1,15 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { needsModuleMocksRelaunch, relaunchWithModuleMocks } from "./support/relaunch-with-module-mocks.mjs";
 
 // Coach Home's calendar: GET /api/athletes/today?date= (one day's overview)
 // and GET /api/athletes/training-days?from=&to= (the dots of one month grid).
 // Both are read-only and use the same roster scope as the Home overview
 // (athlete-roster-scope.test.mjs); the database and the workspace are mocked,
 // the same pattern as that suite.
-if (!process.execArgv.includes("--experimental-test-module-mocks")) {
+if (needsModuleMocksRelaunch()) {
   test("Home calendar routes with isolated database mocks", () => {
-    const result = spawnSync(process.execPath, ["--experimental-test-module-mocks", "--test", "--test-isolation=none", fileURLToPath(import.meta.url)], { encoding: "utf8" });
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
+    relaunchWithModuleMocks(import.meta.url);
   });
 } else {
   let workspace = { type: "club", scopeId: "club-a" };
