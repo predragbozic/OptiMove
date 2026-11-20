@@ -351,7 +351,7 @@ function methodValuesText(proposal, view) {
     .join(" · ");
 }
 
-// Own average: the sessions it used ("From 3 sessions: 12.11, 14.11 and 17.11.2026") and the kind of session it compares with.
+// Own average: the sessions it used ("From 3 sessions: 17.11.2026, 14.11.2026 and 12.11.2026", newest first) and the kind of session it compares with.
 const shortDay = (day) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day ?? ""));
   return m ? `${m[3]}.${m[2]}.${m[1]}` : "";

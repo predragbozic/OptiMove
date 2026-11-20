@@ -343,6 +343,13 @@ test("3. the proposal: the session's variables (a max variable is not estimable,
   assert.equal(r3.body.methods.proportional.available, false);
   assert.equal(r3.body.methods.proportional.reason, "too_few_sessions");
   assert.deepEqual(r3.body.methods.proportional.sessionDays, []);
+  // The days themselves (code review LOW): one entry per session across variables, two sessions on one day stay two,
+  // newest first. The world above has every session on one day, so the order and the dedup are proven here.
+  assert.deepEqual(estimates.proportionalDays([
+    { usedSessions: [{ id: "e1", day: "2026-11-12" }, { id: "e2", day: "2026-11-17" }, { id: "e3", day: "2026-11-17" }] },
+    { usedSessions: [{ id: "e1", day: "2026-11-12" }, { id: "e3", day: "2026-11-17" }, { id: "e4", day: "2026-11-14" }] },
+    { usedSessions: [] },
+  ]), ["2026-11-17", "2026-11-17", "2026-11-14", "2026-11-12"]);
   // Ana was measured: every variable is measured_exists or not estimable.
   const r4 = await proposal(team, s, team.athleteIds[ANA]);
   assert.equal(r4.body.variables.every((x) => !x.estimable), true);

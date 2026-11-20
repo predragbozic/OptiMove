@@ -1555,6 +1555,25 @@ test("45. a club's admin saves and activates a new mapping with one team switche
   assert.ok(interactions <= 10, `a club's path with one team takes ${interactions} interactions`);
 });
 
+test("45b (v80, code review LOW on the estimate-panel PR). Save and activate stopped by team_setting_mismatch names the team and shows the server's sentence naming both settings", async () => {
+  chainWorld();
+  const BOTH = "In GPEXE this team's setting is 3 zones; the variable expects 5 zones.";
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/activate") ? ok({ error: "team_setting_mismatch", message: BOTH, current: { bindingId: B1 } }, 409) : null), statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.equal(posts().length, 4);
+  assert.ok(text().includes(BOTH), "the server's sentence naming both settings is shown in the chain's stop");
+  assert.match(text(), /“[^”]+” /, "the team is named");
+});
+
 test("46. a platform admin saves and activates a system mapping with no team: three writes after create, the last one without activations", async () => {
   chainWorld();
   overrides.push(statusful);

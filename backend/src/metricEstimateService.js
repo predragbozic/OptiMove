@@ -301,7 +301,7 @@ async function proportional(client, ctx, minutes) {
 const dayText = (value) => (value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? "").slice(0, 10));
 // The day of each session Own average used, over all its variables: one entry per session (two on one day are two
 // entries), newest first. Only the days leave the server, never a session's id.
-function proportionalDays(entries) {
+export function proportionalDays(entries) {
   const byId = new Map();
   for (const e of entries) for (const u of e.usedSessions ?? []) if (u.day) byId.set(String(u.id), u.day);
   return [...byId.values()].sort().reverse();
