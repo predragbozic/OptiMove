@@ -127,12 +127,23 @@ the opposite of what a safety layer should do.
   (or `origin/master`) while the current branch is known and is not `main`/`master` (read as a full
   ref, see below), alone or after read-only commands (`git status/fetch/rev-parse/log/diff/show/
   merge-base` without `--output`, `--ext-diff` or `--textconv`, `wc/head/tail`, the same with
-  `git -C <path>`, and `git worktree add` without `-B`/`--force`) in the same line; every other
-  segment of that line is still judged and the strictest verdict wins. In a worktree the merge
-  may be written `git -C <path> merge …` or follow ONE `cd <path> &&` in the same line: the hook
-  resolves that folder itself (relative to its `cwd`) and checks the branch THERE. A path with
-  `~`, `$`, a glob or quotes, a second `cd`, `cd -`, or a folder whose branch is main/master or
-  whose HEAD is detached: asks as before.
+  `git -C <path>`) in the same line; every other segment of that line is still judged and the
+  strictest verdict wins. A line with ANY part that makes a work tree (`git init`, `git clone`,
+  `git worktree add`) or moves HEAD or a branch (`git checkout`, `git switch`), before or after
+  the merge, gets no exemption: the hook checks the branch before the line runs. In a worktree
+  the merge may be written `git -C <path> merge …` or follow ONE `cd <path> &&` in the same
+  line: the hook resolves that folder itself (relative to its `cwd`), requires it to be exactly
+  the top of an existing work tree (`git -C <path> rev-parse --show-toplevel` equals its real
+  path, so a linked worktree with a `.git` file and a symlink to a top pass, a subfolder or a
+  plain folder does not), and checks the branch THERE. A path with `~`, `$`, a glob or quotes,
+  a second `cd`, `cd -`, or a folder whose branch is main/master or whose HEAD is detached:
+  asks as before.
+- `git worktree add` except with `--detach` or `-b <new branch>` (not `main`/`master`), exact
+  spellings, no `-B`/`--force`/`--orphan`. Without them git checks out an EXISTING branch: the
+  one named as an operand, or the one named like the folder (`git worktree add ../w3` checks
+  out branch `w3` when it exists), as the tests prove with real git.
+- `git config set|unset|edit|rename-section|remove-section|replace-all|add` (the subcommand
+  syntax of git 2.46 and later) writes; only `get` and `list` read.
 - `gh pr merge`.
 - A push that targets `main` explicitly, or a bare `git push`/`git push origin` while the
   hook can determine (via a fast, read-only `git symbolic-ref -q HEAD` in the command's own

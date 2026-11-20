@@ -820,7 +820,7 @@ const STILL_REFUSED_ON_A_WORKING_BRANCH = [
   ["git checkout -B main && git merge origin/main", ASK],
   ["git symbolic-ref HEAD refs/heads/main && git merge origin/main", ASK],
   ["git branch -m main && git merge origin/main", ASK],
-  ["git worktree add ../w main && git merge origin/main", ALLOW], // another work tree; this one keeps its branch
+  ["git worktree add ../w main && git merge origin/main", ASK], // HIGH-A: a line that makes a work tree gets no exemption
   ["git worktree add -B main ../w && git merge origin/main", ASK], ["git worktree add --force ../w && git merge origin/main", ASK],
   ["echo ref: refs/heads/main > .git/HEAD && git merge origin/main", ASK],
   ["git fetch origin feature/x:refs/remotes/origin/main && git merge origin/main", ASK],
@@ -1499,8 +1499,8 @@ test("merge exemption in a worktree: -C <path> and one plain cd <path> are resol
     expectAll([
       [`git -C ${work} merge --no-edit origin/main`, ALLOW], [`git -C ${work} merge -q origin/main`, ALLOW], [`git -C ${work} merge --no-ff origin/main`, ALLOW],
       [`cd ${work} && git merge --no-edit origin/main`, ALLOW], [`cd ${work} && git status --short && git merge --no-edit origin/main`, ALLOW],
-      [`cd ${work} && git worktree add ${tmp}/w2 && git merge --no-edit origin/main`, ALLOW],
-      [`cd ${work} && git worktree add -b feature/new ${tmp}/w3 origin/main && git merge --no-edit origin/main`, ALLOW],
+      [`cd ${work} && git worktree add ${tmp}/w2 && git merge --no-edit origin/main`, ASK], // HIGH-A: no exemption in a line that makes a work tree
+      [`cd ${work} && git worktree add -b feature/new ${tmp}/w3 origin/main && git merge --no-edit origin/main`, ASK],
       [`cd ${work} && git fetch -q origin main && git merge --no-edit origin/main`, ALLOW], [`git -C ${work} fetch -q origin && git -C ${work} merge --no-edit origin/main`, ALLOW],
       [`cd ${path.dirname(work)} && git -C ${workName} merge --no-edit origin/main`, ALLOW],
       // a worktree whose branch is main, or a detached HEAD, or one the hook cannot resolve: asks
@@ -1751,5 +1751,92 @@ test("the git list: plumbing and unknown subcommands ask; listed read forms stay
     ["git status", ALLOW], ["git log --oneline -5", ALLOW], ["git reflog -5", ALLOW], ["git tag -l", ALLOW], ["git tag --list 'v*'", ALLOW],
     ["git remote -v", ALLOW], ["git config --get user.name", ALLOW], ["git symbolic-ref HEAD", ALLOW], ["git cat-file -p HEAD", ALLOW],
     ["git -C . status", ALLOW], ["git --no-pager log -1", ALLOW], ["git rev-list --count HEAD", ALLOW],
+  ]);
+});
+
+// ------------------------------------------------------------------
+// Review of #666, HIGH-A: no merge exemption in a line that makes a work tree or moves HEAD; the
+// -C/cd folder must be the top of an existing work tree; `worktree add` only with --detach or
+// -b <new branch>. And LOW-1 of #665: the `git config <subcommand>` syntax that writes.
+// ------------------------------------------------------------------
+
+test("HIGH-A (proof by execution): worktree add without -b/--detach checks out an EXISTING branch", () => {
+  const repo = makeRepo("sg-wta-", "feature/a");
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-wta-out-"));
+  const g = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+  try {
+    g(repo, "branch", "main");
+    g(repo, "branch", "w3");
+    // an existing branch named as an operand
+    g(repo, "worktree", "add", "-q", path.join(tmp, "w1"), "main");
+    assert.equal(g(path.join(tmp, "w1"), "symbolic-ref", "HEAD"), "refs/heads/main");
+    // a path whose last name is an existing branch: git checks that branch out
+    g(repo, "worktree", "add", "-q", path.join(tmp, "w3"));
+    assert.equal(g(path.join(tmp, "w3"), "symbolic-ref", "HEAD"), "refs/heads/w3");
+    for (const cmd of [`git worktree add ${tmp}/x1 main`, `git worktree add ${tmp}/w3`]) assert.equal(verdict(cmd, repo), ASK, cmd);
+    // the allowed forms: a new branch or a detached HEAD
+    g(repo, "worktree", "add", "-q", "-b", "feature/new", path.join(tmp, "w4"), "main");
+    assert.equal(g(path.join(tmp, "w4"), "symbolic-ref", "HEAD"), "refs/heads/feature/new");
+    assert.throws(() => g(repo, "worktree", "add", "-q", "-b", "feature/new", path.join(tmp, "w5")), "git refuses -b with an existing name");
+    for (const cmd of [`git worktree add -b feature/n2 ${tmp}/y main`, `git worktree add --detach ${tmp}/y origin/main`, `git worktree add -q --detach ${tmp}/y`]) assert.equal(verdict(cmd, repo), ALLOW, cmd);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("HIGH-A: worktree add forms", () => {
+  expectAll([
+    ["git worktree add ../w", ASK], ["git worktree add ../w feature/x", ASK], ["git worktree add -B x ../w", ASK], ["git worktree add -b main ../w", ASK],
+    ["git worktree add -b Master ../w", ASK], ["git worktree add -bmain ../w", ASK], ["git worktree add -f --detach ../w", ASK], ["git worktree add --force -b x ../w", ASK],
+    ["git worktree add --orphan x ../w", ASK], ["git worktree add -qbmain --detach ../w", ASK], ["git worktree add -b '' ../w", ASK],
+    ["git worktree add -b feature/n ../w", ALLOW], ["git worktree add -qb feature/n ../w origin/main", ASK], ["git worktree add -q -b feature/n ../w origin/main", ALLOW], ["git worktree add --detach ../w origin/main", ALLOW],
+    ["git worktree add --det ../w", ASK], ["git worktree add -q --detach ../w HEAD", ALLOW],
+  ]);
+});
+
+test("HIGH-A: no merge exemption in a line that makes a work tree or moves HEAD, before or after the merge", () => {
+  const work = makeRepo("sg-hia-", "feature/k");
+  try {
+    expectAll([
+      [`git -C ${work} merge --no-edit origin/main`, ALLOW],
+      [`git -C ${work} merge --no-edit origin/main && git checkout main`, DENY], [`git -C ${work} merge origin/main; git switch main`, ASK],
+      [`git switch -c feature/z && git -C ${work} merge origin/main`, ASK], [`git checkout --detach && git merge origin/main`, ASK],
+      [`git init ${work}/sub && git -C ${work} merge origin/main`, ASK], [`git clone a b && git -C ${work} merge origin/main`, ASK],
+      [`git -C ${work} worktree add --detach ../q && git -C ${work} merge origin/main`, ASK], [`git -C ${work} merge origin/main && git worktree add -b n ../q`, ASK],
+      [`git -C ${work} status && git -C ${work} merge origin/main`, ALLOW], [`cd ${work} && git fetch -q origin && git merge --no-edit origin/main`, ALLOW],
+    ]);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
+test("HIGH-A: the -C/cd folder must be exactly the top of an existing work tree", () => {
+  const work = makeRepo("sg-top-", "feature/t");
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-top-out-"));
+  try {
+    mkdirSync(path.join(work, "sub"));
+    mkdirSync(path.join(tmp, "plain"));
+    symlinkSync(work, path.join(tmp, "link"));
+    execFileSync("git", ["worktree", "add", "-q", "-b", "feature/linked", path.join(tmp, "linked")], { cwd: work, stdio: "ignore" });
+    expectAll([
+      [`git -C ${work}/sub merge origin/main`, ASK], [`cd ${work}/sub && git merge origin/main`, ASK],
+      [`git -C ${tmp}/plain merge origin/main`, ASK], [`cd ${tmp}/plain && git merge origin/main`, ASK],
+      [`git -C ${tmp}/missing merge origin/main`, ASK],
+      // a linked worktree (a .git FILE at its top) and a symlink to a work tree's top
+      [`git -C ${tmp}/linked merge --no-edit origin/main`, ALLOW], [`cd ${tmp}/linked && git merge --no-edit origin/main`, ALLOW],
+      [`git -C ${tmp}/link merge --no-edit origin/main`, ALLOW],
+      // from inside the work tree without -C/cd, the cwd is judged as before
+    ], tmp);
+    assert.equal(verdict("git merge --no-edit origin/main", work), ALLOW);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("LOW-1 (#665): `git config <subcommand>` that writes asks; get/list read", () => {
+  expectAll([
+    ["git config set user.name x", ASK], ["git config unset user.name", ASK], ["git config edit", ASK], ["git config --global edit", ASK],
+    ["git config rename-section a b", ASK], ["git config remove-section a", ASK], ["git config -e", ASK], ["git config user.name x", ASK],
+    ["git config get user.name", ALLOW], ["git config list", ALLOW], ["git config --get user.name", ALLOW], ["git config user.name", ALLOW],
   ]);
 });
