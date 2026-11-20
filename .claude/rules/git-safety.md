@@ -32,9 +32,32 @@ git diff --staged   # if there are staged changes
   `main`/`master`) needs no confirmation (the hook reads the branch as a full ref, so a tag named `main`
   cannot pass for a working branch); merges INTO `main` are done only by the Rukovodilac,
   through GitHub.
-- Commit and push without the user's explicit confirmation for that specific set of
-  changes — even when the work is done, stop and ask before committing/pushing, never
-  assume standing consent.
+- Committing on `main`/`master`, or pushing anything other than one's own work branch:
+  a push to `main`/`master`, a force push, another branch, a refspec (`a:b`), tags, a bare
+  `git push` whose target is not visible. Merging into `main` is done only by the
+  Rukovodilac, through GitHub.
+
+## Without a question (owner's decision, 2026-11-20)
+
+Executor sessions may, without asking each time:
+
+- commit on their own work branch (files staged by name; `git add -u`, `-f`, globs,
+  `git commit -a` and `git commit --amend` still ask) and push it with `git push [-u] origin <the branch checked out
+  there>` — never `main`/`master`, never a force push;
+- start the local test database (`pg_ctlcluster 16 main start|status`, `pg_ctl … start`,
+  `initdb`), and stop a test cluster whose data folder is in their own temporary folder.
+  Stopping, restarting or reloading any other cluster asks — in a cloud container that
+  includes 16/main, because nothing on the command line says it is a test cluster;
+- delete, move and change files in their own temporary folder (the session's scratchpad):
+  `rm`, `rmdir`, `cp`, `mv`, `mkdir`, `ln -s`, `touch`, and writing over a file there. Not
+  the folder itself, not a git worktree inside it, not a hard link, and not a path the hook
+  cannot read on the command line.
+
+Still asked every time: merging into `main`, production (deploys, migrations, persistent
+databases), passwords and secret files, and deleting or changing anything outside the own
+temporary folder. The safety hook (`.claude/hooks/safety-guard.mjs`) enforces these limits:
+`.claude/settings.json` lets the commands through by name, and the hook asks for every form
+outside the scope above.
 
 ## Feature branches
 
