@@ -73,15 +73,17 @@ after(async () => { await new Promise((r) => setTimeout(r, 2500)); });
 import fs from "node:fs";
 after(() => { fs.writeFileSync(process.env.SELFTEST_AFTER_MARK_FILE, "after() ran"); });
 test("fine before the hang", () => {});
-test("hangs forever (known, ended by the runner's per-test limit)", async () => {
-  setInterval(() => {}, 1000);
+test("hangs forever (known, ended by the runner's per-test limit)", async (t) => {
+  const i = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(i));
   await new Promise(() => {});
 });
 test("never runs: the runner ended the file", () => {});
 `,
   "s-hang-file-limit.test.mjs": `import { test } from "node:test";
-test("hangs past the file limit", async () => {
-  setInterval(() => {}, 1000);
+test("hangs past the file limit", async (t) => {
+  const i = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(i));
   await new Promise(() => {});
 });
 `,
@@ -200,13 +202,17 @@ const supportModule = await import(pathToFileURL(path.join(REPO_ROOT, "backend",
 // one)? node 22.23 does not: the runner's own per-test limit then ends the file. A node that
 // does cancels the test itself first and the file runs on. The hang checks assert the branch
 // that matches the node they run on.
+// The decision comes from the output (node's own timeout message), never from the exit: on a
+// node that ignores the flag the probe hangs until spawnSync ends it.
+function probeShowsNodeTimeout(r) {
+  return /test timed out after 300ms/.test(`${r.stdout || ""}${r.stderr || ""}`);
+}
 function nodeAppliesTestTimeout() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-test-runner-selftest-probe-"));
   try {
     const file = path.join(dir, "probe.test.mjs");
-    fs.writeFileSync(file, 'import { test } from "node:test";\ntest("probe", async () => { const t = setInterval(() => {}, 1000); await new Promise(() => {}); });\n');
-    const r = spawnSync(process.execPath, ["--test-timeout=300", file], { encoding: "utf8", timeout: 5_000 });
-    return !r.error && /test timed out after 300ms/.test(`${r.stdout}${r.stderr}`);
+    fs.writeFileSync(file, 'import { test } from "node:test";\ntest("probe", async (t) => { const i = setInterval(() => {}, 1000); t.after(() => clearInterval(i)); await new Promise(() => {}); });\n');
+    return probeShowsNodeTimeout(spawnSync(process.execPath, ["--test-reporter=tap", "--test-timeout=300", file], { encoding: "utf8", timeout: 2_000 }));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -278,8 +284,8 @@ try {
     check("[node applies --test-timeout] a cancelled stuck test whose timer and grandchild stay alive is a failure, ended at the file limit", () => {
       expect("e-stuck.test.mjs", { status: "fail", ok: false, timedOut: true, testTimeout: null, unknownFailures: ["never finishes and keeps a grandchild alive"] });
     });
-    check("[node applies --test-timeout] a hang whose timer stays alive after node cancelled it is ended at the file limit", () => {
-      expect("s-hang-file-limit.test.mjs", { ok: false, timedOut: true, testTimeout: null });
+    check("[node applies --test-timeout] a test node cancelled at its default limit (before the file limit) is an unlisted failure and the file exits", () => {
+      expect("s-hang-file-limit.test.mjs", { status: "fail", ok: false, timedOut: false, testTimeout: null, unknownFailures: ["hangs past the file limit"] });
     });
   }
   check("a file that cannot even load is crash / not ok", () => expect("f-crash.test.mjs", { status: "crash", ok: false }));
@@ -407,6 +413,37 @@ try {
       assert.equal(c.result.error, "connection refused");
       const d = await runnerModule.cleanUpEndedFile({ before: { error: "no server" }, audit: () => ({ databases: [] }), drop: () => ({}) });
       assert.match(d.error, /no snapshot before the file/);
+    });
+    checkAsync("probe: node's per-test limit is read from the output, even when the probe process had to be ended", async () => {
+      const ended = { error: Object.assign(new Error("spawnSync node ETIMEDOUT"), { code: "ETIMEDOUT" }) };
+      assert.equal(probeShowsNodeTimeout({ ...ended, stdout: "not ok 1 - probe\n  error: 'test timed out after 300ms'\n" }), true);
+      assert.equal(probeShowsNodeTimeout({ ...ended, stdout: "" }), false);
+    });
+    const wiring = async ({ snapshot, after, fileResult }) => {
+      const calls = { audit: 0, drop: [] };
+      const r = await runnerModule.runFileWithCleanup({
+        audited: true,
+        snapshot: () => snapshot,
+        audit: () => { calls.audit++; return after; },
+        drop: (names) => { calls.drop.push(names); return { dropped: names, refused: [] }; },
+        runFile: async () => ({ ok: true, ...fileResult }),
+        sleep: async () => {},
+      });
+      return { r, calls };
+    };
+    checkAsync("cleanup wiring: the snapshot is taken per file and an idle-ended file is cleaned up too", async () => {
+      const { r, calls } = await wiring({ snapshot: { databases: [db(EARLIER)] }, after: { databases: [db(EARLIER), db(OWN)] }, fileResult: { endedIdle: true } });
+      assert.deepEqual(calls.drop, [[OWN]]);
+      assert.deepEqual(r.cleanup, { dropped: [OWN], leftover: [] });
+      assert.equal(r.ok, true);
+    });
+    checkAsync("cleanup wiring: a file that ended on its own is not cleaned up; a failed snapshot makes the file not ok", async () => {
+      const normal = await wiring({ snapshot: { databases: [] }, after: { databases: [db(OWN)] }, fileResult: {} });
+      assert.equal(normal.calls.audit, 0);
+      assert.equal(normal.r.cleanup, undefined);
+      const failed = await wiring({ snapshot: { error: "server gone" }, after: { databases: [] }, fileResult: {} });
+      assert.equal(failed.r.snapshotError, "server gone");
+      assert.equal(failed.r.ok, false);
     });
     checkAsync("cleanup: the drop never passes --force and names each database with --only", async () => {
       assert.deepEqual(runnerModule.auditArgs([]), ["--json"]);

@@ -46,7 +46,9 @@ try {
         continue;
       }
       try {
-        await dropDisposableDatabase({ name: row.name });
+        // without --force the drop is a plain DROP: PostgreSQL refuses it (55006) if a session
+        // opened since the list above, so a session is never ended unless --force was given
+        await dropDisposableDatabase({ name: row.name, force });
         dropped.push(row.name);
       } catch (error) {
         refused.push({ name: row.name, reason: error.message });
