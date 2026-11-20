@@ -19733,6 +19733,35 @@ html:has(.exercise-selection-bar) { scroll-padding-bottom: 180px; }
   gap: 8px;
   margin-top: 8px;
 }
+/* v80 step C1: GPEXE's events setting block and its two numbers with a fixed unit. */
+.source-fields-event-setting {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+/* Specific enough to win over `.search-field span` and `.metric-variables-form .search-field span span` (mobile-qa). */
+.metric-variables-form .search-field .source-fields-number {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+.metric-variables-form .search-field .source-fields-number input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 12rem;
+  font-size: 16px;
+}
+.metric-variables-form .search-field .source-fields-number .source-fields-number-unit {
+  display: inline;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+}
 @media (max-width: 760px) {
   .source-fields-acts {
     display: grid;
