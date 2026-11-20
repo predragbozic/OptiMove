@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -824,7 +824,7 @@ const STILL_REFUSED_ON_A_WORKING_BRANCH = [
   ["git checkout -B main && git merge origin/main", ASK],
   ["git symbolic-ref HEAD refs/heads/main && git merge origin/main", ASK],
   ["git branch -m main && git merge origin/main", ASK],
-  ["git worktree add ../w main && git merge origin/main", ALLOW], // another work tree; this one keeps its branch
+  ["git worktree add ../w main && git merge origin/main", ASK], // HIGH-A: a line that makes a work tree gets no exemption
   ["git worktree add -B main ../w && git merge origin/main", ASK], ["git worktree add --force ../w && git merge origin/main", ASK],
   ["echo ref: refs/heads/main > .git/HEAD && git merge origin/main", ASK],
   ["git fetch origin feature/x:refs/remotes/origin/main && git merge origin/main", ASK],
@@ -1142,10 +1142,10 @@ test("new ASK rules: stash pop, branch -D, deleting a remote branch, pull --reba
   expectAll([
     ["git stash pop", ASK], ["git stash pop stash@{1}", ASK], ["git stash", ALLOW], ["git stash list", ALLOW], ["git stash show -p", ALLOW], ["git stash apply", ALLOW],
     ["git branch -D x", ASK], ["git branch -d -f x", ASK], ["git branch --delete --force x", ASK], ["git branch -df x", ASK], ["git branch -Dq x", ASK],
-    ["git branch -d x", ALLOW], ["git branch --show-current", ALLOW], ["git branch -f x HEAD", ALLOW], ["git branch", ALLOW],
+    ["git branch -d x", ALLOW], ["git branch --show-current", ALLOW], ["git branch -f x HEAD", ASK], ["git branch", ALLOW],
     ["git push origin --delete x", ASK], ["git push -d origin x", ASK], ["git push origin :x", ASK], ["git push origin +:x", ASK],
     ["git push --prune origin", ASK], ["git push --mirror", ASK],
-    ["git push origin x:y", ALLOW], ["git push -u origin fix/x", ALLOW], ["git push --dry-run origin x", ALLOW],
+    ["git push origin x:y", ASK], ["git push -u origin fix/x", ALLOW], ["git push --dry-run origin x", ALLOW],
     ["git pull --rebase", ASK], ["git pull --rebase=merges", ASK], ["git pull --rebase=interactive origin main", ASK], ["git pull -r", ASK], ["git pull -qr", ASK],
     ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW], ["git pull", ALLOW], ["git pull --ff-only", ALLOW],
   ]);
@@ -1488,6 +1488,45 @@ test("LOW-2: a temporary directory that lies inside a repository is a work tree"
 });
 
 // ------------------------------------------------------------------
+// The #640 exemption in worktrees: `git -C <path> merge …` and `cd <path> && … git merge …`.
+// The hook resolves the folder itself and checks the branch THERE; whatever it cannot resolve asks.
+// ------------------------------------------------------------------
+
+test("merge exemption in a worktree: -C <path> and one plain cd <path> are resolved and checked", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-wtm-"));
+  const work = makeRepo("sg-wtm-work-", "feature/k4");
+  const onMain = makeRepo("sg-wtm-main-", "main");
+  const detached = makeRepo("sg-wtm-det-", "feature/d");
+  execFileSync("git", ["checkout", "-q", "--detach"], { cwd: detached });
+  const workName = path.basename(work);
+  try {
+    expectAll([
+      [`git -C ${work} merge --no-edit origin/main`, ALLOW], [`git -C ${work} merge -q origin/main`, ALLOW], [`git -C ${work} merge --no-ff origin/main`, ALLOW],
+      [`cd ${work} && git merge --no-edit origin/main`, ALLOW], [`cd ${work} && git status --short && git merge --no-edit origin/main`, ALLOW],
+      [`cd ${work} && git worktree add ${tmp}/w2 && git merge --no-edit origin/main`, ASK], // HIGH-A: no exemption in a line that makes a work tree
+      [`cd ${work} && git worktree add -b feature/new ${tmp}/w3 origin/main && git merge --no-edit origin/main`, ASK],
+      [`cd ${work} && git fetch -q origin main && git merge --no-edit origin/main`, ALLOW], [`git -C ${work} fetch -q origin && git -C ${work} merge --no-edit origin/main`, ALLOW],
+      [`cd ${path.dirname(work)} && git -C ${workName} merge --no-edit origin/main`, ALLOW],
+      // a worktree whose branch is main, or a detached HEAD, or one the hook cannot resolve: asks
+      [`git -C ${onMain} merge --no-edit origin/main`, ASK], [`cd ${onMain} && git merge --no-edit origin/main`, ASK], [`cd ${detached} && git merge origin/main`, ASK],
+      [`git -C ${tmp}/does-not-exist merge origin/main`, ASK], [`cd ${work} && cd ${onMain} && git merge origin/main`, ASK], [`cd ${onMain} && cd ${work} && git merge origin/main`, ASK],
+      [`cd ~/x && git merge origin/main`, ASK], ["cd $W && git merge origin/main", ASK], ["cd $(pwd) && git merge origin/main", ASK], ["cd - && git merge origin/main", ASK],
+      [`cd "${work}" && git merge origin/main`, ASK], [`cd ${work} && git checkout main && git merge origin/main`, DENY], // stricter than ask: the checkout cannot be verified from here
+      [`cd ${work} && git worktree add -B main ${tmp}/w4 && git merge origin/main`, ASK], [`cd ${work} && git worktree add --force ${tmp}/w5 && git merge origin/main`, ASK],
+      [`git -C ${work} -C ${onMain} merge origin/main`, ASK], [`git -C ${work} merge origin/main origin/master`, ASK], [`git -C ${work} merge --squash origin/main`, ASK],
+      // the other parts of the line are judged as before
+      [`cd ${work} && git merge --no-edit origin/main && git push -f`, DENY], [`cd ${work} && git merge origin/main & git push`, ASK],
+      [`cd ${work} && git merge --no-edit origin/main && git branch -D x`, ASK],
+    ], featureRepo);
+    // from a cwd on main, -C into the working branch is what counts
+    assert.equal(verdict(`git -C ${work} merge --no-edit origin/main`, mainRepo), ALLOW);
+    assert.equal(verdict("git merge --no-edit origin/main", mainRepo), ASK);
+  } finally {
+    for (const d of [tmp, work, onMain, detached]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------
 // A false deny from practice (2026-11-19): `git -C <wt> checkout -q --detach <ref> && git diff
 // ... -- path > x.patch` was denied as "checkout -- <path>". The cause was not the later
 // segment's `--`: `--detach <ref>` alone was read as a possible path whenever the ref could
@@ -1501,7 +1540,7 @@ test("checkout: --detach, --orphan and --track take a ref, never a path; the dis
     [`git -C ${nowhere} checkout -q --detach origin/docs/x && git diff 10eeff5 origin/docs/x -- docs/ai/a.md > ${nowhere}/new-r2.patch`, ALLOW], // the line from practice: a new file outside any work tree, and a checkout that cannot discard
     [`git -C ${nowhere} checkout -q --detach origin/docs/x`, ALLOW], ["git checkout -q --detach origin/docs/x", ALLOW], ["git checkout --detach no-such-ref", ALLOW],
     ["git checkout --orphan gh-pages", ALLOW], ["git checkout -t origin/feature/x", ALLOW], ["git checkout --track origin/feature/x", ALLOW],
-    ["git checkout --track=direct origin/x", ALLOW], ["git checkout -b x", ALLOW], ["git checkout -q -B x origin/main", ALLOW], ["git checkout -", ALLOW],
+    ["git checkout --track=direct origin/x", ALLOW], ["git checkout -b x", ALLOW], ["git checkout -q -B x origin/main", ASK], ["git checkout -", ALLOW],
     ["git checkout -q --detach HEAD && git diff -- a.md", ALLOW], ["git checkout -b x && git diff -- y", ALLOW],
     // still denied, in every position and wrapper
     ["git checkout -- a.js", DENY], ["git checkout .", DENY], ["git -C dir checkout -- .", DENY], ["git checkout HEAD -- path", DENY],
@@ -1598,56 +1637,212 @@ test("HIGH-2: every git rule reads a long option as a possible prefix", () => {
     ["git checkout --forc other", DENY], ["git checkout --for other", DENY], ["git checkout --f other", DENY], ["git checkout --bogus x", DENY],
     ["git checkout --forc HEAD", ASK], ["git checkout --f HEAD", ASK], ["git checkout --bogus HEAD", ASK],
     ["git switch --disc other", ASK], ["git switch --dis other", ASK], ["git switch --force other", ASK], ["git switch --forc other", ASK],
-    ["git switch --force-c x origin/main", ALLOW], ["git switch --force-create x origin/main", ALLOW], ["git switch --cre x", ALLOW], ["git checkout --det HEAD", ALLOW],
+    // an abbreviation of a SAFE option is not on the list either: it asks (strict)
+    ["git switch --force-c x origin/main", ASK], ["git switch --force-create x origin/main", ASK], ["git switch --cre x", ASK], ["git checkout --det HEAD", ASK], ["git switch --create x", ALLOW], ["git checkout --detach HEAD", ALLOW],
     ["git checkout --quiet -b x", ALLOW], ["git switch --no-guess x", ALLOW],
     ["git reset --har", DENY], ["git reset --h HEAD~1", DENY], ["git reset --mer", ASK], ["git reset --kee HEAD~1", ASK], ["git reset --soft HEAD~1", ALLOW],
-    ["git clean --forc", DENY], ["git clean -d --fo", DENY], ["git clean --forc --dry", ALLOW],
+    ["git clean --forc", DENY], ["git clean -d --fo", DENY], ["git clean --forc --dry", ASK], ["git clean -n -d", ALLOW],
     ["git push --force-w origin x", DENY], ["git push --forc origin x", DENY], ["git push -uf origin x", DENY], ["git push origin +x", DENY], ["git push origin +x:y", DENY],
-    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ALLOW], ["git push --follow-tags origin x", ALLOW],
-    ["git branch --del --forc x", ASK], ["git branch --del x", ALLOW],
-    ["git restore --work f", DENY], ["git restore --stag f", ALLOW], ["git restore --stag --work f", DENY],
-    ["git pull --reb", ASK], ["git pull --reb=false", ALLOW], ["git pull --no-reb", ALLOW],
+    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ALLOW], ["git push --follow-tags origin x", ASK],
+    ["git branch --del --forc x", ASK], ["git branch --del x", ASK], ["git branch --delete x", ALLOW],
+    ["git restore --work f", DENY], ["git restore --stag f", ASK], ["git restore --staged f", ALLOW], ["git restore --stag --work f", DENY],
+    ["git pull --reb", ASK], ["git pull --reb=false", ASK], ["git pull --no-reb", ASK], ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW],
     ["git worktree remove --forc ../w", ASK], ["git worktree remove -f ../w", ASK], ["git worktree remove ../w", ALLOW],
   ]);
 });
 
 // ------------------------------------------------------------------
-// The #640 exemption in worktrees: `git -C <path> merge …` and `cd <path> && … git merge …`.
-// The hook resolves the folder itself and checks the branch THERE; whatever it cannot resolve asks.
+// Second review of #665, HIGH-1: a setter behind `!`, `time`, `command`, `builtin`, `env`, or any
+// indirect name. Real bash proves each writes somewhere else than the plain reading says.
 // ------------------------------------------------------------------
 
-test("merge exemption in a worktree: -C <path> and one plain cd <path> are resolved and checked", () => {
-  const tmp = mkdtempSync(path.join(tmpdir(), "sg-wtm-"));
-  const work = makeRepo("sg-wtm-work-", "feature/k4");
-  const onMain = makeRepo("sg-wtm-main-", "main");
-  const detached = makeRepo("sg-wtm-det-", "feature/d");
-  execFileSync("git", ["checkout", "-q", "--detach"], { cwd: detached });
-  const workName = path.basename(work);
+test("HIGH-1 (proof by execution): a setter behind a prefix or an indirect name moves the redirect; the hook asks", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-indirect-"));
+  const safe = path.join(tmp, "safe");
+  const other = path.join(tmp, "other.txt");
+  mkdirSync(safe);
+  writeFileSync(path.join(tmp, "list"), `${other}\n`);
+  writeFileSync(path.join(tmp, "g"), "hi\n");
+  try {
+    const lines = [
+      `S=${safe}/n.txt; T=S; time read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; ! read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time -p read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; command read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; builtin read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time printf -v $T %s ${other}; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time declare $T=${other}; cat g > $S`,
+      `S=${safe}/n.txt; T=S; time mapfile -t $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; ! time command builtin read $T < list; cat g > $S`,
+      `S=${safe}/n.txt; T=S; echo $(( $T = 5 )) >/dev/null; cat g > $S`,
+      `S=${safe}/n.txt; X=$(read S < list; echo); cat g > $S`,
+      `S=; T=S; : \${!T:=${other}}; cat g > $S`,
+    ];
+    for (const line of lines) {
+      rmSync(other, { force: true });
+      rmSync(path.join(tmp, "5"), { force: true });
+      execFileSync("bash", ["-c", line], { cwd: tmp, stdio: ["ignore", "pipe", "pipe"] });
+      const moved = existsSync(other) || existsSync(path.join(tmp, "5"));
+      const expectedTarget = existsSync(path.join(safe, "n.txt"));
+      // a subshell assignment does not leak: that line proves only that the hook does not trust it
+      if (!line.includes("X=$(")) assert.ok(moved && !expectedTarget, `bash did not move the redirect: ${line}`);
+      rmSync(path.join(safe, "n.txt"), { force: true });
+      assert.equal(verdict(line, tmp), ASK, line);
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test("HIGH-1: indirection in any form makes every variable unknown", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-indirect2-"));
+  const y = path.join(tmp, "y");
   try {
     expectAll([
-      [`git -C ${work} merge --no-edit origin/main`, ALLOW], [`git -C ${work} merge -q origin/main`, ALLOW], [`git -C ${work} merge --no-ff origin/main`, ALLOW],
-      [`cd ${work} && git merge --no-edit origin/main`, ALLOW], [`cd ${work} && git status --short && git merge --no-edit origin/main`, ALLOW],
-      [`cd ${work} && git worktree add ${tmp}/w2 && git merge --no-edit origin/main`, ALLOW],
-      [`cd ${work} && git worktree add -b feature/new ${tmp}/w3 origin/main && git merge --no-edit origin/main`, ALLOW],
-      [`cd ${work} && git fetch -q origin main && git merge --no-edit origin/main`, ALLOW], [`git -C ${work} fetch -q origin && git -C ${work} merge --no-edit origin/main`, ALLOW],
-      [`cd ${path.dirname(work)} && git -C ${workName} merge --no-edit origin/main`, ALLOW],
-      // a worktree whose branch is main, or a detached HEAD, or one the hook cannot resolve: asks
-      [`git -C ${onMain} merge --no-edit origin/main`, ASK], [`cd ${onMain} && git merge --no-edit origin/main`, ASK], [`cd ${detached} && git merge origin/main`, ASK],
-      [`git -C ${tmp}/does-not-exist merge origin/main`, ASK], [`cd ${work} && cd ${onMain} && git merge origin/main`, ASK], [`cd ${onMain} && cd ${work} && git merge origin/main`, ASK],
-      [`cd ~/x && git merge origin/main`, ASK], ["cd $W && git merge origin/main", ASK], ["cd $(pwd) && git merge origin/main", ASK], ["cd - && git merge origin/main", ASK],
-      [`cd "${work}" && git merge origin/main`, ASK], [`cd ${work} && git checkout main && git merge origin/main`, DENY], // stricter than ask: the checkout cannot be verified from here
-      [`cd ${work} && git worktree add -B main ${tmp}/w4 && git merge origin/main`, ASK], [`cd ${work} && git worktree add --force ${tmp}/w5 && git merge origin/main`, ASK],
-      [`git -C ${work} -C ${onMain} merge origin/main`, ASK], [`git -C ${work} merge origin/main origin/master`, ASK], [`git -C ${work} merge --squash origin/main`, ASK],
-      // the other parts of the line are judged as before
-      [`cd ${work} && git merge --no-edit origin/main && git push -f`, DENY], [`cd ${work} && git merge origin/main & git push`, ASK],
-      [`cd ${work} && git merge --no-edit origin/main && git branch -D x`, ASK],
-    ], featureRepo);
-    // from a cwd on main, -C into the working branch is what counts
-    assert.equal(verdict(`git -C ${work} merge --no-edit origin/main`, mainRepo), ALLOW);
-    assert.equal(verdict("git merge --no-edit origin/main", mainRepo), ASK);
-  } finally {
-    for (const d of [tmp, work, onMain, detached]) rmSync(d, { recursive: true, force: true });
+      [`S=${y}; env A=1 read S < l; cat g > $S`, ASK], [`S=${y}; echo \${!S}; cat g > $S`, ASK], [`S=${y}; T=S; echo \${!T}; cat g > $S/new0.txt`, ASK], [`S=${y}; declare -n R=S; cat g > $S`, ASK],
+      [`S=${y}; (( S = 1 )); cat g > $S`, ASK], [`S=${y}; echo $(( S = 1 )); cat g > $S`, ASK], [`S=${y}; { read S; } < l; cat g > $S`, ASK],
+      [`S=${y}; nohup read S < l; cat g > $S`, ASK], [`S=${y}; A=1 read S < l; cat g > $S`, ASK],
+      // comparisons in arithmetic are not assignments
+      [`S=${y}; echo $(( 1 == 1 )); cat g > $S/new1.txt`, ALLOW], [`S=${y}; echo $(( 2 >= 1 )); cat g > $S/new2.txt`, ALLOW],
+    ], tmp);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+// ------------------------------------------------------------------
+// HIGH-3 and the old silent losses: each proven by real git, each stopped by the hook.
+// ------------------------------------------------------------------
+
+test("HIGH-3 and the git list (proof by execution): every command that loses data asks or is denied", () => {
+  const cases = [
+    ["git restore --pathspec-from-file=list", (g, r) => { writeFileSync(path.join(r, "list"), "f.txt\n"); g("restore", "--pathspec-from-file=list"); }, "work"],
+    ["git restore --pathspec-from=list", (g, r) => { writeFileSync(path.join(r, "list"), "f.txt\n"); g("restore", "--pathspec-from=list"); }, "work"],
+    ["git rm -f f.txt", (g) => g("rm", "-qf", "f.txt"), "work"],
+    ["git checkout-index -f -a", (g) => g("checkout-index", "-f", "-a"), "work"],
+    ["git read-tree -u --reset HEAD", (g) => g("read-tree", "-u", "--reset", "HEAD"), "work"],
+    ["git checkout -B main HEAD~1", (g) => { g("checkout", "-q", "-b", "w"); g("checkout", "-q", "-B", "main", "HEAD~1"); }, "commit"],
+    ["git switch -C main HEAD~1", (g) => { g("checkout", "-q", "-b", "w"); g("switch", "-q", "-C", "main", "HEAD~1"); }, "commit"],
+    ["git branch -f main HEAD~1", (g) => { g("checkout", "-q", "-b", "w"); g("branch", "-f", "main", "HEAD~1"); }, "commit"],
+    ["git branch -M w main", (g) => { g("checkout", "-q", "-b", "w", "HEAD~1"); g("branch", "-M", "w", "main"); }, "commit"],
+    ["git branch --mov --forc w main", (g) => { g("checkout", "-q", "-b", "w", "HEAD~1"); g("branch", "--mov", "--forc", "w", "main"); }, "commit"],
+    ["git update-ref -d refs/heads/main", (g) => { g("checkout", "-q", "--detach", "HEAD~1"); g("update-ref", "-d", "refs/heads/main"); }, "commit"],
+    ["git reflog expire --expire-unreachable=now --all", (g, r) => { writeFileSync(path.join(r, "f.txt"), "stash\n"); g("stash", "-q"); g("update-ref", "-d", "refs/stash"); g("reflog", "expire", "--expire-unreachable=now", "--all"); g("gc", "-q", "--prune=now"); }, "stash"],
+  ];
+  for (const [cmd, run, kind] of cases) {
+    const repo = makeRepo("sg-loss-", "main");
+    const g = (...a) => execFileSync("git", a, { cwd: repo, stdio: ["ignore", "pipe", "pipe"] }).toString();
+    try {
+      writeFileSync(path.join(repo, "f.txt"), "a\n");
+      g("add", "f.txt"); g("commit", "-qm", "two");
+      const tip = g("rev-parse", "main").trim();
+      if (kind === "work") writeFileSync(path.join(repo, "f.txt"), "dirty\n");
+      let stashSha = "";
+      run(g, repo);
+      if (kind === "work") assert.notEqual(existsSync(path.join(repo, "f.txt")) ? readFileSync(path.join(repo, "f.txt"), "utf8") : "", "dirty\n", `git kept the change: ${cmd}`);
+      if (kind === "commit") { let now = ""; try { now = g("rev-parse", "--verify", "-q", "main").trim(); } catch { now = "(gone)"; } assert.notEqual(now, tip, `git kept main: ${cmd}`); }
+      if (kind === "stash") assert.equal(g("fsck", "--lost-found", "--no-reflogs").includes("dangling commit"), false, `the stash survived: ${cmd} ${stashSha}`);
+      const v = verdict(cmd, repo);
+      assert.ok(v === ASK || v === DENY, `${cmd}: ${v}`);
+    } finally { rmSync(repo, { recursive: true, force: true }); }
   }
+});
+
+test("the git list: plumbing and unknown subcommands ask; listed read forms stay silent", () => {
+  expectAll([
+    ["git checkout-index -a", ASK], ["git read-tree HEAD", ASK], ["git update-ref refs/heads/x HEAD", ASK], ["git reflog expire --all", ASK],
+    ["git reflog delete HEAD@{1}", ASK], ["git gc", ASK], ["git prune", ASK], ["git filter-branch", ASK], ["git replace a b", ASK],
+    ["git notes add -m x", ASK], ["git am p.patch", ASK], ["git apply p.patch", ASK], ["git config user.name x", ASK],
+    ["git tag v1", ASK], ["git tag -d v1", ASK], ["git remote add x y", ASK], ["git symbolic-ref HEAD refs/heads/x", ASK],
+    ["git --git-dir=x status", ASK], ["git --work-tree=x checkout .", DENY], ["git frobnicate", ASK], ["git update-index --assume-unchanged f", ASK],
+    ["git restore --pathspec-from-file=list", DENY], ["git restore --pathspec-f=list", DENY], ["git restore --staged --pathspec-from-file=list", ASK],
+    ["git status", ALLOW], ["git log --oneline -5", ALLOW], ["git reflog -5", ALLOW], ["git tag -l", ALLOW], ["git tag --list 'v*'", ALLOW],
+    ["git remote -v", ALLOW], ["git config --get user.name", ALLOW], ["git symbolic-ref HEAD", ALLOW], ["git cat-file -p HEAD", ALLOW],
+    ["git -C . status", ALLOW], ["git --no-pager log -1", ALLOW], ["git rev-list --count HEAD", ALLOW],
+  ]);
+});
+
+// ------------------------------------------------------------------
+// Review of #666, HIGH-A: no merge exemption in a line that makes a work tree or moves HEAD; the
+// -C/cd folder must be the top of an existing work tree; `worktree add` only with --detach or
+// -b <new branch>. And LOW-1 of #665: the `git config <subcommand>` syntax that writes.
+// ------------------------------------------------------------------
+
+test("HIGH-A (proof by execution): worktree add without -b/--detach checks out an EXISTING branch", () => {
+  const repo = makeRepo("sg-wta-", "feature/a");
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-wta-out-"));
+  const g = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+  try {
+    g(repo, "branch", "main");
+    g(repo, "branch", "w3");
+    // an existing branch named as an operand
+    g(repo, "worktree", "add", "-q", path.join(tmp, "w1"), "main");
+    assert.equal(g(path.join(tmp, "w1"), "symbolic-ref", "HEAD"), "refs/heads/main");
+    // a path whose last name is an existing branch: git checks that branch out
+    g(repo, "worktree", "add", "-q", path.join(tmp, "w3"));
+    assert.equal(g(path.join(tmp, "w3"), "symbolic-ref", "HEAD"), "refs/heads/w3");
+    for (const cmd of [`git worktree add ${tmp}/x1 main`, `git worktree add ${tmp}/w3`]) assert.equal(verdict(cmd, repo), ASK, cmd);
+    // the allowed forms: a new branch or a detached HEAD
+    g(repo, "worktree", "add", "-q", "-b", "feature/new", path.join(tmp, "w4"), "main");
+    assert.equal(g(path.join(tmp, "w4"), "symbolic-ref", "HEAD"), "refs/heads/feature/new");
+    assert.throws(() => g(repo, "worktree", "add", "-q", "-b", "feature/new", path.join(tmp, "w5")), "git refuses -b with an existing name");
+    for (const cmd of [`git worktree add -b feature/n2 ${tmp}/y main`, `git worktree add --detach ${tmp}/y origin/main`, `git worktree add -q --detach ${tmp}/y`]) assert.equal(verdict(cmd, repo), ALLOW, cmd);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("HIGH-A: worktree add forms", () => {
+  expectAll([
+    ["git worktree add ../w", ASK], ["git worktree add ../w feature/x", ASK], ["git worktree add -B x ../w", ASK], ["git worktree add -b main ../w", ASK],
+    ["git worktree add -b Master ../w", ASK], ["git worktree add -bmain ../w", ASK], ["git worktree add -f --detach ../w", ASK], ["git worktree add --force -b x ../w", ASK],
+    ["git worktree add --orphan x ../w", ASK], ["git worktree add -qbmain --detach ../w", ASK], ["git worktree add -b '' ../w", ASK],
+    ["git worktree add -b feature/n ../w", ALLOW], ["git worktree add -qb feature/n ../w origin/main", ASK], ["git worktree add -q -b feature/n ../w origin/main", ALLOW], ["git worktree add --detach ../w origin/main", ALLOW],
+    ["git worktree add --det ../w", ASK], ["git worktree add -q --detach ../w HEAD", ALLOW],
+  ]);
+});
+
+test("HIGH-A: no merge exemption in a line that makes a work tree or moves HEAD, before or after the merge", () => {
+  const work = makeRepo("sg-hia-", "feature/k");
+  try {
+    expectAll([
+      [`git -C ${work} merge --no-edit origin/main`, ALLOW],
+      [`git -C ${work} merge --no-edit origin/main && git checkout main`, DENY], [`git -C ${work} merge origin/main; git switch main`, ASK],
+      [`git switch -c feature/z && git -C ${work} merge origin/main`, ASK], [`git checkout --detach && git merge origin/main`, ASK],
+      [`git init ${work}/sub && git -C ${work} merge origin/main`, ASK], [`git clone a b && git -C ${work} merge origin/main`, ASK],
+      [`git -C ${work} worktree add --detach ../q && git -C ${work} merge origin/main`, ASK], [`git -C ${work} merge origin/main && git worktree add -b n ../q`, ASK],
+      [`git -C ${work} status && git -C ${work} merge origin/main`, ALLOW], [`cd ${work} && git fetch -q origin && git merge --no-edit origin/main`, ALLOW],
+    ]);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
+test("HIGH-A: the -C/cd folder must be exactly the top of an existing work tree", () => {
+  const work = makeRepo("sg-top-", "feature/t");
+  const tmp = mkdtempSync(path.join(tmpdir(), "sg-top-out-"));
+  try {
+    mkdirSync(path.join(work, "sub"));
+    mkdirSync(path.join(tmp, "plain"));
+    symlinkSync(work, path.join(tmp, "link"));
+    execFileSync("git", ["worktree", "add", "-q", "-b", "feature/linked", path.join(tmp, "linked")], { cwd: work, stdio: "ignore" });
+    expectAll([
+      [`git -C ${work}/sub merge origin/main`, ASK], [`cd ${work}/sub && git merge origin/main`, ASK],
+      [`git -C ${tmp}/plain merge origin/main`, ASK], [`cd ${tmp}/plain && git merge origin/main`, ASK],
+      [`git -C ${tmp}/missing merge origin/main`, ASK],
+      // a linked worktree (a .git FILE at its top) and a symlink to a work tree's top
+      [`git -C ${tmp}/linked merge --no-edit origin/main`, ALLOW], [`cd ${tmp}/linked && git merge --no-edit origin/main`, ALLOW],
+      [`git -C ${tmp}/link merge --no-edit origin/main`, ALLOW],
+      // from inside the work tree without -C/cd, the cwd is judged as before
+    ], tmp);
+    assert.equal(verdict("git merge --no-edit origin/main", work), ALLOW);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("LOW-1 (#665): `git config <subcommand>` that writes asks; get/list read", () => {
+  expectAll([
+    ["git config set user.name x", ASK], ["git config unset user.name", ASK], ["git config edit", ASK], ["git config --global edit", ASK],
+    ["git config rename-section a b", ASK], ["git config remove-section a", ASK], ["git config -e", ASK], ["git config user.name x", ASK],
+    ["git config get user.name", ALLOW], ["git config list", ALLOW], ["git config --get user.name", ALLOW], ["git config user.name", ALLOW],
+  ]);
 });
 
 // ------------------------------------------------------------------

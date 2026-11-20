@@ -1,5 +1,6 @@
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { closeImportsOverlays } from "./gpexe-period-data.js";
+import { applyRpeChangeAnswer, rpeChangeFormFields, rpeChangeIsUnchanged, rpeChangeRequestBody } from "./rpe-answer-change.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
 import {
@@ -34,6 +35,7 @@ import {
   setExternalScheduleStatus,
   submitRpe,
   submitExternalRpe,
+  changeExternalRpe,
   toggleSessionRpeEnabled,
   toggleSessionTrainingLoadEnabled,
   trainingLoadMutationContextIsCurrentWorkspace,
@@ -715,8 +717,16 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-rpe-change-open") {
+    openRpeChangeFormForAssignment(action.dataset.assignmentId);
+    renderTrainingLoad();
+    return true;
+  }
   if (type === "training-load-close-rpe-form") {
-    const hadSaved = Boolean(state.trainingLoad.rpeForm?.savedFeedback);
+    const closing = state.trainingLoad.rpeForm;
+    if (closing?.mode === "change" && closing.saving) return true;
+    // K4b: a change saved, refused as closed or not confirmed is read again too.
+    const hadSaved = Boolean(closing?.savedFeedback) || Boolean(closing?.mode === "change" && (closing.locked || closing.unconfirmed));
     state.trainingLoad.rpeForm = null;
     // Item: "Posle uspešnog unosa zahtev nestaje sa Home-a" - re-fetch once
     // the confirmation is dismissed, so the Home card/list (and the
@@ -807,7 +817,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
 
   if (type === "training-load-rpe-slider-input") {
     const form = state.trainingLoad.rpeForm;
-    if (!form) return true;
+    if (!form || rpeFormFrozen(form)) return true;
     form.rpe = Number(action.value ?? action.target?.value ?? form.rpe);
     // Targeted patch (never a full re-render) - dragging the slider must
     // never lose slider focus/drag state, same convention as this app's
@@ -821,7 +831,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-rpe-duration-input") {
     const form = state.trainingLoad.rpeForm;
-    if (!form) return true;
+    if (!form || rpeFormFrozen(form)) return true;
     const raw = action.value ?? action.target?.value ?? "";
     form.durationMinutes = raw === "" ? "" : Number(raw);
     patchSrpePreview(form);
@@ -830,7 +840,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   }
   if (type === "training-load-rpe-note-input") {
     const form = state.trainingLoad.rpeForm;
-    if (!form) return true;
+    if (!form || rpeFormFrozen(form)) return true;
     // No DOM patch, no re-render - a textarea already shows exactly what
     // was typed; re-rendering it would just fight the user's own cursor.
     form.note = action.value ?? action.target?.value ?? "";
@@ -2800,6 +2810,24 @@ export async function openExternalAssignmentFromNotification(assignmentId) {
   openRpeFormForSessionId(assignmentId);
 }
 
+// K4a (contract 2.3, Q4): the RPE form for a session or an RPE request of a known day. The athlete's Calendar shows any
+// week, so the lookup reads that day's week; the weekly overlay's own week (shared state) is put back afterwards. True
+// only when the form now open is the one asked for (a form left from elsewhere does not count).
+export async function openRpeFormOnDate(id, date) {
+  const nav = state.trainingLoad.athleteWeekly;
+  const kept = { weekStart: nav.weekStart, selectedDate: nav.selectedDate, data: nav.data };
+  const weekStart = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? weekMondayIso(date) : "";
+  const moved = Boolean(weekStart) && nav.weekStart !== weekStart;
+  if (moved) Object.assign(nav, { weekStart, selectedDate: date, data: null });
+  try {
+    await openExternalAssignmentFromNotification(id);
+  } finally {
+    if (moved) Object.assign(nav, kept);
+  }
+  const form = state.trainingLoad.rpeForm;
+  return Boolean(form) && (String(form.sessionId || "") === String(id) || String(form.externalAssignmentId || "") === String(id));
+}
+
 function patchSrpePreview(form) {
   const el = document.querySelector("[data-training-load-srpe-preview]");
   if (!el) return;
@@ -2810,11 +2838,87 @@ function patchSrpePreview(form) {
 
 function patchSaveButtonDisabled(form) {
   const button = document.querySelector(".training-load-rpe-save");
-  if (button) button.disabled = form.saving || !isRpeFormValid(form);
+  if (!button) return;
+  if (form.mode === "change" && form.unconfirmed) button.disabled = form.saving;
+  else button.disabled = form.saving || !isRpeFormValid(form) || (form.mode === "change" && rpeChangeIsUnchanged(form));
+}
+
+// K4b: while a change is in flight, not confirmed or refused as closed, its fields do not move.
+function rpeFormFrozen(form) {
+  return form.mode === "change" && (form.saving || form.unconfirmed || form.locked);
+}
+
+// K4b: "Change" on a rated external row (Home, the list, the weekly overlay).
+// Opens the RPE form filled in with the saved answer; the server decides
+// whether the change is still allowed.
+function openRpeChangeFormForAssignment(assignmentId) {
+  const found = assignmentId ? findAthleteSessionById(assignmentId) : null;
+  if (!found || !found.session.rated || !found.session.changeable || found.session.source !== "scheduled_external") return;
+  const { session, date } = found;
+  state.trainingLoad.showSessionList = false;
+  state.trainingLoad.rpeForm = emptyRpeForm({
+    externalAssignmentId: session.externalAssignmentId,
+    source: "scheduled_external",
+    sessionName: session.sessionName,
+    date,
+    ...rpeChangeFormFields(session),
+  });
+}
+
+// K4b on the athlete's Calendar: the same change form, from the row her own weekly read returned (athlete-calendar-
+// answers.js). `dateLabel` is the Calendar's day ("Monday 12.10"). Answers the form it opened, or null.
+export function openRpeChangeFormFromRow(row, { date = "", title = "", dateLabel = "" } = {}) {
+  if (!row || !row.rated || !row.changeable || row.source !== "scheduled_external" || !row.externalAssignmentId) return null;
+  state.trainingLoad.showSessionList = false;
+  state.trainingLoad.rpeForm = emptyRpeForm({
+    externalAssignmentId: row.externalAssignmentId,
+    source: "scheduled_external",
+    sessionName: title || row.sessionName,
+    date: date || row.date,
+    dateLabel,
+    ...rpeChangeFormFields(row),
+  });
+  return state.trainingLoad.rpeForm;
+}
+
+function newRequestKey() {
+  return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID()
+    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = Math.floor(Math.random() * 16); return (c === "x" ? r : (r % 4) + 8).toString(16); });
+}
+
+async function submitRpeChangeForm(renderTrainingLoad) {
+  const form = state.trainingLoad.rpeForm;
+  if (!form || form.saving || form.locked) return;
+  if (!form.unconfirmed && (!isRpeFormValid(form) || rpeChangeIsUnchanged(form))) return;
+  const body = rpeChangeRequestBody(form, newRequestKey);
+  form.saving = true;
+  form.error = "";
+  renderTrainingLoad();
+  const athleteWeeklyContext = captureTrainingLoadAthleteWeeklyMutationContext(form.date);
+  const invalidate = () => {
+    if (trainingLoadMutationContextIsCurrentWorkspace(athleteWeeklyContext)) invalidateTrainingLoadAthleteWeeklyContext(athleteWeeklyContext);
+    invalidateAllTrainingLoadCalendarGenerations();
+  };
+  let outcome;
+  try {
+    const result = await changeExternalRpe(form.externalAssignmentId, body);
+    // A change the server confirmed drops the cached reads even when the form was replaced meanwhile.
+    if (result?.outcome === "changed" || result?.outcome === "replayed") invalidate();
+    if (state.trainingLoad.rpeForm !== form) return;
+    outcome = applyRpeChangeAnswer(form, { result });
+  } catch (error) {
+    // A result not confirmed may have committed: drop the cached reads too.
+    invalidate();
+    if (state.trainingLoad.rpeForm !== form) return;
+    outcome = applyRpeChangeAnswer(form, { error });
+  }
+  if (outcome === "unchanged") state.trainingLoad.rpeForm = null;
+  renderTrainingLoad();
 }
 
 async function submitRpeForm(renderTrainingLoad) {
   const form = state.trainingLoad.rpeForm;
+  if (form?.mode === "change") return submitRpeChangeForm(renderTrainingLoad);
   if (!form || form.saving || !isRpeFormValid(form)) return;
   form.saving = true;
   form.error = "";

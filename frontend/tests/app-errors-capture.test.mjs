@@ -264,7 +264,8 @@ test("7. the device: six words of the closed lists chosen in the browser; the Us
 });
 
 test("8. a tab's load that nobody waits for reports with the fixed word open-tab", () => {
-  assert.equal((appJs.match(/detached\(loadActiveTab\(\), "open-tab"\);/g) || []).length, 8);
+  // K2c-3 added the return to the Builder after an event made from it (9).
+  assert.equal((appJs.match(/detached\(loadActiveTab\(\), "open-tab"\);/g) || []).length, 9);
   assert.equal(/detached\(loadActiveTab\(\)\);/.test(appJs), false);
   assert.match(appJs, /detached\(openLibraryTab\(button\.dataset\), "open-tab"\);/);
   assert.match(appJs, /detached\(loadCoachHomeExtras\(\{ onChange: refreshCoachHomeSection, forceRefresh \}\), "open-tab"\);/);

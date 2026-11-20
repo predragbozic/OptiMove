@@ -37,10 +37,11 @@ test("1. the entry: the tab, and on the central calendar its view, week, day and
   assert.deepEqual(history.appHistoryEntryOf({ activeTab: "central-calendar", centralCalendar: calendarState() }), {
     tab: "central-calendar",
     calendar: { view: "week", anchor: "2026-11-18", selectedDate: "2026-11-19", panelKey: "event:e1", panelDate: "2026-11-19" },
+    athleteCalendar: null,
   });
   const closed = calendarState({ panel: { open: false, key: "event:e1", date: "2026-11-19" } });
   assert.equal(history.appHistoryEntryOf({ activeTab: "central-calendar", centralCalendar: closed }).calendar.panelKey, "");
-  assert.deepEqual(history.appHistoryEntryOf({ activeTab: "builder", centralCalendar: calendarState() }), { tab: "builder", calendar: null });
+  assert.deepEqual(history.appHistoryEntryOf({ activeTab: "builder", centralCalendar: calendarState() }), { tab: "builder", calendar: null, athleteCalendar: null });
 });
 
 test("2. push and pop are last in, first out; an empty stack pops null; clear empties it", () => {
@@ -50,7 +51,7 @@ test("2. push and pop are last in, first out; an empty stack pops null; clear em
   assert.equal(history.popAppHistoryEntry().tab, "central-calendar");
   assert.equal(history.popAppHistoryEntry().tab, "coach-home");
   assert.equal(history.popAppHistoryEntry(), null);
-  history.pushAppHistoryEntry({ tab: "builder", calendar: null });
+  history.pushAppHistoryEntry({ tab: "builder", calendar: null, athleteCalendar: null });
   history.clearAppHistoryEntries();
   assert.equal(history.appHistoryEntryCount(), 0);
   assert.equal(history.popAppHistoryEntry(), null);
@@ -207,7 +208,7 @@ test("9. app.js clears the stack on a workspace switch and on sign-out, and push
   assert.match(sourceOf("async function onWorkspaceChanged() {", "\n}"), /clearAppHistoryEntries\(\);/);
   assert.match(sourceOf("async function signOut() {", "\n}"), /clearAppHistoryEntries\(\);/);
   const push = sourceOf("function pushAppHistory() {", "\n}");
-  assert.match(push, /state\.appHistoryDepth \+= 1;\n[^]*pushAppHistoryEntry\(appHistoryEntryOf\(state\)\);/);
+  assert.match(push, /state\.appHistoryDepth \+= 1;\n[^]*const entry = appHistoryEntryOf\(state, \{ athleteCalendar: state\.activeTab === "athlete-calendar" \? athleteCalendarPlace\(\) : null \}\);\s*pushAppHistoryEntry\(entry\);/);
 });
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));

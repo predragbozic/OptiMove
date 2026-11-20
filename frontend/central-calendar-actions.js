@@ -16,6 +16,7 @@ import {
   ccWindowWire,
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
+import { k3SheetAction, k3StartFromPanel } from "./central-calendar-k3-actions.js";
 import { state } from "./state.js";
 import { addDaysIso, addMonthsIso, localDateIso } from "./utils.js";
 import {
@@ -31,8 +32,11 @@ import {
   fetchCentralCalendarEvent,
   fetchCentralCalendarEventQuestions,
   invalidateCentralCalendarCache,
+  centralCalendarServerKinds,
+  centralCalendarShownData,
   loadCentralCalendar,
   loadCentralCalendarDay,
+  loadCentralCalendarKinds,
   newCentralCalendarRequestKey,
   readCentralCalendarCatalog,
   sendCentralCalendarLinkWrite,
@@ -49,6 +53,7 @@ import {
   setCentralCalendarValue,
 } from "./central-calendar-event-details.js";
 import {
+  applyCentralCalendarEventType,
   buildCentralCalendarEventRequest,
   centralCalendarEditFormFromEvent,
   centralCalendarFormTypesLoaded,
@@ -212,12 +217,34 @@ export function closeCentralCalendarPanel(render) {
     if (render) focusQuestionControl(".cc-question-button");
     return true;
   }
+  // K3: an open "Plan the training" sheet closes first (the panel stays).
+  if (cal.k3?.sheet && !cal.k3.busy) {
+    cal.k3 = null;
+    render?.();
+    return true;
+  }
   const key = cal.panel.key;
   cal.panel = closedPanel();
   cal.panelQuestions = null;
+  cal.k3 = null;
   render?.();
   if (render) focusCard(key);
   return true;
+}
+
+// FE-D16: a change of the types that changes what the server is asked for. The cards change answer: an open panel
+// whose card the new answer does not hold closes; the chosen kinds are read (the unfiltered answer needs no read).
+async function typesChanged(cal, before, render) {
+  const after = centralCalendarServerKinds(cal.filters);
+  if (after !== before && cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) cal.panel = closedPanel();
+  render?.();
+  if (after && after !== before) {
+    await loadCentralCalendarKinds({ render, closeMissing: false });
+    if (cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
+      cal.panel = closedPanel();
+      render?.();
+    }
+  }
 }
 
 function toggleValue(list, value) {
@@ -337,6 +364,16 @@ export function rememberCentralCalendarCreate({ sentBody, requestKey }) {
   return () => forgetUncertainWrite(requestKey);
 }
 
+// K3 (docs/ai/central-calendar-k3-plan.md 2.5): an attach sent by the
+// Builder's Save and link joins this memory as a link command from its send,
+// so the leave guards count it and the event's panel offers Check result
+// (the same path, body and key). Returns the function that forgets it once
+// its answer settled.
+export function rememberCentralCalendarLink(spec) {
+  rememberLinkWrite(spec);
+  return () => forgetUncertainWrite(spec.requestKey);
+}
+
 // K2c-2-F (2.1.8): "Open in calendar" from the Builder - the calendar on that
 // day, with the event's panel open when a key is given (and no form is open).
 export function openCentralCalendarAt({ date, key = "" } = {}) {
@@ -380,6 +417,7 @@ export function restoreCentralCalendarPlace(place) {
 // Later move no revision, so an old read is never trusted).
 function resetPanelReads(cal) {
   cal.panelEvent = null;
+  cal.k3 = null;
   cal.linkMessage = null;
   cal.alignStep = null;
   cal.questionStep = null;
@@ -732,6 +770,75 @@ async function loadCreateTypes(form, cal, render) {
   }
   render?.();
   focusPanelStart(cal);
+}
+
+// K2c-3 (docs/ai/central-calendar-k3-plan.md 6.3): Create event → from the
+// Builder opens THIS form (one event form in the app), prefilled: the day,
+// the first training type, its title, the start time, the plan's athletes (or
+// the team, Q8). `form.returnTo` draws the band over it ("Creating an event
+// for the Builder") and, once the create is confirmed, takes the coach back
+// to the Builder (setCentralCalendarBuilderReturn). Nothing else of the form
+// changes for a coach who opens it from the calendar.
+let builderReturn = null;
+export function setCentralCalendarBuilderReturn(hook) {
+  builderReturn = hook;
+}
+
+function ownerOfWorkspace() {
+  const ws = state.currentUser?.activeWorkspace || {};
+  const label = ws.label || "";
+  if (ws.type === "club") return { scope: "club", id: String(ws.scopeId), name: label };
+  if (ws.type === "team") return { scope: "team", id: String(ws.scopeId), name: label };
+  return { scope: "user", id: String(state.currentUser?.id || ""), name: "" };
+}
+
+const trainingTypeOf = (types) => (types || []).find((type) => type?.kind === "training") || null;
+
+function prefillFromBuilder(form, cal, prefill) {
+  const training = trainingTypeOf(cal.eventTypes);
+  if (training) applyCentralCalendarEventType(form, training, cal.eventTypes ? centralCalendarCatalogOf(cal) : null);
+  if (prefill.title) {
+    form.draft.title = prefill.title;
+    form.titleAuto = false;
+  }
+  if (prefill.startTime) form.draft.startTime = prefill.startTime;
+  if (prefill.endTime) form.draft.endTime = prefill.endTime;
+}
+
+export async function openCentralCalendarCreateForBuilder(prefill, render) {
+  const cal = state.centralCalendar;
+  if (!cal || cal.form || !prefill?.day) return false;
+  if (pendingEntryFor({ mode: "create" })) return false;
+  dropStaleEventTypes(cal);
+  cal.anchor = prefill.day;
+  cal.selectedDate = prefill.day;
+  resetPanelReads(cal);
+  cal.panel = closedPanel();
+  const form = newCentralCalendarCreateForm({ day: prefill.day, owner: ownerOfWorkspace(), types: cal.eventTypes, targets: prefill.targets || [], catalog: cal.eventTypes ? centralCalendarCatalogOf(cal) : null });
+  form.returnTo = { tab: "builder", day: prefill.day, sessionName: prefill.sessionName || "" };
+  form.loading = !cal.eventTypes;
+  cal.form = form;
+  if (!form.loading) prefillFromBuilder(form, cal, prefill);
+  render?.();
+  if (form.loading) {
+    await loadCreateTypes(form, cal, render);
+    if (cal.form === form && !form.loadError) {
+      prefillFromBuilder(form, cal, prefill);
+      render?.();
+    }
+  }
+  return true;
+}
+
+// *Back to the Builder* (6.3): the form closes the way Close does (its own
+// question when something was typed); nothing is made.
+export function centralCalendarBackToBuilder(render) {
+  const cal = state.centralCalendar;
+  const form = cal?.form;
+  if (!form?.returnTo) return false;
+  if (!closeEventForm(render)) return false;
+  builderReturn?.({ created: null });
+  return true;
 }
 
 async function openCreateForm(render) {
@@ -1206,6 +1313,12 @@ async function saved(form, data, render, { check = false } = {}) {
   forgetUncertainWrite(form.requestKey);
   const notice = savedText(form, data, { check });
   cal.form = null;
+  // K2c-3: made from the Builder - back to it, the new event in its day's row.
+  if (form.returnTo && form.mode === "create" && event && builderReturn) {
+    invalidateCentralCalendarCache();
+    builderReturn({ created: event, day: form.returnTo.day });
+    return;
+  }
   // The event's panel on the day the coach was on when it is still one of
   // the event's days, else its first day; the range follows that day.
   const eventId = event?.id || form.eventId;
@@ -1221,7 +1334,7 @@ async function saved(form, data, render, { check = false } = {}) {
 
 function findItemOnDay(cal, key, date) {
   if (!key || !isIsoDate(date)) return null;
-  return (cal.data?.days || []).find((day) => day.date === date)?.items?.find((item) => item.key === key) || null;
+  return (centralCalendarShownData(cal)?.days || []).find((day) => day.date === date)?.items?.find((item) => item.key === key) || null;
 }
 
 // The form's fields (app.js routes "input" and "change" here): the value goes
@@ -1769,12 +1882,29 @@ export function handleCentralCalendarKeydown(event) {
   return true;
 }
 
-export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad } = {}) {
+export async function handleCentralCalendarAction(action, { render, openWeeklyPlanForAthleteOnDate, openTrainingLoad, openBuilder } = {}) {
   const type = action?.dataset?.action || "";
   if (!type.startsWith("central-calendar-")) return false;
   const cal = state.centralCalendar;
   const today = localDateIso();
   if (!cal.anchor) cal.anchor = today;
+  // K3 (docs/ai/central-calendar-k3-plan.md 2.1, 2.2): Plan the training, and
+  // its sheet. Off while a link, question or event write of the panel is in
+  // flight or not confirmed (one control at a time).
+  if (type === "central-calendar-plan-training") {
+    const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
+    if (!item || cal.form || cal.questionStep || linkLockedFor(cal, item)) return true;
+    await k3StartFromPanel(cal, item, { openBuilder }, render);
+    return true;
+  }
+  if (type === "central-calendar-back-to-builder") {
+    centralCalendarBackToBuilder(render);
+    return true;
+  }
+  if (type === "central-calendar-k3") {
+    await k3SheetAction(cal, action.dataset.k3 || "", action.dataset, { openBuilder }, render);
+    return true;
+  }
 
   if (type === "central-calendar-prev" || type === "central-calendar-next") {
     cal.anchor = movedAnchor(cal, type === "central-calendar-prev" ? -1 : 1);
@@ -1882,23 +2012,25 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-toggle-kind") {
     const kind = action.dataset.kind || "";
+    const before = centralCalendarServerKinds(cal.filters);
     if (CENTRAL_CALENDAR_KINDS.includes(kind)) {
       toggleValue(cal.filters.kinds, kind);
       // Events chosen: every event passes, so the event types are cleared.
       if (kind === "event" && cal.filters.kinds.includes("event")) cal.filters.eventKinds = [];
     }
-    render?.();
+    await typesChanged(cal, before, render);
     return true;
   }
   if (type === "central-calendar-toggle-event-kind") {
     const eventKind = action.dataset.eventKind || "";
+    const before = centralCalendarServerKinds(cal.filters);
     if (CENTRAL_CALENDAR_EVENT_KINDS.includes(eventKind)) {
       toggleValue(cal.filters.eventKinds, eventKind);
       // Narrowing to some event types turns Events off, so every pressed chip
       // changes the list (Events would let every event through anyway).
       if (cal.filters.eventKinds.length) cal.filters.kinds = cal.filters.kinds.filter((kind) => kind !== "event");
     }
-    render?.();
+    await typesChanged(cal, before, render);
     return true;
   }
   if (type === "central-calendar-all-groups") {
@@ -1907,9 +2039,10 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === "central-calendar-all-types") {
+    const before = centralCalendarServerKinds(cal.filters);
     cal.filters.kinds = [];
     cal.filters.eventKinds = [];
-    render?.();
+    await typesChanged(cal, before, render);
     return true;
   }
   if (type === "central-calendar-toggle-filters") {

@@ -981,7 +981,7 @@ test("10a. the coach's Back root is Home and the rail's Calendar highlights the 
   assert.match(appJs, /els\.calendarToggle\?\.addEventListener\("click", openCentralCalendarFromRail\);/);
   assert.match(appJs, /if \(state\.activeTab === "central-calendar"\) return loadCentralCalendar\(\);/);
   assert.doesNotMatch(appJs, /openWeeklyCalendarFromRail/, "the rail no longer opens the weekly plan's month picker");
-  assert.match(appJs, /if \(type\.startsWith\("central-calendar-"\)\) \{\s*await handleCentralCalendarAction\(action, \{ render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar \}\);/, "the content click dispatch");
+  assert.match(appJs, /if \(type\.startsWith\("central-calendar-"\)\) \{\s*await handleCentralCalendarAction\(action, \{ render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar, openBuilder: openBuilderForK3 \}\);/, "the content click dispatch");
   assert.equal((appJs.match(/if \(closeCentralCalendarPanel\(renderCentralCalendar\)\) return;/g) || []).length, 1, "Escape closes the panel first and draws the screen again");
   // Back too; an event form the coach chose to keep (K2a-2) puts back the
   // history entry Back consumed.
@@ -1032,6 +1032,194 @@ test("10b. a coach who loses Settings access falls back to Home; the athlete she
   state.activeTab = "builder";
   renderLibraryNav();
   assert.equal(state.activeTab, "weekly", "the athlete shell's Builder fallback is unchanged");
+});
+
+// FE-D16 (central-calendar-k2b2-plan.md 9.4): the fake server folds the way the real one does - an event's RPE
+// request is folded into it unless `kinds` leaves `event` out - and honours `kinds`.
+const FOLD_EVENT = baseItem({ key: "event:ev-1:d2", kind: "event", eventKind: "training", date: DAY(2), title: "Club training", startTime: "10:00", expects: ["rpe"], status: "awaiting_entry", links: {} });
+const FOLDED_RPE = baseItem({ key: "external:sch-fold:d2", kind: "external", date: DAY(2), title: "RPE after training", eventType: "training", startTime: "10:00", athleteCount: 20, expects: ["rpe"], status: "awaiting_entry", rpe: { asked: 20, submitted: 4 }, links: { activityIds: [], externalScheduleId: "sch-fold", externalOccurrenceId: "occ-fold" }, foldedInto: "event:ev-1:d2" });
+function foldingResponder() {
+  return (call) => {
+    if (!call.url.startsWith("/api/calendar?")) return { status: 404, body: { error: "not found" } };
+    const raw = params(call).get("kinds");
+    const kinds = raw ? raw.split(",") : null;
+    const items = [...ITEMS, FOLD_EVENT, FOLDED_RPE]
+      .filter((item) => !kinds || kinds.includes(item.kind))
+      .filter((item) => !(item.foldedInto && (!kinds || kinds.includes("event"))))
+      .map(({ foldedInto, ...item }) => item);
+    return { status: 200, body: answerFor(call.url, { items }) };
+  };
+}
+const calendarCalls = (calls) => calls.filter((call) => call.url.startsWith("/api/calendar?"));
+
+test("FE-D16. only non-event kinds chosen: the screen reads exactly those kinds under its own key, so RPE requests alone shows the request an event folds", async () => {
+  const calls = installFetchMock(foldingResponder());
+  await loadCentralCalendar({ render });
+  assert.equal(calendarCalls(calls).length, 1);
+  assert.equal(params(calls[0]).get("kinds"), null, "the unfiltered read sends no kinds");
+  assert.equal(dom().querySelector('[data-key="external:sch-fold:d2"]'), null, "folded into its event");
+  assert.ok(dom().querySelector('[data-key="event:ev-1:d2"]'));
+  const rpeChip = () => dom().querySelector('[data-action="central-calendar-toggle-kind"][data-kind="external"]').textContent;
+  assert.match(rpeChip(), /RPE requests\s*3/, "the unfiltered answer's three own RPE cards");
+
+  await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  assert.equal(calendarCalls(calls).length, 2);
+  assert.equal(params(calendarCalls(calls)[1]).get("kinds"), "external");
+  assert.ok(dom().querySelector('[data-key="external:sch-fold:d2"]'), "RPE requests alone: the folded request is its own card");
+  assert.equal(dom().querySelector('[data-key="event:ev-1:d2"]'), null);
+  assert.match(rpeChip(), /RPE requests\s*4/, "its chip counts the card it shows too");
+
+  // Its panel, with the athletes read the same way.
+  await act({ action: "central-calendar-open-item", key: "external:sch-fold:d2", date: DAY(2) });
+  assert.equal(state.centralCalendar.panel.open, true);
+  const dayRead = calendarCalls(calls).at(-1);
+  assert.equal(params(dayRead).get("include"), "athletes");
+  assert.equal(params(dayRead).get("kinds"), "external");
+  assert.deepEqual(state.centralCalendar.panel.athletes, ATHLETES);
+
+  // Events chosen too: the unfiltered answer again (no read), the request folded, its panel closed.
+  const before = calendarCalls(calls).length;
+  await act({ action: "central-calendar-toggle-kind", kind: "event" });
+  assert.equal(calendarCalls(calls).length, before, "the unfiltered answer is the one on hand");
+  assert.equal(dom().querySelector('[data-key="external:sch-fold:d2"]'), null);
+  assert.equal(state.centralCalendar.panel.open, false);
+  // RPE requests alone again: its own key is still cached - nothing sent.
+  await act({ action: "central-calendar-toggle-kind", kind: "event" });
+  assert.equal(calendarCalls(calls).length, before);
+  assert.ok(dom().querySelector('[data-key="external:sch-fold:d2"]'));
+  // An event type narrows events: the unfiltered answer again.
+  await act({ action: "central-calendar-toggle-event-kind", eventKind: "training" });
+  assert.equal(calendarCalls(calls).length, before);
+  assert.equal(dom().querySelector('[data-key="external:sch-fold:d2"]'), null);
+  assert.ok(dom().querySelector('[data-key="event:ev-1:d2"]'));
+  // All types: the unfiltered answer, nothing sent.
+  await act({ action: "central-calendar-all-types" });
+  assert.equal(calendarCalls(calls).length, before);
+});
+
+test("FE-D16b. another range with RPE requests chosen reads both answers, each once; a refresh reads both again", async () => {
+  const calls = installFetchMock(foldingResponder());
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  await act({ action: "central-calendar-toggle-kind", kind: "planned" });
+  assert.equal(params(calendarCalls(calls).at(-1)).get("kinds"), "planned,external", "the chips' order");
+  const before = calendarCalls(calls).length;
+  await act({ action: "central-calendar-next" });
+  const next = calendarCalls(calls).slice(before);
+  assert.deepEqual(next.map((call) => params(call).get("kinds")), [null, "planned,external"]);
+  assert.ok(next.every((call) => params(call).get("from") === addDaysIso(MONDAY, 7)));
+});
+
+test("FE-D16c. a filter change closes an open panel whose card it hides quietly, the first time and from the cache", async () => {
+  installFetchMock(foldingResponder());
+  await loadCentralCalendar({ render });
+  for (const round of ["read", "cached"]) {
+    await act({ action: "central-calendar-open-item", key: "event:ev-1:d2", date: DAY(2) });
+    assert.equal(state.centralCalendar.panel.open, true, round);
+    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+    assert.equal(state.centralCalendar.panel.open, false, round);
+    assert.equal(state.centralCalendar.notice, "", `${round}: a filter change is not "no longer on this day"`);
+    await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  }
+});
+
+test("FE-D16d. a refresh whose kinds read fails over cards on screen says so", async () => {
+  let kindsCalls = 0;
+  const folding = foldingResponder();
+  installFetchMock((call) => {
+    if (call.url.startsWith("/api/calendar?") && params(call).get("kinds")) {
+      kindsCalls += 1;
+      if (kindsCalls > 1) return { status: 503, body: { error: "database_busy" } };
+    }
+    return folding(call);
+  });
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  assert.equal(state.centralCalendar.refreshError, "");
+  await loadCentralCalendar({ render, forceRefresh: true });
+  assert.equal(kindsCalls, 2);
+  assert.match(state.centralCalendar.refreshError, /Could not refresh/);
+  assert.ok(dom().querySelector('[data-key="external:sch-fold:d2"]'), "the last kinds answer stays on screen");
+});
+
+// A kinds read held in flight until the test lets it answer.
+function heldKindsResponder() {
+  const folding = foldingResponder();
+  const held = [];
+  const responder = (call) => {
+    if (call.url.startsWith("/api/calendar?") && params(call).get("kinds")) return new Promise((resolve) => held.push(() => resolve(folding(call))));
+    return folding(call);
+  };
+  responder.release = () => held.splice(0).forEach((answer) => answer());
+  responder.held = () => held.length;
+  return responder;
+}
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("FE-D16e. a kinds answer that arrives after the coach chose Events again is dropped: the cards stay the unfiltered ones", async () => {
+  const fake = heldKindsResponder();
+  installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  const toggling = act({ action: "central-calendar-toggle-kind", kind: "external" });
+  await tick();
+  assert.equal(fake.held(), 1, "the kinds read is in flight");
+  await act({ action: "central-calendar-toggle-kind", kind: "event" });
+  fake.release();
+  await toggling;
+  render();
+  assert.ok(!state.centralCalendar.kindsAnswer, "the late answer is not applied");
+  assert.equal(dom().querySelector('[data-key="external:sch-fold:d2"]'), null, "the request stays folded");
+  assert.ok(dom().querySelector('[data-key="event:ev-1:d2"]'), "its event is on screen");
+});
+
+test("FE-D16f. a kinds answer made void by an invalidation while in flight is read exactly once more, and that answer is shown", async () => {
+  const fake = heldKindsResponder();
+  const calls = installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  const toggling = act({ action: "central-calendar-toggle-kind", kind: "external" });
+  await tick();
+  invalidateCentralCalendarCache();
+  fake.release();
+  await tick();
+  assert.equal(fake.held(), 1, "read once more");
+  fake.release();
+  await toggling;
+  const kindsReads = calendarCalls(calls).filter((call) => params(call).get("kinds"));
+  assert.equal(kindsReads.length, 2, "the first read and exactly one more");
+  assert.ok(dom().querySelector('[data-key="external:sch-fold:d2"]'), "the second answer is shown");
+});
+
+test("FE-D16f2. a retry voided again is not read a third time: the retry is bounded at one", async () => {
+  const fake = heldKindsResponder();
+  const calls = installFetchMock(fake);
+  await loadCentralCalendar({ render });
+  const toggling = act({ action: "central-calendar-toggle-kind", kind: "external" });
+  await tick();
+  invalidateCentralCalendarCache();
+  fake.release();
+  await tick();
+  assert.equal(fake.held(), 1, "the one retry is in flight");
+  invalidateCentralCalendarCache();
+  fake.release();
+  await tick();
+  assert.equal(fake.held(), 0, "no third kinds read is in flight");
+  await toggling;
+  assert.equal(calendarCalls(calls).filter((call) => params(call).get("kinds")).length, 2, "no third kinds read");
+  assert.ok(!state.centralCalendar.kindsAnswer, "the voided retry's answer is not applied");
+});
+
+// KNOWN LIMIT 2 of FE-D16 (plan 9.4): with an event type chosen next to "RPE requests" the read stays unfiltered, so a
+// request folded into an event of another type shows nowhere. This test pins today's behaviour; a later fix (a
+// `kinds=external,event` read with the type filter in the browser, or a server-side type filter) changes it on purpose.
+test("FE-D16i. known limit: RPE requests plus an event type sends no kinds read, and a request folded into another type's event shows nowhere", async () => {
+  const calls = installFetchMock(foldingResponder());
+  await loadCentralCalendar({ render });
+  await act({ action: "central-calendar-toggle-event-kind", eventKind: "match" });
+  await act({ action: "central-calendar-toggle-kind", kind: "external" });
+  assert.deepEqual(calendarCalls(calls).map((call) => params(call).get("kinds")), [null], "only the unfiltered read");
+  assert.equal(dom().querySelector('[data-key="event:ev-1:d2"]'), null, "the training event is filtered out by the type");
+  assert.equal(dom().querySelector('[data-key="external:sch-fold:d2"]'), null, "and the request folded into it shows nowhere (the known limit)");
+  assert.ok(dom().querySelector('[data-key="external:sch-1:d1"]'), "an RPE request of its own still shows");
 });
 
 test("Back to a calendar place (app-history.js): the remembered panel re-opens when its item is still there, and is not left open when it is gone", async () => {

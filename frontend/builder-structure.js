@@ -374,10 +374,10 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
   const namePlaceholder = isWeekly ? "e.g. MD-1, Match day" : `Block ${block.index}`;
   const nameLabel = isWeekly ? "Day label" : "Block name";
   return `
-    <article class="builder-block">
+    <article class="builder-block${context.k3InEvent?.(block) ? " is-k3-day" : ""}">
       <div class="builder-block-head">
         <div class="builder-block-head-text">
-          ${kicker ? `<span class="builder-block-kicker">${escapeHtml(kicker)}</span>` : ""}
+          ${kicker ? `<span class="builder-block-kicker">${escapeHtml(kicker)}</span>` : ""}${context.k3DayMark?.(block) || ""}
           <form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>
           ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
         </div>
@@ -385,13 +385,15 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}${renderPasteSessionIconButton(block.id, context)}</div>`
           : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
+      ${isWeekly ? context.eventsRow?.(block) || "" : ""}
       <div class="builder-sessions">
         ${block.sessions.length ? block.sessions.map((session) => `
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             ${session.name ? `<strong class="builder-session-name">${escapeHtml(session.name)}</strong>` : ""}
             <span class="builder-session-badge-row"><span>${escapeHtml(context.sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span></span>
-          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${isWeekly ? renderSessionTrainingLoadControls(session) : ""}${isWeekly && context.renderCalendarEventButton ? context.renderCalendarEventButton(block, session) : ""}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div></div>
-          ${isWeekly && context.renderCalendarEventPanel ? context.renderCalendarEventPanel(block, session) : ""}
+          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${isWeekly ? renderSessionTrainingLoadControls(session) : ""}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div>${isWeekly ? context.k3Session?.(block, session) || "" : ""}${isWeekly ? context.sessionEvent?.(block, session) || "" : ""}</div>
+          ${isWeekly ? context.k3SessionNote?.(block, session) || "" : ""}
+          ${isWeekly ? context.sessionEventNote?.(block, session) || "" : ""}
           ${isInlineAddHere(session, "", context) ? renderBuilderInlineAddForm(session, "", context) : ""}
           ${renderBuilderNodeTree(session, "", selectedNodeId, context)}
         `).join("") : `<p class="muted">No sessions yet.</p>`}

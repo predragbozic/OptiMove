@@ -338,12 +338,12 @@ export const emptyBuilderState = (overrides = {}) => ({
   addConfirmation: null, // { itemId, title } - transient inline "<title> added" banner + Edit now, cleared on next navigation/add.
   editItemId: "", // set while a single item's Sets/Reps/Load/Instruction is open in Added-exercises mode.
   editItemInstructionOpen: false, // Instruction starts collapsed per item; resets whenever editItemId changes.
-  // K2c-2-F (docs/ai/central-calendar-k2c-plan.md 2.1): the open "Make an
-  // event" panel of one weekly session (builder-calendar-event-actions.js),
-  // and the sessions made into an event from this Builder (the in-memory
-  // "In calendar" badge; never stored).
-  calendarEvent: null,
-  calendarEventsMade: [],
+  // K2c-3 (docs/ai/central-calendar-k3-plan.md 6.2): the week's events of a
+  // weekly plan, each session's event and the one write (builder-events-row.js).
+  events: null,
+  // K3 (2.3): the event this Builder plans for, with its band
+  // (central-calendar-k3-actions.js); null otherwise.
+  k3: null,
   ...overrides,
 });
 
@@ -685,6 +685,17 @@ export const emptyRpeForm = (overrides = {}) => ({
   saving: false,
   error: "",
   savedFeedback: null,
+  // K4b: "submit" (the first answer) or "change" (the athlete changes her
+  // own external answer while the question is open; rpe-answer-change.js).
+  mode: "submit",
+  original: null,
+  expectedRevision: null,
+  closesAt: "",
+  requestKey: "",
+  unconfirmed: false,
+  locked: false,
+  // The day as the screen that opened the form names it ("Monday 12.10" on the Calendar); else the date is formatted.
+  dateLabel: "",
   ...overrides,
 });
 
