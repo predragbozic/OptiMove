@@ -404,6 +404,17 @@ export async function blockedPlanSessions(client, plan) {
   return blockedSessions(client, plan, changes);
 }
 
+// Task 5 (12.6a): a route that removes or moves some sessions of a published
+// plan directly. Under the caller's plan lock: the plan's sessions chosen by
+// `pick`, checked as `change`.
+export async function blockedSessionsOf(client, planId, pick, change) {
+  const tree = await loadWeeklyTree(client, planId);
+  if (!tree) return [];
+  const changes = tree.sessions.filter(pick).map((session) => ({ session, change }))
+    .sort((x, y) => (String(x.session.id) < String(y.session.id) ? -1 : 1));
+  return blockedSessions(client, tree, changes);
+}
+
 async function blockedSessions(client, before, changes) {
   if (!changes.length) return [];
   await client.query(

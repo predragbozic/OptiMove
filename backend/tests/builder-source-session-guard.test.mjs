@@ -439,34 +439,103 @@ async function outsider(label) {
   return { id, cookie: await cookieOf(id) };
 }
 
-test("10. a published plan's session is never removed or moved through the session routes: the same 404, byte for byte, as a session the caller may not edit", async () => {
+// A direct route's refusal: 409 edit_sessions_locked naming `name` with `change` and `reasons`, nothing written.
+async function assertDirectLocked(res, plans, before, { name, change, reasons }) {
+  assert.equal(res.status, 409, res.text);
+  assert.equal(res.body.code, "edit_sessions_locked");
+  assert.deepEqual(res.body.sessions.map((x) => ({ name: x.name, change: x.change, reasons: x.reasons })), [{ name, change, reasons }]);
+  assert.deepEqual(Object.keys(res.body.sessions[0]).sort(), ["amPm", "bta", "change", "day", "name", "reasons"]);
+  assert.equal(await digestOf(plans), before, "nothing written");
+}
+
+test("10. the session routes on a published plan: a session with results or a live event link is never moved (half-day or phase) or removed (409, nothing written); a rename and a time change stay free; a session without either moves and goes as before; rights first", async () => {
   const s = await squad("direct");
   const plans = await publishedBatch(s);
   const [a] = plans;
   const other = await outsider("direct");
-  const live = byName(await treeOf(a), "Main");
-  const before = await digestOf(plans);
-  const asOwner = {
-    delete: await api(`/api/builder/sessions/${live.id}`, { method: "DELETE", cookie: s.coach.cookie }),
-    patch: await api(`/api/builder/sessions/${live.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }),
-  };
-  const notYours = {
-    delete: await api(`/api/builder/sessions/${live.id}`, { method: "DELETE", cookie: other.cookie }),
-    patch: await api(`/api/builder/sessions/${live.id}`, { method: "PATCH", cookie: other.cookie, body: { amPm: "PM" } }),
-  };
-  const missing = await api(`/api/builder/sessions/${crypto.randomUUID()}`, { method: "DELETE", cookie: s.coach.cookie });
-  for (const kind of ["delete", "patch"]) {
-    assert.equal(asOwner[kind].status, 404, asOwner[kind].text);
-    assert.equal(notYours[kind].status, 404, notYours[kind].text);
-    assert.equal(asOwner[kind].text, notYours[kind].text, `${kind}: the same body as not yours`);
-    assert.equal(asOwner[kind].text, missing.text, `${kind}: the same body as a session that does not exist`);
+  const wed = byName(await treeOf(a), "Wednesday");
+  await rpeRow(s.athletes[0], wed.id);
+  const ev = await teamEventFor(s, WEEK);
+  const main = byName(await treeOf(a), "Main");
+  ok(await attach(s.coach.cookie, ev.id, [String(main.logical_session_id)]));
+  // Rights first: the plain 404 for someone who may not edit the plan, the same body as a missing session.
+  const missing = await api(`/api/builder/sessions/${crypto.randomUUID()}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } });
+  for (const [method, body] of [["PATCH", { amPm: "PM" }], ["DELETE", undefined]]) {
+    const res = await api(`/api/builder/sessions/${wed.id}`, { method, cookie: other.cookie, body });
+    assert.equal(res.status, 404, res.text);
+    assert.equal(res.text, missing.text, `${method}: not yours = missing`);
   }
-  assert.equal(await digestOf(plans), before, "nothing written");
-  // The same session through its edit draft is changed as before.
-  const draft = await reopen(s.coach.cookie, a);
-  await moveToPm(s.coach.cookie, draft, "Main");
-  ok(await save(s.coach.cookie, draft.plan.id));
-  assert.equal(byName(await treeOf(a), "Main").am_pm, "PM");
+  let before = await digestOf(plans);
+  await assertDirectLocked(await api(`/api/builder/sessions/${wed.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }), plans, before, { name: "Wednesday", change: "moved", reasons: ["has_results"] });
+  await assertDirectLocked(await api(`/api/builder/sessions/${wed.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { bta: "A" } }), plans, before, { name: "Wednesday", change: "moved", reasons: ["has_results"] });
+  await assertDirectLocked(await api(`/api/builder/sessions/${wed.id}`, { method: "DELETE", cookie: s.coach.cookie }), plans, before, { name: "Wednesday", change: "removed", reasons: ["has_results"] });
+  await assertDirectLocked(await api(`/api/builder/sessions/${main.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }), plans, before, { name: "Main", change: "moved", reasons: ["linked_to_event"] });
+  await assertDirectLocked(await api(`/api/builder/sessions/${main.id}`, { method: "DELETE", cookie: s.coach.cookie }), plans, before, { name: "Main", change: "removed", reasons: ["linked_to_event"] });
+  // A rename and a time change of the same sessions stay free (content changes in place), and so does sending the same half-day.
+  ok(await api(`/api/builder/sessions/${wed.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: "Wednesday renamed", time: "18:00", amPm: wed.am_pm || "" } }));
+  assert.equal(byName(await treeOf(a), "Wednesday renamed").am_pm, wed.am_pm);
+  // A published session without results or a link moves and goes as before (the sibling's).
+  const sibWed = byName(await treeOf(plans[1]), "Wednesday");
+  ok(await api(`/api/builder/sessions/${sibWed.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { amPm: "PM" } }));
+  assert.equal(byName(await treeOf(plans[1]), "Wednesday").am_pm, "PM");
+  ok(await api(`/api/builder/sessions/${sibWed.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  assert.equal(byName(await treeOf(plans[1]), "Wednesday"), undefined);
+});
+
+test("13. pasting a day over a published plan's day (same plan and another plan, confirmOverwrite): refused when a session there has results; a day without one is pasted as before", async () => {
+  const s = await squad("dayoverwrite");
+  const plans = await publishedBatch(s);
+  const [a, b] = plans;
+  await rpeRow(s.athletes[0], byName(await treeOf(a), "Wednesday").id);
+  const days = await q(`select id, date::text as date from plans.plan_days where plan_id = $1 order by day_order`, [a]);
+  const dayOf = (date) => days.find((d) => d.date === date).id;
+  const before = await digestOf(plans);
+  await assertDirectLocked(await api(`/api/builder/days/${dayOf(WEEK)}/copy-into/${dayOf(WEDNESDAY)}`, { method: "POST", cookie: s.coach.cookie, body: { confirmOverwrite: true } }),
+    plans, before, { name: "Wednesday", change: "removed", reasons: ["has_results"] });
+  const bMonday = (await q(`select id from plans.plan_days where plan_id = $1 and date = $2`, [b, WEEK]))[0].id;
+  await assertDirectLocked(await api(`/api/builder/blocks/${bMonday}/copy-into/${dayOf(WEDNESDAY)}`, { method: "POST", cookie: s.coach.cookie, body: { confirmOverwrite: true } }),
+    plans, before, { name: "Wednesday", change: "removed", reasons: ["has_results"] });
+  // The sibling's Wednesday has no results: pasted over as before.
+  const bDays = await q(`select id, date::text as date from plans.plan_days where plan_id = $1`, [b]);
+  ok(await api(`/api/builder/days/${bDays.find((d) => d.date === WEEK).id}/copy-into/${bDays.find((d) => d.date === WEDNESDAY).id}`, { method: "POST", cookie: s.coach.cookie, body: { confirmOverwrite: true } }));
+  assert.equal(byName(await treeOf(b), "Wednesday"), undefined, "replaced by Monday's copy");
+});
+
+test("14. no branch on plan kind: a published program whose session a record names keeps that session (block delete, session delete, plan delete refused); a program without one is unchanged", async () => {
+  const s = await squad("program");
+  const created = ok(await api("/api/builder/plans", { method: "POST", cookie: s.coach.cookie, body: { planType: "program", athleteIds: [s.athletes[0].externalId], athleteExternalIds: [s.athletes[0].externalId], name: "Program" } }), 201);
+  const planId = created.plan.id;
+  let draft = ok(await api(`/api/builder/plans/${planId}`, { cookie: s.coach.cookie }));
+  if (!draft.blocks?.length) draft = ok(await api(`/api/builder/plans/${planId}/blocks`, { method: "POST", cookie: s.coach.cookie, body: { name: "Block 1" } }), 201);
+  draft = ok(await api(`/api/builder/blocks/${draft.blocks[0].id}/sessions`, { method: "POST", cookie: s.coach.cookie, body: { bta: "T", name: "Program session" } }), 201);
+  const session = sessionsOf(draft).find((x) => x.name === "Program session");
+  const node = await api(`/api/builder/sessions/${session.id}/nodes`, { method: "POST", cookie: s.coach.cookie, body: { nodeType: "domain", name: "Strength" } });
+  assert.ok(node.status < 300, node.text);
+  ok(await api(`/api/builder/plans/${planId}/submit`, { method: "POST", cookie: s.coach.cookie, body: { responseMode: "summary" } }));
+  const live = (await q(`select p.id as plan_id, p.status, ps.id, ps.logical_session_id, ps.plan_day_id from plans.plans p join plans.plan_days pd on pd.plan_id = p.id
+                         join plans.plan_sessions ps on ps.plan_day_id = pd.id where p.athlete_id = $1 and p.plan_type = 'program' and not coalesce(p.is_edit_draft,false)`, [s.athletes[0].athleteId]))[0];
+  assert.notEqual(live.status, "draft", "published");
+  // A record names the program session (a metric event participant; no plan kind is assumed).
+  await metricEventFor(s, WEEK, s.athletes[0].athleteId, String(live.logical_session_id));
+  const before = await digestOf([live.plan_id]);
+  await assertDirectLocked(await api(`/api/builder/sessions/${live.id}`, { method: "DELETE", cookie: s.coach.cookie }), [live.plan_id], before, { name: "Program session", change: "removed", reasons: ["has_results"] });
+  await assertDirectLocked(await api(`/api/builder/blocks/${live.plan_day_id}`, { method: "DELETE", cookie: s.coach.cookie }), [live.plan_id], before, { name: "Program session", change: "removed", reasons: ["has_results"] });
+  const refused = await api(`/api/builder/plans/${live.plan_id}`, { method: "DELETE", cookie: s.coach.cookie });
+  assert.equal(refused.status, 409, refused.text);
+  assert.equal(refused.body.code, "plan_sessions_locked");
+  assert.equal(await digestOf([live.plan_id]), before, "nothing deleted");
+  // The program's Save: copyProgramTree does not keep logical ids, so every session would leave its record behind -
+  // the Save is refused even for a rename in the draft (no branch on plan kind).
+  const edit = await reopen(s.coach.cookie, live.plan_id);
+  const editSession = sessionsOf(edit).find((x) => x.name === "Program session");
+  ok(await api(`/api/builder/sessions/${editSession.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: "Program session renamed in the draft" } }));
+  const saved = await save(s.coach.cookie, edit.plan.id);
+  assert.equal(saved.status, 409, saved.text);
+  assert.equal(saved.body.code, "edit_sessions_locked");
+  assert.deepEqual(saved.body.sessions.map((x) => [x.name, x.change, x.reasons]), [["Program session", "removed", ["has_results"]]]);
+  ok(await api(`/api/builder/plans/${edit.plan.id}`, { method: "DELETE", cookie: s.coach.cookie }));
+  // A rename of the published session itself stays free.
+  ok(await api(`/api/builder/sessions/${live.id}`, { method: "PATCH", cookie: s.coach.cookie, body: { name: "Program session renamed" } }));
 });
 
 test("11. deleting a published plan with a session that has results or a live event link: 409 plan_sessions_locked naming them, nothing deleted; rights first", async () => {

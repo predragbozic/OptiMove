@@ -7,7 +7,7 @@ import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySes
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
-import { batchEditTestHooks, blockedPlanSessions, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
+import { batchEditTestHooks, blockedPlanSessions, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
@@ -1100,11 +1100,11 @@ router.delete("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
     client = await pool.connect();
     await client.query("begin");
     const lockedRow = (await client.query("select id, status, plan_type from plans.plans where id = $1 for update", [plan.id])).rows[0];
-    // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6): a published weekly
-    // plan whose session has results or a live event link made for it is not
-    // deleted (rights first: requirePlan's 404 comes before this 409). A
+    // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a published plan (of
+    // any kind) whose session has results or a live event link made for it is
+    // not deleted (rights first: requirePlan's 404 comes before this 409). A
     // draft, and a published plan with no such session, delete as before.
-    if (lockedRow && lockedRow.status !== "draft" && lockedRow.plan_type === "weekly") {
+    if (lockedRow && lockedRow.status !== "draft") {
       const blocked = await blockedPlanSessions(client, await loadWeeklyTree(client, plan.id));
       if (blocked.length) {
         await client.query("rollback");
@@ -1137,13 +1137,35 @@ router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) 
 }));
 
 router.delete("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
+  let client;
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
-    await deleteBlockTree(block.id);
+    if (isDraftPlanRow(block.plan)) {
+      await deleteBlockTree(block.id);
+      return await respondWithDraft(req, res, req.user, block.plan);
+    }
+    // Task 5 (12.6a): a published plan's block takes its sessions with it -
+    // never one with results or a live event link.
+    client = await pool.connect();
+    await client.query("begin");
+    const locked = await directSessionsLocked(client, block.plan.id, (s) => String(s.plan_day_id) === String(block.id), "removed");
+    if (locked) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
+    }
+    await deleteBlockTreeWithClient(client, block.id);
+    await client.query("commit");
+    client.release();
+    client = null;
     return await respondWithDraft(req, res, req.user, block.plan);
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 }));
 
 router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) => {
@@ -1228,6 +1250,15 @@ async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPl
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     await lockCopyTargetPlan(client,target.plan.id,{dayId:target.id});
+    // Task 5 (12.6a): pasting over a published plan's day removes its
+    // sessions - never one with results or a live event link.
+    const locked = await directSessionsLocked(client, target.plan.id, (s) => String(s.plan_day_id) === String(target.id), "removed");
+    if (locked) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
+    }
     await deleteDayContentWithClient(client, target.id);
     await copyDaySessions(client, source.id, target.id);
     await assertExerciseReuseAllowed(client, req.user.id, { dayIds: [target.id], guard: req.exerciseReuseGuard });
@@ -1515,10 +1546,7 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
   let client;
   try {
     const session = await getEditableSession(req, req.params.sessionId);
-    // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6): a session of a
-    // published plan changes only through its edit draft's Save, never here -
-    // the same 404 as a session the caller may not edit.
-    if (!session || !isDraftPlanRow(session.plan)) return res.status(404).json({ error: "Program session not found" });
+    if (!session) return res.status(404).json({ error: "Program session not found" });
 
     if (req.body?.trackingEnabled !== undefined && strictBoolean(req.body.trackingEnabled) === undefined) {
       return res.status(400).json({ error: "trackingEnabled must be true or false." });
@@ -1552,6 +1580,30 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
       const name = req.body?.name !== undefined ? nullableText(req.body.name) : session.name;
       const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
       const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
+      // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a new half-day or
+      // phase moves the session to another slot. On a published plan a
+      // session with results or a live event link is never moved; a rename
+      // or a time change stays free.
+      const moves = (amPm ?? null) !== (session.am_pm ?? null) || (bta ?? null) !== (session.bta ?? null);
+      if (moves && !isDraftPlanRow(session.plan)) {
+        client = await pool.connect();
+        await client.query("begin");
+        const locked = await directSessionsLocked(client, session.plan.id, (s) => String(s.id) === String(session.id), "moved");
+        if (locked) {
+          await client.query("rollback");
+          client.release();
+          client = null;
+          return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
+        }
+        await client.query(
+          "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
+          [session.id, sessionTime, name, amPm, bta],
+        );
+        await client.query("commit");
+        client.release();
+        client = null;
+        return await respondWithDraft(req, res, req.user, session.plan);
+      }
       await query(
         "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
         [session.id, sessionTime, name, amPm, bta],
@@ -1616,13 +1668,37 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
 }));
 
 router.delete("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) => {
+  let client;
   try {
     const session = await getEditableSession(req, req.params.sessionId);
-    // Task 5: as the PATCH above - a published plan's session is never removed here.
-    if (!session || !isDraftPlanRow(session.plan)) return res.status(404).json({ error: "Program session not found" });
-    await deleteSessionTree(session.id);
+    if (!session) return res.status(404).json({ error: "Program session not found" });
+    if (isDraftPlanRow(session.plan)) {
+      await deleteSessionTree(session.id);
+      return await respondWithDraft(req, res, req.user, session.plan);
+    }
+    // Task 5 (12.6a): a published plan's session with results or a live
+    // event link is never removed; any other is removed as before, in one
+    // transaction under the plan lock.
+    client = await pool.connect();
+    await client.query("begin");
+    const locked = await directSessionsLocked(client, session.plan.id, (s) => String(s.id) === String(session.id), "removed");
+    if (locked) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
+    }
+    await client.query("delete from plans.plan_items where plan_session_id = $1", [session.id]);
+    await client.query("delete from plans.plan_nodes where plan_session_id = $1", [session.id]);
+    await client.query("delete from plans.plan_sessions where id = $1", [session.id]);
+    await client.query("commit");
+    client.release();
+    client = null;
     return await respondWithDraft(req, res, req.user, session.plan);
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    next(error);
+  }
 }));
 
 router.post("/sessions/:sessionId/nodes", withBatchReuseGuard(async (req, res, next) => {
@@ -2372,10 +2448,26 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
   };
 }
 
-// A plan the Builder edits directly: a new draft or an edit draft (both have
-// status 'draft'); a published plan is edited only through its edit draft.
+// A new draft or an edit draft (both have status 'draft').
 function isDraftPlanRow(plan) {
   return plan?.status === "draft";
+}
+
+const SESSIONS_LOCKED_ERROR = "Some sessions can't be removed or moved.";
+
+// Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a route that removes or
+// moves sessions of a plan directly. In the caller's transaction, after its
+// rights check: the plan row FOR UPDATE (status read under it), then - for a
+// published plan of any kind - the chosen sessions with results or a live
+// event link made for them (the Save's facts and locks). The list, or null.
+async function directSessionsLocked(client, planId, pick, change) {
+  // FOR NO KEY UPDATE: the copy routes' own lock strength (lockCopyTargetPlan),
+  // so no upgrade inside one transaction; it still conflicts with the Save's
+  // FOR UPDATE and the calendar attach's FOR SHARE.
+  const row = (await client.query("select status from plans.plans where id = $1 for no key update", [planId])).rows[0];
+  if (!row || row.status === "draft") return null;
+  const blocked = await blockedSessionsOf(client, planId, pick, change);
+  return blocked.length ? blocked : null;
 }
 
 // Task 5 (docs/ai/builder-batch-edit-plan.md section 12): under the Save's plan
@@ -2383,7 +2475,8 @@ function isDraftPlanRow(plan) {
 // removes or moves that have results or a live event link made for them. The
 // list, or null when nothing blocks.
 async function sourceSessionsLocked(client, source, freshDraft) {
-  if (freshDraft.plan_type !== "weekly") return null;
+  // Every kind of plan (the stream manager's ruling): a plan without results
+  // or links passes by itself.
   const blocked = await blockedSourceSessions(client, await loadWeeklyTree(client, source.id), await loadWeeklyTree(client, freshDraft.id));
   return blocked.length ? blocked : null;
 }

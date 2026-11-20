@@ -108,6 +108,15 @@ before(async () => {
       entity_type text,entity_id uuid,metadata jsonb,dedupe_key text,href text,read_at timestamptz,created_at timestamptz default now()
     );
     create unique index notification_dedupe on public.app_notifications(dedupe_key) where dedupe_key is not null;
+    -- Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a published plan's sessions are checked for results and
+    -- live event links before they are removed or moved; the tables that check reads, empty here.
+    create schema training_load;
+    create schema training;
+    create schema calendar;
+    create table training_load.session_feedback (athlete_id uuid, logical_session_id uuid);
+    create table training.activity_participant_session_links (logical_session_id uuid, link_status text);
+    create table training_load.metric_event_participants (logical_session_id uuid);
+    create table calendar.event_session_links (plan_id uuid, day date, am_pm text, bta text, session_order integer, logical_session_id_at_link uuid, ended_at timestamptz);
     create view plans.v_plan_summary as select p.*,p.id as plan_id from plans.plans p;
     create view plans.v_program_plan_items as
       select p.id as plan_id, day.block_index, day.id as plan_block_id, day.block_name,
