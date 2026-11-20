@@ -535,3 +535,24 @@ test("P4 22 (code review): a search started from the calendar on a computer brin
   assert.equal(await run({ fromCalendar: true, sheetOpen: true }), 0, "a phone's sheet: the banner stays where it is");
   assert.equal(await run({ fromCalendar: false }), 0, "a step's own button elsewhere on the page: no scroll");
 });
+
+test("P4 23 (K5-4): chooseDay chooses one day whole through the same dayOff and the same days as a tap; a waiting first tap is not in the way; it never opens the sheet", () => {
+  const now = new Date("2026-11-13T10:00:00");
+  const g = { period: period.emptyPeriod() };
+  assert.equal(period.chooseDay("2026-11-14", g, now), false, "a future day is refused (the same dayOff)");
+  assert.equal(period.chooseDay("not-a-day", g, now), false, "a non-date is refused");
+  assert.deepEqual(g.period, period.emptyPeriod(), "a refusal changes nothing");
+  // A first tap 40 days before the day, left waiting from an earlier visit.
+  assert.equal(period.pickDay("2026-10-04", g, now), true);
+  assert.equal(period.dayOff("2026-11-13", g, now), true, "without the fourth argument the waiting tap still refuses a day 41 days away");
+  assert.equal(period.chooseDay("2026-11-13", g, now), true, "the chosen day replaces the waiting tap");
+  assert.deepEqual(g.period, { open: false, month: "2026-11", anchor: "", from: "2026-11-13", to: "2026-11-13" }, "exactly anchor, from, to and month; open as it was");
+  assert.deepEqual(period.periodRange(g), { from: "2026-11-13", to: "2026-11-13", days: 1 });
+  g.period.open = true;
+  assert.equal(period.chooseDay("2026-11-01", g, now), true);
+  assert.equal(g.period.open, true, "open is left as the caller set it");
+  // A tap after a chosen day behaves as before: it starts a new first tap.
+  assert.equal(period.pickDay("2026-11-05", g, now), true);
+  assert.deepEqual(period.periodRange(g), { from: "2026-11-05", to: "2026-11-05", days: 1 });
+  assert.equal(g.period.anchor, "2026-11-05");
+});
