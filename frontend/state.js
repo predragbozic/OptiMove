@@ -344,6 +344,9 @@ export const emptyBuilderState = (overrides = {}) => ({
   // "In calendar" badge; never stored).
   calendarEvent: null,
   calendarEventsMade: [],
+  // K3 (2.3): the event this Builder plans for, with its band
+  // (central-calendar-k3-actions.js); null otherwise.
+  k3: null,
   ...overrides,
 });
 

@@ -981,7 +981,7 @@ test("10a. the coach's Back root is Home and the rail's Calendar highlights the 
   assert.match(appJs, /els\.calendarToggle\?\.addEventListener\("click", openCentralCalendarFromRail\);/);
   assert.match(appJs, /if \(state\.activeTab === "central-calendar"\) return loadCentralCalendar\(\);/);
   assert.doesNotMatch(appJs, /openWeeklyCalendarFromRail/, "the rail no longer opens the weekly plan's month picker");
-  assert.match(appJs, /if \(type\.startsWith\("central-calendar-"\)\) \{\s*await handleCentralCalendarAction\(action, \{ render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar \}\);/, "the content click dispatch");
+  assert.match(appJs, /if \(type\.startsWith\("central-calendar-"\)\) \{\s*await handleCentralCalendarAction\(action, \{ render: renderCentralCalendar, openWeeklyPlanForAthleteOnDate, openTrainingLoad: openTrainingLoadFromCalendar, openBuilder: openBuilderForK3 \}\);/, "the content click dispatch");
   assert.equal((appJs.match(/if \(closeCentralCalendarPanel\(renderCentralCalendar\)\) return;/g) || []).length, 1, "Escape closes the panel first and draws the screen again");
   // Back too; an event form the coach chose to keep (K2a-2) puts back the
   // history entry Back consumed.
