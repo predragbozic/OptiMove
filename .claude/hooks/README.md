@@ -211,10 +211,15 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
   outside the approved scope:
   - `git add -u`/`--update`/`-f`/`--force`, a glob or magic pathspec (`*.js`, `:/`), a pathspec
     file; `git commit -a`/`--all` (and in clusters, `-am`), `git commit --amend` (it rewrites a
-    commit that may already be pushed); a commit on `main` or `master`;
+    commit that may already be pushed); a commit on `main` or `master`; a `git add` operand
+    that is a folder, `.`/`..`, absolute or an expansion; any pathspec on the commit line
+    (`git commit -m x .` commits everything under it); a commit or push in a line with a `cd`,
+    `pushd`, `popd` or checkout (they move where it runs);
   - every push except `git push [-u|--set-upstream] [-q] origin <B>` where `<B>` is the branch
     checked out where the push runs (read from git, as a full ref) and not `main`/`master`: a bare
-    `git push`, another remote or branch, a refspec, tags, `--no-verify`, any other option;
+    `git push`, another remote or branch, a refspec, tags, `--no-verify`, any other option; and
+    a push that git configuration could send elsewhere (`remote.origin.push`,
+    `remote.origin.pushurl`, or `push.default` upstream/tracking with an upstream of another name);
   - `rm`, `rmdir`, `cp`, `mv`, `mkdir`, `ln`, `touch` unless every path they change is inside the
     session's own temporary folder (never the folder itself), outside every git work tree (a
     recursive delete or move of a folder that holds one asks too), absolute, without `..`,
@@ -223,11 +228,23 @@ hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
     may be anywhere; `mv` deletes its sources, so they must be inside. A hard link (`ln` without
     `-s`, `cp -l`) always asks, and so does overwriting a hard-linked or symlinked file. Without a
     `session_id` in the hook input there is no own folder, and all of these ask.
+    Found by the internal review and closed: a plain variable is put in only by its WHOLE name
+    (`$Db` and `$PWD` are other variables; this also fixes the older redirect check); a trailing
+    `/` or `/.` follows a link (`rm -rf $S/link/` deletes the link's target); a destination that
+    is a link asks, and into an existing folder the entry that would be written is judged (a link
+    already in the folder would be written through); `ln -s` only to a target inside the own
+    folder; `cp -a/-P/-d` (they copy links) ask; operands added by `xargs`/`find` ask;
+    `rmdir -p` asks (it climbs past the folder). In a line where another part makes links or work
+    trees (`ln`, `mv`, `cp -r`, `git init/clone/worktree add`), every scratch exemption of the
+    other parts is off: the hook reads the file system before the line runs.
   - the local test database: `pg_ctl … stop|restart|kill|promote|reload` asks unless `-D` (or
     `--pgdata`) names, literally or by a plain variable of the line, a data folder inside the
     session's own temporary folder (realpath, not a git work tree); `pg_ctl` without `-D`
     (PGDATA from the environment) asks; `pg_ctl kill` always asks (it signals a PID, whatever
-    `-D` says); every `pg_ctlcluster … stop|restart|reload` asks. Starting is left alone.
+    `-D` says); every `pg_ctlcluster … stop|restart|reload` asks. Starting is left alone. More
+    than one data folder (pg_ctl takes the last) or an abbreviation of `--pgdata` asks; a stop
+    is silent only when the PID in `postmaster.pid` is a process running in that data folder
+    (`/proc/<pid>/cwd`), or when there is no `postmaster.pid` (nothing is signalled).
     `su` and `runuser` always ask (their command is a string not read here); `sudo` is read
     through. In a cloud container (root, a root-only temporary folder) a cluster cannot live in
     the temporary folder, so stopping 16/main asks there — a deliberate choice (Rukovodilac,

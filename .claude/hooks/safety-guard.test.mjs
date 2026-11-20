@@ -1881,7 +1881,8 @@ test("P5 (proof by execution): a hard link or a symlink in the scratch folder wr
     // a hard link is never made without a question; a symbolic link only as text
     assert.equal(verdictIn(`ln ${path.join(repo, "f.txt")} ${path.join(scratch, "h2")}`, repo), ASK);
     assert.equal(verdictIn(`cp -l ${path.join(repo, "f.txt")} ${path.join(scratch, "h3")}`, repo), ASK);
-    assert.equal(verdictIn(`ln -s ${path.join(repo, "f.txt")} ${path.join(scratch, "s2")}`, repo), ALLOW);
+    assert.equal(verdictIn(`ln -s ${path.join(repo, "f.txt")} ${path.join(scratch, "s2")}`, repo), ASK); // a link to outside the folder
+    assert.equal(verdictIn(`ln -s ${path.join(scratch, "hard.txt")} ${path.join(scratch, "s3")}`, repo), ALLOW); // a link inside it
   } finally {
     rmSync(base, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
@@ -1980,5 +1981,110 @@ test("P4: stopping a PostgreSQL cluster asks unless it is the session's own test
   } finally {
     rmSync(base, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------
+// Internal review of P3-P5 (code-reviewer and security-reviewer, 2026-11-20): every line below ran
+// without a question before the fix and reaches outside the approved scope.
+// ------------------------------------------------------------------
+
+test("P5 review (proof by execution): a trailing slash and a link in a destination folder reach outside", () => {
+  const repo = makeRepo("sg-p5r-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const outside = mkdtempSync(path.join(tmpdir(), "sg-p5r-outside-"));
+  const s = scratch;
+  try {
+    // rm -rf link/ deletes what the link points to
+    writeFileSync(path.join(outside, "keep.txt"), "x");
+    execFileSync("ln", ["-s", outside, path.join(s, "k")]);
+    execFileSync("bash", ["-c", `rm -rf ${s}/k/`]);
+    assert.equal(existsSync(path.join(outside, "keep.txt")), false, "bash did not delete through k/");
+    writeFileSync(path.join(outside, "keep.txt"), "x");
+    assert.equal(verdictIn(`rm -rf ${s}/k/`, repo), ASK);
+    assert.equal(verdictIn(`rm -rf ${s}/k/.`, repo), ASK);
+    assert.equal(verdictIn(`rm ${s}/k`, repo), ALLOW); // the link itself
+    // cp into a folder writes through a link that is already in it
+    mkdirSync(path.join(s, "d"));
+    mkdirSync(path.join(s, "new"));
+    writeFileSync(path.join(repo, "app.js"), "original\n");
+    writeFileSync(path.join(s, "new", "app.js"), "payload\n");
+    execFileSync("ln", ["-s", path.join(repo, "app.js"), path.join(s, "d", "app.js")]);
+    execFileSync("bash", ["-c", `cp ${s}/new/app.js ${s}/d`]);
+    assert.equal(readFileSync(path.join(repo, "app.js"), "utf8"), "payload\n", "bash did not write through d/app.js");
+    assert.equal(verdictIn(`cp ${s}/new/app.js ${s}/d`, repo), ASK);
+    // mv into a link to a folder lands outside
+    writeFileSync(path.join(s, "a"), "x");
+    assert.equal(verdictIn(`mv ${s}/a ${s}/k`, repo), ASK);
+    assert.equal(verdictIn(`ln -sf ${s}/a ${s}/k`, repo), ASK);
+    // into a plain scratch folder: fine
+    assert.equal(verdictIn(`cp ${s}/a ${s}/new`, repo), ALLOW);
+    assert.equal(verdictIn(`mv ${s}/a ${s}/new`, repo), ALLOW);
+  } finally {
+    for (const d of [base, repo, outside]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("P5 review: whole variable names, links made on the same line, link copies, xargs, rmdir -p", () => {
+  const repo = makeRepo("sg-p5r2-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const s = scratch;
+  try {
+    mkdirSync(path.join(s, "pg"));
+    const rows = [
+      // a variable is put in only by its whole name: $Db and $PWD are other variables
+      [`D=${s}/x; rm -rf $Db/etc`, ASK], [`D=${s}/x; cat README.md > $Db/tmp/f`, ASK], [`P=${s}/x; rm -rf $PWD`, ASK],
+      [`P=${s}/pg; pg_ctl -D $Px stop`, ASK], [`D=${s}/x; rm -rf $D/old`, ALLOW], [`D=${s}/x; rm -rf \${D}/old`, ALLOW],
+      // a link or work tree made on the same line: the other paths were judged before it existed
+      [`ln -s ${repo} ${s}/r && rm -rf ${s}/r/backend`, ASK], [`ln -s ${repo}/f ${s}/f; cat README.md > ${s}/f`, ASK],
+      [`git worktree add -q -b feature/n ${s}/w origin/main && rm -rf ${s}/w/backend`, ASK], [`mv ${s}/a ${s}/b && touch ${s}/b/x`, ASK],
+      [`cp -r ${repo} ${s}/c && rm -rf ${s}/c/x`, ASK], [`ln -s /var/lib/postgresql/16/main ${s}/pg2; pg_ctl -D ${s}/pg2 stop`, ASK],
+      [`mkdir -p ${s}/n && touch ${s}/n/x`, ALLOW],
+      // link copies, a link pointing outside, operands added by xargs, rmdir -p
+      [`cp -a ${repo} ${s}/c2`, ASK], [`cp -P /proc/self/cwd ${s}/l`, ASK], [`cp -d x ${s}/l`, ASK], [`ln -s /proc/self/cwd ${s}/l`, ASK],
+      [`ln -s ${repo} ${s}/r2`, ASK], [`ln -s ${s}/pg ${s}/pglink`, ALLOW], [`echo x | xargs rm -f ${s}/x`, ASK], [`xargs rm < ${s}/list`, ASK],
+      [`rmdir -p ${s}/a/b`, ASK], [`rmdir ${s}/pg`, ALLOW],
+      // pg_ctl: more than one data folder, an abbreviation of --pgdata
+      [`pg_ctl -D ${s}/pg -D /var/lib/postgresql/16/main stop`, ASK], [`pg_ctl -D ${s}/pg --pgdata=/var/lib/postgresql/16/main stop`, ASK],
+      [`pg_ctl --pgd=${s}/pg stop`, ASK], [`pg_ctl -D ${s}/pg --pgd=/var/lib/postgresql/16/main stop`, ASK], [`pg_ctl -D ${s}/pg stop`, ALLOW],
+    ];
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+    // a stop signals the PID in postmaster.pid: a PID of another process asks
+    writeFileSync(path.join(s, "pg", "postmaster.pid"), `${process.pid}\n${s}/pg\n`);
+    assert.equal(verdictIn(`pg_ctl -D ${s}/pg stop`, repo), ASK);
+    writeFileSync(path.join(s, "pg", "postmaster.pid"), "not a pid\n");
+    assert.equal(verdictIn(`pg_ctl -D ${s}/pg stop`, repo), ASK);
+  } finally {
+    for (const d of [base, repo]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("P3 review: broad add/commit forms, a cd on the line, push redirected by git config", () => {
+  const repo = makeRepo("sg-p3r-", "feature/own");
+  const onMaster = makeRepo("sg-p3r-master-", "master");
+  try {
+    mkdirSync(path.join(repo, "backend", "src"), { recursive: true });
+    writeFileSync(path.join(repo, "backend", "src", "a.js"), "x");
+    expectAll([
+      ["git add backend/..", ASK], ["git add ./.", ASK], ["git add ..", ASK], ['git add "$PWD"', ASK], [`git add ${repo}/backend/src/a.js`, ASK],
+      ["git add nothere/..", ASK], ["git add gone/../backend", ASK], // git reads these as . and backend: no stat possible
+      ["git add backend/src", ASK], ["git add backend/src/", ASK], ["git add backend/src/a.js", ALLOW], ["git add ./backend/src/a.js", ALLOW],
+      ["git commit -m x .", ASK], ["git commit -m x -- .", ASK], ["git commit -m x -- backend", ASK], ["git commit -m x backend/src/a.js", ASK],
+      ['git commit -m "fix: two words"', ALLOW], ["git commit -q -m x --no-edit", ALLOW], ["git commit -F msg.txt", ALLOW],
+      [`cd ${onMaster} && git commit -m x`, ASK], [`cd ${repo} && git push origin feature/own`, ASK], ["git checkout -b y && git commit -m x", ASK],
+    ], repo);
+    // git configuration that sends `git push origin <B>` elsewhere
+    const g = (...a) => execFileSync("git", a, { cwd: repo });
+    assert.equal(verdict("git push origin feature/own", repo), ALLOW);
+    g("config", "push.default", "upstream"); g("config", "branch.feature/own.merge", "refs/heads/main");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+    g("config", "--unset", "push.default"); g("config", "--unset", "branch.feature/own.merge");
+    g("config", "remote.origin.push", "refs/heads/*:refs/heads/main");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+    g("config", "--unset", "remote.origin.push"); g("config", "remote.origin.pushurl", "https://example.com/other.git");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+  } finally {
+    for (const d of [repo, onMaster]) rmSync(d, { recursive: true, force: true });
   }
 });

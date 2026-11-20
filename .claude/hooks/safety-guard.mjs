@@ -1501,7 +1501,7 @@ export function isWritableTempTarget(target) {
 export function isHarmlessRedirectTarget(rawTarget, variables = new Map()) {
   let raw = rawTarget;
   for (const [name, value] of variables) {
-    raw = raw.split("${" + name + "}").join(value).split("$" + name).join(value);
+    raw = raw.replace(new RegExp(`\\$\\{${name}\\}|\\$${name}(?![A-Za-z0-9_])`, "g"), () => value);
   }
   if (/[$`*?[\]{}~]/.test(raw)) return false; // cannot be read here
   const target = shellWord(raw);
@@ -2191,27 +2191,59 @@ function isChangeableScratchFile(target) {
   return Boolean(real) && insideOwnScratch(real) && !insideGitWorkTreeOrGitDir(real);
 }
 
+// A line's own plain variable put into a word: only the WHOLE name (`$S`, `${S}`), never the
+// start of a longer one (`$Sb`, `$PWD` with S=P...), which bash expands as another variable.
+export function substituteLineVariables(text, variables = new Map()) {
+  let t = text;
+  for (const [n, v] of variables) {
+    t = t.replace(new RegExp(`\\$\\{${n}\\}|\\$${n}(?![A-Za-z0-9_])`, "g"), () => v);
+  }
+  return t;
+}
+
 const SCRATCH_OPS = {
   rm: { short: "rRfvd", long: ["--recursive", "--force", "--verbose", "--dir"] },
-  rmdir: { short: "pv", long: ["--parents", "--verbose"] },
-  cp: { short: "rRpafvnLPHT", long: ["--recursive", "--preserve", "--archive", "--force", "--verbose", "--no-clobber", "--dereference", "--no-dereference", "--no-target-directory"] },
+  rmdir: { short: "v", long: ["--verbose"] }, // not -p: it climbs past the folder
+  cp: { short: "rRpfvnLHT", long: ["--recursive", "--preserve", "--force", "--verbose", "--no-clobber", "--dereference", "--no-target-directory"] },
   mv: { short: "fvnT", long: ["--force", "--verbose", "--no-clobber", "--no-target-directory"] },
   mkdir: { short: "pv", long: ["--parents", "--verbose"] },
   ln: { short: "sfnvT", long: ["--symbolic", "--force", "--no-dereference", "--verbose", "--no-target-directory"] },
   touch: { short: "cam", long: ["--no-create"] },
 };
 
+// A part that makes links or work trees (ln, mv, cp -r/-R, git init/clone/worktree add). The hook
+// reads the file system BEFORE the line runs, so in a line with such a part every other path it
+// judged may lead somewhere else once the line runs: the scratch exemptions are off for it.
+export function makesLinksOrWorkTrees(segment) {
+  if (createsGitWorkTree(segment)) return true;
+  const words = commandWords(segment);
+  const name = path.basename(words[0] ?? "");
+  if (name === "ln" || name === "mv") return true;
+  if (name === "cp") return words.slice(1).some((w) => /^-[A-Za-z]*[rRaPd]/.test(w) || ["--recursive", "--archive", "--no-dereference"].includes(w) || w.startsWith("--preserve=links"));
+  return false;
+}
+
+// The command a part runs is reached through a wrapper that adds operands the hook never sees.
+function reachedThroughOperandAdder(segment) {
+  const words = tokenizeWords(stripLeadingEnvAssignments(segment)).map(shellWord);
+  return words.some((w, i) => i < 8 && ["xargs", "parallel", "find"].includes(path.basename(w)));
+}
+
 // rm, rmdir, cp, mv, mkdir, ln, touch: no question only when every path it changes is inside the
 // own scratch folder (never the folder itself), outside every git work tree, named literally (a
-// plain variable of the same line counts), absolute, without `..`; a glob only in the last part
-// and never with a recursive delete. cp reads its sources from anywhere; mv deletes its sources,
-// so they must be inside too. A hard link (ln without -s, cp -l) always asks.
-export function scratchFileOpNeedsQuestion(segment, variables = new Map()) {
+// plain variable of the same line counts, by its whole name), absolute, without `..`; a glob only
+// in the last part and never with a recursive delete. A trailing `/` follows a link. cp reads its
+// sources from anywhere; mv deletes its sources, so they must be inside too. A destination that
+// is a link asks; into an existing folder, the entry that would be written is judged. Hard links
+// (ln without -s, cp -l), link copies (cp -a/-P/-d) and ln -s to a target outside always ask.
+// lineMakesLinks: another part of the line makes links or work trees (see above).
+export function scratchFileOpNeedsQuestion(segment, variables = new Map(), { lineMakesLinks = false } = {}) {
   // the raw words (quotes kept, for the variables) and the words as the command receives them
   const rawWords = withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment))));
   const words = rawWords.map(shellWord);
   const name = words[0];
   if (!Object.prototype.hasOwnProperty.call(SCRATCH_OPS, name)) return false;
+  if (lineMakesLinks || reachedThroughOperandAdder(segment)) return true;
   // a substitution anywhere in the part (the words above are read with it masked) could put any
   // path into an operand after the hook looked: `rm $S/\`echo ../../x\``
   if (/`|\$\(|[<>]\(/.test(segment)) return true;
@@ -2235,8 +2267,7 @@ export function scratchFileOpNeedsQuestion(segment, variables = new Map()) {
       continue;
     }
     // an operand: the line's own plain variables put in, then read as the command would
-    let t = rawWords[i];
-    for (const [n, v] of variables) t = t.split("${" + n + "}").join(v).split("$" + n).join(v);
+    const t = substituteLineVariables(rawWords[i], variables);
     if (/[$`{}~\\]/.test(t)) return true;
     resolved.push(shellWord(t));
   }
@@ -2247,28 +2278,53 @@ export function scratchFileOpNeedsQuestion(segment, variables = new Map()) {
   if (changed.some((p) => !path.isAbsolute(p) || p.split(/[\\/]/).includes(".."))) return true;
   if (name === "ln" && !flags.has("-s") && !flags.has("--symbolic")) return true;
   const recursive = flags.has("-r") || flags.has("-R") || flags.has("--recursive");
-  const mustBeInside = name === "cp" ? resolved.slice(-1) : name === "ln" ? resolved.slice(-1) : resolved;
-  for (const p of mustBeInside) {
+  const noTargetDir = flags.has("-T") || flags.has("--no-target-directory");
+  for (const p of changed) {
     const dirPart = path.dirname(p);
     if (/[*?[\]]/.test(dirPart)) return true;
     const globbed = /[*?[\]]/.test(path.basename(p));
     if (globbed && (recursive || name !== "rm")) return true;
-    const followLast = name !== "rm" && name !== "rmdir" && name !== "mv";
-    const real = globbed ? (realPlace(dirPart) && path.join(realPlace(dirPart), path.basename(p))) : realPlace(p, { followLast });
+    // rm, rmdir and mv act on a link itself, except through a trailing `/` or `/.`
+    const trailing = /[\\/]\.?$/.test(p);
+    const followLast = trailing || !["rm", "rmdir", "mv"].includes(name);
+    const bare = trailing ? p.replace(/([\\/]\.?)+$/, "") || "/" : p;
+    const real = globbed ? (realPlace(dirPart) && path.join(realPlace(dirPart), path.basename(p))) : realPlace(bare, { followLast });
     if (!real || !insideOwnScratch(real) || insideGitWorkTreeOrGitDir(real)) return true;
     // a recursive delete or a move takes everything inside along
     if ((recursive || name === "mv") && !globbed) {
-      try { if (fs.lstatSync(p).isDirectory() && containsGitWorkTree(p)) return true; } catch { /* does not exist */ }
-    }
-    // overwriting an existing file: only a plain file of the scratch folder
-    if (name === "cp" || name === "touch" || name === "mv") {
-      try {
-        const st = fs.statSync(p);
-        if (!st.isDirectory() && !isChangeableScratchFile(p)) return true;
-      } catch { /* new */ }
+      try { if (fs.statSync(real).isDirectory() && containsGitWorkTree(real)) return true; } catch { /* does not exist */ }
     }
   }
-  if (name === "cp" && (flags.has("-l") || flags.has("--link"))) return true;
+  // the destination of cp, mv and ln
+  if (["cp", "mv", "ln"].includes(name)) {
+    const dest = resolved.at(-1);
+    const sources = resolved.slice(0, -1);
+    let lst = null;
+    try { lst = fs.lstatSync(dest.replace(/([\\/]\.?)+$/, "") || "/"); } catch { /* new */ }
+    if (lst?.isSymbolicLink()) return true; // writes go where the link points
+    let isDir = false;
+    try { isDir = fs.statSync(dest).isDirectory(); } catch { /* new */ }
+    const entries = isDir && !noTargetDir ? sources.map((s) => path.join(realPlace(dest), path.basename(s.replace(/([\\/]\.?)+$/, "")))) : [dest];
+    for (const entry of entries) {
+      let est = null;
+      try { est = fs.lstatSync(entry); } catch { /* new */ }
+      if (!est) continue;
+      if (name !== "cp" || recursive || est.isSymbolicLink() || !isChangeableScratchFile(entry)) return true;
+    }
+    if (name === "ln") {
+      // the link's text, read from where the link will be: inside the own folder only
+      const linkDir = isDir && !noTargetDir ? realPlace(dest) : path.dirname(realPlace(dest) ?? dest);
+      for (const s of sources) {
+        const target = realPlace(path.resolve(linkDir ?? "/", s));
+        if (!target || !insideOwnScratch(target, { rootAllowed: true }) || insideGitWorkTreeOrGitDir(target)) return true;
+      }
+    }
+  }
+  if (name === "touch") {
+    for (const p of changed) {
+      try { const st = fs.statSync(p); if (!st.isDirectory() && !isChangeableScratchFile(p)) return true; } catch { /* new */ }
+    }
+  }
   return false;
 }
 
@@ -2277,8 +2333,10 @@ export function scratchFileOpNeedsQuestion(segment, variables = new Map()) {
 // or reloading any other cluster asks: nothing on the command line says it is a test one (on
 // another machine the default 16/main may hold a persistent database). pg_ctl without -D uses
 // PGDATA from the environment, which cannot be read here: it asks too. Starting is left alone.
+// More than one data folder asks (pg_ctl takes the last). A stop signals the PID written in
+// postmaster.pid: it is silent only when that process really runs in this data folder.
 const PG_CTL_RISKY = new Set(["stop", "restart", "kill", "promote", "reload"]);
-export function pgControlNeedsQuestion(segment, variables = new Map()) {
+export function pgControlNeedsQuestion(segment, variables = new Map(), { lineMakesLinks = false } = {}) {
   const rawWords = withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment))));
   const words = rawWords.map(shellWord);
   const name = path.basename(words[0] ?? "");
@@ -2287,21 +2345,27 @@ export function pgControlNeedsQuestion(segment, variables = new Map()) {
   if (!words.slice(1).some((w) => PG_CTL_RISKY.has(w))) return false;
   // `pg_ctl kill SIGNAL PID` signals a process by its id, whatever -D says
   if (words.slice(1).includes("kill")) return true;
-  if (/`|\$\(/.test(segment)) return true;
-  let raw = null;
+  if (lineMakesLinks || /`|\$\(/.test(segment)) return true;
+  const raws = [];
   for (let i = 1; i < words.length; i++) {
     const w = words[i];
-    if (w === "-D" || w === "--pgdata") { raw = rawWords[i + 1] ?? null; break; }
-    if (/^-D./.test(w)) { raw = rawWords[i].replace(/^(["']?)-D/, "$1"); break; }
-    if (w.startsWith("--pgdata=")) { raw = rawWords[i].replace(/^(["']?)--pgdata=/, "$1"); break; }
+    if (w === "-D" || w === "--pgdata") { raws.push(rawWords[i + 1] ?? ""); i++; continue; }
+    if (/^-D./.test(w)) { raws.push(rawWords[i].replace(/^(["']?)-D/, "$1")); continue; }
+    if (w.startsWith("--pgdata=")) { raws.push(rawWords[i].replace(/^(["']?)--pgdata=/, "$1")); continue; }
+    if (/^--pg/.test(w)) return true; // an abbreviation of --pgdata
   }
-  if (raw === null) return true;
-  for (const [n, v] of variables) raw = raw.split("${" + n + "}").join(v).split("$" + n).join(v);
+  if (raws.length !== 1) return true;
+  const raw = substituteLineVariables(raws[0], variables);
   if (/[$`{}~\\*?[\]]/.test(raw)) return true;
   const dir = shellWord(raw);
   if (!path.isAbsolute(dir) || dir.split(/[\\/]/).includes("..")) return true;
   const real = realPlace(dir);
-  return !real || !insideOwnScratch(real) || insideGitWorkTreeOrGitDir(real);
+  if (!real || !insideOwnScratch(real) || insideGitWorkTreeOrGitDir(real)) return true;
+  // the PID pg_ctl will signal: no postmaster.pid means nothing is signalled
+  let pid = null;
+  try { pid = Number(fs.readFileSync(path.join(real, "postmaster.pid"), "utf8").split(/\r?\n/)[0]); } catch { return false; }
+  if (!Number.isInteger(pid) || pid <= 1) return true;
+  try { return fs.realpathSync(`/proc/${pid}/cwd`) !== real; } catch { return true; }
 }
 
 // `su [-] user -c "…"` and `runuser`: the command they run is a string the hook does not read
@@ -2313,9 +2377,13 @@ export function isSwitchUserWrapper(segment) {
 
 // git add that stages more than named files, or ignored ones: -u/--update, -f/--force, a
 // pathspec with a glob or magic (":/", ":(top)"), a pathspec file. (`.`, -A, --all are denied.)
-export function gitAddNeedsQuestion(segment) {
+// An operand that is not one named file asks too: a folder (everything under it), `.`/`..` parts,
+// an absolute path, a $-expansion (`git add backend/..` is `git add .`).
+export function gitAddNeedsQuestion(segment, cwd = process.cwd()) {
   const parsed = extractGitSubcommandArgs(segment, "add");
   if (!parsed) return false;
+  if (/`|\$/.test(segment)) return true;
+  const base = parsed.dir ? path.resolve(cwd, parsed.dir) : cwd;
   for (const t of parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes)) {
     if (t === "--") continue;
     if (/^--/.test(t)) {
@@ -2328,26 +2396,41 @@ export function gitAddNeedsQuestion(segment) {
       continue;
     }
     if (/[*?[\]]/.test(t) || t.startsWith(":")) return true;
+    const named = t.replace(/^(\.[\\/])+/, ""); // a leading ./ names the same file
+    if (path.isAbsolute(t) || named === "" || named.split(/[\\/]/).some((part) => part === "." || part === "..")) return true;
+    try { if (fs.statSync(path.resolve(base, t)).isDirectory()) return true; } catch { /* a deleted file: named */ }
   }
   return false;
 }
 
 // git commit -a / --all stages every tracked change: the same as `git add -u`.
+// A pathspec on the commit line (`git commit -m x .`, `-- src`) commits every tracked change under
+// it, like -a: any pathspec asks; files are staged by name with git add.
+const COMMIT_VALUE_OPTIONS = ["--message", "--file", "--reuse-message", "--reedit-message", "--author", "--date", "--cleanup", "--trailer", "--fixup", "--squash", "--template"];
 export function gitCommitStagesAll(segment) {
-  const parsed = extractGitSubcommandArgs(segment, "commit");
-  if (!parsed) return false;
-  for (const t of parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes)) {
-    if (t === "--") break;
-    if (/^--/.test(t) && longOptionIs(t, "--all")) return true;
-    // --amend rewrites a commit that may already be pushed (a later push then needs force)
-    if (/^--/.test(t) && longOptionIs(t, "--amend")) return true;
-    // a short cluster up to its first option that takes a value (-am "x": a, then m)
-    if (/^-[A-Za-z]+$/.test(t)) {
-      for (const ch of t.slice(1)) {
-        if (ch === "a") return true;
-        if ("mFCcSu".includes(ch)) break;
-      }
+  if (!extractGitSubcommandArgs(segment, "commit")) return false;
+  // the words themselves (a quoted message stays one word), from the word after `commit`
+  const words = commandWords(segment);
+  const tokens = words.slice(words.indexOf("commit") + 1);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--") return i + 1 < tokens.length; // pathspecs follow
+    if (/^--/.test(t)) {
+      if (longOptionIs(t, "--all") || longOptionIs(t, "--amend")) return true; // --amend rewrites a commit that may be pushed
+      if (!t.includes("=") && COMMIT_VALUE_OPTIONS.some((o) => longOptionIs(t, o))) i++;
+      continue;
     }
+    if (/^-./.test(t)) {
+      // a short cluster: letters until one that takes a value (the rest of the cluster, or the next word)
+      for (let k = 1; k < t.length; k++) {
+        const ch = t[k];
+        if (ch === "a") return true;
+        if ("mFCct".includes(ch)) { if (k === t.length - 1) i++; break; }
+        if ("Su".includes(ch)) break; // an optional value attached to the cluster
+      }
+      continue;
+    }
+    return true; // a pathspec
   }
   return false;
 }
@@ -2377,8 +2460,24 @@ export function gitPushNeedsQuestion(segment, cwd) {
   const branch = operands[1];
   if (!REMOTE_OR_BRANCH_RE.test(branch) || branch.includes(":") || branch.startsWith("+")) return true;
   if (/^(main|master)$/i.test(branch)) return true;
-  const ref = getCurrentBranchRef(parsed.dir ? path.resolve(cwd, parsed.dir) : cwd);
-  return ref !== `refs/heads/${branch}` || isRefOneOf(ref, ["main", "master"]);
+  const dir = parsed.dir ? path.resolve(cwd, parsed.dir) : cwd;
+  const ref = getCurrentBranchRef(dir);
+  if (ref !== `refs/heads/${branch}` || isRefOneOf(ref, ["main", "master"])) return true;
+  // git configuration can send `git push origin <B>` elsewhere: a configured push refspec or push
+  // URL of origin, or push.default upstream/tracking with an upstream of another name (a work
+  // branch made from origin/main tracks main). Any of these asks.
+  const config = (key) => {
+    try {
+      return execFileSync("git", ["config", "--get", key], { cwd: dir, timeout: GIT_READ_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    } catch { return ""; }
+  };
+  if (config("remote.origin.push") || config("remote.origin.pushurl")) return true;
+  const mode = config("push.default");
+  if (/^(upstream|tracking)$/i.test(mode)) {
+    const merge = config(`branch.${branch}.merge`);
+    if (merge && merge !== `refs/heads/${branch}`) return true;
+  }
+  return false;
 }
 
 export function classifyShellCommand(cmd, cwd) {
@@ -2393,6 +2492,10 @@ export function classifyShellCommand(cmd, cwd) {
   }
   const background = hasBackgroundJob(text);
   const createsWorkTree = segments.some(createsGitWorkTree);
+  // a part that makes links or work trees: the paths of the other parts were judged before it runs
+  const lineMakesLinks = segments.length > 1 && segments.some(makesLinksOrWorkTrees);
+  // a cd or a checkout moves where a commit or push of the same line runs
+  const lineMovesDir = segments.some((s) => /^(cd|pushd|popd)$/.test(commandWords(s)[0] ?? "") || movesHeadOrCreatesWorkTree(s));
   for (const body of shellBodies) segments.push(...expandSegments(splitCommandSegments(body)));
 
   for (const segment of segments) {
@@ -2424,7 +2527,7 @@ export function classifyShellCommand(cmd, cwd) {
     if (isUnreadableShellInput(segment, topLevel.length > 1)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     // `cat >(sh)`, `x <(bash)`: a shell inside a process substitution reads what it is fed
     if (processSubstitutions(segment).some((inner) => isUnreadableShellInput(inner, true))) return { decision: "ask", reason: ASK_REASONS.unreadable };
-    if (allowedCommandNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { noTempExemption: createsWorkTree })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
+    if (allowedCommandNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { noTempExemption: createsWorkTree || lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.readCommandWrites };
     if (setsDangerousEnvironment(segment)) return { decision: "ask", reason: ASK_REASONS.dangerousEnv };
     if (definesAlias(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isGitConfigOverride(segment)) return { decision: "ask", reason: ASK_REASONS.gitConfigOverride };
@@ -2435,10 +2538,11 @@ export function classifyShellCommand(cmd, cwd) {
     if (mentionsSecretFile(segment)) return { decision: "ask", reason: ASK_REASONS.secretFile };
     if (isPushToMain(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushMain };
     if (isCommitOnMain(segment, cwd) || isCommitOnProtectedBranch(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.commitMain };
-    if (gitCommitStagesAll(segment) || gitAddNeedsQuestion(segment)) return { decision: "ask", reason: ASK_REASONS.stageBroad };
+    if (gitCommitStagesAll(segment) || gitAddNeedsQuestion(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.stageBroad };
     if (gitPushNeedsQuestion(segment, cwd)) return { decision: "ask", reason: ASK_REASONS.pushNotOwnBranch };
-    if (scratchFileOpNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map())) return { decision: "ask", reason: ASK_REASONS.fileOpOutsideScratch };
-    if (pgControlNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map())) return { decision: "ask", reason: ASK_REASONS.pgControlNotTestCluster };
+    if (scratchFileOpNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.fileOpOutsideScratch };
+    if (pgControlNeedsQuestion(segment, variablesBefore.get(segment) ?? new Map(), { lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.pgControlNotTestCluster };
+    if (lineMovesDir && (extractGitSubcommandArgs(segment, "commit") || extractGitSubcommandArgs(segment, "push"))) return { decision: "ask", reason: ASK_REASONS.commitMain };
     if (isSwitchUserWrapper(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
     if (isDeployCommand(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };
     if (isMigrationRunner(segment)) return { decision: "ask", reason: ASK_REASONS.migration };
