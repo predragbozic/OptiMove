@@ -313,9 +313,11 @@ function athleteInWeeklyScopeSql(scope, alias, params) {
 
 // One athlete's answer of GET /weekly-plans from its row (exported for its
 // test). Outside the workspace: plannable false and nothing else. A plan the
-// caller may not open: `{ editable: false }` only (with today's rules an
-// athlete inside the workspace is always one the caller may open, so this is
-// a fail-closed branch).
+// caller may not open: `{ editable: false }` only. The branch is reachable:
+// when a role is revoked during the request, `req.authz` (read at the start)
+// still places the athlete in the workspace while `editable` reads the live
+// roles (PR #681's test 10). It is fail-closed: nothing of the plan but
+// `editable: false` is answered.
 export function weeklyPlansReadAnswer(row) {
   if (row.plannable !== true) return { athleteId: row.athlete_id, plannable: false };
   if (!row.plan_id) return { athleteId: row.athlete_id, plannable: true, plan: null };
