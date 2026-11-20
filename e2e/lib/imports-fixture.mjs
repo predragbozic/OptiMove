@@ -44,6 +44,17 @@ export function inventoryBundles(sourceTeam = 7001) {
   });
 }
 
+// v80 step C: the inventory sessions with a GPEXE details acceleration events count (different per athlete, so it can be
+// compared), under the team's default events setting (2.5 m/s² lasting 0.3 s).
+export function eventsBundles(sourceTeam = 7001) {
+  return inventoryBundles(sourceTeam).map((bundle) => {
+    for (const part of [bundle.details.full, ...Object.values(bundle.details.drills)]) {
+      Object.values(part.players).forEach((values, i) => { values.acceleration_events = { unit: "number", value: 14 + 3 * i }; });
+    }
+    return bundle;
+  });
+}
+
 // U6a-3: three sessions with only linked athletes (101..103), all Ready - the batch series scenario.
 export const SERIES_SESSIONS = [9111, 9112, 9113];
 export function seriesBundles(sourceTeam = 7001) {

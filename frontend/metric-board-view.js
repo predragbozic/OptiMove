@@ -214,8 +214,12 @@ function slotHtml(s, v, drag) {
   }
   // Empty.
   if (!v.placeable) {
-    // v80 step A: a variable with a condition says what it counts; no column of this board fills it yet.
-    const why = v.condition ? escapeHtml(`${conditionSentence(v.condition)} No column fills it yet.`)
+    // v80 step A: a variable with a condition says what it counts; no column of this board fills it yet. Step C2: when a
+    // column with the same setting waits only for the owner's confirmation of GPEXE's events setting, it says so.
+    const waiting = (v.waitingFieldIds || []).map((id) => columnOf(board, id)).filter(Boolean);
+    const why = v.condition && waiting.length
+      ? escapeHtml(`${conditionSentence(v.condition)} ${waiting.map((c) => cleanName(c.label)).join(", ")} has this setting and waits for GPEXE's setting to be confirmed in Source fields.`)
+      : v.condition ? escapeHtml(`${conditionSentence(v.condition)} No column fills it yet.`)
       : v.ownerScope === "system" ? "OptiMove does not fill this variable from a column of this session." : "A column cannot fill this variable.";
     return `<li class="mb-slot is-off">${head(why)}${unit}</li>`;
   }
@@ -223,7 +227,10 @@ function slotHtml(s, v, drag) {
   const sub = picked ? `Fill from ${name(picked.label)}` : drag ? "Empty · drag a column here" : "Empty · choose a column for it";
   // On a phone a column is chosen first and its variable in the sheet: the empty slot is not a control there.
   if (isPhone()) return `<li class="mb-slot is-empty"><div class="mb-slot-open">${head(sub)}${unit}</div></li>`;
-  return `<li class="mb-slot is-empty ${picked ? "is-target" : ""}" ${drag ? `data-mb-drop-variable data-variable-id="${escapeAttr(v.id)}"` : ""}>
+  // v80 step C2: a variable with a condition takes a drop only from the columns whose setting matches it (help only; the
+  // server judges the placement again).
+  const only = v.condition ? ` data-mb-only-fields="${escapeAttr((v.matchingFieldIds || []).join(","))}"` : "";
+  return `<li class="mb-slot is-empty ${picked ? "is-target" : ""}" ${drag ? `data-mb-drop-variable data-variable-id="${escapeAttr(v.id)}"${only}` : ""}>
     <button type="button" class="mb-slot-open" data-action="metric-board-place" data-variable-id="${escapeAttr(v.id)}" ${picked && !busy(s) ? "" : 'aria-disabled="true"'}
       aria-label="${escapeAttr(`${cleanName(v.label)}, ${v.unit || "no unit"}${picked ? `, fill from ${cleanName(picked.label)}` : ", empty"}`)}">${head(sub)}${unit}</button></li>`;
 }

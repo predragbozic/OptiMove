@@ -1418,6 +1418,12 @@ test("V80-4. a GPEXE events column: matched only after the owner confirmed the t
   const waiting = await get(`/fields/${fAcc.fieldId}`, W.pa);
   assert.deepEqual(ok(waiting).eventSetting, { event: "acceleration", revisionId: fAcc.revId, compared: true, sessionKept: true, confirmation: null });
   assert.equal((await detailOf(W.caA)).eventSetting.sessionKept, null, "a club admin never learns whether the compared session is kept");
+  // The security review's LOW-4: another club's admin (the compared session is club A's team). A source field is the shared
+  // catalog every club's admin reads in its own workspace, so the read answers it - with no signal of club A's session:
+  // sessionKept is null and nothing of the session's setting is in the answer.
+  const otherClub = await get(`/fields/${fAcc.fieldId}`, W.caB);
+  assert.deepEqual(ok(otherClub).eventSetting, { event: "acceleration", revisionId: fAcc.revId, compared: true, sessionKept: null, confirmation: null });
+  assert.equal(/\b2\.5\b|\b0\.3\b|teamThresholds|duration_seconds/.test(otherClub.text), false, otherClub.text);
   assert.equal(/\b2\.5\b|\b0\.3\b|teamThresholds|duration_seconds/.test(waiting.text), false, waiting.text);
   const waitingBoard = ok(await boardOf(W.caA, t, { candidateId: cand.id })).board;
   const accOnBoard = waitingBoard.variables.find((x) => x.id === acc.id);

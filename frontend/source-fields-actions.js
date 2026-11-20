@@ -11,6 +11,7 @@ import {
   confirmObservedField, fetchBoardTeams, fetchObservation, fetchObservations, observationReadText, observeOffered, openObserveForm, REREADS_OBSERVATION,
   fetchFields, fetchInventory, inventoryMatches, meaningActOffered, newRequestKey, openSourceFieldForm, outcomeUnknown, sourceFieldCodeText, sourceFieldsContext,
   sourceFieldsState, unitActOffered, verifyMeaning, verifyUnit,
+  confirmEventSetting, eventSettingConfirmedText, eventSettingFormOffered, openEventSettingForm,
 } from "./source-fields-data.js";
 
 const confirmAsk = (question) => Boolean(globalThis.window?.confirm?.(question));
@@ -67,6 +68,8 @@ export async function loadSourceField(id, render) {
     if (sourceFieldsState().generation !== generation || s.detail.id !== id) return;
     s.detail.field = data?.field || null;
     s.detail.verifications = Array.isArray(data?.verifications) ? data.verifications : [];
+    // v80 step C1: an events column's confirmation state (never GPEXE's own value; the server sends none).
+    s.detail.eventSetting = data?.eventSetting && typeof data.eventSetting === "object" ? data.eventSetting : null;
     // G1b-2: the field's comparisons on the board (route 10), for a platform admin only.
     if (sourceFieldsContext()?.mayVerify && s.detail.field) {
       try {
@@ -215,6 +218,12 @@ export function sourceFieldsMayBeLeft() {
     if (form.dirty) return confirmAsk("Discard the comparison you have not saved?");
     return true;
   }
+  if (form.act === "event") {
+    if (form.busy) return confirmAsk("GPEXE's setting is still being confirmed. Leave anyway? Its result will not be shown.");
+    if (form.unconfirmed) return confirmAsk("It is not known whether GPEXE's setting was confirmed. Leave without checking? Open the field later to see.");
+    if (form.dirty) return confirmAsk("Discard the numbers you have not confirmed?");
+    return true;
+  }
   if (form.busy) return confirmAsk("A confirmation is still being saved. Leave anyway? Its result will not be shown.");
   if (form.unconfirmed) return confirmAsk("The result of the last confirmation is not known. Leave without checking? Open the field later to see whether it was saved.");
   if (form.dirty) return confirmAsk("Discard the confirmation you have not saved?");
@@ -342,6 +351,7 @@ export async function handleSourceFieldsAction(action, { render }) {
     render();
     // Back where the form was opened from.
     if (form?.act === "observe") focus(`[data-action="source-fields-observe-open"][data-revision-id="${cssValue(form.revisionId)}"]`);
+    else if (form?.act === "event") focus(`[data-action="source-fields-event-open"]`);
     else if (form) focus(`[data-action="source-fields-act-open"][data-act="${form.act}"][data-revision-id="${form.revisionId}"]`);
     return true;
   }
@@ -393,6 +403,19 @@ export async function handleSourceFieldsAction(action, { render }) {
     const o = form?.observation;
     if (form?.act !== "observe" || !o || form.busy || form.unconfirmed || form.observationLoading || !(o.pair?.count > 1)) return true;
     await loadObservation(render, { pair: (o.pair.index + 1) % o.pair.count, candidateId: o.session.candidateId });
+    return true;
+  }
+  if (type === "source-fields-event-open") {
+    // v80 step C1: only what the view offers (a platform administrator, a compared column whose session is kept, no
+    // confirmation yet); not while the field on the screen may be out of date.
+    if (s.form || s.detail.loading || s.detail.error) return true;
+    const field = s.detail.field;
+    const es = s.detail.eventSetting;
+    if (!field || !eventSettingFormOffered(ctx, es)) return true;
+    s.notice = "";
+    s.form = openEventSettingForm({ field, eventSetting: es });
+    render();
+    focus('.source-fields-form [data-sf-field="thresholdValue"]');
     return true;
   }
   if (type === "source-fields-act-open") {
@@ -560,6 +583,7 @@ async function send(render) {
   try {
     data = form.act === "create" ? await createSourceField(form.sentBody)
       : form.act === "observe" ? await confirmObservedField(form.fieldId, form.revisionId, form.sentBody)
+      : form.act === "event" ? await confirmEventSetting(form.fieldId, form.revisionId, form.sentBody)
       : await (form.act === "unit" ? verifyUnit : verifyMeaning)(form.fieldId, form.revisionId, form.sentBody);
   } catch (error) {
     if (sourceFieldsState().generation !== generation || s.form !== form) return;
@@ -578,7 +602,9 @@ async function send(render) {
     focusNotice();
     return;
   }
-  const saved = form.act === "observe"
+  const saved = form.act === "event"
+    ? `${eventSettingConfirmedText({ event: form.event, confirmation: data?.confirmation ?? { thresholdValue: form.sentBody.thresholdValue, durationSeconds: form.sentBody.durationSeconds } })} The column can now fill a variable with this setting.`
+    : form.act === "observe"
     ? `The unit (${form.observation?.unit}, stated by GPEXE) and the meaning (GPEXE's own label) were saved from the comparison.`
     : form.act === "unit" ? "The unit was confirmed." : "The meaning was confirmed.";
   setNotice(s, `${saved}${data?.readError ? " It could not be read back; the field below is read again." : ""}`, "");

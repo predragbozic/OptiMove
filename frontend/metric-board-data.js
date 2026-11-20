@@ -269,7 +269,15 @@ export function placementRefusal(p, { column, variable } = {}) {
     if (code === "variable_hidden") return "This team's club hides this OptiMove variable. It must be shown in that club's Variables first.";
   }
   switch (code) {
+    // v80 step C2: the server's own sentence names both settings (the team's in GPEXE and the variable's).
+    case "team_setting_mismatch":
+      return typeof p.message === "string" && p.message ? p.message : `This column's setting in GPEXE is not what ${name} counts. Choose a variable with the same setting, or change the team's setting in GPEXE.`;
+    case "event_setting_not_confirmed":
+      return `This column waits for GPEXE's events setting to be confirmed in Source fields. Until then it fills no variable with a condition.`;
+    case "team_setting_missing":
+      return "OptiMove has no saved session of this team with GPEXE's team settings, so it cannot check that this column counts what the variable counts. Find new sessions first.";
     case "conversion_unavailable":
+      if (!p.sourceUnit || !p.targetUnit) return "OptiMove cannot compare this column's unit with the variable's.";
       return `The units do not match: GPEXE sends values in ${p.sourceUnit}, and the variable is in ${p.targetUnit}. Choose another variable or create a new one in a fitting unit.`;
     case "target_scope_mismatch": return "OptiMove does not fill this variable from this column. Choose another variable or create your own.";
     case "source_metric_target_taken": return "This column already fills another variable for your club. Change that in Mappings.";
