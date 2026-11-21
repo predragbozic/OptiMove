@@ -1,3 +1,4 @@
+import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // S1.1 26162ae: isolated JSON contracts. No routes, database or evaluator.
 const obj = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const en = (...values) => ({ enum: values });
@@ -33,8 +34,9 @@ export const displayModeSchema = union(tagged('mode', 'preserve'), tagged('mode'
 export const presentationModeSchema = union(tagged('mode', 'preserve'), tagged('mode', 'clear'), tagged('mode', 'replace', { value: presentationV1Schema }));
 export const editorDraftSchema = obj({ contractVersion: { const: 1 }, draftId: uuid, draftVersion: integer, title: str(200), metricRef: metricRefSchema, athleteSelection: athleteSelectionSchema, advancedFilter: obj({ activity: filterSelectionSchema, component: filterSelectionSchema }, []), periodIntent: periodIntentSchema, view: viewSchema, display: displayModeSchema, presentation: presentationModeSchema }, ['contractVersion', 'draftId', 'draftVersion', 'title', 'metricRef', 'athleteSelection', 'periodIntent', 'view']);
 export const runtimeFilterSchema = obj({ athleteIds: union({ type: 'null' }, { type: 'array', items: uuid, maxItems: 500, uniqueItems: true }), activityId: union({ type: 'null' }, uuid), componentId: union({ type: 'null' }, uuid) }, []);
+const shellFilterSchema = union({ type: 'null' }, obj({ clubIds: { type: 'array', items: uuid, maxItems: 200 }, teamIds: { type: 'array', items: uuid, maxItems: 200 }, athleteIds: { type: 'array', items: uuid, maxItems: 200 } }));
 const concretePeriod = obj({ dateFrom: date, dateTo: date, timeZone: { type: 'string', format: 'time-zone' } });
-export const contextSchema = union(tagged('kind', 'legacyDashboard', { runtimeFilter: runtimeFilterSchema, period: concretePeriod }, ['kind', 'period']), tagged('kind', 'page', { pageId: uuid, expectedPageDefaultsRevision: integer, runtimeFilter: runtimeFilterSchema, period: concretePeriod }, ['kind', 'pageId']));
+export const contextSchema = union(tagged('kind', 'legacyDashboard', { runtimeFilter: runtimeFilterSchema, shellFilter: shellFilterSchema, period: concretePeriod }, ['kind', 'period']), tagged('kind', 'page', { pageId: uuid, expectedPageDefaultsRevision: integer, runtimeFilter: runtimeFilterSchema, period: concretePeriod }, ['kind', 'pageId']));
 export const envelopeSchema = obj({ contractVersion: { const: 1 }, context: contextSchema, draftRef: obj({ draftId: uuid, draftVersion: integer }), draft: editorDraftSchema, editTarget: union({ type: 'null' }, obj({ widgetId: uuid, expectedWidgetRevision: integer })), expectedCatalogToken: str(200) }, ['contractVersion', 'context', 'draftRef', 'draft', 'editTarget']);
 export const schemas = Object.freeze({ context: contextSchema, envelope: envelopeSchema, runtimeFilter: runtimeFilterSchema, metricRef: metricRefSchema, athleteSelection: athleteSelectionSchema, filterSelection: filterSelectionSchema, periodConfig: periodConfigSchema, periodIntent: periodIntentSchema, view: viewSchema, displayV2: displayV2Schema, displayMode: displayModeSchema, presentationMode: presentationModeSchema, presentationV1: presentationV1Schema, chartInteractions: chartInteractionsSchema, yAxis: yAxisSchema, reference: referenceSchema, rule: ruleSchema, editorDraft: editorDraftSchema });
 function freezeTree(v) { if (v && typeof v === 'object' && !Object.isFrozen(v)) { Object.values(v).forEach(freezeTree); Object.freeze(v); } }
@@ -87,6 +89,8 @@ export function validateContract(name, value) {
   if (!jsonSafe(value)) return { valid: false, issues: [{ code: 'invalidJson', path: '$' }] };
   if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 65536) return { valid: false, issues: [{ code: 'payloadTooLarge', path: '$' }] };
   const issues = []; check(schemas[name], value, '$', issues);
+  const selection = name === 'envelope' ? value?.context?.shellFilter : name === 'context' ? value?.shellFilter : undefined;
+  try { normalizeShellFilter(selection); } catch { issues.push({ code: 'invalidRequest', path: '$.context.shellFilter' }); }
   const add = (code, path) => issues.push({ code, path });
   if (!issues.length) {
     if (name === 'envelope') {

@@ -1,3 +1,4 @@
+import { resolveShellCohort, intersectShellAthletes } from './dashboardShellFilter.js';
 // Training Load Analysis Dashboard — the real, set-based query engine.
 //
 // This replaces the disposable-DB design proof's own per-activity N+1
@@ -736,6 +737,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
   }
 
   async function runOne(spec) {
+    if (spec.shellConstrained && spec.athleteIds.length === 0) return { current: [], comparison: spec.comparisonPeriod ? [] : null, comparisonRange: spec.comparisonPeriod ? shiftDateRange(dateFrom, dateTo, spec.comparisonPeriod) : null };
     const groupBy = spec.groupBy || "day";
     const analyticalAggregation = spec.analyticalAggregation || "sum";
     // The 'athlete' data workspace ALWAYS narrows to that one athlete,
@@ -851,12 +853,13 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
 // dashboard" cost a small, range-and-filter-bounded number of queries
 // regardless of how many widgets/series it holds.
 // ------------------------------------------------------------
-export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo }, { defaultFilter, requestFilter, queryRunner = query } = {}) {
+export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo }, { defaultFilter, requestFilter, shellFilter = null, shellCohort, queryRunner = query } = {}) {
+  const cohort = shellCohort === undefined ? await resolveShellCohort(dataWorkspaceArgs, shellFilter, queryRunner) : shellCohort;
   const specs = [];
   const placeholders = [];
   for (const widget of widgetsWithSeries) {
     const effectiveFilter = mergeFilters(defaultFilter, requestFilter, widget.local_filter_override);
-    // athleteIds:[] is DELIBERATELY normalized the SAME as null/absent —
+    // Legacy athleteIds:[] is DELIBERATELY normalized the SAME as null/absent —
     // "no athlete restriction" — never "restrict to nothing" (merge-
     // readiness corrective round, finding #8). This is the ONE place
     // that decision is made; every downstream consumer (resolveFactsToRows,
@@ -865,9 +868,12 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
     // or `undefined` — never a distinguishable empty array — so the cache
     // key for []  and for "not provided" collapse to the exact same
     // filter context, never accidentally forking into two.
-    const athleteIds = Object.prototype.hasOwnProperty.call(effectiveFilter, "athleteIds")
+    const legacyAthleteIds = Object.prototype.hasOwnProperty.call(effectiveFilter, "athleteIds")
       && Array.isArray(effectiveFilter.athleteIds) && effectiveFilter.athleteIds.length > 0
       ? effectiveFilter.athleteIds : undefined;
+    // Shell intersection is independent of legacy precedence; unlike a legacy
+    // empty list, a constrained empty cohort must never mean unrestricted.
+    const athleteIds = intersectShellAthletes(legacyAthleteIds, cohort);
     const activityId = Object.prototype.hasOwnProperty.call(effectiveFilter, "activityId") ? (effectiveFilter.activityId ?? null) : null;
     const componentId = Object.prototype.hasOwnProperty.call(effectiveFilter, "componentId") ? (effectiveFilter.componentId ?? null) : null;
     for (const series of widget.series) {
@@ -881,7 +887,7 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
         dataScopeLevel: series.data_scope_level, aggregationRolePolicy: series.aggregation_role_policy,
         coveragePolicy: series.coverage_policy, sourcePolicy: series.source_policy, sourceConnectionId: series.source_connection_id,
         groupBy: widget.group_by, analyticalAggregation: series.analytical_aggregation, comparisonPeriod: series.comparison_period,
-        athleteIds, activityId, componentId,
+        athleteIds, activityId, componentId, shellConstrained: cohort !== null,
       });
     }
   }

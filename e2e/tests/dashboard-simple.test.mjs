@@ -195,3 +195,44 @@ for (const width of [360, 375, WIDTHS.phone, WIDTHS.desktop]) test('('+width+'px
     assert.match(await widget.innerText(),/Calculated/);assert.ok(!(await widget.innerText()).includes(numerator.id));assert.deepEqual(pageErrors,[]);
   }finally{await context.close();}
 });
+
+for(const width of [390,1280])test(`(${width}px) Dashboards applies and clears the shared shell union`,async()=>{
+  const {default:pg}=await import('pg');const client=new pg.Client({connectionString:world.databaseUrl});await client.connect();
+  const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',width);let releaseDelayed;
+  try {
+    const actor=world.accounts.find(a=>a.role==='platform_admin');
+    const activity=(await client.query("insert into training.activities(activity_type_key,name,occurred_local_date,started_at,timezone_snapshot,owner_scope,owner_club_id,origin,lifecycle_state,created_by_user_id) values('training_session','Browser shell','2026-11-03','2026-11-03T10:00:00Z','UTC','club',$1,'manual','confirmed',$2) returning id",[world.ids.clubA,actor.id])).rows[0].id;
+    for(const athlete of world.ids.athleteIds.slice(0,2))await client.query("insert into training.activity_participants(activity_id,athlete_id,local_date,timezone_snapshot,participation_status) values($1,$2,'2026-11-03','UTC','participated')",[activity,athlete]);
+    const d=await context.request.post(`${world.baseUrl}/api/training-load/dashboards`,{data:{name:`Shell ${width}`}});assert.equal(d.status(),201);const {dashboard}=await d.json();
+    const w=await context.request.post(`${world.baseUrl}/api/training-load/dashboards/${dashboard.id}/widgets`,{data:{expectedDashboardRevision:dashboard.revision,widgetType:'table',title:'Shell sessions',groupBy:'athlete',widgetOrder:0,x:0,y:0,width:6,height:4,mobileOrder:0}});assert.equal(w.status(),201,await w.text());const {widgetId}=await w.json();
+    const series=await context.request.post(`${world.baseUrl}/api/training-load/dashboards/${dashboard.id}/widgets/${widgetId}/series`,{data:{expectedWidgetRevision:1,seriesOrder:0,builtInSeriesKey:'session_count',dataScopeLevel:'day',analyticalAggregation:'sum'}});assert.equal(series.status(),201,await series.text());
+    await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();await page.getByRole('tab',{name:'Dashboards'}).click();await action(page,'analysis-open-picker').click();await page.locator(`[data-dashboard-id="${dashboard.id}"]`).first().click();
+    await page.locator('[data-action="training-load-analysis-period-from"]').fill('2026-11-01');
+    await page.locator('[data-action="training-load-analysis-period-to"]').fill('2026-11-07');
+    await action(page,'filter-open').click();
+    for(const [tab,kind,id] of [['clubs','club',world.ids.clubB],['teams','team',world.ids.teamA2],['athletes','athlete',world.ids.athleteIds[0]]]){
+      await page.locator(`[data-action="training-load-filter-set-tab"][data-filter-tab="${tab}"]`).click();
+      await page.locator(`[data-action="training-load-filter-toggle"][data-kind="${kind}"][data-id="${id}"]`).click();
+    }
+    const filtered=page.waitForResponse(r=>r.url().endsWith(`/${dashboard.id}/query`)&&r.request().method()==='POST');await action(page,'filter-confirm').click();const response=await filtered;assert.equal(response.status(),200,await response.text());
+    assert.deepEqual(response.request().postDataJSON().shellFilter,{clubIds:[world.ids.clubB],teamIds:[world.ids.teamA2],athleteIds:[world.ids.athleteIds[0]]});
+    const rows=(await response.json()).widgets[0].series[0].data.current;assert.equal(rows.length,1);assert.equal(rows[0].athleteId,world.ids.athleteIds[0]);
+    await page.getByText('Ana Example',{exact:true}).first().waitFor();
+    assert.equal(await page.getByText('Bojan Example',{exact:true}).count(),0);
+    await action(page,'filter-open').click();for(const [tab,kind] of [['clubs','club'],['teams','team'],['athletes','athlete']]){await page.locator(`[data-action="training-load-filter-set-tab"][data-filter-tab="${tab}"]`).click();await page.locator(`[data-action="training-load-filter-clear"][data-kind="${kind}"]`).click();}
+    const cleared=page.waitForResponse(r=>r.url().endsWith(`/${dashboard.id}/query`)&&r.request().method()==='POST');await action(page,'filter-confirm').click();const all=await cleared;assert.equal(all.request().postDataJSON().shellFilter,null);assert.equal((await all.json()).widgets[0].series[0].data.current.length,2);
+    let heldReady;const held=new Promise(resolve=>heldReady=resolve);let holding=false;
+    await page.route('**/api/training-load/dashboards/'+dashboard.id+'/query',async route=>{
+      if(!holding&&route.request().postDataJSON()?.shellFilter?.athleteIds?.length){holding=true;const response=await route.fetch();await new Promise(resolve=>{releaseDelayed=resolve;heldReady();});await route.fulfill({response});}else await route.continue();
+    });
+    await action(page,'filter-open').click();await page.locator('[data-action="training-load-filter-set-tab"][data-filter-tab="athletes"]').click();await page.locator('[data-action="training-load-filter-toggle"][data-kind="athlete"][data-id="'+world.ids.athleteIds[0]+'"]').click();
+    const late=page.waitForResponse(r=>r.url().endsWith('/'+dashboard.id+'/query')&&r.request().postDataJSON()?.shellFilter!==null);
+    await action(page,'filter-confirm').click();await held;
+    await action(page,'filter-open').click();await page.locator('[data-action="training-load-filter-clear"][data-kind="athlete"]').click();
+    const latest=page.waitForResponse(r=>r.url().endsWith('/'+dashboard.id+'/query')&&r.request().postDataJSON()?.shellFilter===null);await action(page,'filter-confirm').click();await latest;
+    await page.getByText('Bojan Example',{exact:true}).first().waitFor();releaseDelayed();await late;
+    await page.waitForFunction(()=>document.querySelectorAll('.tl-analysis-table tbody tr').length===2);
+    assert.equal(await page.getByText('Bojan Example',{exact:true}).count(),1);
+    assert.deepEqual(pageErrors,[]);
+  } finally {releaseDelayed?.();await client.end();await context.close();}
+});

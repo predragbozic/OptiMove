@@ -125,7 +125,7 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
   if (supportedPresentation && presentation?.chartComposition && (!charts.has(view.type) || !snapshot.capabilities.chartComposition.includes(presentation.chartComposition))) issue('unsupportedCapability', '$.presentation.chartComposition');
   if (supportedPresentation && (presentation?.chartInteractions && !charts.has(view.type) || presentation?.tableFormatting && view.type !== 'table')) issue('incompatiblePresentation', '$.presentation');
   if (supportedPresentation && !['day', 'week'].includes(view.groupBy) && (presentation?.chartInteractions?.zoom?.mode === 'local' || presentation?.chartInteractions?.zoom?.applyPeriodAction)) issue('temporalZoomRequired', '$.presentation.chartInteractions.zoom');
-  if (supportedPresentation && presentation?.chartComposition === 'athletes-v1' && effectiveFilter.athleteIds.length > 20) choices.push({ code: 'requiresChoice', path: '$.athleteSelection', reason: 'maxChartAthletes', limit: 20 });
+  if (supportedPresentation && presentation?.chartComposition === 'athletes-v1' && effectiveFilter.athleteIds.filter(id => context.shellCohort == null || context.shellCohort.includes(id)).length > 20) choices.push({ code: 'requiresChoice', path: '$.athleteSelection', reason: 'maxChartAthletes', limit: 20 });
   for (const [index, rule] of (supportedPresentation ? presentation?.tableFormatting?.rules ?? [] : []).entries()) {
     const path = `$.presentation.tableFormatting.rules[${index}]`;
     if (m.value_type !== 'numeric') issue('numericRuleRequired', path);

@@ -748,3 +748,17 @@ for (const [status, code] of [[400, 'invalid_json'], [413, 'body_too_large']]) {
     assert.equal(h.controller.model.pendingBody, null);
   });
 }
+
+test('shell selection is a distinct preview context and a change invalidates saving', async()=>{
+  const h=harness();h.context={...h.context,shellFilter:{clubIds:['club-a'],teamIds:[],athleteIds:[]}};
+  await ready(h);await h.controller.preview();
+  assert.deepEqual(h.of('preview').at(-1).body.context.shellFilter,h.context.shellFilter);
+  assert.equal(h.of('preview').at(-1).body.context.runtimeFilter.shellFilter,undefined);
+  h.context={...h.context,shellFilter:{clubIds:[],teamIds:['team-b'],athleteIds:[]}};
+  await h.controller.save();assert.equal(h.of('save').length,0);assert.match(h.controller.model.saveError,/filters changed/);
+});
+
+test('a preview shell-limit refusal gives a plain next step',async()=>{
+  const h=harness();h.context={...h.context,shellFilter:{clubIds:[],teamIds:[],athleteIds:Array.from({length:201},(_,i)=>`athlete-${i}`)}};await ready(h);
+  h.reply('preview',()=>Promise.reject(apiError(400,'invalidRequest')));await h.controller.preview();assert.equal(h.controller.model.error,'Close the editor and choose at most 200 clubs, teams and athletes.');
+});
