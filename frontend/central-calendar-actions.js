@@ -38,6 +38,8 @@ import {
   centralCalendarServerKinds,
   centralCalendarShownData,
   loadCentralCalendar,
+  centralCalendarChosenAthlete,
+  loadCentralCalendarAthlete,
   loadCentralCalendarDay,
   loadCentralCalendarKinds,
   newCentralCalendarRequestKey,
@@ -48,6 +50,14 @@ import {
   updateCentralCalendarEvent,
   writeCentralCalendarWeekMode,
 } from "./central-calendar-data.js";
+import {
+  centralCalendarWeeklySwitcher,
+  chooseCentralCalendarTeam,
+  handleCentralCalendarK6Action,
+  handleCentralCalendarK6Input,
+  handleCentralCalendarK6Keydown,
+  revealCentralCalendarAthlete,
+} from "./central-calendar-athletes.js";
 import {
   centralCalendarCatalogOf,
   changeCentralCalendarFields,
@@ -146,7 +156,7 @@ export function captureCentralCalendarView(root) {
     }
   }
   const focus = !field && inside && active?.dataset?.action
-    ? { action: active.dataset.action, key: active.dataset.key || "", date: active.dataset.date || "", teamId: active.dataset.teamId || "", kind: active.dataset.kind || "", eventKind: active.dataset.eventKind || "", view: active.dataset.view || "", mode: active.dataset.mode || "" }
+    ? { action: active.dataset.action, key: active.dataset.key || "", date: active.dataset.date || "", teamId: active.dataset.teamId || "", kind: active.dataset.kind || "", eventKind: active.dataset.eventKind || "", view: active.dataset.view || "", mode: active.dataset.mode || "", athleteKey: active.dataset.athleteKey || "", label: active.getAttribute?.("aria-label") || "" }
     : null;
   return { scroll, focus, field, panelScroll };
 }
@@ -185,6 +195,7 @@ export function restoreCentralCalendarView(root, snapshot) {
     }
   }
   revealCentralCalendarShowOnly(root);
+  revealCentralCalendarAthlete(root);
   if (!snapshot) return;
   const panel = root.querySelector?.(".cc-panel");
   if (panel && snapshot.panelScroll) panel.scrollTop = snapshot.panelScroll;
@@ -207,8 +218,16 @@ export function restoreCentralCalendarView(root, snapshot) {
   // The sheet's backdrop shares the close action with the Close button and
   // comes first in the markup: never the element to give the focus back to.
   const selector = [`[data-action="${cssValue(focus.action)}"]:not(.cc-sheet-backdrop)`];
-  for (const [name, value] of [["key", focus.key], ["date", focus.date], ["team-id", focus.teamId], ["kind", focus.kind], ["event-kind", focus.eventKind], ["view", focus.view], ["mode", focus.mode]]) {
+  for (const [name, value] of [["key", focus.key], ["date", focus.date], ["team-id", focus.teamId], ["kind", focus.kind], ["event-kind", focus.eventKind], ["view", focus.view], ["mode", focus.mode], ["athlete-key", focus.athleteKey]]) {
     if (value) selector.push(`[data-${name}="${cssValue(value)}"]`);
+  }
+  // K6: the strip's ‹ and › carry the next pill's key, so after a step the arrow pressed is found by its label.
+  if (focus.action === "central-calendar-k6-athlete" && /^(Previous|Next) athlete$/.test(focus.label)) {
+    const arrow = root.querySelector?.(`.cc-k6 [data-action="central-calendar-k6-athlete"][aria-label="${focus.label}"]`);
+    if (arrow && !arrow.disabled) {
+      arrow.focus?.({ preventScroll: true });
+      return;
+    }
   }
   // Show only's All pill is the one with an empty kind: named, so the focus never depends on the pills' order.
   if (focus.action === "central-calendar-show-only" && !focus.kind) selector.push('[data-kind=""]');
@@ -273,6 +292,15 @@ async function typesChanged(cal, before, render) {
   const after = centralCalendarServerKinds(cal.filters);
   if (after !== before && cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) cal.panel = closedPanel();
   render?.();
+  // K6: a chosen athlete's cards come from her read, which carries the kinds.
+  if (after !== before && centralCalendarChosenAthlete(cal)) {
+    await loadCentralCalendarAthlete({ render });
+    if (cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
+      cal.panel = closedPanel();
+      render?.();
+    }
+    return;
+  }
   if (after && after !== before) {
     await loadCentralCalendarKinds({ render, closeMissing: false });
     if (cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
@@ -1881,6 +1909,7 @@ function handleQuestionStepInput(target, render) {
 }
 
 export function handleCentralCalendarInput(target, { render } = {}) {
+  if (handleCentralCalendarK6Input(target, { render })) return true;
   if (target?.closest?.("[data-cc-question-step]")) return handleQuestionStepInput(target, render);
   if (!target?.closest?.("[data-cc-event-form]")) return false;
   const cal = state.centralCalendar;
@@ -1962,8 +1991,9 @@ function handleShowOnlyArrows(event) {
 // app.js's keydown on the content: Enter in the athlete search finds, it
 // never submits the event form (HTML's implicit submission would create or
 // save the event before the athletes are chosen).
-export function handleCentralCalendarKeydown(event) {
+export function handleCentralCalendarKeydown(event, { render } = {}) {
   if (handleShowOnlyArrows(event)) return true;
+  if (handleCentralCalendarK6Keydown(event, { render })) return true;
   if (event?.key !== "Enter" || !event.target?.matches?.("[data-cc-event-athlete-search]")) return false;
   event.preventDefault();
   // A phone's Search key: the keyboard goes away so the filtered list shows.
@@ -2097,10 +2127,15 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     focusCard(key);
     return true;
   }
+  // K6 (contract 2.2, Q1): a Groups chip, now in the switcher box, chooses one team; the chosen one again is All
+  // groups.
   if (type === "central-calendar-toggle-team") {
     const teamId = action.dataset.teamId || "";
-    if (teamId) toggleValue(cal.filters.teamIds, teamId);
-    render?.();
+    if (teamId) await chooseCentralCalendarTeam(cal, cal.filters.teamIds[0] === teamId ? "" : teamId, { render });
+    return true;
+  }
+  if (type.startsWith("central-calendar-k6-")) {
+    await handleCentralCalendarK6Action(type, action, { render, openWeeklyPlanForAthleteOnDate });
     return true;
   }
   // K5-2 *Show only* (contract 2.5): one kind at a time - a tap on another pill switches straight over, All (or the
@@ -2128,8 +2163,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === "central-calendar-all-groups") {
-    cal.filters.teamIds = [];
-    render?.();
+    await chooseCentralCalendarTeam(cal, "", { render });
     return true;
   }
   if (type === "central-calendar-all-types") {
@@ -2145,7 +2179,11 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === "central-calendar-clear-filters") {
+    const hadAthlete = Boolean(centralCalendarChosenAthlete(cal));
     cal.filters = { teamIds: [], kinds: [], eventKinds: [] };
+    // K6 (F2): Clear filters clears the chosen athlete too.
+    if (cal.k6) cal.k6.athleteId = "";
+    if (hadAthlete && cal.panel.open && !cal.form) cal.panel = closedPanel();
     render?.();
     return true;
   }
@@ -2329,7 +2367,8 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     if (!athleteUuid || !isIsoDate(date)) return true;
     const rosterAthleteId = centralCalendarRosterAthleteId(athleteUuid);
     if (!rosterAthleteId) return true;
-    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date);
+    // K6-2: the plan carries the switcher of the calendar's strip.
+    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date, { switcher: centralCalendarWeeklySwitcher(cal, athleteUuid) });
     return true;
   }
   return false;

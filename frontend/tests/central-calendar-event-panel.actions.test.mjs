@@ -481,7 +481,9 @@ test("P7. the row opens the athlete's Weekly plan on the day; 'Weekly plan ›' 
   assert.match(cyra.textContent, /Not in this workspace's roster/);
   const opened = [];
   await act({ action: ben.dataset.action, athleteId: ben.dataset.athleteId, date: ben.dataset.date }, { openWeeklyPlanForAthleteOnDate: async (...args) => opened.push(args) });
-  assert.deepEqual(opened, [["R-2", EV_DAY]]);
+  assert.deepEqual(opened.map((args) => args.slice(0, 2)), [["R-2", EV_DAY]]);
+  // K6-2: the plan carries the calendar's switcher, roster athletes only.
+  assert.ok(opened[0][2].switcher.athletes.every((athlete) => athlete.key.startsWith("R-")), "only roster ids");
 });
 
 // --- P8: nothing of it outside a manager's event -----------------------------------

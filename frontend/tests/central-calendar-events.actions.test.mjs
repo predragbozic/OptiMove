@@ -313,7 +313,9 @@ test("2a. More filters starts collapsed with one summary line; the chips are in 
   assert.equal(toggle.querySelector(".cc-filters-summary").textContent, "All groups · all event types");
   assert.equal(doc.querySelector("#ccFiltersBody .cc-showonly"), null, "Show only stays in view, outside the folded part");
   assert.ok(doc.querySelector("#ccFiltersBody").hasAttribute("hidden"));
-  assert.ok(doc.querySelector('#ccFiltersBody [data-action="central-calendar-toggle-team"]'), "the chips stay in the markup");
+  // K6 (contract 2.2): the Groups chips moved into the team and athlete switcher box, drawn once.
+  assert.equal(doc.querySelector('#ccFiltersBody [data-action="central-calendar-toggle-team"]'), null, "no Groups row in the Filters panel");
+  assert.ok(doc.querySelector('.cc-k6 [data-action="central-calendar-toggle-team"]'), "the Groups chips are in the switcher box");
   await act({ action: "central-calendar-toggle-filters" });
   doc = dom();
   assert.equal(doc.querySelector('[data-action="central-calendar-toggle-filters"]').getAttribute("aria-expanded"), "true");
@@ -321,13 +323,14 @@ test("2a. More filters starts collapsed with one summary line; the chips are in 
   await act({ action: "central-calendar-toggle-team", teamId: U19 });
   await act({ action: "central-calendar-show-only", kind: "event" });
   assert.equal(dom().querySelector(".cc-filters-summary").textContent, "U19 · all event types", "the kind is the Show only row's");
+  // K6 (Q1): one team at a time - another chip switches over.
   await act({ action: "central-calendar-toggle-team", teamId: U17 });
   await act({ action: "central-calendar-toggle-team", teamId: U13 });
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "match" });
-  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · Match");
+  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "U13 · Match");
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "meeting" });
   await act({ action: "central-calendar-toggle-event-kind", eventKind: "camp" });
-  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "3 groups · 3 event types");
+  assert.equal(dom().querySelector(".cc-filters-summary").textContent, "U13 · 3 event types");
   assert.equal(rangeReads(calls).length, 1, "no chip sends a request");
 });
 
@@ -425,13 +428,13 @@ test("3a. a phone's day: the per-team row (every team, 0 included), the timed ca
   // K5-2 (E4): the "No time" split is the cards'; the day's chips (the activity) follow them all.
   assert.deepEqual(order, ["planned:batch-1", "[No time]", `event:${E_MEETING}:${DAY(0)}`, "activity:act-1"], "a slot counts as a time; the untimed keep their order");
   assert.ok(list.querySelector('.cc-daychip[data-key="activity:act-1"]'), "the activity is a chip after the cards");
-  // The Groups chips choose the teams the row names; one team alone would
-  // only repeat the day's count.
+  // The Groups chips choose the team the row names; one team alone would
+  // only repeat the day's count. K6 (Q1): one team at a time, the chosen one
+  // again is All groups.
   await act({ action: "central-calendar-toggle-team", teamId: U17 });
-  await act({ action: "central-calendar-toggle-team", teamId: U13 });
-  assert.deepEqual([...dom().querySelectorAll(".cc-day-teams .cc-team-pill-name")].map((node) => node.textContent), ["U17 · 0 items", "U13 · 0 items"]);
-  await act({ action: "central-calendar-toggle-team", teamId: U13 });
   assert.equal(dom().querySelector(".cc-day-teams"), null);
+  await act({ action: "central-calendar-toggle-team", teamId: U17 });
+  assert.deepEqual([...dom().querySelectorAll(".cc-day-teams .cc-team-pill-name")].map((node) => node.textContent), ["U19 · 3 items", "U17 · 0 items", "U13 · 0 items"]);
 });
 
 test("3b. the strip: one team-colour dot per team with a visible card that day, named in the day's label", async () => {

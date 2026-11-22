@@ -32,6 +32,7 @@ import {
   renderImportBlockIconButton,
 } from "./builder-structure.js";
 import { els } from "./dom.js";
+import { renderAthleteSwitcherStripHtml } from "./athlete-switcher.js";
 import { renderImage } from "./media.js";
 import { state } from "./state.js";
 import {
@@ -118,8 +119,6 @@ export function renderBuilderBatchHiddenNote(hiddenCount) {
 export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
   if (!batchPlans.length || currentIndex < 0) return "";
   const current = batchPlans[currentIndex];
-  const previous = batchPlans[currentIndex - 1];
-  const next = batchPlans[currentIndex + 1];
   // A reopened, published plan (an edit draft) saves to this athlete only (the
   // server does not sync an edit draft's batch), so it offers no
   // "Apply changes to all athletes" checkbox.
@@ -135,24 +134,16 @@ export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
         <small data-builder-batch-status role="status" aria-live="polite" hidden></small>
       </div>
       <div class="builder-batch-controls">
-        <div class="builder-batch-buttons">
-          <button class="plain-button icon-button" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(previous?.id || "")}" ${previous ? "" : "disabled"} aria-label="Previous athlete"><span class="button-icon">&lt;</span></button>
-          <div class="builder-batch-pills">
-            ${batchPlans.map((plan, index) => {
-              const name = plan.athleteName || plan.name || "Program copy";
-              const parts = name.trim().split(/\s+/);
-              const caption = parts.length > 1 ? `${parts[0]} ${parts.at(-1)[0]}.` : name;
-              const athlete = state.athletes.find((row) => String(row.athlete_id) === String(plan.athleteId));
-              const image = athlete?.athlete_image_url || athlete?.image_url;
-              return `
-              <button class="builder-batch-pill ${index === currentIndex ? "is-active" : ""}" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(plan.id)}" title="${escapeAttr(name)}" aria-label="${escapeAttr(name)}" aria-pressed="${index === currentIndex}">
-                <span class="builder-batch-avatar"><span>${escapeHtml(initialsFor(name))}</span>${image ? renderImage(image, "builder-batch-photo") : ""}</span>
-                <span class="builder-batch-caption">${escapeHtml(caption)}</span>
-              </button>
-            `; }).join("")}
-          </div>
-          <button class="plain-button icon-button" type="button" data-action="builder-open-batch-plan" data-plan-id="${escapeAttr(next?.id || "")}" ${next ? "" : "disabled"} aria-label="Next athlete"><span class="button-icon">&gt;</span></button>
-        </div>
+        ${renderAthleteSwitcherStripHtml({
+          items: batchPlans.map((plan) => {
+            const athlete = state.athletes.find((row) => String(row.athlete_id) === String(plan.athleteId));
+            return { key: plan.id, name: plan.athleteName || plan.name || "Program copy", imageUrl: athlete?.athlete_image_url || athlete?.image_url };
+          }),
+          currentKey: current.id,
+          action: "builder-open-batch-plan",
+          keyAttr: "data-plan-id",
+          wrapArrows: false,
+        })}
         <div class="builder-batch-mode">
           ${isEditDraft ? `<small data-builder-batch-edit-note>Changes go to this athlete only.</small>` : `
           <label class="builder-batch-sync">

@@ -1,5 +1,6 @@
 import { calendarColorIndex, calendarTeamColorIndexes } from "./calendar-colors.js";
-import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_SHOW_ONLY, centralCalendarShownData, centralCalendarTeamLabel } from "./central-calendar-data.js";
+import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_SHOW_ONLY, centralCalendarCardFilters, centralCalendarChosenAthlete, centralCalendarShownData, centralCalendarTeamLabel } from "./central-calendar-data.js";
+import { renderCentralCalendarAthleteLineHtml, renderCentralCalendarEachAthleteHtml, renderCentralCalendarPanelAthleteNoteHtml, renderCentralCalendarSwitcherHtml } from "./central-calendar-athletes.js";
 import {
   centralCalendarCatalogOf,
   renderCentralCalendarEventDetailsHtml,
@@ -650,16 +651,9 @@ function renderFiltersHtml(cal, counts, teams) {
   // the green line's Show all (one button per question).
   const active = (filters.teamIds?.length || 0) + (filters.eventKinds?.length || 0) > 0;
   const open = Boolean(cal.filtersOpen);
-  const groups = teams.length
-    ? `<div class="cc-chip-row" role="group" aria-label="Groups">
-        <span class="cc-chip-row-label">Groups</span>
-        ${renderChipHtml({ action: "central-calendar-all-groups", label: "All groups", count: counts.total, active: !filters.teamIds.length })}
-        ${teams.map((team) => renderChipHtml({
-          action: "central-calendar-toggle-team", dataAttr: "data-team-id", value: team.teamId, label: centralCalendarTeamLabel(team),
-          count: counts.teams.get(team.teamId) || 0, active: filters.teamIds.includes(team.teamId), style: teamColorStyle(team.teamId, teams), dot: true,
-        })).join("")}
-      </div>`
-    : "";
+  // K6 (contract 2.2): the Groups chips moved into the team and athlete switcher box (central-calendar-athletes.js),
+  // drawn there once, wherever the answer has more than one team; the Filters panel keeps the event types.
+  const groups = "";
   const eventKinds = CENTRAL_CALENDAR_EVENT_KINDS.filter((kind) => counts.eventKinds.get(kind) || filters.eventKinds.includes(kind));
   const eventTypes = eventKinds.length
     ? `<div class="cc-chip-row" role="group" aria-label="Event types">
@@ -670,8 +664,13 @@ function renderFiltersHtml(cal, counts, teams) {
         })).join("")}
       </div>`
     : "";
+  // K6 (F2): while an athlete is chosen, one green line names her, her team and the *Show only* kind.
+  const only = (filters.kinds || [])[0] || "";
+  const line = centralCalendarChosenAthlete(cal)
+    ? renderCentralCalendarAthleteLineHtml(cal, { showOnlyLabel: only ? CENTRAL_CALENDAR_SHOW_ONLY_LABELS[only] || only : "" })
+    : renderShowOnlyLineHtml(cal, counts);
   return `<div class="cc-filters${open ? " is-open" : ""}">
-      ${renderShowOnlyLineHtml(cal, counts)}
+      ${line}
       ${renderShowOnlyHtml(cal, counts)}
       <div class="cc-filters-bar">
         <button type="button" class="cc-filters-toggle" data-action="central-calendar-toggle-filters" aria-expanded="${open ? "true" : "false"}" aria-controls="ccFiltersBody">
@@ -801,7 +800,7 @@ function dayHeadHtml(date, today, count, { button = true } = {}) {
 // short type line (centralCalendarShortKindLabel).
 function renderWeekColumnsHtml(days, byDate, cal, teams, today, layout = "") {
   const columns = days.map((date) => {
-    const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
+    const items = centralCalendarVisibleItems(byDate.get(date), centralCalendarCardFilters(cal));
     return `<section class="cc-day-column${date === today ? " is-today" : ""}" aria-label="${escapeAttr(centralCalendarLongDate(date))}">
         ${dayHeadHtml(date, today, items.length)}
         ${items.length || !gpsMarkFor(cal, date) ? `<div class="cc-day-cards">${renderDayCardsHtml(items, teams, cal.panel.key, today, { shortKind: layout === "wide" })}</div>` : ""}
@@ -820,7 +819,7 @@ function hourOf(item) {
 // slot-only cards; a card sits at its start hour with one fixed height (the
 // start is the only time K1 knows - no end, no duration).
 function renderWeekGridHtml(days, byDate, cal, teams, today) {
-  const visible = new Map(days.map((date) => [date, centralCalendarVisibleItems(byDate.get(date), cal.filters)]));
+  const visible = new Map(days.map((date) => [date, centralCalendarVisibleItems(byDate.get(date), centralCalendarCardFilters(cal))]));
   let start = DAY_GRID_START_HOUR;
   let end = DAY_GRID_END_HOUR;
   for (const items of visible.values()) {
@@ -866,7 +865,7 @@ function renderStripHtml(days, byDate, cal, today, teams) {
   const selected = days.includes(cal.selectedDate) ? cal.selectedDate : days[0];
   return `<div class="cc-strip" role="group" aria-label="Select a day">
       ${days.map((date) => {
-        const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
+        const items = centralCalendarVisibleItems(byDate.get(date), centralCalendarCardFilters(cal));
         const count = items.length;
         const isSelected = date === selected;
         const allIds = centralCalendarDayTeamIds(items, teams);
@@ -889,7 +888,8 @@ function renderStripHtml(days, byDate, cal, today, teams) {
 // the Groups chips choose some. One team alone would only repeat the day's
 // count: no row then.
 function renderDayTeamsHtml(items, cal, teams) {
-  const shown = cal.filters.teamIds.length ? teams.filter((team) => cal.filters.teamIds.includes(team.teamId)) : teams;
+  const cardTeamIds = centralCalendarCardFilters(cal).teamIds;
+  const shown = cardTeamIds.length ? teams.filter((team) => cardTeamIds.includes(team.teamId)) : teams;
   if (shown.length < 2) return "";
   return `<ul class="cc-day-teams" role="list" aria-label="Per group on this day">
       ${shown.map((team) => {
@@ -915,7 +915,7 @@ function renderDayListCardsHtml(items, teams, openKey, today, emptyText, emptyAc
 }
 
 function renderSelectedDayListHtml(date, byDate, cal, teams, today, { heading = true } = {}) {
-  const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
+  const items = centralCalendarVisibleItems(byDate.get(date), centralCalendarCardFilters(cal));
   const filtered = centralCalendarFiltersActive(cal.filters);
   const emptyText = filtered ? "Nothing matches these filters on this day." : "Nothing on this day.";
   // A filtered empty day offers the one way back: the same Clear filters as the filter bar.
@@ -938,7 +938,7 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
   const selected = days.includes(cal.selectedDate) ? cal.selectedDate : cal.anchor;
   const phone = layout === "phone";
   const cell = (date) => {
-    const items = centralCalendarVisibleItems(byDate.get(date), cal.filters);
+    const items = centralCalendarVisibleItems(byDate.get(date), centralCalendarCardFilters(cal));
     const classes = ["cc-month-cell"];
     if (date.slice(0, 7) !== monthIso) classes.push("is-outside");
     if (date === today) classes.push("is-today");
@@ -972,11 +972,14 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
 
 function renderBodyHtml(cal, layout, today) {
   if (!cal.data) return renderStateHtml(cal);
+  // K6 (contract 2.5): the chosen athlete's cards come only from her read - its loading or error state meanwhile,
+  // never everyone's cards.
+  if (!centralCalendarShownData(cal)) return renderStateHtml(cal.k6?.athleteError ? { error: cal.k6.athleteError } : {});
   const teams = cal.data.teams || [];
   const byDate = centralCalendarItemsByDate(centralCalendarShownData(cal));
   const days = centralCalendarDisplayedDays(cal.view, cal.anchor);
   // A GPS mark (K5-4) is something to show too: a week or month with one never reads as empty.
-  const anyVisible = days.some((date) => centralCalendarVisibleItems(byDate.get(date), cal.filters).length > 0 || Boolean(gpsMarkFor(cal, date)));
+  const anyVisible = days.some((date) => centralCalendarVisibleItems(byDate.get(date), centralCalendarCardFilters(cal)).length > 0 || Boolean(gpsMarkFor(cal, date)));
   const scope = cal.view === "month" ? "this month" : cal.view === "day" ? "on this day" : "this week";
   // A month with nothing to show says so once: a phone then skips the
   // selected day's own "Nothing on this day." under the grid.
@@ -1000,7 +1003,9 @@ function renderPanelAthletesHtml(item, cal, roster) {
   // still needs an attendance state is the Roster tab's knowledge (K1a
   // gives no per-athlete roster state), so the head says what the list is.
   const recorded = item.kind === "activity" && Boolean(item.attendance);
-  const head = `<h4 class="cc-panel-subtitle">${recorded ? "Recorded athletes" : "Athletes"}${count ? ` (${count})` : ""}</h4>`;
+  // K6 (Q5): while an athlete is chosen the list is hers, and the note offers the item's everyone again.
+  // K6-3: See each athlete (a manager) or Open the week (a reader), above the list it steps through.
+  const head = `<h4 class="cc-panel-subtitle">${recorded ? "Recorded athletes" : "Athletes"}${count ? ` (${count})` : ""}</h4>${renderCentralCalendarPanelAthleteNoteHtml(cal)}${renderCentralCalendarEachAthleteHtml(cal, item)}`;
   if (panel.loading) return `${head}<p class="cc-panel-note" role="status">Loading athletes…</p>`;
   if (panel.error === "changed") return `${head}<p class="cc-panel-note">This item has changed since the calendar was loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry">Refresh the calendar</button>`;
   if (panel.error) return `${head}<p class="cc-panel-note">Athlete names could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry-athletes">Try again</button>`;
@@ -1481,6 +1486,7 @@ export function renderCentralCalendarHtml(cal, { today, layout = "wide", roster 
   return `<section class="central-calendar cc-layout-${escapeAttr(layout)} cc-view-${escapeAttr(cal.view)}${panelOpen ? " cc-panel-open" : ""}" aria-label="Calendar">
       ${layout === "wide" ? renderK2c3FormBandHtml(cal.form) : ""}
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
+      ${cal.view === "week" || cal.view === "day" || cal.view === "month" ? renderCentralCalendarSwitcherHtml(cal, { counts, layout }) : ""}
       ${renderFiltersHtml(cal, counts, teams)}
       ${cal.refreshError ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.refreshError)} <button type="button" class="plain-button cc-inline-button" data-action="central-calendar-retry">Try again</button></p>` : ""}
       ${cal.notice ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.notice)}</p>` : ""}

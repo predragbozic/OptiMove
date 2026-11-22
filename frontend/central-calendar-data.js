@@ -9,7 +9,9 @@ import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./vie
 // Central calendar (K1b) - the reads of GET /api/calendar, the K1a read API
 // (docs/ai/central-calendar-k1-plan.md). One request per visible range,
 // never a filter parameter (the chips filter the answer in memory, plan
-// decision A) - except `kinds` while only non-event kinds are chosen (FE-D16,
+// decision A) - except one chosen athlete (K6, central-calendar-k6-contract.md
+// 2.5: `athleteIds`, a read of its own whose cards are hers, so the numbers on
+// them are her own) and `kinds` while only non-event kinds are chosen (FE-D16,
 // a second read, below) - and one extra read of a single day with include=athletes
 // when the item panel needs names. Both go through view-cache.js'
 // loadCachedView with a context key of account + workspace + range + the
@@ -48,6 +50,8 @@ export function centralCalendarTeamLabel(team) {
 let rangeGeneration = 0;
 let kindsGeneration = 0;
 let dayGeneration = 0;
+let athleteGeneration = 0;
+let organizationGeneration = 0;
 
 // The days one request covers: a month is its grid of whole weeks (35 or 42
 // days, under the API's cap of 62); a week and a day are the Monday-to-Sunday
@@ -64,19 +68,38 @@ export function centralCalendarRange(view, anchor) {
 }
 
 // FE-D16 (central-calendar-k2b2-plan.md 9.4): a read with `kinds` has its own key; the unfiltered read keeps its key.
-export function centralCalendarContextKey(from, to, today, kinds = "") {
-  return buildContextKey([...currentUserWorkspaceContextParts(), from, to, today, ...(kinds ? ["kinds", kinds] : [])]);
+// K6 (central-calendar-k6-contract.md 2.5): a read of one athlete adds `athlete:<uuid>`, the same way.
+export function centralCalendarContextKey(from, to, today, kinds = "", athleteId = "") {
+  return buildContextKey([...currentUserWorkspaceContextParts(), from, to, today, ...(kinds ? ["kinds", kinds] : []), ...(athleteId ? ["athlete", athleteId] : [])]);
 }
 
-function dayContextKey(date, today, kinds = "") {
-  return buildContextKey([...currentUserWorkspaceContextParts(), date, today, ...(kinds ? ["kinds", kinds] : [])]);
+function dayContextKey(date, today, kinds = "", athleteId = "") {
+  return buildContextKey([...currentUserWorkspaceContextParts(), date, today, ...(kinds ? ["kinds", kinds] : []), ...(athleteId ? ["athlete", athleteId] : [])]);
 }
 
-export function centralCalendarUrl(from, to, today, { includeAthletes = false, kinds = "" } = {}) {
+// K6: `athleteIds` alone narrows the answer to one athlete. It never goes with `clubIds` or `teamIds`: the server's
+// filter is a union inside the scope (calendarAthleteFilterSql), so a team sent with the athlete would widen it.
+export function centralCalendarUrl(from, to, today, { includeAthletes = false, kinds = "", athleteIds = "" } = {}) {
   const params = new URLSearchParams({ from, to, today });
   if (kinds) params.set("kinds", kinds);
+  if (athleteIds) params.set("athleteIds", athleteIds);
   if (includeAthletes) params.set("include", "athletes");
   return `/api/calendar?${params.toString()}`;
+}
+
+// K6 (contract 2.5): the athlete the calendar shows, or "". Only an athlete of the rail roster (state.athletes, the
+// server's roster scope) is ever chosen: a remembered id that left the roster, and any choice in the platform
+// workspace (no roster there, Q2), count as Everyone, so a stale id is never sent.
+export function centralCalendarChosenAthlete(cal) {
+  const id = String(cal?.k6?.athleteId || "");
+  if (!id || cal?.data?.workspace?.type === "platform") return "";
+  return (state.athletes || []).some((athlete) => String(athlete?.athlete_uuid || "") === id) ? id : "";
+}
+
+// The filters the cards are drawn with: while an athlete is chosen the Groups choice scopes only the strip (Q3), so a
+// club-wide event of hers is never hidden.
+export function centralCalendarCardFilters(cal) {
+  return centralCalendarChosenAthlete(cal) ? { ...cal.filters, teamIds: [] } : cal?.filters;
 }
 
 // FE-D16 (central-calendar-k2b2-plan.md 9.4): without `event` in `kinds` the server folds nothing into an event,
@@ -95,11 +118,26 @@ export function centralCalendarServerKinds(filters) {
 // The answer the cards and the open panel are drawn from: the kinds read while it is the one asked for and covers
 // the range on screen, else the unfiltered answer (which also carries the teams, the workspace, the events of the
 // link suggestions and the chips' counts).
-export function centralCalendarShownData(cal) {
+// K6 (contract 2.5): while an athlete is chosen, the most specific athlete read that covers the range (kinds +
+// athlete, else athlete), and never the unfiltered answer: null while it loads or failed, so the grid shows the
+// calendar's loading or error state, never everyone's cards under "Showing …".
+export function centralCalendarShownSource(cal) {
   const kinds = centralCalendarServerKinds(cal?.filters);
+  const inRange = (answer) => Boolean(answer && cal.data && answer.data?.from === cal.data.from && answer.data?.to === cal.data.to);
+  const athleteId = centralCalendarChosenAthlete(cal);
+  if (athleteId) {
+    const answers = cal.k6?.answers || {};
+    if (inRange(answers[`${athleteId}|${kinds}`])) return { data: answers[`${athleteId}|${kinds}`].data, kinds, athleteId };
+    if (kinds && inRange(answers[`${athleteId}|`])) return { data: answers[`${athleteId}|`].data, kinds: "", athleteId };
+    return { data: null, kinds, athleteId };
+  }
   const answer = cal?.kindsAnswer;
-  if (kinds && answer && cal.data && answer.kinds === kinds && answer.data?.from === cal.data.from && answer.data?.to === cal.data.to) return answer.data;
-  return cal?.data || null;
+  if (kinds && answer && answer.kinds === kinds && inRange(answer)) return { data: answer.data, kinds, athleteId: "" };
+  return { data: cal?.data || null, kinds: "", athleteId: "" };
+}
+
+export function centralCalendarShownData(cal) {
+  return centralCalendarShownSource(cal).data;
 }
 
 // A plan saved or deleted in the Builder changes the planned cards of its
@@ -143,6 +181,10 @@ export function resetCentralCalendarForWorkspaceChange() {
   rangeGeneration += 1;
   kindsGeneration += 1;
   dayGeneration += 1;
+  // K6: the chosen athlete and team, the search, the organization pairs and every athlete answer go with the state;
+  // a read of the workspace left is dropped by its generation.
+  athleteGeneration += 1;
+  organizationGeneration += 1;
 }
 
 export function readCentralCalendarWeekMode() {
@@ -203,8 +245,139 @@ function closePanelMissingFrom(cal, data) {
 export async function loadCentralCalendar({ render, forceRefresh = false } = {}) {
   const result = await loadCentralCalendarRange({ render, forceRefresh });
   const cal = state.centralCalendar;
-  if (cal?.data && centralCalendarServerKinds(cal.filters)) await loadCentralCalendarKinds({ render, forceRefresh });
+  // K6: the cards of a chosen athlete come from her own read (which carries the kinds), so the kinds read of
+  // everyone is not needed for them. A remembered athlete no longer in the roster is dropped first.
+  if (cal?.data) dropStaleCentralCalendarAthlete(cal);
+  if (cal?.data && centralCalendarChosenAthlete(cal)) await loadCentralCalendarAthlete({ render, forceRefresh });
+  else if (cal?.data && centralCalendarServerKinds(cal.filters)) await loadCentralCalendarKinds({ render, forceRefresh });
+  if (cal?.data) void loadCentralCalendarOrganization({ render });
   return result;
+}
+
+// K6 (contract 2.5, F2): the remembered choice is checked against the current roster (and the team against the
+// answer's teams) before the first read that would use it; what is no longer there is dropped, so Everyone is used.
+export function dropStaleCentralCalendarAthlete(cal) {
+  const k6 = cal?.k6;
+  if (!k6) return;
+  if (k6.athleteId && !centralCalendarChosenAthlete(cal)) k6.athleteId = "";
+  const teamIds = new Set((cal.data?.teams || []).map((team) => String(team.teamId)));
+  if ((cal.filters?.teamIds || []).some((id) => !teamIds.has(String(id)))) cal.filters.teamIds = cal.filters.teamIds.filter((id) => teamIds.has(String(id)));
+}
+
+export function emptyCentralCalendarK6State() {
+  return { athleteId: "", search: "", searchIndex: -1, boxOpen: false, answers: {}, athleteLoading: false, athleteError: "", organization: { status: "idle", pairs: [] } };
+}
+
+export function centralCalendarK6(cal) {
+  if (!cal.k6) cal.k6 = emptyCentralCalendarK6State();
+  return cal.k6;
+}
+
+// K6 (contract 2.5): the read of one athlete for the range on screen, with the kinds while *Show only* asks for them.
+export async function loadCentralCalendarAthlete({ render, forceRefresh = false } = {}, { retried = false } = {}) {
+  const cal = state.centralCalendar;
+  const athleteId = centralCalendarChosenAthlete(cal);
+  if (!athleteId || !cal.data) return null;
+  const k6 = centralCalendarK6(cal);
+  const kinds = centralCalendarServerKinds(cal.filters);
+  const today = localDateIso();
+  const range = centralCalendarRange(cal.view, cal.anchor);
+  const generation = ++athleteGeneration;
+  const contextKey = centralCalendarContextKey(range.from, range.to, today, kinds, athleteId);
+  const current = () => generation === athleteGeneration && state.centralCalendar === cal && centralCalendarChosenAthlete(cal) === athleteId;
+  k6.athleteError = "";
+  const result = await loadCachedView({
+    namespace: CENTRAL_CALENDAR_NAMESPACE,
+    contextKey,
+    forceRefresh,
+    fetcher: () => api(centralCalendarUrl(range.from, range.to, today, { kinds, athleteIds: athleteId })),
+    showLoading: () => {
+      if (!current()) return;
+      k6.athleteLoading = true;
+      render?.();
+    },
+    applyData: (data) => {
+      if (!current()) return;
+      k6.answers[`${athleteId}|${kinds}`] = { data };
+      k6.athleteLoading = false;
+      k6.athleteError = "";
+      closePanelMissingFrom(cal, data);
+      render?.();
+    },
+    applyError: (error) => {
+      if (!current()) return;
+      k6.athleteLoading = false;
+      const described = describeCentralCalendarError(error);
+      // Her cards already on screen (a refresh of the same range): one note. Nothing of hers yet: the error state.
+      if (centralCalendarShownData(cal)) cal.refreshError = `${described.message} Showing the last loaded calendar.`;
+      else k6.athleteError = described.message;
+      render?.();
+    },
+    getCurrentContextKey: () => {
+      const now = state.centralCalendar;
+      const nowAthlete = centralCalendarChosenAthlete(now);
+      if (!nowAthlete) return "";
+      const nowRange = centralCalendarRange(now.view, now.anchor);
+      return centralCalendarContextKey(nowRange.from, nowRange.to, localDateIso(), centralCalendarServerKinds(now.filters), nowAthlete);
+    },
+  });
+  if (!current()) return result;
+  if ((result?.outcome === "invalidated-stale" || result?.outcome === "stale-ignored") && !retried) return loadCentralCalendarAthlete({ render, forceRefresh }, { retried: true });
+  if (result?.outcome === "background-refresh-failed") {
+    cal.refreshError = "Could not refresh. Showing the last loaded calendar.";
+    render?.();
+  }
+  if (k6.athleteLoading && result?.outcome === "stale-ignored") {
+    k6.athleteLoading = false;
+    render?.();
+  }
+  return result;
+}
+
+// K6 (contract 2.3): who is in which of the workspace's teams, for a club admin's grouping only. GET /api/organization
+// (already read in this workspace by Training Load's filter, the Tests picker and the Builder's picker) is reduced on
+// arrival to { athleteUuid, teamId } pairs: an active team membership, a team of the calendar answer's teams, an
+// athlete of the roster. Nothing else of the answer is kept anywhere. Read once per workspace, in a club only.
+export function reduceCentralCalendarOrganization(answer, { teamIds, rosterUuids }) {
+  const pairs = [];
+  const seen = new Set();
+  for (const athlete of Array.isArray(answer?.athletes) ? answer.athletes : []) {
+    const athleteUuid = String(athlete?.id || "");
+    if (!athleteUuid || !rosterUuids.has(athleteUuid)) continue;
+    for (const membership of Array.isArray(athlete?.memberships) ? athlete.memberships : []) {
+      const teamId = String(membership?.teamId || "");
+      if (membership?.membershipType !== "team" || membership?.status !== "active" || !teamIds.has(teamId)) continue;
+      const key = `${athleteUuid}|${teamId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({ athleteUuid, teamId });
+    }
+  }
+  return pairs;
+}
+
+export async function loadCentralCalendarOrganization({ render, force = false } = {}) {
+  const cal = state.centralCalendar;
+  if (cal?.data?.workspace?.type !== "club") return;
+  // Nothing to group without a roster (it may still be loading): read once there is one.
+  if (!(state.athletes || []).some((athlete) => athlete?.athlete_uuid)) return;
+  const k6 = centralCalendarK6(cal);
+  const org = k6.organization;
+  if (!force && (org.status === "ready" || org.status === "loading")) return;
+  const generation = ++organizationGeneration;
+  const current = () => generation === organizationGeneration && state.centralCalendar === cal;
+  k6.organization = { status: "loading", pairs: [] };
+  try {
+    const answer = await api("/api/organization");
+    if (!current()) return;
+    const teamIds = new Set((cal.data?.teams || []).map((team) => String(team.teamId)));
+    const rosterUuids = new Set((state.athletes || []).map((athlete) => String(athlete?.athlete_uuid || "")).filter(Boolean));
+    k6.organization = { status: "ready", pairs: reduceCentralCalendarOrganization(answer, { teamIds, rosterUuids }) };
+  } catch {
+    if (!current()) return;
+    k6.organization = { status: "failed", pairs: [] };
+  }
+  render?.();
 }
 
 // FE-D16: the read of the chosen kinds for the range on screen (after the unfiltered one), under its own key.
@@ -485,8 +658,11 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
   if (!panel.open || !panel.key || !panel.date) return;
   const { key, date } = panel;
   const today = localDateIso();
-  // The day is read the way its cards were (FE-D16): a card only the kinds read shows is found there.
-  const kinds = centralCalendarShownData(cal) === cal.data ? "" : centralCalendarServerKinds(cal.filters);
+  // The day is read the way its cards were (FE-D16): a card only the kinds read shows is found there. K6: with the
+  // chosen athlete too (Q5), unless the panel's *Show everyone* asked for the item without her.
+  const source = centralCalendarShownSource(cal);
+  const kinds = source.kinds;
+  const athleteIds = panel.everyone ? "" : source.athleteId;
   const generation = ++dayGeneration;
   panel.loading = true;
   panel.error = "";
@@ -495,9 +671,9 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
   const current = () => generation === dayGeneration && state.centralCalendar === cal && cal.panel.open && cal.panel.key === key;
   await loadCachedView({
     namespace: CENTRAL_CALENDAR_DAY_NAMESPACE,
-    contextKey: dayContextKey(date, today, kinds),
+    contextKey: dayContextKey(date, today, kinds, athleteIds),
     forceRefresh,
-    fetcher: () => api(centralCalendarUrl(date, date, today, { includeAthletes: true, kinds })),
+    fetcher: () => api(centralCalendarUrl(date, date, today, { includeAthletes: true, kinds, athleteIds })),
     applyData: (data) => {
       if (!current()) return;
       const item = findCentralCalendarItem(data, key);
@@ -518,7 +694,7 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
     },
     getCurrentContextKey: () => {
       const open = state.centralCalendar.panel;
-      return open.open ? dayContextKey(open.date, localDateIso(), kinds) : "";
+      return open.open ? dayContextKey(open.date, localDateIso(), kinds, athleteIds) : "";
     },
   });
 }
