@@ -7,6 +7,7 @@
 // week, not a weekday: "Day 1" lands on the date the coach assigns from).
 // No schema change: block_type has no check constraint, and every copy path
 // (copyProgramTree, the edit draft, block copy) already carries it.
+import { createHash } from "node:crypto";
 import { copyBuilderSessionContents } from "./builderTreeBatch.js";
 
 export const WEEKLY_BLOCK_TYPE = "template_week_day";
@@ -65,6 +66,51 @@ export async function renumberTemplateWeeks(client, planId, order) {
   );
 }
 
+// ---- dates ---------------------------------------------------------------
+
+export function isoDate(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const date = new Date(`${raw}T12:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== raw) return null;
+  return raw;
+}
+export function addDays(iso, days) {
+  const date = new Date(`${iso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+export function mondayOf(iso) {
+  const date = new Date(`${iso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
+}
+// 1 = Monday .. 7 = Sunday, the weekly plans' day_order.
+export const weekdayOf = (iso) => ((new Date(`${iso}T12:00:00Z`).getUTCDay() + 6) % 7) + 1;
+
+// Where each template day lands from `startDate`: template day k (0-based, in
+// week order) on startDate + k, in the weekly plan of that date's Monday.
+export function placeTemplateDays(days, startDate) {
+  return [...days]
+    .sort((a, b) => Number(a.block_index) - Number(b.block_index))
+    .map((day) => {
+      const date = addDays(startDate, Number(day.block_index) - 1);
+      return { sourceDayId: day.id, blockIndex: Number(day.block_index), date, weekStart: mondayOf(date), weekday: weekdayOf(date), dayNote: day.day_note || null };
+    });
+}
+
+// The choice token: a hash of everything the coach was shown, so a resend
+// after anything changed is asked again instead of written.
+export function assignChoiceToken(classified) {
+  const canonical = classified
+    .map((entry) => [entry.athleteUuid, entry.weekStart, entry.kind, entry.planId || "", entry.planStatus || "", entry.cannot || "",
+      (entry.days || []).join(","), [...(entry.sessionIds || [])].sort().join(","),
+      (entry.kept || []).map((k) => `${k.sessionId}:${k.reasons.join("+")}`).sort().join(",")].join("|"))
+    .sort()
+    .join("\n");
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+}
+
 // Copies the sessions of template days into weekly-plan days, with fresh
 // logical ids (the column default), session_order after `orderOffset` of the
 // target day, and their node / item trees. `pairs`: [{ sourceDayId,
@@ -80,7 +126,7 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
   const values = [];
   const params = [];
   let column = 0;
-  // After kept sessions (an offset), each copied session is numbered 1..n in
+  // After kept sessions (pair.afterKept, offset = the highest kept order), each copied session is numbered 1..n in
   // its day and slot (half-day, phase) in its own order, then shifted past the
   // kept ones: never the order of a kept session, and never two copies with
   // one order even from a legacy source ordered NULL and 1. Without an offset
@@ -91,7 +137,7 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
     const slot = `${session.plan_day_id}|${session.am_pm ?? ""}|${session.bta ?? ""}`;
     rank.set(slot, (rank.get(slot) || 0) + 1);
     const row = [pair.targetDayId, session.am_pm, session.bta, session.session_time,
-      Number(pair.orderOffset) > 0 ? rank.get(slot) + Number(pair.orderOffset) : session.session_order,
+      pair.afterKept ? rank.get(slot) + Number(pair.orderOffset || 0) : session.session_order,
       session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);

@@ -44,7 +44,7 @@ export function handleAthleteFilter(input) {
   }
   const empty = scope.querySelector("[data-athlete-filter-empty]");
   if (empty) empty.hidden = !input.value.trim() || count > 0;
-  const toggle = scope.querySelector('[data-action="builder-toggle-select-all-athletes"]');
+  const toggle = scope.querySelector('[data-action="builder-toggle-select-all-athletes"], [data-athlete-select-all]');
   if (toggle) {
     const visible = [...scope.querySelectorAll("[data-athlete-filter-row]")].filter((row) => !row.hidden);
     const checked = visible.length > 0 && visible.every((row) => row.classList.contains("is-selected"));

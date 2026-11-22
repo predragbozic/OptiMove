@@ -63,7 +63,8 @@ test("1. the week strip: one template week on screen, Day 1..Day 7, no add-block
   assert.equal(content().querySelector(".builder-add-block-card"), null);
   assert.equal(content().querySelector('[data-builder-form="update-block"]'), null);
   assert.equal(content().querySelector('[data-action="builder-delete-block"]'), null);
-  // Never the specific-program copy (the dated assign comes with WT-B).
+  // The template's Assign is the dated assign, never the specific-program copy.
+  assert.ok(content().querySelector('[data-action="builder-tw-assign-open"]'));
   assert.equal(content().querySelector('[data-action="builder-duplicate-plan"][data-intent="assign"]'), null);
   await handleWeeklyTemplateAction(button("builder-tw-select-week", { week: "2" }), handlers);
   assert.match(text(), /W2 Tue/);

@@ -101,6 +101,7 @@ import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn,
 import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { handleWeeklyTemplateAction } from "./builder-weekly-template-actions.js";
+import { handleWeeklyAssignAction, updateWeeklyAssignStartDate } from "./builder-weekly-assign-actions.js";
 import { handleSaveWeeksAction, updateSaveWeeksName } from "./builder-weekly-save-actions.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
@@ -1394,6 +1395,11 @@ function handleContentInput(event) {
   }
 
   // Weekly program templates (builder-weekly-template-actions.js).
+  const twStartDate = event.target.closest("[data-tw-start-date]");
+  if (twStartDate) {
+    updateWeeklyAssignStartDate(twStartDate);
+    return;
+  }
   const twSaveName = event.target.closest("[data-tw-save-name]");
   if (twSaveName) {
     updateSaveWeeksName(twSaveName);
@@ -4724,6 +4730,7 @@ async function handleBuilderAction(action) {
     // K2c-3: the events row, Event: [▾], Create event → (builder-events-row.js).
     if (await handleBuilderEventsAction(action)) return;
     if (await handleWeeklyTemplateAction(action, { renderBuilder, flushBuilderAutosaves })) return;
+    if (await handleWeeklyAssignAction(action, { renderBuilder, flushBuilderAutosaves })) return;
     if (await handleSaveWeeksAction(action, { renderBuilder, flushBuilderAutosaves })) return;
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
     if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly })) return;
