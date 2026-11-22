@@ -20,6 +20,8 @@ const TODAY = iso(new Date());
 const MONDAY = (() => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return iso(d); })();
 const OTHER = TODAY === addDays(MONDAY, 6) ? addDays(MONDAY, 5) : addDays(TODAY, 1);
 const PAST = TODAY === MONDAY ? null : addDays(TODAY, -1);
+// On a Sunday OTHER is the Saturday, which is also PAST: three items' dates, two distinct days.
+const DAYS_WITH_SOMETHING = new Set([TODAY, OTHER, PAST].filter(Boolean)).size;
 
 const event = ({ id, date, title, eventKind = "training", eventTypeLabel = "Training", startTime = "10:00", endTime = "11:30", cancelled = false, sessions = null, place = { source: "library", name: "North field", address: "1 Field Road", note: null } }) => ({
   key: `event:${id}:${date}`, kind: "event", date, title, eventKind, eventTypeLabel, eventTypeIconKey: null, eventTypeColorKey: null,
@@ -113,7 +115,7 @@ for (const width of [1280, 390, 375, 360]) {
       assert.deepEqual([byTitle["Tactical session"].cancelled, byTitle["Tactical session"].buttons, byTitle["Tactical session"].sessions], [true, [], []]);
       for (const card of look.cards) assert.ok(card.buttons.filter((b) => b.endsWith("*")).length <= 1, `one primary: ${card.title}`);
       assert.match(look.labels[TODAY], / · today$/, "today's day is marked");
-      assert.equal(Object.keys(look.labels).length, PAST ? 3 : 2, "only days that have something");
+      assert.equal(Object.keys(look.labels).length, DAYS_WITH_SOMETHING, "only days that have something");
       assert.equal(look.overflow, 0, "no horizontal scroll");
       assert.deepEqual(look.small, [], "44 px targets");
       assert.ok(await a.page.$$eval(".athlete-calendar a.cc-maps", (links) => links.every((l) => l.getBoundingClientRect().height >= 43.5)), "Open in maps is a 44 px target");

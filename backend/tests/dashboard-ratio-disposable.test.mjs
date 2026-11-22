@@ -192,3 +192,25 @@ test('ratio query casts scale to integer before min aggregation',async()=>{
   const [result]=await run({dataWorkspaceType:'team',dataWorkspaceScopeId:org.teamId,dateFrom:'2026-09-14',dateTo:'2026-09-14'},[reviewSpec()],{queryRunner:(sql,params)=>{if(sql.includes('jsonb_to_recordset')){checked=true;assert.match(sql,/min\(\(calculation->>'scale'\)::int\)/);}return client.query(sql,params);}});
   assert.equal(checked,true);assert.equal(result.status,'ok');
 });
+
+// v79 enforces complete coverage on persisted ratios. Inject a future canonical
+// exclusion at the read boundary; keep the real stored ratio and SQL lookup intact.
+// This proves SQL cannot re-admit a stored ratio rejected by canonical policy.
+test('a policy-excluded stored ratio with eligible input is left out, never a value', async()=>{
+  const [result]=await run({dataWorkspaceType:'team',dataWorkspaceScopeId:org.teamId,dateFrom:'2026-09-14',dateTo:'2026-09-14'},[{...reviewSpec(),coveragePolicy:'complete_only'}],{queryRunner:async(sql,params)=>{
+    const answer=await client.query(sql,params);
+    if(sql.includes('cross join lateral training.canonical_activity_results'))for(const row of answer.rows)if(row.detail?.metricDefinitionId===ratio.id)row.detail={...row.detail,coverage:'unknown'};
+    return answer;
+  }});
+  assert.equal(result.status,'ok',JSON.stringify(result));assert.deepEqual(result.data.current,[]);assert.deepEqual(result.coverage,{includedOccasions:0,leftOutOccasions:3});
+});
+
+test('shell narrows ratio pooling and independent coverage alongside built-in series',async()=>{
+  const {queryDashboard}=await import('../src/trainingLoadDashboardQuery.js');
+  const ratioWidget={id:'ratio-widget',widget_type:'table',group_by:'cohort',local_filter_override:{},series:[{id:'ratio-series',resolution_status:'resolved',metric_definition_id:ratio.id,data_scope_level:'session',analytical_aggregation:'ratio',aggregation_role_policy:'all_including_derived',source_policy:'all_with_conflicts'}]};
+  const builtinWidget={id:'builtin-widget',widget_type:'table',group_by:'athlete',local_filter_override:{},series:[{id:'builtin-series',resolution_status:'resolved',built_in_series_key:'session_count',data_scope_level:'day',analytical_aggregation:'sum'}]};
+  const workspace={dataWorkspaceType:'team',dataWorkspaceScopeId:org.teamId},period={dateFrom:'2026-09-14',dateTo:'2026-09-14'};
+  const result=await queryDashboard(workspace,[ratioWidget,builtinWidget],period,{shellFilter:{clubIds:[],teamIds:[],athleteIds:[org.athleteIds[0]]},queryRunner:(sql,p)=>client.query(sql,p)});
+  assert.equal(result[0].series[0].data.current[0].value,10);assert.deepEqual(result[0].series[0].coverage,{includedOccasions:1,leftOutOccasions:0});assert.ok(result[1].series[0].data.current.every(r=>r.athleteId===org.athleteIds[0]));
+  const none=await queryDashboard(workspace,[ratioWidget,builtinWidget],period,{shellFilter:{clubIds:[],teamIds:[],athleteIds:[]},queryRunner:(sql,p)=>client.query(sql,p)});assert.ok(none.every(w=>w.series.every(s=>s.data.current.length===0)));
+});

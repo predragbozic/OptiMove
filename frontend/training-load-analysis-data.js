@@ -134,15 +134,20 @@ function detailContextKey(dashboardId) {
   return buildContextKey([...currentUserWorkspaceContextParts(), dashboardId, dashboard?.revision || ""]);
 }
 
+export function analysisShellFilterPayload(filter = state.trainingLoad.filter) {
+  const shell = Object.fromEntries(["clubIds", "teamIds", "athleteIds"].map(key => [key, [...new Set((filter?.[key] ?? []).map(id => id.toLowerCase()))].sort()]));
+  return Object.values(shell).some(ids => ids.length) ? shell : null;
+}
+
 export function analysisRuntimeFilterPayload(filter = state.trainingLoad.analysis.runtimeFilter) {
-  const payload = {};
+  const payload = { shellFilter: analysisShellFilterPayload() };
   if (Array.isArray(filter.athleteIds) && filter.athleteIds.length) payload.athleteIds = filter.athleteIds;
   if (Object.prototype.hasOwnProperty.call(filter, "activityId")) payload.activityId = filter.activityId || null;
   if (Object.prototype.hasOwnProperty.call(filter, "componentId")) payload.componentId = filter.componentId || null;
   return payload;
 }
 
-function queryContextKey() {
+function queryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
   const a = state.trainingLoad.analysis;
   const widgetRevisions = (a.widgets || []).map((w) => `${w.id}:${w.revision}`).join(",");
   return buildContextKey([
@@ -152,7 +157,7 @@ function queryContextKey() {
     widgetRevisions,
     a.period.dateFrom,
     a.period.dateTo,
-    JSON.stringify(analysisRuntimeFilterPayload()),
+    JSON.stringify(runtimePayload),
   ]);
 }
 
@@ -297,14 +302,17 @@ export async function queryAnalysisDashboard(onPainted, { force = false } = {}) 
   if (!a.selectedDashboardId || !a.dashboard || a.dashboard.status === "archived" || a.dashboard.is_template) return;
   ensureAnalysisPeriod();
   const generation = ++queryGeneration;
-  const contextKey = queryContextKey();
+  const runtimePayload = analysisRuntimeFilterPayload();
+  const requestBody = JSON.stringify({ dateFrom: a.period.dateFrom, dateTo: a.period.dateTo, ...runtimePayload });
+  const contextKey = queryContextKey(runtimePayload);
+  if (a.queryContextKey !== contextKey) { a.queryResult = null; a.queryError = ""; a.queryContextKey = contextKey; }
   await loadCachedView({
     namespace: DASHBOARD_QUERY_NAMESPACE,
     contextKey,
     forceRefresh: force,
     fetcher: () => api(`/api/training-load/dashboards/${encodeURIComponent(a.selectedDashboardId)}/query`, {
       method: "POST",
-      body: JSON.stringify({ dateFrom: a.period.dateFrom, dateTo: a.period.dateTo, ...analysisRuntimeFilterPayload() }),
+      body: requestBody,
     }),
     showLoading: () => { a.queryLoading = true; a.queryError = ""; onPainted?.(); },
     applyData: (data) => {
@@ -317,7 +325,8 @@ export async function queryAnalysisDashboard(onPainted, { force = false } = {}) 
     applyError: (error) => {
       if (generation !== queryGeneration || queryContextKey() !== contextKey) return;
       a.queryLoading = false;
-      a.queryError = error.status === 409 && error.message === "dashboardArchived" ? "This dashboard is archived." : (error.message || "Could not run dashboard query.");
+      const shellCount = Object.values(runtimePayload.shellFilter ?? {}).reduce((n, ids) => n + ids.length, 0);
+      a.queryError = error.status === 400 && shellCount > 200 ? 'Choose at most 200 clubs, teams and athletes in the filter.' : error.status === 409 && error.message === "dashboardArchived" ? "This dashboard is archived." : (error.message || "Could not run dashboard query.");
       onPainted?.();
     },
     getCurrentContextKey: queryContextKey,

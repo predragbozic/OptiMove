@@ -11,7 +11,8 @@
     "production-static-serving.test.mjs": "disposable",
     "rpe-answer-change-v83-rehearsal-guards.test.mjs": "unit",
     "session-types-v85-rehearsal-guards.test.mjs": "unit",
-    "source-metric-access-7a-context.test.mjs": "unit"
+    "source-metric-access-7a-context.test.mjs": "unit",
+    "dashboard-shell-filter-disposable.test.mjs": "disposable"
   },
   "kindOverrideNotes": {
     "dashboard-simple-s3a-integration.test.mjs": "db.js is replaced by node:test module mocking before service/runtime imports; all database clients are in-memory fixtures and HTTP requests use a temporary loopback server",
@@ -24,7 +25,8 @@
     "rpe-answer-change-v83-rehearsal-guards.test.mjs": "imports backend/scripts/rpe-answer-change-v83-rehearsal.mjs only for its pure guards (parseArgs, assertOwnName, urlFor, falseOkColumns); the script connects only when invoked as a command, so no database connection is opened",
     "session-types-v85-rehearsal-guards.test.mjs": "imports backend/scripts/session-types-v85-rehearsal.mjs only for its pure guards (parseArgs, assertOwnName, urlFor); the script connects only when invoked as a command, and the bash wrapper is run with a non-loopback host it refuses before node starts, so no database connection is opened",
     "production-static-serving.test.mjs": "spawns the real src/server.js in production mode, whose /api/health runs select now(); it needs a reachable local server and nothing else, so it runs with the maintenance database as its target and creates nothing",
-    "source-metric-access-7a-context.test.mjs": "imports sourceMetricAccess.js (its authz.js and workspace.js import db.js) with an unreachable loopback URL solely to construct the lazy pool; pool.query and pool.connect are replaced before the import with fail-fast counters and asserted unused; the resolver is called with an explicit workspace and a fake read, so no database connection"
+    "source-metric-access-7a-context.test.mjs": "imports sourceMetricAccess.js (its authz.js and workspace.js import db.js) with an unreachable loopback URL solely to construct the lazy pool; pool.query and pool.connect are replaced before the import with fail-fast counters and asserted unused; the resolver is called with an explicit workspace and a fake read, so no database connection",
+    "dashboard-shell-filter-disposable.test.mjs": "Real HTTP server and uniquely named disposable PostgreSQL database via the e2e world; never a shared/unit DB test."
   },
   "fileOptions": {},
   "knownFailures": [
@@ -43,15 +45,6 @@
       "messagePattern": "^a real platform_admin row must grant the full-visibility bypass regardless of role_hint",
       "since": "2026-10-11",
       "note": "fails on the local development database (shared kind) with plain node --test on origin/main 241765e, 2026-10-11; cause not established (a platform_admin visibility rule, possibly data-dependent); not part of test:pr"
-    },
-    {
-      "file": "builder-tree-batch-routes.test.mjs",
-      "test": "Builder tree batching route integration with isolated database mocks",
-      "failureType": "testCodeFailure",
-      "messagePattern": "^inner suite failed \\(exit 1\\): 14-session content copy drops from 56 sequential queries to four$",
-      "since": "2026-11-20",
-      "owner": "Builder (calendar flow)",
-      "note": "outdated mock, not a product regression (bisected on main: first bad 9e6eb01d, 2026-10-19). The mock rebuilds inserted rows by splitting the column list on ', '; since 9e6eb01d the inserts write 'video_source,video_asset_id,image_source,image_asset_id' without spaces, so the old per-session path counts 28 phantom rows for 14 real ones. Fix: split on /\\s*,\\s*/ in the mock; the file is being changed by #673, so the fix lands there. Hidden until 2026-11-20: the file was classified shared and its wrapper used a flag Node 22 rejects."
     }
   ],
   "knownNoExit": []

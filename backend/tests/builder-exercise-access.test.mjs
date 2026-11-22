@@ -77,7 +77,7 @@ before(async () => {
       id uuid primary key default gen_random_uuid(), plan_session_id uuid references plans.plan_sessions(id),
       plan_node_id uuid references plans.plan_nodes(id), item_type text, exercise_id uuid references library.exercises(id),
       title text, description text, short_note text, note text, source_row_ref text,
-      image_url text, video_url text, sets text, reps text, load text, updated_at timestamptz default now(),
+      image_url text, video_url text, sets varchar(80), reps varchar(80), load varchar(80), updated_at timestamptz default now(),
       item_order numeric, exercise_order numeric,
       ${["domain", "category", "section"].flatMap((level) => [
         `${level}_name text`, `${level}_color text`, `${level}_icon_url text`,
@@ -223,6 +223,40 @@ test("archiving a referenced exercise preserves existing program API rows, snaps
   assert.equal((await addExercise(source, {}, section)).status, 404);
   assert.equal((await request(`/api/exercises/${source}/restore`, {})).status, 200);
   assert.equal((await addExercise(source, {}, section)).status, 201);
+});
+
+// Production error: builder-pick-exercise ended in Postgres 22001 (a 500) when the typed Sets / Reps / Load was longer
+// than plans.plan_items' varchar(80). The fixture's columns are varchar(80) like production's.
+for (const field of ["sets", "reps", "load"]) {
+  test(`a ${field} longer than 80 characters is a 400 that names the field, with nothing written`, async () => {
+    const tooLong = await addExercise(exercises.own, { [field]: "x".repeat(81) });
+    assert.equal(tooLong.status, 400, JSON.stringify(tooLong.body));
+    assert.match(tooLong.body.error, new RegExp(`^${field[0].toUpperCase()}${field.slice(1)} can be at most 80 characters\\.$`));
+    assert.equal(await itemCount(), 0);
+    const atLimit = await addExercise(exercises.own, { [field]: "y".repeat(80) });
+    assert.equal(atLimit.status, 201, JSON.stringify(atLimit.body));
+    assert.equal((await client.query(`select ${field} as value from plans.plan_items`)).rows[0].value.length, 80);
+  });
+}
+
+test("the 80-character limit counts characters, not UTF-16 units: 80 emoji are stored, 81 refused", async () => {
+  const stored = await addExercise(exercises.own, { sets: "😀".repeat(80) });
+  assert.equal(stored.status, 201, JSON.stringify(stored.body));
+  assert.equal([...(await client.query("select sets from plans.plan_items")).rows[0].sets].length, 80);
+  assert.equal((await addExercise(exercises.own, { sets: "😀".repeat(81) })).status, 400);
+});
+
+test("a dose longer than 80 characters is refused on the item edit and the custom exercise too, nothing changed", async () => {
+  assert.equal((await addExercise(exercises.own)).status, 201);
+  const itemId = (await client.query("select id from plans.plan_items")).rows[0].id;
+  const edit = await request(`/api/builder/items/${itemId}`, { sets: "9", reps: "z".repeat(81), load: "" }, { method: "PATCH" });
+  assert.equal(edit.status, 400, JSON.stringify(edit.body));
+  assert.match(edit.body.error, /^Reps can be at most 80 characters\.$/);
+  assert.equal((await client.query("select sets from plans.plan_items where id=$1", [itemId])).rows[0].sets, "3");
+  const custom = await request(`/api/builder/nodes/${sectionId}/custom-exercise`, { name: "Long dose custom", load: "w".repeat(81) });
+  assert.equal(custom.status, 400, JSON.stringify(custom.body));
+  assert.match(custom.body.error, /^Load can be at most 80 characters\.$/);
+  assert.equal(await itemCount(), 1);
 });
 
 test("foreign private and nonexistent exercises return the identical 404 and create no item", async () => {

@@ -110,6 +110,23 @@ test("3. create lands on the new database, the audit lists it, drop ends other s
   }
 });
 
+test("6. a drop without force never ends a session: PostgreSQL refuses it while one is open, and it succeeds once the session is gone", async () => {
+  const db = await createDisposableDatabase({ prefix: "support", label: "noforce", baseDatabaseUrl: BASE });
+  const client = new pg.Client({ connectionString: db.url });
+  try {
+    await client.connect();
+    await assert.rejects(() => dropDisposableDatabase({ name: db.name, adminUrl: db.adminUrl, force: false }), (error) => error.code === "55006");
+    assert.equal((await client.query("select 1 as one")).rows[0].one, 1, "the session is still alive");
+    assert.ok((await listDatabases({ baseDatabaseUrl: BASE })).some((d) => d.name === db.name), "the database is still there");
+    await client.end();
+    await dropDisposableDatabase({ name: db.name, adminUrl: db.adminUrl, force: false });
+    assert.ok(!(await listDatabases({ baseDatabaseUrl: BASE })).some((d) => d.name === db.name), "the database is gone");
+  } finally {
+    await client.end().catch(() => {});
+    await db.drop();
+  }
+});
+
 test("5. the server-address rule: only loopback (127/8, ::1, their IPv4-mapped form) or a Unix socket proves a local server; every private, link-local, CGNAT or public address is refused", () => {
   for (const local of [null, undefined, "", "127.0.0.1", "127.0.0.1/32", "127.255.255.254", "::1", "::ffff:127.0.0.1"]) {
     assert.equal(isLoopbackServerAddress(local), true, `${JSON.stringify(local)} must count as local`);

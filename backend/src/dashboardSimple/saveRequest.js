@@ -1,3 +1,4 @@
+import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { createHash } from 'node:crypto';
 import { canonicalKey } from './compiler.js';
 import { validateContract, isUuid } from './schema.js';
@@ -12,6 +13,7 @@ export function validateSimpleSaveRequest(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== keys.length || !keys.every(key => Object.hasOwn(body, key))) throw previewError('invalidRequest', 400);
   if (!isUuid(body.requestId) || typeof body.requestIssuedAt !== 'string' || !Number.isFinite(Date.parse(body.requestIssuedAt)) ||
       typeof body.previewToken !== 'string' || body.previewToken.length < 1 || body.previewToken.length > 16384) throw previewError('invalidRequest', 400);
+  normalizeShellFilter(body.input?.context?.shellFilter);
   const period = validateContract('context', { kind: 'legacyDashboard', period: body.resolvedPeriod });
   const input = validateContract('envelope', body.input);
   if (!period.valid || !input.valid) throw Object.assign(previewError('invalidDraft', 400), { issues: [...period.issues, ...input.issues] });
