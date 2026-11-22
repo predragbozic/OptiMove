@@ -113,7 +113,8 @@ for (const width of [1280, 390, 375, 360]) {
       assert.deepEqual([byTitle["Tactical session"].cancelled, byTitle["Tactical session"].buttons, byTitle["Tactical session"].sessions], [true, [], []]);
       for (const card of look.cards) assert.ok(card.buttons.filter((b) => b.endsWith("*")).length <= 1, `one primary: ${card.title}`);
       assert.match(look.labels[TODAY], / · today$/, "today's day is marked");
-      assert.equal(Object.keys(look.labels).length, PAST ? 3 : 2, "only days that have something");
+      // Distinct dates: on a Sunday OTHER and PAST are both Saturday.
+      assert.equal(Object.keys(look.labels).length, new Set([TODAY, OTHER, PAST].filter(Boolean)).size, "only days that have something");
       assert.equal(look.overflow, 0, "no horizontal scroll");
       assert.deepEqual(look.small, [], "44 px targets");
       assert.ok(await a.page.$$eval(".athlete-calendar a.cc-maps", (links) => links.every((l) => l.getBoundingClientRect().height >= 43.5)), "Open in maps is a 44 px target");
