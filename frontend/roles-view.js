@@ -109,6 +109,7 @@ function listHtml(d, ctx) {
   const archivedCount = (d.roles || []).filter((r) => r.archived).length;
   const canCreate = Boolean(ctx.platform || ctx.clubId) && !d.command?.unconfirmed;
   return `
+    ${rolesCanWrite(d, ctx) ? "" : `<p class="muted" role="status" data-roles-read-only>You can view these roles. Only a club administrator can change them.</p>`}
     <div class="roles-toolbar">
       ${canCreate && rolesCanWrite(d, ctx) ? `<button class="plain-button data-sources-primary" type="button" data-action="roles-new">New role</button>` : ""}
       ${archivedCount ? `<label class="roles-archived-toggle"><input type="checkbox" data-action="roles-toggle-archived"${d.showArchived ? " checked" : ""}> Show archived (${archivedCount})</label>` : ""}

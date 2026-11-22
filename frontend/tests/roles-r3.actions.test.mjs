@@ -99,6 +99,7 @@ test("2. the list reads the catalog and every role for the club and shows people
   assert.match(html, /data-action="roles-archive"/);
   assert.match(html, /data-action="roles-new"/);
   assert.match(html, /data-action="roles-copy"/); // the basic role offers a copy
+  assert.doesNotMatch(html, /You can view these roles/, "a caller who can change or copy a role is not told it is read-only");
   assert.doesNotMatch(html, /dddddddd|11111111-0000/); // no id on screen
 });
 
@@ -109,6 +110,7 @@ test("3. a caller with no actions reads the list and a role read-only", async ()
   const list = renderRolesPanelHtml();
   assert.doesNotMatch(list, /roles-new|roles-archive|roles-copy/);
   assert.match(list, />View</);
+  assert.match(list, /You can view these roles\. Only a club administrator can change them\./);
   await handleRolesAction(action("roles-open", { roleId: ROLE }), {});
   const html = renderRolesPanelHtml();
   assert.match(html, /You can read this role but not change it/);
