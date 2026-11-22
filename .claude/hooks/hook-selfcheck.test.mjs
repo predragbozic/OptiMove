@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkSettings, runProbe, selfCheck, sessionStartOutput, registeredGuardPath, nodeOptionsProblem, PROBES } from "./hook-selfcheck.mjs";
+import { checkSettings, fileProbes, runProbe, selfCheck, sessionStartOutput, registeredGuardPath, nodeOptionsProblem, PROBES } from "./hook-selfcheck.mjs";
 
 const HOOK_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SETTINGS = path.join(HOOK_DIR, "..", "settings.json");
@@ -15,7 +15,7 @@ const GUARD = path.join(HOOK_DIR, "safety-guard.mjs");
 const SELFCHECK = path.join(HOOK_DIR, "hook-selfcheck.mjs");
 
 const guardHook = (extra = {}) => ({ type: "command", command: "node", args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], timeout: 30, ...extra });
-const settingsWith = (perMatcher) => JSON.stringify({ hooks: { PreToolUse: Object.entries(perMatcher).map(([matcher, hook]) => ({ matcher, hooks: [hook] })) } });
+const settingsWith = (perMatcher, extra = { disableAllHooks: false }) => JSON.stringify({ ...extra, hooks: { PreToolUse: Object.entries(perMatcher).map(([matcher, hook]) => ({ matcher, hooks: [hook] })) } });
 
 function withTempDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hook-selfcheck-test-"));
@@ -46,14 +46,30 @@ test("settings: every guard registration carries onFailure block, and SessionSta
 
 test("checkSettings names a matcher whose guard lacks onFailure block, or is missing, and invalid JSON", () => {
   const ok = guardHook({ onFailure: "block" });
-  assert.deepEqual(checkSettings(settingsWith({ Bash: ok, PowerShell: ok, "mcp__.*": ok })), []);
-  const noBlock = checkSettings(settingsWith({ Bash: guardHook(), PowerShell: ok, "mcp__.*": ok }));
+  assert.deepEqual(checkSettings(settingsWith({ Bash: ok, PowerShell: ok, "Write|Edit|MultiEdit|NotebookEdit": ok, "mcp__.*": ok })), []);
+  const noBlock = checkSettings(settingsWith({ Bash: guardHook(), PowerShell: ok, "Write|Edit|MultiEdit|NotebookEdit": ok, "mcp__.*": ok }));
   assert.equal(noBlock.length, 1);
   assert.match(noBlock[0], /Bash guard hook lacks "onFailure": "block"/);
-  const missing = checkSettings(settingsWith({ Bash: ok, PowerShell: ok }));
+  const missing = checkSettings(settingsWith({ Bash: ok, PowerShell: ok, "Write|Edit|MultiEdit|NotebookEdit": ok }));
   assert.deepEqual(missing, ["safety-guard.mjs is not registered for the mcp__.* matcher"]);
   assert.match(checkSettings("{ not json")[0], /not valid JSON/);
   assert.deepEqual(checkSettings("{}"), ["no PreToolUse hooks are registered in .claude/settings.json"]);
+  const all = { Bash: ok, PowerShell: ok, "Write|Edit|MultiEdit|NotebookEdit": ok, "mcp__.*": ok };
+  assert.deepEqual(checkSettings(settingsWith(all, {})), ['.claude/settings.json does not set "disableAllHooks": false']);
+  assert.deepEqual(checkSettings(settingsWith(all, { disableAllHooks: true })), ['.claude/settings.json does not set "disableAllHooks": false']);
+  const noFileTools = checkSettings(settingsWith({ Bash: ok, PowerShell: ok, "mcp__.*": ok }));
+  assert.deepEqual(noFileTools, ["safety-guard.mjs is not registered for the Write|Edit|MultiEdit|NotebookEdit matcher"]);
+});
+
+test("the file-tool probes: an edit of the guard's own .claude/settings.json must ask, a write elsewhere gets no decision", () => {
+  const probes = fileProbes(GUARD);
+  assert.deepEqual(probes.map((p) => [p.tool, p.expect]), [["Edit", "ask"], ["Write", "none"]]);
+  for (const p of probes) assert.equal(runProbe(p, { cwd: process.cwd() }).problem, null, p.label);
+  withTempDir((dir) => {
+    const silent = path.join(dir, "silent.mjs");
+    fs.writeFileSync(silent, "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));\n");
+    assert.match(runProbe(probes[0], { cwd: dir, guardPath: silent }).problem, /returned none for Edit "\.claude\/settings\.json" \(expected ask\)/);
+  });
 });
 
 test("checkSettings refuses a registration that names the guard but would not run it as the guard", () => {
@@ -68,7 +84,7 @@ test("checkSettings refuses a registration that names the guard but would not ru
     "a condition field": guardHook({ onFailure: "block", if: "Bash(ls *)" }),
   };
   for (const [label, hook] of Object.entries(variants)) {
-    const problems = checkSettings(settingsWith({ Bash: hook, PowerShell: ok, "mcp__.*": ok }));
+    const problems = checkSettings(settingsWith({ Bash: hook, PowerShell: ok, "Write|Edit|MultiEdit|NotebookEdit": ok, "mcp__.*": ok }));
     assert.ok(problems.length >= 1, label);
     assert.ok(problems.every((p) => p.includes("Bash")), label);
   }

@@ -2660,6 +2660,56 @@ export function classifyMcpToolCall(toolName, toolInput) {
 // Top-level dispatcher
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// File tools (Write, Edit, MultiEdit, NotebookEdit) on the live .claude folder
+// ---------------------------------------------------------------------------
+// The guard, its registration (settings.json, settings.local.json), the rules and the agent
+// briefs live in the project's .claude folder - the one this file runs from. A session in an
+// auto-accepting mode could otherwise edit them with a file tool, without any question, and
+// switch its own protection off mid-session. Any target inside that folder asks. The path is
+// compared by real path (symlinks and ".." resolved, the not-yet-existing tail kept as
+// written), with letter case ignored where the file system usually ignores it. A copy of the
+// project in another work tree is not the live folder and is not covered.
+export const FILE_EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const LIVE_CLAUDE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function realPathOfNearestExisting(p) {
+  const tail = [];
+  let current = path.resolve(p);
+  for (;;) {
+    for (const resolve of [fs.realpathSync.native, fs.realpathSync]) {
+      try {
+        return path.join(resolve(current), ...tail.reverse());
+      } catch {
+        // try the next resolver, then the parent
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(p);
+    tail.push(path.basename(current));
+    current = parent;
+  }
+}
+
+export function isInsideDir(target, dir) {
+  const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+  const norm = (p) => (caseInsensitive ? p.toLowerCase() : p);
+  const t = norm(realPathOfNearestExisting(target));
+  const d = norm(realPathOfNearestExisting(dir));
+  return t === d || t.startsWith(d.endsWith(path.sep) ? d : d + path.sep);
+}
+
+export function classifyFileEdit(toolInput, cwd, { claudeDir = LIVE_CLAUDE_DIR } = {}) {
+  const target = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.notebook_path === "string" ? toolInput.notebook_path : null;
+  if (!target || !target.trim()) {
+    return { decision: "ask", reason: "Could not find a recognizable file path on this file edit; failing to a confirmation prompt rather than allowing it silently." };
+  }
+  if (isInsideDir(path.resolve(cwd, target), claudeDir)) {
+    return { decision: "ask", reason: "This edits the project's .claude folder (the safety guard, its settings, rules or agent briefs); that needs your confirmation." };
+  }
+  return null;
+}
+
 export function classifyToolCall(input) {
   const toolName = input && typeof input.tool_name === "string" ? input.tool_name : null;
   const toolInput = (input && input.tool_input) || {};
@@ -2682,6 +2732,10 @@ export function classifyToolCall(input) {
 
   if (toolName.startsWith("mcp__")) {
     return classifyMcpToolCall(toolName, toolInput);
+  }
+
+  if (FILE_EDIT_TOOLS.has(toolName)) {
+    return classifyFileEdit(toolInput, cwd);
   }
 
   return null;
@@ -2726,7 +2780,7 @@ export function runCli(rawStdin) {
     // internal error while inspecting an unrelated tool (Read, Grep, ...) must never
     // block it.
     const toolName = input && typeof input.tool_name === "string" ? input.tool_name : "";
-    if (toolName === "Bash" || toolName === "PowerShell" || toolName.startsWith("mcp__")) {
+    if (toolName === "Bash" || toolName === "PowerShell" || toolName.startsWith("mcp__") || FILE_EDIT_TOOLS.has(toolName)) {
       emitDecision("ask", "An internal error occurred while safety-checking this command; failing to a confirmation prompt.");
     }
     return;

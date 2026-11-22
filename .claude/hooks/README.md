@@ -9,7 +9,8 @@ existing.
 ## How it's wired
 
 `.claude/settings.json` registers `safety-guard.mjs` as a `PreToolUse` hook for the
-`Bash` and `PowerShell` tools, **and** for MCP tool calls (matched by the regex
+`Bash` and `PowerShell` tools, for the file tools (`Write|Edit|MultiEdit|NotebookEdit`,
+see "File tools on the .claude folder" below), **and** for MCP tool calls (matched by the regex
 `mcp__.*`, since an MCP tool's name carries an instance-specific server-id prefix that
 can't be hardcoded — see "Verifying it's actually registered" below for why this third
 matcher matters as much as the other two). Before a matching tool actually runs, Claude
@@ -17,10 +18,12 @@ Code pipes a JSON description of the call to the hook's stdin and reads a JSON d
 back from its stdout.
 
 ```
-{ "hooks": {
+{ "disableAllHooks": false,
+  "hooks": {
   "PreToolUse": [
     { "matcher": "Bash",       "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], "timeout": 30, "onFailure": "block" }] },
     { "matcher": "PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], "timeout": 30, "onFailure": "block" }] },
+    { "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], "timeout": 30, "onFailure": "block" }] },
     { "matcher": "mcp__.*",    "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], "timeout": 30, "onFailure": "block" }] }
   ],
   "SessionStart": [
@@ -207,8 +210,26 @@ across projects/instances:
 a feature branch, tests and builds (`npm test`, `vite build`, `npm run dev`), read-only
 SQL, `git clean -n`, switching branches (`git checkout <branch>`), unstaging without
 touching the working tree (`git restore --staged <path>`), reversible stash operations
-(`git stash`, `push`, `apply`, `list`, `show` — `pop` asks, see below), and any tool this
-hook doesn't govern at all (`Read`, `Write`, `Grep`, ...).
+(`git stash`, `push`, `apply`, `list`, `show` — `pop` asks, see below), a file tool
+(`Write`, `Edit`, ...) on any path outside the live `.claude` folder, and any tool this
+hook doesn't govern at all (`Read`, `Grep`, ...).
+
+### File tools on the .claude folder (ASK)
+
+`Write`, `Edit`, `MultiEdit` and `NotebookEdit` ask for any target inside the project's
+`.claude` folder - the one this guard runs from: the guard itself, `settings.json`,
+`settings.local.json`, `rules/`, `agents/`, `skills/`. Without this, a session in an
+auto-accepting mode (`acceptEdits`, `auto`) could edit its own guard or registration
+mid-session without a question, after the session-start self-check had passed. The target
+is resolved against the call's `cwd` and compared by real path (`..`, `./` and a symlink
+pointing into the folder are all caught; a file that does not exist yet is caught by its
+existing parent), ignoring letter case on Windows and macOS. A file tool call with no
+usable path asks. The same layout in another folder (a copy of the project in a scratch
+work tree) is not the live folder and gets no decision. Verified live on Claude Code
+2.1.329 in `acceptEdits` mode: the guard answered `ask` for a write to `.claude/rules/`
+(Claude Code's own "sensitive file" protection also prompted), and a write elsewhere went
+through. Not covered here: a Bash redirect into `.claude` (`>`, `tee`), and a hard link
+to one of these files placed elsewhere.
 
 ### ASK added with the hardening (Bash + PowerShell)
 
@@ -580,9 +601,13 @@ cloud session is replaced, not repaired).
 session loaded, and it checks the guard at session start, not on every call.
 It probes the `node` found on `PATH` at session start; a different `node` that the real
 hook finds later in the session (a changed `PATH`, or on Windows a `node.exe` in a folder
-the session moves into) is not checked again. `disableAllHooks: true` in any settings layer
-(including the untracked `.claude/settings.local.json` or a user-level settings file)
-switches off the guard *and* the self-check together, so nothing warns. The same holds for
+the session moves into) is not checked again. `disableAllHooks: true` switches off the guard
+*and* the self-check together, so nothing warns. `settings.json` sets
+`"disableAllHooks": false`, which overrides a `true` in the user's own settings
+(`~/.claude/settings.json`; project settings take precedence over user settings), and the
+self-check reports it if that line is missing. It cannot override the layers above the
+project settings: `.claude/settings.local.json` (editing it with a file tool now asks, see
+"File tools on the .claude folder"), a command-line `--settings`, or managed settings. The same holds for
 a settings layer that replaces these hook entries. `/hooks` in the session shows what is
 actually loaded.
 

@@ -15,13 +15,14 @@
 // "block" is what keeps the session safe (every Bash / PowerShell / MCP call is blocked).
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HOOK_DIR = path.dirname(fileURLToPath(import.meta.url));
 const GUARD = path.join(HOOK_DIR, "safety-guard.mjs");
 const SETTINGS = path.join(HOOK_DIR, "..", "settings.json");
-const MATCHERS = ["Bash", "PowerShell", "mcp__.*"];
+const MATCHERS = ["Bash", "PowerShell", "Write|Edit|MultiEdit|NotebookEdit", "mcp__.*"];
 // The one registration form that is accepted: exec form, `node` with the guard as its only
 // argument. Anything else - another program with the same path, an extra flag, async - could
 // run without ever deciding, which no probe of the file itself would notice.
@@ -65,6 +66,9 @@ export function checkSettings(settingsText) {
   }
   const groups = settings?.hooks?.PreToolUse;
   if (!Array.isArray(groups)) return ["no PreToolUse hooks are registered in .claude/settings.json"];
+  // false here overrides a true in the user's own settings (a command-line --settings layer
+  // or managed settings still win; the self-check cannot see those)
+  if (settings.disableAllHooks !== false) problems.push('.claude/settings.json does not set "disableAllHooks": false');
   for (const matcher of MATCHERS) {
     const hooks = groups.filter((g) => g?.matcher === matcher).flatMap((g) => (Array.isArray(g.hooks) ? g.hooks : []));
     const mentions = hooks.filter((h) => JSON.stringify(h ?? null).includes("safety-guard.mjs"));
@@ -86,8 +90,19 @@ export function checkSettings(settingsText) {
 }
 
 // nodePath "node": the program the registration names, found on PATH as Claude Code finds it.
+// File-tool probes, built for the guard being probed: an edit of its own .claude/settings.json
+// must ask, a write outside it must get no decision. `label` keeps paths out of messages.
+export function fileProbes(guardPath) {
+  return [
+    { tool: "Edit", filePath: path.resolve(path.dirname(guardPath), "..", "settings.json"), label: ".claude/settings.json", expect: "ask" },
+    { tool: "Write", filePath: path.join(os.tmpdir(), "hook-selfcheck-probe.txt"), label: "a file outside .claude", expect: "none" },
+  ];
+}
+
 export function runProbe(probe, { cwd, nodePath = "node", guardPath = GUARD, timeoutMs = 15_000 } = {}) {
-  const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: probe.tool, tool_input: { command: probe.command }, cwd, session_id: "hook-selfcheck" });
+  const toolInput = probe.filePath ? { file_path: probe.filePath } : { command: probe.command };
+  const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: probe.tool, tool_input: toolInput, cwd, session_id: "hook-selfcheck" });
+  probe = { ...probe, command: probe.label ?? probe.command };
   const r = spawnSync(nodePath, [guardPath], { input, encoding: "utf8", timeout: timeoutMs, windowsHide: true });
   if (r.error) return { problem: `the guard could not run for "${probe.command}" (${r.error.code || "error"})` };
   if (r.status !== 0) return { problem: `the guard exited ${r.status ?? r.signal} for "${probe.command}"` };
@@ -115,7 +130,7 @@ export function selfCheck({ cwd = process.cwd(), settingsPath = SETTINGS, guardP
   const nodeOptions = nodeOptionsProblem(env);
   if (nodeOptions) problems.push(nodeOptions);
   if (fs.existsSync(guardPath)) {
-    for (const probe of PROBES) {
+    for (const probe of [...PROBES, ...fileProbes(guardPath)]) {
       const { problem } = runProbe(probe, { cwd, nodePath, guardPath });
       if (problem) problems.push(problem);
     }
@@ -128,7 +143,7 @@ export function sessionStartOutput(problems) {
     return {
       hookSpecificOutput: {
         hookEventName: "SessionStart",
-        additionalContext: `Safety hook self-check passed: safety-guard.mjs is registered for Bash, PowerShell and mcp__.* with "onFailure": "block", and, run at its registered path, it denied and allowed its ${PROBES.length} probe calls as expected. (A session start without this line or a SAFETY HOOK SELF-CHECK FAILED warning means the check did not run: treat it as failed.)`,
+        additionalContext: `Safety hook self-check passed: safety-guard.mjs is registered for Bash, PowerShell, the file tools and mcp__.* with "onFailure": "block", hooks are not disabled in the project settings, and, run at its registered path, the guard decided its ${PROBES.length + 2} probe calls as expected. (A session start without this line or a SAFETY HOOK SELF-CHECK FAILED warning means the check did not run: treat it as failed.)`,
       },
     };
   }
