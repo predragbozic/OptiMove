@@ -8508,6 +8508,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-create-form { max-width: 700px; }
 .builder-error { min-height: 0; margin: 0; color: var(--danger, #a23b3b); font-size: 13px; font-weight: 700; }
 .builder-page-error { margin: 0 0 12px; }
+.builder-page-error p { margin: 0; overflow-wrap: anywhere; }
+.builder-page-error .builder-page-error-action { min-height: 44px; min-width: 44px; margin-top: 8px; max-width: 100%; }
 .builder-check { display: flex; gap: 8px; align-items: center; font-weight: 700; }
 .builder-inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
 .builder-inline-form .builder-error { grid-column: 1 / -1; }
