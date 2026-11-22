@@ -1,7 +1,8 @@
-# Manual values on the roster: migration v86
+# Manual values on the roster: migration v88
 
-Migration: `migrations_v2/202611221100_training_load_v86_manual_values.sql` (number and prefix given by the *Rukovodilac*
-on 2026-11-22).
+Migration: `migrations_v2/202611221300_training_load_v88_manual_values.sql` (number and prefix given by the *Rukovodilac*
+on 2026-11-22; first named v86 / `202611221100`, renumbered v88 / `202611221300` the same day so the positions
+migration v87 goes first - v86 stays unused).
 Plan: `docs/ai/session-type-plan.md` sections 7, 8 and 13 (Q3), and section 16 "ST-4 as built".
 
 ## What it changes
@@ -20,11 +21,11 @@ Plan: `docs/ai/session-type-plan.md` sections 7, 8 and 13 (Q3), and section 16 "
 
 ## Order of the deploy
 
-1. The owner's order naming v86, and a quiet moment (no import, check or undo running: the migration takes the occasions
+1. The owner's order naming v88, and a quiet moment (no import, check or undo running: the migration takes the occasions
    and values SHARE ROW EXCLUSIVE and the deletion log and approvals ACCESS EXCLUSIVE, `lock_timeout` 5 s).
-2. Preflight: `manual-values-v86-preflight.sql` (read only; every column true).
-3. Deploy (the migrator applies v86 at start).
-4. Post-check: `manual-values-v86-postcheck.sql` (read only; every column true).
+2. Preflight: `manual-values-v88-preflight.sql` (read only; every column true).
+3. Deploy (the migrator applies v88 at start).
+4. Post-check: `manual-values-v88-postcheck.sql` (read only; every column true).
 
 The server flag `MANUAL_VALUES_ENABLED` is on unless it is `"false"` (the *Rukovodilac*, 2026-11-22): no Render change is
 needed. Setting it to `false` makes every manual-values route the identical 404 and hides the roster action; it does not
@@ -32,29 +33,29 @@ touch data.
 
 ## Rollback
 
-`manual-values-v86-rollback.sql`, one transaction, only with the owner's approval for that database and a fresh
-restore-verified backup, and only from a commit that no longer contains the v86 file. It restores v76's undo, v63's scope
-and v26's needs-state by md5, v59's pair rule, and drops everything v86 added. It refuses, changing nothing, while the
-migrator runs, under a later migration, over a changed v86 body, and once v86's data is used (a provenance row, a logged
+`manual-values-v88-rollback.sql`, one transaction, only with the owner's approval for that database and a fresh
+restore-verified backup, and only from a commit that no longer contains the v88 file. It restores v76's undo, v63's scope
+and v26's needs-state by md5, v59's pair rule, and drops everything v88 added. It refuses, changing nothing, while the
+migrator runs, under a later migration, over a changed v88 body, and once v88's data is used (a provenance row, a logged
 manual removal, an approval choice): from then on the way back is forward only.
 
 Rehearsed on disposable databases: `backend/tests/manual-values-st4.test.mjs` tests 13 and 14.
 
 ## Before the merge: the rehearsal on PostgreSQL 17
 
-`backend/scripts/manual-values-v86-rehearsal.mjs` (wrappers `.sh` and `.ps1`, the v85 pattern) runs on any local server
+`backend/scripts/manual-values-v88-rehearsal.mjs` (wrappers `.sh` and `.ps1`, the v85 pattern) runs on any local server
 and prints PASS / FAIL per step and `RESULT: PASS`. It builds a disposable database through v85 with the real runner,
-runs the preflight, applies v86 (checksum = the file's sha256), writes a guarded manual entry as the service does (rolled
+runs the preflight, applies v88 (checksum = the file's sha256), writes a guarded manual entry as the service does (rolled
 back, then committed) with the five refusals (no acting user, a forged author, no provenance by COMMIT, a value after the
 provenance, a TRUNCATE), runs the post-check, the runner again, the rollback (the catalog of `training` and
-`training_load` equal to the one before v86), v86 again, the rollback's refusal once a manual value exists, and a
-`pg_dump -Fc` / `pg_restore` read-back of v86's objects. Loopback only; it creates and drops only its own
+`training_load` equal to the one before v88), v88 again, the rollback's refusal once a manual value exists, and a
+`pg_dump -Fc` / `pg_restore` read-back of v88's objects. Loopback only; it creates and drops only its own
 `optimove_tests_st4rehearsal_*` databases and takes no database name. Needs `npm --prefix backend ci` and `pg_dump` /
 `pg_restore` of the server's major version.
 
-    backend/scripts/manual-values-v86-rehearsal.sh --host 127.0.0.1 --port 5432 --user postgres --pg-bin /usr/lib/postgresql/17/bin
+    backend/scripts/manual-values-v88-rehearsal.sh --host 127.0.0.1 --port 5432 --user postgres --pg-bin /usr/lib/postgresql/17/bin
 
-    powershell -ExecutionPolicy Bypass -File backend\scripts\manual-values-v86-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres -PgBin "C:\Program Files\PostgreSQL\17\bin"
+    powershell -ExecutionPolicy Bypass -File backend\scripts\manual-values-v88-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres -PgBin "C:\Program Files\PostgreSQL\17\bin"
 
 The password comes from `PGPASSWORD` if set, otherwise it is asked once, hidden, and never printed. In step 8 a restore
 re-prints a varchar IN-list (`ARRAY['a'::character varying]::text[]` as `ARRAY[('a'::character varying)::text]`; a v21

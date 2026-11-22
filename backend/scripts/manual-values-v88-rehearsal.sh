@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# The v86 rehearsal (manual values, ST-4) on a local PostgreSQL - bash. Runs
-# backend/scripts/manual-values-v86-rehearsal.mjs unchanged; see that file and
-# docs/runbooks/manual-values-v86.md for what it does. Loopback only; it creates
+# The v88 rehearsal (manual values, ST-4) on a local PostgreSQL - bash. Runs
+# backend/scripts/manual-values-v88-rehearsal.mjs unchanged; see that file and
+# docs/runbooks/manual-values-v88.md for what it does. Loopback only; it creates
 # and drops its own optimove_tests_st4rehearsal_* databases.
 #
-#   backend/scripts/manual-values-v86-rehearsal.sh [--host 127.0.0.1] [--port 5432] [--user postgres] [--pg-bin /usr/lib/postgresql/17/bin]
+#   backend/scripts/manual-values-v88-rehearsal.sh [--host 127.0.0.1] [--port 5432] [--user postgres] [--pg-bin /usr/lib/postgresql/17/bin]
 #
 # The password: from PGPASSWORD if set, otherwise asked once (not echoed, never printed).
 set -euo pipefail
@@ -31,4 +31,4 @@ else
 fi
 args=(--host "$host" --port "$port" --user "$user")
 [ -n "$pgbin" ] && args+=(--pg-bin "$pgbin")
-OPTIMOVE_REHEARSAL_PASSWORD="$pw" PGPASSWORD="" node "$here/manual-values-v86-rehearsal.mjs" "${args[@]}"
+OPTIMOVE_REHEARSAL_PASSWORD="$pw" PGPASSWORD="" node "$here/manual-values-v88-rehearsal.mjs" "${args[@]}"

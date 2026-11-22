@@ -54,7 +54,7 @@ const SENTENCES = {
   event_session_mismatch: [409, "The stored import does not match this session; contact a platform administrator."],
   two_events_for_session: [409, "Two imports exist for this session. They have to be resolved by a platform administrator first."],
   manual_occasion: [409, "Some results of this session were entered by hand, so its imported data cannot be deleted here. Ask a platform administrator to delete it."],
-  // v86 (ST-4): manual values are removed only after a confirmation that lists them.
+  // v88 (ST-4): manual values are removed only after a confirmation that lists them.
   manual_values_need_confirmation: [409, "Coaches entered or corrected values in this session. Confirm that these values are removed too, then undo again."],
   manual_values_changed: [409, "The session's manual values changed since you reviewed them. Nothing was removed. Review the undo again."],
   shared_activity: [409, "This session's activity also holds data from another source, so it cannot be removed here."],
@@ -185,14 +185,14 @@ function rosterFromLog(removed) {
 
 // Names for the listed later changes (at most 60 athletes and users) and the reasons' labels: the administrator sees who,
 // whom and why, never only ids or codes.
-// v86 added an eighth argument with a default: a call without a manual confirmation keeps v76's seven arguments (the same
-// function on a v86 database, and still callable on a database before v86); only a confirmation sends the eighth.
+// v88 added an eighth argument with a default: a call without a manual confirmation keeps v76's seven arguments (the same
+// function on a v88 database, and still callable on a database before v88); only a confirmation sends the eighth.
 function undoCall(middle, manual) {
   const head = "select * from training_load.undo_imported_session($1, $2, $3, ";
   return { seven: `${head}${middle})`, eight: `${head}${middle}, ${manual})` };
 }
 
-// v86 (ST-4): the session's manual values in the scope's (or the log's) closed shape: { count, list, fingerprint }.
+// v88 (ST-4): the session's manual values in the scope's (or the log's) closed shape: { count, list, fingerprint }.
 const MANUAL_KINDS = new Set(["entry", "correction", "restore", "removal", "other"]);
 function manualFromScope(scope) {
   const count = Number.isInteger(scope?.count) && scope.count >= 0 ? scope.count : 0;
@@ -262,7 +262,7 @@ function shapeResult(row) {
     // Every candidate the undo marked undone: the requested one and any other approved version of the session (one event).
     undoneCandidateIds: row.undone_candidate_ids ?? [],
     rosterWork: rosterFromLog(row.roster_work_removed),
-    // v86: the manual values this undo removed (count 0 when there were none).
+    // v88: the manual values this undo removed (count 0 when there were none).
     manualValues: manualFromScope(row.manual_values_removed),
   };
 }
@@ -308,7 +308,7 @@ export async function undoPreview(teamId, candidateId, { userId }) {
       let scopeManual = null;
       let rosterFp = null;
       let manualFp = null;
-      // A confirmation the function asks for (v60's later roster work, v86's manual values) is answered with the
+      // A confirmation the function asks for (v60's later roster work, v88's manual values) is answered with the
       // fingerprint the function itself reported, so the preview shows everything it would remove (still rolled back).
       // Each is answered once; any other refusal, or a second ask for the same one, ends the preview. Rolling back to the
       // savepoint releases the team lock, so the rerun takes it again and checks the same fingerprints under it: a change in

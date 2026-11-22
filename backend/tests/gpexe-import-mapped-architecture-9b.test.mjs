@@ -293,7 +293,7 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   // J21: OptiMove's calculated values are no source value either: each is derived, a derived_rollup naming its formula
   // version and input values (v77's value guard), with no T6 row - checked below.
   const CALCULATED = "calculatedValues.js";
-  // ST-4 (v86): the roster's manual values are 'manual' occasions, never a source value: no T6 row; each occasion has its
+  // ST-4 (v88): the roster's manual values are 'manual' occasions, never a source value: no T6 row; each occasion has its
   // provenance row in metric_manual_values, checked below.
   const ROSTER_MANUAL = "manualValueService.js";
   const files = all();
@@ -302,7 +302,7 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   {
     const rm = files.find((f) => f.rel === ROSTER_MANUAL);
     assert.equal(count(rm.text, PROVENANCE), 0, "a roster manual value writes no T6 row");
-    assert.ok(count(rm.text, /\binsert\s+into\s+training_load\.metric_manual_values\b/gi) > 0, "it writes the v86 provenance row");
+    assert.ok(count(rm.text, /\binsert\s+into\s+training_load\.metric_manual_values\b/gi) > 0, "it writes the v88 provenance row");
     const OCCASIONS = /\binsert\s+into\s+training_load\.metric_measurement_occasions\b/gi;
     assert.ok(count(rm.text, OCCASIONS) > 0, "it writes occasions");
     for (const m of rm.text.matchAll(OCCASIONS)) {

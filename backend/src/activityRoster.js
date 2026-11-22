@@ -119,7 +119,7 @@ export function decisionView(row) {
 // wins), with its group, flags and what it rests on.
 export function deriveAthleteState({ decisions, facts, needsReview, observations }) {
   const flags = [];
-  // ST-4 (v86): a device record corrected on the roster is still the athlete's record (measured, marked corrected); a
+  // ST-4 (v88): a device record corrected on the roster is still the athlete's record (measured, marked corrected); a
   // value entered on the roster gives the athlete the state Manual values. A manual value of another path is as before.
   const measured = facts.filter((f) => MEASURED_METHODS.has(f.entryMethod) || (f.manualKind && f.sourceIdentityId));
   const rosterEntry = facts.filter((f) => f.entryMethod === "manual" && f.manualKind && !f.sourceIdentityId);
@@ -195,13 +195,13 @@ function valuesView(facts, estimateLabels = new Map(), nameInAnswer = () => null
     .sort((a, b) => String(a.metricKey).localeCompare(String(b.metricKey)));
 }
 
-// ST-4 (v86): Map(occasionId -> { kind, by, basis, at, note, measured: Map(definitionId -> number|null) }) for the manual
+// ST-4 (v88): Map(occasionId -> { kind, by, basis, at, note, measured: Map(definitionId -> number|null) }) for the manual
 // occasions a roster answer shows. The author is named (the roster's audience decides on this team; the name is a
 // display fact like a decision's decidedBy).
 async function readManualProvenance(client, occasionIds) {
   const ids = [...new Set(occasionIds.filter(Boolean).map(String))];
   if (!ids.length) return new Map();
-  // A database before v86 (some suites pin one) has no provenance table: no manual value was written on its roster.
+  // A database before v88 (some suites pin one) has no provenance table: no manual value was written on its roster.
   if (!(await client.query(`select to_regclass('training_load.metric_manual_values') is not null as present`)).rows[0].present) return new Map();
   const rows = (await client.query(
     `select m.occasion_id, m.kind, m.entered_by_user_id, m.entered_by_basis, m.entered_at, m.note, m.measured_occasion_id,
@@ -364,7 +364,7 @@ export async function loadRosterSnapshot(client, canonicalId) {
   // leave here.
   const unnamedKeys = unnamedMetricKeys(factRows.filter((r) => !r.metric_named).map((r) => r.metric_definition_id));
   const unnamedKeyOf = (definitionId) => unnamedKeys.get(String(definitionId ?? ""));
-  // ST-4 (v86): the provenance of every manual value written on the roster, and the measured values a correction rests on.
+  // ST-4 (v88): the provenance of every manual value written on the roster, and the measured values a correction rests on.
   const manualRows = await readManualProvenance(client, factRows.filter((r) => r.entry_method === "manual" && r.segment_id === null).map((r) => r.occasion_id));
   const facts = factRows.map((r) => ({
     athleteId: String(r.athlete_id), entryMethod: r.entry_method, occasionId: r.occasion_id,

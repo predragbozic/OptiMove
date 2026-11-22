@@ -109,7 +109,7 @@ function handle(fn) {
           // U5 / v60: the roster work an undo would remove (counts, and the bounded list of later changes for a platform
           // admin, the only audience of the undo routes), or that the same request may be repeated.
           ...(rosterWork && typeof rosterWork === "object" ? { rosterWork } : {}),
-          // v86 (ST-4): the manual values an undo would remove (count, the bounded list, the fingerprint that confirms it).
+          // v88 (ST-4): the manual values an undo would remove (count, the bounded list, the fingerprint that confirms it).
           ...(manualValues && typeof manualValues === "object" ? { manualValues } : {}),
           ...(Number.isInteger(calendarLinks) ? { calendarLinks } : {}),
           ...(retrySameRequest === true ? { retrySameRequest: true } : {}),
@@ -646,7 +646,7 @@ router.post("/teams/:teamId/candidates/:candidateId/undo-import", handle(async (
     userId: String(req.user.id), requestKey: body.requestKey, reason: body.reason, expectedEventId: expected.eventId ?? null,
     // v60 (O1): later roster changes are removed only with their fingerprint, the confirmation of exactly the listed ones.
     laterRosterFingerprint: body.laterRosterFingerprint,
-    // v86 (ST-4): manual values are removed only with their fingerprint, the confirmation of exactly the listed ones.
+    // v88 (ST-4): manual values are removed only with their fingerprint, the confirmation of exactly the listed ones.
     manualValuesFingerprint: body.manualValuesFingerprint,
   }) });
 }));

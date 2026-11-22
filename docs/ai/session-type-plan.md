@@ -524,7 +524,7 @@ imported again):
   The Training Load calendar still shows the raw key words ("training session") until ST-5 reads the labels.
 - **Runbook:** `docs/runbooks/session-types-v85.md`, with its preflight, post-check, rollback and the rehearsal tool.
 
-## 16. ST-4 as built, part 1 (migration v86, `migrations_v2/202611221100_training_load_v86_manual_values.sql`)
+## 16. ST-4 as built, part 1 (migration v88, `migrations_v2/202611221300_training_load_v88_manual_values.sql`; first numbered v86, renumbered by the *Rukovodilac* on 2026-11-22 so the positions migration v87 goes first - v86 stays unused)
 
 Number and prefix given by the *Rukovodilac* on 2026-11-22. Departures from section 7, decided while building, for the
 reviewers:
@@ -536,13 +536,13 @@ reviewers:
 - **Provenance has a table of its own** (`training_load.metric_manual_values`): who, when, on which right, which request
   (the replay reads it, as v64 does for estimates). `metric_write_requests` is not used: its foreign key would block the
   undo.
-- **A restore is a new manual occasion equal to the measured one** (v86 checks it in every semantic column); the measured
+- **A restore is a new manual occasion equal to the measured one** (v88 checks it in every semantic column); the measured
   occasion is never made current again (v13 supersedes once). It reads "Measured values restored by <coach> on <date>".
 - **A later entry carries over the values it does not name**, as a correction copies the values not changed.
 - **Roster state:** an athlete with an entry gets *Manual values* (group done, so the session can be completed); a
   corrected athlete stays *Measured* with the flag `corrected` and each corrected value's `measuredValue`;
   `training.activity_roster_needs_state` agrees. A manual value of another path (the Metrics screen) is as before.
-- **Undo (Q3):** v86's undo removes manual values only with `p_manual_values_fingerprint`, the confirmation of exactly the
+- **Undo (Q3):** v88's undo removes manual values only with `p_manual_values_fingerprint`, the confirmation of exactly the
   listed ones; a Metrics-screen write request still refuses, checked first.
 - **Approval columns for later pull requests** (agreed with the ST-2 executor on 2026-11-22):
   `gpexe_import_approvals.replaced_manual_athlete_ids` (the re-import question) and `chosen_activity_type_key` (ST-2's
@@ -555,7 +555,7 @@ reviewers:
   needs a state again; the entry stays as history). The owner's open question of 2026-11-22 ("may a coach remove a
   value or a whole entry?"); if yes, *Remove these values* is a route of the re-import pull request, with no migration.
 - **Not in part 1:** the re-import question and the `manual_replaced` writer path (after ST-2's merge), the screens.
-- **Runbook:** `docs/runbooks/manual-values-v86.md`, with its preflight, post-check and rollback.
+- **Runbook:** `docs/runbooks/manual-values-v88.md`, with its preflight, post-check and rollback.
 - **Fail closed until the re-import question** (the *Nezavisni revizor*'s HIGH on `c146b66`; the *Rukovodilac*'s decision
   of 2026-11-22: in this pull request, the switch stays on by default): nothing written on the roster is replaced or
   doubled by an import without the owner's choice. The import writer (`backend/src/gpexeImportWriter.js`) refuses the
@@ -574,8 +574,8 @@ reviewers:
 - **Known limits recorded at that review (LOW):** the database does not derive `entered_by_basis` (v35 / v38 do); it
   keeps the service's word after `lock_activity_decider` (a derivation needs a migration change; left for later). After
   a restore the values stay `manual` without T6 provenance, so a series filtered to imported values only leaves a
-  restored athlete out. v86 adds varchar IN-list constraints of the kind a restore re-prints (see the runbook's
+  restored athlete out. v88 adds varchar IN-list constraints of the kind a restore re-prints (see the runbook's
   rehearsal note); PostgreSQL 17 behaviour of `gpexe-backup-verify` with them is not known yet.
 - **The owner's answers of 2026-11-22** (relayed by the *Rukovodilac*): (1) yes, *Remove these values*: an entry is ended
-  as history (who entered, who removed) and the athlete needs a state again - v86's `removal` kind holds it, so its route
+  as history (who entered, who removed) and the athlete needs a state again - v88's `removal` kind holds it, so its route
   and screen come with PR3, no migration; (2) *Did not participate* is offered only after the values are removed.

@@ -1,22 +1,22 @@
 #!/usr/bin/env node
-// The rehearsal of migration v86 (manual values on the roster, ST-4 of docs/ai/session-type-plan.md) on ANY PostgreSQL
+// The rehearsal of migration v88 (manual values on the roster, ST-4 of docs/ai/session-type-plan.md) on ANY PostgreSQL
 // server you point it at - written so that it runs unchanged on PostgreSQL 17 (production runs 17.6) as on 16. The v85
 // rehearsal's shape (backend/scripts/session-types-v85-rehearsal.mjs):
 //
-//   1. a disposable database built from the legacy snapshot and the real runner, every migration before v86;
-//   2. the read-only preflight (docs/runbooks/manual-values-v86-preflight.sql; every boolean true);
-//   3. v86 applied by the real runner, recorded once with the file's sha256;
+//   1. a disposable database built from the legacy snapshot and the real runner, every migration before v88;
+//   2. the read-only preflight (docs/runbooks/manual-values-v88-preflight.sql; every boolean true);
+//   3. v88 applied by the real runner, recorded once with the file's sha256;
 //  3b. a guarded write as the service writes it (the acting user, a manual whole-session occasion of a session's
 //      participant, one value, its provenance row 'entry', every deferred guard fired), rolled back; and the refusals: a
 //      provenance row without the acting user, a forged author, a manual occasion left without its provenance at COMMIT, a
 //      value added to an occasion that has its provenance, a TRUNCATE of the provenance table;
-//   4. the read-only post-check (docs/runbooks/manual-values-v86-postcheck.sql; every boolean true);
-//   5. the runner again: v86 skipped by its checksum;
-//   6. the rollback (docs/runbooks/manual-values-v86-rollback.sql): the catalog equal to the one before v86;
-//   7. v86 applied again, the post-check again;
+//   4. the read-only post-check (docs/runbooks/manual-values-v88-postcheck.sql; every boolean true);
+//   5. the runner again: v88 skipped by its checksum;
+//   6. the rollback (docs/runbooks/manual-values-v88-rollback.sql): the catalog equal to the one before v88;
+//   7. v88 applied again, the post-check again;
 //  7b. the guarded write of 3b again, COMMITTED this time; then the rollback refuses (a manual value was written) and
 //      changes nothing;
-//   8. pg_dump -Fc of that database, pg_restore into a second disposable database, and the catalog of v86's objects
+//   8. pg_dump -Fc of that database, pg_restore into a second disposable database, and the catalog of v88's objects
 //      compared (constraints read back by pg_get_constraintdef, triggers, indexes, function bodies);
 //   9. both disposable databases dropped, whatever happened.
 //
@@ -28,7 +28,7 @@
 // --pg-bin <dir>). The user needs CREATEDB (a superuser for the legacy seed replay: session_replication_role).
 //
 // Usage:
-//   node backend/scripts/manual-values-v86-rehearsal.mjs --host 127.0.0.1 --port 5432 --user postgres [--pg-bin <dir>]
+//   node backend/scripts/manual-values-v88-rehearsal.mjs --host 127.0.0.1 --port 5432 --user postgres [--pg-bin <dir>]
 // Exit code 0 when every step passed, 1 otherwise. Prints PASS / FAIL per step.
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
@@ -44,8 +44,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const MIGRATIONS = path.join(REPO, "migrations_v2");
 const RUNBOOKS = path.join(REPO, "docs", "runbooks");
-const V86_FILE = "202611221100_training_load_v86_manual_values.sql";
-const V86_NAME = `migrations_v2/${V86_FILE}`;
+const V88_FILE = "202611221300_training_load_v88_manual_values.sql";
+const V88_NAME = `migrations_v2/${V88_FILE}`;
 export const LOOPBACK = ["localhost", "127.0.0.1", "::1", "[::1]"];
 export const NAME_PREFIX = "optimove_tests_st4rehearsal_";
 
@@ -94,7 +94,7 @@ function report(step, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${step}${detail ? ` - ${detail}` : ""}`);
 }
 
-// The two schemas v86 touches: relations, every column of their tables, function bodies, constraints, triggers, indexes.
+// The two schemas v88 touches: relations, every column of their tables, function bodies, constraints, triggers, indexes.
 export const CATALOG_SQL = `with s as (select oid from pg_namespace where nspname in ('training', 'training_load'))
   select
   (select string_agg(x, ',' order by x) from (select c.relnamespace::regnamespace::text || '.' || c.relname || ':' || c.relkind::text x from pg_class c where c.relnamespace in (select oid from s)) q) as rels,
@@ -106,8 +106,8 @@ export const CATALOG_SQL = `with s as (select oid from pg_namespace where nspnam
   (select string_agg(x, ',' order by x) from (select t.tgrelid::regclass::text || '.' || t.tgname || ':' || t.tgenabled::text || ':' || pg_get_triggerdef(t.oid) x from pg_trigger t
      where not t.tgisinternal and t.tgrelid in (select oid from pg_class where relnamespace in (select oid from s))) q) as trigs,
   (select string_agg(x, ',' order by x) from (select i.indexrelid::regclass::text || '=' || pg_get_indexdef(i.indexrelid) x from pg_index i join pg_class c on c.oid = i.indrelid where c.relnamespace in (select oid from s)) q) as idx`;
-// v86's objects only, for the dump read-back.
-const V86_CATALOG_SQL = `with t as (select oid from pg_class where oid in ('training_load.metric_manual_values'::regclass, 'training_load.import_deletion_log'::regclass,
+// v88's objects only, for the dump read-back.
+const V88_CATALOG_SQL = `with t as (select oid from pg_class where oid in ('training_load.metric_manual_values'::regclass, 'training_load.import_deletion_log'::regclass,
     'training_load.gpexe_import_approvals'::regclass, 'training_load.metric_measurement_occasions'::regclass, 'training_load.metric_values'::regclass))
   select
   (select string_agg(x, E'\\n' order by x) from (select k.conrelid::regclass::text || '.' || k.conname || '=' || pg_get_constraintdef(k.oid) x from pg_constraint k where k.conrelid in (select oid from t)) q) as constraints,
@@ -147,7 +147,7 @@ export async function rehearse(args, password) {
     const restoreMajor = await major("pg_restore");
     report("tools: pg_dump and pg_restore of the server's major version", dumpMajor === Math.floor(version.n / 10000) && restoreMajor === dumpMajor, `server ${Math.floor(version.n / 10000)}, pg_dump ${dumpMajor}, pg_restore ${restoreMajor}`);
 
-    // 1. Build to the migration before v86.
+    // 1. Build to the migration before v88.
     const name = await created();
     const url = urlFor(args, name, password);
     const snapshotSql = fs.readFileSync(path.join(REPO, "backend", "tests", "support", "legacy-schema.sql"), "utf8");
@@ -156,12 +156,12 @@ export async function rehearse(args, password) {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-st4-rehearsal-"));
     const before = path.join(tmp, "migrations_v2");
     fs.mkdirSync(before);
-    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V86_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
+    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V88_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
     await runMigrations({ databaseUrl: url, migrationsRoot: before });
     const c = new pg.Client({ connectionString: url });
     await c.connect();
     try {
-      const notYet = (await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V86_NAME])).rows[0].n === 0;
+      const notYet = (await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V88_NAME])).rows[0].n === 0;
       // One user (a team coach), a team, an athlete and a session with its participant: the world of the guarded write.
       const u = (await c.query(`insert into public.users (email, first_name, last_name, full_name) values ('st4-rehearsal@test.local','S','4','S 4') returning id`)).rows[0].id;
       const club = (await c.query(`insert into public.clubs (name) values ('Rehearsal club') returning id`)).rows[0].id;
@@ -176,18 +176,18 @@ export async function rehearse(args, password) {
       const versionId = (await c.query(`insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type) values ($1, 1, 'm', 'numeric') returning id`, [definitionId])).rows[0].id;
       await c.query(`update training_load.metric_definitions set current_version_id = $1 where id = $2`, [versionId, definitionId]);
       const definition = { id: definitionId, current_version_id: versionId };
-      report("1. a disposable database through the migration before v86; a session with one participant", notYet && Boolean(definition), name);
+      report("1. a disposable database through the migration before v88; a session with one participant", notYet && Boolean(definition), name);
 
       // 2. Preflight.
-      const pre = await booleansOf(c, fs.readFileSync(path.join(RUNBOOKS, "manual-values-v86-preflight.sql"), "utf8"));
+      const pre = await booleansOf(c, fs.readFileSync(path.join(RUNBOOKS, "manual-values-v88-preflight.sql"), "utf8"));
       const catalogBefore = (await c.query(CATALOG_SQL)).rows[0];
       report("2. preflight: every boolean true", pre.length >= 12 && falseOnes(pre).length === 0, `${pre.length} booleans${falseOnes(pre).length ? `; false: ${falseOnes(pre).join(", ")}` : ""}`);
 
       // 3. Apply.
       await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
-      const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V86_NAME])).rows;
-      const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V86_FILE))).digest("hex");
-      report("3. v86 applied by the runner, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha, `sha256 ${sha}`);
+      const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V88_NAME])).rows;
+      const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V88_FILE))).digest("hex");
+      report("3. v88 applied by the runner, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha, `sha256 ${sha}`);
 
       // 3b. A guarded write as the service writes it, and the refusals.
       const setActor = (userId) => c.query(`select set_config('optimove.manual_value_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [userId]);
@@ -240,7 +240,7 @@ export async function rehearse(args, password) {
 
       // 4. Post-check.
       const postCheck = async () => {
-        const post = await booleansOf(c, fs.readFileSync(path.join(RUNBOOKS, "manual-values-v86-postcheck.sql"), "utf8"));
+        const post = await booleansOf(c, fs.readFileSync(path.join(RUNBOOKS, "manual-values-v88-postcheck.sql"), "utf8"));
         return { n: post.length, bad: falseOnes(post) };
       };
       const p1 = await postCheck();
@@ -249,21 +249,21 @@ export async function rehearse(args, password) {
       // 5. The runner again.
       const count = Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count);
       await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
-      report("5. the runner again: v86 skipped by its checksum", Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count) === count);
+      report("5. the runner again: v88 skipped by its checksum", Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count) === count);
 
       // 6. Rollback.
-      const rollbackSql = fs.readFileSync(path.join(RUNBOOKS, "manual-values-v86-rollback.sql"), "utf8");
+      const rollbackSql = fs.readFileSync(path.join(RUNBOOKS, "manual-values-v88-rollback.sql"), "utf8");
       await c.query(rollbackSql);
       const catalogAfter = (await c.query(CATALOG_SQL)).rows[0];
       const sameCatalog = JSON.stringify(catalogAfter) === JSON.stringify(catalogBefore);
-      const unrecorded = (await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V86_NAME])).rows[0].n === 0;
-      report("6. rollback: the catalog of training and training_load equal to the one before v86, v86 no longer recorded", sameCatalog && unrecorded,
+      const unrecorded = (await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V88_NAME])).rows[0].n === 0;
+      report("6. rollback: the catalog of training and training_load equal to the one before v88, v88 no longer recorded", sameCatalog && unrecorded,
         sameCatalog ? "" : Object.keys(catalogBefore).filter((k) => catalogBefore[k] !== catalogAfter[k]).join(", "));
 
       // 7. Apply again.
       await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
       const p2 = await postCheck();
-      report("7. v86 applied again; the post-check again", p2.n >= 16 && p2.bad.length === 0, p2.bad.join(", "));
+      report("7. v88 applied again; the post-check again", p2.n >= 16 && p2.bad.length === 0, p2.bad.join(", "));
       const gw2 = await guardedWrite({ commit: true });
       const rows = (await c.query(`select count(*)::int as n from training_load.metric_manual_values`)).rows[0].n;
       report("7b. the guarded entry again, COMMITTED (one provenance row); the refusals again", gw2.ok && rows === 1, `${gw2.detail}; provenance rows ${rows}`);
@@ -274,16 +274,16 @@ export async function rehearse(args, password) {
       const unchanged = JSON.stringify((await c.query(CATALOG_SQL)).rows[0]) === JSON.stringify(used);
       report("7c. the rollback then refuses (a manual value was written on a roster) and changes nothing", /a manual value was written on a roster/.test(refusal) && unchanged, refusal.slice(0, 100));
 
-      // 8. pg_dump -Fc and pg_restore into a second database, v86's catalog compared.
-      const source = (await c.query(V86_CATALOG_SQL)).rows[0];
-      const dumpFile = path.join(tmp, "v86.dump");
+      // 8. pg_dump -Fc and pg_restore into a second database, v88's catalog compared.
+      const source = (await c.query(V88_CATALOG_SQL)).rows[0];
+      const dumpFile = path.join(tmp, "v88.dump");
       await run(tool(args.pgBin, "pg_dump"), ["--format", "custom", "--file", dumpFile, ...conn(args, name)], { env: toolEnv(password), windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
       const copy = await created();
       await run(tool(args.pgBin, "pg_restore"), ["--exit-on-error", "--no-owner", ...conn(args, copy), dumpFile], { env: toolEnv(password), windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
       const r = new pg.Client({ connectionString: urlFor(args, copy, password) });
       await r.connect();
       try {
-        const restored = (await r.query(V86_CATALOG_SQL)).rows[0];
+        const restored = (await r.query(V88_CATALOG_SQL)).rows[0];
         // A restore re-prints a varchar IN-list (`ARRAY['a'::character varying]::text[]` comes back as
         // `ARRAY[('a'::character varying)::text]`, a v21 constraint included): the same expression. Constraints are compared
         // with the casts and parentheses taken out; how many differ only in that print is reported.
@@ -298,7 +298,7 @@ export async function rehearse(args, password) {
           for (const line of b.filter((x) => !a.includes(x)).slice(0, 5)) console.log(`      restored only: ${line}`);
         }
         const restoredRows = (await r.query(`select count(*)::int as n from training_load.metric_manual_values`)).rows[0].n;
-        report("8. pg_dump / pg_restore read-back: v86's constraints, triggers, indexes and function bodies identical, the provenance row restored", differs.length === 0 && restoredRows === 1,
+        report("8. pg_dump / pg_restore read-back: v88's constraints, triggers, indexes and function bodies identical, the provenance row restored", differs.length === 0 && restoredRows === 1,
           [differs.join(", "), reprinted ? `${reprinted} constraint(s) equal after the varchar-array re-print` : ""].filter(Boolean).join("; "));
       } finally {
         await r.end().catch(() => {});

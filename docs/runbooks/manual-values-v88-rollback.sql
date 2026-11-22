@@ -1,29 +1,29 @@
--- Rollback of migration v86 (manual values on the roster, the undo that confirms them, the approval's choice columns):
--- migrations_v2/202611221100_training_load_v86_manual_values.sql
+-- Rollback of migration v88 (manual values on the roster, the undo that confirms them, the approval's choice columns):
+-- migrations_v2/202611221300_training_load_v88_manual_values.sql
 --
 -- Not a migration and never run automatically. Rehearsed on disposable databases (backend/tests/manual-values-st4.test.mjs:
--- apply -> rollback -> the catalog before v86 exactly -> re-apply, and every refusal below). Before it is run anywhere real: a
--- fresh restore-verified backup exists; the deployed commit no longer contains the v86 migration file (otherwise the migrator
--- applies v86 again at the next start); and the owner approved this database specifically (.claude/rules/database-safety.md).
--- The backend of the commit before v86 calls the undo with seven arguments, which the restored function takes.
+-- apply -> rollback -> the catalog before v88 exactly -> re-apply, and every refusal below). Before it is run anywhere real: a
+-- fresh restore-verified backup exists; the deployed commit no longer contains the v88 migration file (otherwise the migrator
+-- applies v88 again at the next start); and the owner approved this database specifically (.claude/rules/database-safety.md).
+-- The backend of the commit before v88 calls the undo with seven arguments, which the restored function takes.
 --
 -- It puts v76's undo, v63's scope and v26's needs-state back exactly (checked by md5 afterwards), restores v59's subset-hash
 -- pair rule, drops the provenance table with its guards, the deletion log's and the approvals' new columns, and removes the
--- v86 record. It changes no other row. It refuses, changing nothing, when
+-- v88 record. It changes no other row. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v86 is not recorded, or any later migrations_v2 migration is;
---   * the body in force of a v86 function is not v86's (by md5);
+--   * v88 is not recorded, or any later migrations_v2 migration is;
+--   * the body in force of a v88 function is not v88's (by md5);
 --   * a manual value was written on a roster (a provenance row exists), an undo logged removed manual values, or an approval
---     recorded a replaced manual value or a chosen type (the way back is forward-only once v86's data is used).
+--     recorded a replaced manual value or a chosen type (the way back is forward-only once v88's data is used).
 -- One transaction. Run it at a quiet moment as
---   psql -v ON_ERROR_STOP=1 -f manual-values-v86-rollback.sql
+--   psql -v ON_ERROR_STOP=1 -f manual-values-v88-rollback.sql
 begin;
 set local lock_timeout = '5s';
 
 do $$
 begin
   if not pg_try_advisory_xact_lock(822026) then
-    raise exception 'v86 rollback refused: the migrator is running';
+    raise exception 'v88 rollback refused: the migrator is running';
   end if;
 end $$;
 
@@ -38,37 +38,37 @@ lock table training_load.metric_manual_values in access exclusive mode;
 
 do $$
 declare
-  v86 constant text := 'migrations_v2/202611221100_training_load_v86_manual_values.sql';
+  v88 constant text := 'migrations_v2/202611221300_training_load_v88_manual_values.sql';
   expected constant text[][] := array[
-    ['training_load', 'undo_imported_session', '727221b5842fb74b7f4f100411c4b89e'],
-    ['training_load', 'session_undo_scope', 'a68f994cbbe2cbeaadfad5207334ba01'],
-    ['training', 'activity_roster_needs_state', '1a64e2ce6d700b742b7383055681774e'],
+    ['training_load', 'undo_imported_session', '43736ad4b05f3393a77d06ed01b184bc'],
+    ['training_load', 'session_undo_scope', '073b87308f65f89751a90038164adaf9'],
+    ['training', 'activity_roster_needs_state', '048ce8e28db12369eab9ea5d8d97295b'],
     ['training_load', 'validate_metric_manual_value', 'e50e495a9447dde50193230603eda742'],
     ['training_load', 'session_undo_manual_log_ok', '85907d20eef6ff365255eafe31b2598f'],
     ['training_load', 'forbid_value_after_manual_provenance', '9a200df4d7b15331795782dcbf124185']];
   i int;
 begin
-  if not exists (select 1 from public.schema_migrations where migration_name = v86) then
-    raise exception 'v86 rollback refused: v86 is not recorded on this database';
+  if not exists (select 1 from public.schema_migrations where migration_name = v88) then
+    raise exception 'v88 rollback refused: v88 is not recorded on this database';
   end if;
-  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v86) then
-    raise exception 'v86 rollback refused: later migrations are applied';
+  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v88) then
+    raise exception 'v88 rollback refused: later migrations are applied';
   end if;
   for i in 1 .. array_length(expected, 1) loop
     if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = expected[i][1] and p.proname = expected[i][2]) is distinct from expected[i][3] then
-      raise exception 'v86 rollback refused: the body in force of %.% is not v86''s', expected[i][1], expected[i][2];
+      raise exception 'v88 rollback refused: the body in force of %.% is not v88''s', expected[i][1], expected[i][2];
     end if;
   end loop;
   if exists (select 1 from training_load.metric_manual_values) then
-    raise exception 'v86 rollback refused: a manual value was written on a roster';
+    raise exception 'v88 rollback refused: a manual value was written on a roster';
   end if;
   if exists (select 1 from training_load.import_deletion_log where manual_values_removed is not null) then
-    raise exception 'v86 rollback refused: an undo logged removed manual values';
+    raise exception 'v88 rollback refused: an undo logged removed manual values';
   end if;
   if exists (select 1 from training_load.gpexe_import_approvals
               where cardinality(replaced_manual_athlete_ids) > 0 or chosen_activity_type_key is not null) then
-    raise exception 'v86 rollback refused: an approval recorded a replaced manual value or a chosen session type';
+    raise exception 'v88 rollback refused: an approval recorded a replaced manual value or a chosen session type';
   end if;
 end $$;
 
@@ -84,7 +84,7 @@ alter table training_load.gpexe_import_approvals
 alter table training_load.gpexe_import_approvals
   add constraint gpexe_import_approvals_subset_hash_pair check ((cardinality(excluded_athlete_ids) = 0) = (subset_hash is null));
 
--- The bodies before v86, exactly (the undo goes back to seven arguments and its v76 result columns).
+-- The bodies before v88, exactly (the undo goes back to seven arguments and its v76 result columns).
 drop function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, text, text);
 CREATE FUNCTION training_load.undo_imported_session(p_actor uuid, p_team uuid, p_candidate uuid, p_request_key uuid, p_reason text, p_expected_event uuid DEFAULT NULL::uuid, p_later_roster_fingerprint text DEFAULT NULL::text)
  RETURNS TABLE(replayed boolean, event_id uuid, deletion_log_id uuid, removed_counts jsonb, removed_total integer, new_candidate_id uuid, undone_candidate_ids uuid[], roster_work_removed jsonb)
@@ -635,7 +635,7 @@ drop function training_load.protect_metric_manual_values();
 drop function training_load.manual_value_actor_is_set();
 drop function training_load.manual_value_context_actor();
 
-delete from public.schema_migrations where migration_name = 'migrations_v2/202611221100_training_load_v86_manual_values.sql';
+delete from public.schema_migrations where migration_name = 'migrations_v2/202611221300_training_load_v88_manual_values.sql';
 
 do $$
 declare
@@ -648,7 +648,7 @@ begin
   for i in 1 .. array_length(expected, 1) loop
     if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = expected[i][1] and p.proname = expected[i][2]) is distinct from expected[i][3] then
-      raise exception 'v86 rollback: the restored body of %.% is not the one before v86', expected[i][1], expected[i][2];
+      raise exception 'v88 rollback: the restored body of %.% is not the one before v88', expected[i][1], expected[i][2];
     end if;
   end loop;
 end $$;

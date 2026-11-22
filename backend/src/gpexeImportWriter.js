@@ -538,7 +538,7 @@ async function supersede(client, { common, currentOccasionId, identityId }) {
   return occasionId;
 }
 
-// ST-4 (v86), until the re-import question (ST-4 PR2) asks "Keep my values / Use GPEXE's" (the Rukovodilac's decision of
+// ST-4 (v88), until the re-import question (ST-4 PR2) asks "Keep my values / Use GPEXE's" (the Rukovodilac's decision of
 // 2026-11-22): nothing written on the roster is replaced or doubled without that choice. An import whose session holds
 // such values is refused as a whole with manual_values_conflict and the athletes named (fail closed); the preview runs
 // this writer, so the candidate shows as blocked and nothing is written. Two cases:
@@ -579,7 +579,7 @@ async function rosterCorrectionOf(client, occasionId) {
 }
 
 function manualValuesConflict(athleteIds) {
-  const error = new GpexeImportError("manual_values_conflict", "Values entered or corrected on the roster would be replaced or doubled by this import.");
+  const error = new GpexeImportError("manual_values_conflict", "Values were entered or corrected by hand on the roster for athletes GPEXE now sends data for. Importing would replace or double them, so this session waits until you can choose between them; nothing of it is imported.");
   error.manualAthleteIds = [...new Set(athleteIds)].sort();
   return error;
 }

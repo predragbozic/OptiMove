@@ -180,8 +180,6 @@ export const BLOCK_MESSAGES = Object.freeze({
   source_instance_held: "Another team's GPEXE source instance holds this GPEXE team.",
   source_instance_changed: "This team's GPEXE source instance names another GPEXE team.",
   session_imported_under_another_instance: "This session was imported earlier under another GPEXE source instance.",
-  // ST-4 (v86): fail closed until the re-import question exists.
-  manual_values_conflict: "Values were entered or corrected by hand on the roster for athletes GPEXE now sends data for. Importing would replace or double them, so this session waits until you can choose between them; nothing of it is imported.",
 });
 
 // v80 step C0: the plan's section 5 sentence of a session blocked by team_setting_changed, naming both settings.

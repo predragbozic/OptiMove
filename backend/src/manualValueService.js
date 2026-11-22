@@ -6,8 +6,8 @@
 //     it replaces an estimate of the same variable through v63's M3, and a later entry supersedes the earlier one;
 //   - a correction is a 'manual' occasion of the athlete's whole-session source identity: it supersedes the current
 //     occasion and becomes the identity's current one. The measured occasion is never deleted;
-//   - a restore is a correction whose values are exactly the measured occasion's (v86 checks it).
-// Every one has its provenance row in training_load.metric_manual_values (who, when, on which right, which request; v86),
+//   - a restore is a correction whose values are exactly the measured occasion's (v88 checks it).
+// Every one has its provenance row in training_load.metric_manual_values (who, when, on which right, which request; v88),
 // written in the same transaction. This module is the only writer of that table.
 //
 // Behind the server flag MANUAL_VALUES_ENABLED (on unless it is "false"; the Rukovodilac, 2026-11-22): off, every route
@@ -161,7 +161,7 @@ function classify(occasions) {
     return { mode: "correction", current };
   }
   const entries = occasions.filter((o) => o.entry_method === "manual");
-  // A removal (v86's 'removal' kind: an empty occasion that ended an entry) is the current occasion a new entry follows.
+  // A removal (v88's 'removal' kind: an empty occasion that ended an entry) is the current occasion a new entry follows.
   if (entries.some((o) => o.manual_kind !== "entry" && o.manual_kind !== "removal")) {
     throw conflict("changed_elsewhere", "This athlete's values were entered outside the roster. Change them there.");
   }
