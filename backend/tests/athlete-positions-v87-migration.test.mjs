@@ -91,7 +91,7 @@ test("2. preflight, apply, post-check, rollback to the same catalog, apply again
   await applyGpexeTestMigrations(db.url, [V87_FILE]);
   assert.deepEqual((await c.query(TESTS_FKS)).rows[0], fksBefore, "v87 changes none of the Tests module's foreign keys");
   assert.deepEqual(await allBlocks("athlete-positions-v87-preflight.sql"), [
-    "1.v87_not_recorded", "2.v42_shape", "2.positions_empty", "2.football_free", "2.v42_unique", "2.no_assignment_table", "2.no_change_log", "2.no_override_table", "2.no_functions",
+    "1.v85_last", "1.v87_not_recorded", "2.v42_shape", "2.positions_empty", "2.football_free", "2.v42_unique", "2.no_assignment_table", "2.no_change_log", "2.no_override_table", "2.no_functions",
     "3.basis_body_v69", "3.guard_body_v64", "3.method_check_v69",
   ], "after v87 the preflight refuses exactly on the v87 objects");
   assert.deepEqual(await allBlocks("athlete-positions-v87-postcheck.sql"), [], "the post-check passes after v87");

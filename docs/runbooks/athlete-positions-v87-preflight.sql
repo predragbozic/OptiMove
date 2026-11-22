@@ -4,10 +4,13 @@
 --   begin transaction read only; <block>; rollback;
 -- Every block returns ok columns that must all be true; block 4 is for the reader (post-check block 6 compares it).
 
--- 1. The server, the last recorded migration (for the reader), v87 not recorded, the checksums shaped.
+-- 1. The server, the last recorded migration (v85, the Rukovodilac's order of 2026-11-22: v87 goes right after it), v87
+--    not recorded, the checksums shaped.
 select current_setting('server_version_num')::int >= 150000 as server_15_or_later,
        current_setting('server_version') as server_version,
        (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%') as last_migration,
+       (select max(migration_name) from public.schema_migrations where migration_name like 'migrations_v2/%')
+         = 'migrations_v2/202611201500_training_load_v85_session_types.sql' as v85_last,
        not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611221200_athletes_v87_positions.sql') as v87_not_recorded,
        not exists (select 1 from public.schema_migrations where checksum is null or checksum !~ '^[0-9a-f]{64}$') as checksums_shaped;
 
