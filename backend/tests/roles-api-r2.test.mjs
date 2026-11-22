@@ -217,15 +217,26 @@ test("19c. a revocation whose caller loses the right between the route's gate an
   const before = await counts();
   const hold = async (lose, restore) => {
     const g = gate(); let entered = false;
-    svc.setRolesBeforeLocksHoldForTests(async () => { entered = true; await g.promise; });
-    const pending = revoke(w.adminA, a.id, { userId: w.target.id, roleId: role.id });
-    const start = Date.now();
-    while (!entered && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 10));
-    assert.ok(entered);
-    await lose();
-    g.open();
-    try { return await pending; } finally { svc.setRolesBeforeLocksHoldForTests(null); await restore(); }
+    let pending;
+    try {
+      svc.setRolesBeforeLocksHoldForTests(async () => { entered = true; await g.promise; });
+      pending = revoke(w.adminA, a.id, { userId: w.target.id, roleId: role.id });
+      const start = Date.now();
+      while (!entered && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 10));
+      assert.ok(entered);
+      await lose();
+      g.open();
+      return await pending;
+    } finally {
+      g.open();
+      svc.setRolesBeforeLocksHoldForTests(null);
+      if (pending) await pending.catch(() => {});
+      await restore();
+    }
   };
+  // Case 1: lock_permission_actor finds no basis (the club role is inactive): `!basis` in revokeAssignment's prepare.
+  // Case 2: an archived club does not change the lock's basis (lock_permission_actor does not read clubs.is_active),
+  // so only `!(await staffStanding(ctx)(client, clubId))` in the same prepare stops it (standingFor of runWrite runs on replays only).
   code(await hold(
     () => k.query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [w.adminA.id, w.A]),
     () => k.query(`update public.user_club_roles set is_active = true where user_id = $1 and club_id = $2`, [w.adminA.id, w.A]),
