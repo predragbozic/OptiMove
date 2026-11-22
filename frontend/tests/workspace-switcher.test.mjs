@@ -115,7 +115,10 @@ test("4. selecting a workspace sends PUT with the exact type/scopeId, shows pend
   const second = handleWorkspaceAction(action);
   await Promise.all([first, second]);
 
-  assert.equal(calls.length, 1, "a second click while pending must not send a second request");
+  // One PUT (a second click while pending sends none); the only other request is the read of /me for the new
+  // workspace's permissions (roles R3).
+  assert.equal(calls.filter((call) => call.method === "PUT").length, 1, "a second click while pending must not send a second request");
+  assert.deepEqual(calls.slice(1).map((call) => [call.method, call.url]), [["GET", "/api/auth/me"]]);
   assert.equal(calls[0].url, "/api/auth/workspace");
   assert.equal(calls[0].method, "PUT");
   assert.deepEqual(calls[0].body, { type: "team", scopeId: "team-1" });
@@ -212,4 +215,28 @@ test("12. after a workspace is revoked and a fallback takes over, the switcher r
   assert.match(workspaceToggleEl.innerHTML, /<span class="workspace-toggle-extra">Team · <\/span>U18 Boys/);
   assert.equal(workspaceToggleEl.getAttribute("aria-label"), "Workspace: Team · U18 Boys");
   assert.equal(workspaceToggleEl.dataset.action, undefined, "only one workspace remains, so no dropdown is needed");
+});
+
+test("13. roles R3: a switch drops the old workspace's permissions and takes the new workspace's from /me; a failed read leaves none (fallback)", async () => {
+  const switched = { activeWorkspace: clubWorkspace, availableWorkspaces: [clubWorkspace, teamWorkspace] };
+  // Words read for the NEW workspace replace the old ones.
+  resetState();
+  state.currentUser = { activeWorkspace: teamWorkspace, availableWorkspaces: [clubWorkspace, teamWorkspace], permissions: ["org.view", "athletes.manage"], permissionsUnavailable: false };
+  installFetchMock([{ status: 200, body: switched }, { status: 200, body: { user: { activeWorkspace: clubWorkspace, permissions: ["org.view", "staff.assign", "roles.manage"], permissionsUnavailable: false } } }]);
+  await handleWorkspaceAction(fakeAction({ action: "workspace-select", workspaceType: "club", workspaceScopeId: "club-1" }));
+  assert.deepEqual(state.currentUser.permissions, ["org.view", "staff.assign", "roles.manage"]);
+  assert.equal(state.currentUser.activeWorkspace.type, "club");
+  // A /me that names another workspace is not used.
+  resetState();
+  state.currentUser = { activeWorkspace: teamWorkspace, availableWorkspaces: [clubWorkspace, teamWorkspace], permissions: ["org.view"] };
+  installFetchMock([{ status: 200, body: switched }, { status: 200, body: { user: { activeWorkspace: teamWorkspace, permissions: ["org.view"] } } }]);
+  await handleWorkspaceAction(fakeAction({ action: "workspace-select", workspaceType: "club", workspaceScopeId: "club-1" }));
+  assert.equal("permissions" in state.currentUser, false, "the old workspace's words never stay");
+  // A failed read: no words at all, so the screens fall back to what they showed before permissions existed.
+  resetState();
+  state.currentUser = { activeWorkspace: teamWorkspace, availableWorkspaces: [clubWorkspace, teamWorkspace], permissions: [], permissionsUnavailable: false };
+  installFetchMock([{ status: 200, body: switched }, { status: 500, body: { error: "x" } }]);
+  await handleWorkspaceAction(fakeAction({ action: "workspace-select", workspaceType: "club", workspaceScopeId: "club-1" }));
+  assert.equal("permissions" in state.currentUser, false);
+  assert.equal("permissionsUnavailable" in state.currentUser, false);
 });

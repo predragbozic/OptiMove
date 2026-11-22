@@ -5,6 +5,7 @@
 // returns. One write at a time, each with its requestKey; a lost answer is checked by sending the same request again.
 import { api } from "./api.js";
 import { CENTRAL_CALENDAR_WRITE_BOUND_MS, centralCalendarErrorInfo, centralCalendarOutcomeUnknown, newCentralCalendarRequestKey } from "./central-calendar-data.js";
+import { heldPermissions } from "./permission-nav.js";
 import { emptyRolesState as emptyRoles, state } from "./state.js";
 
 export const ROLES_BASE = "/api/organization/roles";
@@ -25,6 +26,10 @@ export function rolesContext(data = state.organization?.data) {
   const platform = data?.isPlatformAdmin === true;
   if (ws?.type === "club" && ws.scopeId) {
     const clubId = String(ws.scopeId);
+    // With /me `permissions` (Q4): whoever manages roles edits them, whoever sees the organization reads them; the
+    // server's `actions` still decide each button. Without the list, today's club-admin fact.
+    const held = heldPermissions(user);
+    if (held) return held.has("roles.manage") || held.has("org.view") ? { clubId, platform } : null;
     const admin = (user.clubs || []).some((club) => String(club?.id) === clubId && club?.role === "club_admin");
     return admin || platform ? { clubId, platform } : null;
   }

@@ -1,3 +1,4 @@
+import { bumpCentralCalendarSwitcherGeneration, centralCalendarChosenAthlete } from "./central-calendar-switcher.js";
 import { CC_QUESTION_SETTLED_CODES } from "./central-calendar-questions.js";
 import { api } from "./api.js";
 import { clearGpsReview } from "./central-calendar-gps-review.js";
@@ -10,7 +11,9 @@ import { buildContextKey, invalidateCacheNamespace, loadCachedView } from "./vie
 // (docs/ai/central-calendar-k1-plan.md). One request per visible range,
 // never a filter parameter (the chips filter the answer in memory, plan
 // decision A) - except `kinds` while only non-event kinds are chosen (FE-D16,
-// a second read, below) - and one extra read of a single day with include=athletes
+// a second read, below) and `athleteIds` while an athlete is chosen (K6, the
+// switcher: the cards and their numbers must be that athlete's, which an
+// in-memory filter cannot give) - and one extra read of a single day with include=athletes
 // when the item panel needs names. Both go through view-cache.js'
 // loadCachedView with a context key of account + workspace + range + the
 // browser's date (the server derives every status from `today`, so a tab
@@ -47,6 +50,7 @@ export function centralCalendarTeamLabel(team) {
 
 let rangeGeneration = 0;
 let kindsGeneration = 0;
+let athleteGeneration = 0;
 let dayGeneration = 0;
 
 // The days one request covers: a month is its grid of whole weeks (35 or 42
@@ -64,17 +68,21 @@ export function centralCalendarRange(view, anchor) {
 }
 
 // FE-D16 (central-calendar-k2b2-plan.md 9.4): a read with `kinds` has its own key; the unfiltered read keeps its key.
-export function centralCalendarContextKey(from, to, today, kinds = "") {
-  return buildContextKey([...currentUserWorkspaceContextParts(), from, to, today, ...(kinds ? ["kinds", kinds] : [])]);
+// K6 (contract 2.5): an athlete's read has its own key (`athlete:<uuid>`); the unfiltered read keeps its key.
+export function centralCalendarContextKey(from, to, today, kinds = "", athleteId = "") {
+  return buildContextKey([...currentUserWorkspaceContextParts(), from, to, today, ...(kinds ? ["kinds", kinds] : []), ...(athleteId ? [`athlete:${athleteId}`] : [])]);
 }
 
-function dayContextKey(date, today, kinds = "") {
-  return buildContextKey([...currentUserWorkspaceContextParts(), date, today, ...(kinds ? ["kinds", kinds] : [])]);
+function dayContextKey(date, today, kinds = "", athleteId = "") {
+  return buildContextKey([...currentUserWorkspaceContextParts(), date, today, ...(kinds ? ["kinds", kinds] : []), ...(athleteId ? [`athlete:${athleteId}`] : [])]);
 }
 
-export function centralCalendarUrl(from, to, today, { includeAthletes = false, kinds = "" } = {}) {
+// `athleteId` is sent as `athleteIds` ALONE (never with clubIds or teamIds: the server's filter is a union inside the
+// scope, so a team sent with the athlete would widen the answer to the whole team - contract 2.5).
+export function centralCalendarUrl(from, to, today, { includeAthletes = false, kinds = "", athleteId = "" } = {}) {
   const params = new URLSearchParams({ from, to, today });
   if (kinds) params.set("kinds", kinds);
+  if (athleteId) params.set("athleteIds", athleteId);
   if (includeAthletes) params.set("include", "athletes");
   return `/api/calendar?${params.toString()}`;
 }
@@ -97,6 +105,14 @@ export function centralCalendarServerKinds(filters) {
 // link suggestions and the chips' counts).
 export function centralCalendarShownData(cal) {
   const kinds = centralCalendarServerKinds(cal?.filters);
+  // K6 (contract 2.5): while an athlete is chosen the cards are that athlete's read (kinds included), and NEVER the
+  // unfiltered answer - null while it loads or failed, so no one's cards sit under "Showing Ana".
+  const athleteId = centralCalendarChosenAthlete(cal);
+  if (athleteId) {
+    const own = cal.switcher?.answer;
+    if (own && cal.data && own.athleteId === athleteId && own.kinds === kinds && own.data?.from === cal.data.from && own.data?.to === cal.data.to) return own.data;
+    return null;
+  }
   const answer = cal?.kindsAnswer;
   if (kinds && answer && cal.data && answer.kinds === kinds && answer.data?.from === cal.data.from && answer.data?.to === cal.data.to) return answer.data;
   return cal?.data || null;
@@ -142,7 +158,11 @@ export function resetCentralCalendarForWorkspaceChange() {
   clearGpsReview();
   rangeGeneration += 1;
   kindsGeneration += 1;
+  athleteGeneration += 1;
   dayGeneration += 1;
+  // K6: the chosen athlete and team, the search, the reduced team pairs and the Weekly plan's switcher flow all live
+  // in the slice replaced above; a slower organization read of the old workspace is dropped by this counter.
+  bumpCentralCalendarSwitcherGeneration();
 }
 
 export function readCentralCalendarWeekMode() {
@@ -203,7 +223,66 @@ function closePanelMissingFrom(cal, data) {
 export async function loadCentralCalendar({ render, forceRefresh = false } = {}) {
   const result = await loadCentralCalendarRange({ render, forceRefresh });
   const cal = state.centralCalendar;
-  if (cal?.data && centralCalendarServerKinds(cal.filters)) await loadCentralCalendarKinds({ render, forceRefresh });
+  // K6: a remembered athlete no longer in the roster is dropped before any read that would send it (contract 2.5).
+  if (cal?.data && cal.switcher?.athleteKey && !centralCalendarChosenAthlete(cal)) {
+    cal.switcher.athleteKey = "";
+    cal.switcher.answer = null;
+    cal.switcher.status = "idle";
+    render?.();
+  }
+  if (cal?.data && centralCalendarChosenAthlete(cal)) await loadCentralCalendarAthlete({ render, forceRefresh });
+  else if (cal?.data && centralCalendarServerKinds(cal.filters)) await loadCentralCalendarKinds({ render, forceRefresh });
+  return result;
+}
+
+// K6 (contract 2.5): the chosen athlete's read of the range on screen, with the chosen kinds too (one read, its own
+// key). While it is not the answer shown, the cards are the loading state, never the unfiltered answer's.
+export async function loadCentralCalendarAthlete({ render, forceRefresh = false, closeMissing = true } = {}, { retried = false } = {}) {
+  const cal = state.centralCalendar;
+  const athleteId = centralCalendarChosenAthlete(cal);
+  if (!athleteId || !cal.data) return null;
+  const kinds = centralCalendarServerKinds(cal.filters);
+  const today = localDateIso();
+  const range = centralCalendarRange(cal.view, cal.anchor);
+  const generation = ++athleteGeneration;
+  const contextKey = centralCalendarContextKey(range.from, range.to, today, kinds, athleteId);
+  const current = () => generation === athleteGeneration && state.centralCalendar === cal && centralCalendarChosenAthlete(cal) === athleteId;
+  const result = await loadCachedView({
+    namespace: CENTRAL_CALENDAR_NAMESPACE,
+    contextKey,
+    forceRefresh,
+    fetcher: () => api(centralCalendarUrl(range.from, range.to, today, { kinds, athleteId })),
+    showLoading: () => {
+      if (!current()) return;
+      cal.switcher.status = "loading";
+      render?.();
+    },
+    applyData: (data) => {
+      if (!current()) return;
+      cal.switcher.answer = { athleteId, kinds, data };
+      cal.switcher.status = "idle";
+      if (closeMissing) closePanelMissingFrom(cal, data);
+      render?.();
+    },
+    applyError: () => {
+      if (!current()) return;
+      cal.switcher.status = "error";
+      render?.();
+    },
+    getCurrentContextKey: () => {
+      const now = state.centralCalendar;
+      const nowAthlete = centralCalendarChosenAthlete(now);
+      if (!nowAthlete) return "";
+      const nowRange = centralCalendarRange(now.view, now.anchor);
+      return centralCalendarContextKey(nowRange.from, nowRange.to, localDateIso(), centralCalendarServerKinds(now.filters), nowAthlete);
+    },
+  });
+  if (!current()) return result;
+  if (result?.outcome === "invalidated-stale" && !retried) return loadCentralCalendarAthlete({ render, forceRefresh, closeMissing }, { retried: true });
+  if (result?.outcome === "background-refresh-failed") {
+    cal.refreshError = "Could not refresh. Showing the last loaded calendar.";
+    render?.();
+  }
   return result;
 }
 
@@ -287,7 +366,7 @@ async function loadCentralCalendarRange({ render, forceRefresh = false } = {}, {
       cal.data = data;
       cal.loading = false;
       // While the cards come from the kinds read, that read decides (an RPE request it shows may be folded here).
-      if (!centralCalendarServerKinds(cal.filters)) closePanelMissingFrom(cal, data);
+      if (!centralCalendarServerKinds(cal.filters) && !centralCalendarChosenAthlete(cal)) closePanelMissingFrom(cal, data);
       render?.();
       // K2b-1d3: the cards wear their type's look from the card itself; the
       // catalog is read only when the event form opens (the actions' ensureEventTypes).
@@ -486,7 +565,9 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
   const { key, date } = panel;
   const today = localDateIso();
   // The day is read the way its cards were (FE-D16): a card only the kinds read shows is found there.
-  const kinds = centralCalendarShownData(cal) === cal.data ? "" : centralCalendarServerKinds(cal.filters);
+  // K6 (contract 2.5): with an athlete chosen the day is read with the same athleteIds and kinds as the cards.
+  const athleteId = centralCalendarChosenAthlete(cal);
+  const kinds = athleteId ? centralCalendarServerKinds(cal.filters) : centralCalendarShownData(cal) === cal.data ? "" : centralCalendarServerKinds(cal.filters);
   const generation = ++dayGeneration;
   panel.loading = true;
   panel.error = "";
@@ -495,9 +576,9 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
   const current = () => generation === dayGeneration && state.centralCalendar === cal && cal.panel.open && cal.panel.key === key;
   await loadCachedView({
     namespace: CENTRAL_CALENDAR_DAY_NAMESPACE,
-    contextKey: dayContextKey(date, today, kinds),
+    contextKey: dayContextKey(date, today, kinds, athleteId),
     forceRefresh,
-    fetcher: () => api(centralCalendarUrl(date, date, today, { includeAthletes: true, kinds })),
+    fetcher: () => api(centralCalendarUrl(date, date, today, { includeAthletes: true, kinds, athleteId })),
     applyData: (data) => {
       if (!current()) return;
       const item = findCentralCalendarItem(data, key);
@@ -518,7 +599,7 @@ export async function loadCentralCalendarDay({ render, forceRefresh = false } = 
     },
     getCurrentContextKey: () => {
       const open = state.centralCalendar.panel;
-      return open.open ? dayContextKey(open.date, localDateIso(), kinds) : "";
+      return open.open ? dayContextKey(open.date, localDateIso(), kinds, athleteId) : "";
     },
   });
 }
