@@ -80,7 +80,7 @@ export function renderPositionsSectionHtml() {
 export function renderAthletePositionFormHtml(athleteId) {
   const p = state.positions;
   if (!p.loaded) {
-    return p.error
+    return p.error && !p.loading
       ? `<div class="organization-form organization-dialog-part"><h4>Position</h4><p class="builder-error" role="alert">${escapeHtml(p.error)}</p><button class="plain-button compact-button" type="button" data-action="positions-reload">Try again</button></div>`
       : `<div class="organization-form organization-dialog-part"><h4>Position</h4><p class="muted" aria-live="polite">Reading positions…</p></div>`;
   }

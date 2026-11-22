@@ -17,7 +17,10 @@ async function write(forWhat, op, path, method, body, rerender) {
   let result;
   try {
     result = await sendPositionWrite(op, path, method, body);
-    if (result.ok || result.code === "position_changed" || result.code === "name_changed") await loadPositions({ force: true });
+    // A success, or a refusal that says the list changed under the caller: read it again.
+    if (result.ok || ["position_changed", "name_changed", "position_hidden", "position_shown", "position_archived", "position_active"].includes(result.code)) {
+      await loadPositions({ force: true });
+    }
     if (!result.ok) say(forWhat, result.message);
   } finally {
     p.busy = false;
