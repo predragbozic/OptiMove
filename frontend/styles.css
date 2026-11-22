@@ -8508,6 +8508,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-create-form { max-width: 700px; }
 .builder-error { min-height: 0; margin: 0; color: var(--danger, #a23b3b); font-size: 13px; font-weight: 700; }
 .builder-page-error { margin: 0 0 12px; }
+.builder-page-error p { margin: 0; overflow-wrap: anywhere; }
+.builder-page-error .builder-page-error-action { min-height: 44px; min-width: 44px; margin-top: 8px; max-width: 100%; }
 .builder-check { display: flex; gap: 8px; align-items: center; font-weight: 700; }
 .builder-inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
 .builder-inline-form .builder-error { grid-column: 1 / -1; }
@@ -8736,6 +8738,25 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
 .builder-block-picker-node-tree .builder-block-picker-node-tree { margin-left: 16px; margin-top: 4px; border-left: 1px solid var(--line, #dfe4e8); padding-left: 10px; }
 .builder-block-picker-node-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid var(--line, #dfe4e8); border-radius: 6px; background: #fff; color: inherit; text-align: left; cursor: pointer; }
 .builder-block-picker-node-row:hover { border-color: #287e77; background: #eef8f6; }
+/* A long unbroken section name wraps inside its row instead of widening the dialog. */
+.builder-block-picker-node-row > span:not(.builder-node-icon) { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .builder-block-picker-node-tree .builder-block-picker-node-tree { margin-left: 8px; padding-left: 6px; }
+}
+/* A section's copy button and its pictures button side by side (never nested). */
+.builder-block-picker-node-line { display: flex; align-items: stretch; gap: 6px; }
+.builder-block-picker-node-line .builder-block-picker-node-row { flex: 1 1 auto; min-width: 0; min-height: 44px; }
+.builder-block-picker-thumbs-button { display: inline-grid; place-items: center; flex: 0 0 44px; align-self: flex-start; width: 44px; min-width: 44px; height: 44px; border: 1px solid var(--line, #dfe4e8); border-radius: 6px; background: #fff; color: var(--muted, #667085); cursor: pointer; }
+.builder-block-picker-thumbs-button:hover, .builder-block-picker-thumbs-button.is-open { border-color: #287e77; background: #eef8f6; color: #1f6f68; }
+.builder-block-picker-thumbs-button .rail-icon { width: 20px; height: 20px; }
+.builder-block-picker-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin: 6px 0 2px; padding: 8px; list-style: none; border: 1px solid var(--line, #dfe4e8); border-radius: 8px; background: #f8fafb; }
+.builder-block-picker-thumb { display: grid; gap: 4px; min-width: 0; }
+.builder-block-picker-thumb-frame { display: block; aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: #eef2f4; }
+.builder-block-picker-thumb-image { display: block; width: 100%; height: 100%; object-fit: cover; }
+.builder-block-picker-thumb-frame .exercise-thumb-fallback { display: grid; place-items: center; width: 100%; height: 100%; color: var(--muted, #667085); font-weight: 800; }
+.builder-block-picker-thumb-name { font-size: 12px; line-height: 1.25; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.builder-block-picker-thumb-more { align-self: center; font-size: 12px; }
+.builder-block-picker-thumbs-empty { margin: 6px 0 2px; }
 .builder-block-picker-node-row small { margin-left: auto; color: var(--muted, #667085); font-size: 12px; white-space: nowrap; }
 .builder-copy-plan-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .builder-copy-plan-footer .muted { margin: 0; font-size: 12px; }
@@ -29808,6 +29829,18 @@ body.athlete-questions-prompt-open {
 }
 .cc-go-meta { color: var(--muted); font-weight: 600; }
 
+/* v87: positions (Settings -> Tags & Presets, and the athlete's Edit window). */
+.positions-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.positions-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 4px 0; border-bottom: 1px solid var(--line, #dfe4e8); }
+.positions-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.positions-row.is-archived strong { color: var(--muted, #667085); }
+.positions-actions { display: flex; gap: 12px; }
+.positions-actions .text-action, .positions-rename-form .text-action { min-height: 44px; min-width: 44px; }
+.positions-rename-form { flex: 1 1 100%; }
+.positions-add-form { display: flex; flex-direction: column; gap: 8px; }
+/* 16 px at every width (iOS zoom); an older dialog rule sets 14 px on desktop, so this one is marked important. */
+.positions-section input, .positions-section select, [data-position-form] input, [data-position-form] select { font-size: 16px !important; }
+
 /* ============================================================
    Settings > Roles and the role assignment in Settings > Users (roles plan R3).
    The Roles panel is a .data-sources panel (inputs, selects and textareas are
@@ -30014,6 +30047,11 @@ body.athlete-questions-prompt-open {
 .athlete-switcher-fold > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .athlete-switcher.is-open .cc-filters-chevron { transform: translateY(2px) rotate(-135deg); }
 .weekly-k6-controls[aria-busy="true"] { opacity: .6; pointer-events: none; }
+/* K6 follow-up: hide / show the athlete strip (a computer's calendar box, the Weekly plan's strip). */
+.athlete-switcher-head, .weekly-k6-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.athlete-switcher-head-text { min-width: 0; overflow-wrap: anywhere; font-weight: 800; }
+.athlete-switcher-hide, .weekly-k6-strip-toggle { flex: none; min-height: 44px; min-width: 44px; font-weight: 700; }
+.athlete-switcher.is-collapsed { gap: 0; }
 /* Weekly program templates, part WT-A (docs/ai/weekly-program-template-plan.md):
    the week strip, the template type choice, the library chip. */
 .builder-week-strip { display: grid; gap: 10px; margin: 4px 0 14px; }
@@ -30063,3 +30101,9 @@ body.athlete-questions-prompt-open {
   .builder-tw-conflict-actions .plain-button { flex: 1 1 auto; }
 }
 /* end WT-B */
+/* Weekly program templates, part WT-C: the Save weeks as template dialog. */
+.builder-tw-save-modal input { font-size: 16px; }
+.builder-tw-save-modal .builder-copy-plan-footer .plain-button,
+.builder-tw-save-modal .builder-modal-head .icon-button { min-height: 44px; min-width: 44px; }
+.builder-tw-week-options .builder-athlete-option { grid-template-columns: minmax(0, 1fr) auto; }
+/* end WT-C */

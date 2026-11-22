@@ -66,13 +66,18 @@ export function renderImportBlockIconButton() {
 // meaningless, and the backend already rejects it) - a cross-plan-block
 // clipboard has no such self-collision (its id belongs to a different
 // plan entirely), so it shows on every weekly day.
-function renderPasteDayIconButton(dayId, context) {
+// `crossPlanOnly`: a program or template block takes only content copied from
+// another plan (a weekly plan's day, via the import dialog), never a
+// same-plan "day" clipboard, which only a weekly plan can make.
+function renderPasteDayIconButton(dayId, context, { crossPlanOnly = false } = {}) {
   const clipboard = context.clipboard;
-  if (clipboard?.type === "day") {
+  if (clipboard?.type === "day" && !crossPlanOnly) {
     if (clipboard.dayId === dayId) return "";
   } else if (clipboard?.type !== "cross-plan-block") {
     return "";
   }
+  // The server refuses a program or template source for a program or template block.
+  if (crossPlanOnly && clipboard.sourcePlanType !== "weekly") return "";
   const title = `Paste "${clipboard.name || "day"}"`;
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-day" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
@@ -82,9 +87,10 @@ function renderPasteDayIconButton(dayId, context) {
 // piggyback on (a session has only ever been created one at a time), so
 // this is its own button appending a new session to the target day rather
 // than overwriting anything, unlike Paste day.
-function renderPasteSessionIconButton(dayId, context) {
+function renderPasteSessionIconButton(dayId, context, { weeklySourceOnly = false } = {}) {
   const clipboard = context.clipboard;
   if (clipboard?.type !== "cross-plan-session") return "";
+  if (weeklySourceOnly && clipboard.sourcePlanType !== "weekly") return "";
   const title = `Paste session "${clipboard.name || "Session"}"`;
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-session" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
@@ -386,7 +392,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
         </div>
         ${templateDay ? "" : isWeekly
           ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}${renderPasteSessionIconButton(block.id, context)}</div>`
-          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
+          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderPasteDayIconButton(block.id, context, { crossPlanOnly: true })}${renderPasteSessionIconButton(block.id, context, { weeklySourceOnly: true })}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
       ${isWeekly ? context.eventsRow?.(block) || "" : ""}
       <div class="builder-sessions">

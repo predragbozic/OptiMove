@@ -270,7 +270,7 @@ router.get("/drafts", async (req, res, next) => {
 // - A plannable athlete's plan is the one ensureWeeklySlot (POST /plans)
 //   would refuse on: the oldest active, non-edit-draft weekly plan of that
 //   week, whoever made it, leaving out the caller's own Builder draft with no
-//   session (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
+//   session and no day note (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
 //   rule) is `{ editable: false }` only: no id, name, author or status.
 export const WEEKLY_PLANS_READ_MAX = 200;
 const ATHLETE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -362,16 +362,17 @@ router.get("/weekly-plans", async (req, res, next) => {
             where p.plan_type = 'weekly' and p.athlete_id = a.id and p.week_start = $2::date
               and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)
               -- ensureWeeklySlot's skip: the caller's own Builder DRAFT with
-              -- no session at all is removed by POST /plans, so it is not
-              -- reported either (weeklySlotPlanIsFree's rule: a published
-              -- plan, or a plan with any session, is never removed; change
-              -- the two together).
+              -- no session and no day note is removed by POST /plans, so it
+              -- is not reported either (weeklySlotPlanIsFree's rule: a
+              -- published plan, or a plan with any session or day note, is
+              -- never removed; change the two together).
               and not (
                 p.source_type = 'builder' and p.created_by_user_id = $3
                 and p.status = 'draft'
-                and not exists (select 1 from plans.plan_sessions ps
-                                  join plans.plan_days pd on pd.id = ps.plan_day_id
-                                 where pd.plan_id = p.id)
+                and not exists (select 1 from plans.plan_days pd
+                                 where pd.plan_id = p.id
+                                   and (nullif(trim(coalesce(pd.day_note, '')), '') is not null
+                                        or exists (select 1 from plans.plan_sessions ps where ps.plan_day_id = pd.id)))
               )
             order by p.created_at
             limit 1
@@ -636,6 +637,11 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     if (client) {
       try { await client.query("rollback"); } catch {}
       client.release();
+      // Before the COMMIT (client is cleared right after it): the slot check
+      // sets a 2 s lock_timeout for the rest of this transaction, so a lock
+      // wait that ran out, or a deadlock, in the slot check, its removal or
+      // the inserts after it wrote nothing - try_again, never a 500.
+      if (weeklySlotBusy(error)) return res.status(409).json(WEEKLY_SLOT_BUSY_ANSWER);
     }
     next(error);
   }
@@ -918,9 +924,17 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
 
     if (source.plan_type === "weekly") {
       const conflicts = [];
-      for (const target of targets) {
-        const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart));
-        if (conflict) conflicts.push(conflict);
+      try {
+        for (const target of targets) {
+          const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart));
+          if (conflict) conflicts.push(conflict);
+        }
+      } catch (error) {
+        if (!weeklySlotBusy(error)) throw error;
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return res.status(409).json(WEEKLY_SLOT_BUSY_ANSWER);
       }
       if (conflicts.length) {
         await client.query("rollback");
@@ -1124,8 +1138,8 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         const entry = { athleteUuid: String(athlete.id), athleteId: athlete.externalId, weekStart, days: days.map((d) => d.date), placed: days, kind: "new", kept: [] };
         let live = lockedPlans.filter((p) => String(p.athlete_id) === String(athlete.id) && p.week_start.slice(0, 10) === weekStart);
         // Only this coach's own builder DRAFT with no session and no day note
-        // counts as free (it is replaced by the new plan). Narrower than
-        // ensureWeeklySlot's content rule on purpose: a published week, or one
+        // counts as free (it is replaced by the new plan) - the same rule as
+        // ensureWeeklySlot's weeklySlotPlanIsFree: a published week, or one
         // with a session without exercises (which can carry results), is
         // never removed here - it is asked about like any other week.
         const remaining = [];
@@ -1329,6 +1343,81 @@ async function claimAssignmentRequest(client, { id, userId, sourcePlanId, payloa
   }
   return { failed: true };
 }
+
+// Save as template from chosen weekly plans (docs/ai/weekly-program-template-
+// plan.md, section 3.2): any weeks the coach may open, in date order, each one
+// template week (Monday = Day 1). Content only - sessions and their trees with
+// fresh logical ids, day notes; never results, RPE, event links or ids.
+export const weeklySaveTestHooks = { afterRights: null };
+
+router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
+  let client;
+  try {
+    const name = text(req.body?.name);
+    if (!name) return res.status(400).json({ error: "Template name is required." });
+    const planIds = [...new Set((Array.isArray(req.body?.planIds) ? req.body.planIds : []).map(text).filter(Boolean))];
+    if (!planIds.length || planIds.length > MAX_TEMPLATE_WEEKS) return res.status(400).json({ error: `Choose 1 to ${MAX_TEMPLATE_WEEKS} weeks.`, code: "weeks" });
+    if (!planIds.every((id) => UUID_RE.test(id))) return res.status(404).json({ error: "Weekly plan not found." });
+    const sources = [];
+    for (const id of planIds) {
+      const plan = await getEditablePlan(req, id);
+      if (!plan || plan.plan_type !== "weekly" || plan.is_edit_draft) return res.status(404).json({ error: "Weekly plan not found." });
+      sources.push(plan);
+    }
+    sources.sort((a, b) => String(a.week_start).localeCompare(String(b.week_start)) || (String(a.id) < String(b.id) ? -1 : 1));
+    if (weeklySaveTestHooks.afterRights) await weeklySaveTestHooks.afterRights({ planIds: sources.map((p) => p.id) });
+    client = await pool.connect();
+    await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    // The chosen plans stay as they are while they are copied: FOR SHARE,
+    // ascending id (a Save takes them FOR UPDATE in the same order).
+    const stillThere = await client.query(
+      `select id from plans.plans
+       where id = any($1::uuid[]) and plan_type = 'weekly' and coalesce(is_active, true) and not coalesce(is_edit_draft, false)
+       order by id for share`,
+      [sources.map((p) => p.id)],
+    );
+    // A week removed between the rights check and the lock: nothing is saved.
+    if (stillThere.rowCount !== sources.length) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(404).json({ error: "Weekly plan not found." });
+    }
+    const created = (await client.query(
+      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, visibility, is_template, status, source_type)
+       values ('program', $1, null, $2, 'private', true, 'draft', 'builder') returning id`,
+      [req.user.id, name],
+    )).rows[0];
+    await insertTemplateWeeks(client, created.id, 1, sources.length);
+    const templateDays = new Map((await client.query("select id, block_index from plans.plan_days where plan_id = $1", [created.id])).rows
+      .map((d) => [Number(d.block_index), d.id]));
+    const pairs = [];
+    for (const [position, plan] of sources.entries()) {
+      const days = (await client.query("select id, day_order, day_note from plans.plan_days where plan_id = $1 order by day_order, id", [plan.id])).rows;
+      for (const day of days) {
+        const targetDayId = templateDays.get(blockIndexOf(position + 1, normalizedWeekday(day.day_order)));
+        if (day.day_note) await client.query("update plans.plan_days set day_note = $2 where id = $1", [targetDayId, day.day_note]);
+        pairs.push({ sourceDayId: day.id, targetDayId, orderOffset: 0 });
+      }
+    }
+    await copyTemplateDaySessions(client, pairs, copyLegacySession);
+    await assertExerciseReuseAllowed(client, req.user.id, { planIds: [created.id], guard: req.exerciseReuseGuard });
+    await client.query("commit");
+    client.release();
+    client = null;
+    // Committed: a failed read never reads as "not saved" (db review).
+    try {
+      return res.status(201).json(await buildDraft(await getEditablePlan(req, created.id), req));
+    } catch {
+      return res.status(201).json({ planId: created.id, reload: true });
+    }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    if (error?.code === "40P01" || error?.code === "55P03") return res.status(409).json({ error: "The plans are busy. Nothing was saved. Try again.", code: "try_again" });
+    next(error);
+  }
+}));
 
 router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) => {
   let client;
@@ -1658,6 +1747,22 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
   }
 }));
 
+// Which plan kinds a paste may join. A weekly target (fixed seven calendar
+// days, each with a date) takes content from any plan the caller may copy
+// from, as before. A program or block-template target (blocks with no date
+// at all) takes content from a WEEKLY plan only: that is the one new
+// direction, kept narrow on purpose (program-to-program stays the block
+// copy within one program). Only content moves: sessions/nodes/items are
+// re-inserted under fresh ids (no logical_session_id is carried, so no RPE
+// result, activity link or metric event names a copy), and the day's own
+// date, note and calendar links are never touched. Rights, workspace scope
+// and the published-plan session guard are unchanged and run before this.
+function pasteKindError(targetPlan, sourcePlan, noun) {
+  if (targetPlan.plan_type === "weekly") return null;
+  if (sourcePlan.plan_type === "weekly") return null;
+  return `${noun} paste into a program or template is only available from a weekly plan.`;
+}
+
 // Content-only paste into a weekly day - replaces the target day's
 // sessions/nodes/items with the source's, but never touches either day's
 // own date/day_order row (a weekly plan always keeps its fixed 7 calendar
@@ -1674,9 +1779,14 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
 async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPlan = false } = {}) {
   let client;
   try {
+    // Rights first: an unreadable source and a missing one are the same 404,
+    // and the plan-kind rule below runs only once both ids resolved for this
+    // caller (a program or template target may take content from a weekly
+    // plan only - see pasteKindError).
     if (!target) return res.status(404).json({ error: "Target day not found." });
-    if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Day paste is only available for weekly plans." });
     if (!source) return res.status(404).json({ error: "Source not found." });
+    const kindError = pasteKindError(target.plan, source.plan, "Day");
+    if (kindError) return res.status(400).json({ error: kindError });
     if (source.plan.id === target.plan.id && source.id === target.id) return res.status(400).json({ error: "Choose a different day to paste into." });
     if (!allowCrossPlan && source.plan.id !== target.plan.id) {
       return res.status(400).json({ error: "Pasting between different plans' days isn't supported on this route - use 'Copy from another plan' instead." });
@@ -1822,6 +1932,8 @@ router.get("/blocks/:blockId/sessions", async (req, res, next) => {
 // session.nodes.filter(node => node.parentId === parentId)) for a session
 // the coach has read/copy access to - powers the "drill into a session,
 // pick any domain/category/section" picker step.
+const SECTION_THUMB_LIMIT = 12;
+
 router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
   try {
     const session = await getCopySourceSession(req, req.params.sessionId);
@@ -1834,6 +1946,40 @@ router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
        order by pn.node_order nulls last`,
       [session.id],
     );
+    // `?items=1`: the import dialog's section thumbnails. Each section also
+    // carries its first SECTION_THUMB_LIMIT exercises (title and media only,
+    // decorated like the Builder's own items so R2 pictures resolve through
+    // their plan_item access context). The same copy-source access as the
+    // nodes above, one extra bounded query, nothing when not asked for.
+    const thumbs = new Map();
+    if (req.query.items === "1") {
+      const items = await query(
+        `select id, plan_node_id, exercise_id, title, description, image_url, video_url
+         from (
+           select pi.id, pi.plan_node_id, pi.exercise_id, pi.title, pi.description, pi.image_url, pi.video_url,
+                  row_number() over (partition by pi.plan_node_id order by pi.item_order nulls last, pi.id) as place
+           from plans.plan_items pi
+           join plans.plan_nodes pn on pn.id = pi.plan_node_id
+           where pn.plan_session_id = $1 and pn.node_type = 'section'
+         ) ranked
+         where place <= $2
+         order by plan_node_id, place`,
+        [session.id, SECTION_THUMB_LIMIT],
+      );
+      await decorateMediaRows(items.rows, "plan_item", query);
+      await decoratePlanItemEnglish(items.rows, query);
+      for (const row of items.rows) {
+        if (!thumbs.has(row.plan_node_id)) thumbs.set(row.plan_node_id, []);
+        thumbs.get(row.plan_node_id).push({
+          ...(row.media ? { media: row.media } : {}),
+          id: row.id,
+          title: row.title || "",
+          titleEn: row.title_en || null,
+          imageUrl: row.image_url || "",
+          videoUrl: row.video_url || "",
+        });
+      }
+    }
     res.json({
       nodes: result.rows.map((row) => ({
         id: row.id,
@@ -1842,6 +1988,7 @@ router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
         name: row.name,
         iconUrl: row.icon_url || "",
         itemCount: row.item_count,
+        ...(req.query.items === "1" && row.node_type === "section" ? { items: thumbs.get(row.id) || [] } : {}),
       })),
     });
   } catch (error) { next(error); }
@@ -1860,7 +2007,8 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     if (!source) return res.status(404).json({ error: "Source session not found." });
     const target = await getEditableBlock(req, req.params.targetDayId);
     if (!target) return res.status(404).json({ error: "Target day not found." });
-    if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Session paste is only available for weekly plans." });
+    const kindError = pasteKindError(target.plan, source.plan, "Session");
+    if (kindError) return res.status(400).json({ error: kindError });
 
     client = await pool.connect();
     const nextOrderResult = await client.query(
@@ -3995,14 +4143,14 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
 }
 
 // Whether ensureWeeklySlot may remove the caller's own Builder plan that holds
-// a week: only a DRAFT with NO session at all. A published plan is never free,
-// and a session - even one with no item and no named node - is content (it can
-// carry RPE or an event link; removing it leaves those records naming a
-// logical id no session has).
+// a week: only a DRAFT with NO session at all and no day note. A published plan
+// is never free, and a session - even one with no item and no named node - is
+// content (it can carry RPE or an event link; removing it leaves those records
+// naming a logical id no session has).
 //
 // Three conditions:
 //   1. the status is 'draft';
-//   2. the plan has no session;
+//   2. the plan has no content: no session and no day note;
 //   3. no session of the plan has results or a live event link made for it
 //      (Task 5, docs/ai/builder-batch-edit-plan.md section 12: the plan
 //      delete's own check, blockedPlanSessions, whatever the status). Today 2
@@ -4022,10 +4170,26 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
 //
 // GET /weekly-plans skips exactly this plan (its lateral's `and not (...)`):
 // change the two together.
+//
+// Content is a session OR a day note (the assign-weekly rule: a week the coach
+// wrote a note into is not empty). The day locks cover a note written
+// meanwhile too (it updates the day row).
+//
+// The locks wait at most 2 s (this file's lock_timeout, SET LOCAL: it stays
+// for the rest of the caller's transaction, so the removal is bounded too). A
+// wait that ran out (55P03) or a deadlock (40P01; the submit's empty-draft
+// removal deletes children first) is the caller's `try_again`
+// (weeklySlotBusy), never a 500 and never an unbounded wait.
 async function weeklySlotPlanIsFree(client, existingPlan, userId) {
-  const hasSessionSql = `select exists (select 1 from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1) as has_session`;
+  const hasContentSql = `select exists (
+      select 1 from plans.plan_days pd
+       where pd.plan_id = $1
+         and (nullif(trim(coalesce(pd.day_note, '')), '') is not null
+              or exists (select 1 from plans.plan_sessions ps where ps.plan_day_id = pd.id))
+    ) as has_content`;
   if (existingPlan.status !== "draft") return false;
-  if ((await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false) return false;
+  if ((await client.query(hasContentSql, [existingPlan.id])).rows[0]?.has_content !== false) return false;
+  await client.query("set local lock_timeout = '2s'");
   const locked = (await client.query(
     `select status from plans.plans
       where id = $1 and plan_type = 'weekly' and source_type = 'builder' and created_by_user_id = $2
@@ -4036,10 +4200,18 @@ async function weeklySlotPlanIsFree(client, existingPlan, userId) {
   if (!locked) return false;
   await client.query("select id from plans.plan_days where plan_id = $1 order by id for update", [existingPlan.id]);
   const isDraft = locked.status === "draft";
-  const hasSession = (await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false;
+  const hasContent = (await client.query(hasContentSql, [existingPlan.id])).rows[0]?.has_content !== false;
   const guarded = await blockedPlanSessions(client, await loadWeeklyTree(client, existingPlan.id));
-  return isDraft && !hasSession && guarded.length === 0;
+  return isDraft && !hasContent && guarded.length === 0;
 }
+
+// A lock wait that ran out or a deadlock inside the weekly slot check or its
+// removal: nothing was written (the caller rolls back) and the coach may try
+// again - this file's own answer for it.
+function weeklySlotBusy(error) {
+  return error?.code === "55P03" || error?.code === "40P01";
+}
+const WEEKLY_SLOT_BUSY_ANSWER = { error: "The plan is busy. Nothing was saved. Try again.", code: "try_again" };
 
 // The batch switcher's members: only the plans this viewer may open, by the
 // very predicate getEditablePlan uses (editablePlanAccessSql); the rest only

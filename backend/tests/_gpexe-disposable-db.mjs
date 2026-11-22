@@ -243,7 +243,8 @@ const LEGACY_FIXTURE_SQL = `
   alter table plans.plan_days
     add column plan_id uuid not null references plans.plans(id) on delete cascade,
     add column date date,
-    add column day_order int;
+    add column day_order int,
+    add column day_note text;
   alter table plans.plan_sessions
     add column plan_day_id uuid not null references plans.plan_days(id) on delete cascade,
     add column am_pm text,

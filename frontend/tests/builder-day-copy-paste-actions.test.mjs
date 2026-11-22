@@ -195,4 +195,18 @@ test("8. renderOverwriteDayConfirmHtml renders nothing when there is no pending 
   assert.match(html, /exit-confirm-modal/, "must reuse the app's existing styled confirm modal classes, not a one-off style or window.confirm");
   assert.match(html, /data-action="builder-overwrite-day-cancel"/);
   assert.match(html, /data-action="builder-overwrite-day-confirm"/);
+  // a weekly (or unknown) target keeps the day wording
+  assert.match(html, /Replace this day's content\?/);
+  assert.match(html, /This day already has sessions/);
+
+  // a program or block-template target is a block, never a day
+  for (const planType of ["program", "template"]) {
+    state.builder.draft = { plan: { planType } };
+    const blockHtml = renderOverwriteDayConfirmHtml(state);
+    assert.match(blockHtml, /Replace this block's content\?/, planType);
+    assert.match(blockHtml, /This block already has sessions\./, planType);
+    assert.doesNotMatch(blockHtml.replace(/<[^>]*>/g, " "), /\bday\b/i,`${planType}: no "day" wording on a block target`);
+  }
+  state.builder.draft = { plan: { planType: "weekly" } };
+  assert.match(renderOverwriteDayConfirmHtml(state), /Replace this day's content\?/);
 });
