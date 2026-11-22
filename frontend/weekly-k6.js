@@ -194,7 +194,7 @@ export function renderWeeklySwitcherHtml({ flow, items, currentKey, groupsHtml =
   const position = index >= 0 ? `${index + 1} / ${items.length}${flow.eventKey ? " in this event" : ""}` : "";
   const strip = renderAthleteSwitcherStripHtml({ items, currentKey, action: "weekly-k6-pick", keyAttr: "data-athlete-key", ariaLabel: "Athletes", wrapArrows: false });
   const summary = current ? `<p class="weekly-k6-summary"><strong>${escapeHtml(current.name)}</strong>${teamLabel ? ` · ${escapeHtml(teamLabel)}` : ""}${position ? ` · <span>${escapeHtml(position)}</span>` : ""}</p>` : "";
-  const notice = flow.line ? `<p class="weekly-k6-line" role="status">${escapeHtml(flow.line)}</p>` : flow.kept ? `<p class="weekly-k6-kept" role="status">${escapeHtml(flow.kept)}</p>` : "";
+  const notice = flow.line ? `<p class="weekly-k6-line" role="status">${escapeHtml(flow.line)}</p>` : flow.kept ? `<p class="weekly-k6-kept">${escapeHtml(flow.kept)}</p>` : "";
   const notIn = flow.notInKeys?.includes(currentKey) && flow.eventKey ? `<p class="weekly-k6-line" role="status"><strong>Not in this session</strong> · ${escapeHtml(flow.notInLine || "")}</p>` : "";
   const plan = noPlan ? `<p class="weekly-k6-line" role="status">No plan this week</p><button type="button" class="plain-button cc-primary" data-action="weekly-create-plan" aria-label="Plan it in the Builder">Plan it in the Builder</button>` : "";
   return `<section class="weekly-k6" aria-label="Athletes">

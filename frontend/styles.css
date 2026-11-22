@@ -29569,3 +29569,12 @@ body.athlete-questions-prompt-open {
 .cc-see-each .cc-panel-button { min-height: 44px; }
 .athlete-switcher .cc-chip { min-height: 44px; }
 .weekly-k6 .cc-chip, .weekly-k6 .cc-primary, .weekly-k6 .plain-button { min-height: 44px; }
+
+/* K6 review fixes (mobile-qa): the "not in this session" mark sits on its own pill, long team names wrap, the fold's
+   text breaks, the chevron turns, a busy header says so. */
+.athlete-switcher .builder-batch-pill, .weekly-k6-controls .builder-batch-pill { position: relative; }
+.athlete-switcher-result { flex-wrap: wrap; }
+.athlete-switcher-result-team { max-width: 100%; overflow-wrap: anywhere; }
+.athlete-switcher-fold > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.athlete-switcher.is-open .cc-filters-chevron { transform: translateY(2px) rotate(-135deg); }
+.weekly-k6-controls[aria-busy="true"] { opacity: .6; pointer-events: none; }

@@ -396,7 +396,9 @@ async function chooseSearchResult(cal, key, render) {
   const team = (cal.filters.teamIds || [])[0] || "";
   const pairs = cal.switcher.org.status === "ready" ? cal.switcher.org.pairs.filter((pair) => pair.athleteUuid === key).map((pair) => pair.teamId) : [];
   let teamId;
-  if (pairs.length && !pairs.includes(team)) {
+  // A chosen team she is not in, or no team at all (the "No team" athletes live under All groups), goes to All groups.
+  if (!pairs.length && team) teamId = "";
+  else if (pairs.length && !pairs.includes(team)) {
     const order = (cal.data?.teams || []).map((entry) => String(entry.teamId));
     teamId = [...pairs].sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
   }

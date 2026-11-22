@@ -113,6 +113,7 @@ export async function switchWeeklyAthlete(targetKey, deps) {
   const pathDepth = state.navStack.length;
   const aName = nameOf(flow.currentKey);
   const bName = nameOf(targetKey);
+  const before = { data: state.lastWeeklyData, athleteId: state.selectedAthleteId, navStack: state.navStack };
   flow.busy = true;
   deps.renderCurrent?.();
   state.selectedAthleteId = rosterId;
@@ -122,7 +123,18 @@ export async function switchWeeklyAthlete(targetKey, deps) {
   } finally {
     if (cal.weeklyFlow === flow) flow.busy = false;
   }
-  if (state.centralCalendar !== cal || cal.weeklyFlow !== flow) return false;
+  // The coach left meanwhile (Back to calendar, another tab): nothing of this answer is drawn (review MEDIUM).
+  if (state.centralCalendar !== cal || cal.weeklyFlow !== flow || state.activeTab !== "weekly") return false;
+  // The load did not answer for this athlete (an error, a stale answer): the plan on screen is still the other
+  // athlete's, so it is never shown under this name. Back to where the coach was, with a calm line (review HIGH).
+  if (state.lastWeeklyData === before.data || state.selectedAthleteId !== rosterId) {
+    state.selectedAthleteId = before.athleteId;
+    state.navStack = before.navStack;
+    flow.line = `Could not open ${bName}'s plan. Try again.`;
+    flow.kept = "";
+    deps.renderCurrent?.();
+    return false;
+  }
   state.viewedWeekStart = weekStart;
   state.selectedWeekDay = day;
   const dayItemsB = weeklyDayItems(state.lastWeeklyData, weekStart, day);
@@ -168,6 +180,13 @@ export async function chooseWeeklyGroup(teamId, deps) {
   if (teamId && !teams.some((team) => String(team.teamId) === teamId)) return false;
   cal.filters.teamIds = teamId ? [teamId] : [];
   // The calendar's own athlete choice goes back to Everyone when she is not in the new team (contract 2.2).
+  const chosen = cal.switcher?.athleteKey;
+  const pairs = cal.switcher?.org?.status === "ready" ? cal.switcher.org.pairs : null;
+  if (chosen && teamId && pairs && !pairs.some((pair) => pair.athleteUuid === chosen && pair.teamId === teamId)) {
+    cal.switcher.athleteKey = "";
+    cal.switcher.answer = null;
+    cal.switcher.status = "idle";
+  }
   const keys = calendarListKeys(cal);
   if (keys.length) flow.keys = keys;
   if (!flow.keys.includes(flow.currentKey) && flow.keys[0]) return switchWeeklyAthlete(flow.keys[0], deps);
@@ -178,6 +197,9 @@ export async function chooseWeeklyGroup(teamId, deps) {
 // *Back to calendar*: every layer Back closes first is closed here, then one history step: the Weekly tab's
 // drill-in entries are skipped by the app's own Back until the calendar's place is restored (4.3).
 export function weeklyBackToCalendar({ renderCurrent, goBack, fallback }) {
+  // The flow ends here (review MEDIUM): a load still running bails out, and a later entry into the Weekly plan by
+  // another way never inherits it.
+  if (state.centralCalendar) state.centralCalendar.weeklyFlow = null;
   state.navStack = [];
   state.exerciseDetail = { ids: [], currentId: null };
   state.weekSelectorOpen = false;

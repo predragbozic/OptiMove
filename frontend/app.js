@@ -91,7 +91,7 @@ import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEnt
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
 import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, weeklyBackToCalendar } from "./weekly-k6-actions.js";
 import { slotPathFor, weeklyDayItems } from "./weekly-k6.js";
-import { captureCentralCalendarView,centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
+import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
 import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
@@ -2530,6 +2530,8 @@ async function loadCentralCalendar({ forceRefresh = false } = {}) {
 
 function renderCentralCalendar() {
   if (state.activeTab !== "central-calendar") return;
+  // K6: the Weekly plan's switcher flow ends when the calendar is back on screen.
+  state.centralCalendar.weeklyFlow = null;
   // A repaint keeps the chip rows' sideways scroll and the focused control.
   const snapshot = captureCentralCalendarView(els.content.querySelector(".central-calendar"));
   els.content.innerHTML = renderCentralCalendarHtml(state.centralCalendar, {

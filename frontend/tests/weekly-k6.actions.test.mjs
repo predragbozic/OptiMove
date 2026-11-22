@@ -161,3 +161,56 @@ test("a click on another athlete in the rail ends the flow; a busy flow ignores 
   state.centralCalendar.weeklyFlow = { keys: ["ua", "ub"], currentKey: "ua", eventKey: "", notInKeys: [], busy: true };
   assert.equal(await switchWeeklyAthlete("ub", deps()), false);
 });
+
+// --- the code review's HIGH and MEDIUMs --------------------------------------------------------------------
+
+test("a failed load of the next athlete never shows the previous plan under the new name", async () => {
+  state.navStack = tap(ANA, ["Strength", "Power"]);
+  const keep = state.navStack;
+  const failing = { loadWeekly: async () => { /* loadCachedView's applyError: no throw, lastWeeklyData untouched */ }, renderCurrent() {} };
+  assert.equal(await switchWeeklyAthlete("ub", failing), false);
+  const flow = state.centralCalendar.weeklyFlow;
+  assert.equal(flow.currentKey, "ua", "the strip still names the athlete whose plan is shown");
+  assert.equal(state.selectedAthleteId, "RA");
+  assert.equal(state.lastWeeklyData, plans.RA);
+  assert.equal(state.navStack, keep, "the open path is where it was");
+  assert.equal(flow.line, "Could not open Ben's plan. Try again.");
+  assert.equal(flow.busy, false);
+});
+
+test("Back to calendar during a load: the answer is not drawn over the calendar, and the flow is gone", async () => {
+  const { weeklyBackToCalendar } = await import("../weekly-k6-actions.js");
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let drawn = 0;
+  const slow = { loadWeekly: async () => { await gate; state.lastWeeklyData = plans.RB; }, renderCurrent() { drawn += 1; } };
+  const pending = switchWeeklyAthlete("ub", slow);
+  weeklyBackToCalendar({ renderCurrent() {}, goBack() { state.activeTab = "central-calendar"; } });
+  assert.equal(state.centralCalendar.weeklyFlow, null, "ending the flow is what makes the continuation bail");
+  const before = drawn;
+  release();
+  assert.equal(await pending, false);
+  assert.equal(drawn, before, "nothing is drawn after the coach left");
+  assert.deepEqual(state.navStack, []);
+});
+
+test("after Back to calendar, a later entry into the same athlete's plan carries no switcher", async () => {
+  const { weeklyBackToCalendar } = await import("../weekly-k6-actions.js");
+  weeklyBackToCalendar({ renderCurrent() {}, goBack() {} });
+  state.activeTab = "weekly";
+  state.selectedAthleteId = "RA";
+  assert.equal(activeWeeklyFlow(), null);
+  assert.equal(renderWeeklyK6Html(), "");
+});
+
+test("leaving the Weekly tab by any other way during a load draws nothing either", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let drawn = 0;
+  const pending = switchWeeklyAthlete("ub", { loadWeekly: async () => { await gate; state.lastWeeklyData = plans.RB; }, renderCurrent() { drawn += 1; } });
+  state.activeTab = "tests";
+  const before = drawn;
+  release();
+  assert.equal(await pending, false);
+  assert.equal(drawn, before);
+});

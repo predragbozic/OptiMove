@@ -191,7 +191,7 @@ export function centralCalendarSwitcherResults(cal, model) {
 function groupsRowHtml(cal, model, counts) {
   if (!model.showGroups) return "";
   const chip = (action, teamId, label, count, active, style = "") => `<button type="button" class="cc-chip${active ? " is-active" : ""}" data-action="${action}"${teamId ? ` data-team-id="${escapeAttr(teamId)}"` : ""} aria-pressed="${active ? "true" : "false"}" aria-label="${escapeAttr(`${label}, ${count}`)}"${style ? ` style="${escapeAttr(style)}"` : ""}>${style ? `<span class="cc-chip-dot" aria-hidden="true"></span>` : ""}<span class="cc-chip-label">${escapeHtml(label)}</span><span class="cc-chip-count">${escapeHtml(String(count))}</span></button>`;
-  return `<div class="cc-chip-row athlete-switcher-groups" role="group" aria-label="Groups">
+  return `<div class="cc-chip-row athlete-switcher-groups" role="group" aria-label="Groups, choose one">
         <span class="cc-chip-row-label">Groups</span>
         ${chip("central-calendar-all-groups", "", "All groups", counts?.total ?? 0, !model.chosenTeam)}
         ${model.teams.map((team) => chip(CC_SWITCHER_ACTIONS.group, String(team.teamId), centralCalendarTeamLabel(team), counts?.teams?.get(team.teamId) || 0, model.chosenTeam === String(team.teamId), teamColorStyle(String(team.teamId), model.teams))).join("")}
@@ -206,7 +206,9 @@ function chosenItem(model, key) {
 export function centralCalendarSwitcherSummary(cal, model) {
   const team = model.chosenTeam ? model.teams.find((entry) => String(entry.teamId) === model.chosenTeam)?.name || "" : "";
   const athlete = model.athleteKey ? chosenItem(model, model.athleteKey)?.name || "" : "";
-  return { athlete, team, text: [athlete || "Everyone", model.showGroups ? team : ""].filter(Boolean).join(" · ") };
+  // A chosen team alone narrows the strip, not the athletes: "U19 · all athletes", never "Everyone · U19".
+  const text = athlete ? [athlete, model.showGroups ? team : ""].filter(Boolean).join(" · ") : model.showGroups && team ? `${team} · all athletes` : "Everyone";
+  return { athlete, team, text };
 }
 
 const searchArgs = (cal, model) => ({
@@ -270,7 +272,7 @@ export function renderCentralCalendarShowingLineHtml(cal, model, { onlyLabel = "
   const parts = [`Showing <strong>${escapeHtml(athlete)}</strong>`];
   if (model.type === "club" && team) parts.push(escapeHtml(team));
   if (onlyLabel) parts.push(escapeHtml(onlyLabel));
-  return `<p class="cc-showonly-line cc-athlete-line" role="status"><span>${parts.join(" · ")}</span><button type="button" class="plain-button cc-inline-button cc-showonly-all" data-action="${CC_SWITCHER_ACTIONS.everyone}">Show everyone</button><button type="button" class="plain-button cc-inline-button" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(model.athleteKey)}" data-date="${escapeAttr(cal.selectedDate || cal.anchor || "")}">Open the week</button></p>`;
+  return `<p class="cc-showonly-line cc-athlete-line" role="status"><span>${parts.join(" · ")}</span><button type="button" class="plain-button cc-inline-button cc-showonly-all" data-action="${CC_SWITCHER_ACTIONS.everyone}">Show everyone</button><button type="button" class="plain-button cc-inline-button" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(model.athleteKey)}" data-date="${escapeAttr(cal.selectedDate || cal.anchor || "")}">Open ${escapeHtml(athlete)}'s week</button></p>`;
 }
 
 // --- K6-3: See each athlete (contract section 4) ---------------------------------

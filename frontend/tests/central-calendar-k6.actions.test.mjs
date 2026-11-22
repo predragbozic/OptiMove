@@ -343,3 +343,31 @@ test("K6-1l. the model: the search list is the roster intersected, never the org
   assert.equal(handleCentralCalendarInput({ dataset: {}, matches: () => false, closest: () => null }), false);
   assert.equal(typeof handleCentralCalendarKeydown, "function");
 });
+
+test("K6-1m. the Everyone pill says it once (the caption), the avatar carries a glyph", async () => {
+  await open();
+  const all = dom().querySelector(".athlete-switcher .athlete-switcher-all");
+  assert.equal(all.querySelector(".builder-batch-caption").textContent, "All");
+  assert.equal(all.querySelector(".builder-batch-avatar").textContent.includes("All"), false);
+});
+
+test("K6-1n. a search for an athlete with no team while a team is chosen goes to All groups, so the strip holds her", async () => {
+  const lone = { athlete_uuid: uuid(5), athlete_id: "R5", athlete: "Lone Person" };
+  state.athletes = [...ROSTER, lone];
+  server();
+  await data.loadCentralCalendar({ render });
+  await act({ action: "central-calendar-toggle-team", teamId: A });
+  await act({ action: "central-calendar-pick-result", athleteKey: uuid(5) });
+  assert.deepEqual(state.centralCalendar.filters.teamIds, []);
+  assert.equal(state.centralCalendar.switcher.athleteKey, uuid(5));
+  render();
+  assert.equal(dom().querySelector(".athlete-switcher .builder-batch-pill.is-active").getAttribute("aria-label"), "Lone Person");
+});
+
+test("K6-1o. the phone's fold line: a team alone reads 'U19 · all athletes', never 'Everyone · U19'", async () => {
+  layout = "phone";
+  await open();
+  await act({ action: "central-calendar-toggle-team", teamId: A });
+  render();
+  assert.equal(dom().querySelector(".athlete-switcher-fold span").textContent, "U19 · all athletes");
+});

@@ -219,6 +219,9 @@ for (const [label, cookieOf] of [["the team coach of A", () => W.coachA], ["the 
     assert.equal(own.status, 200);
     assert.ok(cards(own).length > 0, "x1 has cards in this scope");
     const byKey = new Map(cards(all).map((card) => [card.key, card]));
+    // The other club's session that targets x1 (x1 trains there too): in both reads or in neither, never in one only.
+    const foreign = (res) => cards(res).some((card) => /E session x1/.test(String(card.title)));
+    assert.equal(foreign(own), foreign(all), "an item of another club that targets x1 is in both reads or in neither");
     for (const card of cards(own)) {
       const wide = byKey.get(card.key);
       assert.ok(wide, `the card ${card.key} is in the unfiltered read too`);

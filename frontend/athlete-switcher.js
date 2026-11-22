@@ -25,7 +25,7 @@ function pillHtml(item, { active, action, keyAttr, isAll }) {
   const dot = item.teamColorStyle ? `<span class="athlete-switcher-dot" style="${escapeAttr(item.teamColorStyle)}" aria-hidden="true"></span>` : "";
   const mark = item.notInSession ? `<span class="athlete-switcher-mark" aria-hidden="true">–</span>` : "";
   const label = item.groupLabel ? `<span class="athlete-switcher-group-label" aria-hidden="true">${escapeHtml(item.groupLabel)}</span>` : "";
-  const glyph = isAll ? "All" : initialsFor(name);
+  const glyph = isAll ? "•••" : initialsFor(name);
   const avatar = `<span class="builder-batch-avatar"><span>${escapeHtml(glyph)}</span>${item.imageUrl ? renderImage(item.imageUrl, "builder-batch-photo") : ""}${dot}</span>`;
   return `${label}
               <button class="builder-batch-pill ${active ? "is-active" : ""}${isAll ? " athlete-switcher-all" : ""}" type="button" data-action="${escapeAttr(action)}" ${keyAttr}="${escapeAttr(item.key)}" title="${escapeAttr(name)}" aria-label="${escapeAttr(name)}" aria-pressed="${active}">
