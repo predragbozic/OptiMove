@@ -88,6 +88,9 @@ import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, rend
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsResetForWorkspaceChange, checkBuilderEventsResult, chooseSessionEvent, chooseWholeDay, loadBuilderEvents, setBuilderEventsRender } from "./builder-events-row.js";
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
+import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
+import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, weeklyBackToCalendar } from "./weekly-k6-actions.js";
+import { slotPathFor, weeklyDayItems } from "./weekly-k6.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
@@ -169,6 +172,9 @@ import { startAppUpdateWatch } from "./app-update.js";
 import { CALENDAR_SETTINGS_ICON_HOST, calendarSettingsMayBeLeft, handleCalendarSettingsAction, handleCalendarSettingsBeforeUnload, handleCalendarSettingsInput, submitCalendarSettingsForm } from "./calendar-settings-actions.js";
 import { calendarSettingsNeedLoad, enterCalendarSettingsSection, loadCalendarSettings, resetCalendarSettingsForWorkspaceChange } from "./calendar-settings-data.js";
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
+import { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, rolesMayBeLeft, submitRolesForm } from "./roles-actions.js";
+import { enterRolesSection, loadRoles, markRolesUsersStale, loadWho, resetRolesForWorkspaceChange, rolesContext, rolesNeedLoad, rolesUsersAvailable, whoNeedsLoad } from "./roles-data.js";
+import { renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml } from "./roles-view.js";
 import { installThumbnailResolver, retryExpiredMediaImage } from "./media-playback.js";
 import {
   closeMessagesIfOutside,
@@ -347,7 +353,7 @@ async function init() {
   // Refresh and Later (the app installed on an iPhone keeps an old version
   // until iOS restarts it). Never refreshes by itself; an unsaved Training
   // Load draft (a dashboard layout, Advanced settings) is asked about first.
-  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() && calendarSettingsMayBeLeft() });
+  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() && calendarSettingsMayBeLeft() && rolesMayBeLeft() });
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
@@ -476,7 +482,7 @@ function bindEvents() {
   // The central calendar's event form (K2a-2) is asked before the logout
   // request, never after it: a "No" keeps the session and the form.
   els.signOut?.addEventListener("click", () => {
-    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" })) void signOut();
+    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" }) && rolesMayBeLeft({ final: "sign-out" })) void signOut();
   });
   els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
   // The central calendar draws itself again when a layout breakpoint is
@@ -552,7 +558,7 @@ function bindEvents() {
   els.content.addEventListener("keydown", handleBuilderSearchKeydown);
   els.content.addEventListener("keydown", handleTemplateMetadataKeydown);
   // Central calendar (K2a-2): Enter in the event form's athlete search never submits it.
-  els.content.addEventListener("keydown", handleCentralCalendarKeydown);
+  els.content.addEventListener("keydown", (event) => handleCentralCalendarKeydown(event, { render: renderCentralCalendar }));
   // Text fields that grow with their text (textarea-autosize.js), wherever
   // they are rendered (the content area and the Builder's modals).
   document.addEventListener("input", (event) => {
@@ -570,6 +576,8 @@ function bindEvents() {
   els.content.addEventListener("change", (event) => handleCentralCalendarInput(event.target, { render: renderCentralCalendar }));
   // Settings -> Calendar (K2b-1c): a choice in its form (a select, a colour, a box).
   els.content.addEventListener("change", (event) => handleCalendarSettingsInput(event.target, { render: renderCalendarSettingsSurface }));
+  // Settings -> Roles and the role assignment in Users (roles plan R3): a choice in their forms.
+  els.content.addEventListener("change", (event) => handleRolesInput(event.target, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface }, "change"));
   // Data configuration -> Mappings: a checkbox, a radio or a select reports its choice through "change".
   els.content.addEventListener("change", (event) => { if (event.target?.matches?.("select, input[type=checkbox], input[type=radio]")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface }); });
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
@@ -778,6 +786,7 @@ function bindEvents() {
   window.addEventListener("beforeunload", handleCentralCalendarBeforeUnload);
   // Settings -> Calendar (K2b-1c): a setting being saved, not confirmed or not saved.
   window.addEventListener("beforeunload", handleCalendarSettingsBeforeUnload);
+  window.addEventListener("beforeunload", handleRolesBeforeUnload);
   // Import from Google Drive: an opened <details> of its card survives the
   // repaints of a running import (toggle does not bubble: caught on the way
   // down), and a repaint of its card waits while a pointer is down, then
@@ -895,6 +904,12 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const rolesForm = event.target.closest("[data-roles-form]");
+  if (rolesForm) {
+    event.preventDefault();
+    await submitRolesForm(rolesForm, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface, refreshOrganization: () => renderOrganizationPanel() });
+    return;
+  }
   const calendarSettingsForm = event.target.closest("[data-calendar-settings-form]");
   if (calendarSettingsForm) {
     event.preventDefault();
@@ -1441,6 +1456,8 @@ function handleContentInput(event) {
   if (handleCentralCalendarInput(event.target, { render: renderCentralCalendar })) return;
   // Settings -> Calendar (K2b-1c): the open form's typed values.
   if (handleCalendarSettingsInput(event.target, { render: renderCalendarSettingsSurface })) return;
+  // Settings -> Roles / Users (R3): typed values.
+  if (handleRolesInput(event.target, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface }, "input")) return;
   // Data configuration -> Mappings: typed values (a choice reports through "change").
   if (event.target?.closest?.("[data-mm-field]")) {
     if (event.target.matches?.("input[type=text], textarea")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface });
@@ -2035,7 +2052,7 @@ async function handleGlobalClick(event) {
     return;
   }
   // A workspace switch resets the central calendar too: its event form asks first (K2a-2).
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) })) {
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) && rolesMayBeLeft({ final: "switch" }) })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openCalendarQuestion: (questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers()), openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
@@ -2477,6 +2494,9 @@ async function loadActiveTab() {
     if (state.organization.section === "storage") enterStorageAdminSection();
     if (state.organization.section === "icons") enterIconGallery();
     if (state.organization.section === "calendar") enterCalendarSettingsSection();
+    if (state.organization.section === "roles") enterRolesSection();
+    // Users reads the club's roles and who holds them again on entry (a role may have changed in Roles meanwhile).
+    if (state.organization.section === "users") markRolesUsersStale();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();
@@ -2527,6 +2547,8 @@ async function loadCentralCalendar({ forceRefresh = false } = {}) {
 
 function renderCentralCalendar() {
   if (state.activeTab !== "central-calendar") return;
+  // K6: the Weekly plan's switcher flow ends when the calendar is back on screen.
+  state.centralCalendar.weeklyFlow = null;
   // A repaint keeps the chip rows' sideways scroll and the focused control.
   const snapshot = captureCentralCalendarView(els.content.querySelector(".central-calendar"));
   els.content.innerHTML = renderCentralCalendarHtml(state.centralCalendar, {
@@ -2537,6 +2559,8 @@ function renderCentralCalendar() {
     uncertainWrites: centralCalendarUncertainWrites(),
   });
   restoreCentralCalendarView(els.content.querySelector(".central-calendar"), snapshot);
+  // K6: the chosen athlete's pill stays in view after every repaint.
+  athleteSwitcherScrollIntoView(els.content);
 }
 
 // D14: the item panel's button to the Training Load activity - the detail
@@ -2992,10 +3016,29 @@ function renderActiveTrainingLoadSurface() {
 // ne pravi poseban RPE schedule") - reuses the EXACT same navigation
 // coach-home-open-athlete already does (select the athlete, land on a
 // specific date in the real Weekly plan Calendar), never a new view.
-async function openWeeklyPlanForAthleteOnDate(athleteId, date) {
+async function openWeeklyPlanForAthleteOnDate(athleteId, date, { flow = null, slot = null } = {}) {
+  // K6-2: only a plan opened from the calendar carries the athlete switcher; any other way in ends it.
+  state.centralCalendar.weeklyFlow = flow;
   state.selectedAthleteId = athleteId;
   state.athletesExpanded = false;
-  await openWeeklyPlanOnDate(date);
+  const opened = await openWeeklyPlanOnDate(date);
+  // A lost load shows the screen's error line: nothing of an earlier athlete's plan is read as this one's.
+  if (opened === false) return;
+  // K6-3: an event's slot opens by the same drill-in as a tap (one history entry per level); an athlete without
+  // that session keeps the day open and says so (F6).
+  if (flow && slot && state.centralCalendar.weeklyFlow === flow) {
+    const path = slotPathFor(weeklyDayItems(state.lastWeeklyData, weekMondayIso(date), date), slot);
+    if (path.length) {
+      for (const node of path) {
+        pushAppHistory();
+        state.navStack.push(node);
+      }
+      renderCurrentNode();
+    } else {
+      noteNotInSession(flow, date);
+      renderWeeklyRoot(state.lastWeeklyData);
+    }
+  }
 }
 
 // Mirrors weekly-actions.js's "week-day-select" branch exactly (same
@@ -3016,7 +3059,7 @@ async function openWeeklyPlanOnDate(date) {
   renderLibraryNav();
   const loaded = await loadWeekly();
   // A lost answer with nothing to show: the screen's error line (renderError) stays; a blank week must not replace it.
-  if (loaded?.outcome === "error") return;
+  if (loaded?.outcome === "error") return false;
   const weeks = state.lastWeeklyData?.weeks || [];
   const weekIndex = weekIndexForDate(weeks, date);
   state.selectedWeekIndex = weekIndex >= 0 ? weekIndex : 0;
@@ -3027,6 +3070,21 @@ async function openWeeklyPlanOnDate(date) {
   state.weekCalendarMonth = monthStartIso(date);
   state.navStack = [];
   renderWeeklyRoot(state.lastWeeklyData);
+}
+
+// K6: the switcher's own loader paints only while the coach is still in this flow on the Weekly tab: a slow answer for
+// the athlete switched to never draws over the calendar the coach went back to (review MEDIUM).
+function loadWeeklyForSwitcher() {
+  const flow = state.centralCalendar.weeklyFlow;
+  const live = () => state.activeTab === "weekly" && state.centralCalendar.weeklyFlow === flow;
+  return loadWeeklyData({
+    // No "Loading…" screen: the header (busy) and the plan being left stay in view, with Back to calendar one tap away.
+    setLoading: () => {},
+    renderEmpty: (text) => { if (live()) renderEmpty(text); },
+    renderError: (error) => { if (live()) renderError(error); },
+    renderAthleteHeader: (data) => { if (live()) renderAthleteHeader(data); },
+    renderWeeklyRoot: (data) => { if (live()) renderWeeklyRoot(data); },
+  }, {});
 }
 
 async function loadWeekly(options = {}) {
@@ -3242,6 +3300,27 @@ async function handleContentClick(event) {
   }
   if (type.startsWith("builder-")) {
     void handleBuilderAction(action).catch(renderBuilderError);
+    return;
+  }
+  if (type === "weekly-k6-pick") {
+    await switchWeeklyAthlete(action.dataset.athleteKey || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
+    return;
+  }
+  if (type === "weekly-k6-group") {
+    await chooseWeeklyGroup(action.dataset.teamId || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
+    return;
+  }
+  if (type === "weekly-back-to-calendar") {
+    weeklyBackToCalendar({
+      renderCurrent: () => {},
+      goBack: () => window.history.back(),
+      fallback: () => {
+        state.activeTab = "central-calendar";
+        renderTabs();
+        renderLibraryNav();
+        void Promise.resolve(loadActiveTab()).catch(() => {});
+      },
+    });
     return;
   }
   if (type.startsWith("central-calendar-")) {
@@ -3543,6 +3622,7 @@ async function handleContentClick(event) {
   if (action.dataset.action === "source-connections-pair-team") return;
   if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
   if (await handleCalendarSettingsAction(action, { render: renderCalendarSettingsSurface })) return;
+  if (await handleRolesAction(action, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface, refreshOrganization: () => renderOrganizationPanel() })) return;
   if (await handleStorageAdminAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleDriveImportAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleOrganizationAction(action, {
@@ -3631,6 +3711,9 @@ function renderTabs() {
   // The same choke point puts the Exercise Library's pinned header back in
   // its place once another screen opens.
   exerciseHeaderReveal?.sync();
+  // K6: the Weekly plan's athlete switcher belongs to the calendar's flow; any other tab ends it (the flow is set and
+  // the tab becomes weekly in the same tick when a plan is opened from the calendar, before renderTabs runs).
+  if (state.activeTab !== "weekly" && state.centralCalendar) state.centralCalendar.weeklyFlow = null;
 }
 
 function renderAthleteListState() {
@@ -3677,6 +3760,32 @@ function renderCalendarSettingsSurface() {
   panel.outerHTML = renderCalendarSettingsPanelHtml();
 }
 
+// Settings -> Roles (R3) repaints only its own panel; before it is on screen it is the Settings repaint.
+function renderRolesSurface() {
+  if (state.activeTab !== "organization" || state.organization.section !== "roles") return;
+  const panel = els.content.querySelector(".roles-panel");
+  if (!panel) {
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  panel.outerHTML = renderRolesPanelHtml();
+}
+
+// Users (R3): the assignment form and "who holds what" repaint on their own, so what is typed elsewhere stays.
+function renderRolesUsersSurface() {
+  if (state.activeTab !== "organization" || state.organization.section !== "users") return;
+  const data = state.organization.data;
+  if (!data) return;
+  const assign = els.content.querySelector("[data-roles-assign]");
+  if (assign && !rolesUsersAvailable(data)) {
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  if (assign) assign.outerHTML = renderRolesAssignHtml(data);
+  const who = els.content.querySelector("[data-roles-who]");
+  if (who) who.outerHTML = renderRolesWhoHtml(data);
+}
+
 // From Source connections to the approved pair: the existing Data sources
 // tab (platform admin only), where the GPEXE Team ID of a team is set.
 function openDataSourcesFromSourceConnections() {
@@ -3715,6 +3824,16 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     // Calendar (K2b-1c): the club's catalog, read once on entry and after a write.
     if (state.organization.section === "calendar" && calendarSettingsNeedLoad()) {
       void loadCalendarSettings(renderCalendarSettingsSurface);
+    }
+    // Roles (R3): the catalog and every role of the club (or the system), read once on entry and after a write.
+    if (state.organization.section === "roles" && rolesNeedLoad()) {
+      void loadRoles(renderRolesSurface);
+    }
+    // Users (R3): who holds what; its answer also tells whether the Roles API knows this account at all.
+    if (state.organization.section === "users" && whoNeedsLoad()) {
+      const roleCtx = rolesContext(state.organization.data);
+      if (!state.roles.who.clubId && roleCtx?.clubId) state.roles.who.clubId = roleCtx.clubId;
+      void loadWho({}, renderRolesUsersSurface);
     }
     // Storage (PR 5): the same one-shot read of the defaults and the accounts.
     if (state.organization.section === "storage" && storageAdminContext(state.organization.data) && storageAdminNeedsLoad()) {
@@ -3797,6 +3916,7 @@ async function onWorkspaceChanged() {
   clearAppHistoryEntries();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
+  resetRolesForWorkspaceChange();
   resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;
   // a create not confirmed stays in the calendar's memory under it.
@@ -4056,7 +4176,8 @@ function renderWeeklyRoot(data) {
 
   // K4a: Back to calendar, only on the step Open training pushed (athlete-calendar-data.js).
   const calendarBack = isAthleteMode() ? renderAthleteCalendarBackBarHtml(athleteCalendarReturnFor(appHistoryTopEntry()), activeWeek.weekStart) : "";
-  els.content.innerHTML = calendarBack + renderWeeklyRootHtml({
+  // K6-2: the athlete switcher of a plan opened from the calendar (weekly-k6-actions.js).
+  els.content.innerHTML = renderWeeklyK6Html({ noPlan: !activeWeek.planId }) + calendarBack + renderWeeklyRootHtml({
     activeWeek,
     copyPlanModal: renderCopyPlanModal(state),
     makeNode,
@@ -4248,7 +4369,8 @@ function renderNode(node) {
   const next = nextNodes(node);
   const crumbs = state.navStack.map((entry) => entry.label);
   const siblingState = nodeSiblingState();
-  const detailHtml = renderNodeDetailHtml({
+  // K6-2: the athlete switcher stays drawn at every level of a plan opened from the calendar.
+  const detailHtml = renderWeeklyK6Html() + renderNodeDetailHtml({
     crumbs,
     next,
     node,

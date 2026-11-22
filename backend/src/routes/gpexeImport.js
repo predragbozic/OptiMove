@@ -78,7 +78,7 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest, subsetPreview, subsetHash, excludedAthleteIds, currentChoice, manualValues } = error.details || {};
+        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest, subsetPreview, subsetHash, excludedAthleteIds, currentChoice, activityTypeKey, manualValues } = error.details || {};
         // The precise reason of a source-connection refusal names connection
         // and server configuration facts: an administrator of the team's club
         // or of the platform gets it; a coach gets the stable code and the
@@ -92,7 +92,14 @@ function handle(fn) {
             const projected = await service.getCandidate(req.gpexeTeamAccess.teamId, req.params.candidateId, {
               audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview), previewOverride: subsetPreview,
             });
-            if (projected) subsetBody = { excludedAthleteIds: Array.isArray(excludedAthleteIds) ? excludedAthleteIds : [], subsetHash, preview: projected.preview, athletes: projected.athletes };
+            if (projected) {
+              subsetBody = {
+                excludedAthleteIds: Array.isArray(excludedAthleteIds) ? excludedAthleteIds : [], subsetHash,
+                // ST-2: the session type the refused approval chose, echoed with its recomputed preview.
+                ...(typeof activityTypeKey === "string" ? { activityTypeKey } : {}),
+                preview: projected.preview, athletes: projected.athletes,
+              };
+            }
           } catch (readError) {
             console.error(`[gpexe] reading the subset preview of ${req.params.candidateId} for a refusal failed: ${service.formatDbError(readError)}`);
           }
@@ -353,6 +360,8 @@ router.post("/teams/:teamId/candidates/:candidateId/approve", handle(async (req,
   const result = await service.approveCandidate(access.teamId, req.params.candidateId, {
     userId: req.user.id, previewHash: req.body?.previewHash, acceptChanges: req.body?.acceptChanges, expectedClubId: access.clubId,
     excludedAthleteIds: req.body?.excludedAthleteIds, subsetHash: req.body?.subsetHash,
+    // ST-2: the session type the approver chose (bound by subsetHash, like the athletes left out).
+    activityTypeKey: req.body?.activityTypeKey,
   });
   // The import is committed. Reading the candidate afterwards is only a
   // convenience; if it fails, the answer still says the import happened.
@@ -409,11 +418,13 @@ router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req,
   if (!access) return;
   if (!UUID.test(req.params.candidateId)) return notFound(res);
   // J20-B: with excludedAthleteIds this is the SUBSET preview - it stores nothing (service.previewCandidateSubset).
-  if (req.body && req.body.excludedAthleteIds !== undefined) {
-    const unknown = Object.keys(req.body).filter((key) => key !== "excludedAthleteIds");
-    if (unknown.length) return res.status(400).json({ error: "invalid_body", message: "The body must be { excludedAthleteIds: [...] } or empty." });
+  // ST-2: so it is with activityTypeKey (the approver's choice of the session type), alone or with athletes left out.
+  // (A null activityTypeKey is no choice, as in the approval's body.)
+  if (req.body && (req.body.excludedAthleteIds !== undefined || (req.body.activityTypeKey !== undefined && req.body.activityTypeKey !== null))) {
+    const unknown = Object.keys(req.body).filter((key) => key !== "excludedAthleteIds" && key !== "activityTypeKey");
+    if (unknown.length) return res.status(400).json({ error: "invalid_body", message: "The body must be { excludedAthleteIds: [...], activityTypeKey } (either or both) or empty." });
     const subset = await service.previewCandidateSubset(access.teamId, req.params.candidateId, {
-      userId: req.user.id, excludedAthleteIds: req.body.excludedAthleteIds, expectedClubId: access.clubId,
+      userId: req.user.id, excludedAthleteIds: req.body.excludedAthleteIds, activityTypeKey: req.body.activityTypeKey, expectedClubId: access.clubId,
     });
     const projected = await service.getCandidate(access.teamId, req.params.candidateId, {
       audience: req.gpexeImportAudience, namesClubVariables: (preview) => namesClubVariablesFor(req, preview), previewOverride: subset.preview,
@@ -422,6 +433,7 @@ router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req,
     return res.json({
       subset: {
         excludedAthleteIds: subset.excludedAthleteIds, previewHash: subset.fullHash, subsetHash: subset.subsetHash,
+        ...(subset.activityTypeKey !== undefined ? { activityTypeKey: subset.activityTypeKey } : {}),
         preview: projected.preview, athletes: projected.athletes,
       },
       importSwitch: service.applySwitchInfo(),

@@ -424,8 +424,9 @@ test("3. the importer's specs come only from the extractor registry: the mapping
       // v62: `teamTimezone` (the team's session time zone, a shorthand property) and MT-B's `trackChoices` (the reviewer's
       // track choices, read under the team lock) are the only other keys a plan may take: the first chooses the event's zone
       // of a mixed session, the second which of an athlete's tracks the rows come from - neither is a spec or a value, so the
-      // specs are read without them.
-      const spec = /\{\s*metricSpecs\s*:\s*([\s\S]*?)(?:\s*,\s*teamTimezone)?(?:\s*,\s*trackChoices)?\s*\}\s*$/.exec(call.args)?.[1] ?? null;
+      // specs are read without them. ST-2: so is `activityTypeKey` (the session type OptiMove decided, a key - never a
+      // spec or a value), given as sessionType.activityTypeKey, the result of resolveSessionType.
+      const spec = /\{\s*metricSpecs\s*:\s*([\s\S]*?)(?:\s*,\s*teamTimezone)?(?:\s*,\s*trackChoices)?(?:\s*,\s*activityTypeKey\s*:\s*sessionType\.activityTypeKey)?\s*\}\s*$/.exec(call.args)?.[1] ?? null;
       const ok = spec === "[]"
         || (g.rel === "gpexeImportMapper.js" && caller?.name === "gpexeLevelValues" && /^\[\{\s*raw\s*:\s*true\s*,[\s\S]*\bextract\s*\}\]$/.test(spec ?? ""))
         // J18 (18-3): the board's one plan of several raw specs, each one of its `extracts`, at the session level only.

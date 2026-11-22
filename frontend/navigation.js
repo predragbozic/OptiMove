@@ -1,6 +1,8 @@
 import { hasOrganizationAccess, isAthleteMode } from "./access.js";
 import { calendarSettingsContext } from "./calendar-settings-data.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
+import { rolesContext } from "./roles-data.js";
+import { coachSettingsSections, permissionTabAllowed } from "./permission-nav.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
 import { els } from "./dom.js";
 import { ATHLETE_TEMPLATE_SCOPES, TEMPLATE_SCOPES, state } from "./state.js";
@@ -81,7 +83,7 @@ export function renderLibraryNav() {
     const programLibrarySection = button.dataset.programLibrarySection || "";
     const isHiddenScope = tab === "templates" && scope && button.classList.contains("sidebar-subnav-button") && !visibleTemplateScopes().includes(scope);
     const organizationSection = button.dataset.organizationSection || "";
-    const isHiddenOrganizationSection = tab === "organization" && button.classList.contains("sidebar-subnav-button") && isCoachSettings() && !COACH_SETTINGS_SECTIONS.includes(organizationSection);
+    const isHiddenOrganizationSection = tab === "organization" && button.classList.contains("sidebar-subnav-button") && (isCoachSettings() ? !coachSettingsSections().includes(organizationSection) : !permissionTabAllowed(organizationSection));
     button.hidden = isHiddenScope || isHiddenOrganizationSection;
     const isTemplateTab = tab === "templates" && state.activeTab === "templates";
     const isTemplateScope = isTemplateTab && scope && state.programLibrarySection !== "requests" && scope === state.templateScope;
@@ -152,7 +154,7 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     const labels = { athletes: "Athletes", joinLinks: "Join links", presets: "Tags & Presets", icons: "Icons" };
     return `
     <nav class="settings-tabs om-tabs" aria-label="Settings sections">
-      ${COACH_SETTINGS_SECTIONS.map((value) => `<button class="settings-tab om-tab ${section === value ? "is-active" : ""}" type="button"${section === value ? ' aria-current="page"' : ""} data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(labels[value])}</button>`).join("")}
+      ${coachSettingsSections().map((value) => `<button class="settings-tab om-tab ${section === value ? "is-active" : ""}" type="button"${section === value ? ' aria-current="page"' : ""} data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(labels[value])}</button>`).join("")}
     </nav>
   `;
   }
@@ -170,6 +172,9 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     // that club's club_admin role. Every route behind it decides the same
     // again (T6) and answers everyone else 403 / the one 404.
     ...(calendarSettingsContext() ? [["calendar", "Calendar"]] : []),
+    // Roles (R3): a platform admin, or the club's admin in that club's workspace, from today's /me facts. Every
+    // route behind it decides again and answers everyone else the one 404.
+    ...(rolesContext(data) ? [["roles", "Roles"]] : []),
     // Administering a data source is a platform-admin job (F3b). Hiding the
     // tab is not the protection - every route behind it checks the active
     // platform_admin role again on the server.
@@ -185,7 +190,7 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     ...(storageAdminContext(data) ? [["storage", "Storage"]] : []),
     // App health (A2): the recorded errors, a platform administrator only; the route answers everyone else the unknown-route 404.
     ...(data.isPlatformAdmin ? [["appHealth", "App health"]] : []),
-  ];
+  ].filter(([value]) => permissionTabAllowed(value));
   return `
     <nav class="settings-tabs om-tabs" aria-label="Settings sections">
       ${items.map(([value, label]) => `<button class="settings-tab om-tab ${section === value ? "is-active" : ""}" type="button"${section === value ? ' aria-current="page"' : ""} data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(label)}</button>`).join("")}
