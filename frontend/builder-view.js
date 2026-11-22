@@ -19,6 +19,7 @@ import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import { ensureBuilderEvents } from "./builder-events-row.js";
+import { renderBuilderSessionsLockedHtml } from "./builder-sessions-locked.js";
 import { renderBuilderEventsAskHtml, renderBuilderEventsRowHtml, renderBuilderSessionEventHtml, renderBuilderSessionEventNoteHtml } from "./builder-events-row-view.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
@@ -735,6 +736,7 @@ function renderBuilderInner() {
           <span class="builder-discard-status" data-builder-discard-status role="status" aria-live="polite" hidden></span>
         </div>
       </header>
+      ${renderBuilderSessionsLockedHtml()}
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex)
         : batchEditPanel ? batchEditPanel + (hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : "")

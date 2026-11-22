@@ -1111,3 +1111,13 @@ test("32a. (R2) no fallback to the constant: a club admin's hand-built context w
   const platform = { ...CONTEXTS["platform admin"], rolePermissions: Object.freeze({ unavailable: true }) };
   for (const word of ALL_WORDS) assert.equal(canR2(platform, word, clubScope(CLUB_A)), true, word);
 });
+
+test("32b. (R2) scope type is part of the match: an entry held at club scope does not grant a team scope with the same id, and a team entry does not grant a club scope with the same id", () => {
+  const ctx = (entry) => ({ platformRoles: [], rolePermissions: Object.freeze([Object.freeze(entry)]) });
+  const atClub = ctx({ scopeType: "club", scopeId: CLUB_A, words: ["org.view"], teamIds: [] });
+  assert.equal(canR2(atClub, "org.view", clubScope(CLUB_A)), true, "control: the club entry grants its club");
+  assert.equal(canR2(atClub, "org.view", teamScope(CLUB_A)), false, "a club id passed with scope type team grants nothing");
+  const atTeam = ctx({ scopeType: "team", scopeId: TEAM_T1, words: ["org.view"], teamIds: [] });
+  assert.equal(canR2(atTeam, "org.view", teamScope(TEAM_T1)), true, "control: the team entry grants its team");
+  assert.equal(canR2(atTeam, "org.view", clubScope(TEAM_T1)), false, "a team id passed with scope type club grants nothing");
+});
