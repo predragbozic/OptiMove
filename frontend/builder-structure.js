@@ -374,8 +374,11 @@ export function renderBuilderTrainingLoadSettings(draft) {
 }
 
 export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false, context) {
+  // A weekly program template's day (docs/ai/weekly-program-template-plan.md):
+  // "Day N" of its template week, no rename and no single-day delete.
+  const templateDay = context.templateDayOf?.(block) || 0;
   const defaultDayName = isWeekly ? weekDayName(block.date) : "";
-  const kicker = isWeekly ? defaultDayName : `Block ${block.index}`;
+  const kicker = templateDay ? `Day ${templateDay}` : isWeekly ? defaultDayName : `Block ${block.index}`;
   const secondary = isWeekly ? (block.date ? formatDate(block.date) : "") : (block.note || "");
   const namePlaceholder = isWeekly ? "e.g. MD-1, Match day" : `Block ${block.index}`;
   const nameLabel = isWeekly ? "Day label" : "Block name";
@@ -384,10 +387,10 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
       <div class="builder-block-head">
         <div class="builder-block-head-text">
           ${kicker ? `<span class="builder-block-kicker">${escapeHtml(kicker)}</span>` : ""}${context.k3DayMark?.(block) || ""}
-          <form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>
+          ${templateDay ? "" : `<form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>`}
           ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
         </div>
-        ${isWeekly
+        ${templateDay ? "" : isWeekly
           ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}${renderPasteSessionIconButton(block.id, context)}</div>`
           : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderPasteDayIconButton(block.id, context, { crossPlanOnly: true })}${renderPasteSessionIconButton(block.id, context, { weeklySourceOnly: true })}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>

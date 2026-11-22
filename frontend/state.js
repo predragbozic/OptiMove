@@ -196,6 +196,8 @@ export const emptyTemplateFilters = () => ({
   visibility: "",
   lifecycle: "",
   pricing: "all",
+  // "" | "weekly" | "blocks" (docs/ai/weekly-program-template-plan.md).
+  kind: "",
 });
 
 export const emptyTemplatePreview = (overrides = {}) => ({
