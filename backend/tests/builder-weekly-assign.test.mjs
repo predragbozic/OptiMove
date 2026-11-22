@@ -408,3 +408,22 @@ test("7. one request writes at most 400 athlete-weeks: more is refused before an
   assert.equal(ok7.status, 201, ok7.text);
   assert.equal(ok7.body.created.length, 371);
 });
+
+test("8. Replace after a kept session with a template day holding two sessions in one slot ordered NULL and 1: both written after it", async () => {
+  const s = await squad("legacyrep", 1);
+  const cookie = s.coach.cookie;
+  const athlete = s.athletes[0];
+  let draft = await weeklyTemplate(cookie, 1, "Legacy slots");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T first");
+  await q(`insert into plans.plan_sessions (plan_day_id, bta, session_order, name) values ($1, 'T', null, 'T unordered')`, [blockOf(draft, 1, 1).id]);
+  const weekId = await publishedWeek(s, athlete, "2027-07-05", [[1, "Rated"]]);
+  const rated = (await planSessions(weekId))[0];
+  await rpeRow(athlete.athleteId, rated.id);
+  const ask = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-07-05" });
+  assert.equal(ask.status, 409, ask.text);
+  const done = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-07-05", choice: "replace", choiceToken: ask.body.choiceToken });
+  assert.equal(done.status, 201, done.text);
+  const after = await planSessions(weekId);
+  assert.deepEqual(after.map((x) => x.name), ["Rated", "T unordered", "T first"]);
+  assert.deepEqual(after.map((x) => Number(x.session_order)), [1, 2, 3]);
+});
