@@ -36,8 +36,9 @@ test("every code the GPEXE mapper and writer can throw maps to a neutral blocked
   // the admin step is the honest category. MT-B's track_choice_not_supported
   // is the CLI / test writer path's refusal only; the in-app preview applies a
   // choice and never meets it. J21's calculation_context_missing is a writer invariant (a caller that did not read the
-  // calculated levels), a bug too.
-  assert.deepEqual(unmapped.sort(), ["athlete_not_in_team", "athlete_not_mapped", "calculation_context_missing", "provenance_incomplete", "provenance_missing", "track_choice_not_supported", "value_not_decimal"]);
+  // calculated levels), a bug too. ST-2's session_type_required is, as a writer code, the CLI / test writer path's
+  // refusal only (importGpexeBundleLocked); in the app it is a reason of a pending candidate, never a block.
+  assert.deepEqual(unmapped.sort(), ["athlete_not_in_team", "athlete_not_mapped", "calculation_context_missing", "provenance_incomplete", "provenance_missing", "session_type_required", "track_choice_not_supported", "value_not_decimal"]);
   for (const code of codes) assert.ok(Object.values(BLOCKED_CODES).includes(blockedCodeFor(code)), code);
   assert.equal(blockedCodeFor("something_new_nobody_mapped"), BLOCKED_CODES.other);
   assert.equal(blockedCodeFor(null), null);
@@ -135,4 +136,18 @@ test("9-B: every block the mapping context and the mapper can answer is the stab
     assert.ok(!Object.values(BLOCKED_CODES).includes(c), `${c} is not a blocked code`);
     assert.equal(blockedCodeFor(c), BLOCKED_CODES.other, `${c} is never a session refusal`);
   }
+});
+
+test("ST-2: a pending session without a decided session type carries the reason session_type_required, first; a preview from before ST-2, a suggested type and an imported session's own type do not", () => {
+  const typed = (session) => preview({ session: { categoryName: "OFFICIAL MATCH", ...session }, athletes: [athlete(), unlinked("104")] });
+  assert.deepEqual(candidateReasons("pending", typed({ activityTypeKey: null, activityTypeSource: "none" })).reasons,
+    [{ code: REASON_CODES.session_type_required, count: 1 }, { code: REASON_CODES.athletes_not_linked, count: 1 }]);
+  for (const session of [{}, { activityTypeKey: "match", activityTypeSource: "team_suggestion" }, { activityTypeKey: "match", activityTypeSource: "choice" },
+    { activityTypeKey: null, activityTypeSource: "imported_session" }, { activityTypeKey: null, activityTypeSource: null }]) {
+    assert.deepEqual(candidateReasons("pending", typed(session)).reasons, [{ code: REASON_CODES.athletes_not_linked, count: 1 }], JSON.stringify(session));
+  }
+  // It is a reason of a pending session, never a block, and never a blocked code.
+  assert.equal(candidateReasons("pending", typed({ activityTypeSource: "none" })).blockedCode, null);
+  assert.ok(!Object.values(BLOCKED_CODES).includes("session_type_required"));
+  assert.deepEqual(candidateReasons("imported", typed({ activityTypeSource: "none" })).reasons, []);
 });

@@ -120,9 +120,9 @@ test("4. gpexeLevelValues against the frozen pre-9-B import (the oracle specs): 
 
 test("5. a refusal of the whole session returns its stable code and nothing else (no message, no anomaly, no id); an error that is not the mapper's is thrown", () => {
   const cases = [
-    [previewBundle({ gpexeTeamId: 970001, category: "MATCH" }), "unsupported_category"],
-    [Object.assign(previewBundle({ gpexeTeamId: 970001 }), { teamSession: undefined }), "session_missing"],
+    // The first case's message names the session (asserted below). ST-2: a category is no refusal any more.
     [(() => { const b = previewBundle({ gpexeTeamId: 970001 }); b.teamSession.is_stats_valid = false; return b; })(), "session_stats_invalid"],
+    [Object.assign(previewBundle({ gpexeTeamId: 970001 }), { teamSession: undefined }), "session_missing"],
     [previewBundle({ gpexeTeamId: 970001, athletes: previewAthletes().slice(3) }), "no_importable_participants"],
     [previewBundle({ gpexeTeamId: 970001, thresholds: { team: 1, id: 5 } }), "thresholds_wrong_team"],
   ];
@@ -134,6 +134,8 @@ test("5. a refusal of the whole session returns its stable code and nothing else
   // Why only the code crosses: the plan's own message names the session.
   assert.throws(() => buildGpexeImportPlan(cases[0][0], { metricSpecs: ORACLE }), (e) => e.message.includes(String(PLANTED.sessionId)));
   assert.throws(() => gpexeLevelValues(previewBundle({ gpexeTeamId: 970001 }), () => { throw new Error("boom"); }), /boom/);
+  // ST-2: a session of any category passes the gates (the import's session type is OptiMove's, decided elsewhere).
+  assert.equal(gpexeLevelValues(previewBundle({ gpexeTeamId: 970001, category: "MATCH" }), () => ({ value: 1 })).code, null);
 });
 
 test("6. the whole preview of a session level in memory: athlete 1's values round at the 10th place, in both directions of the seeded conversions", () => {

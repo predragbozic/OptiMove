@@ -269,8 +269,8 @@ router.get("/drafts", async (req, res, next) => {
 //   false }` and nothing else, whether or not a plan exists.
 // - A plannable athlete's plan is the one ensureWeeklySlot (POST /plans)
 //   would refuse on: the oldest active, non-edit-draft weekly plan of that
-//   week, whoever made it, leaving out the caller's own empty Builder plan
-//   (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
+//   week, whoever made it, leaving out the caller's own Builder draft with no
+//   session (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
 //   rule) is `{ editable: false }` only: no id, name, author or status.
 export const WEEKLY_PLANS_READ_MAX = 200;
 const ATHLETE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -361,19 +361,17 @@ router.get("/weekly-plans", async (req, res, next) => {
              from plans.plans p
             where p.plan_type = 'weekly' and p.athlete_id = a.id and p.week_start = $2::date
               and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)
-              -- ensureWeeklySlot's skip: the caller's own EMPTY Builder plan
-              -- is removed by POST /plans, so it is not reported either
-              -- (planHasWeeklyTrainingContentWithClient's content rule).
+              -- ensureWeeklySlot's skip: the caller's own Builder DRAFT with
+              -- no session at all is removed by POST /plans, so it is not
+              -- reported either (weeklySlotPlanIsFree's rule: a published
+              -- plan, or a plan with any session, is never removed; change
+              -- the two together).
               and not (
                 p.source_type = 'builder' and p.created_by_user_id = $3
-                and not exists (select 1 from plans.plan_items pi
-                                  join plans.plan_sessions ps on ps.id = pi.plan_session_id
+                and p.status = 'draft'
+                and not exists (select 1 from plans.plan_sessions ps
                                   join plans.plan_days pd on pd.id = ps.plan_day_id
                                  where pd.plan_id = p.id)
-                and not exists (select 1 from plans.plan_nodes pn
-                                  join plans.plan_sessions ps on ps.id = pn.plan_session_id
-                                  join plans.plan_days pd on pd.id = ps.plan_day_id
-                                 where pd.plan_id = p.id and nullif(trim(coalesce(pn.name, '')), '') is not null)
               )
             order by p.created_at
             limit 1
@@ -3986,8 +3984,7 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
       existingPlan.source_type === "builder"
       && String(existingPlan.created_by_user_id) === String(userId)
     ) {
-      const hasContent = await planHasWeeklyTrainingContentWithClient(client, existingPlan.id);
-      if (!hasContent) {
+      if (await weeklySlotPlanIsFree(client, existingPlan, userId)) {
         await deletePlanTreeWithClient(client, existingPlan.id);
         continue;
       }
@@ -3995,6 +3992,53 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
     return `Athlete ${athlete.externalId || athlete.id} already has a weekly plan for that week.`;
   }
   return "";
+}
+
+// Whether ensureWeeklySlot may remove the caller's own Builder plan that holds
+// a week: only a DRAFT with NO session at all. A published plan is never free,
+// and a session - even one with no item and no named node - is content (it can
+// carry RPE or an event link; removing it leaves those records naming a
+// logical id no session has).
+//
+// Three conditions:
+//   1. the status is 'draft';
+//   2. the plan has no session;
+//   3. no session of the plan has results or a live event link made for it
+//      (Task 5, docs/ai/builder-batch-edit-plan.md section 12: the plan
+//      delete's own check, blockedPlanSessions, whatever the status). Today 2
+//      implies 3, so 3 decides only if 1 or 2 is ever loosened; it stays for
+//      that.
+//
+// A refusal needs no lock: a plan the unlocked reads see as published or as
+// having a session is refused at once (a stale read can only refuse), so a
+// create that is refused never waits on, or holds, another plan's rows. Only a
+// plan about to be removed is locked, and all three conditions are then read
+// again under the locks: the plan row FOR UPDATE (still the caller's own
+// active Builder plan), then - new here, the plan delete takes no day lock -
+// its days FOR UPDATE in ascending id, then, inside blockedPlanSessions, the
+// session rows as the plan delete does. A new day needs the plan row FOR KEY
+// SHARE and a new session its day FOR KEY SHARE, so neither can land between
+// this check and the removal.
+//
+// GET /weekly-plans skips exactly this plan (its lateral's `and not (...)`):
+// change the two together.
+async function weeklySlotPlanIsFree(client, existingPlan, userId) {
+  const hasSessionSql = `select exists (select 1 from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1) as has_session`;
+  if (existingPlan.status !== "draft") return false;
+  if ((await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false) return false;
+  const locked = (await client.query(
+    `select status from plans.plans
+      where id = $1 and plan_type = 'weekly' and source_type = 'builder' and created_by_user_id = $2
+        and coalesce(is_active, true) and not coalesce(is_edit_draft, false)
+      for update`,
+    [existingPlan.id, userId],
+  )).rows[0];
+  if (!locked) return false;
+  await client.query("select id from plans.plan_days where plan_id = $1 order by id for update", [existingPlan.id]);
+  const isDraft = locked.status === "draft";
+  const hasSession = (await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false;
+  const guarded = await blockedPlanSessions(client, await loadWeeklyTree(client, existingPlan.id));
+  return isDraft && !hasSession && guarded.length === 0;
 }
 
 // The batch switcher's members: only the plans this viewer may open, by the

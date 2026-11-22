@@ -247,8 +247,16 @@ test("1. the mapper: a 'track' choice of exactly this track set imports that tra
   const before = JSON.stringify(buildGpexeImportPlan(bundle, { metricSpecs: oracle }));
   // Pinned on the base commit 172218c4 (before MT-B): the no-choice plan is the old code's, not only stable under the new one.
   const sha = (text) => crypto.createHash("sha256").update(text).digest("hex");
-  assert.equal(sha(before), "f5c285d86aeff1f9b4e44f4720d3eb45b799102070f12f01bb2d23174c743373", "no choice: the plan of 172218c4");
-  assert.equal(sha(JSON.stringify(buildGpexeImportPlan(bundleOf({ sessionId: 6101, with106: true }), { metricSpecs: oracle, trackChoices: new Map() }))),
+  // ST-2: the plan no longer derives the session type from the category (it is given one, or null) and carries the
+  // source's categoryName. The pin is kept on everything else: the plan with those two event fields as 172218c4 had them.
+  const as172218c4 = (p) => {
+    assert.deepEqual([p.event.activityTypeKey, p.event.categoryName], [null, "FULL TRAINING"]);
+    const event = { ...p.event, activityTypeKey: "training_session" };
+    delete event.categoryName;
+    return JSON.stringify({ ...p, event });
+  };
+  assert.equal(sha(as172218c4(JSON.parse(before))), "f5c285d86aeff1f9b4e44f4720d3eb45b799102070f12f01bb2d23174c743373", "no choice: the plan of 172218c4");
+  assert.equal(sha(as172218c4(buildGpexeImportPlan(bundleOf({ sessionId: 6101, with106: true }), { metricSpecs: oracle, trackChoices: new Map() }))),
     "2fd6c11a55edb97a94276d9123e2342f10ada74e30081a6b821465c13509a99a", "no choice with an MT-0 athlete: the plan of 172218c4");
   assert.equal(JSON.stringify(plan(new Map())), before, "an empty choice map changes nothing");
   assert.equal(JSON.stringify(plan(null)), before);
