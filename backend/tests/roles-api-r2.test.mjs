@@ -195,6 +195,49 @@ test("19. losing the word mid-request: the admin's club role is revoked between 
   assert.equal((await one(`select count(*)::int as n from public.permission_roles where name = 'Mid request'`)).n, 0);
 });
 
+test("18b. revoke with a wrong expected pair (another user, another role): 409 assignment_mismatch, the assignment stays active and no request or change row is written", async () => {
+  const w = await world();
+  const role = ok(await createRole(w.pa, { clubId: w.A, scopeTypes: ["club"], items: ["org.view"] })).role;
+  const other = ok(await createRole(w.pa, { clubId: w.A, scopeTypes: ["club"], items: ["org.view"] })).role;
+  const a = ok(await grant(w.adminA, { userId: w.target.id, roleId: role.id, scopeType: "club", scopeId: w.A })).assignment;
+  const counts = async () => one(`select (select count(*)::int from public.permission_requests) as requests, (select count(*)::int from public.permission_role_changes) as changes`);
+  const before = await counts();
+  code(await revoke(w.adminA, a.id, { userId: w.nobody.id, roleId: role.id }), 409, "assignment_mismatch");
+  code(await revoke(w.adminA, a.id, { userId: w.target.id, roleId: other.id }), 409, "assignment_mismatch");
+  assert.deepEqual(await counts(), before, "nothing written");
+  assert.equal((await one(`select revoked_at from public.user_role_assignments where id = $1`, [a.id])).revoked_at, null, "still active");
+  ok(await revoke(w.adminA, a.id, { userId: w.target.id, roleId: role.id }));
+});
+
+test("19c. a revocation whose caller loses the right between the route's gate and the locks (the admin's club role is revoked, then the club is archived): the identical 404 and nothing written", async () => {
+  const w = await world();
+  const role = ok(await createRole(w.pa, { clubId: w.A, scopeTypes: ["club"], items: ["org.view"] })).role;
+  const a = ok(await grant(w.pa, { userId: w.target.id, roleId: role.id, scopeType: "club", scopeId: w.A })).assignment;
+  const counts = async () => one(`select (select count(*)::int from public.permission_requests) as requests, (select count(*)::int from public.permission_role_changes) as changes`);
+  const before = await counts();
+  const hold = async (lose, restore) => {
+    const g = gate(); let entered = false;
+    svc.setRolesBeforeLocksHoldForTests(async () => { entered = true; await g.promise; });
+    const pending = revoke(w.adminA, a.id, { userId: w.target.id, roleId: role.id });
+    const start = Date.now();
+    while (!entered && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(entered);
+    await lose();
+    g.open();
+    try { return await pending; } finally { svc.setRolesBeforeLocksHoldForTests(null); await restore(); }
+  };
+  code(await hold(
+    () => k.query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [w.adminA.id, w.A]),
+    () => k.query(`update public.user_club_roles set is_active = true where user_id = $1 and club_id = $2`, [w.adminA.id, w.A]),
+  ), 404, "notFound");
+  code(await hold(
+    () => k.query(`update public.clubs set is_active = false where id = $1`, [w.A]),
+    () => k.query(`update public.clubs set is_active = true where id = $1`, [w.A]),
+  ), 404, "notFound");
+  assert.deepEqual(await counts(), before, "nothing written");
+  assert.equal((await one(`select revoked_at from public.user_role_assignments where id = $1`, [a.id])).revoked_at, null, "still active");
+});
+
 test("19b. losing roles.manage alone mid-request (staff.assign kept, so the lock's basis still holds): P4 and P7 re-check roles.manage under the locks, answer 404 and write nothing (a latent case: rule 7 keeps roles.manage on Club admin, so the item is removed past the guards and put back)", async () => {
   const w = await world();
   const hold = async (send) => {
