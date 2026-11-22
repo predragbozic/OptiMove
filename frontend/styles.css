@@ -29553,3 +29553,17 @@ body.athlete-questions-prompt-open {
   .athlete-switcher { padding: 8px; }
   .athlete-switcher .builder-batch-buttons { justify-content: space-between; }
 }
+
+/* K6-2 / K6-3: the Weekly plan's athlete switcher header (weekly-k6.js). */
+.weekly-k6 { display: grid; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line, #dce6ea); border-radius: 8px; background: var(--surface, #fff); box-sizing: border-box; max-width: 100%; min-width: 0; }
+.weekly-k6-back { justify-self: start; min-height: 44px; font-weight: 800; }
+.weekly-k6-controls { display: grid; gap: 8px; min-width: 0; }
+.weekly-k6-controls .builder-batch-buttons { width: 100%; box-sizing: border-box; }
+.weekly-k6-controls .builder-batch-pills { position: relative; flex: 1 1 0; min-width: 0; max-width: none; }
+.weekly-k6-controls .icon-button { flex: none; min-width: 44px; min-height: 44px; }
+.weekly-k6-controls .builder-batch-avatar { overflow: visible; }
+.weekly-k6-summary { margin: 0; overflow-wrap: anywhere; }
+.weekly-k6-line, .weekly-k6-kept, .weekly-k6-hidden { margin: 0; color: #667085; font-size: 13px; overflow-wrap: anywhere; }
+.weekly-k6-line { color: #344054; font-weight: 700; }
+.cc-see-each { display: grid; gap: 6px; margin: 8px 0; }
+.cc-see-each .cc-panel-button { min-height: 44px; }
