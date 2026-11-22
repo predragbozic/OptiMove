@@ -47,6 +47,10 @@ begin
   if exists (select 1 from public.sport_positions) then
     raise exception 'v88 refused: public.sport_positions already holds a row' using errcode = '23514';
   end if;
+  -- The rollback removes the sport v88 adds; so v88 refuses if one of that name already exists.
+  if exists (select 1 from public.sports where name = 'Football') then
+    raise exception 'v88 refused: a sport named Football already exists' using errcode = '23514';
+  end if;
   if not exists (select 1 from pg_constraint where conrelid = 'public.sport_positions'::regclass
                   and conname = 'sport_positions_sport_id_name_key') then
     raise exception 'v88 refused: the unique (sport_id, name) of v42 is missing' using errcode = '23514';
@@ -75,7 +79,7 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- 1. The registry: owner, archive, creator, order; the seed
 -- ---------------------------------------------------------------------------
-insert into public.sports (name) values ('Football') on conflict (name) do nothing;
+insert into public.sports (name) values ('Football');
 
 alter table public.sport_positions
   add column owner_scope text not null default 'system',
