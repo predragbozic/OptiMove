@@ -31,7 +31,10 @@ import {
 import { boundedText } from "./metricTextRules.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average", "scale_recording"]);
+export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average", "scale_recording", "position_average"]);
+// v88: the position average - the mean of the measured values of the athletes of the same position in this session (the
+// team average's rule: at least 3 athletes, no minutes).
+export const POSITION_AVERAGE_MIN_ATHLETES = 3;
 // The proportional method's history (owner's answer 3): the last 5 measured sessions of the same category, within 90 days,
 // at least 3.
 export const PROPORTIONAL_SESSIONS = 5;
@@ -229,6 +232,41 @@ function teamAverage(ctx) {
   });
 }
 
+// v88: the positions in force, in the team's club, of the target athlete and of the session's roster. Read in the
+// caller's transaction (the proposal's snapshot, or the save's). Without v88 (a database built before it) the method is
+// not available, never replaced by another.
+export async function loadPositions(client, ctx) {
+  const installed = (await client.query(`select to_regclass('public.athlete_positions') is not null as ok`)).rows[0].ok;
+  if (!installed) return { installed: false, target: null, byAthlete: new Map() };
+  const ids = ctx.roster.map((a) => a.athleteId);
+  if (!ids.includes(ctx.athleteId)) ids.push(ctx.athleteId);
+  const rows = (await client.query(
+    `select a.id as athlete_id, p.id as position_id, p.name
+       from unnest($1::uuid[]) as a(id)
+       join public.sport_positions p on p.id = public.athlete_position_in_force(a.id, $2)`,
+    [ids, ctx.team.club_id],
+  )).rows;
+  const byAthlete = new Map(rows.map((r) => [String(r.athlete_id), String(r.position_id)]));
+  const mine = rows.find((r) => String(r.athlete_id) === ctx.athleteId) ?? null;
+  return { installed: true, target: mine ? { id: String(mine.position_id), name: mine.name } : null, byAthlete };
+}
+
+function positionAverage(ctx, positions) {
+  const estimable = ctx.variables.filter((v) => v.estimable);
+  const unavailable = (reason) => estimable.map((v) => ({ variable: v, value: null, reason, basis: null }));
+  if (!positions.installed) return unavailable("positions_not_available");
+  if (!positions.target) return unavailable("no_position");
+  const positionId = positions.target.id;
+  const peers = new Set(ctx.roster.filter((a) => a.athleteId !== ctx.athleteId && positions.byAthlete.get(a.athleteId) === positionId).map((a) => a.athleteId));
+  return estimable.map((v) => {
+    const values = ctx.measured.filter((m) => m.def === v.metricDefinitionId && peers.has(m.athleteId) && sameUnit(m.unit, v.unit));
+    const athletes = new Set(values.map((m) => m.athleteId)).size;
+    if (athletes < POSITION_AVERAGE_MIN_ATHLETES) return { variable: v, value: null, reason: "too_few_athletes_in_position", basis: null };
+    const mean = values.reduce((s, m) => s + m.value, 0) / values.length;
+    return { variable: v, value: round(mean, 3), reason: null, basis: { athletes, positionId } };
+  });
+}
+
 function copySources(ctx) {
   const estimable = new Set(ctx.variables.filter((v) => v.estimable).map((v) => v.metricDefinitionId));
   const withValue = new Set(ctx.measured.filter((m) => estimable.has(m.def)).map((m) => m.athleteId));
@@ -402,6 +440,7 @@ export async function getEstimateProposal(ctx, activityId, query) {
       copy = methodView(copyAthlete(ectx, input.sourceAthleteId), "nothing_to_estimate");
     }
     const own = await proportional(client, ectx, minutes);
+    const positions = await loadPositions(client, ectx);
     // The kind of session Own average compares with: this session's type (its key and label), or null without one.
     const typeKey = target.activity?.activity_type_key ?? null;
     const typeLabel = typeKey ? (await client.query(`select label from training.activity_types where key = $1`, [typeKey])).rows[0]?.label ?? null : null;
@@ -416,6 +455,8 @@ export async function getEstimateProposal(ctx, activityId, query) {
         proportional: { ...methodView(own, "nothing_to_estimate"), sessionDays: proportionalDays(own), comparesWith: typeKey ? { key: typeKey, label: typeLabel } : null },
         copy_athlete: { ...copy, sourceAthleteId: input.sourceAthleteId, sources },
         team_average: methodView(teamAverage(ectx), "nothing_to_estimate"),
+        // v88: the athletes of the same position; not available with the reason (no position, too few athletes of it).
+        position_average: { ...methodView(positionAverage(ectx, positions), "nothing_to_estimate"), position: positions.target },
         // MT-D: only where a scale was chosen before the import; otherwise not available with the reason.
         scale_recording: await scaleRecording(client, ectx).then(
           (entries) => methodView(entries, "nothing_to_estimate"),
@@ -595,6 +636,11 @@ export async function saveEstimate(ctx, activityId, body) {
       entries = await scaleRecording(client, ectx);
     } else if (input.method === "team_average") {
       entries = teamAverage(ectx);
+    } else if (input.method === "position_average") {
+      const positions = await loadPositions(client, ectx);
+      if (!positions.installed) throw conflict("positions_not_available", "Positions are not available.");
+      if (!positions.target) throw conflict("no_position", "This athlete has no position. Set one in Settings → Athletes.");
+      entries = positionAverage(ectx, positions);
     } else if (input.method === "copy_athlete") {
       if (!copySources(ectx).some((s) => s.athleteId === input.sourceAthleteId)) {
         throw conflict("copy_source_not_usable", "Choose an athlete of this session's roster with measured values.");

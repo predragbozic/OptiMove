@@ -28,6 +28,12 @@ export async function readEstimateLabels(executor, occasionIds) {
       where e.occasion_id = any($1::uuid[])`,
     [ids],
   )).rows;
+  // v88: the position a position average used, by its name now (a rename shows the new name). Read only when such a row
+  // exists, so a reader on a database without v88 never touches the table.
+  const positionIds = [...new Set(rows.filter((r) => r.method === "position_average").map((r) => r.basis?.positionId).filter((id) => typeof id === "string" && UUID.test(id)))];
+  const positionNames = new Map(positionIds.length
+    ? (await executor.query(`select id, name from public.sport_positions where id = any($1::uuid[])`, [positionIds])).rows.map((p) => [String(p.id), p.name])
+    : []);
   const out = new Map();
   for (const r of rows) {
     const basis = r.basis && typeof r.basis === "object" ? r.basis : {};
@@ -38,6 +44,9 @@ export async function readEstimateLabels(executor, occasionIds) {
       label.sessionCount = finite(basis.sessions);
     } else if (r.method === "team_average") {
       label.athleteCount = finite(basis.athletes);
+    } else if (r.method === "position_average") {
+      label.athleteCount = finite(basis.athletes);
+      label.positionName = positionNames.get(String(basis.positionId ?? "").toLowerCase()) ?? null;
     } else if (r.method === "scale_recording") {
       label.recordedMinutes = finite(basis.recordedMinutes);
       label.targetMinutes = finite(basis.targetMinutes);
