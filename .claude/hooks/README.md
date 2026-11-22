@@ -17,12 +17,20 @@ Code pipes a JSON description of the call to the hook's stdin and reads a JSON d
 back from its stdout.
 
 ```
-{ "hooks": { "PreToolUse": [
-  { "matcher": "Bash",       "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"] }] },
-  { "matcher": "PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"] }] },
-  { "matcher": "mcp__.*",    "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"] }] }
-] } }
+{ "hooks": {
+  "PreToolUse": [
+    { "matcher": "Bash",       "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], "timeout": 30, "onFailure": "block" }] },
+    { "matcher": "PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], "timeout": 30, "onFailure": "block" }] },
+    { "matcher": "mcp__.*",    "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"], "timeout": 30, "onFailure": "block" }] }
+  ],
+  "SessionStart": [
+    { "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/hook-selfcheck.mjs"], "timeout": 60 }] }
+  ]
+} }
 ```
+
+`"onFailure": "block"` and the SessionStart self-check are explained in "If the hook does
+not run" below.
 
 This is **exec form** — a bare executable name in `command` plus an explicit `args`
 array — not shell form (a single string handed to a shell to interpret). That distinction
@@ -456,6 +464,127 @@ as aimed at a secret.
   mistaken for a `git add .` because the phrase appears inside a quoted commit message.
   See `safety-guard.test.mjs` for this and other explicit false-positive regression
   tests.
+
+## If the hook does not run
+
+The allow list in `settings.json` lets some commands through by name (`rm`, `cp`, `mv`,
+`mkdir`, `ln`, `touch`, `git add`, `git commit`, `git push origin`, ...): it relies on
+this hook to ask or deny for everything outside the approved scope (see "The allow list"
+above). So the question is what happens when the hook does not produce a decision.
+
+**Without `onFailure` (Claude Code's default).** A hook that cannot start (`node` not
+installed or not on `PATH`: exit 127 / ENOENT), crashes (exit 1, a stack trace), prints
+something that is not valid JSON, or runs past its `timeout` (600 s by default for a
+command hook) is a *non-blocking error*: the tool call goes ahead as if the hook had
+given no decision, and the settings decide. For a command on the allow list that means
+**it runs silently, without any of this hook's checks** - exactly the commands the allow
+list widened. Verified on Claude Code 2.1.329 (2026-11-20) with a throwaway project
+whose hook command did not exist: the call ran.
+
+**With `"onFailure": "block"` (what `settings.json` sets, Claude Code 2.1.295 or later).**
+Minimum versions, per the hooks reference: `onFailure` on a hook of type `command` (or
+`http`) needs 2.1.295; on a hook of type `mcp_tool` it needs 2.1.328. All three guard
+registrations here - the `mcp__.*` matcher included - are `command` hooks, so 2.1.295 is
+the minimum for all of them; the matcher is about which tool is called, not the hook
+type. (Verified on 2.1.329.)
+Every one of those failures blocks the tool call instead; Claude sees
+`PreToolUse:Bash hook error: … blocking because onFailure is "block"` with the cause
+(`its program could not be started (ENOENT)`, `timed out`, …). Verified on 2.1.329 for a
+missing program and for a timeout. This is the fail-closed setting: a broken guard stops
+every Bash / PowerShell / MCP call rather than letting one through unchecked. It does
+**not** cover a guard that exits 0 without output: that is a valid "no decision", so
+nothing failed. The one known way that happened - the project reached through a symlink
+(macOS `/tmp` -> `/private/tmp`, a linked code folder) or with another letter case, where
+node's `import.meta.url` and `argv[1]` disagreed and the guard never read its input - is
+fixed (the main-module check compares real paths, with a regression test); the
+self-check's probes are what would catch any other. Exit code 2
+and this hook's own `deny`/`ask` are unaffected; the hook still fails *to `ask`* on its
+own internal errors (see "Safety contract"), which is a decision, not a failure. The
+explicit `"timeout": 30` keeps a hung guard from stalling a call for the 600 s default
+before it is blocked. An older Claude Code (before 2.1.295) does not know `onFailure` and
+behaves as without it. The SessionStart check below cannot tell: it reads the file, not
+what the running Claude Code enforces, so it still passes there - only a current Claude
+Code makes the guard fail closed.
+
+While the guard is broken, `onFailure` on `mcp__.*` blocks **every** MCP tool, read-only
+ones and the cross-session message tool included: an orchestrated session cannot report
+the failure to its manager through MCP, so recovery goes through the user.
+
+**The SessionStart self-check** (`hook-selfcheck.mjs`, no matcher, so it runs on every
+session start: startup, resume, clear, compact, fork). It confirms once per session that:
+
+1. `settings.json` registers `safety-guard.mjs` for `Bash`, `PowerShell` and `mcp__.*`
+   in exactly the expected form - exec form, `"command": "node"`, the guard as the only
+   argument, not `async`, with `"onFailure": "block"` and a timeout of at most 60 s (another
+   program with the same path, or an async hook, would never decide);
+2. the guard, started as Claude Code starts it - `node` from `PATH`, at the registered path
+   with `${CLAUDE_PROJECT_DIR}` expanded (symlinks and letter case included), the call
+   on stdin - denies `git push --force origin main` (Bash) and `git reset --hard`
+   (PowerShell) and stays silent on `ls -la`.
+
+It also reports `NODE_OPTIONS` that loads code into, or changes how node resolves, every
+node process (`--require`, `--import`, `--loader`, `--preserve-symlinks…`), by option name
+only. When all is well it only adds one line to Claude's context ("Safety hook self-check
+passed …"); a session start with neither that line nor the warning means the check did
+not run and is treated as failed (`CLAUDE.md`, "Startup gate").
+
+**A session that started before this check existed** has neither line in its context.
+It runs the check once by hand from the project root:
+
+```
+node .claude/hooks/hook-selfcheck.mjs
+```
+
+It prints the same JSON as the hook. "Safety hook self-check passed" (exit 0) → carry on;
+"SAFETY HOOK SELF-CHECK FAILED" (exit 1), or the command cannot run → stop and tell the
+user. Run by hand it reads no stdin from a terminal and probes the guard at its own path
+(`CLAUDE_PROJECT_DIR` is not set outside a hook). The guard gives this command no decision,
+and it is deliberately not on the allow list (that would be a settings change), so it asks
+for permission once. As the SessionStart hook it always exits 0: Claude Code ignores the
+output of a hook that exits non-zero, so the warning would be lost. When anything fails it shows the user a warning that starts with
+`SAFETY HOOK SELF-CHECK FAILED` and names each problem, and puts the same text in
+Claude's context with the instruction to stop and fix it before running shell commands.
+A SessionStart hook cannot block anything; if `node` itself is missing, the self-check
+does not start either (a non-blocking error shown as a hook error), and it is
+`"onFailure": "block"` on the PreToolUse hooks that keeps the session safe. Verified live
+on 2.1.329: with the guard file moved away, the session start reported the failure and
+every Bash call was blocked. Tests: `node --test .claude/hooks/hook-selfcheck.test.mjs`.
+
+**What to do when it fires.** Two cases:
+- the guard cannot start, crashes or times out: every Bash / PowerShell / MCP call is
+  blocked (`onFailure`), Read / Edit / Write still work;
+- anything else the check reports (a wrong registration form, unexpected fields,
+  `NODE_OPTIONS`, a guard that runs but answers wrongly): nothing is blocked, the session
+  is simply unprotected, and only the `CLAUDE.md` rule ("do not run shell commands")
+  stands between it and the allow list.
+
+Either way Claude does not repair the guard or `settings.json` itself in that session: the
+user runs the steps below in their own terminal, or starts a new session after the fix (a
+cloud session is replaced, not repaired).
+- `node` missing or not on `PATH` → install Node (the project's version) and start a new
+  session.
+- The guard file missing or broken → restore `.claude/hooks/safety-guard.mjs` from git
+  (`git restore .claude/hooks/safety-guard.mjs`) and run
+  `node --test .claude/hooks/safety-guard.test.mjs`.
+- A registration missing or without `onFailure` → `settings.json` was changed; compare it
+  with `origin/main`. `/hooks` shows what the running session actually loaded.
+- Unexpected fields or another form in a registration → restore the entry exactly as in
+  the snippet at the top of this file.
+- `NODE_OPTIONS` reported → find where it is set (shell profile, a settings `env` block)
+  and remove the option, or confirm it cannot stop the guard.
+- Never work around it by switching the hook off (`disableAllHooks`, removing the
+  entries) without the owner's explicit decision: that removes the checks the allow list
+  depends on.
+
+**What the self-check cannot see.** It reads `.claude/settings.json`, not what the running
+session loaded, and it checks the guard at session start, not on every call.
+It probes the `node` found on `PATH` at session start; a different `node` that the real
+hook finds later in the session (a changed `PATH`, or on Windows a `node.exe` in a folder
+the session moves into) is not checked again. `disableAllHooks: true` in any settings layer
+(including the untracked `.claude/settings.local.json` or a user-level settings file)
+switches off the guard *and* the self-check together, so nothing warns. The same holds for
+a settings layer that replaces these hook entries. `/hooks` in the session shows what is
+actually loaded.
 
 ## Known limitations / false-positive & false-negative risk
 
