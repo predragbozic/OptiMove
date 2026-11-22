@@ -29631,3 +29631,25 @@ body.athlete-questions-prompt-open {
     flex: 1 1 auto;
   }
 }
+.roles-who-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+/* The data-sources panel makes every input full width and 44 px tall; a tick box is neither. */
+.roles-panel .roles-words input[type="checkbox"],
+.roles-panel .roles-scope input[type="checkbox"],
+.roles-panel .roles-archived-toggle input[type="checkbox"] {
+  flex: none;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  margin: 0;
+}
+.roles-words label,
+.roles-scope label {
+  align-items: flex-start;
+  padding: 10px 0;
+  min-width: 0;
+}

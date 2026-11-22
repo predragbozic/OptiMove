@@ -295,7 +295,7 @@ export function renderRolesWhoHtml(data) {
   const date = (value) => { const t = new Date(value); return Number.isNaN(t.getTime()) ? "" : t.toLocaleDateString("en-GB"); };
   return `
     <section class="panel roles-who" data-roles-who aria-labelledby="roles-who-title">
-      <div class="organization-list-head"><p class="eyebrow">Access</p><h3 id="roles-who-title">Who holds what</h3></div>
+      <div class="roles-who-head"><p class="eyebrow">Access</p><h3 id="roles-who-title">Who holds what</h3></div>
       <div class="roles-who-filters">
         ${ctx?.clubId ? "" : `<label class="search-field"><span>Club</span><select data-roles-who-field="clubId"><option value="">All clubs</option>${clubs.map((c) => `<option value="${escapeAttr(c.id)}"${String(c.id) === String(clubId) ? " selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}</select></label>`}
         <label class="search-field"><span>Role</span><select data-roles-who-field="roleId"><option value="">All roles</option>${roles.map((r) => `<option value="${escapeAttr(r.id)}"${r.id === who.roleId ? " selected" : ""}>${escapeHtml(r.name)}</option>`).join("")}</select></label>

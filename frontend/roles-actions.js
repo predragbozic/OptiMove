@@ -284,7 +284,8 @@ export function handleRolesInput(target, { render, renderUsers } = {}, eventType
     const name = assignField.dataset.rolesAssignField;
     a.draft[name] = assignField.value;
     if (form?.elements?.userId) a.draft.userId = form.elements.userId.value;
-    if (eventType === "input" && name !== "scope" && name !== "roleId") return true;
+    // Only a choice of place or role repaints; typed fields just keep their value.
+    if (name !== "scope" && name !== "roleId") return true;
     if (name === "scope") {
       a.draft.roleId = "";
       a.error = "";
@@ -423,7 +424,11 @@ async function submitAssign(formEl, { renderUsers, refreshOrganization }) {
   const a = d.assign;
   if (a.command) return;
   const data = state.organization.data;
-  a.draft.userId = formEl.elements?.userId?.value || a.draft.userId;
+  // What is on screen is the truth: read every field of the form that the draft may not have heard of yet.
+  for (const name of ["userId", "displayTitle", "expiresAt", "reason"]) {
+    const value = formEl.elements?.[name]?.value;
+    if (typeof value === "string") a.draft[name] = value;
+  }
   const scope = assignScopeOptions(data).find((s) => s.value === a.draft.scope);
   const role = scope ? assignableRoles(a.byClub[scope.clubId]?.roles, scope.type).find((r) => r.id === a.draft.roleId) : null;
   a.notice = "";
