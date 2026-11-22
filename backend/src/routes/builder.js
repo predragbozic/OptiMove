@@ -604,17 +604,9 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     await client.query("begin");
     if (planType === "weekly") {
       const conflicts = [];
-      try {
-        for (const target of targets) {
-          const conflict = await ensureWeeklySlot(client, req.user.id, target, weekStart);
-          if (conflict) conflicts.push(conflict);
-        }
-      } catch (error) {
-        if (!weeklySlotBusy(error)) throw error;
-        await client.query("rollback");
-        client.release();
-        client = null;
-        return res.status(409).json(WEEKLY_SLOT_BUSY_ANSWER);
+      for (const target of targets) {
+        const conflict = await ensureWeeklySlot(client, req.user.id, target, weekStart);
+        if (conflict) conflicts.push(conflict);
       }
       if (conflicts.length) {
         await client.query("rollback");
@@ -645,6 +637,11 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     if (client) {
       try { await client.query("rollback"); } catch {}
       client.release();
+      // Before the COMMIT (client is cleared right after it): the slot check
+      // sets a 2 s lock_timeout for the rest of this transaction, so a lock
+      // wait that ran out, or a deadlock, in the slot check, its removal or
+      // the inserts after it wrote nothing - try_again, never a 500.
+      if (weeklySlotBusy(error)) return res.status(409).json(WEEKLY_SLOT_BUSY_ANSWER);
     }
     next(error);
   }

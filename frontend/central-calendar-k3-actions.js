@@ -409,8 +409,11 @@ async function k3Go(cal, target, how, handlers, render) {
     }
   } catch (error) {
     if (state.centralCalendar !== cal) return;
-    // Someone made a plan meanwhile: the plans are read again (2.2).
-    if (error?.status === 409 && how.create) {
+    // Someone made a plan meanwhile: the plans are read again (2.2). The
+    // server's "busy, try again" (409 try_again) is not that: read again it
+    // would be sent again without end while the plan stays busy, so it is
+    // shown once, like any other failure.
+    if (error?.status === 409 && how.create && error?.data?.code !== "try_again") {
       cal.k3 = null;
       await k3StartFromPanel(cal, item, handlers, render);
       return;

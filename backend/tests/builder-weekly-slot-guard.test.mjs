@@ -415,6 +415,27 @@ test("L2. a deadlock on the removal (the other side holds a day and then asks fo
   }
 });
 
+test("L4. the lock timeout set by the slot check also covers the inserts after it: a held athlete row is 409 try_again, not a 500, and the replaced draft is back", async () => {
+  const s = await squad("laterinsert");
+  const planId = await weeklyDraft(s);
+  const before = [await digestOf(planId), await planCount()];
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    // The new plan's insert needs this row FOR KEY SHARE (its foreign key).
+    await holder.query(`select id from public.athletes where id = $1 for update`, [s.athlete.athleteId]);
+    const res = await within(createWeekly(s.coach.cookie, s.athlete), 8000);
+    assert.notEqual(res, "waited");
+    assert.equal(res.status, 409, res.text);
+    assert.deepEqual(res.body, BUSY);
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end().catch(() => {});
+  }
+  assert.deepEqual([await digestOf(planId), await planCount()], before, "the free draft removed inside the transaction is back, no plan created");
+});
+
 const weeklyPlansRead = (s) => api(`/api/builder/weekly-plans?weekStart=${WEEK}&athleteIds=${s.athlete.athleteId}`, { cookie: s.coach.cookie });
 
 test("L3. the caller's own draft with no session but WITH a day note is content: refused on both routes, and the list read reports it; a blank note is not content", async () => {
