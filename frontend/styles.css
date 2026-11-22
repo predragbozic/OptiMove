@@ -30044,3 +30044,22 @@ body.athlete-questions-prompt-open {
   .builder-week-actions .compact-button { flex: 1 1 auto; }
 }
 /* end WT-A */
+/* Weekly program templates, part WT-B: the dated assign dialog and its question
+   (the question scrolls inside the dialog on a short phone). */
+.builder-tw-assign-modal input[type="date"] { font-size: 16px; }
+.builder-tw-assign-modal .builder-copy-plan-footer .plain-button,
+.builder-tw-assign-modal .builder-modal-head .icon-button { min-height: 44px; min-width: 44px; }
+.builder-tw-assign-modal .checkbox-toggle-all { width: 44px; height: 44px; min-width: 44px; }
+.builder-tw-assign-modal.is-question { overflow-y: auto; overscroll-behavior: contain; }
+.builder-tw-conflict { display: grid; gap: 10px; outline: none; }
+.builder-tw-conflict-title, .builder-tw-conflict-changed { margin: 0; }
+.builder-tw-conflict-changed { color: var(--danger); }
+.builder-tw-conflict-list { margin: 0; padding-left: 18px; display: grid; gap: 8px; overflow-wrap: anywhere; }
+.builder-tw-conflict-list ul { padding-left: 18px; margin: 4px 0 0; }
+.builder-tw-kept li { color: var(--muted); }
+.builder-tw-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.builder-tw-conflict-actions .plain-button { min-height: 44px; }
+@media (max-width: 760px) {
+  .builder-tw-conflict-actions .plain-button { flex: 1 1 auto; }
+}
+/* end WT-B */

@@ -536,6 +536,16 @@ router.post("/:planId/assignments", async (req, res, next) => {
     const plan = await loadAssignableTemplate(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Template not found." });
     if (plan.can_assign_to_athlete === false) return res.status(403).json({ error: "This program cannot be assigned." });
+    // A weekly program template is never granted as library access: it is
+    // assigned from a date into the athletes' weekly plans
+    // (docs/ai/weekly-program-template-plan.md, Q3).
+    const weekly = await query(
+      `select count(*)::int as total, count(*) filter (where block_type = 'template_week_day')::int as weekly from plans.plan_days where plan_id = $1`,
+      [plan.id],
+    );
+    if (weekly.rows[0].total > 0 && weekly.rows[0].total === weekly.rows[0].weekly) {
+      return res.status(400).json({ error: "A weekly program is assigned from a date into the athletes' weekly plans.", code: "weekly_template_use_dated_assign" });
+    }
 
     const requestedIds = Array.isArray(req.body?.athleteIds) ? req.body.athleteIds.map(text).filter(Boolean) : [];
     const athleteIds = [...new Set(requestedIds)];
