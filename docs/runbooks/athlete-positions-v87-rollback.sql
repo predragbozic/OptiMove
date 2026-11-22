@@ -132,6 +132,19 @@ begin
 end;
 $$ language plpgsql;
 
+-- The restored bodies must be v69's and v64's byte for byte (by md5, as v87's gate and the preflight compare them). A copy
+-- of this file with CRLF line ends (a Windows checkout with core.autocrlf) would restore bodies with a CR in every line:
+-- refused here, so the transaction ends with nothing changed (the owner's PG17 rehearsal of 2026-11-22).
+do $$
+begin
+  if (select md5(prosrc) from pg_proc where pronamespace = 'training_load'::regnamespace and proname = 'estimate_basis_ok')
+       is distinct from '1ee471360a969f6895e1e697fa1facc6'
+     or (select md5(prosrc) from pg_proc where pronamespace = 'training_load'::regnamespace and proname = 'validate_metric_value_estimate')
+       is distinct from 'd4fdb1a813a4560651493af644632ea3' then
+    raise exception 'v87 rollback refused: a restored function body is not v69''s / v64''s (check that this file has LF line ends)' using errcode = '23514';
+  end if;
+end $$;
+
 -- An athlete's position.
 drop trigger athlete_positions_no_truncate on public.athlete_positions;
 drop trigger athlete_positions_no_update on public.athlete_positions;

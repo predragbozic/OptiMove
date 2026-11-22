@@ -103,6 +103,18 @@ test("2. preflight, apply, post-check, rollback to the same catalog, apply again
   assert.deepEqual(await allBlocks("athlete-positions-v87-postcheck.sql"), [], "the post-check passes after the second apply");
 });
 
+test("2b. a CRLF copy of the rollback (a Windows checkout with core.autocrlf) is refused, changing nothing: the bodies it restores would not be v69's and v64's (the owner's PG17 rehearsal of 2026-11-22)", async () => {
+  const crlf = RUNBOOK("athlete-positions-v87-rollback.sql").replace(/\r?\n/g, "\r\n");
+  await assert.rejects(c.query(crlf), (error) => error.code === "23514" && /v87 rollback refused: a restored function body/.test(error.message));
+  await c.query("rollback").catch(() => {});
+  assert.equal(await recorded(c), 1, "nothing changed");
+  const md5 = async (name) => (await c.query(`select md5(prosrc) as m from pg_proc where proname = $1`, [name])).rows[0].m;
+  assert.equal(await md5("estimate_basis_ok"), "aa000fd84278770aa9e2f8276bdbd9bb", "v87's body is still in force");
+  // The runbook SQL is pinned to LF in every checkout.
+  const attributes = fs.readFileSync(path.join(REPO, ".gitattributes"), "utf8");
+  assert.match(attributes, /^docs\/runbooks\/athlete-positions-v87\*\.sql text eol=lf$/m);
+});
+
 test("3. the rollback refuses, changing nothing, once a position was changed in the app or an athlete's position was set", async () => {
   const refuse = async (label) => {
     await assert.rejects(c.query(RUNBOOK("athlete-positions-v87-rollback.sql")), (error) => error.code === "23514" && /v87 rollback refused/.test(error.message), label);
