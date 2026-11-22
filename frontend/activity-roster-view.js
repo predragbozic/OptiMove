@@ -377,7 +377,9 @@ function outsideAthletes(data) {
 }
 
 function stateLabel(athlete) {
-  return athlete.stateLabel || STATE_LABELS[athlete.state] || "Unknown";
+  const label = athlete.stateLabel || STATE_LABELS[athlete.state] || "Unknown";
+  // ST-4: a corrected record is never shown as the device's values alone.
+  return athlete.state === "measured" && athlete.flags?.includes("corrected") ? `${label} · corrected` : label;
 }
 
 // Whether this viewer may decide (the read always comes with a basis; a
@@ -882,7 +884,11 @@ function rosterTableHtml(roster, data, canDecide) {
   // confirmed, a save in flight) stays where the coach's thumb is, whatever
   // the filter, until the filter changes (section 1); it is shown under its
   // own group name.
-  const pinned = (athlete) => Boolean(roster.notices?.rows?.[athlete.athleteId]) || Boolean(roster.unconfirmed?.athleteIds?.includes(athlete.athleteId)) || Boolean(roster.busy?.[athlete.athleteId]);
+  // A row whose panel (an estimate or manual values) is saving or not confirmed stays under every filter: its Check result is
+  // the only live control then.
+  const panelBusy = (athlete) => (roster.manual?.athleteId === athlete.athleteId && manualBusy(roster))
+    || (roster.estimate?.athleteId === athlete.athleteId && estimateBusy(roster));
+  const pinned = (athlete) => Boolean(roster.notices?.rows?.[athlete.athleteId]) || Boolean(roster.unconfirmed?.athleteIds?.includes(athlete.athleteId)) || Boolean(roster.busy?.[athlete.athleteId]) || panelBusy(athlete);
   const visibleGroups = filter === "all"
     ? groups
     : groups.map((group) => ({ ...group, athletes: group.id === filter ? group.athletes : group.athletes.filter(pinned) }));

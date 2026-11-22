@@ -514,9 +514,12 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
     const changes = laterChangeCount(later);
     const laterText = later ? ` This also removes ${changes === 1 ? "1 later attendance change" : `${changes} later attendance changes`} made in the Roster tab.` : "";
-    const manualAthletes = manual ? (Array.isArray(manual.list) && manual.list.length ? manual.list.length : Number(manual.count) || 0) : 0;
-    const manualText = manual ? ` This also removes the values coaches entered or corrected for ${manualAthletes === 1 ? "1 athlete" : `${manualAthletes} athletes`}.` : "";
-    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText}${manualText} Deleted data can't be restored; to get it back, import the session again from Imports.`;
+    const manualList = manual && Array.isArray(manual.list) ? manual.list : [];
+    const manualAthletes = new Set(manualList.map((i) => i.athleteId).filter(Boolean)).size || manualList.length;
+    const manualText = manual
+      ? ` This also removes the values coaches entered or corrected${manualAthletes ? ` for ${manualAthletes === 1 ? "1 athlete" : `${manualAthletes} athletes`}` : ""}; importing the session again does not bring them back.`
+      : "";
+    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText}${manualText} Deleted data can't be restored; to get ${manual ? "the imported data" : "it"} back, import the session again from Imports.`;
     u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
     await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);

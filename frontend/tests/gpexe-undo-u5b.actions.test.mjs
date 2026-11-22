@@ -817,6 +817,8 @@ test("26. manual values: their own warning lists them (names escaped, what was d
   await act("training-load-gpexe-undo-open");
   let s = undoSection();
   assert.match(s, /Coaches entered or corrected values in the Roster tab for 2 athletes\./);
+  assert.match(s, /Importing the session again does not bring them back; they would have to be entered again\./);
+  assert.match(s, /To get the imported data back, import the session again from Imports\./);
   assert.match(s, /Athlete &lt;0&gt;<\/strong>: values entered/);
   assert.match(s, /Athlete &lt;1&gt;<\/strong>: measured values corrected/);
   assert.match(s, /by Coach Example, \d{2}\.11\.2026 \d{2}:\d{2}/);
@@ -833,7 +835,8 @@ test("26. manual values: their own warning lists them (names escaped, what was d
     manualBox = { checked: true };
     await act("training-load-gpexe-undo-confirm");
     assert.equal(confirmAsked.length, 1);
-    assert.match(confirmAsked[0], /This also removes the values coaches entered or corrected for 2 athletes\./);
+    assert.match(confirmAsked[0], /This also removes the values coaches entered or corrected for 2 athletes; importing the session again does not bring them back\./);
+    assert.match(confirmAsked[0], /to get the imported data back, import the session again from Imports\./, "the re-import brings back only the imported data");
     assert.equal(undoCalls().length, 1);
     assert.equal(undoCalls()[0].body.manualValuesFingerprint, MFP, "sending the fingerprint is the confirmation");
     assert.equal(undoCalls()[0].body.laterRosterFingerprint, undefined);
@@ -871,6 +874,25 @@ test("27. the manual values changed meanwhile (manual_values_changed): nothing r
     assert.equal(undoCalls().length, 2);
     assert.equal(undoCalls()[1].body.manualValuesFingerprint, MFP2);
     assert.notEqual(undoCalls()[1].body.requestKey, firstKey);
+  } finally {
+    manualBox = null;
+  }
+});
+
+test("29. the number of athletes is the list's, never the count of manual records (one athlete corrected three times is 1 athlete)", async () => {
+  const one = { count: 3, fingerprint: MFP, list: [{ athleteId: "bbbb0000-0000-4000-8000-000000000001", athleteName: "Athlete A", kind: "correction", byUserId: COACH, byName: "Coach Example", at: "2026-11-21T09:15:00Z", values: 2 }] };
+  setup({ preview: () => ({ status: 200, body: { undoPreview: scopeWithManual(one) } }), undo: () => { performUndo(); return { status: 200, body: { undo: okUndo() } }; } });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  assert.match(undoSection(), /for 1 athlete\./);
+  assert.doesNotMatch(undoSection(), /(?<!\d)3 athletes/);
+  typedReason = "Wrong link";
+  manualBox = { checked: true };
+  try {
+    await act("training-load-gpexe-undo-confirm");
+    assert.match(confirmAsked[0], /for 1 athlete;/);
+    assert.doesNotMatch(confirmAsked[0], /(?<!\d)3 athletes/);
   } finally {
     manualBox = null;
   }

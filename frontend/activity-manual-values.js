@@ -19,26 +19,40 @@ const REFUSALS = {
   athlete_not_on_roster: "This athlete is no longer on this session's roster.",
   manual_not_available: "Values cannot be entered for this session.",
   roster_not_applicable: "Values cannot be entered for this session.",
-  values_changed: "This athlete's values changed since you opened them. Nothing was saved. Open them again.",
+  values_changed: "This athlete's values changed since you opened them. Nothing was saved. The values below are the current ones now.",
   nothing_changed: "These are the values already shown. Change a value first.",
-  variable_not_in_record: "A value is not part of this athlete's record. Open the values again.",
-  variable_not_in_session: "A value is not measured in this session. Open the values again.",
+  variable_not_in_record: "A value is not part of this athlete's record. Nothing was saved. The values below are the current ones now.",
+  variable_not_in_session: "A value is not measured in this session. Nothing was saved. The values below are the current ones now.",
   record_ambiguous: "This athlete has more than one device record in this session. Fix it in GPEXE first.",
-  changed_elsewhere: "This athlete's values were changed outside the roster. Change them there.",
+  changed_elsewhere: "This athlete's values were changed outside the roster, so they can't be changed here. Ask an administrator to look at them.",
   nothing_to_restore: "These are already the measured values.",
   activity_superseded: "This session was merged into another one. Open the other session.",
-  request_key_reused: "Something changed while saving. Open the values again.",
+  request_key_reused: "Something changed while saving. Nothing was saved. The values below are the current ones now.",
   try_again: "The server was busy and saved nothing. Try again.",
   not_a_team_coach: "You can no longer decide on this roster.",
   invalid_value: "Each value must be a number.",
+  invalid_values: "Each value must be a number.",
+  invalid_note: "Keep the note to one line of at most 500 characters.",
 };
+// After these refusals the form is read again at once (the next step is already on screen).
+const REREAD = new Set(["values_changed", "variable_not_in_record", "variable_not_in_session", "request_key_reused"]);
 
 function roster() {
   return state.trainingLoad.calendar.roster;
 }
 
+// No thousands separator anywhere in this panel: a number shown here can be typed back exactly ("3900", never "3,900").
 function num(n) {
-  return new Intl.NumberFormat("en-GB", { maximumFractionDigits: 3 }).format(n);
+  return new Intl.NumberFormat("en-GB", { maximumFractionDigits: 3, useGrouping: false }).format(n);
+}
+
+// A typed number: digits with one optional decimal point or comma ("4100.5", "4100,5"), an optional minus. "3,900" is
+// refused: it may mean 3900 or 3.9. Returns { value } or { problem }.
+export function parseTypedNumber(raw) {
+  const text = String(raw ?? "").trim();
+  if (/^-?\d{1,3},\d{3}$/.test(text)) return { problem: "write it without a comma for thousands (3900), or with a point for a decimal (3.9)." };
+  if (!/^-?\d+([.,]\d+)?$/.test(text)) return { problem: "enter a number." };
+  return { value: Number(text.replace(",", ".")) };
 }
 
 function localDay(iso) {
@@ -55,7 +69,7 @@ export function isManualValue(v) {
 // The row's line about its manual values: "Values entered by Ana Coach on 15.11.2026".
 export function manualLineText(manual) {
   if (!manual) return "";
-  const what = manual.kind === "correction" ? "Corrected" : manual.kind === "restore" ? "Measured values restored" : "Values entered";
+  const what = manual.kind === "correction" ? "Values corrected" : manual.kind === "restore" ? "Measured values restored" : "Values entered";
   const who = manual.enteredBy?.name ? ` by ${manual.enteredBy.name}` : "";
   const when = manual.enteredAt ? ` on ${localDay(manual.enteredAt)}` : "";
   return `${what}${who}${when}.`;
@@ -67,7 +81,8 @@ export function manualMark(value, manual) {
   const corrected = manual?.kind === "correction";
   const measured = corrected && value.measuredValue !== undefined
     ? ` (measured: ${Number.isFinite(value.measuredValue) ? num(value.measuredValue) : "none"})` : "";
-  return { short: corrected ? "corr." : manual?.kind === "restore" ? "" : "man.", title: `${manualLineText(manual)}${measured}`.trim() };
+  // Whole words (a title never shows on a touch screen): "manual" for an entered value, "corrected" for a corrected one.
+  return { short: corrected ? "corrected" : manual?.kind === "restore" ? "" : "manual", title: `${manualLineText(manual)}${measured}`.trim() };
 }
 
 // Offered: the server says the routes are on, and the athlete is one whose values a coach may enter or correct here.
@@ -94,10 +109,13 @@ function refusedBeforeReplay(result) {
 // ---------------------------------------------------------------------------
 // Data
 // ---------------------------------------------------------------------------
-async function readForm(render) {
+// `keepTyped`: after a refusal the form is read again, and what the coach typed stays in the fields that still exist.
+async function readForm(render, { keepTyped = false } = {}) {
   const r = roster();
   const m = r.manual;
   if (!m) return;
+  const typed = keepTyped ? { ...m.inputs } : null;
+  const shown = keepTyped ? Object.fromEntries((m.form?.variables || []).map((v) => [v.metricDefinitionId, Number.isFinite(v.value) ? String(v.value) : ""])) : null;
   const generation = currentRosterResetGeneration();
   const ticket = (m.readTicket ?? 0) + 1;
   m.readTicket = ticket;
@@ -108,7 +126,12 @@ async function readForm(render) {
     const answer = await api(`/api/training-activity/${encodeURIComponent(r.activityId)}/manual-values?${new URLSearchParams({ athleteId: m.athleteId })}`);
     if (roster() !== r || r.manual !== m || m.readTicket !== ticket || generation !== currentRosterResetGeneration()) return;
     m.form = answer;
-    m.inputs = Object.fromEntries((answer.variables || []).filter((v) => v.editable).map((v) => [v.metricDefinitionId, Number.isFinite(v.value) ? String(v.value) : ""]));
+    m.inputs = Object.fromEntries((answer.variables || []).filter((v) => v.editable).map((v) => {
+      const current = Number.isFinite(v.value) ? String(v.value) : "";
+      // A field the coach changed keeps the change; an untouched one shows the current value.
+      const kept = typed && Object.hasOwn(typed, v.metricDefinitionId) && typed[v.metricDefinitionId] !== shown[v.metricDefinitionId];
+      return [v.metricDefinitionId, kept ? typed[v.metricDefinitionId] : current];
+    }));
   } catch (error) {
     if (roster() !== r || r.manual !== m || m.readTicket !== ticket || generation !== currentRosterResetGeneration()) return;
     m.error = error?.status === 404 ? "Values cannot be entered for this session." : REFUSALS[error?.data?.error] ?? "The values could not be read. Try again.";
@@ -118,17 +141,28 @@ async function readForm(render) {
   render();
 }
 
-// What a Save sends: the typed values that are numbers. A correction sends only the values that differ from the current
-// ones; an entry sends every filled value (it replaces the earlier entry as a whole). Returns { values, problem }.
+// A variable's name in the form: the full label (a coach needs the whole name here), else the short one.
+export function fieldName(v) {
+  return variableName({ ...v, shortLabel: v?.label || v?.shortLabel });
+}
+
+// What a Save sends: the typed values. A correction sends only the values that differ from the current ones; an entry sends
+// the filled values that changed or are new, and the server keeps the others (it carries the earlier entry's values over).
+// A value cannot be removed here: a field that held a value and is now empty is refused, never silently kept.
+// Returns { values, problem }.
 export function valuesToSend(m) {
   const variables = (m?.form?.variables || []).filter((v) => v.editable);
   const values = [];
   for (const v of variables) {
-    const raw = String(m.inputs?.[v.metricDefinitionId] ?? "").trim().replace(",", ".");
-    if (raw === "") continue;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return { values: [], problem: `${variableName(v)}: enter a number.` };
-    if (m.form.mode === "correction" && Number.isFinite(v.value) && n === v.value) continue;
+    const raw = String(m.inputs?.[v.metricDefinitionId] ?? "").trim();
+    if (raw === "") {
+      if (Number.isFinite(v.value)) return { values: [], problem: `${fieldName(v)}: a saved value can't be removed here. Type a value, or Cancel.` };
+      continue;
+    }
+    const parsed = parseTypedNumber(raw);
+    if (parsed.problem) return { values: [], problem: `${fieldName(v)}: ${parsed.problem}` };
+    const n = parsed.value;
+    if (Number.isFinite(v.value) && n === v.value) continue;
     values.push({ metricDefinitionId: v.metricDefinitionId, value: n });
   }
   if (!values.length) return { values, problem: m?.form?.mode === "correction" ? "Change a value first." : "Enter at least one value." };
@@ -137,7 +171,8 @@ export function valuesToSend(m) {
 
 function saveCommand(activityId, m, values) {
   const body = { requestKey: m.requestKey, athleteId: m.athleteId, expectedOccasionId: m.form.expectedOccasionId ?? null, values };
-  const note = String(m.note ?? "").trim();
+  // One line, as the server keeps it (a textarea gives a person Enter): a line break or tab is a space.
+  const note = String(m.note ?? "").replace(/[\r\n\t]+/g, " ").trim();
   if (note) body.note = note;
   return { method: "POST", path: `/api/training-activity/${encodeURIComponent(activityId)}/manual-values`, body };
 }
@@ -178,7 +213,8 @@ export async function handleManualAction(action, { render }) {
   }
   if (m.sending || m.unconfirmed) {
     if (type === "training-load-roster-manual-check") {
-      if (!m.unconfirmed) return true;
+      // One Check result at a time (the same key; the button is off meanwhile, this guards a second tap too).
+      if (!m.unconfirmed || m.sending) return true;
       m.unconfirmed.checks += 1;
       return send(r, m, m.unconfirmed.command, render);
     }
@@ -204,10 +240,21 @@ export async function handleManualAction(action, { render }) {
     m.requestKey = newRosterRequestKey();
     return send(r, m, saveCommand(r.activityId, m, values), render);
   }
-  if (type === "training-load-roster-manual-restore") {
+  // The restore asks first, inline (the roster's own pattern, never a modal): Restore → the question with two buttons.
+  if (type === "training-load-roster-manual-restore-ask") {
     if (!m.form?.canRestore || m.loading || rosterWriteBusy(r)) return true;
-    const name = (r.data?.athletes || []).find((a) => a.athleteId === m.athleteId)?.name || "this athlete";
-    if (globalThis.window?.confirm && !globalThis.window.confirm(`Use the measured values again for ${name}? Your corrected values are kept as history.`)) return true;
+    m.confirmRestore = true;
+    render();
+    return true;
+  }
+  if (type === "training-load-roster-manual-restore-keep") {
+    m.confirmRestore = false;
+    render();
+    return true;
+  }
+  if (type === "training-load-roster-manual-restore") {
+    if (!m.confirmRestore || !m.form?.canRestore || m.loading || rosterWriteBusy(r)) return true;
+    m.confirmRestore = false;
     m.problem = "";
     m.refusal = null;
     m.requestKey = newRosterRequestKey();
@@ -235,9 +282,12 @@ async function send(r, m, command, render) {
     const name = (r.data?.athletes || []).find((a) => a.athleteId === m.athleteId)?.name || "this athlete";
     const restored = command.path.endsWith("/restore");
     r.manual = null;
+    const corrected = m.form?.mode === "correction";
     r.notices.rows[m.athleteId] = {
       tone: "saved",
-      text: restored ? `Measured values restored for ${name}.` : `Values saved for ${name}. They are shown as entered by hand, never as measured by GPEXE.`,
+      text: restored ? `Measured values restored for ${name}.`
+        : corrected ? `Corrected values saved for ${name}. The measured values are kept.`
+        : `Values saved for ${name}. They are shown as entered by hand, never as measured.`,
     };
     render();
     await refreshActivityRoster(activityId, render, { exclude: [m.athleteId] });
@@ -255,6 +305,8 @@ async function send(r, m, command, render) {
   m.refusal = REFUSALS[result.code] ?? (result.status === 404 ? "This session is not available here any more. Nothing was saved." : result.status === 403 ? REFUSALS.not_a_team_coach : "It could not be saved. Nothing was saved.");
   render();
   await refreshActivityRoster(activityId, render, { exclude: [m.athleteId] });
+  // The values changed under the coach: the form is read again at once, keeping what was typed.
+  if (REREAD.has(result.code) && roster() === r && r.manual === m) await readForm(render, { keepTyped: true });
   render();
   return true;
 }
@@ -264,7 +316,7 @@ async function send(r, m, command, render) {
 // ---------------------------------------------------------------------------
 function fieldHtml(m, v) {
   const id = `tl-manual-${escapeAttr(v.metricDefinitionId)}`;
-  const name = variableName(v);
+  const name = fieldName(v);
   const hints = [];
   if (m.form.mode === "correction" && v.measuredValue !== undefined && v.measuredValue !== v.value) {
     hints.push(`Measured: ${Number.isFinite(v.measuredValue) ? num(v.measuredValue) : "none"}`);
@@ -301,7 +353,7 @@ export function renderManualPanelHtml(r, athlete) {
   const title = correction ? `Correct values for ${name}` : `Enter values for ${name}`;
   const intro = correction
     ? "The measured values are kept. Your values count instead and are shown as corrected by you."
-    : "For an athlete without a device record. Your values are shown as entered by hand, never as measured.";
+    : "Your own numbers for an athlete without usable device data, shown as entered by hand, never as measured. (An estimate is calculated; these are typed by you.)";
   const fields = f ? (f.variables || []).map((v) => fieldHtml(m, v)).join("") : "";
   const canSave = Boolean(f) && !m.sending && !m.loading && !rosterWriteBusy(r);
   return `
@@ -318,10 +370,18 @@ export function renderManualPanelHtml(r, athlete) {
         <textarea id="tl-manual-note" rows="2" maxlength="${MAX_NOTE}" data-action="training-load-roster-manual-note" ${m.sending ? "disabled" : ""}>${escapeHtml(m.note)}</textarea>` : ""}
       ${m.problem ? `<p class="tl-estimate-error" role="alert">${escapeHtml(m.problem)}</p>` : ""}
       ${m.refusal ? `<p class="tl-estimate-error" role="alert">${escapeHtml(m.refusal)}</p>` : ""}
+      ${m.confirmRestore ? `
+        <div class="tl-roster-confirm" role="group" aria-label="Restore the measured values">
+          <p>Use the measured values again for ${escapeHtml(name)}? Your corrected values stop counting.</p>
+          <div class="tl-roster-actions">
+            <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-manual-restore" ${canSave ? "" : "disabled"}>Restore measured values</button>
+            <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-restore-keep">Keep my correction</button>
+          </div>
+        </div>` : `
       <div class="tl-roster-actions">
         <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-manual-save" ${canSave && fields ? "" : "disabled"}>${m.sending ? "Saving…" : "Save values"}</button>
-        ${f?.canRestore ? `<button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-restore" ${canSave ? "" : "disabled"}>Restore measured values</button>` : ""}
+        ${f?.canRestore ? `<button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-restore-ask" ${canSave ? "" : "disabled"}>Restore measured values…</button>` : ""}
         <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-cancel" ${m.sending ? "disabled" : ""}>Cancel</button>
-      </div>
+      </div>`}
     </section>`;
 }

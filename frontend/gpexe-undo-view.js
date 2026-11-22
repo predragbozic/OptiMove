@@ -78,6 +78,9 @@ function manualValuesHtml(u, { disabled }) {
   const manual = manualToRemove(u);
   if (!manual) return "";
   const list = Array.isArray(manual.list) ? manual.list : [];
+  // The list names the athletes' current values (at most 60); `count` counts every manual record, history included, so it
+  // is never shown as a number of athletes.
+  const athletes = new Set(list.map((i) => i.athleteId).filter(Boolean)).size || list.length;
   const rows = list.map((i) => {
     const who = i.athleteName || "An athlete";
     const by = [i.byName ? `by ${i.byName}` : "", fmtWhen(i.at)].filter(Boolean).join(", ");
@@ -86,8 +89,9 @@ function manualValuesHtml(u, { disabled }) {
   return `
     <div class="gpexe-warning gpexe-undo-later" role="note">
       ${u.manualNote ? `<p class="gpexe-error" role="alert">${escapeHtml(u.manualNote)}</p>` : ""}
-      <p><strong>${escapeHtml(`Coaches entered or corrected values in the Roster tab for ${plural(list.length || Number(manual.count) || 0, "athlete", "athletes")}.`)}</strong> They are removed too if you delete.</p>
+      <p><strong>${escapeHtml(athletes ? `Coaches entered or corrected values in the Roster tab for ${plural(athletes, "athlete", "athletes")}.` : "Coaches entered or corrected values in the Roster tab.")}</strong> They are removed too if you delete. Importing the session again does not bring them back; they would have to be entered again.</p>
       ${rows ? `<ul class="gpexe-undo-later-list" tabindex="0" aria-label="${escapeAttr("Values entered by hand")}">${rows}</ul>` : ""}
+      ${list.length >= 60 ? `<p class="muted">${escapeHtml("The list shows the first 60.")}</p>` : ""}
       <label class="gpexe-undo-later-confirm"><input type="checkbox" data-gpexe-undo-manual-confirm ${u.manualConfirmed ? "checked" : ""} ${disabled ? "disabled" : ""}> Remove these values too</label>
       ${u.manualProblem ? `<p class="gpexe-error" role="alert">${escapeHtml(u.manualProblem)}</p>` : ""}
     </div>`;
@@ -133,7 +137,7 @@ function scopeHtml(u, { disabled = false } = {}) {
   const versions = Array.isArray(p.undoneCandidateIds) ? p.undoneCandidateIds.length : 1;
   return `
     <p>This removes the session from the calendar and deletes its imported data${summary ? `: ${escapeHtml(summary)}` : ""}.</p>
-    <p><strong>Deleted data can't be restored.</strong> To get it back, import the session again from Imports.</p>
+    <p><strong>Deleted data can't be restored.</strong> To get ${manualToRemove(u) ? "the imported data" : "it"} back, import the session again from Imports.</p>
     ${versions > 1 ? `<p class="gpexe-warning" role="note"><strong>This session was imported more than once with different data.</strong> All ${versions} imports are deleted together.</p>` : ""}
     ${importStatesHtml(p.rosterWork)}
     ${laterWorkHtml(u, { disabled })}
