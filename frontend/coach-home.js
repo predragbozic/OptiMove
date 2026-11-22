@@ -102,6 +102,14 @@ export function coachHomeDayView(rows, home, today = localDateIso()) {
   return { date, isToday: false, status: "ready", rows: day.rows, error: "" };
 }
 
+// K6 follow-up (PR2): the athletes (UUIDs, in the list's order) with a session on the day Home shows - the very rows
+// the day list draws, so nothing new is read. Empty unless that day is the one asked for and its rows are ready.
+export function coachHomeDayAthleteKeys(rows, home, date, today = localDateIso()) {
+  const day = coachHomeDayView(rows, home, today);
+  if (day.status !== "ready" || day.date !== date) return [];
+  return [...new Set(sortAthletes(day.rows.filter((row) => row.hasTrainingToday && row.athleteUuid)).map((row) => String(row.athleteUuid)))];
+}
+
 // The picker's rows: the whole roster for Training plan / Training load, the
 // chosen day's athletes with a session for the day list.
 export function coachHomePickerRows(rows, picker = {}, home = emptyCoachHomeState(), today = localDateIso()) {

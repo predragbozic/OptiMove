@@ -84,12 +84,12 @@ import {
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
-import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
+import { coachHomeDayAthleteKeys, coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsResetForWorkspaceChange, checkBuilderEventsResult, chooseSessionEvent, chooseWholeDay, loadBuilderEvents, setBuilderEventsRender } from "./builder-events-row.js";
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
-import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, toggleWeeklyStrip, weeklyBackToCalendar } from "./weekly-k6-actions.js";
+import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, toggleWeeklyStrip, weeklyBackToCalendar, weeklyFlowFromHome } from "./weekly-k6-actions.js";
 import { slotPathFor, weeklyDayItems } from "./weekly-k6.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
@@ -3315,11 +3315,12 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "weekly-back-to-calendar") {
+    const toHome = state.centralCalendar.weeklyFlow?.origin === "home";
     weeklyBackToCalendar({
       renderCurrent: () => {},
       goBack: () => window.history.back(),
       fallback: () => {
-        state.activeTab = "central-calendar";
+        state.activeTab = toHome ? "coach-home" : "central-calendar";
         renderTabs();
         renderLibraryNav();
         void Promise.resolve(loadActiveTab()).catch(() => {});
@@ -3418,6 +3419,10 @@ async function handleContentClick(event) {
     renderAthleteList();
     renderTabs();
     renderLibraryNav();
+    // PR2: a row of Home's day list opens the plan with the day's athletes in the switcher (back goes to Home).
+    state.centralCalendar.weeklyFlow = action.dataset.mode === "day" && /^\d{4}-\d{2}-\d{2}$/.test(action.dataset.date || "")
+      ? weeklyFlowFromHome(coachHomeDayAthleteKeys(coachHomeRows, state.coachHome, action.dataset.date), row.athleteUuid || "")
+      : null;
     if (action.dataset.mode === "day") await openWeeklyPlanOnDate(/^\d{4}-\d{2}-\d{2}$/.test(action.dataset.date || "") ? action.dataset.date : localDateIso());
     else await loadWeekly();
     return;
