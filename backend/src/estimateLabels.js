@@ -28,11 +28,25 @@ export async function readEstimateLabels(executor, occasionIds) {
       where e.occasion_id = any($1::uuid[])`,
     [ids],
   )).rows;
-  // v87: the position a position average used, by its name now (a rename shows the new name). Read only when such a row
-  // exists, so a reader on a database without v87 never touches the table.
-  const positionIds = [...new Set(rows.filter((r) => r.method === "position_average").map((r) => r.basis?.positionId).filter((id) => typeof id === "string" && UUID.test(id)))];
-  const positionNames = new Map(positionIds.length
-    ? (await executor.query(`select id, name from public.sport_positions where id = any($1::uuid[])`, [positionIds])).rows.map((p) => [String(p.id), p.name])
+  // v87: the position a position average used, by its name now in the club of the estimate's team (a rename shows the new
+  // name; the club's own name for a default). A club's own position is named only to that club - after a team moved, the
+  // old club's position is left unnamed. Read only when such a row exists, so a reader on a database without v87 never
+  // touches the tables.
+  const positionRows = rows.filter((r) => r.method === "position_average");
+  const positionNames = new Map(positionRows.length
+    ? (await executor.query(
+      `select e.occasion_id, coalesce(o.name, sp.name) as name
+         from training_load.metric_value_estimates e
+         join training_load.metric_measurement_occasions oc on oc.id = e.occasion_id
+         join training_load.metric_event_participants mp on mp.id = oc.event_participant_id
+         join training_load.metric_events ev on ev.id = mp.event_id
+         join public.teams t on t.id = ev.owner_team_id
+         join public.sport_positions sp on sp.id::text = e.basis ->> 'positionId'
+         left join public.club_position_overrides o on o.position_id = sp.id and o.club_id = t.club_id
+        where e.occasion_id = any($1::uuid[]) and e.method = 'position_average'
+          and (sp.owner_scope = 'system' or sp.owner_club_id = t.club_id)`,
+      [positionRows.map((r) => String(r.occasion_id))],
+    )).rows.map((p) => [String(p.occasion_id), p.name])
     : []);
   const out = new Map();
   for (const r of rows) {
@@ -46,7 +60,7 @@ export async function readEstimateLabels(executor, occasionIds) {
       label.athleteCount = finite(basis.athletes);
     } else if (r.method === "position_average") {
       label.athleteCount = finite(basis.athletes);
-      label.positionName = positionNames.get(String(basis.positionId ?? "").toLowerCase()) ?? null;
+      label.positionName = positionNames.get(String(r.occasion_id)) ?? null;
     } else if (r.method === "scale_recording") {
       label.recordedMinutes = finite(basis.recordedMinutes);
       label.targetMinutes = finite(basis.targetMinutes);

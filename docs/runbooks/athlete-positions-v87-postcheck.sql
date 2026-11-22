@@ -18,14 +18,17 @@ select (select string_agg(p.name, ', ' order by p.sort_order) from public.sport_
 -- 3. The objects: both tables, the functions and the triggers, every trigger enabled.
 select to_regclass('public.athlete_positions') is not null as assignment_table,
        to_regclass('public.sport_position_changes') is not null as change_log,
+       to_regclass('public.club_position_overrides') is not null as override_table,
        (select count(*) from pg_proc where pronamespace = 'public'::regnamespace
          and proname in ('position_actor', 'sport_position_basis', 'athlete_position_right', 'sport_position_offered', 'athlete_position_in_force',
                          'sport_positions_before_write', 'sport_positions_no_truncate', 'sport_positions_change_logged',
-                         'sport_position_changes_before_insert', 'position_history_append_only', 'athlete_positions_before_insert')) = 11 as functions,
+                         'sport_position_changes_before_insert', 'position_history_append_only', 'athlete_positions_before_insert',
+                         'club_position_overrides_before_write', 'club_position_overrides_no_truncate', 'club_position_overrides_change_logged')) = 14 as functions,
        (select count(*) from pg_trigger where not tgisinternal and tgenabled = 'O' and tgname in (
           'sport_positions_before_write', 'sport_positions_no_truncate', 'sport_positions_change_logged',
           'sport_position_changes_before_insert', 'sport_position_changes_no_update', 'sport_position_changes_no_truncate',
-          'athlete_positions_before_insert', 'athlete_positions_no_update', 'athlete_positions_no_truncate')) = 9 as triggers_enabled,
+          'athlete_positions_before_insert', 'athlete_positions_no_update', 'athlete_positions_no_truncate',
+          'club_position_overrides_before_write', 'club_position_overrides_no_truncate', 'club_position_overrides_change_logged')) = 12 as triggers_enabled,
        (select tgdeferrable and tginitdeferred from pg_trigger where tgname = 'sport_positions_change_logged') as change_logged_deferred;
 
 -- 4. The estimate guards: the v87 bodies, the method CHECK with position_average.
@@ -35,7 +38,8 @@ select (select md5(prosrc) from pg_proc where pronamespace = 'training_load'::re
 
 -- 5. Nothing written by a user yet.
 select not exists (select 1 from public.sport_position_changes) as no_change_rows,
-       not exists (select 1 from public.athlete_positions) as no_assignment_rows;
+       not exists (select 1 from public.athlete_positions) as no_assignment_rows,
+       not exists (select 1 from public.club_position_overrides) as no_override_rows;
 
 -- 6. For the reader, compared with preflight block 4: the estimates per method (unchanged: v87 writes no estimate).
 select (select string_agg(method || '=' || n, ', ' order by method)

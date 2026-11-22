@@ -272,6 +272,13 @@ test("3. the position average: the mean of the three measured forwards (not the 
   const map = await labels.readEstimateLabels(admin, [saved.occasionId]);
   const label = labels.estimateLabelFor(map.get(saved.occasionId), () => null);
   assert.deepEqual([label.method, label.athleteCount, label.positionName], ["position_average", 3, "Forward"]);
+  // The club's own name for the default shows in the label (the club's view; the basis keeps the id).
+  const cadmin = await withRole("club admin", `insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [team.clubId], ["club", team.clubId]);
+  const renamed = await call(`/api/positions/${forward}/rename`, { method: "POST", cookie: cadmin.cookie, body: { requestKey: key(), name: "Striker", expectedName: "Forward" } });
+  assert.equal(renamed.status, 200, renamed.text);
+  const relabel = labels.estimateLabelFor((await labels.readEstimateLabels(admin, [saved.occasionId])).get(saved.occasionId), () => null);
+  assert.equal(relabel.positionName, "Striker");
+  assert.equal((await proposal(team, s, team.athleteIds[DAN])).body.methods.position_average.position.name, "Striker");
   // A later change of Dan's position does not change the saved estimate.
   await setPosition(team, DAN, "Goalkeeper");
   const row = (await admin.query(`select basis from training_load.metric_value_estimates where occasion_id = $1`, [saved.occasionId])).rows[0];

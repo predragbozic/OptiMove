@@ -79,14 +79,25 @@ test("1. the migration refuses, changing nothing: another body of estimate_basis
 test("2. preflight, apply, post-check, rollback to the same catalog, apply again", async () => {
   assert.deepEqual(await allBlocks("athlete-positions-v87-preflight.sql"), [], "the preflight passes before v87");
   const catalogBefore = (await c.query(CATALOG_SQL)).rows[0];
+  // The Rukovodilac's condition: nothing the Tests module reads changes - its foreign keys into public.sports and
+  // public.sport_positions (and the unique (id, sport_id) they rest on) are the same and valid before, after and after the
+  // rollback.
+  const TESTS_FKS = `select string_agg(conrelid::regclass::text || '.' || conname || '=' || pg_get_constraintdef(oid) || ':' || convalidated::text, ',' order by conname) as fks,
+                            (select count(*) from pg_constraint where conrelid = 'public.sport_positions'::regclass and conname = 'sport_positions_id_sport_id_key') as id_sport_unique
+                       from pg_constraint where contype = 'f' and confrelid in ('public.sports'::regclass, 'public.sport_positions'::regclass)
+                        and connamespace = 'tests'::regnamespace`;
+  const fksBefore = (await c.query(TESTS_FKS)).rows[0];
+  assert.ok((fksBefore.fks ?? "").split(",").length >= 4, "the Tests module's foreign keys exist");
   await applyGpexeTestMigrations(db.url, [V87_FILE]);
+  assert.deepEqual((await c.query(TESTS_FKS)).rows[0], fksBefore, "v87 changes none of the Tests module's foreign keys");
   assert.deepEqual(await allBlocks("athlete-positions-v87-preflight.sql"), [
-    "1.v87_not_recorded", "2.v42_shape", "2.positions_empty", "2.football_free", "2.v42_unique", "2.no_assignment_table", "2.no_change_log", "2.no_functions",
-    "3.basis_body_v69", "3.guard_body_v64",
+    "1.v87_not_recorded", "2.v42_shape", "2.positions_empty", "2.football_free", "2.v42_unique", "2.no_assignment_table", "2.no_change_log", "2.no_override_table", "2.no_functions",
+    "3.basis_body_v69", "3.guard_body_v64", "3.method_check_v69",
   ], "after v87 the preflight refuses exactly on the v87 objects");
   assert.deepEqual(await allBlocks("athlete-positions-v87-postcheck.sql"), [], "the post-check passes after v87");
   await c.query(RUNBOOK("athlete-positions-v87-rollback.sql"));
   assert.deepEqual((await c.query(CATALOG_SQL)).rows[0], catalogBefore, "the rollback restores the catalog exactly");
+  assert.deepEqual((await c.query(TESTS_FKS)).rows[0], fksBefore, "and the Tests module's foreign keys");
   assert.equal(await recorded(c), 0);
   await applyGpexeTestMigrations(db.url, [V87_FILE]);
   assert.deepEqual(await allBlocks("athlete-positions-v87-postcheck.sql"), [], "the post-check passes after the second apply");

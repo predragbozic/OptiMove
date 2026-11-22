@@ -15,10 +15,11 @@ select current_setting('server_version_num')::int >= 150000 as server_15_or_late
 select (select string_agg(column_name, ',' order by ordinal_position) from information_schema.columns
           where table_schema = 'public' and table_name = 'sport_positions') = 'id,sport_id,name,created_at' as v42_shape,
        not exists (select 1 from public.sport_positions) as positions_empty,
-       not exists (select 1 from public.sports where name = 'Football') as football_free,
+       not exists (select 1 from public.sports where lower(name) = 'football') as football_free,
        exists (select 1 from pg_constraint where conrelid = 'public.sport_positions'::regclass and conname = 'sport_positions_sport_id_name_key') as v42_unique,
        to_regclass('public.athlete_positions') is null as no_assignment_table,
        to_regclass('public.sport_position_changes') is null as no_change_log,
+       to_regclass('public.club_position_overrides') is null as no_override_table,
        not exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace
                     and proname in ('position_actor', 'sport_position_basis', 'athlete_position_right', 'sport_position_offered',
                                     'athlete_position_in_force', 'sport_positions_before_write')) as no_functions;
@@ -27,7 +28,8 @@ select (select string_agg(column_name, ',' order by ordinal_position) from infor
 --    method CHECK; no estimate holds a method v87 adds.
 select (select md5(prosrc) from pg_proc where pronamespace = 'training_load'::regnamespace and proname = 'estimate_basis_ok') = '1ee471360a969f6895e1e697fa1facc6' as basis_body_v69,
        (select md5(prosrc) from pg_proc where pronamespace = 'training_load'::regnamespace and proname = 'validate_metric_value_estimate') = 'd4fdb1a813a4560651493af644632ea3' as guard_body_v64,
-       (select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'training_load.metric_value_estimates'::regclass and conname = 'metric_value_estimates_method_check') like '%scale_recording%' as method_check_v69,
+       (select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'training_load.metric_value_estimates'::regclass and conname = 'metric_value_estimates_method_check')
+         = 'CHECK (((method)::text = ANY ((ARRAY[''proportional''::character varying, ''copy_athlete''::character varying, ''team_average''::character varying, ''scale_recording''::character varying])::text[])))' as method_check_v69,
        not exists (select 1 from training_load.metric_value_estimates where method = 'position_average') as no_position_average;
 
 -- 4. For the reader (and post-check block 6): the sports, the estimates per method.

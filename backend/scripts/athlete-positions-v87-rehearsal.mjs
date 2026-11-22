@@ -108,7 +108,7 @@ export const CATALOG_SQL = `select
   (select string_agg(name, ',' order by name) from public.sport_positions) as position_rows`;
 // v87's objects only, for the dump read-back.
 const V87_CATALOG_SQL = `with t as (select oid from pg_class where oid in ('public.sport_positions'::regclass, 'public.sport_position_changes'::regclass,
-    'public.athlete_positions'::regclass, 'training_load.metric_value_estimates'::regclass))
+    'public.athlete_positions'::regclass, 'public.club_position_overrides'::regclass, 'training_load.metric_value_estimates'::regclass))
   select
   (select string_agg(k.conrelid::regclass::text || '.' || k.conname || '=' || pg_get_constraintdef(k.oid), E'\\n' order by k.conrelid::regclass::text || '.' || k.conname || '=' || pg_get_constraintdef(k.oid)) from pg_constraint k where k.conrelid in (select oid from t)) as constraints,
   (select string_agg(g.tgrelid::regclass::text || '.' || g.tgname || ':' || g.tgenabled::text || g.tgdeferrable::text || g.tginitdeferred::text, E'\\n' order by g.tgrelid::regclass::text || '.' || g.tgname || ':' || g.tgenabled::text || g.tgdeferrable::text || g.tginitdeferred::text) from pg_trigger g where g.tgrelid in (select oid from t) and not g.tgisinternal) as triggers,
@@ -117,6 +117,7 @@ const V87_CATALOG_SQL = `with t as (select oid from pg_class where oid in ('publ
      where p.proname in ('position_actor', 'sport_position_basis', 'athlete_position_right', 'sport_position_offered', 'athlete_position_in_force',
                          'sport_positions_before_write', 'sport_positions_no_truncate', 'sport_positions_change_logged',
                          'sport_position_changes_before_insert', 'position_history_append_only', 'athlete_positions_before_insert',
+                         'club_position_overrides_before_write', 'club_position_overrides_no_truncate', 'club_position_overrides_change_logged',
                          'estimate_basis_ok', 'validate_metric_value_estimate')) as functions,
   (select string_agg(name || ':' || owner_scope || ':' || sort_order, ',' order by sort_order, name) from public.sport_positions) as position_rows`;
 

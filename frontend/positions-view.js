@@ -3,7 +3,10 @@
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
-const OWNER_WORD = { system: "OptiMove", club: "Your club" };
+// A default is offered to every club, which may rename or hide it for itself; a club's own position is added by it.
+const OWNER_WORD = { system: "Default", club: "Added by your club" };
+// The row's actions, as the server offers them for this caller.
+const ACTION_BUTTONS = { rename: "Rename", archive: "Archive", restore: "Restore", hide: "Hide", show: "Show" };
 
 function messageHtml(forWhat) {
   const p = state.positions;
@@ -28,13 +31,14 @@ function positionRowHtml(position) {
         ${messageHtml(`rename:${position.id}`)}
       </li>`;
   }
-  const status = position.active ? "" : `<span class="muted"> · archived</span>`;
-  const actions = position.editable ? `
-      <button class="text-action" type="button" data-action="positions-rename" data-position-id="${escapeAttr(position.id)}" ${busy}>Rename</button>
-      <button class="text-action" type="button" data-action="${position.active ? "positions-archive" : "positions-restore"}" data-position-id="${escapeAttr(position.id)}" ${busy}>${position.active ? "Archive" : "Restore"}</button>` : "";
+  // The state in words (never by colour alone): hidden for this club, or archived.
+  const status = position.hidden ? `<span class="muted"> · hidden</span>` : position.archived ? `<span class="muted"> · archived</span>` : "";
+  const renamed = position.defaultName ? `<small class="muted"> (default: ${escapeHtml(position.defaultName)})</small>` : "";
+  const actions = (position.actions || []).map((a) => ACTION_BUTTONS[a]
+    ? `<button class="text-action" type="button" data-action="positions-${a}" data-position-id="${escapeAttr(position.id)}" ${busy}>${ACTION_BUTTONS[a]}</button>` : "").join("");
   return `
     <li class="positions-row ${position.active ? "" : "is-archived"}">
-      <span><strong>${escapeHtml(position.name)}</strong><small class="muted"> · ${escapeHtml(OWNER_WORD[position.ownerScope] ?? "")}</small>${status}</span>
+      <span><strong>${escapeHtml(position.name)}</strong>${renamed}<small class="muted"> · ${escapeHtml(OWNER_WORD[position.ownerScope] ?? "")}</small>${status}</span>
       <span class="positions-actions">${actions}</span>
       ${messageHtml(`row:${position.id}`)}
     </li>`;
@@ -60,7 +64,7 @@ export function renderPositionsSectionHtml() {
     <section class="panel taxonomy-intro">
       <p class="eyebrow">Athletes</p>
       <h3>Positions</h3>
-      <p class="muted">Each athlete has one position, chosen in Settings → Athletes (Edit). The Position average estimate uses it.</p>
+      <p class="muted">Each athlete has one position, chosen in Settings → Athletes (Edit). The Position average estimate uses it.${p.canAdd === "club" ? " The defaults are suggestions: rename or hide them, or add your own. Changes apply to your club only." : ""}</p>
     </section>
     <section class="panel tag-chip-section positions-section">
       <div class="tag-chip-head">
@@ -77,7 +81,7 @@ export function renderAthletePositionFormHtml(athleteId) {
   const p = state.positions;
   if (!p.loaded) {
     return p.error
-      ? `<div class="organization-form organization-dialog-part"><h4>Position</h4><p class="builder-error" role="alert">${escapeHtml(p.error)}</p></div>`
+      ? `<div class="organization-form organization-dialog-part"><h4>Position</h4><p class="builder-error" role="alert">${escapeHtml(p.error)}</p><button class="plain-button compact-button" type="button" data-action="positions-reload">Try again</button></div>`
       : `<div class="organization-form organization-dialog-part"><h4>Position</h4><p class="muted" aria-live="polite">Reading positions…</p></div>`;
   }
   if (!p.canSet) {
@@ -92,10 +96,10 @@ export function renderAthletePositionFormHtml(athleteId) {
       <label class="search-field"><span>Position</span>
         <select class="builder-text-input" name="positionId">
           <option value="" ${current ? "" : "selected"}>No position</option>
-          ${options.map((x) => `<option value="${escapeAttr(x.id)}" ${x.id === current ? "selected" : ""}>${escapeHtml(x.name)}${x.active ? "" : " (archived)"}</option>`).join("")}
+          ${options.map((x) => `<option value="${escapeAttr(x.id)}" ${x.id === current ? "selected" : ""}>${escapeHtml(x.name)}${x.active ? "" : x.hidden ? " (hidden)" : " (archived)"}</option>`).join("")}
+          ${current && !currentPosition ? `<option value="${escapeAttr(current)}" selected>Current position (not on this list)</option>` : ""}
         </select>
       </label>
-      ${current && !currentPosition ? `<p class="muted">The current position is not on this workspace's list.</p>` : ""}
       <div class="organization-form-footer organization-dialog-footer">
         ${messageHtml(`athlete:${athleteId}`)}
         <button class="plain-button data-sources-primary" type="submit" ${p.busy ? "disabled" : ""}>Save position</button>

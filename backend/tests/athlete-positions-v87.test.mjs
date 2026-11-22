@@ -64,7 +64,9 @@ test("2. who reads the list: coaches of a club or team see the system positions 
   assert.equal(platform.body.positions.length, 6);
   const club = await api(R, { cookie: role("clubAdmin").cookie });
   assert.equal(club.body.canAdd, "club");
-  assert.ok(club.body.positions.every((p) => p.ownerScope !== "system" || p.editable === false));
+  // A club's admin renames or hides a default for the club only; never archives it.
+  assert.ok(club.body.positions.filter((p) => p.ownerScope === "system").every((p) => JSON.stringify(p.actions) === JSON.stringify(["rename", "hide"])));
+  assert.ok(platform.body.positions.every((p) => p.actions.includes("archive")));
   const coach = await api(R, { cookie: role("teamCoach").cookie });
   assert.equal(coach.status, 200);
   assert.equal(coach.body.canAdd, null);
@@ -93,7 +95,7 @@ test("3. a club adds, renames, archives and restores its own position; another c
   assert.ok(log.every((r) => r.basis === "club_admin"));
 });
 
-test("4. names: one live name per owner (case-insensitive), an archived one frees it; a club may not edit a system position; a coach writes nothing", async () => {
+test("4. names: one live name per owner (case-insensitive), an archived one frees it; a club may not archive a default; a coach writes nothing", async () => {
   const a = await post("clubAdmin", "", { requestKey: newKey(), name: "Sweeper" });
   assert.equal(a.status, 200);
   const dup = await post("clubAdmin", "", { requestKey: newKey(), name: "sweeper" });
@@ -103,8 +105,10 @@ test("4. names: one live name per owner (case-insensitive), an archived one free
   await post("clubAdmin", `/${a.body.position.id}/archive`, { requestKey: newKey() });
   assert.equal((await post("clubAdmin", "", { requestKey: newKey(), name: "Sweeper" })).status, 200);
   const gk = await systemId("Goalkeeper");
-  assert.equal((await post("clubAdmin", `/${gk}/rename`, { requestKey: newKey(), name: "Keeper", expectedName: "Goalkeeper" })).status, 404);
+  assert.equal((await post("clubAdmin", `/${gk}/archive`, { requestKey: newKey() })).status, 404);
+  assert.equal((await post("platformAdmin", `/${gk}/hide`, { requestKey: newKey() })).status, 404, "hide is a club's own view");
   assert.equal((await post("teamCoach", "", { requestKey: newKey(), name: "Libero" })).status, 404);
+  assert.equal((await post("teamCoach", `/${gk}/hide`, { requestKey: newKey() })).status, 404);
   for (const [body, code] of [[{ requestKey: "x", name: "A" }, "invalid_request_key"], [{ requestKey: newKey(), name: "" }, "invalid_name"],
     [{ requestKey: newKey(), name: "x".repeat(61) }, "invalid_name"], [{ requestKey: newKey(), name: "A", ownerScope: "system" }, "invalid_body"]]) {
     const r = await post("clubAdmin", "", body);
@@ -201,4 +205,90 @@ test("8. the database guards: no write without the acting user, a wrong basis or
   assert.equal(await raw(async (c) => { await c.query("begin"); return refusal(c.query(`delete from public.athlete_positions`)); }), "23514");
   assert.equal(await raw(async (c) => { await c.query("begin"); return refusal(c.query(`truncate public.athlete_positions`)); }), "23514");
   assert.equal(await raw(async (c) => { await c.query("begin"); return refusal(c.query(`delete from public.sport_position_changes`)); }), "23514");
+});
+
+const names = async (who) => Object.fromEntries((await api(R, { cookie: role(who).cookie })).body.positions.map((p) => [p.id, p]));
+
+test("9. a club's own view of the defaults: it renames and hides a default for itself only; the platform's later rename reaches only clubs without a name of their own; a hidden default is not offered, an athlete who holds it keeps it", async () => {
+  const wing = await systemId("Winger");
+  const cb = await systemId("Centre back");
+  // The club renames Centre back; another club and the platform still see the default name.
+  const renamed = await post("clubAdmin", `/${cb}/rename`, { requestKey: newKey(), name: "Stopper", expectedName: "Centre back" });
+  assert.equal(renamed.status, 200, renamed.text);
+  assert.deepEqual([renamed.body.position.name, renamed.body.position.defaultName], ["Stopper", "Centre back"]);
+  assert.equal((await names("stranger"))[cb].name, "Centre back");
+  assert.equal((await names("platformAdmin"))[cb].name, "Centre back");
+  // The platform renames both defaults: the club keeps its own name for Centre back and takes the new Winger name.
+  assert.equal((await post("platformAdmin", `/${cb}/rename`, { requestKey: newKey(), name: "Central defender", expectedName: "Centre back" })).status, 200);
+  assert.equal((await post("platformAdmin", `/${wing}/rename`, { requestKey: newKey(), name: "Wide forward", expectedName: "Winger" })).status, 200);
+  const club = await names("clubAdmin");
+  assert.deepEqual([club[cb].name, club[cb].defaultName, club[wing].name], ["Stopper", "Central defender", "Wide forward"]);
+  assert.equal((await names("stranger"))[cb].name, "Central defender");
+  // Renaming back to the default name clears the club's own name.
+  await post("clubAdmin", `/${cb}/rename`, { requestKey: newKey(), name: "Central defender", expectedName: "Stopper" });
+  assert.equal((await names("clubAdmin"))[cb].defaultName, null);
+  // An athlete holds Winger; the club hides it: not offered to anyone new, the athlete keeps it, another club unaffected.
+  const athleteId = m.athletes.athlete.athleteId;
+  const current = (await q(`select public.athlete_position_in_force($1, $2) as p`, [athleteId, m.clubs.c1]))[0].p;
+  assert.equal((await put("clubAdmin", athleteId, { requestKey: newKey(), positionId: wing, expectedPositionId: current })).status, 200);
+  const hidden = await post("clubAdmin", `/${wing}/hide`, { requestKey: newKey() });
+  assert.deepEqual([hidden.status, hidden.body.position.hidden, hidden.body.position.active, hidden.body.position.actions], [200, true, false, ["show"]]);
+  assert.equal((await q(`select public.athlete_position_in_force($1, $2) as p`, [athleteId, m.clubs.c1]))[0].p, wing, "the athlete keeps it");
+  assert.equal((await names("stranger"))[wing].hidden, false);
+  const fk = await fx.makeAthlete("pos87 second athlete", { clubId: m.clubs.c1, teamId: m.teams.t1 });
+  const refused = await put("clubAdmin", fk.athleteId, { requestKey: newKey(), positionId: wing, expectedPositionId: null });
+  assert.deepEqual([refused.status, refused.body.error], [409, "position_not_offered"]);
+  // A club name may not repeat a live one: a default it shows, or its own.
+  assert.equal((await post("clubAdmin", "", { requestKey: newKey(), name: "forward" })).body.error, "name_taken");
+  assert.equal((await post("clubAdmin", "", { requestKey: newKey(), name: "Wide forward" })).status, 200, "the hidden default frees its name");
+  assert.equal((await post("clubAdmin", `/${wing}/show`, { requestKey: newKey() })).body.error, "name_taken", "showing it again would repeat a name");
+  const log = await q(`select action, club_id from public.sport_position_changes where club_id is not null order by created_at`);
+  assert.deepEqual(log.map((r) => r.action), ["club_rename", "club_rename", "club_hide"]);
+  assert.ok(log.every((r) => r.club_id === m.clubs.c1));
+});
+
+test("10. the override's database guards: no change without its log row, never another club's admin, never a club's own position, never deleted", async () => {
+  const gk = await systemId("Goalkeeper");
+  const own = (await q(`select id from public.sport_positions where owner_scope = 'club' and owner_club_id = $1 limit 1`, [m.clubs.c1]))[0].id;
+  const write = (c, by, club, position) => c.query(
+    `insert into public.club_position_overrides (club_id, position_id, name, updated_by_user_id) values ($1, $2, 'X', $3)
+     on conflict (club_id, position_id) do update set name = 'X', updated_by_user_id = excluded.updated_by_user_id`, [club, position, by]);
+  assert.equal(await raw(async (c) => { await c.query("begin"); await asActor(c, role("clubAdmin").id); await write(c, role("clubAdmin").id, m.clubs.c1, gk); return refusal(c.query("commit")); }), "23514");
+  assert.equal(await raw(async (c) => { await c.query("begin"); await asActor(c, role("stranger").id); return refusal(write(c, role("stranger").id, m.clubs.c1, gk)); }), "42501");
+  assert.equal(await raw(async (c) => { await c.query("begin"); await asActor(c, role("clubAdmin").id); return refusal(write(c, role("clubAdmin").id, m.clubs.c1, own)); }), "23514");
+  assert.equal(await raw(async (c) => { await c.query("begin"); return refusal(c.query(`delete from public.club_position_overrides`)); }), "23514");
+  // A club_* log row that does not match the override is refused.
+  assert.equal(await raw(async (c) => {
+    await c.query("begin");
+    await asActor(c, role("clubAdmin").id);
+    return refusal(c.query(`insert into public.sport_position_changes (position_id, action, old_name, new_name, performed_by_user_id, basis, request_key, request_hash, club_id)
+                            values ($1, 'club_hide', 'Goalkeeper', 'Goalkeeper', $2, 'club_admin', gen_random_uuid(), $3, $4)`, [gk, role("clubAdmin").id, "d".repeat(64), m.clubs.c1]));
+  }), "23514");
+});
+
+test("11. the bounded COMMIT: a COMMIT that never answers is 503 outcome_unknown with nothing saved; the same key then saves once. A revoked admin's replay is the 404", async () => {
+  const svc = await import("../src/positionService.js");
+  const key = newKey();
+  svc.testHooks.commit = () => new Promise(() => {});
+  svc.testHooks.commitTimeoutMs = 200;
+  let lost;
+  try {
+    lost = await post("clubAdmin", "", { requestKey: key, name: "Lost answer" });
+  } finally {
+    delete svc.testHooks.commit;
+    delete svc.testHooks.commitTimeoutMs;
+  }
+  assert.deepEqual([lost.status, lost.body.error], [503, "outcome_unknown"]);
+  const again = await post("clubAdmin", "", { requestKey: key, name: "Lost answer" });
+  assert.equal(again.status, 200, again.text);
+  const replay = await post("clubAdmin", "", { requestKey: key, name: "Lost answer" });
+  assert.equal(replay.body.replayed, true);
+  assert.equal((await q(`select count(*)::int as n from public.sport_positions where name = 'Lost answer'`))[0].n, 1);
+  // The right is gone: the same key is the 404, never the saved answer.
+  const admin2 = await fx.clubAdminOf(m.clubs.c1, "pos87 admin later revoked");
+  const k2 = newKey();
+  assert.equal((await api(R, { method: "POST", cookie: admin2.cookie, body: { requestKey: k2, name: "Before revoke" } })).status, 200);
+  await q(`update public.user_club_roles set is_active = false where user_id = $1`, [admin2.id]);
+  const revoked = await api(R, { method: "POST", cookie: admin2.cookie, body: { requestKey: k2, name: "Before revoke" } });
+  assert.deepEqual([revoked.status, revoked.body], [404, NOT_FOUND]);
 });

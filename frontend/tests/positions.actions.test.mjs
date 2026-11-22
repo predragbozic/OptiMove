@@ -13,14 +13,20 @@ const { renderPositionsSectionHtml, renderAthletePositionFormHtml } = await impo
 const { handlePositionAction, submitPositionForm } = await import("../positions-actions.js");
 const { estimateLabelText } = await import("../activity-estimate.js");
 
-const LIST = (canAdd) => ({
-  canAdd,
-  positions: [
-    { id: "p-gk", name: "Goalkeeper", ownerScope: "system", active: true, sortOrder: 10, editable: canAdd === "system" },
-    { id: "p-fw", name: "Forward", ownerScope: "system", active: true, sortOrder: 60, editable: canAdd === "system" },
-    { id: "p-old", name: "Sweeper", ownerScope: "club", active: false, sortOrder: 70, editable: canAdd === "club" },
-  ],
-});
+// The server's answer for a club's admin (canAdd "club"), a platform admin ("system") or a coach (null): the actions are the
+// server's, by owner and state (positionService.actionsFor).
+const LIST = (canAdd) => {
+  const acts = (own, club) => (canAdd === "system" ? (own === "system" ? club.system : []) : canAdd === "club" ? club.club : []);
+  return {
+    canAdd,
+    positions: [
+      { id: "p-gk", name: "Keeper", defaultName: "Goalkeeper", ownerScope: "system", active: true, archived: false, hidden: false, sortOrder: 10, actions: acts("system", { system: ["rename", "archive"], club: ["rename", "hide"] }) },
+      { id: "p-fw", name: "Forward", defaultName: null, ownerScope: "system", active: true, archived: false, hidden: false, sortOrder: 60, actions: acts("system", { system: ["rename", "archive"], club: ["rename", "hide"] }) },
+      { id: "p-wi", name: "Winger", defaultName: null, ownerScope: "system", active: false, archived: false, hidden: true, sortOrder: 50, actions: acts("system", { system: ["rename", "archive"], club: ["show"] }) },
+      { id: "p-old", name: "Sweeper", defaultName: null, ownerScope: "club", active: false, archived: true, hidden: false, sortOrder: 70, actions: acts("club", { system: [], club: ["restore"] }) },
+    ],
+  };
+};
 
 let requests;
 function server({ canAdd = "club", athletes = { canSet: true, assignments: [{ athleteId: "a-1", positionId: "p-old" }] }, onWrite } = {}) {
@@ -45,15 +51,20 @@ const form = (dataset, fields) => {
 };
 globalThis.FormData = class { constructor(f) { this.f = f.entries; } get(k) { return this.f[k] ?? null; } };
 
-test("1. the section: every position with its owner, the archived one marked; a club admin edits only the club's and may add", async () => {
+test("1. the section: every position with its owner and state in words; a club's admin renames or hides a default, restores its own, and may add", async () => {
   resetPositions();
   server({ canAdd: "club" });
   await loadPositions();
   const html = renderPositionsSectionHtml();
-  assert.match(html, /Goalkeeper/);
-  assert.match(html, /Sweeper<\/strong><small class="muted"> · Your club<\/small><span class="muted"> · archived/);
-  assert.equal((html.match(/data-action="positions-rename"/g) || []).length, 1, "only the club's own position is editable");
+  assert.match(html, /Keeper<\/strong><small class="muted"> \(default: Goalkeeper\)<\/small><small class="muted"> · Default<\/small>/);
+  assert.match(html, /Sweeper<\/strong><small class="muted"> · Added by your club<\/small><span class="muted"> · archived/);
+  assert.match(html, /Winger<\/strong><small class="muted"> · Default<\/small><span class="muted"> · hidden/);
+  assert.equal((html.match(/data-action="positions-rename"/g) || []).length, 2);
+  assert.equal((html.match(/data-action="positions-hide"/g) || []).length, 2);
+  assert.match(html, /data-action="positions-show" data-position-id="p-wi"/);
   assert.match(html, /data-action="positions-restore" data-position-id="p-old"/);
+  assert.doesNotMatch(html, /positions-archive/, "a club never archives a default");
+  assert.match(html, /Changes apply to your club only/);
   assert.match(html, /data-action="positions-toggle-add"/);
   resetPositions();
   server({ canAdd: null });
@@ -132,4 +143,55 @@ test("6. the estimate label names the position and the count", () => {
   assert.equal(estimateLabelText({ method: "position_average", positionName: "Forward", athleteCount: 3, estimatedBy: "Mira Coach", estimatedAt: "2026-11-20T10:00:00Z" }),
     "Estimate · position average (Forward, 3 athletes) · Mira Coach, 20.11.2026");
   assert.equal(estimateLabelText({ method: "position_average" }), "Estimate · position average");
+});
+
+test("7. after a lost answer, a 'busy' refusal of the resend proves nothing: the key is kept, the result stays not confirmed, the next send carries the same key", async () => {
+  resetPositions();
+  const answers = [new TypeError("network"), { status: 409, body: { error: "try_again" } }, { status: 200, body: { athleteId: "a-1", positionId: "p-fw" } }];
+  server({ onWrite: async () => answers.shift() });
+  await loadPositions();
+  const f = form({ positionForm: "athlete", athleteId: "a-1", positionExpected: "p-old" }, { positionId: "p-fw" });
+  await submitPositionForm(f, ctx);
+  await submitPositionForm(f, ctx);
+  assert.match(state.positions.message, /not confirmed/);
+  assert.doesNotMatch(state.positions.message, /nothing was saved/i);
+  assert.equal(Object.keys(state.positions.keys).length, 1);
+  await submitPositionForm(f, ctx);
+  const keys = requests.filter((r) => r.method === "PUT").map((r) => r.body.requestKey);
+  assert.equal(keys.length, 3);
+  assert.equal(new Set(keys).size, 1, "one key for the three sends");
+  // A first send refused as busy is a definite refusal: nothing was saved, the key is dropped.
+  resetPositions();
+  server({ onWrite: async () => ({ status: 409, body: { error: "try_again" } }) });
+  await loadPositions();
+  await submitPositionForm(f, ctx);
+  assert.match(state.positions.message, /nothing was saved/);
+  assert.deepEqual(state.positions.keys, {});
+});
+
+test("8. an athlete's position that is not on the list stays selected (a Save without a change keeps it); a failed read offers Try again in the Edit window", async () => {
+  resetPositions();
+  server({ athletes: { canSet: true, assignments: [{ athleteId: "a-1", positionId: "p-gone" }] } });
+  await loadPositions();
+  const html = renderAthletePositionFormHtml("a-1");
+  assert.match(html, /<option value="" >No position<\/option>/);
+  assert.match(html, /<option value="p-gone" selected>Current position \(not on this list\)<\/option>/);
+  // A hidden default the athlete does not hold is not offered; one the athlete holds is kept and marked.
+  assert.doesNotMatch(html, /p-wi/);
+  resetPositions();
+  server({ athletes: { canSet: true, assignments: [{ athleteId: "a-1", positionId: "p-wi" }] } });
+  await loadPositions();
+  assert.match(renderAthletePositionFormHtml("a-1"), /<option value="p-wi" selected>Winger \(hidden\)<\/option>/);
+  resetPositions();
+  state.positions.error = "Positions could not be read. Try again.";
+  assert.match(renderAthletePositionFormHtml("a-1"), /data-action="positions-reload"/);
+});
+
+test("9. hide and show send their own route", async () => {
+  resetPositions();
+  server({ onWrite: async () => ({ status: 200, body: { position: {} } }) });
+  await loadPositions();
+  await handlePositionAction({ dataset: { action: "positions-hide", positionId: "p-fw" } }, ctx);
+  await handlePositionAction({ dataset: { action: "positions-show", positionId: "p-wi" } }, ctx);
+  assert.deepEqual(requests.filter((r) => r.method === "POST").map((r) => r.url), ["/api/positions/p-fw/hide", "/api/positions/p-wi/show"]);
 });

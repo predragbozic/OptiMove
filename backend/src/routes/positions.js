@@ -4,8 +4,8 @@ import { Router } from "express";
 import { isPoolCheckoutTimeout } from "../db.js";
 import { resolveCalendarContext } from "../calendarAccess.js";
 import {
-  archivePosition, createPosition, listAthletePositions, listPositions, PositionError, renamePosition, restorePosition,
-  setAthletePosition,
+  archivePosition, createPosition, hidePosition, listAthletePositions, listPositions, PositionError, renamePosition, restorePosition,
+  setAthletePosition, showPosition,
 } from "../positionService.js";
 
 const router = Router();
@@ -42,5 +42,8 @@ router.put("/athletes/:athleteId", handle((ctx, req) => setAthletePosition(ctx, 
 router.post("/:id/rename", handle((ctx, req) => renamePosition(ctx, req.params.id, req.body)));
 router.post("/:id/archive", handle((ctx, req) => archivePosition(ctx, req.params.id, req.body)));
 router.post("/:id/restore", handle((ctx, req) => restorePosition(ctx, req.params.id, req.body)));
+// A club's own view of a default position (the system list and other clubs unchanged).
+router.post("/:id/hide", handle((ctx, req) => hidePosition(ctx, req.params.id, req.body)));
+router.post("/:id/show", handle((ctx, req) => showPosition(ctx, req.params.id, req.body)));
 
 export default router;

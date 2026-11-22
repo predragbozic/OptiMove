@@ -45,6 +45,8 @@ const REFUSALS = {
   name_unchanged: "That is already its name.",
   position_archived: "This position is archived.",
   position_active: "This position is not archived.",
+  position_hidden: "This position is already hidden.",
+  position_shown: "This position is not hidden.",
   position_changed: "The position was changed meanwhile. Check it and save again.",
   position_not_offered: "This position is no longer on your club's list.",
   invalid_name: "Enter a name of 1 to 60 characters on one line.",
@@ -56,6 +58,8 @@ const REFUSALS = {
 // One write. op names the operation (a lost answer keeps its key under op until a definite answer).
 export async function sendPositionWrite(op, path, method, body) {
   const p = state.positions;
+  // A resend after a lost answer carries the same key; its "busy" refusal proves nothing about the first send.
+  const resend = Boolean(p.keys[op]);
   const requestKey = p.keys[op] ?? newKey();
   p.keys[op] = requestKey;
   try {
@@ -65,6 +69,9 @@ export async function sendPositionWrite(op, path, method, body) {
   } catch (error) {
     const status = error?.status;
     const code = error?.data?.error ?? error?.message;
+    if (resend && code === "try_again") {
+      return { ok: false, unconfirmed: true, message: "The result is not confirmed. Save again to check it; it will not be saved twice." };
+    }
     if (status && status < 500 && status !== 408) {
       delete p.keys[op];
       return { ok: false, message: REFUSALS[code] ?? "Nothing was saved. Try again.", code, current: error?.data?.current ?? null };

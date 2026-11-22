@@ -5,14 +5,14 @@
 -- Before it is run anywhere real: the deployed commit no longer contains the v87 file (otherwise the migrator applies v87 again at
 -- the next start), and the database is named in its own approval (.claude/rules/database-safety.md).
 --
--- It drops the two v87 tables, every v87 trigger and function, the v87 constraints, indexes and columns of
+-- It drops the three v87 tables, every v87 trigger and function, the v87 constraints, indexes and columns of
 -- public.sport_positions, deletes the six seeded positions and the sport 'Football', puts back v42's unique (sport_id, name),
 -- v69's method CHECK and estimate_basis_ok and v64's validate_metric_value_estimate (bodies verbatim), and deletes the v87
 -- record. It changes no other row. It refuses (23514, fixed message), changing nothing, once any of these holds - from then on
 -- v87 is forward-only:
 --   * the migrator is running (advisory lock 822026, taken without waiting);
 --   * v87 is not recorded, or any migration was applied after it (by applied_at, not by prefix);
---   * a position was changed in the app (a change row exists, or a club position exists), or a seeded position differs;
+--   * a position was changed in the app (a change row exists, a club position or a club override exists), or a seeded position differs;
 --   * an athlete's position was ever set (a row of public.athlete_positions exists);
 --   * an estimate with the method position_average exists;
 --   * anything else references the sport 'Football' (the delete then fails and the transaction ends with nothing changed).
@@ -33,7 +33,8 @@ begin
               and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611221200_athletes_v87_positions.sql')) then
     raise exception 'v87 rollback refused: later migrations are applied' using errcode = '23514';
   end if;
-  if exists (select 1 from public.sport_position_changes) or exists (select 1 from public.sport_positions where owner_scope <> 'system') then
+  if exists (select 1 from public.sport_position_changes) or exists (select 1 from public.sport_positions where owner_scope <> 'system')
+     or exists (select 1 from public.club_position_overrides) then
     raise exception 'v87 rollback refused: positions were changed in the app' using errcode = '23514';
   end if;
   if (select string_agg(p.name || ':' || p.sort_order || ':' || (p.archived_at is null)::text, ',' order by p.sort_order)
@@ -47,6 +48,21 @@ begin
   if exists (select 1 from training_load.metric_value_estimates where method = 'position_average') then
     raise exception 'v87 rollback refused: a position average estimate exists' using errcode = '23514';
   end if;
+  -- The Tests module's reference values and criteria versions point at a sport and a position by id (v42); a row that
+  -- names Football or a seeded position keeps them (read dynamically: the tables exist only with the Tests module).
+  declare
+    t text;
+    v_refers boolean;
+  begin
+    foreach t in array array['tests.test_parameter_reference_values', 'tests.test_criteria_set_versions'] loop
+      if to_regclass(t) is not null then
+        execute format('select exists (select 1 from %s r join public.sports s on s.id = r.sport_id where s.name = %L)', t, 'Football') into v_refers;
+        if v_refers then
+          raise exception 'v87 rollback refused: the Tests module refers to the sport Football' using errcode = '23514';
+        end if;
+      end if;
+    end loop;
+  end;
 end $$;
 
 -- The estimate method: v69's CHECK and basis, v64's provenance guard (verbatim).
@@ -123,6 +139,15 @@ drop trigger athlete_positions_before_insert on public.athlete_positions;
 drop table public.athlete_positions;
 drop function public.athlete_positions_before_insert();
 drop function public.athlete_position_in_force(uuid, uuid);
+
+-- A club's overrides (empty: a club's change writes a change row, refused above).
+drop trigger club_position_overrides_change_logged on public.club_position_overrides;
+drop trigger club_position_overrides_no_truncate on public.club_position_overrides;
+drop trigger club_position_overrides_before_write on public.club_position_overrides;
+drop table public.club_position_overrides;
+drop function public.club_position_overrides_change_logged();
+drop function public.club_position_overrides_no_truncate();
+drop function public.club_position_overrides_before_write();
 
 -- The list's log.
 drop trigger sport_position_changes_no_truncate on public.sport_position_changes;

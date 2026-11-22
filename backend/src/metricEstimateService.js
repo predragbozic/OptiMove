@@ -241,9 +241,11 @@ export async function loadPositions(client, ctx) {
   const ids = ctx.roster.map((a) => a.athleteId);
   if (!ids.includes(ctx.athleteId)) ids.push(ctx.athleteId);
   const rows = (await client.query(
-    `select a.id as athlete_id, p.id as position_id, p.name
+    `select a.id as athlete_id, p.id as position_id, coalesce(o.name, p.name) as name
        from unnest($1::uuid[]) as a(id)
-       join public.sport_positions p on p.id = public.athlete_position_in_force(a.id, $2)`,
+       join public.sport_positions p on p.id = public.athlete_position_in_force(a.id, $2)
+       -- The club's own name for a default position.
+       left join public.club_position_overrides o on o.position_id = p.id and o.club_id = $2`,
     [ids, ctx.team.club_id],
   )).rows;
   const byAthlete = new Map(rows.map((r) => [String(r.athlete_id), String(r.position_id)]));

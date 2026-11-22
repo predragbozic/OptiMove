@@ -61,9 +61,57 @@ async function workspaceScope(ctx, client) {
   throw notFound();
 }
 
-const view = (row) => ({
-  id: String(row.id), name: row.name, ownerScope: row.owner_scope, active: row.archived_at === null, sortOrder: row.sort_order,
-});
+// The positions a club sees: the system (default) ones under the club's own name for them, unless hidden, and the club's
+// own. $1 the club (null: the system list only), $2 the sport's name.
+const CLUB_POSITIONS_SQL = `
+  select p.id, coalesce(o.name, p.name) as name, p.name as default_name, p.owner_scope, p.owner_club_id, p.archived_at, p.sort_order,
+         coalesce(o.hidden, false) as hidden
+    from public.sport_positions p
+    join public.sports s on s.id = p.sport_id
+    left join public.club_position_overrides o on o.position_id = p.id and o.club_id = $1
+   where s.name = $2 and (p.owner_scope = 'system' or p.owner_club_id = $1)`;
+
+// What this caller may do to a row: a platform admin edits the defaults; a club's admin edits its own positions and
+// renames, hides or shows a default for the club only.
+function actionsFor(owner, row) {
+  if (!owner) return [];
+  const archived = row.archived_at !== null;
+  if (owner.ownerScope === "system") return row.owner_scope === "system" ? (archived ? ["restore"] : ["rename", "archive"]) : [];
+  if (row.owner_scope === "club") return archived ? ["restore"] : ["rename", "archive"];
+  if (archived) return [];
+  return row.hidden ? ["show"] : ["rename", "hide"];
+}
+
+const view = (row, owner = null) => {
+  const actions = actionsFor(owner, row);
+  return {
+    id: String(row.id),
+    name: row.name,
+    // A default the club renamed names its default too.
+    defaultName: row.owner_scope === "system" && row.default_name && row.default_name !== row.name ? row.default_name : null,
+    ownerScope: row.owner_scope,
+    active: row.archived_at === null && !row.hidden,
+    archived: row.archived_at !== null,
+    hidden: Boolean(row.hidden),
+    sortOrder: row.sort_order,
+    actions,
+    editable: actions.length > 0,
+  };
+};
+
+async function readOne(client, clubId, id, owner) {
+  const row = (await client.query(`${CLUB_POSITIONS_SQL} and p.id = $3`, [clubId, SPORT_NAME, id])).rows[0];
+  return row ? view(row, owner) : null;
+}
+
+// Whether a live position of this club (its own, or a default it shows) already carries the name.
+async function clubNameTaken(client, clubId, name, exceptId = null) {
+  return (await client.query(
+    `select 1 from (${CLUB_POSITIONS_SQL}) x where x.archived_at is null and not x.hidden and lower(x.name) = lower($3)
+        and ($4::uuid is null or x.id <> $4::uuid) limit 1`,
+    [clubId, SPORT_NAME, name, exceptId],
+  )).rowCount > 0;
+}
 
 // Which owner of the list this caller writes in this workspace, or null.
 function writableOwner(ctx) {
@@ -102,16 +150,11 @@ export async function listPositions(ctx) {
   try {
     const scope = await workspaceScope(ctx, client);
     const rows = (await client.query(
-      `select p.id, p.name, p.owner_scope, p.archived_at, p.sort_order
-         from public.sport_positions p join public.sports s on s.id = p.sport_id
-        where s.name = $2 and (p.owner_scope = 'system' or p.owner_club_id = $1)
-        order by (p.archived_at is null) desc, p.sort_order, lower(p.name), p.id`, [scope.clubId, SPORT_NAME],
+      `${CLUB_POSITIONS_SQL} order by (p.archived_at is null and not coalesce(o.hidden, false)) desc, p.sort_order, lower(coalesce(o.name, p.name)), p.id`,
+      [scope.clubId, SPORT_NAME],
     )).rows;
     const owner = writableOwner(ctx);
-    return {
-      positions: rows.map((r) => ({ ...view(r), editable: Boolean(owner && owner.ownerScope === r.owner_scope) })),
-      canAdd: owner ? owner.ownerScope : null,
-    };
+    return { positions: rows.map((r) => view(r, owner)), canAdd: owner ? owner.ownerScope : null };
   } finally {
     client.release();
   }
@@ -193,35 +236,62 @@ async function writeList(ctx, { requestKey, hash, run }) {
     // The same (user, requestKey) is serialised before the replay read; taken after the rights rows (users first).
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 88))`, [ctx.userId, requestKey]);
     const seen = (await client.query(
-      `select c.request_hash, p.id, p.name, p.owner_scope, p.owner_club_id, p.archived_at, p.sort_order
+      `select c.request_hash, c.club_id, p.id, p.owner_scope, p.owner_club_id
          from public.sport_position_changes c join public.sport_positions p on p.id = c.position_id
         where c.performed_by_user_id = $1 and c.request_key = $2`, [ctx.userId, requestKey],
     )).rows[0];
     if (seen) {
-      if (seen.owner_scope !== owner.ownerScope || String(seen.owner_club_id ?? "") !== String(owner.clubId ?? "")) throw notFound();
+      // Answered only while the caller still writes the owner the change was made for (a club's change of a default:
+      // that club; otherwise the position's own owner).
+      const sameOwner = seen.club_id
+        ? owner.ownerScope === "club" && String(seen.club_id) === String(owner.clubId)
+        : seen.owner_scope === owner.ownerScope && String(seen.owner_club_id ?? "") === String(owner.clubId ?? "");
+      if (!sameOwner) throw notFound();
       if (seen.request_hash !== hash) throw conflict("request_key_reused", "This requestKey was used for another change.");
-      return { position: view(seen), replayed: true };
+      return { position: await readOne(client, owner.clubId, seen.id, owner), replayed: true };
     }
     return run(client, { owner, basis });
   });
 }
 
-async function lockedPosition(client, owner, id) {
-  const row = (await client.query(
-    `select id, name, owner_scope, owner_club_id, archived_at, sort_order from public.sport_positions where id = $1 for update`, [id],
-  )).rows[0];
-  if (!row || row.owner_scope !== owner.ownerScope || String(row.owner_club_id ?? "") !== String(owner.clubId ?? "")) throw notFound();
-  return row;
+// The position row, locked: FOR UPDATE when the caller writes the position itself (its owner), FOR SHARE when a club
+// changes its own view of a default (mode "override"); everything else is the 404.
+async function lockedPosition(client, owner, id, { allowOverride = false } = {}) {
+  const peek = (await client.query(`select owner_scope, owner_club_id from public.sport_positions where id = $1`, [id])).rows[0];
+  if (!peek) throw notFound();
+  const own = peek.owner_scope === owner.ownerScope && String(peek.owner_club_id ?? "") === String(owner.clubId ?? "");
+  const override = !own && allowOverride && owner.ownerScope === "club" && peek.owner_scope === "system";
+  if (!own && !override) throw notFound();
+  await client.query(`select 1 from public.sport_positions where id = $1 for ${override ? "share" : "update"}`, [id]);
+  if (override) {
+    await client.query(`select 1 from public.club_position_overrides where club_id = $1 and position_id = $2 for update`, [owner.clubId, id]);
+  }
+  const row = (await client.query(`${CLUB_POSITIONS_SQL} and p.id = $3`, [owner.clubId, SPORT_NAME, id])).rows[0];
+  return { row, mode: override ? "override" : "own" };
 }
 
-async function log(client, ctx, { id, action, oldName, newName, basis, requestKey, hash }) {
+async function log(client, ctx, { id, action, oldName, newName, basis, requestKey, hash, clubId = null }) {
   await client.query(
-    `insert into public.sport_position_changes (position_id, action, old_name, new_name, performed_by_user_id, basis, request_key, request_hash)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)`, [id, action, oldName, newName, ctx.userId, basis, requestKey, hash],
+    `insert into public.sport_position_changes (position_id, action, old_name, new_name, performed_by_user_id, basis, request_key, request_hash, club_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [id, action, oldName, newName, ctx.userId, basis, requestKey, hash, clubId],
   );
 }
 
-const RETURNING = "returning id, name, owner_scope, archived_at, sort_order";
+// A club's view of a default: its own name (null: the default name) and whether it hides it. Written before its log row,
+// which the database checks against it.
+async function writeOverride(client, ctx, clubId, id, { name, hidden }) {
+  await client.query(
+    `insert into public.club_position_overrides (club_id, position_id, name, hidden, updated_by_user_id)
+     values ($1, $2, $3, coalesce($4, false), $5)
+     on conflict (club_id, position_id) do update
+       set name = case when $6 then excluded.name else club_position_overrides.name end,
+           hidden = coalesce($4, club_position_overrides.hidden),
+           updated_by_user_id = excluded.updated_by_user_id`,
+    [clubId, id, name ?? null, hidden ?? null, ctx.userId, name !== undefined],
+  );
+}
+
+const RETURNING = "returning id";
 
 export async function createPosition(ctx, body) {
   const owner = writableOwner(ctx);
@@ -234,6 +304,9 @@ export async function createPosition(ctx, body) {
     requestKey, hash,
     run: async (client, { basis }) => {
       const sport = await footballId(client);
+      if (owner.ownerScope === "club" && await clubNameTaken(client, owner.clubId, name)) {
+        throw conflict("name_taken", "A position with this name already exists.");
+      }
       const row = (await client.query(
         `insert into public.sport_positions (sport_id, name, owner_scope, owner_club_id, created_by_user_id, sort_order)
          values ($1, $2, $3, $4, $5,
@@ -243,7 +316,7 @@ export async function createPosition(ctx, body) {
         [sport, name, owner.ownerScope, owner.clubId, ctx.userId],
       )).rows[0];
       await log(client, ctx, { id: row.id, action: "create", oldName: null, newName: name, basis, requestKey, hash });
-      return { position: view(row) };
+      return { position: await readOne(client, owner.clubId, row.id, owner) };
     },
   });
 }
@@ -259,16 +332,56 @@ export async function renamePosition(ctx, rawId, body) {
   return writeList(ctx, {
     requestKey, hash,
     run: async (client, { owner, basis }) => {
-      const row = await lockedPosition(client, owner, id);
-      if (row.name !== expectedName) throw conflict("name_changed", "The name was changed meanwhile.", { current: view(row) });
-      if (row.archived_at !== null) throw conflict("position_archived", "Restore the position before renaming it.", { current: view(row) });
-      if (row.name === name) throw conflict("name_unchanged", "That is already its name.", { current: view(row) });
-      const next = (await client.query(`update public.sport_positions set name = $2 where id = $1 ${RETURNING}`, [id, name])).rows[0];
-      await log(client, ctx, { id, action: "rename", oldName: row.name, newName: name, basis, requestKey, hash });
-      return { position: view(next) };
+      const { row, mode } = await lockedPosition(client, owner, id, { allowOverride: true });
+      const current = view(row, owner);
+      if (row.name !== expectedName) throw conflict("name_changed", "The name was changed meanwhile.", { current });
+      if (row.archived_at !== null) throw conflict("position_archived", "Restore the position before renaming it.", { current });
+      if (row.name === name) throw conflict("name_unchanged", "That is already its name.", { current });
+      if (owner.ownerScope === "club" && await clubNameTaken(client, owner.clubId, name, id)) {
+        throw conflict("name_taken", "A position with this name already exists.");
+      }
+      if (mode === "override") {
+        // The club's own name for a default; its default name again clears it.
+        await writeOverride(client, ctx, owner.clubId, id, { name: name === row.default_name ? null : name });
+        await log(client, ctx, { id, action: "club_rename", oldName: row.name, newName: name, basis, requestKey, hash, clubId: owner.clubId });
+      } else {
+        await client.query(`update public.sport_positions set name = $2 where id = $1`, [id, name]);
+        await log(client, ctx, { id, action: "rename", oldName: row.name, newName: name, basis, requestKey, hash });
+      }
+      return { position: await readOne(client, owner.clubId, id, owner) };
     },
   });
 }
+
+// A club hides a default from its pickers, or shows it again; the system list and other clubs are unchanged. An athlete
+// who holds a hidden position keeps it.
+async function setHidden(ctx, rawId, body, hidden) {
+  const owner = writableOwner(ctx);
+  if (!owner || owner.ownerScope !== "club") throw notFound();
+  const id = idOf(rawId);
+  only(body, ["requestKey"]);
+  const requestKey = requestKeyOf(body);
+  const op = hidden ? "hide" : "show";
+  const hash = hashOf({ op, id, clubId: owner.clubId });
+  return writeList(ctx, {
+    requestKey, hash,
+    run: async (client, { basis }) => {
+      const { row, mode } = await lockedPosition(client, owner, id, { allowOverride: true });
+      if (mode !== "override") throw notFound();
+      const current = view(row, owner);
+      if (row.archived_at !== null) throw conflict("position_archived", "This position is no longer offered.", { current });
+      if (row.hidden === hidden) throw conflict(hidden ? "position_hidden" : "position_shown", hidden ? "The position is already hidden." : "The position is not hidden.", { current });
+      // Showing a default again must not bring back a name another live position of the club now carries.
+      if (!hidden && await clubNameTaken(client, owner.clubId, row.name, id)) throw conflict("name_taken", "A position with this name already exists.");
+      await writeOverride(client, ctx, owner.clubId, id, { hidden });
+      await log(client, ctx, { id, action: hidden ? "club_hide" : "club_show", oldName: row.name, newName: row.name, basis, requestKey, hash, clubId: owner.clubId });
+      return { position: await readOne(client, owner.clubId, id, owner) };
+    },
+  });
+}
+
+export const hidePosition = (ctx, id, body) => setHidden(ctx, id, body, true);
+export const showPosition = (ctx, id, body) => setHidden(ctx, id, body, false);
 
 async function setActive(ctx, rawId, body, active) {
   if (!writableOwner(ctx)) throw notFound();
@@ -280,17 +393,21 @@ async function setActive(ctx, rawId, body, active) {
   return writeList(ctx, {
     requestKey, hash,
     run: async (client, { owner, basis }) => {
-      const row = await lockedPosition(client, owner, id);
+      const { row } = await lockedPosition(client, owner, id);
       if ((row.archived_at === null) === active) {
-        throw conflict(active ? "position_active" : "position_archived", active ? "The position is not archived." : "The position is already archived.", { current: view(row) });
+        throw conflict(active ? "position_active" : "position_archived", active ? "The position is not archived." : "The position is already archived.", { current: view(row, owner) });
       }
-      const next = (await client.query(
+      if (active && owner.ownerScope === "club" && await clubNameTaken(client, owner.clubId, row.name, id)) {
+        throw conflict("name_taken", "A position with this name already exists.");
+      }
+      await client.query(
         `update public.sport_positions
             set archived_at = case when $2 then null else now() end, archived_by_user_id = case when $2 then null else $3::uuid end
-          where id = $1 ${RETURNING}`, [id, active, ctx.userId],
-      )).rows[0];
-      await log(client, ctx, { id, action: op, oldName: row.name, newName: row.name, basis, requestKey, hash });
-      return { position: view(next) };
+          where id = $1`, [id, active, ctx.userId],
+      );
+      // The log names the position's own name (the database checks it against the row).
+      await log(client, ctx, { id, action: op, oldName: row.default_name, newName: row.default_name, basis, requestKey, hash });
+      return { position: await readOne(client, owner.clubId, id, owner) };
     },
   });
 }
@@ -332,6 +449,8 @@ export async function listAthletePositions(ctx) {
 }
 
 export async function setAthletePosition(ctx, rawAthleteId, body) {
+  // Who may never set a position gets the 404 whatever it sends (the rights are checked again under lock below).
+  if (ctx.accountType !== "coach" || !ctx.workspace || !["club", "team"].includes(ctx.workspace.type)) throw notFound();
   const athleteId = idOf(rawAthleteId);
   only(body, ["requestKey", "positionId", "expectedPositionId"]);
   const requestKey = requestKeyOf(body);

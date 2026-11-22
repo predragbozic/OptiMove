@@ -47,8 +47,8 @@ export async function handlePositionAction(action, { renderOrganizationPanel }) 
     p.renameId = null;
     say(null, "");
     await rerender();
-  } else if (type === "positions-archive" || type === "positions-restore") {
-    const op = type === "positions-archive" ? "archive" : "restore";
+  } else if (["positions-archive", "positions-restore", "positions-hide", "positions-show"].includes(type)) {
+    const op = type.slice("positions-".length);
     await write(`row:${id}`, `${op}:${id}`, `/api/positions/${encodeURIComponent(id)}/${op}`, "POST", {}, rerender);
   }
   return true;

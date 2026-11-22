@@ -29,6 +29,7 @@ Last verified against commit: `be5f62b` (`origin/main`, merge of PR #709).
   |---|---|
   | `GET /api/positions` | a coach account in a platform, club or team workspace (system positions plus the workspace club's) |
   | `POST /api/positions` `{ name }`, `POST /:id/rename` `{ name, expectedName }`, `/:id/archive`, `/:id/restore` | system: a platform admin in the platform workspace; club: the club's admin in its workspace |
+  | `POST /:id/rename` on a default, `POST /:id/hide`, `POST /:id/show` | the club's admin: the club's own name for a default, or hiding it, for that club only (`public.club_position_overrides`) |
   | `GET /api/positions/athletes` | the club's admin (club workspace) or the team's coach (team workspace): the positions of the workspace's athletes |
   | `PUT /api/positions/athletes/:athleteId` `{ positionId | null, expectedPositionId | null }` | the same, for an athlete of the workspace (`409 position_changed` when stale) |
 
@@ -42,10 +43,20 @@ Last verified against commit: `be5f62b` (`origin/main`, merge of PR #709).
   Edit window → *Position* (its own Save); the Roster tab's estimate panel → *Position average*, offered in the owner's
   quality order.
 
-## 3. Open questions for the owner (with the recommendation built)
+## 3. The owner's answers (2026-11-22, relayed by the *Rukovodilac*)
 
-1. Is the list one system list, or may a club add its own? **Built:** system list plus club positions (as session
-   types). Removing the club's own is a frontend/route change, not a migration.
-2. Who sets an athlete's position? **Built:** the club's admin and the coach of the athlete's team (and a platform
-   admin). Only admins edit the list.
-3. The names of the six system positions. **Built:** Goalkeeper, Centre back, Full back, Midfielder, Winger, Forward.
+- „po preporucu ali mora postojati mogucnost da klubovi dodaju svoje pozicije, odnosno da imaju svoje"; „mi moramo
+  imati negde u settingsu da postavimo pozicije… verovatno najbolje u nekm presets-u da mozemo da menjamo liste te";
+  „u nekom default delu mi predlazemo pozicije, kada neko otvori profil prvi put on dobije vec neke pozicije koje moze da
+  promeni".
+- **Built accordingly:**
+  1. Default (system) positions edited by a platform admin; every club starts with them and may rename or hide each one
+     for itself (`club_position_overrides`) and add its own. A platform admin's later rename reaches only the clubs
+     without a name of their own. Chosen over copying the defaults to each club because the position's id stays the same
+     (athletes, the position average and the Tests module's references are untouched) and a first read writes nothing.
+  2. The club's admin and the coach of the athlete's team set an athlete's position (and a platform admin); only admins
+     edit the list.
+  3. The defaults: Goalkeeper, Centre back, Full back, Midfielder, Winger, Forward.
+- The *Rukovodilac*'s conditions: the UI says "one position" and names no club (an athlete in two clubs holds one per
+  club); the position average reads the position in the club of the session's team; nothing the Tests module reads
+  changes (tested).

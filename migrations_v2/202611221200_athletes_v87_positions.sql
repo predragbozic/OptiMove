@@ -10,8 +10,14 @@
 --     updated_at. The id is the identity; a rename changes only the name; an archive takes it out of the pickers and
 --     leaves it on the athletes who hold it. A position is never deleted. Clubs carry no sport today, so every position
 --     belongs to the sport 'Football', seeded here with six system positions.
---   * public.sport_position_changes: the append-only log of every add, rename, archive and restore (who, the basis, the
---     old and new name, the request key and its hash - the request record of the routes). The v85 pattern.
+--   * public.club_position_overrides (the owner, 2026-11-22: a club starts from the suggested positions and changes them
+--     for itself): one row per club and system position - the club's own name for it (or null: the default name) and
+--     whether the club hides it. It never changes the system list or another club; the platform admin's later rename of a
+--     default reaches only the clubs without a name of their own. A hidden position is not offered for a new choice; an
+--     athlete who holds it keeps it (and it still counts in the position average). A club also adds positions of its own.
+--   * public.sport_position_changes: the append-only log of every add, rename, archive and restore, and of a club's
+--     rename, hide and show of a system position (who, the basis, the club, the old and new name, the request key and
+--     its hash - the request record of the routes). The v85 pattern.
 --   * public.athlete_positions: the append-only history of an athlete's position in a club. One row per change (a set
 --     or a clear, position_id null); the athlete's position in the club is the row with the highest seq. An athlete in
 --     two clubs holds one position per club (two lists). The row is also the request record of the route.
@@ -48,14 +54,15 @@ begin
     raise exception 'v87 refused: public.sport_positions already holds a row' using errcode = '23514';
   end if;
   -- The rollback removes the sport v87 adds; so v87 refuses if one of that name already exists.
-  if exists (select 1 from public.sports where name = 'Football') then
+  if exists (select 1 from public.sports where lower(name) = 'football') then
     raise exception 'v87 refused: a sport named Football already exists' using errcode = '23514';
   end if;
   if not exists (select 1 from pg_constraint where conrelid = 'public.sport_positions'::regclass
                   and conname = 'sport_positions_sport_id_name_key') then
     raise exception 'v87 refused: the unique (sport_id, name) of v42 is missing' using errcode = '23514';
   end if;
-  if to_regclass('public.athlete_positions') is not null or to_regclass('public.sport_position_changes') is not null then
+  if to_regclass('public.athlete_positions') is not null or to_regclass('public.sport_position_changes') is not null
+     or to_regclass('public.club_position_overrides') is not null then
     raise exception 'v87 refused: a v87 table already exists' using errcode = '23514';
   end if;
   if to_regclass('training_load.metric_value_estimates') is null then
@@ -119,7 +126,9 @@ create table public.sport_position_changes (
   id                   uuid primary key default gen_random_uuid(),
   position_id          uuid not null references public.sport_positions(id) on delete restrict,
   action               text not null
-                       constraint sport_position_changes_action_check check (action in ('create', 'rename', 'archive', 'restore')),
+                       constraint sport_position_changes_action_check check (action in ('create', 'rename', 'archive', 'restore', 'club_rename', 'club_hide', 'club_show')),
+  -- The club whose override a club_* row records (null for a change of the position itself).
+  club_id              uuid references public.clubs(id) on delete restrict,
   old_name             text,
   new_name             text not null
                        constraint sport_position_changes_new_name_check check (training_load.source_metric_text_ok(new_name, 60)),
@@ -131,10 +140,25 @@ create table public.sport_position_changes (
   created_xact         text not null default pg_current_xact_id()::text,
   created_at           timestamptz not null default now(),
   constraint sport_position_changes_name_shape check (
-    (action = 'create' and old_name is null) or (action <> 'create' and old_name is not null))
+    (action = 'create' and old_name is null) or (action <> 'create' and old_name is not null)),
+  constraint sport_position_changes_club_shape check ((action like 'club\_%') = (club_id is not null))
 );
 create unique index sport_position_changes_request_key on public.sport_position_changes (performed_by_user_id, request_key);
 create index sport_position_changes_position_idx on public.sport_position_changes (position_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- 2b. A club's own name for a system position, and whether the club hides it
+-- ---------------------------------------------------------------------------
+create table public.club_position_overrides (
+  club_id            uuid not null references public.clubs(id) on delete restrict,
+  position_id        uuid not null references public.sport_positions(id) on delete restrict,
+  name               text constraint club_position_overrides_name_check check (name is null or training_load.source_metric_text_ok(name, 60)),
+  hidden             boolean not null default false,
+  updated_by_user_id uuid not null references public.users(id) on delete restrict,
+  updated_at         timestamptz not null default now(),
+  primary key (club_id, position_id)
+);
+create index club_position_overrides_position_idx on public.club_position_overrides (position_id);
 
 -- ---------------------------------------------------------------------------
 -- 3. The athlete's position in a club (append-only history; the latest row is in force)
@@ -257,15 +281,25 @@ begin
   else
     return false;
   end if;
-  -- An admin sets the position of an athlete who holds an active membership in the club (club or team).
-  perform 1 from public.athlete_memberships m
-   where m.athlete_id = p_athlete and m.club_id = p_club and m.status = 'active' for share;
-  return found;
+  -- An admin sets the position of an athlete who holds an active membership in the club (club or team). The club
+  -- membership is locked before the team memberships (ascending), the order of the club-membership archive and of the
+  -- athlete edit (D45), so neither can wait on this in a cycle.
+  declare
+    v_club_member boolean;
+  begin
+    perform 1 from public.athlete_memberships m
+     where m.athlete_id = p_athlete and m.club_id = p_club and m.membership_type = 'club' and m.status = 'active' for share;
+    v_club_member := found;
+    perform 1 from public.athlete_memberships m
+     where m.athlete_id = p_athlete and m.club_id = p_club and m.membership_type = 'team' and m.status = 'active'
+     order by m.id for share;
+    return v_club_member or found;
+  end;
 end;
 $$ language plpgsql;
 
 -- Whether a position is offered to a club (a system position, or the club's own), and, with p_require_active, still
--- active. The position row is locked FOR SHARE.
+-- active and not hidden by the club. The position row (and the club's override of it) are locked FOR SHARE.
 create function public.sport_position_offered(p_position uuid, p_club uuid, p_require_active boolean) returns boolean as $$
 declare
   v record;
@@ -277,7 +311,14 @@ begin
   if v.owner_scope = 'club' and v.owner_club_id is distinct from p_club then
     return false;
   end if;
-  return not p_require_active or v.archived_at is null;
+  if not p_require_active then
+    return true;
+  end if;
+  if v.archived_at is not null then
+    return false;
+  end if;
+  perform 1 from public.club_position_overrides o where o.club_id = p_club and o.position_id = p_position and o.hidden for share;
+  return not found;
 end;
 $$ language plpgsql;
 
@@ -367,6 +408,28 @@ begin
   if not found then
     raise exception 'public.sport_position_changes: no such position' using errcode = '23514';
   end if;
+  -- A club's change of a system position: the club's admin, and the row matches the club's override as it now is.
+  if new.club_id is not null then
+    declare
+      o record;
+    begin
+      if v.owner_scope <> 'system' then
+        raise exception 'public.sport_position_changes: a club changes only a system position this way' using errcode = '23514';
+      end if;
+      if new.basis is distinct from public.sport_position_basis(v_actor, 'club', new.club_id) then
+        raise exception 'public.sport_position_changes: the basis is not the acting user''s right' using errcode = '42501';
+      end if;
+      select name, hidden into o from public.club_position_overrides where club_id = new.club_id and position_id = new.position_id;
+      if not found
+         or new.new_name is distinct from coalesce(o.name, v.name)
+         or (new.action = 'club_rename' and new.old_name is not distinct from new.new_name)
+         or (new.action = 'club_hide' and not o.hidden)
+         or (new.action = 'club_show' and o.hidden) then
+        raise exception 'public.sport_position_changes: the row does not match the club''s override' using errcode = '23514';
+      end if;
+      return new;
+    end;
+  end if;
   if new.basis is distinct from public.sport_position_basis(v_actor, v.owner_scope, v.owner_club_id) then
     raise exception 'public.sport_position_changes: the basis is not the acting user''s right' using errcode = '42501';
   end if;
@@ -392,6 +455,58 @@ create trigger sport_position_changes_no_update before update or delete on publi
   for each row execute function public.position_history_append_only();
 create trigger sport_position_changes_no_truncate before truncate on public.sport_position_changes
   for each statement execute function public.position_history_append_only();
+
+-- ---------------------------------------------------------------------------
+-- 6b. Guards on a club's override of a system position
+-- ---------------------------------------------------------------------------
+create function public.club_position_overrides_before_write() returns trigger as $$
+declare
+  v_actor uuid;
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'public.club_position_overrides: an override is never deleted; show the position or clear its name' using errcode = '23514';
+  end if;
+  v_actor := public.position_actor();
+  if tg_op = 'UPDATE' and (new.club_id is distinct from old.club_id or new.position_id is distinct from old.position_id) then
+    raise exception 'public.club_position_overrides: club and position are write-once' using errcode = '23514';
+  end if;
+  if new.updated_by_user_id is distinct from v_actor then
+    raise exception 'public.club_position_overrides: the row names the acting user' using errcode = '42501';
+  end if;
+  if public.sport_position_basis(v_actor, 'club', new.club_id) is null then
+    raise exception 'public.club_position_overrides: the acting user may not change this club''s positions' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.sport_positions p where p.id = new.position_id and p.owner_scope = 'system') then
+    raise exception 'public.club_position_overrides: only a system position is overridden' using errcode = '23514';
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$ language plpgsql;
+create trigger club_position_overrides_before_write
+  before insert or update or delete on public.club_position_overrides
+  for each row execute function public.club_position_overrides_before_write();
+create function public.club_position_overrides_no_truncate() returns trigger as $$
+begin
+  raise exception 'public.club_position_overrides: an override is never deleted' using errcode = '23514';
+end;
+$$ language plpgsql;
+create trigger club_position_overrides_no_truncate before truncate on public.club_position_overrides
+  for each statement execute function public.club_position_overrides_no_truncate();
+
+-- A change of an override needs its log row (club_rename, club_hide or club_show) in the same transaction.
+create function public.club_position_overrides_change_logged() returns trigger as $$
+begin
+  if not exists (select 1 from public.sport_position_changes c
+                  where c.position_id = new.position_id and c.club_id = new.club_id and c.created_xact = pg_current_xact_id()::text) then
+    raise exception 'public.club_position_overrides: a change needs its log row' using errcode = '23514';
+  end if;
+  return null;
+end;
+$$ language plpgsql;
+create constraint trigger club_position_overrides_change_logged
+  after insert or update on public.club_position_overrides deferrable initially deferred
+  for each row execute function public.club_position_overrides_change_logged();
 
 -- ---------------------------------------------------------------------------
 -- 7. Guards on an athlete's position

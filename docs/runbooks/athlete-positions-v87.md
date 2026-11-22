@@ -16,7 +16,13 @@ wrappers.
   `updated_at`. v42's `unique (sport_id, name)` is replaced by one live name per owner (case-insensitive; an archived
   position frees its name). Clubs carry no sport, so v87 adds the sport `Football` and its six system positions:
   Goalkeeper, Centre back, Full back, Midfielder, Winger, Forward.
-- **The log.** `public.sport_position_changes` is append-only and is the request record of the list's routes.
+- **A club's own view of the defaults.** `public.club_position_overrides` (one row per club and system position): the
+  club's own name for a default (null: the default name) and whether the club hides it. It never changes the system list
+  or another club; a platform admin's later rename of a default reaches only the clubs without a name of their own. A
+  hidden default is not offered for a new choice; an athlete who holds it keeps it, and it still counts in the position
+  average. Never deleted (show it again, or rename it back to the default name).
+- **The log.** `public.sport_position_changes` is append-only and is the request record of the list's routes; a club's
+  rename, hide and show of a default are logged as `club_rename`, `club_hide`, `club_show` with the club.
 - **An athlete's position.** `public.athlete_positions` is the append-only history of an athlete's position in a club;
   the row with the highest `seq` is in force (`public.athlete_position_in_force(athlete, club)`; a row with no position
   is a clear). One position per athlete and club. The row is the request record of the route.
@@ -30,6 +36,9 @@ wrappers.
   (exactly `athletes` >= 3 and `positionId`, a uuid); `validate_metric_value_estimate` lets it estimate an `avg`
   variable, as `team_average`. Every other branch is verbatim, so every existing row stays valid.
 - **What it does not change.** No athlete, membership, estimate or activity row.
+- **The Tests module.** v87 changes none of its foreign keys into `public.sports` / `public.sport_positions`, nor the
+  `unique (id, sport_id)` they rest on (`athlete-positions-v87-migration.test.mjs` test 2: before, after, and after the
+  rollback). The rollback refuses (fixed message) while a Tests row names the sport Football.
 
 ## Before the merge
 
@@ -69,7 +78,12 @@ wrappers.
   credentials (as v35 states it).
 - The rights are the basic roles (`club_admin`, `team_coach`, `platform_admin`), as v85's. A custom role of v84 does
   not grant them.
-- A club position may carry a system position's name (names are unique per owner).
+- The database keeps names unique per owner only. Within a club, the service refuses a name that a live position of the
+  club already shows (its own, or a default it shows, under the club's name for it); two admins of one club adding the
+  same name at the same moment could both pass that check.
+- The admin branch of `public.athlete_position_right` locks the club membership before the team memberships (ascending),
+  the order of the club-membership archive and of the athlete edit (D45).
+- The users lock carries `is_active = true` (the known L1 gap of v54, inherited).
 - The estimate reads the positions in force at the moment of the proposal or the save (its basis keeps the position's
   id); a later change of a position does not change a saved estimate.
 - An athlete in two clubs holds one position per club.
