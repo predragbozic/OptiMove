@@ -101,9 +101,12 @@ beforeEach(() => {
 
 test("1. the Assign to athlete button only renders while editing a template, never a weekly plan or a specific program", () => {
   const body = readFileSync(path.resolve(__dirname, "../builder-view.js"), "utf8");
+  // A weekly program template has its own dated assign instead
+  // (docs/ai/weekly-program-template-plan.md), never this copy into a
+  // specific program.
   assert.match(
     body,
-    /draft\.plan\.isTemplate && !isWeekly \? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan"/,
+    /draft\.plan\.isTemplate && !isWeekly && !isWeeklyTemplate \? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan"/,
   );
 });
 

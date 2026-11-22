@@ -14,7 +14,8 @@ function readSource(relativePath) {
 
 const builderViewSource = readSource("../builder-view.js");
 
-function sliceFunction(source, name, windowSize = 5500) {
+// The window covers the create form (it grew with the template type choice).
+function sliceFunction(source, name, windowSize = 6500) {
   const marker = source.includes(`function ${name}(`) ? `function ${name}(` : `export function ${name}(`;
   const start = source.indexOf(marker);
   assert.ok(start >= 0, `${name} must exist`);

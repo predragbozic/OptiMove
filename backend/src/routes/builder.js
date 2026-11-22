@@ -11,6 +11,7 @@ import { batchEditTestHooks, blockedPlanSessions, blockedSessionsOf, blockedSour
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
+import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
 
 const router = Router();
 let activeBatchGuards = 0;
@@ -268,8 +269,8 @@ router.get("/drafts", async (req, res, next) => {
 //   false }` and nothing else, whether or not a plan exists.
 // - A plannable athlete's plan is the one ensureWeeklySlot (POST /plans)
 //   would refuse on: the oldest active, non-edit-draft weekly plan of that
-//   week, whoever made it, leaving out the caller's own empty Builder plan
-//   (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
+//   week, whoever made it, leaving out the caller's own Builder draft with no
+//   session (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
 //   rule) is `{ editable: false }` only: no id, name, author or status.
 export const WEEKLY_PLANS_READ_MAX = 200;
 const ATHLETE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -360,19 +361,17 @@ router.get("/weekly-plans", async (req, res, next) => {
              from plans.plans p
             where p.plan_type = 'weekly' and p.athlete_id = a.id and p.week_start = $2::date
               and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)
-              -- ensureWeeklySlot's skip: the caller's own EMPTY Builder plan
-              -- is removed by POST /plans, so it is not reported either
-              -- (planHasWeeklyTrainingContentWithClient's content rule).
+              -- ensureWeeklySlot's skip: the caller's own Builder DRAFT with
+              -- no session at all is removed by POST /plans, so it is not
+              -- reported either (weeklySlotPlanIsFree's rule: a published
+              -- plan, or a plan with any session, is never removed; change
+              -- the two together).
               and not (
                 p.source_type = 'builder' and p.created_by_user_id = $3
-                and not exists (select 1 from plans.plan_items pi
-                                  join plans.plan_sessions ps on ps.id = pi.plan_session_id
+                and p.status = 'draft'
+                and not exists (select 1 from plans.plan_sessions ps
                                   join plans.plan_days pd on pd.id = ps.plan_day_id
                                  where pd.plan_id = p.id)
-                and not exists (select 1 from plans.plan_nodes pn
-                                  join plans.plan_sessions ps on ps.id = pn.plan_session_id
-                                  join plans.plan_days pd on pd.id = ps.plan_day_id
-                                 where pd.plan_id = p.id and nullif(trim(coalesce(pn.name, '')), '') is not null)
               )
             order by p.created_at
             limit 1
@@ -563,6 +562,15 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     if (planType === "program" && !requestedName) return res.status(400).json({ error: "Program name is required." });
     if (planType === "weekly" && !athleteExternalIds.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan." });
     if (planType === "weekly" && !weekStart) return res.status(400).json({ error: "Choose a valid date for the weekly plan." });
+    // A weekly program template (docs/ai/weekly-program-template-plan.md):
+    // a reusable program template made of whole template weeks.
+    const weeklyTemplateWeeks = planType === "program" && text(req.body?.templateKind) === "weekly"
+      ? Number.parseInt(req.body?.weeks ?? 1, 10)
+      : 0;
+    if (weeklyTemplateWeeks && athleteExternalIds.length) return res.status(400).json({ error: "A weekly program template is not assigned to an athlete when it is created.", code: "weekly_template_no_athlete" });
+    if (planType === "program" && text(req.body?.templateKind) === "weekly" && !(weeklyTemplateWeeks >= 1 && weeklyTemplateWeeks <= MAX_TEMPLATE_WEEKS)) {
+      return res.status(400).json({ error: `A weekly program template has 1 to ${MAX_TEMPLATE_WEEKS} weeks.`, code: "weekly_template_weeks" });
+    }
     const name = requestedName || `Weekly plan ${weekStart}`;
     const { athletes, missing, archived } = await findRequestedAthletes(athleteExternalIds);
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
@@ -618,6 +626,7 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
         await createWeeklyDays(client, created.rows[0].id, weekStart);
         await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
       }
+      if (weeklyTemplateWeeks) await insertTemplateWeeks(client, created.rows[0].id, 1, weeklyTemplateWeeks);
     }
     await client.query("commit");
     client.release();
@@ -1126,6 +1135,7 @@ router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) 
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
+    if (await weeklyTemplateFacts(query, plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
     const next = await nextOrder("plans.plan_days", "plan_id", plan.id, "block_order");
     await query(
       `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
@@ -1136,12 +1146,117 @@ router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) 
   } catch (error) { next(error); }
 }));
 
+// Weekly program templates (docs/ai/weekly-program-template-plan.md): the
+// template changes by whole weeks. One transaction each: the exercise-reuse
+// lock, then the plan row FOR NO KEY UPDATE (the copy routes' order), the
+// facts read under it.
+async function changeWeeklyTemplate(req, res, next, change) {
+  let client;
+  try {
+    const plan = await requirePlan(req, req.params.planId, res);
+    if (!plan) return;
+    client = await pool.connect();
+    await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    await lockCopyTargetPlan(client, plan.id);
+    const facts = await weeklyTemplateFacts(client.query.bind(client), plan.id);
+    const outcome = facts
+      ? await change(client, plan, facts)
+      : { status: 400, body: { error: "This plan is not a weekly program template.", code: "not_weekly_template" } };
+    if (outcome?.body) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(outcome.status).json(outcome.body);
+    }
+    await client.query("commit");
+    client.release();
+    client = null;
+    // Committed: a failed read of the new draft never reads as "not saved"
+    // (a retry would add the week twice); the screen reloads it (db review).
+    try {
+      return await respondWithDraft(req, res, req.user, plan, { status: outcome?.status || 200 });
+    } catch {
+      return res.status(outcome?.status || 200).json({ planId: plan.id, reload: true });
+    }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    if (error?.code === "40P01" || error?.code === "55P03") return res.status(409).json({ error: "The plan is busy. Nothing was saved. Try again.", code: "try_again" });
+    next(error);
+  }
+}
+
+function weekNumber(value, facts) {
+  const week = Number.parseInt(value, 10);
+  return Number.isInteger(week) && week >= 1 && week <= facts.weekCount ? week : null;
+}
+const badWeek = { status: 400, body: { error: "Choose a week of this template.", code: "week_not_found" } };
+
+// Adds a week at the end: empty, or a copy of week `copyFrom` (Duplicate week).
+router.post("/plans/:planId/weeks", withBatchReuseGuard((req, res, next) => changeWeeklyTemplate(req, res, next, async (client, plan, facts) => {
+  if (facts.weekCount >= MAX_TEMPLATE_WEEKS) return { status: 400, body: { error: `A weekly program template has at most ${MAX_TEMPLATE_WEEKS} weeks.`, code: "weekly_template_weeks" } };
+  const copyFrom = req.body?.copyFrom === undefined || req.body?.copyFrom === null || req.body?.copyFrom === "" ? null : weekNumber(req.body.copyFrom, facts);
+  if (req.body?.copyFrom !== undefined && req.body?.copyFrom !== null && req.body?.copyFrom !== "" && !copyFrom) return badWeek;
+  const week = facts.weekCount + 1;
+  await insertTemplateWeeks(client, plan.id, week, week);
+  if (copyFrom) {
+    const days = (await client.query(
+      `select id, block_index, day_note from plans.plan_days where plan_id = $1 and block_index between $2 and $3 order by block_index`,
+      [plan.id, blockIndexOf(copyFrom, 1), blockIndexOf(week, 7)],
+    )).rows;
+    const source = days.filter((d) => weekOfIndex(d.block_index) === copyFrom);
+    const target = new Map(days.filter((d) => weekOfIndex(d.block_index) === week).map((d) => [Number(d.block_index) - (week - copyFrom) * 7, d]));
+    const pairs = source.map((d) => ({ sourceDayId: d.id, targetDayId: target.get(Number(d.block_index)).id, orderOffset: 0, dayNote: d.day_note }));
+    for (const pair of pairs) {
+      if (pair.dayNote) await client.query("update plans.plan_days set day_note = $2 where id = $1", [pair.targetDayId, pair.dayNote]);
+    }
+    await copyTemplateDaySessions(client, pairs, copyLegacySession);
+    await assertExerciseReuseAllowed(client, req.user.id, { dayIds: pairs.map((p) => p.targetDayId), guard: req.exerciseReuseGuard });
+  }
+  return { status: 201 };
+})));
+
+// Moves week `week` to position `to` (the others shift).
+router.post("/plans/:planId/weeks/:week/move", withBatchReuseGuard((req, res, next) => changeWeeklyTemplate(req, res, next, async (client, plan, facts) => {
+  const week = weekNumber(req.params.week, facts);
+  const to = weekNumber(req.body?.to, facts);
+  if (!week || !to) return badWeek;
+  if (week === to) return null;
+  const order = Array.from({ length: facts.weekCount }, (_, i) => i + 1).filter((w) => w !== week);
+  order.splice(to - 1, 0, week);
+  await renumberTemplateWeeks(client, plan.id, order);
+  return null;
+})));
+
+// Removes a week (never the last one); the later weeks move up.
+router.delete("/plans/:planId/weeks/:week", withBatchReuseGuard((req, res, next) => changeWeeklyTemplate(req, res, next, async (client, plan, facts) => {
+  const week = weekNumber(req.params.week, facts);
+  if (!week) return badWeek;
+  if (facts.weekCount === 1) return { status: 400, body: { error: "A weekly program template keeps at least one week.", code: "weekly_template_last_week" } };
+  const days = (await client.query(
+    "select id from plans.plan_days where plan_id = $1 and block_index between $2 and $3 order by id",
+    [plan.id, blockIndexOf(week, 1), blockIndexOf(week, 7)],
+  )).rows;
+  if (!isDraftPlanRow(plan)) {
+    // A published template's sessions: the same guard as every other removal
+    // (program sessions carry no results or links today, so it passes).
+    const dayIds = new Set(days.map((d) => String(d.id)));
+    const locked = await directSessionsLocked(client, plan.id, (s) => dayIds.has(String(s.plan_day_id)), "removed");
+    if (locked) return { status: 409, body: { error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked } };
+  }
+  for (const day of days) await deleteBlockTreeWithClient(client, day.id);
+  const order = Array.from({ length: facts.weekCount }, (_, i) => i + 1).filter((w) => w !== week);
+  await renumberTemplateWeeks(client, plan.id, order);
+  return null;
+})));
+
 router.delete("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
+    if (await weeklyTemplateFacts(query, block.plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
     if (isDraftPlanRow(block.plan)) {
       await deleteBlockTree(block.id);
       return await respondWithDraft(req, res, req.user, block.plan);
@@ -1174,6 +1289,7 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
+    if (await weeklyTemplateFacts(query, block.plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
     const source = await query("select * from plans.plan_days where id = $1", [block.id]);
     const sourceDay = source.rows[0];
     if (!sourceDay) return res.status(404).json({ error: "Program block not found" });
@@ -2088,10 +2204,16 @@ async function buildDraft(plan, req) {
     }
     if (row.item_id) node.items.push({ ...(row.media?{media:row.media}:{}),id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", titleEn: row.title_en, descriptionEn: row.description_en, imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
   });
+  const blockList = [...blocks.values()];
+  const isWeeklyTemplate = plan.plan_type === "program" && blockList.length > 0 && blockList.every((block) => block.type === WEEKLY_BLOCK_TYPE);
   return {
     plan: {
       id: plan.id,
       planType: plan.plan_type,
+      // A weekly program template (docs/ai/weekly-program-template-plan.md):
+      // its blocks are whole template weeks.
+      templateKind: plan.plan_type !== "program" ? "" : (isWeeklyTemplate ? "weekly" : "blocks"),
+      weekCount: isWeeklyTemplate ? Math.ceil(Math.max(...blockList.map((block) => Number(block.index) || 0)) / 7) : 0,
       weekStart: plan.week_start || "",
       name: plan.name,
       note: plan.note || "",
@@ -2114,7 +2236,7 @@ async function buildDraft(plan, req) {
       trackTrainingLoadDefault: Boolean(plan.track_training_load_default),
       requestRpeDefault: Boolean(plan.request_rpe_default),
     },
-    blocks: [...blocks.values()],
+    blocks: blockList,
     batch: await loadBuilderBatch(plan, req),
   };
 }
@@ -3535,8 +3657,7 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
       existingPlan.source_type === "builder"
       && String(existingPlan.created_by_user_id) === String(userId)
     ) {
-      const hasContent = await planHasWeeklyTrainingContentWithClient(client, existingPlan.id);
-      if (!hasContent) {
+      if (await weeklySlotPlanIsFree(client, existingPlan, userId)) {
         await deletePlanTreeWithClient(client, existingPlan.id);
         continue;
       }
@@ -3544,6 +3665,53 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
     return `Athlete ${athlete.externalId || athlete.id} already has a weekly plan for that week.`;
   }
   return "";
+}
+
+// Whether ensureWeeklySlot may remove the caller's own Builder plan that holds
+// a week: only a DRAFT with NO session at all. A published plan is never free,
+// and a session - even one with no item and no named node - is content (it can
+// carry RPE or an event link; removing it leaves those records naming a
+// logical id no session has).
+//
+// Three conditions:
+//   1. the status is 'draft';
+//   2. the plan has no session;
+//   3. no session of the plan has results or a live event link made for it
+//      (Task 5, docs/ai/builder-batch-edit-plan.md section 12: the plan
+//      delete's own check, blockedPlanSessions, whatever the status). Today 2
+//      implies 3, so 3 decides only if 1 or 2 is ever loosened; it stays for
+//      that.
+//
+// A refusal needs no lock: a plan the unlocked reads see as published or as
+// having a session is refused at once (a stale read can only refuse), so a
+// create that is refused never waits on, or holds, another plan's rows. Only a
+// plan about to be removed is locked, and all three conditions are then read
+// again under the locks: the plan row FOR UPDATE (still the caller's own
+// active Builder plan), then - new here, the plan delete takes no day lock -
+// its days FOR UPDATE in ascending id, then, inside blockedPlanSessions, the
+// session rows as the plan delete does. A new day needs the plan row FOR KEY
+// SHARE and a new session its day FOR KEY SHARE, so neither can land between
+// this check and the removal.
+//
+// GET /weekly-plans skips exactly this plan (its lateral's `and not (...)`):
+// change the two together.
+async function weeklySlotPlanIsFree(client, existingPlan, userId) {
+  const hasSessionSql = `select exists (select 1 from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1) as has_session`;
+  if (existingPlan.status !== "draft") return false;
+  if ((await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false) return false;
+  const locked = (await client.query(
+    `select status from plans.plans
+      where id = $1 and plan_type = 'weekly' and source_type = 'builder' and created_by_user_id = $2
+        and coalesce(is_active, true) and not coalesce(is_edit_draft, false)
+      for update`,
+    [existingPlan.id, userId],
+  )).rows[0];
+  if (!locked) return false;
+  await client.query("select id from plans.plan_days where plan_id = $1 order by id for update", [existingPlan.id]);
+  const isDraft = locked.status === "draft";
+  const hasSession = (await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false;
+  const guarded = await blockedPlanSessions(client, await loadWeeklyTree(client, existingPlan.id));
+  return isDraft && !hasSession && guarded.length === 0;
 }
 
 // The batch switcher's members: only the plans this viewer may open, by the

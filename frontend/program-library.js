@@ -106,6 +106,17 @@ export function programInfoModel(program) {
   };
 }
 
+// A weekly program template or a block template
+// (docs/ai/weekly-program-template-plan.md): the server's template_kind.
+export function templateKind(template) {
+  return template?.template_kind === "weekly" ? "weekly" : "blocks";
+}
+export function templateKindLabel(template) {
+  if (templateKind(template) !== "weekly") return "Blocks";
+  const weeks = Number(template.week_count) || 0;
+  return `Weekly · ${weeks} week${weeks === 1 ? "" : "s"}`;
+}
+
 export function renderProgramLibraryCard(template, duplicateNames, selectedTemplateId, currentUser) {
   const category = templateCategoryLabel(template);
   const creator = clean(template.creator_name);
@@ -132,6 +143,7 @@ export function renderProgramLibraryCard(template, duplicateNames, selectedTempl
         </span>
         <span class="program-library-card-foot">
           <span class="program-library-meta-primary">
+            <span class="program-library-card-chip program-kind-chip is-${templateKind(template)}"><span aria-hidden="true">${templateKind(template) === "weekly" ? "&#9638;" : "&#9634;"}</span> ${escapeHtml(templateKindLabel(template))}</span>
             ${renderEditableProgramChip(price, template, canEditSettings, "is-price")}
             ${renderEditableProgramChip(lifecycle.label, template, canEditSettings, `program-lifecycle-badge is-${escapeAttr(lifecycle.code)}`)}
             ${accessBadge ? renderEditableProgramChip(accessBadge.label, template, canEditSettings, `program-access-badge is-${escapeAttr(accessBadge.code)}`) : ""}
@@ -219,7 +231,9 @@ export function applyTemplateClientFilters(templates, filters) {
   const visibility = clean(filters.visibility).toLowerCase();
   const lifecycle = clean(filters.lifecycle).toLowerCase();
   const pricing = clean(filters.pricing).toLowerCase();
+  const kind = clean(filters.kind).toLowerCase();
   return templates.filter((template) => {
+    if ((kind === "weekly" || kind === "blocks") && templateKind(template) !== kind) return false;
     if (search) {
       const haystack = `${template.plan_name || ""} ${template.source_external_id || ""}`.toLowerCase();
       if (!haystack.includes(search)) return false;
@@ -284,6 +298,14 @@ export function renderTemplateFiltersHtml(data) {
           <option value="All"></option>
           ${visibleTags.map((tag) => `<option value="${escapeAttr(tag)}"></option>`).join("")}
         </datalist>
+      </label>`}
+      ${athlete ? "" : `<label class="search-field">
+        <span>Type</span>
+        <select data-template-filter="kind">
+          ${renderOption("", "All", filters.kind || "")}
+          ${renderOption("weekly", "Weekly programs", filters.kind || "")}
+          ${renderOption("blocks", "Block templates", filters.kind || "")}
+        </select>
       </label>`}
       ${showLifecycleFilter ? `
         <label class="search-field">
