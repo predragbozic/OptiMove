@@ -19,7 +19,7 @@ const REFUSALS = {
   athlete_not_on_roster: "This athlete is no longer on this session's roster.",
   manual_not_available: "Values cannot be entered for this session.",
   roster_not_applicable: "Values cannot be entered for this session.",
-  values_changed: "This athlete's values changed since you opened them. Nothing was saved. The values below are the current ones now.",
+  values_changed: "This athlete's values changed since you opened them. Nothing was saved. Fields you changed keep what you typed; the others now show the current values.",
   nothing_changed: "These are the values already shown. Change a value first.",
   variable_not_in_record: "A value is not part of this athlete's record. Nothing was saved. The values below are the current ones now.",
   variable_not_in_session: "A value is not measured in this session. Nothing was saved. The values below are the current ones now.",
@@ -126,10 +126,13 @@ async function readForm(render, { keepTyped = false } = {}) {
     const answer = await api(`/api/training-activity/${encodeURIComponent(r.activityId)}/manual-values?${new URLSearchParams({ athleteId: m.athleteId })}`);
     if (roster() !== r || r.manual !== m || m.readTicket !== ticket || generation !== currentRosterResetGeneration()) return;
     m.form = answer;
+    // The fields kept as typed while the saved value is another one: each names what is saved now.
+    m.keptIds = {};
     m.inputs = Object.fromEntries((answer.variables || []).filter((v) => v.editable).map((v) => {
       const current = Number.isFinite(v.value) ? String(v.value) : "";
       // A field the coach changed keeps the change; an untouched one shows the current value.
       const kept = typed && Object.hasOwn(typed, v.metricDefinitionId) && typed[v.metricDefinitionId] !== shown[v.metricDefinitionId];
+      if (kept && typed[v.metricDefinitionId].trim() !== current) m.keptIds[v.metricDefinitionId] = true;
       return [v.metricDefinitionId, kept ? typed[v.metricDefinitionId] : current];
     }));
   } catch (error) {
@@ -165,7 +168,8 @@ export function valuesToSend(m) {
     if (Number.isFinite(v.value) && n === v.value) continue;
     values.push({ metricDefinitionId: v.metricDefinitionId, value: n });
   }
-  if (!values.length) return { values, problem: m?.form?.mode === "correction" ? "Change a value first." : "Enter at least one value." };
+  // Nothing new to send: with a saved value in any field the coach has to change one; with none, to enter one.
+  if (!values.length) return { values, problem: variables.some((v) => Number.isFinite(v.value)) ? "Change a value first." : "Enter at least one value." };
   return { values, problem: "" };
 }
 
@@ -322,6 +326,7 @@ function fieldHtml(m, v) {
     hints.push(`Measured: ${Number.isFinite(v.measuredValue) ? num(v.measuredValue) : "none"}`);
   }
   if (Number.isFinite(v.estimatedValue)) hints.push(`Estimate now: ${num(v.estimatedValue)}`);
+  if (m.keptIds?.[v.metricDefinitionId]) hints.push(`Now saved: ${Number.isFinite(v.value) ? num(v.value) : "none"}`);
   if (!v.editable) {
     return `<div class="tl-manual-field is-fixed"><span>${escapeHtml(name)}</span><span>${escapeHtml(v.value === null ? "—" : num(v.value))}</span></div>`;
   }
@@ -353,7 +358,7 @@ export function renderManualPanelHtml(r, athlete) {
   const title = correction ? `Correct values for ${name}` : `Enter values for ${name}`;
   const intro = correction
     ? "The measured values are kept. Your values count instead and are shown as corrected by you."
-    : "Your own numbers for an athlete without usable device data, shown as entered by hand, never as measured. (An estimate is calculated; these are typed by you.)";
+    : "Typed by you for an athlete without usable device data. Shown as entered by hand, never as measured.";
   const fields = f ? (f.variables || []).map((v) => fieldHtml(m, v)).join("") : "";
   const canSave = Boolean(f) && !m.sending && !m.loading && !rosterWriteBusy(r);
   return `

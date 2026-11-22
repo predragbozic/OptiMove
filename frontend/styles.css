@@ -14647,6 +14647,11 @@ button.tests-assignment-card {
   gap: 8px;
 }
 
+/* The restore question inside the panel: the panel's own padding, no second margin. */
+.tl-estimate-panel .tl-roster-confirm {
+  margin: 0;
+}
+
 .tl-estimate-inline select {
   min-width: 0;
   flex: 1 1 12em;

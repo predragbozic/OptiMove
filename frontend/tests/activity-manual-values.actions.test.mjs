@@ -225,6 +225,10 @@ test("4. a correction sends only the changed values and the current occasion; un
   assert.equal(saved.expectedOccasionId, OCC);
   assert.deepEqual(saved.values, [{ metricDefinitionId: "def-dist", value: 5150 }], "only the changed value");
   assert.deepEqual(valuesToSend({ form: { mode: "correction", variables: VARS_CORR }, inputs: { "def-dist": "5000", "def-time": "60" } }).values, []);
+  // An entry whose fields already hold saved values: nothing changed is "Change a value first.", not "Enter at least one".
+  const savedEntry = { form: { mode: "entry", variables: [{ ...VARS_ENTRY[0], value: 3800 }, VARS_ENTRY[1]] }, inputs: { "def-dist": "3800", "def-time": "" } };
+  assert.equal(valuesToSend(savedEntry).problem, "Change a value first.");
+  assert.equal(valuesToSend({ form: { mode: "entry", variables: VARS_ENTRY }, inputs: { "def-dist": "", "def-time": "" } }).problem, "Enter at least one value.");
 });
 
 test("5. a lost answer is not confirmed: the panel keeps the request, leaving asks, and Check result sends the SAME request (key included)", async () => {
@@ -252,19 +256,24 @@ test("6. a stale refusal says nothing was saved, reads the form again at once (k
   let forms = 0;
   const NEW = "22222222-0000-4000-8000-000000000002";
   await openRoster({
-    form: () => { forms += 1; return { status: 200, body: { ...formEntry(), expectedOccasionId: forms > 1 ? NEW : null } }; },
+    // Meanwhile another coach saved 3800 m and 55 min.
+    form: () => { forms += 1; return { status: 200, body: { ...formEntry(), expectedOccasionId: forms > 1 ? NEW : null, variables: forms > 1 ? [{ ...VARS_ENTRY[0], value: 3800 }, { ...VARS_ENTRY[1], value: 55 }] : VARS_ENTRY } }; },
     onWrite: () => { n += 1; return n === 1 ? { status: 409, body: { error: "values_changed", message: "x" } } : { status: 201, body: {} }; },
   });
   await act("training-load-roster-manual-open", { athleteId: "ath-1" });
   await act("training-load-roster-manual-input", { metricId: "def-dist" }, "4000");
   await act("training-load-roster-manual-save");
-  assert.match(rowHtml("ath-1"), /This athlete(?:'|&#0?39;)s values changed since you opened them\. Nothing was saved\. The values below are the current ones now\./);
+  assert.match(rowHtml("ath-1"), /This athlete(?:'|&#0?39;)s values changed since you opened them\. Nothing was saved\. Fields you changed keep what you typed; the others now show the current values\./);
   assert.doesNotMatch(rowHtml("ath-1"), /values_changed/, "no code on the screen");
   assert.equal(forms, 2, "the form was read again");
   assert.match(rowHtml("ath-1"), /value="4000"/, "what was typed is kept");
+  assert.match(rowHtml("ath-1"), /Now saved: 3800/, "the kept field names what is saved now");
+  assert.match(rowHtml("ath-1"), /value="55"/, "an untouched field shows the current value");
+  assert.equal((rowHtml("ath-1").match(/Now saved:/g) || []).length, 1, "only the kept field carries the hint");
   await act("training-load-roster-manual-save");
   assert.equal(writes().length, 2);
   assert.equal(writes()[1].body.expectedOccasionId, NEW);
+  assert.deepEqual(writes()[1].body.values, [{ metricDefinitionId: "def-dist", value: 4000 }], "the current value of the untouched field is not sent");
   assert.notEqual(writes()[1].body.requestKey, writes()[0].body.requestKey);
 });
 
