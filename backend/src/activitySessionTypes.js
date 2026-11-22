@@ -1,5 +1,5 @@
 // The session type of each athlete in one session (ST-3 of docs/ai/session-type-plan.md, sections 3, 5 and 6;
-// migration v88): the session's own type, an athlete's exception, the effective type, and how both stood at an earlier
+// migration v89): the session's own type, an athlete's exception, the effective type, and how both stood at an earlier
 // moment. A read module: it takes the caller's client (a snapshot, or a command's transaction after its locks), locks
 // nothing and writes nothing. No pool import, so the pure parts load anywhere.
 //
@@ -15,7 +15,7 @@ export function comparableSessionTypes(typeKey) {
   return [...(COMPARABLE_TYPES[typeKey] ?? [typeKey])];
 }
 
-// A world built without v88 (the suites that stop at an older migration) has no exception table: every athlete's type
+// A world built without v89 (the suites that stop at an older migration) has no exception table: every athlete's type
 // is then the session's, as before ST-3.
 export async function participantTypesInstalled(client) {
   return (await client.query(`select to_regclass('training.participant_activity_types') is not null as installed`)).rows[0].installed === true;
@@ -46,22 +46,30 @@ export async function readSessionTypeState(client, canonicalId, { withHistory = 
     )).rows;
     for (const r of rows) {
       const athleteId = String(r.athlete_id);
-      if (!byAthlete.has(athleteId)) byAthlete.set(athleteId, { rows: [], live: null });
+      if (!byAthlete.has(athleteId)) byAthlete.set(athleteId, { rows: [], own: [], live: null });
       const entry = byAthlete.get(athleteId);
       const row = {
         activityTypeKey: r.activity_type_key, reason: r.reason ?? null, setAt: time(r.set_at), endedAt: time(r.ended_at),
         endCause: r.end_cause ?? null, setByName: r.set_by_name ?? null,
       };
       entry.rows.push(row);
-      if (row.endedAt === null && r.merge_status === "canonical" && r.on_canonical) entry.live = row;
+      // `own`: the rows of the athlete's canonical participant in this session - the only ones that say what the
+      // athlete's type HERE was at an earlier moment (a merged-in participant's rows belonged to another session).
+      if (r.merge_status === "canonical" && r.on_canonical) {
+        entry.own.push(row);
+        if (row.endedAt === null) entry.live = row;
+      }
     }
     if (withHistory) {
+      // The correction log of THIS activity only (v1; v89 dates it by the wall clock): every type change through the
+      // sanctioned function, whichever path called it. A session merged into this one keeps its own history apart.
       sessionChanges = (await client.query(
-        `select old_type_key, new_type_key, created_at from training.activity_type_requests
-          where activity_id in (select activity_id from training.activity_alias_ids($1)) and operation = 'session_type'
-          order by created_at, id`,
+        `select old_values ->> 'activity_type_key' as old_type_key, new_values ->> 'activity_type_key' as new_type_key, changed_at
+           from training.activity_field_correction_log
+          where activity_id = $1 and old_values ->> 'activity_type_key' is distinct from new_values ->> 'activity_type_key'
+          order by changed_at, id`,
         [canonicalId],
-      )).rows.map((r) => ({ from: r.old_type_key ?? null, to: r.new_type_key, at: time(r.created_at) }));
+      )).rows.map((r) => ({ from: r.old_type_key ?? null, to: r.new_type_key ?? null, at: time(r.changed_at) }));
     }
   }
   return { installed, sessionTypeKey, byAthlete, sessionChanges };
@@ -84,7 +92,7 @@ function sessionTypeAt(state, at) {
 
 // The athlete's effective type as it stood at `at` (ms). Needs a state read `withHistory`.
 export function effectiveTypeAt(state, athleteId, at) {
-  const rows = state.byAthlete.get(String(athleteId))?.rows ?? [];
+  const rows = state.byAthlete.get(String(athleteId))?.own ?? [];
   const then = rows.find((r) => r.setAt <= at && (r.endedAt === null || r.endedAt > at));
   return then ? then.activityTypeKey : sessionTypeAt(state, at);
 }

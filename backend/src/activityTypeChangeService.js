@@ -1,5 +1,5 @@
 // A session's type changed after the import, and an athlete's own type in a session (ST-3 of
-// docs/ai/session-type-plan.md, sections 3, 5 and 10; migration v88 holds the rules whoever writes).
+// docs/ai/session-type-plan.md, sections 3, 5 and 10; migration v89 holds the rules whoever writes).
 //
 //   POST /api/training-activity/:activityId/type                    { activityTypeKey, reason?, requestKey }
 //   PUT  /api/training-activity/:activityId/roster/:athleteId/type  { activityTypeKey | null, reason?, requestKey }
@@ -16,8 +16,10 @@
 //                                                           that is canonical under this lock stays canonical
 //   4. the participant row(s) FOR UPDATE, ascending
 //   5. the exception row(s)
-//   6. the type row FOR SHARE (training.session_type_offered; inside v85's and v88's guards too)
-//   7. the request row, the deferred checks, a bounded COMMIT.
+//   6. the request row, the deferred checks, a bounded COMMIT.
+// The type row is locked FOR SHARE (training.session_type_offered, and again inside v85's and v89's guards) with the
+// write that sets it: before the participants when the session's type changes, after them for an exception. It is only
+// ever shared, and an archive takes that row alone, so its place closes no cycle.
 // No team import lock is taken: a type change never waits for an import, and an import never touches a type or an
 // exception of an imported session.
 //
@@ -199,7 +201,7 @@ async function runTypeCommand(ctx, activityId, { requestKey, canonical }, apply)
       }
       throw conflict("activity_superseded", "This session was merged into another.", { canonicalActivityId: canonicalId });
     }
-    // The acting user of v85's and v88's guards.
+    // The acting user of v85's and v89's guards.
     await client.query(`select set_config('optimove.session_type_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [ctx.userId]);
     const outcome = await apply({
       client, ctx, canonical, activityId: canonicalId, teamId, clubId: String(target.team.club_id), basis: target.basis,
@@ -231,7 +233,7 @@ async function runTypeCommand(ctx, activityId, { requestKey, canonical }, apply)
         throw conflict("try_again", "The session is being changed. Try again.");
       }
       if (error?.code === "42501") throw new RosterError(403, "not_a_team_coach", "You may not decide on this team's sessions.");
-      // The database's own refusals (v85's activity guard, v88's exception guard), for a write that raced a change.
+      // The database's own refusals (v85's activity guard, v89's exception guard), for a write that raced a change.
       if (error?.code === "23514" && error?.message === "participant_type_same_as_session") throw sameAsSession();
       if (error?.code === "23514" && (error?.message === "participant_type_not_offered" || /session type is not offered/.test(String(error?.message)))) throw notOffered();
       throw error;
@@ -253,6 +255,8 @@ async function runTypeCommand(ctx, activityId, { requestKey, canonical }, apply)
       console.error(`[session-type] checking ${canonical.operation} on activity ${activityId} after an unconfirmed COMMIT failed: ${checkError?.message}`);
     }
     if (found) return { status: 200, body: found, verifiedAfterCommitError: true };
+    // The lookup above answers only the caller's own (user, key) with the same hash: it confirms a write this very
+    // request made under its rights, so it does not check them again.
     throw new RosterError(503, "outcome_unknown", OUTCOME_UNKNOWN);
   } finally {
     if (!released) {

@@ -1,4 +1,4 @@
--- Training Load v88 - a session type per athlete, and a type changed after the import (ST-3 of
+-- Training Load v89 - a session type per athlete, and a type changed after the import (ST-3 of
 -- docs/ai/session-type-plan.md, sections 3, 5, 6 and 10; section 16 records what was built).
 --
 -- What this migration does:
@@ -10,8 +10,7 @@
 --     canonical participant's live exception, otherwise the canonical activity's type.
 --   * training.activity_type_requests: the append-only request record of the two routes (a session's type changed
 --     after the import; an athlete's exception set or cleared): who, on which basis, the old and the new type, the
---     reason, the request key and its hash, the saved answer. Its created_at is the wall clock, so "was the type
---     changed after this estimate was saved" compares two wall-clock times.
+--     reason, the request key and its hash, the saved answer.
 --   * Guards (the v35 / v85 pattern): a new exception and a request row need the transaction's acting user
 --     (optimove.session_type_actor) with the roster decider's right on the activity's team
 --     (training.lock_activity_decider, users first since v54); the exception's type must be active, offered to the
@@ -26,7 +25,9 @@
 --   * training.activity_field_correction_log (v1): its foreign key to the activity becomes ON DELETE CASCADE and a
 --     guard refuses every delete outside the sanctioned undo. Before ST-3 nothing wrote this log; the type change
 --     route does (through training.correct_confirmed_activity_fields), and without this an undo of a session whose
---     type was changed would fail on the foreign key. The undo's own function is not changed.
+--     type was changed would fail on the foreign key. The undo's own function is not changed. A correction's
+--     changed_at becomes the wall clock (a trigger), so "was the type changed after this estimate was saved" compares
+--     two wall-clock times.
 --
 -- Nothing else is written: no activity changes its type, no exception exists after the migration.
 -- Lock orders: an exception write - the team, its club, the acting user, the role row (FOR SHARE), the activity row,
@@ -34,10 +35,14 @@
 -- activity row (FOR UPDATE), the participants whose exception ends, their exception rows, the type row.
 -- The guards prove that the row, the actor and the right agree; they do not stop whoever holds the database
 -- credentials (stated as v35 states it).
--- Rollback: docs/runbooks/participant-session-types-v88-rollback.sql. Runbook: docs/runbooks/participant-session-types-v88.md.
+-- Rollback: docs/runbooks/participant-session-types-v89-rollback.sql. Runbook: docs/runbooks/participant-session-types-v89.md.
+
+-- The schema locks below (foreign keys to the activity, participant and user tables) wait at most this long; a
+-- lock-timeout failure changes nothing and the deploy is simply repeated at a quieter moment.
+set local lock_timeout = '5s';
 
 -- ---------------------------------------------------------------------------
--- 0. Preconditions: nothing of v88 exists, and the two v4 bodies are the ones v88 replaces
+-- 0. Preconditions: nothing of v89 exists, and the two v4 bodies are the ones v89 replaces
 -- ---------------------------------------------------------------------------
 do $$
 declare
@@ -47,23 +52,23 @@ declare
   i int;
 begin
   if to_regclass('training.participant_activity_types') is not null or to_regclass('training.activity_type_requests') is not null then
-    raise exception 'v88 refused: a v88 table already exists' using errcode = '23514';
+    raise exception 'v89 refused: a v89 table already exists' using errcode = '23514';
   end if;
   if to_regprocedure('training.session_type_offered(text, uuid, boolean)') is null
      or to_regprocedure('training.lock_activity_decider(uuid, uuid, character varying)') is null
      or to_regprocedure('training_load.session_undo_marker_ok()') is null then
-    raise exception 'v88 refused: v54, v57 and v85 must be applied first' using errcode = '23514';
+    raise exception 'v89 refused: v54, v57 and v85 must be applied first' using errcode = '23514';
   end if;
   for i in 1 .. array_length(expected, 1) loop
     if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training' and p.proname = expected[i][1])
        is distinct from expected[i][2] then
-      raise exception 'v88 refused: the body in force of training.% is not v4''s', expected[i][1] using errcode = '23514';
+      raise exception 'v89 refused: the body in force of training.% is not v4''s', expected[i][1] using errcode = '23514';
     end if;
   end loop;
   if (select confdeltype from pg_constraint where conname = 'activity_field_correction_log_activity_id_fkey'
         and conrelid = 'training.activity_field_correction_log'::regclass) is distinct from 'a' then
-    raise exception 'v88 refused: the correction log''s activity key is not as v1 made it' using errcode = '23514';
+    raise exception 'v89 refused: the correction log''s activity key is not as v1 made it' using errcode = '23514';
   end if;
 end $$;
 
@@ -191,18 +196,33 @@ begin
     raise exception 'training.participant_activity_types: a new exception is live' using errcode = '23514';
   end if;
   new.set_at := clock_timestamp();
-  select ap.activity_id, ap.merge_status into v_participant from training.activity_participants ap where ap.id = new.participant_id;
-  if not found or v_participant.merge_status <> 'canonical' then
+  -- The order of the routes: the rights first, then the activity row, then the participant row.
+  -- 1. The session and its team, read without a lock (an activity's owner never changes), and the roster decider's
+  --    right on the claimed basis (42501 from the function itself).
+  select ap.activity_id into v_participant from training.activity_participants ap where ap.id = new.participant_id;
+  if not found then
     raise exception 'training.participant_activity_types: the participant is not a canonical participant' using errcode = '23514';
   end if;
-  -- The activity row FOR SHARE: a type change of the session (FOR UPDATE) waits for this write, and this for it.
-  select a.owner_scope, a.owner_team_id, a.activity_type_key, a.lifecycle_state into v_activity
-    from training.activities a where a.id = v_participant.activity_id for share;
-  if v_activity.owner_scope <> 'team' or v_activity.lifecycle_state = 'superseded' then
+  select a.owner_scope, a.owner_team_id into v_activity from training.activities a where a.id = v_participant.activity_id;
+  if v_activity.owner_scope is distinct from 'team' then
     raise exception 'training.participant_activity_types: only a team''s current session takes an exception' using errcode = '23514';
   end if;
-  -- The roster decider's right on the claimed basis (42501 from the function itself).
   perform training.lock_activity_decider(v_actor, v_activity.owner_team_id, new.set_by_basis::varchar);
+  -- 2. The activity row FOR SHARE: a type change of the session, a merge and a reparent (FOR UPDATE) wait for this
+  --    write, and this for them.
+  select a.owner_scope, a.owner_team_id, a.activity_type_key, a.lifecycle_state into v_activity
+    from training.activities a where a.id = v_participant.activity_id for share;
+  if v_activity.lifecycle_state = 'superseded' then
+    raise exception 'training.participant_activity_types: only a team''s current session takes an exception' using errcode = '23514';
+  end if;
+  -- 3. The participant, read again under that lock: a merge or a reparent that committed while this write waited has
+  --    superseded or moved it, and what was read before the lock no longer holds.
+  perform 1 from training.activity_participants ap
+    where ap.id = new.participant_id and ap.activity_id = v_participant.activity_id and ap.merge_status = 'canonical'
+      for key share;
+  if not found then
+    raise exception 'training.participant_activity_types: the participant is not a canonical participant' using errcode = '23514';
+  end if;
   if new.activity_type_key is not distinct from v_activity.activity_type_key then
     raise exception 'participant_type_same_as_session' using errcode = '23514';
   end if;
@@ -306,6 +326,16 @@ begin
   return old;
 end;
 $$ language plpgsql set search_path = pg_catalog, public;
+-- A correction's time is the wall clock, not the transaction's start: a type change that waited for its lock is dated
+-- after whatever it waited for (the mark on a saved estimate compares the two).
+create function training.activity_field_correction_log_clock() returns trigger as $$
+begin
+  new.changed_at := clock_timestamp();
+  return new;
+end;
+$$ language plpgsql set search_path = pg_catalog, public;
+create trigger activity_field_correction_log_clock before insert on training.activity_field_correction_log
+  for each row execute function training.activity_field_correction_log_clock();
 create trigger activity_field_correction_log_no_delete before delete on training.activity_field_correction_log
   for each row execute function training.activity_field_correction_log_no_delete();
 create trigger activity_field_correction_log_no_truncate before truncate on training.activity_field_correction_log
@@ -385,7 +415,7 @@ begin
     where id = p_source_participant_id;
   perform set_config('training.allow_participant_merge_write', 'off', true);
 
-  -- v88 (ST-3): the merged participant's own session type ends; the canonical participant keeps its own. The exception
+  -- v89 (ST-3): the merged participant's own session type ends; the canonical participant keeps its own. The exception
   -- rows come last, after the activities and the participants locked above.
   perform set_config('training.allow_participant_type_end', 'on', true);
   update training.participant_activity_types
@@ -567,7 +597,7 @@ begin
   update training.activity_participants set activity_id = p_to_activity_id, updated_at = now() where id = p_participant_id;
   perform set_config('training.allow_reparent_write', 'off', true);
 
-  -- v88 (ST-3): the participant's own session type belonged to the session it left: it ends. The exception rows come
+  -- v89 (ST-3): the participant's own session type belonged to the session it left: it ends. The exception rows come
   -- last, after the activities and the participant locked above.
   perform set_config('training.allow_participant_type_end', 'on', true);
   update training.participant_activity_types
@@ -719,15 +749,15 @@ $$ language plpgsql;
 do $$
 declare
   expected constant text[][] := array[
-    ['merge_activity_participants', 'f6fa45c13fcd11765b9d2eac5b2cd80e'],
-    ['reparent_activity_participant', '0b3f25f34d823af811c8cb824861e4bf']];
+    ['merge_activity_participants', '8b7fb19320c8d16071a02d765438f1e2'],
+    ['reparent_activity_participant', '7563c29ddae3f5508dbeff1780a2d89e']];
   i int;
 begin
   for i in 1 .. array_length(expected, 1) loop
     if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training' and p.proname = expected[i][1])
        is distinct from expected[i][2] then
-      raise exception 'v88 refused: the new body of training.% is not the expected one', expected[i][1] using errcode = '23514';
+      raise exception 'v89 refused: the new body of training.% is not the expected one', expected[i][1] using errcode = '23514';
     end if;
   end loop;
 end $$;

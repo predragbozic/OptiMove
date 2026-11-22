@@ -602,7 +602,7 @@ Verified against `be5f62b9` (`origin/main`, merge of PR #709).
 - **Tests:** `backend/tests/gpexe-session-type-st2.test.mjs` (disposable; 19 tests), with the mutations of section 11,
   item 9.
 
-## 16. ST-3 as built (migration v88, `migrations_v2/202611221300_training_load_v88_participant_session_types.sql`)
+## 16. ST-3 as built (migration v89, `migrations_v2/202611221400_training_load_v89_participant_session_types.sql`)
 
 The number and the prefix are provisional until the *Rukovodilac* confirms them before the merge.
 
@@ -644,9 +644,10 @@ The number and the prefix are provisional until the *Rukovodilac* confirms them 
 - **Departures from sections 3 to 10, each for the reviewers:**
   - **The reason is optional** on both routes (at most 300 characters). The plan's bodies list it; a mandatory reason
     on every roster exception was judged too heavy for a coach.
-  - **The mark is dated against the request record, not the correction log.** The correction log's time is the
-    transaction's start, which can be earlier than an estimate saved while the change waited for its lock. The
-    request record and the exception rows carry the wall clock.
+  - **The mark is dated against the correction log of the canonical session and the exception rows of the athlete's
+    own participant there**, as section 5 says. v89 dates a correction by the wall clock (a trigger): the transaction's
+    start can be earlier than an estimate saved while the change waited for its lock. A session merged into this one
+    keeps its own history apart, so it marks nothing here.
   - **No concurrency token** (`expected…`) on the two routes: the last write wins, and the history keeps every row.
   - **The correction log's foreign key cascades**, with a delete guard. Without it the undo of a session whose type
     was changed would fail on that key.
@@ -654,10 +655,17 @@ The number and the prefix are provisional until the *Rukovodilac* confirms them 
   - An athlete with no record in a session cannot get an exception (`athlete_has_no_record`). An RTP athlete without
     a recording is first estimated under the session's type; setting the exception then marks that estimate.
   - The undo removes a session's type changes and exceptions without listing them (the runbook, "Known limits").
-  - A world built without v88 reads as before ST-3: the roster and the estimates probe for the table.
+  - A world built without v89 reads as before ST-3: the roster and the estimates probe for the table.
   - `backend/scripts/session-types-v85-rehearsal.mjs` builds "everything but v85", so it no longer runs once a later
     migration needs v85. v85 is applied; the tool is kept as its record.
-  - ST-2's precondition for ST-3 (the import locks the imported activity row `FOR SHARE` when it reads the type of a
-    session already imported) is built after ST-2 is on `main`, in the follow-up that also stores the chosen type on
-    the approval.
-- **Runbook:** `docs/runbooks/participant-session-types-v88.md`, with its preflight, post-check and rollback.
+  - **ST-2's precondition for ST-3 is built here:** the import reads the type of a session already imported under
+    `FOR SHARE` on the activity row (`backend/src/gpexeSessionType.js`), so it waits for a type change in flight.
+  - **The session's type has no database guard of its own for the actor.** v85's guard checks only that the type is
+    offered. A change through `training.correct_confirmed_activity_fields` outside the route writes the correction log
+    and no request row; the mark still sees it. An exception equal to the session's type is refused at insert and
+    ended by the route's type change; a type changed another way can leave one, with the same effective type.
+  - A request row is not checked against the activity's real previous type (a trusted acting user, as v35).
+  - The older undo CLI (`backend/scripts/gpexe-undo-imported-session.mjs`, disposable databases only) does not set
+    v57's marker, so v89's delete guards refuse it for a session with a type change or an exception.
+  - New foreign-key columns to users, types and athletes carry no index: those rows are never deleted.
+- **Runbook:** `docs/runbooks/participant-session-types-v89.md`, with its preflight, post-check and rollback.

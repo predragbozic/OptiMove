@@ -1,5 +1,5 @@
-// ST-3, migration v88 itself: the preflight and the post-check on a database before and after v88, the rollback round
-// trip (the catalog equal to the one before v88, v4's two bodies back by md5), the rollback's refusals, and v88's own
+// ST-3, migration v89 itself: the preflight and the post-check on a database before and after v89, the rollback round
+// trip (the catalog equal to the one before v89, v4's two bodies back by md5), the rollback's refusals, and v89's own
 // refusal over a changed body. A disposable database only (optimove_tests_gpexe_*), invented rows.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,9 +13,9 @@ import { blocks, CATALOG_SQL } from "../scripts/session-types-v85-rehearsal.mjs"
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 // The one place this suite names the migration.
-const V88 = "202611221300_training_load_v88_participant_session_types.sql";
-const BEFORE = GPEXE_TEST_MIGRATIONS.filter((f) => f < V88);
-const RUNBOOK = (f) => fs.readFileSync(path.join(REPO, "docs/runbooks", `participant-session-types-v88${f}`), "utf8");
+const V89 = "202611221400_training_load_v89_participant_session_types.sql";
+const BEFORE = GPEXE_TEST_MIGRATIONS.filter((f) => f < V89);
+const RUNBOOK = (f) => fs.readFileSync(path.join(REPO, "docs/runbooks", `participant-session-types-v89${f}`), "utf8");
 const CONSTRAINTS_SQL = `select string_agg(conname || '=' || pg_get_constraintdef(oid), ',' order by conname) as c from pg_constraint
   where conrelid = 'training.activity_field_correction_log'::regclass`;
 
@@ -54,18 +54,18 @@ async function allBlocks(file) {
   for (const [b, sql] of Object.entries(blocks(RUNBOOK(file)))) bad.push(...falseColumns(await readOnly(sql)).map((k) => `${b}.${k}`));
   return bad;
 }
-const recorded = async () => (await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V88}`])).rows[0].n;
+const recorded = async () => (await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V89}`])).rows[0].n;
 
 test("1. preflight, apply, post-check, rollback to the same catalog, apply again", async () => {
-  assert.deepEqual(await allBlocks("-preflight.sql"), [], "the preflight passes before v88");
+  assert.deepEqual(await allBlocks("-preflight.sql"), [], "the preflight passes before v89");
   const catalogBefore = (await c.query(CATALOG_SQL)).rows[0];
   const constraintsBefore = (await c.query(CONSTRAINTS_SQL)).rows[0].c;
 
-  await applyGpexeTestMigrations(db.url, [V88]);
+  await applyGpexeTestMigrations(db.url, [V89]);
   assert.deepEqual(await allBlocks("-preflight.sql"),
-    ["1.v88_not_recorded", "2.no_exception_table", "2.no_request_table", "2.no_functions", "2.merge_body_is_v4", "2.reparent_body_is_v4", "2.correction_log_key_is_v1"],
-    "after v88 the preflight refuses exactly on the v88 objects");
-  assert.deepEqual(await allBlocks("-postcheck.sql"), [], "the post-check passes after v88");
+    ["1.v89_not_recorded", "2.no_exception_table", "2.no_request_table", "2.no_functions", "2.merge_body_is_v4", "2.reparent_body_is_v4", "2.correction_log_key_is_v1"],
+    "after v89 the preflight refuses exactly on the v89 objects");
+  assert.deepEqual(await allBlocks("-postcheck.sql"), [], "the post-check passes after v89");
   assert.equal((await c.query(`select training.effective_activity_type($1) as t`, [ids.participant])).rows[0].t, "training_session",
     "without an exception the effective type is the session's");
 
@@ -74,13 +74,13 @@ test("1. preflight, apply, post-check, rollback to the same catalog, apply again
   assert.equal((await c.query(CONSTRAINTS_SQL)).rows[0].c, constraintsBefore, "the correction log's key is v1's again");
   assert.equal(await recorded(), 0);
 
-  await applyGpexeTestMigrations(db.url, [V88]);
-  assert.deepEqual(await allBlocks("-postcheck.sql"), [], "v88 applies again after its rollback");
+  await applyGpexeTestMigrations(db.url, [V89]);
+  assert.deepEqual(await allBlocks("-postcheck.sql"), [], "v89 applies again after its rollback");
 });
 
 test("2. the rollback refuses once an exception or a request row exists, and changes nothing", async () => {
   const refuse = async (label) => {
-    await assert.rejects(c.query(RUNBOOK("-rollback.sql")), (error) => error.code === "23514" && /v88 rollback refused: a session type was changed in the app/.test(error.message), label);
+    await assert.rejects(c.query(RUNBOOK("-rollback.sql")), (error) => error.code === "23514" && /v89 rollback refused: a session type was changed in the app/.test(error.message), label);
     await c.query("rollback").catch(() => {});
     assert.equal(await recorded(), 1, `${label}: nothing changed`);
   };
@@ -92,20 +92,20 @@ test("2. the rollback refuses once an exception or a request row exists, and cha
   await refuse("an exception row");
 });
 
-test("3. v88 refuses to run over a body that is not v4's, or when it is already applied", async () => {
+test("3. v89 refuses to run over a body that is not v4's, or when it is already applied", async () => {
   const fresh = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "st3mig2", migrations: BEFORE });
   const f = new pg.Client({ connectionString: fresh.url });
   await f.connect();
   try {
-    const sql = fs.readFileSync(path.join(REPO, "migrations_v2", V88), "utf8");
+    const sql = fs.readFileSync(path.join(REPO, "migrations_v2", V89), "utf8");
     const body = (await f.query(`select pg_get_functiondef('training.merge_activity_participants(uuid, uuid, uuid, text)'::regprocedure) as d`)).rows[0].d;
     await f.query(body.replace("source and target are the same participant", "source and target are one participant"));
-    await assert.rejects(f.query(`begin; ${sql}; commit;`), (error) => error.code === "23514" && /v88 refused: the body in force of training.merge_activity_participants is not v4's/.test(error.message));
+    await assert.rejects(f.query(`begin; ${sql}; commit;`), (error) => error.code === "23514" && /v89 refused: the body in force of training.merge_activity_participants is not v4's/.test(error.message));
     await f.query("rollback").catch(() => {});
-    assert.equal((await f.query(`select to_regclass('training.participant_activity_types') is null as none`)).rows[0].none, true, "nothing of v88 was left behind");
+    assert.equal((await f.query(`select to_regclass('training.participant_activity_types') is null as none`)).rows[0].none, true, "nothing of v89 was left behind");
     await f.query(body);
     await f.query(`begin; ${sql}; commit;`);
-    await assert.rejects(f.query(`begin; ${sql}; commit;`), (error) => error.code === "23514" && /v88 refused: a v88 table already exists/.test(error.message));
+    await assert.rejects(f.query(`begin; ${sql}; commit;`), (error) => error.code === "23514" && /v89 refused: a v89 table already exists/.test(error.message));
     await f.query("rollback").catch(() => {});
   } finally {
     await f.end().catch(() => {});

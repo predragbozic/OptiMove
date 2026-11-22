@@ -1,49 +1,49 @@
--- Rollback of migration v88 (a session type per athlete, ST-3; migrations_v2/202611221300_training_load_v88_participant_session_types.sql).
+-- Rollback of migration v89 (a session type per athlete, ST-3; migrations_v2/202611221400_training_load_v89_participant_session_types.sql).
 --
 -- Not a migration and never run automatically. Rehearsed on a disposable database (backend/tests/session-types-st3-migration.test.mjs:
 -- apply -> rollback -> the catalog identical to before -> apply again), on PostgreSQL 16. Before it is run anywhere real: the deployed
--- commit no longer contains the v88 file (otherwise the migrator applies v88 again at the next start) and no longer calls
--- training.effective_activity_type or the v88 tables, and the database is named in its own approval (.claude/rules/database-safety.md).
+-- commit no longer contains the v89 file (otherwise the migrator applies v89 again at the next start) and no longer calls
+-- training.effective_activity_type or the v89 tables, and the database is named in its own approval (.claude/rules/database-safety.md).
 --
 -- It restores v4's bodies of training.merge_activity_participants and training.reparent_activity_participant verbatim (checked by
 -- md5 before and after), puts the correction log's foreign key back to v1's (no cascade) and drops its delete guard, drops
--- training.effective_activity_type, training.session_type_team_decider, the two v88 tables with their triggers and functions, and
--- deletes the v88 record. It changes no other row. It refuses (23514, fixed message), changing nothing, once any of these holds -
--- from then on v88 is forward-only:
+-- training.effective_activity_type, training.session_type_team_decider, the two v89 tables with their triggers and functions, and
+-- deletes the v89 record. It changes no other row. It refuses (23514, fixed message), changing nothing, once any of these holds -
+-- from then on v89 is forward-only:
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v88 is not recorded, or any migration was applied after it (by applied_at, not by prefix);
+--   * v89 is not recorded, or any migration was applied after it (by applied_at, not by prefix);
 --   * an exception row or a request row exists (a type was changed after an import, or an athlete got a type of their own);
---   * the two function bodies in force are not v88's.
+--   * the two function bodies in force are not v89's.
 -- One transaction. Run it at a quiet moment as
---   psql -v ON_ERROR_STOP=1 -f participant-session-types-v88-rollback.sql
+--   psql -v ON_ERROR_STOP=1 -f participant-session-types-v89-rollback.sql
 begin;
 set local lock_timeout = '5s';
 
 do $$
 declare
   expected constant text[][] := array[
-    ['merge_activity_participants', 'f6fa45c13fcd11765b9d2eac5b2cd80e'],
-    ['reparent_activity_participant', '0b3f25f34d823af811c8cb824861e4bf']];
+    ['merge_activity_participants', '8b7fb19320c8d16071a02d765438f1e2'],
+    ['reparent_activity_participant', '7563c29ddae3f5508dbeff1780a2d89e']];
   i int;
 begin
   if not pg_try_advisory_xact_lock(822026) then
-    raise exception 'v88 rollback refused: the migrator is running' using errcode = '23514';
+    raise exception 'v89 rollback refused: the migrator is running' using errcode = '23514';
   end if;
-  if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611221300_training_load_v88_participant_session_types.sql') then
-    raise exception 'v88 rollback refused: v88 is not recorded on this database' using errcode = '23514';
+  if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611221400_training_load_v89_participant_session_types.sql') then
+    raise exception 'v89 rollback refused: v89 is not recorded on this database' using errcode = '23514';
   end if;
-  if exists (select 1 from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611221300_training_load_v88_participant_session_types.sql'
-              and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611221300_training_load_v88_participant_session_types.sql')) then
-    raise exception 'v88 rollback refused: later migrations are applied' using errcode = '23514';
+  if exists (select 1 from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611221400_training_load_v89_participant_session_types.sql'
+              and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611221400_training_load_v89_participant_session_types.sql')) then
+    raise exception 'v89 rollback refused: later migrations are applied' using errcode = '23514';
   end if;
   if exists (select 1 from training.participant_activity_types) or exists (select 1 from training.activity_type_requests) then
-    raise exception 'v88 rollback refused: a session type was changed in the app' using errcode = '23514';
+    raise exception 'v89 rollback refused: a session type was changed in the app' using errcode = '23514';
   end if;
   for i in 1 .. array_length(expected, 1) loop
     if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training' and p.proname = expected[i][1])
        is distinct from expected[i][2] then
-      raise exception 'v88 rollback refused: the body in force of training.% is not v88''s', expected[i][1] using errcode = '23514';
+      raise exception 'v89 rollback refused: the body in force of training.% is not v89''s', expected[i][1] using errcode = '23514';
     end if;
   end loop;
 end $$;
@@ -446,11 +446,13 @@ begin
     if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training' and p.proname = expected[i][1])
        is distinct from expected[i][2] then
-      raise exception 'v88 rollback refused: the restored body of training.% is not v4''s', expected[i][1] using errcode = '23514';
+      raise exception 'v89 rollback refused: the restored body of training.% is not v4''s', expected[i][1] using errcode = '23514';
     end if;
   end loop;
 end $$;
 
+drop trigger activity_field_correction_log_clock on training.activity_field_correction_log;
+drop function training.activity_field_correction_log_clock();
 drop trigger activity_field_correction_log_no_truncate on training.activity_field_correction_log;
 drop trigger activity_field_correction_log_no_delete on training.activity_field_correction_log;
 drop function training.activity_field_correction_log_no_delete();
@@ -472,5 +474,5 @@ drop function training.participant_activity_types_no_truncate();
 drop function training.participant_activity_types_before_write();
 drop function training.session_type_team_decider(uuid, uuid);
 
-delete from public.schema_migrations where migration_name = 'migrations_v2/202611221300_training_load_v88_participant_session_types.sql';
+delete from public.schema_migrations where migration_name = 'migrations_v2/202611221400_training_load_v89_participant_session_types.sql';
 commit;

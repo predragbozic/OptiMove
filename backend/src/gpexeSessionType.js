@@ -96,7 +96,11 @@ export async function resolveSessionType(client, { ownerTeamId, categoryName, so
   // The session's event on the team's ACTIVE source instance: after an ended instance (7g) the writer starts a new one,
   // and the session is imported anew, with a type of its own.
   if (row.activity_id) {
-    const current = row.activity_type_key ?? null;
+    // ST-3: the session's type can now be changed after the import (activityTypeChangeService.js holds the activity
+    // row FOR UPDATE). The row is read again FOR SHARE, so what the import states as the session's type is not one a
+    // type change in flight is about to replace; the change, or this import, waits for the other.
+    const locked = (await client.query(`select activity_type_key from training.activities where id = $1 for share`, [row.activity_id])).rows[0];
+    const current = (locked ?? row).activity_type_key ?? null;
     return { activityTypeKey: current, source: "imported_session", refusal: chosenKey !== undefined && chosenKey !== current ? "session_type_fixed" : null };
   }
   if (chosenKey !== undefined) {

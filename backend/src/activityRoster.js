@@ -385,7 +385,7 @@ export async function loadRosterSnapshot(client, canonicalId) {
   const estimateLabels = await readEstimateLabels(client, facts.filter((f) => f.entryMethod === "estimate").map((f) => f.occasionId));
   const answerNames = new Map([...roster.map((r) => [String(r.athlete_id).toLowerCase(), r.name]), ...[...outsideNames].map(([id, name]) => [id.toLowerCase(), name])]);
   const nameInAnswer = (athleteId) => answerNames.get(String(athleteId).toLowerCase()) ?? null;
-  // ST-3 (v88): each athlete's effective session type and own exception. The mark of a saved estimate is derived, never
+  // ST-3 (v89): each athlete's effective session type and own exception. The mark of a saved estimate is derived, never
   // stored: the type the athlete had when it was saved, when that differs from the type now (plan section 5).
   const types = await readSessionTypeState(client, canonicalId, { withHistory: estimateLabels.size > 0 });
   const typeMarks = [];

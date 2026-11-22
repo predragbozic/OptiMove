@@ -104,7 +104,7 @@ export const GPEXE_TEST_MIGRATIONS = [
   // ST-1 (docs/ai/session-type-plan.md): session types and their owner guard.
   "202611201500_training_load_v85_session_types.sql",
   // ST-3: a session type per athlete, the type change record, the merge and reparent rule.
-  "202611221300_training_load_v88_participant_session_types.sql",
+  "202611221400_training_load_v89_participant_session_types.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to

@@ -1,13 +1,13 @@
--- Read-only POST-CHECK for migration v88 (a session type per athlete, ST-3;
--- migrations_v2/202611221300_training_load_v88_participant_session_types.sql). Run it right after the deploy
--- (docs/runbooks/participant-session-types-v88.md). Changes nothing: run each block as
+-- Read-only POST-CHECK for migration v89 (a session type per athlete, ST-3;
+-- migrations_v2/202611221400_training_load_v89_participant_session_types.sql). Run it right after the deploy
+-- (docs/runbooks/participant-session-types-v89.md). Changes nothing: run each block as
 --   begin transaction read only; <block>; rollback;
 -- Every block returns ok columns that must all be true.
 
--- 1. v88 recorded once with a shaped checksum.
-select (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611221300_training_load_v88_participant_session_types.sql') = 1 as v88_recorded_once,
-       (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202611221300_training_load_v88_participant_session_types.sql') ~ '^[0-9a-f]{64}$' as checksum_shaped,
-       (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202611221300_training_load_v88_participant_session_types.sql') as checksum_for_the_reader;
+-- 1. v89 recorded once with a shaped checksum.
+select (select count(*) from public.schema_migrations where migration_name = 'migrations_v2/202611221400_training_load_v89_participant_session_types.sql') = 1 as v89_recorded_once,
+       (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202611221400_training_load_v89_participant_session_types.sql') ~ '^[0-9a-f]{64}$' as checksum_shaped,
+       (select checksum from public.schema_migrations where migration_name = 'migrations_v2/202611221400_training_load_v89_participant_session_types.sql') as checksum_for_the_reader;
 
 -- 2. The objects: the two tables, the functions, the triggers (every one enabled), the one-live-row index.
 select to_regclass('training.participant_activity_types') is not null as exception_table,
@@ -16,14 +16,15 @@ select to_regclass('training.participant_activity_types') is not null as excepti
        (select count(*) from pg_proc where pronamespace = 'training'::regnamespace
          and proname in ('effective_activity_type', 'session_type_team_decider', 'participant_activity_types_before_write',
                          'participant_activity_types_no_truncate', 'activity_type_requests_before_write',
-                         'activity_field_correction_log_no_delete')) = 6 as functions,
+                         'activity_field_correction_log_no_delete', 'activity_field_correction_log_clock')) = 7 as functions,
        (select count(*) from pg_trigger where not tgisinternal and tgenabled = 'O' and tgname in (
           'participant_activity_types_before_write', 'participant_activity_types_no_truncate', 'activity_type_requests_before_write',
-          'activity_type_requests_no_truncate', 'activity_field_correction_log_no_delete', 'activity_field_correction_log_no_truncate')) = 6 as triggers_enabled;
+          'activity_type_requests_no_truncate', 'activity_field_correction_log_no_delete', 'activity_field_correction_log_no_truncate',
+          'activity_field_correction_log_clock')) = 7 as triggers_enabled;
 
--- 3. The two replaced bodies are v88's; the correction log's key cascades.
-select (select md5(prosrc) from pg_proc where pronamespace = 'training'::regnamespace and proname = 'merge_activity_participants') = 'f6fa45c13fcd11765b9d2eac5b2cd80e' as merge_body_is_v88,
-       (select md5(prosrc) from pg_proc where pronamespace = 'training'::regnamespace and proname = 'reparent_activity_participant') = '0b3f25f34d823af811c8cb824861e4bf' as reparent_body_is_v88,
+-- 3. The two replaced bodies are v89's; the correction log's key cascades.
+select (select md5(prosrc) from pg_proc where pronamespace = 'training'::regnamespace and proname = 'merge_activity_participants') = '8b7fb19320c8d16071a02d765438f1e2' as merge_body_is_v89,
+       (select md5(prosrc) from pg_proc where pronamespace = 'training'::regnamespace and proname = 'reparent_activity_participant') = '7563c29ddae3f5508dbeff1780a2d89e' as reparent_body_is_v89,
        (select confdeltype from pg_constraint where conname = 'activity_field_correction_log_activity_id_fkey'
           and conrelid = 'training.activity_field_correction_log'::regclass) = 'c' as correction_log_key_cascades,
        (select convalidated from pg_constraint where conname = 'activity_field_correction_log_activity_id_fkey'

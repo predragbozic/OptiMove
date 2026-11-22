@@ -1,4 +1,4 @@
-// ST-3 (docs/ai/session-type-plan.md sections 3, 5, 6, 10 and 16; migration v88): a session's type changed after the
+// ST-3 (docs/ai/session-type-plan.md sections 3, 5, 6, 10 and 16; migration v89): a session's type changed after the
 // import, an athlete's own type in a session, the effective type in the estimates (Own average in history with D7,
 // Team average, Copy), the derived mark on a saved estimate, and the merge / reparent rule. The real app over HTTP on a
 // disposable database; the sessions are real imports through the routes. Invented people only.
@@ -805,4 +805,126 @@ test("10. the undo of an imported session whose type was changed and that holds 
   assert.equal(u.status, 200, u.text);
   assert.equal((await q(`select count(*)::int as n from training.activities where id = $1`, [s.activityId]))[0].n, 0);
   assert.deepEqual(await rowsOf(), { requests: 0, corrections: 0, exceptions: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// After the internal reviews
+// ---------------------------------------------------------------------------
+test("11. (database and code review) a raw exception insert that waited for a merge or a reparent is refused: the guard reads the participant again under the activity's lock", async () => {
+  const { team } = await theWorld();
+  const [ana, bea, cil] = team.athleteIds;
+  const insertFor = (c, participantId) => c.query(
+    `insert into training.participant_activity_types (participant_id, activity_type_key, set_by_user_id, set_by_basis) values ($1, 'rtp_session', $2, 'team_coach')`, [participantId, team.coach.id]);
+  const waitsThenRefused = async (label, participantId, change) => {
+    await raw(async (holder) => {
+      await holder.query("begin");
+      await change(holder);
+      await raw(async (writer) => {
+        await writer.query("begin");
+        await asActor(writer, team.coach.id);
+        const pid = (await writer.query("select pg_backend_pid() as pid")).rows[0].pid;
+        const pending = refusal(insertFor(writer, participantId));
+        // The insert is really waiting on the holder's lock before the holder commits.
+        for (let i = 0; ; i += 1) {
+          if ((await q(`select count(*)::int as n from pg_locks where pid = $1 and not granted`, [pid]))[0].n > 0) break;
+          assert.ok(i < 100, `${label}: the insert waits`);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        await holder.query("commit");
+        assert.match(await pending, /^23514 .*not a canonical participant/, label);
+      });
+    });
+    assert.equal((await q(`select count(*)::int as n from training.participant_activity_types where participant_id = $1 and ended_at is null`, [participantId]))[0].n, 0, label);
+  };
+  const a = await manualSession(team, [ana, bea]);
+  const b = await manualSession(team, [ana, cil]);
+  await waitsThenRefused("merge", a.participants[0], (c) => c.query(`select training.merge_activity_participants($1, $2, $3, 'held')`, [a.participants[0], b.participants[0], team.coach.id]));
+  const from = await manualSession(team, [bea, cil]);
+  const to = await manualSession(team, [ana]);
+  await waitsThenRefused("reparent", from.participants[0], (c) => c.query(`select training.reparent_activity_participant($1, $2, $3, 'held')`, [from.participants[0], to.activityId, team.coach.id]));
+});
+
+test("12. (code review) a session merged into another keeps its own type history apart: the canonical session's estimates are not marked by it; a correction through the sanctioned function alone is seen", async () => {
+  const { team, distance } = await theWorld();
+  const [ana, , , dan] = team.athleteIds;
+  const s = await importSession(team, bundleOf({ sessionId: 9840, hour: 15, ids: [101, 102, 104] }));
+  // A hand-made session whose type was changed, then merged whole into the imported one.
+  const merged = await manualSession(team, [ana], D1);
+  assert.equal((await setType(merged, "match", { cookie: team.coach.cookie })).status, 200);
+  assert.equal((await setAthleteType(merged, ana, "rtp_session", { cookie: team.coach.cookie })).status, 200);
+  await q(`select training.merge_activity_participants($1, $2, $3, 'the same session')`, [merged.participants[0], await participantOf(s, ana), team.coach.id]);
+  assert.equal((await q(`select training.resolve_canonical_activity_id($1) as id`, [merged.activityId]))[0].id, s.activityId);
+  const save = () => tapi(`/${s.activityId}/estimates`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), athleteId: dan, method: "team_average" } });
+  const saved = await save();
+  assert.equal(saved.status, 201, saved.text);
+  const danValues = async () => (await rosterAthlete(team, s, dan)).values.filter((v) => v.entryMethod === "estimate");
+  assert.ok((await danValues()).length > 0);
+  assert.ok((await danValues()).every((v) => v.estimate.calculatedWhenType === undefined), "the merged-in session's history marks nothing here");
+  // A type change through the sanctioned function without the route (no request row) is still seen by the mark.
+  await raw(async (c) => {
+    await c.query("begin");
+    await c.query("select pg_sleep(0.05)");
+    await c.query(`select training.correct_confirmed_activity_fields(a.id, a.occurred_local_date, a.started_at, a.ended_at, a.timezone_snapshot, 'match', $2, 'raw')
+                     from training.activities a where a.id = $1`, [s.activityId, team.coach.id]);
+    // The correction is dated by the wall clock, later than the transaction's start (v89's trigger).
+    assert.equal((await c.query(`select changed_at > now() as later from training.activity_field_correction_log where activity_id = $1 order by changed_at desc limit 1`, [s.activityId])).rows[0].later, true);
+    await c.query("commit");
+  });
+  // The pure rule: only the rows of the athlete's own participant in this session date its type; a merged-in
+  // participant's rows (kept for the roster's "ended" mark) do not.
+  const { effectiveTypeAt } = await import("../src/activitySessionTypes.js");
+  const foreign = { activityTypeKey: "rtp_session", setAt: 100, endedAt: 300, endCause: "merge" };
+  const state = { sessionTypeKey: "training_session", sessionChanges: [], byAthlete: new Map([["x", { rows: [foreign], own: [], live: null }]]) };
+  assert.equal(effectiveTypeAt(state, "x", 200), "training_session");
+  state.byAthlete.get("x").own.push(foreign);
+  assert.equal(effectiveTypeAt(state, "x", 200), "rtp_session");
+  assert.equal(effectiveTypeAt(state, "x", 300), "training_session", "an ended row no longer counts at its end");
+  assert.ok((await danValues()).every((v) => v.estimate.calculatedWhenType?.key === "training_session"), JSON.stringify(await danValues()));
+  assert.ok(distance);
+});
+
+test("13. (code review) a COMMIT that never answers is 503 outcome_unknown and the key writes once later; another club's type held FOR UPDATE never delays the refusal; the import reads an imported session's type under a lock", async () => {
+  const { team, full } = await theWorld();
+  await reset(team, full);
+  const k = key();
+  const before = await counts();
+  typeService.setTypeChangeTestHooks({ commit: () => new Promise(() => {}), commitTimeoutMs: 200, checkTimeoutMs: 500 });
+  let r;
+  try {
+    r = await setType(full, "match", { cookie: team.coach.cookie, requestKey: k });
+  } finally {
+    typeService.setTypeChangeTestHooks(null);
+  }
+  assert.deepEqual([r.status, r.body.error], [503, "outcome_unknown"], r.text);
+  assert.deepEqual(await counts(), before, "the connection was destroyed, so nothing committed");
+  r = await setType(full, "match", { cookie: team.coach.cookie, requestKey: k });
+  assert.deepEqual([r.status, r.body.changed], [200, true]);
+  assert.deepEqual((await setType(full, "match", { cookie: team.coach.cookie, requestKey: k })).body, r.body);
+  assert.equal((await counts()).requests, before.requests + 1);
+
+  // Another club's type row, held FOR UPDATE by its own club's work: the refusal comes at once (a plain read, no lock).
+  await raw(async (holder) => {
+    await holder.query("begin");
+    await holder.query(`select 1 from training.activity_types where key = 'c_0000beef_gym' for update`);
+    const started = Date.now();
+    const s = await setType(full, "c_0000beef_gym", { cookie: team.coach.cookie });
+    const a = await setAthleteType(full, team.athleteIds[ANA], "c_0000beef_gym", { cookie: team.coach.cookie });
+    assert.deepEqual([s.status, s.body.error, a.status, a.body.error], [409, "session_type_not_offered", 409, "session_type_not_offered"]);
+    assert.ok(Date.now() - started < 3000, "neither waited for the foreign row (the lock timeout is 5 s)");
+  });
+
+  // ST-2's resolver: the imported session's type is read FOR SHARE, so it waits for a type change in flight.
+  const { resolveSessionType } = await import("../src/gpexeSessionType.js");
+  await raw(async (holder) => {
+    await holder.query("begin");
+    await holder.query(`select 1 from training.activities where id = $1 for update`, [full.activityId]);
+    await raw(async (reader) => {
+      await reader.query("begin");
+      await reader.query("set local lock_timeout = '300ms'");
+      assert.match(await refusal(resolveSessionType(reader, { ownerTeamId: team.teamId, categoryName: "FULL TRAINING", sourceExternalId: "team_session:9820" })), /^55P03 /);
+    });
+  });
+  const free = await raw((reader) => resolveSessionType(reader, { ownerTeamId: team.teamId, categoryName: "FULL TRAINING", sourceExternalId: "team_session:9820" }));
+  assert.deepEqual([free.activityTypeKey, free.source], ["match", "imported_session"]);
+  await reset(team, full);
 });
