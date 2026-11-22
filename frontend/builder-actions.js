@@ -288,6 +288,11 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
+      // The library's "Assign to athletes" of a weekly program opens it here
+      // with the dated assign (builder-weekly-template-actions.js).
+      if (action.dataset.openWeeklyAssign === "true" && state.builder.draft?.plan?.templateKind === "weekly") {
+        state.builder.weeklyAssign = { planId: state.builder.draft.plan.id, open: true, fromLibrary: true, startDate: localDateIso(), athleteIds: [], requestId: "", sending: false, conflict: null, error: "", result: null };
+      }
       // A stale "Assigned to ..." banner from whatever was open before must
       // not follow the coach into a different plan (including - the common
       // case right after an assign - the newly assigned Specific Program
@@ -304,6 +309,11 @@ export async function handleBuilderPlanAction(action, handlers) {
     } catch (error) {
       action.disabled = false;
       if (label) label.textContent = originalLabel;
+      // The library's "Assign to athletes" of a weekly program the coach may
+      // not open in the Builder: its own sentence, not the batch one.
+      if (isNotFoundError(error) && action.dataset.openWeeklyAssign === "true") {
+        throw new Error("You can't open this weekly program in the Builder, so it can't be assigned from here. Ask its owner, or make a copy and assign the copy.");
+      }
       if (isNotFoundError(error)) {
         forgetBatchPlan(planId);
         state.builder.error = "That athlete copy is no longer available in this group.";

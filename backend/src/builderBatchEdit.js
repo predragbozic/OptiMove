@@ -417,7 +417,18 @@ export async function blockedSessionsOf(client, planId, pick, change) {
   return blockedSessions(client, tree, changes);
 }
 
-async function blockedSessions(client, before, changes) {
+// Weekly template assign (docs/ai/weekly-program-template-plan.md): the same
+// check, each blocked entry also naming its session id (the caller keeps those
+// sessions in place). The 409 bodies of the other callers are unchanged.
+export async function blockedSessionIdsOf(client, planId, pick, change) {
+  const tree = await loadWeeklyTree(client, planId);
+  if (!tree) return [];
+  const changes = tree.sessions.filter(pick).map((session) => ({ session, change }))
+    .sort((x, y) => (String(x.session.id) < String(y.session.id) ? -1 : 1));
+  return blockedSessions(client, tree, changes, { withIds: true });
+}
+
+async function blockedSessions(client, before, changes, { withIds = false } = {}) {
   if (!changes.length) return [];
   await client.query(
     "select id from plans.plan_sessions where id = any($1::uuid[]) order by id for update",
@@ -444,7 +455,7 @@ async function blockedSessions(client, before, changes) {
     if (results.has(String(session.id))) reasons.push("has_results");
     if (linked.has([sourceSlotKey(session), String(session.logical_session_id)].join("#")) || unnamed.has(sourceSlotKey(session))) reasons.push("linked_to_event");
     if (reasons.length) {
-      blocked.push({ name: session.name || "", day: dateString(session.day_date), amPm: session.am_pm || "", bta: session.bta || "", change, reasons });
+      blocked.push({ ...(withIds ? { sessionId: String(session.id) } : {}), name: session.name || "", day: dateString(session.day_date), amPm: session.am_pm || "", bta: session.bta || "", change, reasons });
     }
   }
   if (batchEditTestHooks.afterSourceLocks) await batchEditTestHooks.afterSourceLocks({ client, blocked });

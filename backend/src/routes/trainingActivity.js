@@ -31,6 +31,7 @@ import { SourceMetricMappingError } from "../sourceMetricAccess.js";
 import {
   clearAthleteDecision, completeRoster, decideAthlete, decideAthletesBulk, reopenRoster,
 } from "../activityRosterCommands.js";
+import { changeSessionType, setAthleteSessionType } from "../activityTypeChangeService.js";
 
 const router = Router();
 
@@ -309,6 +310,14 @@ router.post("/:activityId/roster/complete", rosterCommandRoute((ctx, activityId,
   completeRoster(ctx, activityId, req.body)));
 router.post("/:activityId/roster/reopen", rosterCommandRoute((ctx, activityId, req) =>
   reopenRoster(ctx, activityId, req.body)));
+
+// ST-3 (activityTypeChangeService.js): the session's type changed after the import, and an athlete's own type in the
+// session. The roster command's shape: the same 404 for everything outside the active-workspace path, stable codes, a
+// bounded COMMIT (503 outcome_unknown; the same requestKey is safe to repeat).
+router.post("/:activityId/type", rosterCommandRoute((ctx, activityId, req) =>
+  changeSessionType(ctx, activityId, req.body)));
+router.put("/:activityId/roster/:athleteId/type", rosterCommandRoute((ctx, activityId, req) =>
+  setAthleteSessionType(ctx, activityId, req.params.athleteId, req.body)));
 
 // Estimated values for an athlete without GPS data (phase 5b, 6b-B; metricEstimateService.js). Behind ESTIMATES_ENABLED:
 // off, both are the identical 404. The proposal reads only; the save is the roster command's shape (stable codes, a bounded
