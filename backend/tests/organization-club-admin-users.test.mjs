@@ -81,7 +81,9 @@ async function world() {
   // Accounts adminA created: one without any role (visible today), one whose only role is in club B (never visible in A).
   w.ownUnassigned = await person("ownUnassigned");
   w.ownInB = await person("ownInB", (id) => F.grantTeam(id, w.TB));
-  await k.query(`update public.users set created_by_user_id = $1 where id = any($2::uuid[])`, [w.adminA.id, [w.ownUnassigned.id, w.ownInB.id]]);
+  // adminA's own creation that left A's team and coaches in B now: an older rule (own creation) returns it.
+  w.ownMoved = await person("ownMoved", async (id) => { await F.grantTeam(id, w.TA2, false); await F.grantTeam(id, w.TB); });
+  await k.query(`update public.users set created_by_user_id = $1 where id = any($2::uuid[])`, [w.adminA.id, [w.ownUnassigned.id, w.ownInB.id, w.ownMoved.id]]);
   w.revokedAdminA = await person("revokedAdminA", (id) => F.grantClub(id, w.A, false));
   return w;
 }
@@ -91,7 +93,7 @@ test("1. a club's admin in its club's workspace sees every account with an activ
   const body = await org(w.adminA, "club", w.A);
   const before = [w.adminA, w.coAdminA, w.dualAdmin, w.paInA, w.ownUnassigned]; // what the old rules already showed
   const added = [w.coachA1, w.coachA2, w.dual, w.coachA1FormerA2, w.paCoachA, w.athleteCoachA];
-  const never = [w.formerCoachA, w.formerAdminA, w.movedCoach, w.movedAdmin, w.coachB, w.adminB, w.paOutside, w.pureAthlete, w.nobody, w.ownInB, w.revokedAdminA];
+  const never = [w.formerCoachA, w.formerAdminA, w.movedCoach, w.movedAdmin, w.coachB, w.adminB, w.paOutside, w.pureAthlete, w.nobody, w.ownInB, w.ownMoved, w.revokedAdminA];
   assert.deepEqual(ids(body), new Set([...before, ...added].map((p) => p.id)));
   for (const p of never) assert.equal(row(body, p), undefined, "never visible");
 });
@@ -134,6 +136,17 @@ test("3. former members (only an inactive role in the club) stay hidden: the swi
   assert.ok(row(pa, w.formerCoachA) && row(pa, w.formerAdminA));
 });
 
+test("8. a former member stays hidden even when an older rule returns it (own creation, a club the viewer shares)", async () => {
+  const w = W;
+  const a = await org(w.adminA, "club", w.A);
+  assert.equal(row(a, w.ownMoved), undefined, "adminA's own creation, now active only in B, with an inactive role in A");
+  const dualInA = await org(w.dualAdmin, "club", w.A);
+  assert.equal(row(dualInA, w.movedAdmin), undefined, "a former admin of A, returned by the shared-club rule through B");
+  assert.equal(row(dualInA, w.movedCoach), undefined);
+  const dualInB = await org(w.dualAdmin, "club", w.B);
+  assert.ok(row(dualInB, w.movedAdmin) && row(dualInB, w.movedCoach), "both are B's members");
+});
+
 test("4. nothing of the account actions opens: canManageLogin only for the admin's own creations, the manageable scopes unchanged", async () => {
   const w = W;
   const body = await org(w.adminA, "club", w.A);
@@ -152,7 +165,7 @@ test("4. nothing of the account actions opens: canManageLogin only for the admin
 test("5. another club stays closed: B's admin in B's workspace sees B's people, never A's; a two-club admin sees per workspace", async () => {
   const w = W;
   const b = await org(w.adminB, "club", w.B);
-  assert.deepEqual(ids(b), new Set([w.adminB, w.dual, w.dualAdmin, w.coachB, w.ownInB, w.movedCoach, w.movedAdmin].map((p) => p.id)), "ownInB coaches B's team, so it is B's member");
+  assert.deepEqual(ids(b), new Set([w.adminB, w.dual, w.dualAdmin, w.coachB, w.ownInB, w.ownMoved, w.movedCoach, w.movedAdmin].map((p) => p.id)), "ownInB and ownMoved coach B's team, so they are B's members");
   for (const p of [w.coachA1, w.adminA, w.athleteCoachA]) assert.equal(row(b, p), undefined);
   assert.deepEqual(row(b, w.dual).clubRoles.map((r) => r.clubId), [w.B]);
   assert.deepEqual(row(b, w.dual).teamRoles, [], "dual's team role in A is not shown in B");

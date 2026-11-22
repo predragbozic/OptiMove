@@ -350,8 +350,15 @@ router.get("/", async (req, res, next) => {
     const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
     // After the workspace filter, which decides on the full rows (an account whose only active role is in another club
     // must never become "unassigned" here and pass as the viewer's own creation).
+    // The older visibility rules (own creations, shared clubs and teams) can return a former member whose tie to this club
+    // is only an inactive role, and the workspace filter matches a club by id alone: the member rule is applied again here
+    // on the full rows, then the rows are narrowed.
     const memberClubId = clubMembersViewClubId(req, activeWorkspace);
-    if (memberClubId) scoped.users = scoped.users.map((row) => narrowUserRowToClub(row, memberClubId));
+    if (memberClubId) {
+      scoped.users = scoped.users
+        .filter((row) => clubMemberRowVisible(row, memberClubId, req.user.id))
+        .map((row) => narrowUserRowToClub(row, memberClubId));
+    }
     const scopedArchivedTeams = archivedTeamsForWorkspace(activeWorkspace, archivedTeams);
     // Independent of each other - neither reads the other's result - so they
     // run concurrently instead of back-to-back. loadJoinApplicationsForWorkspace
@@ -3363,6 +3370,17 @@ function clubMembersViewClubId(req, workspace) {
   if (isPlatformAdministrator(req.authz)) return null;
   if (workspace?.type !== "club" || !workspace.scopeId) return null;
   return can(req.authz, "staff.assign", clubScope(workspace.scopeId)) ? String(workspace.scopeId) : null;
+}
+
+// Whether a club's admin sees this full row in its club's workspace: its own account, an own creation that holds no active
+// club or team role anywhere (today's rule, unchanged), or a member of the club - a club role in it or a team role on one of
+// its teams, active only while CLUB_MEMBERS_ACTIVE_ROLES_ONLY is true.
+function clubMemberRowVisible(row, clubId, actorUserId) {
+  if (String(row.id) === String(actorUserId)) return true;
+  const counts = (r) => String(r.clubId) === clubId && (r.isActive || !CLUB_MEMBERS_ACTIVE_ROLES_ONLY);
+  if ((row.clubRoles || []).some(counts) || (row.teamRoles || []).some(counts)) return true;
+  const hasAnyActiveScopedRole = (row.clubRoles || []).some((r) => r.isActive) || (row.teamRoles || []).some((r) => r.isActive);
+  return Boolean(row.canManageLogin) && !hasAnyActiveScopedRole;
 }
 
 // What a club's admin is shown of an account in its club's workspace: its roles in this club and this club's teams only
