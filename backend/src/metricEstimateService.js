@@ -32,7 +32,10 @@ import { boundedText } from "./metricTextRules.js";
 import { comparableSessionTypes, effectiveTypeOf, readSessionTypeState, sessionTypeLabels } from "./activitySessionTypes.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average", "scale_recording"]);
+export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average", "scale_recording", "position_average"]);
+// v87: the position average - the mean of the measured values of the athletes of the same position in this session (the
+// team average's rule: at least 3 athletes, no minutes).
+export const POSITION_AVERAGE_MIN_ATHLETES = 3;
 // The proportional method's history (owner's answer 3): the last 5 measured sessions of the same category, within 90 days,
 // at least 3.
 export const PROPORTIONAL_SESSIONS = 5;
@@ -244,6 +247,43 @@ function teamAverage(ctx) {
   });
 }
 
+// v87: the positions in force, in the team's club, of the target athlete and of the session's roster. Read in the
+// caller's transaction (the proposal's snapshot, or the save's). Without v87 (a database built before it) the method is
+// not available, never replaced by another.
+export async function loadPositions(client, ctx) {
+  const installed = (await client.query(`select to_regclass('public.athlete_positions') is not null as ok`)).rows[0].ok;
+  if (!installed) return { installed: false, target: null, byAthlete: new Map() };
+  const ids = ctx.roster.map((a) => a.athleteId);
+  if (!ids.includes(ctx.athleteId)) ids.push(ctx.athleteId);
+  const rows = (await client.query(
+    `select a.id as athlete_id, p.id as position_id, coalesce(o.name, p.name) as name
+       from unnest($1::uuid[]) as a(id)
+       join public.sport_positions p on p.id = public.athlete_position_in_force(a.id, $2)
+       -- The club's own name for a default position.
+       left join public.club_position_overrides o on o.position_id = p.id and o.club_id = $2`,
+    [ids, ctx.team.club_id],
+  )).rows;
+  const byAthlete = new Map(rows.map((r) => [String(r.athlete_id), String(r.position_id)]));
+  const mine = rows.find((r) => String(r.athlete_id) === ctx.athleteId) ?? null;
+  return { installed: true, target: mine ? { id: String(mine.position_id), name: mine.name } : null, byAthlete };
+}
+
+function positionAverage(ctx, positions) {
+  const estimable = ctx.variables.filter((v) => v.estimable);
+  const unavailable = (reason) => estimable.map((v) => ({ variable: v, value: null, reason, basis: null }));
+  if (!positions.installed) return unavailable("positions_not_available");
+  if (!positions.target) return unavailable("no_position");
+  const positionId = positions.target.id;
+  const peers = new Set(ctx.roster.filter((a) => a.athleteId !== ctx.athleteId && positions.byAthlete.get(a.athleteId) === positionId).map((a) => a.athleteId));
+  return estimable.map((v) => {
+    const values = ctx.measured.filter((m) => m.def === v.metricDefinitionId && peers.has(m.athleteId) && sameUnit(m.unit, v.unit));
+    const athletes = new Set(values.map((m) => m.athleteId)).size;
+    if (athletes < POSITION_AVERAGE_MIN_ATHLETES) return { variable: v, value: null, reason: "too_few_athletes_in_position", basis: null };
+    const mean = values.reduce((s, m) => s + m.value, 0) / values.length;
+    return { variable: v, value: round(mean, 3), reason: null, basis: { athletes, positionId } };
+  });
+}
+
 // Roster athletes with a measured value of an estimable variable, apart from the target.
 function measuredAthletes(ctx) {
   const estimable = new Set(ctx.variables.filter((v) => v.estimable).map((v) => v.metricDefinitionId));
@@ -269,7 +309,7 @@ function copyAthlete(ctx, sourceAthleteId) {
 // The type of a past session as the athlete did it (ST-3, plan section 6): the athlete's effective type there as it
 // stands now - an exception in that session, otherwise that session's type (a correction fixes the record, so a past
 // session corrected to another type leaves this average). A past participant without an activity participant row falls
-// back to the session's type. PAST_SESSION_TYPE alone is the rule of a world without v88.
+// back to the session's type. PAST_SESSION_TYPE alone is the rule of a world without v89.
 const PAST_SESSION_TYPE = `(select a.activity_type_key from training.activity_metric_event_links l join training.activities a on a.id = l.activity_id
                              where l.metric_event_id = e.id and l.link_status = 'confirmed' order by l.activity_id limit 1)`;
 const PAST_EFFECTIVE_TYPE = `coalesce(
@@ -440,6 +480,7 @@ export async function getEstimateProposal(ctx, activityId, query) {
       copy = methodView(copyAthlete(ectx, input.sourceAthleteId), "nothing_to_estimate");
     }
     const own = await proportional(client, ectx, minutes);
+    const positions = await loadPositions(client, ectx);
     // The kind of session Own average compares with: the athlete's effective type here (its key and label) and the set
     // of types that count toward it (D7), or null without a type.
     const typeKey = ectx.targetType ?? null;
@@ -461,6 +502,8 @@ export async function getEstimateProposal(ctx, activityId, query) {
           otherTypeSources: others.map((o) => ({ ...o, activityTypeLabel: typeLabels.get(o.activityTypeKey) ?? null })),
         },
         team_average: methodView(teamAverage(ectx), "nothing_to_estimate"),
+        // v87: the athletes of the same position; not available with the reason (no position, too few athletes of it).
+        position_average: { ...methodView(positionAverage(ectx, positions), "nothing_to_estimate"), position: positions.target },
         // MT-D: only where a scale was chosen before the import; otherwise not available with the reason.
         scale_recording: await scaleRecording(client, ectx).then(
           (entries) => methodView(entries, "nothing_to_estimate"),
@@ -640,6 +683,11 @@ export async function saveEstimate(ctx, activityId, body) {
       entries = await scaleRecording(client, ectx);
     } else if (input.method === "team_average") {
       entries = teamAverage(ectx);
+    } else if (input.method === "position_average") {
+      const positions = await loadPositions(client, ectx);
+      if (!positions.installed) throw conflict("positions_not_available", "Positions are not available.");
+      if (!positions.target) throw conflict("no_position", "This athlete has no position. Set one in Settings → Athletes.");
+      entries = positionAverage(ectx, positions);
     } else if (input.method === "copy_athlete") {
       // A stale screen naming an athlete who did another type: refused, nothing written (plan section 6).
       if (otherTypeSources(ectx).some((s) => s.athleteId === input.sourceAthleteId)) {

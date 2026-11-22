@@ -3,7 +3,8 @@
 // nothing of it crosses a workspace); it exists only while the plan was opened from the calendar. Moving to
 // another athlete pushes NO history entry (Q6): it replaces the athlete, the week and day are kept, and the open
 // node path is rebuilt in the other athlete's own plan (weekly-k6.js).
-import { buildCentralCalendarSwitcherModel } from "./central-calendar-switcher.js";
+import { buildCentralCalendarSwitcherModel, centralCalendarEventAthletes } from "./central-calendar-switcher.js";
+import { readAthleteStripHidden, writeAthleteStripHidden } from "./athlete-strip-pref.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { captureWeeklyPlace, matchWeeklyPlace, renderWeeklySwitcherHtml, slotPathFor, slotWords, weeklyDayItems } from "./weekly-k6.js";
@@ -51,6 +52,39 @@ export function weeklyFlowFromCalendar(athleteUuid) {
   return { keys, currentKey: athleteUuid, eventKey: "", eventTitle: "", slot: null, notInKeys: [], notInLine: "", hiddenCount: 0, line: "", kept: "", busy: false };
 }
 
+// K6 follow-up (PR2): a flow whose list is NOT the calendar's strip - the athletes of one panel item on one day, or
+// Coach Home's athletes with a session on the shown day. The list is only ever what that screen already shows the coach,
+// intersected with the roster (`state.athletes`), so no athlete the roster does not return can be in it. `listLabel`
+// says what the list is ("in this event", "planned on this day", "with a session on this day"); `origin` is where
+// *Back* goes ("calendar" by default, "home"). Returns null when the chosen athlete is not in the roster list.
+function listFlow(keys, currentKey, { listLabel, origin, scopeNote = "" }) {
+  const roster = new Set(rosterRows().map((row) => String(row.athlete_uuid)));
+  const kept = [...new Set((keys || []).map(String))].filter((key) => roster.has(key));
+  if (!kept.includes(String(currentKey))) return null;
+  return { keys: kept, currentKey: String(currentKey), eventKey: "", eventTitle: "", slot: null, notInKeys: [], notInLine: "", hiddenCount: 0, line: "", kept: "", busy: false, listLabel, origin, scopeNote };
+}
+
+// An athlete's row in the open panel: the switcher holds the athletes of THAT item on THAT day (the panel's own list,
+// roster-intersected as See each athlete does). Without such a list the calendar's own strip, as before.
+export function weeklyFlowFromPanel(athleteUuid, item) {
+  const cal = state.centralCalendar;
+  const event = centralCalendarEventAthletes(cal);
+  const kind = item?.kind;
+  const listLabel = kind === "event" ? "in this event" : kind === "activity" ? "recorded in this session" : "planned on this day";
+  const scopeNote = kind === "event" ? "Only the athletes of this event are listed. Back shows everyone." : "Only the athletes of this item on this day are listed. Back shows everyone.";
+  const flow = event ? listFlow(event.listed.filter((entry) => entry.targeted).map((entry) => entry.key), athleteUuid, { listLabel, origin: "calendar", scopeNote }) : null;
+  return flow || weeklyFlowFromCalendar(athleteUuid);
+}
+
+// Coach Home's shown day: the athletes with a session that day (`keys`, already the day's rows). One athlete alone
+// needs no switcher (null).
+export function weeklyFlowFromHome(keys, athleteUuid) {
+  const flow = listFlow(keys, athleteUuid, { listLabel: "with a session on this day", origin: "home", scopeNote: "Only the athletes with a session on this day are listed. Back shows everyone." });
+  return flow && flow.keys.length > 1 ? flow : null;
+}
+
+const fixedList = (flow) => Boolean(flow.eventKey || flow.listLabel);
+
 function stripItems(flow, cal) {
   const model = buildCentralCalendarSwitcherModel(cal);
   const pairs = cal.switcher?.org?.status === "ready" ? cal.switcher.org.pairs : [];
@@ -59,7 +93,7 @@ function stripItems(flow, cal) {
   for (const key of flow.keys) {
     const row = rowByUuid(key);
     if (!row) continue;
-    const dot = model?.type === "club" && !flow.eventKey ? pairs.find((pair) => pair.athleteUuid === key) : null;
+    const dot = model?.type === "club" && !fixedList(flow) ? pairs.find((pair) => pair.athleteUuid === key) : null;
     items.push({
       key, name: String(row.athlete || "Athlete"), imageUrl: rowImage(row),
       notInSession: Boolean(flow.eventKey) && flow.notInKeys.includes(key),
@@ -70,7 +104,7 @@ function stripItems(flow, cal) {
 }
 
 function teamLabelFor(flow, cal, model) {
-  if (flow.eventKey || model?.type !== "club") return "";
+  if (fixedList(flow) || model?.type !== "club") return "";
   const teams = cal.data?.teams || [];
   const chosen = (cal.filters?.teamIds || [])[0] || "";
   if (chosen) return teams.find((team) => String(team.teamId) === chosen)?.name || "";
@@ -79,10 +113,24 @@ function teamLabelFor(flow, cal, model) {
 }
 
 function groupsHtml(flow, cal, model) {
-  if (flow.eventKey || model?.type !== "club" || (cal.data?.teams || []).length < 2) return "";
+  if (fixedList(flow) || model?.type !== "club" || (cal.data?.teams || []).length < 2) return "";
   const chosen = (cal.filters?.teamIds || [])[0] || "";
   const chip = (teamId, label, active) => `<button type="button" class="cc-chip${active ? " is-active" : ""}" data-action="weekly-k6-group"${teamId ? ` data-team-id="${escapeAttr(teamId)}"` : ""} aria-pressed="${active ? "true" : "false"}"><span class="cc-chip-label">${escapeHtml(label)}</span></button>`;
   return `<div class="cc-chip-row" role="group" aria-label="Groups"><span class="cc-chip-row-label">Groups</span>${chip("", "All groups", !chosen)}${cal.data.teams.map((team) => chip(String(team.teamId), team.name, chosen === String(team.teamId))).join("")}</div>`;
+}
+
+// K6 follow-up: hide / show the strip, remembered per user. Read once per flow from the preference.
+function weeklyStripHidden(flow) {
+  if (typeof flow.stripHidden !== "boolean") flow.stripHidden = readAthleteStripHidden("weekly", state.currentUser?.id);
+  return flow.stripHidden;
+}
+
+export function toggleWeeklyStrip() {
+  const flow = activeWeeklyFlow();
+  if (!flow) return false;
+  flow.stripHidden = !weeklyStripHidden(flow);
+  writeAthleteStripHidden("weekly", state.currentUser?.id, flow.stripHidden);
+  return true;
 }
 
 // The header drawn above the week and above every node view; "" when there is no flow.
@@ -93,7 +141,7 @@ export function renderWeeklyK6Html({ noPlan = false } = {}) {
   const { items, model } = stripItems(flow, cal);
   const hidden = flow.hiddenCount > 0 ? `${flow.hiddenCount} athlete${flow.hiddenCount === 1 ? "" : "s"} of this event ${flow.hiddenCount === 1 ? "is" : "are"} not in your roster.` : "";
   return renderWeeklySwitcherHtml({
-    flow, items, currentKey: flow.currentKey, groupsHtml: groupsHtml(flow, cal, model), teamLabel: teamLabelFor(flow, cal, model), hiddenNote: hidden, noPlan,
+    flow, items, currentKey: flow.currentKey, groupsHtml: groupsHtml(flow, cal, model), teamLabel: teamLabelFor(flow, cal, model), hiddenNote: hidden, noPlan, stripHidden: weeklyStripHidden(flow),
   });
 }
 
@@ -176,7 +224,7 @@ function eventPlace(flow, targetKey, dayItemsB, { day, bName, pathDepth, place, 
 export async function chooseWeeklyGroup(teamId, deps) {
   const cal = state.centralCalendar;
   const flow = activeWeeklyFlow();
-  if (!flow || flow.busy || flow.eventKey) return false;
+  if (!flow || flow.busy || fixedList(flow)) return false;
   const teams = cal.data?.teams || [];
   if (teamId && !teams.some((team) => String(team.teamId) === teamId)) return false;
   cal.filters.teamIds = teamId ? [teamId] : [];

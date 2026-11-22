@@ -144,6 +144,25 @@ test("3b. a create refused 409 (a plan made meanwhile) reads the plans again and
   assert.match(state.centralCalendar.k3.sheet.text, /1 athlete has no plan for this week\. 1 already has one: Ana Example\./);
 });
 
+test("3c. a create answered 409 try_again (the plan is busy) is shown once and not sent again", async () => {
+  let creates = 0;
+  installFetchMock((call) => {
+    if (call.url.startsWith("/api/builder/weekly-plans")) {
+      return { status: 200, body: { athletes: A.slice(0, 2).map((athleteId) => ({ athleteId, plannable: true, plan: null })) } };
+    }
+    if (call.url === "/api/builder/plans") {
+      creates += 1;
+      if (creates > 3) throw new Error("the create was sent again and again");
+      return { status: 409, body: { error: "The plan is busy. Nothing was saved. Try again.", code: "try_again" } };
+    }
+    return { status: 404, body: {} };
+  });
+  await k3.k3StartFromPanel(state.centralCalendar, EVENT, { openBuilder: () => assert.fail("not opened") }, () => {});
+  assert.equal(creates, 1, "one create");
+  assert.equal(state.centralCalendar.k3.busy, false);
+  assert.ok(state.centralCalendar.k3.error, "one sentence is shown");
+});
+
 // The event as GET /api/calendar/events/:id gives it to its manager (its revision).
 let eventRevision = 3;
 const eventRead = (call) => (call.url === "/api/calendar/events/e1" && (call.method || "GET") === "GET" ? { status: 200, body: { event: { id: "e1", revision: eventRevision, status: "planned" } } } : null);

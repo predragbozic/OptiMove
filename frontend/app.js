@@ -84,19 +84,21 @@ import {
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
-import { coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
+import { coachHomeDayAthleteKeys, coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsResetForWorkspaceChange, checkBuilderEventsResult, chooseSessionEvent, chooseWholeDay, loadBuilderEvents, setBuilderEventsRender } from "./builder-events-row.js";
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
-import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, weeklyBackToCalendar } from "./weekly-k6-actions.js";
+import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, toggleWeeklyStrip, weeklyBackToCalendar, weeklyFlowFromHome } from "./weekly-k6-actions.js";
 import { slotPathFor, weeklyDayItems } from "./weekly-k6.js";
+import { findExistingWeeklyPlan, openExistingWeeklyPlan, renderWeeklyExistingHtml } from "./weekly-open-existing.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
 import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { handleWeeklyTemplateAction } from "./builder-weekly-template-actions.js";
+import { handleSaveWeeksAction, updateSaveWeeksName } from "./builder-weekly-save-actions.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { enterMyTraining, handleMyTrainingAction, handleMyTrainingBack, refreshMyTrainingEntry } from "./my-training-actions.js";
@@ -218,6 +220,8 @@ import {
   loadTaxonomyData,
   submitTaxonomyForm,
 } from "./taxonomy-actions.js";
+import { loadPositions, resetPositions } from "./positions-data.js";
+import { handlePositionAction, submitPositionForm } from "./positions-actions.js";
 import {
   closeNotificationsIfOutside,
   handleNotificationAction,
@@ -324,6 +328,8 @@ import { installExerciseHeaderReveal } from "./exercise-header-reveal.js";
 import { markCurrentTab, revealActiveTab } from "./om-tabs.js";
 
 let inboxPollId = null;
+// The plan "Open that draft" opens after a refused weekly create (weekly-open-existing.js); never read from the DOM.
+let weeklyExistingPlan = null;
 // The Exercise Library's top bar and search row brought back by a pull up
 // (exercise-header-reveal.js); kept in step with the screen by renderTabs().
 let exerciseHeaderReveal = null;
@@ -947,6 +953,13 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const positionForm = event.target.closest("[data-position-form]");
+  if (positionForm) {
+    event.preventDefault();
+    await submitPositionForm(positionForm, { renderOrganizationPanel });
+    return;
+  }
+
   const taxonomyForm = event.target.closest("[data-taxonomy-form]");
   if (taxonomyForm) {
     event.preventDefault();
@@ -1372,6 +1385,11 @@ function handleContentInput(event) {
   }
 
   // Weekly program templates (builder-weekly-template-actions.js).
+  const twSaveName = event.target.closest("[data-tw-save-name]");
+  if (twSaveName) {
+    updateSaveWeeksName(twSaveName);
+    return;
+  }
   const templateKindInput = event.target.closest("[data-builder-template-kind]");
   if (templateKindInput) {
     state.builder.createTemplateKind = templateKindInput.value;
@@ -3316,16 +3334,21 @@ async function handleContentClick(event) {
     await switchWeeklyAthlete(action.dataset.athleteKey || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
     return;
   }
+  if (type === "weekly-k6-strip-toggle") {
+    if (toggleWeeklyStrip()) renderCurrentNode();
+    return;
+  }
   if (type === "weekly-k6-group") {
     await chooseWeeklyGroup(action.dataset.teamId || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
     return;
   }
   if (type === "weekly-back-to-calendar") {
+    const toHome = state.centralCalendar.weeklyFlow?.origin === "home";
     weeklyBackToCalendar({
       renderCurrent: () => {},
       goBack: () => window.history.back(),
       fallback: () => {
-        state.activeTab = "central-calendar";
+        state.activeTab = toHome ? "coach-home" : "central-calendar";
         renderTabs();
         renderLibraryNav();
         void Promise.resolve(loadActiveTab()).catch(() => {});
@@ -3424,6 +3447,10 @@ async function handleContentClick(event) {
     renderAthleteList();
     renderTabs();
     renderLibraryNav();
+    // PR2: a row of Home's day list opens the plan with the day's athletes in the switcher (back goes to Home).
+    state.centralCalendar.weeklyFlow = action.dataset.mode === "day" && /^\d{4}-\d{2}-\d{2}$/.test(action.dataset.date || "")
+      ? weeklyFlowFromHome(coachHomeDayAthleteKeys(coachHomeRows, state.coachHome, action.dataset.date), row.athleteUuid || "")
+      : null;
     if (action.dataset.mode === "day") await openWeeklyPlanOnDate(/^\d{4}-\d{2}-\d{2}$/.test(action.dataset.date || "") ? action.dataset.date : localDateIso());
     else await loadWeekly();
     return;
@@ -3536,6 +3563,32 @@ async function handleContentClick(event) {
     } catch (error) {
       state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart });
       renderBuilder();
+      // The week already holds a plan: offer to open it when the weekly-plans read returns one the caller may open.
+      const existing = error?.status === 409 && athleteId ? await findExistingWeeklyPlan(athleteId, weekStart) : null;
+      if (existing && state.activeTab === "builder" && state.builder?.weekStart === weekStart) {
+        weeklyExistingPlan = { ...existing, message: error?.message };
+        els.content.insertAdjacentHTML("afterbegin", renderWeeklyExistingHtml(error?.message, existing));
+      } else {
+        renderBuilderError(error);
+      }
+    }
+    return;
+  }
+  if (type === "weekly-open-existing") {
+    const existing = weeklyExistingPlan;
+    if (!existing || String(action.dataset.planId) !== existing.planId || action.disabled) return;
+    action.disabled = true;
+    setLoading("Opening weekly plan...");
+    try {
+      const draft = await openExistingWeeklyPlan(existing);
+      state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart: existing.weekStart, draft });
+      weeklyExistingPlan = null;
+      await loadBuilder();
+    } catch (error) {
+      // setLoading replaced the screen: draw it again, then the original message with its button (a retry), then why.
+      state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart: existing.weekStart });
+      renderBuilder();
+      els.content.insertAdjacentHTML("afterbegin", renderWeeklyExistingHtml(existing.message, existing));
       renderBuilderError(error);
     }
     return;
@@ -3642,6 +3695,7 @@ async function handleContentClick(event) {
     renderOrganizationPanel,
   })) return;
   if (await handleTaxonomyAction(action, { renderOrganizationPanel })) return;
+  if (await handlePositionAction(action, { renderOrganizationPanel })) return;
   if (await handleIconGalleryAction(action)) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   if (await handleTestsAction(action, { renderTests: renderActiveTestsSurface })) return;
@@ -3818,6 +3872,11 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     if (state.organization.section === "presets" && !state.taxonomy.loaded) {
       await loadTaxonomyData();
     }
+    // v87: positions for Tags & Presets and for an athlete's Edit window; read once, then after every write.
+    if ((state.organization.section === "presets" || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
+        && !state.positions.loaded && !state.positions.loading && !state.positions.error) {
+      void loadPositions().then(() => renderOrganizationPanel({ refresh: false }));
+    }
     // A team is chosen but its data is not loaded yet (the tab was opened
     // again after a workspace or Settings reload): read it once. Every write
     // on the screen reloads the team itself, so this never repeats.
@@ -3926,6 +3985,8 @@ async function onWorkspaceChanged() {
   clearAppHistoryEntries();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
+  // v87: the positions list and the athletes' positions are the workspace's own.
+  resetPositions();
   resetRolesForWorkspaceChange();
   resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;
@@ -4194,6 +4255,8 @@ function renderWeeklyRoot(data) {
     renderPlanMoreMenu,
     weekSelectorMarkup,
   });
+  // K6 follow-up: a repaint redraws the pills at scroll 0, so the chosen pill is brought into view again.
+  athleteSwitcherScrollIntoView(els.content);
   if (state.pendingScrollDate) {
     const date = state.pendingScrollDate;
     state.pendingScrollDate = "";
@@ -4405,6 +4468,7 @@ function renderNode(node) {
     return;
   }
   els.content.innerHTML = detailHtml;
+  athleteSwitcherScrollIntoView(els.content);
 }
 function renderTerminalNode(node) {
   if (!(node.items || []).some(isExerciseItem)) return renderOrganizationSummary(node);
@@ -4632,6 +4696,7 @@ async function handleBuilderAction(action) {
     // K2c-3: the events row, Event: [▾], Create event → (builder-events-row.js).
     if (await handleBuilderEventsAction(action)) return;
     if (await handleWeeklyTemplateAction(action, { renderBuilder, flushBuilderAutosaves })) return;
+    if (await handleSaveWeeksAction(action, { renderBuilder, flushBuilderAutosaves })) return;
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
     if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
