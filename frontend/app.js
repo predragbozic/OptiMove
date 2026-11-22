@@ -4189,7 +4189,6 @@ function renderWeeklyRoot(data) {
     weekSelectorMarkup,
   });
   // K6 follow-up: a repaint redraws the pills at scroll 0, so the chosen pill is brought into view again.
-  // K6 follow-up: a repaint redraws the pills at scroll 0, so the chosen pill is brought into view again.
   athleteSwitcherScrollIntoView(els.content);
   if (state.pendingScrollDate) {
     const date = state.pendingScrollDate;
