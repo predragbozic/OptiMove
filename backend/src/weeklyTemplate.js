@@ -103,8 +103,9 @@ export function placeTemplateDays(days, startDate) {
 // after anything changed is asked again instead of written.
 export function assignChoiceToken(classified) {
   const canonical = classified
-    .map((entry) => [entry.athleteUuid, entry.weekStart, entry.kind, entry.planId || "", entry.cannot || "",
-      (entry.days || []).join(","), (entry.kept || []).map((k) => `${k.sessionId}:${k.reasons.join("+")}`).sort().join(",")].join("|"))
+    .map((entry) => [entry.athleteUuid, entry.weekStart, entry.kind, entry.planId || "", entry.planStatus || "", entry.cannot || "",
+      (entry.days || []).join(","), [...(entry.sessionIds || [])].sort().join(","),
+      (entry.kept || []).map((k) => `${k.sessionId}:${k.reasons.join("+")}`).sort().join(",")].join("|"))
     .sort()
     .join("\n");
   return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
@@ -128,7 +129,9 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
   for (const session of sessions) {
     const pair = bySource.get(String(session.plan_day_id));
     const row = [pair.targetDayId, session.am_pm, session.bta, session.session_time,
-      Number(session.session_order || 0) + Number(pair.orderOffset || 0), session.name, session.rpe_enabled, session.training_load_enabled];
+      // At least 1 before the offset, so a template session never takes the
+      // order of a kept session it follows (db review).
+      Math.max(Number(session.session_order) || 0, 1) + Number(pair.orderOffset || 0), session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   }

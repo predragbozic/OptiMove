@@ -1019,13 +1019,17 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
 // alone (Skip). A session with results or a live event link is never removed
 // (task 5, #702): it stays and the template's sessions of that day follow it.
 // A copy, never a link: nothing ties the written plans to the template.
-export const weeklyAssignTestHooks = { afterPlanLocks: null };
+export const weeklyAssignTestHooks = { afterPlanLocks: null, afterSaveRights: null };
+const MAX_ASSIGN_PLACEMENTS = 400;
 
 router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const source = await getCopySource(req, req.params.planId);
     if (!source || !source.is_template || source.plan_type !== "program") return res.status(404).json({ error: "Template not found." });
+    // An open edit draft carries unsaved changes and none of the template's
+    // library flags: only its creator may assign from it (security review).
+    if (source.is_edit_draft && String(source.created_by_user_id) !== String(req.user.id)) return res.status(404).json({ error: "Template not found." });
     const isOwnerOrAll = canAccessAllAthletes(req) || String(source.created_by_user_id) === String(req.user.id);
     if (source.can_copy === false && !isOwnerOrAll) return res.status(403).json({ error: "This template cannot be copied." });
     if (source.can_assign_to_athlete === false && !isOwnerOrAll) return res.status(403).json({ error: "This program cannot be assigned." });
@@ -1073,10 +1077,19 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     )).rows;
     const placed = placeTemplateDays(templateDays, startDate);
     const weeks = [...new Set(placed.map((p) => p.weekStart))].sort();
-    // Two assigns to one athlete's week wait for each other (the slot rule is
-    // otherwise only read): one transaction-scoped advisory lock per
-    // (athlete, week), ascending, before any plan row.
-    const slotKeys = athletes.flatMap((a) => weeks.map((w) => `weekly-slot:${a.id}:${w}`)).sort();
+    // One request writes at most MAX_ASSIGN_PLACEMENTS athlete-weeks (one
+    // transaction holds every plan lock it takes; db review).
+    if (athletes.length * weeks.length > MAX_ASSIGN_PLACEMENTS) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(400).json({ error: "Too many athletes and weeks at once.", code: "assign_too_large", maxPlacements: MAX_ASSIGN_PLACEMENTS });
+    }
+    // Two assigns to one athlete wait for each other (the week slot is
+    // otherwise only read): one transaction-scoped advisory lock per athlete,
+    // ascending, before any plan row (per athlete, not per week, so the lock
+    // count stays small).
+    const slotKeys = athletes.map((a) => `weekly-slot:${a.id}`).sort();
     for (const key of slotKeys) await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
     const athleteIds = athletes.map((a) => a.id);
     const found = (await client.query(
@@ -1141,11 +1154,14 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
           const targetDays = (await client.query("select id, date::text as date from plans.plan_days where plan_id = $1 and date = any($2::date[])", [plan.id, entry.days])).rows;
           entry.targetDays = new Map(targetDays.map((d) => [d.date.slice(0, 10), d.id]));
           const touched = new Set(targetDays.map((d) => String(d.id)));
-          const withContent = (await client.query(
-            "select distinct pd.date::text as date from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.id = any($1::uuid[]) order by 1",
+          const touchedSessions = (await client.query(
+            "select ps.id, pd.date::text as date from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.id = any($1::uuid[]) order by ps.id",
             [[...touched]],
-          )).rows.map((r) => r.date.slice(0, 10));
-          entry.contentDays = withContent;
+          )).rows;
+          entry.contentDays = [...new Set(touchedSessions.map((r) => r.date.slice(0, 10)))].sort();
+          // Every session a Replace would remove is in the choice token, so a
+          // session added (or removed) after the question asks again (code review).
+          entry.sessionIds = touchedSessions.map((r) => String(r.id));
           // Only for a draft plan nothing is guarded; a published plan's
           // sessions on the touched days: results and live links, rows FOR
           // UPDATE ascending, after every plan lock.
@@ -1252,7 +1268,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     return res.status(201).json(result);
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
-    if (error?.code === "23505" || error?.code === "40P01" || error?.code === "55P03") {
+    if ((error?.code === "23505" && error?.constraint === "plans_weekly_unique") || error?.code === "40P01" || error?.code === "55P03") {
       return res.status(409).json({ error: "The plans are busy. Nothing was saved. Try again.", code: "try_again" });
     }
     next(error);
@@ -1291,12 +1307,25 @@ router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
       sources.push(plan);
     }
     sources.sort((a, b) => String(a.week_start).localeCompare(String(b.week_start)) || (String(a.id) < String(b.id) ? -1 : 1));
+    if (weeklyAssignTestHooks.afterSaveRights) await weeklyAssignTestHooks.afterSaveRights({ planIds: sources.map((p) => p.id) });
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     // The chosen plans stay as they are while they are copied: FOR SHARE,
     // ascending id (a Save takes them FOR UPDATE in the same order).
-    await client.query("select id from plans.plans where id = any($1::uuid[]) order by id for share", [sources.map((p) => p.id)]);
+    const stillThere = await client.query(
+      `select id from plans.plans
+       where id = any($1::uuid[]) and plan_type = 'weekly' and coalesce(is_active, true) and not coalesce(is_edit_draft, false)
+       order by id for share`,
+      [sources.map((p) => p.id)],
+    );
+    // A week removed between the rights check and the lock: nothing is saved.
+    if (stillThere.rowCount !== sources.length) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(404).json({ error: "Weekly plan not found." });
+    }
     const created = (await client.query(
       `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, visibility, is_template, status, source_type)
        values ('program', $1, null, $2, 'private', true, 'draft', 'builder') returning id`,
@@ -1319,9 +1348,15 @@ router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
     await client.query("commit");
     client.release();
     client = null;
-    return res.status(201).json(await buildDraft(await getEditablePlan(req, created.id), req));
+    // Committed: a failed read never reads as "not saved" (db review).
+    try {
+      return res.status(201).json(await buildDraft(await getEditablePlan(req, created.id), req));
+    } catch {
+      return res.status(201).json({ planId: created.id, reload: true });
+    }
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    if (error?.code === "40P01" || error?.code === "55P03") return res.status(409).json({ error: "The plans are busy. Nothing was saved. Try again.", code: "try_again" });
     next(error);
   }
 }));
@@ -1518,9 +1553,16 @@ async function changeWeeklyTemplate(req, res, next, change) {
     await client.query("commit");
     client.release();
     client = null;
-    return await respondWithDraft(req, res, req.user, plan, { status: outcome?.status || 200 });
+    // Committed: a failed read of the new draft never reads as "not saved"
+    // (a retry would add the week twice); the screen reloads it (db review).
+    try {
+      return await respondWithDraft(req, res, req.user, plan, { status: outcome?.status || 200 });
+    } catch {
+      return res.status(outcome?.status || 200).json({ planId: plan.id, reload: true });
+    }
   } catch (error) {
     if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    if (error?.code === "40P01" || error?.code === "55P03") return res.status(409).json({ error: "The plan is busy. Nothing was saved. Try again.", code: "try_again" });
     next(error);
   }
 }
@@ -3747,7 +3789,7 @@ async function getCopySource(req, planId) {
     // cross-plan copy alike, whenever the source plan had been edited
     // and re-opened at least once (i.e. almost always, for anything but a
     // brand-new never-yet-saved draft).
-    `select id, created_by_user_id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days, can_copy, can_edit_copy, can_assign_to_athlete,
+    `select id, created_by_user_id, athlete_id, plan_type, name, note, icon_url, color, is_template, start_date, duration_days, can_copy, can_edit_copy, can_assign_to_athlete, is_edit_draft,
             track_training_load_default, request_rpe_default
      from plans.plans
      where id = $1 and plan_type in ('program', 'weekly') and (coalesce(is_active, true) or is_edit_draft = true)`,

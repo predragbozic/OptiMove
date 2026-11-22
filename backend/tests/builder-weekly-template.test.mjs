@@ -466,3 +466,60 @@ test("8. a published week whose session has no exercise is never taken for empty
   assert.equal(done.created.length, 1);
   assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [empty.plan.id]))[0].n, 0);
 });
+
+test("9. review fixes: a session added after the question asks again; an edit draft is assignable only by its creator; a week removed before the save lock saves nothing", async () => {
+  const s = await squad("fixes", 1);
+  const cookie = s.coach.cookie;
+  let draft = await weeklyTemplate(cookie, 1, "Fixes");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T Monday");
+  const athlete = s.athletes[0];
+  // A published week with a session on Tuesday only; the template's Monday lands on an empty day.
+  const weekId = await publishedWeek(s, athlete, "2027-03-01", [[2, "Tuesday own"]]);
+  const first = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-03-01" });
+  assert.equal(first.status, 409);
+  assert.deepEqual(first.body.athletes[0].weeks[0].contentDays, ["2027-03-02"]);
+  // Another session lands on Monday after the question.
+  await q(`insert into plans.plan_sessions (plan_day_id, bta, session_order, name) select id, 'T', 1, 'Added later' from plans.plan_days where plan_id = $1 and date = '2027-03-01'`, [weekId]);
+  const again = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-03-01", choice: "replace", choiceToken: first.body.choiceToken });
+  assert.equal(again.status, 409, again.text);
+  assert.equal(again.body.code, "weekly_assign_conflicts");
+  assert.notEqual(again.body.choiceToken, first.body.choiceToken);
+  assert.ok((await planSessions(weekId)).some((x) => x.name === "Added later"));
+
+  // An open edit draft of a public template: another coach gets the 404 of a missing template.
+  await q(`update plans.plans set status = 'active', visibility = 'public' where id = $1`, [draft.plan.id]);
+  const edit = ok(await api(`/api/builder/plans/${draft.plan.id}/edit`, { method: "POST", cookie, body: {} }));
+  const other = await coachOf("fixes-other", s.teamId);
+  const foreign = await assign(other.cookie, edit.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-04-05" });
+  assert.equal(foreign.status, 404, foreign.text);
+  assert.deepEqual(foreign.body, { error: "Template not found." });
+  // Its creator still may (the Builder applies the edit first; the route itself accepts it).
+  assert.equal((await assign(cookie, edit.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-04-05" })).status, 201);
+
+  // Save as template: a chosen week removed after the rights check -> 404, no template.
+  const keep = await publishedWeek(s, athlete, "2027-05-03", [[1, "Keep"]]);
+  const gone = await publishedWeek(s, athlete, "2027-05-10", [[1, "Gone"]]);
+  builderModule.weeklyAssignTestHooks.afterSaveRights = async () => { await q(`delete from plans.plans where id = $1`, [gone]); };
+  try {
+    const res = await api("/api/builder/weekly-templates", { method: "POST", cookie, body: { name: "Raced template", planIds: [keep, gone] } });
+    assert.equal(res.status, 404, res.text);
+  } finally {
+    builderModule.weeklyAssignTestHooks.afterSaveRights = null;
+  }
+  assert.equal((await q(`select count(*)::int as n from plans.plans where name = 'Raced template'`))[0].n, 0);
+});
+
+
+test("10. one request writes at most 400 athlete-weeks: more is refused before any lock on a plan, nothing written", async () => {
+  const s = await squad("cap", 8);
+  const draft = await weeklyTemplate(s.coach.cookie, 52, "Season");
+  // 52 template weeks from a Wednesday touch 53 calendar weeks; 8 athletes = 424.
+  const res = await assign(s.coach.cookie, draft.plan.id, { athleteIds: s.athletes.map((a) => a.externalId), startDate: "2027-01-06" });
+  assert.equal(res.status, 400, res.text);
+  assert.equal(res.body.code, "assign_too_large");
+  for (const athlete of s.athletes) assert.equal((await weekPlans(athlete.athleteId)).length, 0);
+  // 7 athletes = 371: written.
+  const ok7 = await assign(s.coach.cookie, draft.plan.id, { athleteIds: s.athletes.slice(0, 7).map((a) => a.externalId), startDate: "2027-01-06" });
+  assert.equal(ok7.status, 201, ok7.text);
+  assert.equal(ok7.body.created.length, 371);
+});

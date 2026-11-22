@@ -132,10 +132,14 @@ test("4. assign: date and athletes, a conflict question, the choice resent with 
   assert.equal(first.url, "/api/builder/plans/T1/assign-weekly");
   assert.deepEqual({ ...first.body, assignmentRequestId: "x" }, { athleteIds: ["11", "12"], startDate: "2026-12-09", assignmentRequestId: "x" });
   assert.match(text(), /1 athlete already has plans in these weeks\./);
-  assert.match(text(), /3 weeks without a plan get a new weekly plan either way\./);
+  assert.match(text(), /3 new weekly plans are created either way, where there is no plan yet\./);
+  // While asking, the dialog scrolls as a whole (the answers stay reachable on a short phone).
+  assert.ok(content().querySelector(".builder-tw-assign-modal.is-question"));
+  assert.equal(content().querySelector(".builder-tw-assign-modal").classList.contains("builder-copy-plan-modal"), false);
   assert.match(text(), /Main · Wed 09\.12 · AM has results, so it stays\./);
   assert.match(text(), /Someone is editing this week right now\. It stays as it is\./);
-  assert.deepEqual([...content().querySelectorAll(".builder-tw-conflict-actions button")].map((b) => b.textContent), ["Replace", "Skip weeks that already have a plan", "Cancel"]);
+  assert.deepEqual([...content().querySelectorAll(".builder-tw-conflict-actions button")].map((b) => b.textContent), ["Replace", "Skip weeks that already have a plan", "Back"]);
+  assert.ok(content().querySelector('[data-choice="replace"]').classList.contains("danger-action"));
   answers.push({ status: 201, body: { created: [{}, {}, {}], replaced: [{}], skipped: [{}], kept: 1 } });
   await handleWeeklyTemplateAction(button("builder-tw-assign-choice", { choice: "replace" }), handlers);
   const second = calls.at(-1);
@@ -150,7 +154,7 @@ test("5. a lost answer: Assign again resends the same key; Cancel on the questio
   await handleWeeklyTemplateAction(button("builder-tw-assign-toggle", { athleteId: "12" }), handlers);
   answers.push(new TypeError("Failed to fetch"));
   await handleWeeklyTemplateAction(button("builder-tw-assign-submit"), handlers);
-  assert.match(text(), /No answer from the server\. Assign again: nothing is written twice\./);
+  assert.match(text(), /No answer from the server\. Press Assign again: nothing is written twice\./);
   const key = calls.at(-1).body.assignmentRequestId;
   answers.push({ status: 409, body: { code: "weekly_assign_conflicts", choiceToken: "t", newWeeks: 0, athletes: [{ athleteId: "12", name: "Example Beta", weeks: [{ weekStart: "2026-12-07", days: ["2026-12-07"], contentDays: [], kept: [] }] }] } });
   await handleWeeklyTemplateAction(button("builder-tw-assign-submit"), handlers);
@@ -180,8 +184,9 @@ test("7. save weeks as template: the athlete's weekly plans listed, any chosen, 
   ] } });
   await handleWeeklyTemplateAction(button("builder-tw-save-open"), handlers);
   const rows = [...content().querySelectorAll('[data-action="builder-tw-save-toggle"]')];
-  assert.deepEqual(rows.map((r) => r.dataset.planId), ["W1", "W3"]);
-  assert.equal(rows[0].getAttribute("aria-pressed"), "true");
+  // Newest first; the week on screen is chosen to start with.
+  assert.deepEqual(rows.map((r) => r.dataset.planId), ["W3", "W1"]);
+  assert.equal(rows[1].getAttribute("aria-pressed"), "true");
   await handleWeeklyTemplateAction(button("builder-tw-save-toggle", { planId: "W3" }), handlers);
   // No name: asked, nothing sent.
   await handleWeeklyTemplateAction(button("builder-tw-save-submit"), handlers);
@@ -223,4 +228,75 @@ test("9. the template create form: Weekly program or Blocks; Weekly asks the num
   const form = new window.FormData(content().querySelector('[data-builder-form="create"]'));
   assert.equal(form.get("templateKind"), "weekly");
   assert.equal(form.get("planType"), "program");
+});
+
+test("10. review fixes: nothing assigned says so; a refusal is a plain sentence; a lost choice is resent with its key, another choice gets a new key; asked again after a choice says the plans changed", async () => {
+  await handleWeeklyTemplateAction(button("builder-tw-assign-open"), handlers);
+  await handleWeeklyTemplateAction(button("builder-tw-assign-toggle", { athleteId: "11" }), handlers);
+  answers.push({ status: 403, body: { error: "Athlete 11 is outside your current workspace." } });
+  await handleWeeklyTemplateAction(button("builder-tw-assign-submit"), handlers);
+  assert.match(text(), /One of the athletes is not in your current workspace/);
+  assert.doesNotMatch(text(), /Athlete 11/);
+  const conflict = { code: "weekly_assign_conflicts", choiceToken: "t1", newWeeks: 0, athletes: [{ athleteId: "11", name: "Example Alpha", weeks: [{ weekStart: "2026-12-07", days: ["2026-12-07"], contentDays: ["2026-12-07"], kept: [] }] }] };
+  answers.push({ status: 409, body: conflict });
+  await handleWeeklyTemplateAction(button("builder-tw-assign-submit"), handlers);
+  answers.push(new TypeError("Failed to fetch"));
+  await handleWeeklyTemplateAction(button("builder-tw-assign-choice", { choice: "skip" }), handlers);
+  assert.match(text(), /Press Skip weeks that already have a plan again/);
+  const lostKey = calls.at(-1).body.assignmentRequestId;
+  answers.push({ status: 409, body: { ...conflict, choiceToken: "t2" } });
+  await handleWeeklyTemplateAction(button("builder-tw-assign-choice", { choice: "skip" }), handlers);
+  assert.equal(calls.at(-1).body.assignmentRequestId, lostKey);
+  assert.match(text(), /The plans changed since you looked\. Check again\./);
+  answers.push({ status: 201, body: { created: [], replaced: [], skipped: [{}], kept: 0 } });
+  await handleWeeklyTemplateAction(button("builder-tw-assign-choice", { choice: "replace" }), handlers);
+  assert.notEqual(calls.at(-1).body.assignmentRequestId, lostKey);
+  assert.equal(calls.at(-1).body.choiceToken, "t2");
+  assert.match(text(), /Nothing was assigned: every week already had a plan and was left as it was\./);
+  assert.doesNotMatch(text(), /Assigned\./);
+});
+
+test("11. opened from the library: the saved template is assigned (the edit copy is not applied), and Close removes that edit copy", async () => {
+  state.builder.draft = { ...template(), plan: { ...template().plan, id: "T1-edit", isEditDraft: true, editSourcePlanId: "T1" } };
+  state.builder.weeklyAssign = { planId: "T1-edit", open: true, fromLibrary: true, startDate: "2026-12-07", athleteIds: ["11"], requestId: "", sending: false, conflict: null, error: "", result: null };
+  answers.push({ status: 201, body: { created: [{}], replaced: [], skipped: [], kept: 0 } });
+  await handleWeeklyTemplateAction(button("builder-tw-assign-submit"), handlers);
+  assert.deepEqual(calls.map((c) => [c.method, c.url]), [["POST", "/api/builder/plans/T1/assign-weekly"]]);
+  answers.push({ status: 200, body: { deleted: true } });
+  await handleWeeklyTemplateAction(button("builder-tw-assign-close"), handlers);
+  assert.deepEqual(calls.at(-1), { url: "/api/builder/plans/T1-edit", method: "DELETE", body: null });
+  assert.equal(state.builder.draft, null);
+});
+
+test("12. save weeks: newest first, the open week marked, and a sentence after the save", async () => {
+  state.builder.draft = { plan: { id: "W1-edit", isEditDraft: true, editSourcePlanId: "W1", name: "Week", planType: "weekly", status: "draft", athleteId: "11", athleteName: "Example Alpha", weekStart: "2026-12-07" }, blocks: [], batch: null };
+  answers.push({ status: 200, body: { plans: [
+    { plan_id: "W1", plan_type: "weekly", week_start: "2026-12-07", plan_name: "Week", session_count: 1 },
+    { plan_id: "W3", plan_type: "weekly", week_start: "2026-12-21", plan_name: "Late", session_count: 2 },
+  ] } });
+  await handleWeeklyTemplateAction(button("builder-tw-save-open"), handlers);
+  const rows = [...content().querySelectorAll('[data-action="builder-tw-save-toggle"]')];
+  assert.deepEqual(rows.map((r) => r.dataset.planId), ["W3", "W1"]);
+  assert.match(rows[1].textContent, /\(open now\)/);
+  assert.equal(rows[1].getAttribute("aria-pressed"), "true");
+  content().querySelector("[data-tw-save-name]").value = "Two weeks";
+  answers.push({ status: 201, body: template(1) });
+  await handleWeeklyTemplateAction(button("builder-tw-save-submit"), handlers);
+  assert.deepEqual(calls.at(-1).body, { name: "Two weeks", planIds: ["W1"] });
+  assert.match(text(), /Saved as the template “Two weeks”\. It is a draft: change it here, then save it\./);
+});
+
+
+test("13. a week change with no answer reads the template again and says so; a saved change answered with reload reads it too", async () => {
+  answers.push(new TypeError("Failed to fetch"));
+  answers.push({ status: 200, body: template(3) });
+  await handleWeeklyTemplateAction(button("builder-tw-add-week"), handlers);
+  assert.deepEqual(calls.map((c) => [c.method, c.url]), [["POST", "/api/builder/plans/T1/weeks"], ["GET", "/api/builder/plans/T1"]]);
+  assert.equal(state.builder.draft.plan.weekCount, 3);
+  assert.match(text(), /No answer from the server\. The template is shown as it is now: check the weeks before trying again\./);
+  answers.push({ status: 201, body: { planId: "T1", reload: true } });
+  answers.push({ status: 200, body: template(4) });
+  await handleWeeklyTemplateAction(button("builder-tw-add-week"), handlers);
+  assert.equal(state.builder.draft.plan.weekCount, 4);
+  assert.equal(state.builder.templateWeekError, "");
 });

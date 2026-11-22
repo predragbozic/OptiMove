@@ -54,6 +54,7 @@ export function renderTemplateWeekStripHtml(state) {
             <button class="plain-button" type="button" data-action="builder-tw-delete-week-cancel">Cancel</button>
           </div>
         </div>` : ""}
+      ${state.builder.templateNotice ? `<p class="builder-tw-notice" role="status">${escapeHtml(state.builder.templateNotice)}</p>` : ""}
       ${state.builder.templateWeekError ? `<p class="builder-error" role="alert">${escapeHtml(state.builder.templateWeekError)}</p>` : ""}
     </div>
   `;
@@ -85,12 +86,13 @@ const CANNOT_TEXT = {
   several_plans: "This week has more than one plan. It stays as it is.",
 };
 
-function renderConflictHtml(conflict) {
+function renderConflictHtml(conflict, changedAgain = false) {
   const keptCount = conflict.athletes.reduce((n, a) => n + a.weeks.reduce((m, w) => m + (w.kept || []).length, 0), 0);
   return `
     <div class="builder-tw-conflict" data-tw-conflict tabindex="-1">
+      ${changedAgain ? `<p class="builder-tw-conflict-changed"><strong>The plans changed since you looked. Check again.</strong></p>` : ""}
       <p class="builder-tw-conflict-title" role="alert"><strong>${conflict.athletes.length} athlete${conflict.athletes.length === 1 ? "" : "s"} already ${conflict.athletes.length === 1 ? "has" : "have"} plans in these weeks.</strong></p>
-      ${conflict.newWeeks ? `<p class="muted">${conflict.newWeeks} week${conflict.newWeeks === 1 ? "" : "s"} without a plan get${conflict.newWeeks === 1 ? "s" : ""} a new weekly plan either way.</p>` : ""}
+      ${conflict.newWeeks ? `<p class="muted">${conflict.newWeeks} new weekly plan${conflict.newWeeks === 1 ? " is" : "s are"} created either way, where there is no plan yet.</p>` : ""}
       <ul class="builder-tw-conflict-list">
         ${conflict.athletes.map((athlete) => `
           <li><strong>${escapeHtml(athlete.name || "Athlete")}</strong>
@@ -104,9 +106,9 @@ function renderConflictHtml(conflict) {
       </ul>
       <p class="muted">Replace: the program's days take the place of what is planned on those days${keptCount ? "; sessions with results or a link to an event stay, and the program's sessions follow them" : ""}. Days outside the program are not changed.</p>
       <div class="builder-tw-conflict-actions">
-        <button class="plain-button" type="button" data-action="builder-tw-assign-choice" data-choice="replace">Replace</button>
+        <button class="plain-button danger-action" type="button" data-action="builder-tw-assign-choice" data-choice="replace">Replace</button>
         <button class="plain-button" type="button" data-action="builder-tw-assign-choice" data-choice="skip">Skip weeks that already have a plan</button>
-        <button class="plain-button" type="button" data-action="builder-tw-assign-back">Cancel</button>
+        <button class="plain-button" type="button" data-action="builder-tw-assign-back">Back</button>
       </div>
     </div>
   `;
@@ -128,7 +130,9 @@ export function renderWeeklyAssignModalHtml(state) {
         <button class="builder-modal-backdrop" type="button" data-action="builder-tw-assign-close" aria-label="Close"></button>
         <section class="panel builder-compact-modal builder-tw-assign-modal" role="dialog" aria-modal="true" aria-label="Program assigned">
           <div class="builder-modal-head"><div><p class="eyebrow">Assign weekly program</p><h3>${escapeHtml(draft.plan.name || "Weekly program")}</h3></div></div>
-          <p role="status"><strong>Assigned.</strong> ${r.created.length} new weekly plan${r.created.length === 1 ? "" : "s"}${r.replaced.length ? `, ${r.replaced.length} week${r.replaced.length === 1 ? "" : "s"} replaced` : ""}${r.skipped.length ? `, ${r.skipped.length} week${r.skipped.length === 1 ? "" : "s"} left as ${r.skipped.length === 1 ? "it was" : "they were"}` : ""}.${r.kept ? ` ${r.kept} session${r.kept === 1 ? "" : "s"} with results or an event link stayed.` : ""}</p>
+          ${r.created.length + r.replaced.length === 0
+            ? `<p role="status"><strong>Nothing was assigned:</strong> every week already had a plan and was left as it was.</p>`
+            : `<p role="status"><strong>Assigned.</strong> ${r.created.length} new weekly plan${r.created.length === 1 ? "" : "s"}${r.replaced.length ? `, ${r.replaced.length} week${r.replaced.length === 1 ? "" : "s"} replaced` : ""}${r.skipped.length ? `, ${r.skipped.length} week${r.skipped.length === 1 ? "" : "s"} left as ${r.skipped.length === 1 ? "it was" : "they were"}` : ""}.${r.kept ? ` ${r.kept} session${r.kept === 1 ? "" : "s"} with results or an event link stayed.` : ""}</p>`}
           <p class="muted">The athletes' weeks are a copy: changing this template later does not change them.</p>
           <div class="builder-copy-plan-footer"><span></span><button class="plain-button" type="button" data-action="builder-tw-assign-close">Done</button></div>
         </section>
@@ -137,7 +141,7 @@ export function renderWeeklyAssignModalHtml(state) {
   return `
     <div class="builder-modal-overlay">
       <button class="builder-modal-backdrop" type="button" data-action="builder-tw-assign-close" aria-label="Close assignment setup"></button>
-      <section class="panel builder-compact-modal builder-copy-plan-modal builder-tw-assign-modal" data-athlete-filter-scope role="dialog" aria-modal="true" aria-label="Assign weekly program">
+      <section class="panel builder-compact-modal builder-tw-assign-modal${assign.conflict ? " is-question" : " builder-copy-plan-modal"}" ${assign.conflict ? "" : "data-athlete-filter-scope"} role="dialog" aria-modal="true" aria-label="Assign weekly program">
         <div class="builder-modal-head">
           <div>
             <p class="eyebrow">Assign weekly program</p>
@@ -146,7 +150,7 @@ export function renderWeeklyAssignModalHtml(state) {
           </div>
           <button class="plain-button icon-button" type="button" data-action="builder-tw-assign-close" aria-label="Close"><span class="button-icon">x</span></button>
         </div>
-        ${assign.conflict ? renderConflictHtml(assign.conflict) : `
+        ${assign.conflict ? renderConflictHtml(assign.conflict, assign.changedAgain) : `
           <label class="search-field builder-copy-week"><span>Start date (Day 1)</span><input data-tw-start-date type="date" value="${escapeAttr(startDate)}" required><small data-tw-start-preview>${escapeHtml(weeklyAssignPreviewText(startDate, weekCount))}</small></label>
           ${renderAthleteFilter("builder-tw-assign", state.athletes || [])}
           <div class="builder-athlete-select-all">
@@ -199,7 +203,7 @@ export function renderSaveWeeksModalHtml(state) {
             ${plans.map((plan) => {
               const isSelected = selected.has(String(plan.plan_id));
               return `<button class="builder-athlete-option ${isSelected ? "is-selected" : ""}" type="button" data-action="builder-tw-save-toggle" data-plan-id="${escapeAttr(plan.plan_id)}" aria-pressed="${isSelected}">
-                <span><strong>Week of ${escapeHtml(formatDate(plan.week_start))}</strong><small>${escapeHtml(plan.plan_name || "Weekly plan")} · ${Number(plan.session_count) || 0} session${Number(plan.session_count) === 1 ? "" : "s"}</small></span>
+                <span><strong>Week of ${escapeHtml(formatDate(plan.week_start))}${String(plan.plan_id) === String(save.currentPlanId) ? " (open now)" : ""}</strong><small>${escapeHtml(plan.plan_name || "Weekly plan")} · ${Number(plan.session_count) || 0} session${Number(plan.session_count) === 1 ? "" : "s"}</small></span>
                 <span class="builder-checkmark" aria-hidden="true">${isSelected ? "&#10003;" : ""}</span>
               </button>`;
             }).join("")}

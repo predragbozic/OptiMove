@@ -30052,3 +30052,11 @@ body.athlete-questions-prompt-open {
 .athlete-switcher-fold > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .athlete-switcher.is-open .cc-filters-chevron { transform: translateY(2px) rotate(-135deg); }
 .weekly-k6-controls[aria-busy="true"] { opacity: .6; pointer-events: none; }
+/* Review fixes: the question scrolls inside the dialog on a short phone; the
+   select-all and week rows of the new dialogs. */
+.builder-tw-assign-modal.is-question { overflow-y: auto; overscroll-behavior: contain; }
+.builder-tw-assign-modal.is-question .builder-tw-conflict-list { max-height: none; overflow: visible; }
+.builder-tw-assign-modal .checkbox-toggle-all { width: 44px; height: 44px; min-width: 44px; }
+.builder-tw-week-options .builder-athlete-option { grid-template-columns: minmax(0, 1fr) auto; }
+.builder-tw-notice { margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--accent-soft); }
+.builder-tw-conflict-changed { margin: 0; color: var(--danger); }

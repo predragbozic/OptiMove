@@ -135,3 +135,60 @@ for (const width of [1280, 390, 375, 360]) {
     }
   });
 }
+
+test("(360x640) the question with three athletes and a kept session: Replace / Skip / Back can be reached and pressed", async () => {
+  const world = await startWorld();
+  try {
+    const { templateId, wednesday, monday } = await setUp(world);
+    const db = new pg.Client({ connectionString: world.databaseUrl });
+    await db.connect();
+    let athletes;
+    try {
+      athletes = (await db.query("select athlete_id from public.athletes where id = any($1::uuid[]) order by athlete_id limit 3", [world.ids.athleteIds])).rows.map((r) => r.athlete_id);
+    } finally {
+      await db.end();
+    }
+    // Two more athletes with a published week where Day 1 lands.
+    for (const athleteId of athletes.slice(1)) {
+      const week = await call(world, "team_coach", "POST", "/api/builder/plans", { planType: "weekly", weekStart: monday, athleteIds: [athleteId], name: "Own week" });
+      assert.equal(week.status, 201, week.text);
+      const wed = week.body.blocks.find((b) => b.date === wednesday);
+      const own = await call(world, "team_coach", "POST", `/api/builder/blocks/${wed.id}/sessions`, { bta: "T", name: "Own session" });
+      const ownSession = own.body.blocks.find((b) => b.date === wednesday).sessions[0];
+      await call(world, "team_coach", "POST", `/api/builder/sessions/${ownSession.id}/nodes`, { nodeType: "domain", name: "Warm-up" });
+      assert.equal((await call(world, "team_coach", "POST", `/api/builder/plans/${week.body.plan.id}/submit`, { responseMode: "summary" })).status, 200);
+    }
+    const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 360);
+    try {
+      await page.setViewportSize({ width: 360, height: 640 });
+      const toggle = page.locator('[data-action="mobile-nav-toggle"]');
+      if (await toggle.isVisible().catch(() => false)) await toggle.click();
+      await page.locator('[data-library-tab="builder"]').first().click();
+      await page.getByText("Continue where you left off").first().click();
+      await page.locator(".builder-draft-row", { hasText: "Base weeks" }).getByRole("button", { name: "Continue", exact: true }).click();
+      await page.locator(".builder-week-strip").waitFor();
+      assert.ok(templateId);
+      await page.locator('[data-action="builder-tw-assign-open"]').click();
+      const modal = page.locator(".builder-tw-assign-modal");
+      await modal.locator("[data-tw-start-date]").fill(wednesday);
+      for (const athleteId of athletes) await modal.locator(`[data-action="builder-tw-assign-toggle"][data-athlete-id="${athleteId}"]`).click();
+      await modal.locator('[data-action="builder-tw-assign-submit"]').click();
+      await modal.locator("[data-tw-conflict]").waitFor({ timeout: 20_000 });
+      for (const choice of ["replace", "skip"]) {
+        const answer = modal.locator(`[data-action="builder-tw-assign-choice"][data-choice="${choice}"]`);
+        await answer.scrollIntoViewIfNeeded();
+        const box = await answer.boundingBox();
+        assert.ok(box && box.y >= 0 && box.y + box.height <= 640 && box.height >= 44, `${choice} reachable: ${JSON.stringify(box)}`);
+      }
+      assert.equal(await overflow(page, 360), 0, "no horizontal page scroll");
+      await shot(page, "wt-05-question-3-athletes-360x640");
+      await modal.locator('[data-action="builder-tw-assign-choice"][data-choice="skip"]').click();
+      await modal.getByText(/Assigned\.|Nothing was assigned/).first().waitFor({ timeout: 20_000 });
+      assert.deepEqual(pageErrors, []);
+    } finally {
+      await context.close();
+    }
+  } finally {
+    await world.stop();
+  }
+});

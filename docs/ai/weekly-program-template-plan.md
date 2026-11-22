@@ -178,17 +178,35 @@ Where this differs from sections 1–6, this section records what the code does.
   week every day of the calendar week is replaced; only a partial first or last week leaves days outside the program
   untouched (Q1).
 - **Concurrency.** Lock order: the exercise-reuse lock, the template row `FOR NO KEY UPDATE`, the idempotency row, one
-  transaction-scoped advisory lock per (athlete, week) in ascending key order, every existing weekly plan of those
-  athletes and weeks `FOR UPDATE` in ascending id, then (per plan, ascending plan id) the session rows of the touched
-  days `FOR UPDATE` ascending inside `blockedSessionIdsOf`. Two assigns of the same template meet on the template row;
+  transaction-scoped advisory lock per athlete (`weekly-slot:<athlete>`) in ascending key order, every existing weekly
+  plan of those athletes and weeks `FOR UPDATE` in ascending id in one statement, then the session rows of the touched
+  days `FOR UPDATE` ascending inside `blockedSessionIdsOf`, plan by plan in athlete-then-week order (every plan row is
+  already held, so their order cannot cross another writer's; db review L5). One request writes at most 400
+  athlete-weeks (`400 assign_too_large`, before any plan lock), which bounds the locks one transaction holds. Two assigns of the same template meet on the template row;
   of two templates on the slot lock (test 6; without it the second ends in `409 try_again` from
-  `plans_weekly_unique`). A `23505`, `40P01` or `55P03` answers `409 try_again`, nothing written.
+  `plans_weekly_unique`). A `23505` on `plans_weekly_unique`, a `40P01` or a `55P03` answers `409 try_again`, nothing written; any other
+  unique violation is a 500 (it would repeat on every resend). Template sessions take `max(order, 1) + offset`, so they
+  never share an order with a kept session.
   **Known limit:** `POST /plans` and `/duplicate` do not take the slot lock, so a weekly plan created there for the same
   athlete and week at the same moment can still meet `plans_weekly_unique` (same creator → `try_again`) or, for another
   creator, leave two plans in that week (the existing behaviour of those routes; such a week is then answered
   `several_plans` by the next assign).
+- **The choice token** hashes, per athlete and week: the plan, its status, the days placed, the ids of every session on
+  those days and the kept sessions with their reasons. A session added or removed, or a draft published, after the
+  question answers the question again (test 9; code and db review).
+- **After the COMMIT.** The week routes and Save as template read the new draft after their COMMIT; if that read fails
+  they answer `{ planId, reload: true }` with the success status, and the screen reads the plan again. A lost answer
+  on a week change reads the template again and says so; a lost Save as template says the template may have been
+  saved and where to look. Neither route has an idempotency key (no migration): an explicit second press after a lost
+  answer can still add a second week or template, which the screen warns about (db review HIGH, as fixed).
+- **Edit drafts.** `assign-weekly` refuses an open edit draft as the source for anyone but its creator (the same 404),
+  since an edit draft carries none of the template's library flags (security review).
+- **Replace and notifications.** A replaced published week is not notified again: the notification's dedupe key is per
+  plan (`builder:v1:weekly_plan_assigned:<plan>`), so an athlete already told about that week gets no second message.
 - **`not_editable`** is reachable only when the active-workspace scope and the plan access predicate disagree (both
   read the same memberships today); it is answered by athlete and week only, with nothing about the plan.
+- **Library preview.** *Assign to athletes* opens the template in the Builder with the dated assign open. The assign
+  then sends the saved template (not the edit copy opened to show it), and closing the dialog deletes that edit copy.
 - **Old paths.** `/duplicate` with athletes and `/api/templates/:id/assignments` answer
   `400 weekly_template_use_dated_assign` for a weekly template (Q3). Library preview: *Assign to athletes* opens the
   template in the Builder with the dated assign open (an owner of the template; a coach who can only read a shared
@@ -205,7 +223,14 @@ and no named node — whatever its status. A **published** week whose sessions h
 event link) is therefore deleted by a new weekly plan for that week, with its session rows (`deletePlanTreeWithClient`),
 leaving results naming a removed logical id. Not changed here; reported to the stream manager.
 
-### 7.2 Tests
+### 7.2 Follow-ups recorded (not in this task)
+
+- Athlete codes can be told apart across clubs (unknown 404 / archived 400 / another club's 403) on `POST /plans`,
+  `/duplicate` and now `assign-weekly`: one cross-route fix (security review, MEDIUM, inherited).
+- `POST /plans` and `/duplicate` do not take the `weekly-slot:<athlete>` lock (db review L1).
+- The pre-existing `ensureWeeklySlot` deletion of a published bare week (7.1; db review: HIGH on its own).
+
+### 7.3 Tests
 
 `backend/tests/builder-weekly-template.test.mjs` (8, disposable database, real routes), mutations M1–M5 (kept-session
 check, slot lock, choice token, empty-draft rule, the `/duplicate` refusal) each killed;
