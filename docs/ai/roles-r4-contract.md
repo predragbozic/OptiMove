@@ -434,7 +434,10 @@ An archived system role: its club versions stay as history and give nothing (the
 exactly the stored value. The `BEFORE UPDATE` trigger on `user_club_roles` / `user_team_roles` (3.4) also writes
 `ended_at` and `end_kind = 'role_ended'` on the live customs of that row whenever `is_active` or `revoked_at` changes (the
 revocation and the re-grant of `organization.js:3025-3033`, `:3062`), so the history shows the end; the read-time check of
-3.4 stays as the guarantee. Tests: a custom is live right after it is made; a word taken away in it really does not act;
+3.4 stays as the guarantee. The custom guards accept this write without an acting user only from that trigger: the trigger
+sets a transaction-local marker (`optimove.custom_role_end_tx` = the current transaction id, the pattern of v57's
+`optimove.session_undo_tx`), writes the `role_ended` change row in the same transaction, and the guard refuses a null-actor
+end without the marker (the db re-review's MEDIUM). Tests: a custom is live right after it is made; a word taken away in it really does not act;
 a revoke and a re-grant end it and write `role_ended`.
 
 A custom role is **not** a `permission_roles` row: it can never be listed or assigned (O4) and needs no name. A team or
@@ -466,6 +469,14 @@ kind `migration` with the `migration_name`, as v84's M15). This **clarifies** th
 changes made by people, not against a migration opening a new word. Test: old-vs-new with a club version and a custom made
 **before** a seed migration - both holders keep today's behaviour after it.
 
+What such a migration does to the revisions (the db re-review's MEDIUM): the basic role's `revision` goes up by one (v84),
+and in the same file every live club version of it moves `based_on_revision` and `answered_revision` to the new revision
+and its own `revision` up by one, each live custom its `revision` up by one, each with a change row of kind `migration` -
+so no club gets the O3 question for a word nobody chose, and an `expectedRevision` taken before the migration answers
+`version_changed` / `custom_changed`. The migration takes the exclusive ceiling lock of every affected club in club id
+order as its first statements and runs in the runbook's quiet moment. Test: after a seed migration, no version reports
+a pending question, and a stale `expectedRevision` is refused.
+
 **The old-vs-new proof per row of 4.1 is a condition of R4-1** (the *Nezavisni revizor*'s M4; decided by the stream
 manager): before vNN is frozen, each row of 4.1 has a test that the seeded holders pass exactly the gates of that module
 they pass today. A row that cannot be proven is not seeded in vNN; it waits for its module's step.
@@ -493,11 +504,19 @@ Rewritten after the *Nezavisni revizor*'s H3. The existing rule is **every advis
    from the headcount lock, the team import lock and R2's request-key lock). Decided by the *Rukovodilac* of OptiMove: it is
    taken by **every** writer of roles, club versions, custom roles and the ceiling in that club, and by every guarded write
    that calls `lock_permission_actor` for a club or team scope.
-   - **The mode is a parameter**, never an upgrade inside one transaction: `lock_permission_actor(..., p_ceiling_mode)`
-     with `shared` (a guarded write, a custom role write, a club role or assignment write) or `exclusive` (a ceiling change
-     and every club version write - rule 7 of 7.2 depends on all versions of the club together). A transaction asks once,
-     in the mode it needs; a second call in the same transaction with another mode is refused (`55000`, a programming
-     error, caught by tests).
+   - **Taken by the caller, not inside `lock_permission_actor`** (the db re-review's HIGH on H3): v84's function locks the
+     `users` row as its first statement (v84 `:523-524`), and a caller that checked rights first already holds a `users`
+     row, so an advisory lock taken inside the function would come after a row lock - with a waiting exclusive request in
+     PostgreSQL's queue, that can close a cycle with a revocation that locks `users FOR UPDATE`. So a new helper,
+     `lockClubCeiling(client, clubIds, mode)` (and its SQL twin `public.lock_club_ceiling(p_club_ids uuid[], p_mode
+     text)`), is called as the **first statement of the transaction** by every caller, before any rights check or row lock.
+     `lock_permission_actor` does not take it; it **checks** that the transaction holds it in a sufficient mode
+     (`pg_locks`, `locktype = 'advisory'`, `pid = pg_backend_pid()`, the namespace and key) and refuses `55000` otherwise -
+     a programming error the tests catch. A recorded-order test for every caller of `lock_permission_actor`.
+   - **The mode is a parameter**, never an upgrade inside one transaction: `shared` (a guarded write, a custom role write,
+     a club role or assignment write) or `exclusive` (a ceiling change and every club version write - rule 7 of 7.2
+     depends on all versions of the club together). A transaction asks once, in the mode it needs; a second request in the
+     same transaction in another mode is refused (`55000`, a programming error, caught by tests).
    - Several clubs in one transaction: in club id order.
    - The headcount lock: R4's writes do not take it (7.2, H1). An old route that takes it (a club-admin grant or
      revocation, the login switch-off) and also calls `lock_permission_actor` takes the headcount lock first, then this
