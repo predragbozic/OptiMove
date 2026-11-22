@@ -83,9 +83,13 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
   for (const session of sessions) {
     const pair = bySource.get(String(session.plan_day_id));
     const row = [pair.targetDayId, session.am_pm, session.bta, session.session_time,
-      // At least 1 before the offset, so a template session never takes the
-      // order of a kept session it follows (db review).
-      Math.max(Number(session.session_order) || 0, 1) + Number(pair.orderOffset || 0), session.name, session.rpe_enabled, session.training_load_enabled];
+      // After kept sessions (an offset): at least 1 before the offset, so a
+      // template session never takes the order of a kept session it follows.
+      // Without an offset the source's own order is copied as it is, so two
+      // legacy sessions ordered NULL and 1 stay distinct (db review).
+      Number(pair.orderOffset) > 0
+        ? Math.max(Number(session.session_order) || 0, 1) + Number(pair.orderOffset)
+        : session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   }

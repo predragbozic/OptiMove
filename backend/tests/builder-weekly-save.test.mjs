@@ -194,3 +194,13 @@ test("2. a chosen week removed after the rights check: 404, no template", async 
   }
   assert.equal((await q(`select count(*)::int as n from plans.plans where name = 'Raced template'`))[0].n, 0);
 });
+
+test("3. a week with two sessions in one slot ordered NULL and 1 (legacy) is saved, both sessions kept", async () => {
+  const s = await squad("legacyorder", 1);
+  const cookie = s.coach.cookie;
+  const athlete = s.athletes[0];
+  const weekId = await publishedWeek(s, athlete, "2027-06-07", [[1, "Ordered"]]);
+  await q(`insert into plans.plan_sessions (plan_day_id, bta, session_order, name) select id, 'T', null, 'Unordered' from plans.plan_days where plan_id = $1 and date = '2027-06-07'`, [weekId]);
+  const draft = ok(await api("/api/builder/weekly-templates", { method: "POST", cookie, body: { name: "Legacy order", planIds: [weekId] } }), 201);
+  assert.deepEqual(sessionsOf(draft).map((x) => x.name).sort(), ["Ordered", "Unordered"]);
+});
