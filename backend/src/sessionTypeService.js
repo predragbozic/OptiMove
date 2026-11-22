@@ -121,6 +121,10 @@ async function write(ctx, { requestKey, hash, run }) {
     await client.query(`select set_config('optimove.session_type_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [ctx.userId]);
     const basis = (await client.query(`select training.session_type_basis($1, $2, $3) as b`, [ctx.userId, owner.ownerScope, owner.clubId])).rows[0].b;
     if (!basis) throw notFound();
+    // The same (user, requestKey) is serialized before the replay read (the code review of ST-1): a resend while the
+    // first is still in flight waits for it and replays, instead of meeting its effect as a label or row conflict.
+    // Taken after the rights rows, so users-first holds.
+    await client.query(`select pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 85))`, [ctx.userId, requestKey]);
     const seen = (await client.query(
       `select c.request_hash, t.key, t.label, t.owner_scope, t.owner_club_id, t.is_active, t.sort_order
          from training.activity_type_changes c join training.activity_types t on t.key = c.type_key

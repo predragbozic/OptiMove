@@ -72,6 +72,10 @@ wrappers.
 - The log guard checks `new_label` against the type row, not `old_label` against the label before. A `create` row for an
   existing type passes too. These are the limits of a trusted acting user, as in v35.
 - Labels are unique per owner only, so a club type may carry a system type's name. ST-5's pickers name the owner.
+- **Follow-up (code review, LOW):** the older metrics API's activity materializer (`backend/src/trainingActivityMetricsLink.js`)
+  does not check `activityTypeKey` for being active. After v85, an archived key (`testing_session`, `recovery_session`)
+  sent there by a hand-made API call meets the guard's 23514 and answers 500, with nothing written. No screen sends the
+  field. The fix is `assertActivityTypeKeyValid` on that path, in a later pull request that touches it.
 - The activity guard refuses moving an activity that holds a club type to another club's team (23514). That is the
   intended rule, and it cannot happen today: teams do not move between clubs (D43), and a reparent stays within one
   owner.

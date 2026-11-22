@@ -320,6 +320,38 @@ test("10d. (database review) a COMMIT whose answer never comes is 503 outcome_un
   }
 });
 
+test("10e. (code review) the same requestKey sent while the first is still in flight waits for it and replays", async () => {
+  const { testHooks } = await import("../src/sessionTypeService.js");
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  let held = 0;
+  testHooks.beforeCommit = async () => { held += 1; if (held === 1) await gate; };
+  try {
+    const body = { requestKey: newKey(), label: `Twice ${crypto.randomBytes(2).toString("hex")}` };
+    const first = post("clubAdmin", "", body);
+    while (held === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = post("clubAdmin", "", body);
+    // The second request waits on the request lock, not on the label.
+    let waiting = 0;
+    for (let i = 0; i < 100 && waiting === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      waiting = (await q(`select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`))[0].n;
+    }
+    assert.equal(waiting, 1, "the resend waits on the (user, requestKey) lock");
+    open();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(a.status, 200, a.text);
+    assert.equal(b.status, 200, b.text);
+    assert.equal(b.body.replayed, true);
+    assert.equal(b.body.type.key, a.body.type.key);
+    assert.equal((await q(`select count(*)::int as n from training.activity_types where label = $1`, [body.label]))[0].n, 1);
+    assert.equal((await q(`select count(*)::int as n from training.activity_type_changes where request_key = $1`, [body.requestKey]))[0].n, 1);
+  } finally {
+    open();
+    delete testHooks.beforeCommit;
+  }
+});
+
 test("11. bad bodies: 400 before any database work; a refusal carries no-store", async () => {
   for (const [body, code] of [
     [{ label: "No key" }, "invalid_request_key"],
