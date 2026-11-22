@@ -77,6 +77,8 @@ export const emptyCentralCalendarState = () => ({
   view: "week",
   // "" until the first load reads the device preference ("list" | "grid").
   weekMode: "",
+  // K7: the time grid's "+N more" opened the Day view as its list, until the next view, day or mode change.
+  dayList: false,
   // The day the views are built around ("" = today at the first open) and
   // the day a phone's strip or the month grid points at.
   anchor: "",

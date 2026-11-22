@@ -209,7 +209,10 @@ test("K5-2. chips come after the day's cards in the list layouts, sit in their h
   assert.deepEqual(shownKeys(), ["planned:p-late", "activity:a-first"], "the phone's selected day too");
   layout = "wide";
   await act({ action: "central-calendar-mode", mode: "grid" });
-  assert.equal(dom().querySelector('.cc-timegrid-cell[data-hour="7"] .cc-daychip').dataset.key, "activity:a-first", "its hour's cell");
+  // K7: a chip with a time is a box at its minute (07:00 with the grid opening at 06:00 -> 60 minutes down).
+  const chipBox = dom().querySelector('.cc-tg-col .cc-daychip[data-key="activity:a-first"]').closest(".cc-tg-box");
+  assert.match(chipBox.getAttribute("style"), /--cc-tg-top:60;/, "at its minute");
+  assert.ok(chipBox.classList.contains("is-chip"));
   await act({ action: "central-calendar-view", view: "month" });
   // The month's line draws the `gps` icon's own paths.
   const paths = (html) => [...dom(html).querySelectorAll("path")].map((path) => path.getAttribute("d")).join("|");

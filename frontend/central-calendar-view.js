@@ -26,6 +26,7 @@ import {
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
 import { CC_WAITING_SENTENCE, ccPanelAskOffered, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
+import { centralCalendarGridHours, centralCalendarMinutesOf, centralCalendarTimeLayout } from "./central-calendar-timegrid.js";
 import {
   ccAnswerEntries,
   ccAnswersReadable,
@@ -371,6 +372,16 @@ export function centralCalendarSpanLabel(item) {
   return index >= 1 && index <= total ? `Day ${index} of ${total}` : "";
 }
 
+// K7 (2.1): a multi-day event's times in the time grid's band - "from 10:00" on its first day, "until 16:00" on its
+// last, nothing on the days between (its "Day 2 of 3" says where it is).
+export function centralCalendarSpanWhenLabel(item) {
+  const span = item?.span;
+  if (!span?.from || !span?.to || span.to <= span.from) return centralCalendarWhenLabel(item);
+  if (item.date === span.from && item.startTime) return `from ${String(item.startTime).slice(0, 5)}`;
+  if (item.date === span.to && item.endTime) return `until ${String(item.endTime).slice(0, 5)}`;
+  return "";
+}
+
 // A start time (with an event's end time) when the item has one, else the
 // slot words (AM/PM, then Before/Training/After); `slot.order` is never shown.
 export function centralCalendarWhenLabel(item) {
@@ -519,11 +530,11 @@ function renderTeamPillHtml(teamId, teams) {
   return `<span class="cc-team-pill"${teamColorStyle(teamId, teams)}><span class="cc-team-dot" aria-hidden="true"></span><span class="cc-team-pill-name">${escapeHtml(teamName(teamId, teams))}</span></span>`;
 }
 
-function cardAriaLabel(item, teams, today) {
+function cardAriaLabel(item, teams, today, { spanWhen = false } = {}) {
   const parts = [centralCalendarTitle(item), centralCalendarKindLabel(item)];
   const marks = centralCalendarMarksLabel(centralCalendarCardMarks(item));
   if (marks) parts.push(marks);
-  const when = centralCalendarWhenLabel(item);
+  const when = spanWhen ? centralCalendarSpanWhenLabel(item) : centralCalendarWhenLabel(item);
   if (when) parts.push(when);
   const span = centralCalendarSpanLabel(item);
   if (span) parts.push(span);
@@ -547,8 +558,17 @@ function eventPlaceText(item) {
   return item.location || "";
 }
 
-export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today = "", shortKind = false } = {}) {
-  const when = centralCalendarWhenLabel(item);
+// K7, the time grid: `spanWhen` (the band) shows a multi-day event's times as "from 10:00" / "until 16:00";
+// `gridBox` (a positioned box) splits the time so the end can hide when the box itself is narrow (a container query
+// in styles.css), and gives the whole time and title as the card's tooltip. The label always keeps the whole time.
+export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today = "", shortKind = false, spanWhen = false, gridBox = false } = {}) {
+  const fullWhen = spanWhen ? centralCalendarSpanWhenLabel(item) : centralCalendarWhenLabel(item);
+  const when = fullWhen;
+  const titleAttr = gridBox ? ` title="${escapeAttr([fullWhen, centralCalendarTitle(item)].filter(Boolean).join(" "))}"` : "";
+  const start = String(item.startTime || "").slice(0, 5);
+  const whenHtml = gridBox && item.startTime && item.endTime && fullWhen.startsWith(start)
+    ? `${escapeHtml(start)}<span class="cc-card-when-end">${escapeHtml(fullWhen.slice(start.length))}</span>`
+    : escapeHtml(when);
   const count = centralCalendarCountLabel(item);
   const span = centralCalendarSpanLabel(item);
   const firstTeam = (item.teamIds || [])[0];
@@ -557,10 +577,10 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
   if (item.cancelled) classes.push("is-cancelled");
   if (openKey && openKey === item.key) classes.push("is-open");
   if (!firstTeam) classes.push("cc-card-no-team");
-  return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
+  return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)}${titleAttr} aria-label="${escapeAttr(cardAriaLabel(item, teams, today, { spanWhen }))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
       <span class="cc-card-stripe" aria-hidden="true"></span>
       <span class="cc-card-body">
-        <span class="cc-card-top">${itemIconHtml(item)}${renderMarksHtml(item)}${when ? `<span class="cc-card-when">${escapeHtml(when)}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
+        <span class="cc-card-top">${itemIconHtml(item)}${renderMarksHtml(item)}${when ? `<span class="cc-card-when">${whenHtml}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
         <span class="cc-card-title">${escapeHtml(centralCalendarTitle(item))}</span>
         ${place ? `<span class="cc-card-place">${escapeHtml(place)}</span>` : ""}
         ${centralCalendarScheduleSeparate(item) ? `<span class="cc-card-note">${SEPARATE_WORDS}</span>` : ""}
@@ -711,10 +731,12 @@ function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
     ? `<button type="button" class="plain-button cc-primary cc-new-event" data-action="central-calendar-new-event"${cal.form || cal.linkWrite ? " disabled" : ""}>${renderIconSvg("calendar-event", { size: 18 })}<span>New event</span></button>`
     : "";
   const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}" aria-label="${label}" title="${label}">${renderSwitchIcon(value)}</button>`;
-  const modeSwitch = layout === "wide" && cal.view === "week"
-    ? `<div class="cc-segmented cc-mode-switch" role="group" aria-label="Week layout">
-          ${segment("list", "List", "central-calendar-mode", "data-mode", cal.weekMode || "list")}
-          ${segment("grid", "Time grid", "central-calendar-mode", "data-mode", cal.weekMode || "list")}
+  // K7 (Q1): the Day view on wide has the same switch, one choice for both; it shows List while "+N more"'s list is open.
+  const mode = cal.view === "day" && cal.dayList ? "list" : cal.weekMode || "list";
+  const modeSwitch = layout === "wide" && (cal.view === "week" || cal.view === "day")
+    ? `<div class="cc-segmented cc-mode-switch" role="group" aria-label="${cal.view === "day" ? "Day layout" : "Week layout"}">
+          ${segment("list", "List", "central-calendar-mode", "data-mode", mode)}
+          ${segment("grid", "Time grid", "central-calendar-mode", "data-mode", mode)}
         </div>`
     : "";
   return `<div class="cc-toolbar">
@@ -811,44 +833,94 @@ function renderWeekColumnsHtml(days, byDate, cal, teams, today, layout = "") {
   return `<div class="cc-week" role="group" aria-label="Week of ${escapeAttr(shortDate(days[0], { year: true }))}">${columns.join("")}</div>`;
 }
 
-function hourOf(item) {
-  const match = /^(\d{2}):(\d{2})/.exec(String(item.startTime || ""));
-  return match ? Number(match[1]) : null;
+// K7 (docs/ai/central-calendar-k7-timegrid-contract.md 2.1): a multi-day event's card per day (span.from < span.to)
+// is never timed: it goes in the band, on each of its days.
+function isMultiDay(item) {
+  return Boolean(item?.span?.from && item?.span?.to && item.span.from < item.span.to);
 }
 
-// Week as a time grid (wide only): rows by hour, a "No time" band for the
-// slot-only cards; a card sits at its start hour with one fixed height (the
-// start is the only time K1 knows - no end, no duration).
-function renderWeekGridHtml(days, byDate, cal, teams, today) {
+// The timed part of a day: an item with a start time that is not a multi-day event's day.
+function timedEntryOf(item) {
+  if (isMultiDay(item)) return null;
+  const start = centralCalendarMinutesOf(item.startTime);
+  if (start == null) return null;
+  return { item, start, end: centralCalendarMinutesOf(item.endTime), minor: centralCalendarIsDayChip(item) };
+}
+
+// The band "No set time" (2.4), per day in this order: multi-day events, cards without a start time, chips without
+// one. At most BAND_ITEMS, then "+N more".
+const BAND_ITEMS = 3;
+function bandItemsOf(items) {
+  const untimed = items.filter((item) => !timedEntryOf(item));
+  const multi = untimed.filter((item) => isMultiDay(item));
+  const rest = untimed.filter((item) => !isMultiDay(item));
+  return [...multi, ...rest.filter((item) => !centralCalendarIsDayChip(item)), ...rest.filter((item) => centralCalendarIsDayChip(item))];
+}
+
+// "+N more" (2.3): opens the day as the Day view's list, where every item of the day is listed in the server's order.
+function renderTimeGridMoreHtml(date, count, { from = "" } = {}) {
+  const label = `${count} more item${count === 1 ? "" : "s"}, ${centralCalendarLongDate(date)}${from ? `, from ${from}` : ""}: open the day`;
+  // In a narrow column only "+3" shows (a container query); the label keeps the whole sentence.
+  return `<button type="button" class="cc-tg-more" data-action="central-calendar-open-day" data-day-list="1" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(label)}">+${count}<span class="cc-tg-more-word"> more</span></button>`;
+}
+
+const clockOf = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+
+// One positioned box of a day column (2.2, section 4): top and height from the grid's start in minutes, left and width
+// as fractions of the column.
+function boxStyle({ top, height, column, columns, span = 1 }) {
+  return `--cc-tg-top:${top};--cc-tg-height:${height};--cc-tg-left:${column / columns};--cc-tg-width:${span / columns}`;
+}
+
+// The time grid (K7): the week on wide (Time grid), or one day (the Day view on wide with Time grid). The heads, the
+// band and the day columns; each column is a list of its items laid out by centralCalendarTimeLayout, day by day in
+// reading order (section 5).
+function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false } = {}) {
+  const openKey = cal.panel.key;
   const visible = new Map(days.map((date) => [date, centralCalendarVisibleItems(byDate.get(date), cal.filters)]));
-  let start = DAY_GRID_START_HOUR;
-  let end = DAY_GRID_END_HOUR;
-  for (const items of visible.values()) {
-    for (const item of items) {
-      const hour = hourOf(item);
-      if (hour === null) continue;
-      if (hour < start) start = hour;
-      if (hour > end) end = hour;
-    }
-  }
-  const hours = Array.from({ length: end - start + 1 }, (_, index) => start + index);
+  const entriesByDay = new Map(days.map((date) => [date, visible.get(date).map(timedEntryOf).filter(Boolean)]));
+  const { startHour, endHour } = centralCalendarGridHours([...entriesByDay.values()].flat(), { startHour: DAY_GRID_START_HOUR, endHour: DAY_GRID_END_HOUR + 1 });
+  const hours = endHour - startHour;
   const heads = days.map((date) => `<div class="cc-timegrid-head${date === today ? " is-today" : ""}">${dayHeadHtml(date, today, visible.get(date).length)}</div>`).join("");
-  const untimed = days.map((date) => {
-    const items = visible.get(date).filter((item) => hourOf(item) === null);
-    return `<div class="cc-timegrid-cell cc-timegrid-untimed${date === today ? " is-today" : ""}">${items.map((item) => renderDayItemHtml(item, teams, cal.panel.key, today)).join("")}${renderGpsMarkHtml(cal, date)}</div>`;
+  const band = days.map((date) => {
+    // 2.4: the band's entries in order, K5-4's GPS mark last; more than BAND_ITEMS show BAND_ITEMS and "+N more".
+    const entries = bandItemsOf(visible.get(date)).map((item) => (isMultiDay(item)
+      ? renderCentralCalendarCardHtml(item, { teams, openKey, today, spanWhen: true })
+      : renderDayItemHtml(item, teams, openKey, today)));
+    const mark = renderGpsMarkHtml(cal, date);
+    if (mark) entries.push(mark);
+    const shown = entries.length > BAND_ITEMS ? entries.slice(0, BAND_ITEMS) : entries;
+    const more = entries.length > shown.length ? renderTimeGridMoreHtml(date, entries.length - shown.length) : "";
+    return `<div class="cc-timegrid-cell cc-timegrid-untimed${date === today ? " is-today" : ""}">${shown.join("")}${more}</div>`;
   }).join("");
-  const rows = hours.map((hour) => {
-    const label = `${String(hour).padStart(2, "0")}:00`;
-    const cells = days.map((date) => {
-      const items = visible.get(date).filter((item) => hourOf(item) === hour);
-      return `<div class="cc-timegrid-cell${date === today ? " is-today" : ""}" data-hour="${hour}">${items.map((item) => renderDayItemHtml(item, teams, cal.panel.key, today)).join("")}</div>`;
-    }).join("");
-    return `<div class="cc-timegrid-row"><span class="cc-timegrid-hour">${label}</span>${cells}</div>`;
+  const gutter = Array.from({ length: hours }, (_, index) => `<span class="cc-tg-hour" style="--cc-tg-top:${index * 60}">${String(startHour + index).padStart(2, "0")}:00</span>`).join("");
+  const columns = days.map((date) => {
+    const { placed, more } = centralCalendarTimeLayout(entriesByDay.get(date), { startHour, maxColumns: dayView ? 6 : 3 });
+    const count = visible.get(date).length;
+    let html = "";
+    let next = 0;
+    const moreHtml = (block) => `<div class="cc-tg-box cc-tg-box-more" role="listitem" style="${boxStyle(block)}">${renderTimeGridMoreHtml(date, block.items.length, { from: clockOf(block.top + startHour * 60) })}</div>`;
+    placed.forEach((box, index) => {
+      const classes = ["cc-tg-box"];
+      if (box.openEnd) classes.push("is-open-end");
+      if (box.minor) classes.push("is-chip");
+      if (box.span < box.columns) classes.push("is-narrow");
+      // Under 45 minutes high the time and title share one line (2.1: "10:00 Title").
+      if (box.height < 45) classes.push("is-short");
+      // 2.2.5: a narrow card keeps its stripe and its start first (the end hides only when the box itself is narrow,
+      // a container query); the whole time and title in its tooltip and label.
+      const inner = box.minor ? renderDayChipHtml(box.item, teams, openKey, today) : renderCentralCalendarCardHtml(box.item, { teams, openKey, today, gridBox: true });
+      html += `<div class="${classes.join(" ")}" role="listitem" style="${boxStyle(box)}">${inner}</div>`;
+      while (next < more.length && more[next].after === index + 1) html += moreHtml(more[next++]);
+    });
+    while (next < more.length) html += moreHtml(more[next++]);
+    return `<div class="cc-tg-col${date === today ? " is-today" : ""}" role="list" aria-label="${escapeAttr(`${centralCalendarLongDate(date)}, ${count} item${count === 1 ? "" : "s"}`)}">${html}</div>`;
   }).join("");
-  return `<div class="cc-timegrid" role="group" aria-label="Week of ${escapeAttr(shortDate(days[0], { year: true }))}, by hour">
+  const label = dayView ? `${centralCalendarLongDate(days[0])}, by hour` : `Week of ${shortDate(days[0], { year: true })}, by hour`;
+  return `<div class="cc-timegrid${dayView ? " cc-timegrid-day" : ""}" role="group" aria-label="${escapeAttr(label)}">
       <div class="cc-timegrid-row cc-timegrid-heads"><span class="cc-timegrid-hour" aria-hidden="true"></span>${heads}</div>
-      <div class="cc-timegrid-row cc-timegrid-untimed-row"><span class="cc-timegrid-hour">No set time</span>${untimed}</div>
-      ${rows}
+      <div class="cc-timegrid-row cc-timegrid-untimed-row"><span class="cc-timegrid-hour">No set time</span>${band}</div>
+      <div class="cc-timegrid-row cc-timegrid-body" style="--cc-tg-hours:${hours}"><div class="cc-tg-gutter" aria-hidden="true">${gutter}</div>${columns}</div>
     </div>`;
 }
 
@@ -970,6 +1042,11 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
     ${phone && dayList ? renderSelectedDayListHtml(selected, byDate, cal, teams, today) : ""}`;
 }
 
+// The Day view's time grid (K7, Q1): wide, the switch on Time grid, and not the list "+N more" opened.
+export function centralCalendarDayGridShown(cal, layout) {
+  return cal.view === "day" && layout === "wide" && cal.weekMode === "grid" && !cal.dayList;
+}
+
 function renderBodyHtml(cal, layout, today) {
   if (!cal.data) return renderStateHtml(cal);
   const teams = cal.data.teams || [];
@@ -990,13 +1067,18 @@ function renderBodyHtml(cal, layout, today) {
   // A month with nothing to show says so once: a phone then skips the
   // selected day's own "Nothing on this day." under the grid.
   if (cal.view === "month") return renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList: anyVisible }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
-  if (cal.view === "day") return renderSelectedDayListHtml(days[0], byDate, cal, teams, today, { heading: false });
+  if (cal.view === "day") {
+    // K7 (Q1): on wide, the Day view is a time grid too when the switch says Time grid, unless "+N more" asked for
+    // the day's list (cal.dayList).
+    if (centralCalendarDayGridShown(cal, layout)) return renderTimeGridHtml([days[0]], byDate, cal, teams, today, { dayView: true }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+    return renderSelectedDayListHtml(days[0], byDate, cal, teams, today, { heading: false });
+  }
   if (layout === "phone") {
     const selected = days.includes(cal.selectedDate) ? cal.selectedDate : days[0];
     return renderStripHtml(days, byDate, cal, today, teams) + renderSelectedDayListHtml(selected, byDate, cal, teams, today);
   }
   const grid = layout === "wide" && cal.weekMode === "grid";
-  return (grid ? renderWeekGridHtml(days, byDate, cal, teams, today) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+  return (grid ? renderTimeGridHtml(days, byDate, cal, teams, today) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
 }
 
 // `roster` maps an athlete UUID to the rail roster's athlete_id, the id the

@@ -316,16 +316,23 @@ test("4a. a day's cards keep exactly the server's order, never re-sorted", async
   assert.deepEqual([...dom().querySelectorAll(".cc-card .cc-card-title")].map((node) => node.textContent), ["C last", "A first", "B middle"]);
 });
 
-test("4b. the time grid (wide, grid mode) places a timed card at its hour and the slot-only ones in the No time band", async () => {
+test("4b. the time grid (wide, grid mode) places a timed card at its minute and the slot-only ones in the No time band", async () => {
   installFetchMock(okResponder());
   await loadCentralCalendar({ render });
   await act({ action: "central-calendar-mode", mode: "grid" });
   const doc = dom();
   assert.ok(doc.querySelector(".cc-timegrid"), "the grid is drawn");
-  assert.equal(doc.querySelector('.cc-timegrid-cell[data-hour="17"] .cc-card').dataset.key, "planned:batch-2");
-  // K5-2 (contract 2.4): a chip sits in its hour's cell like a card, and in the No set time row without a time.
-  assert.equal(doc.querySelector('.cc-timegrid-cell[data-hour="19"] .cc-daychip').dataset.key, "activity:act-gps");
-  assert.equal(doc.querySelector('.cc-timegrid-cell[data-hour="9"] .cc-daychip').dataset.key, "test:tsch-1:d2");
+  // K7: a timed item is a box at its start, in minutes from the grid's first hour (the gutter's first label).
+  const firstHour = Number(doc.querySelector(".cc-tg-hour").textContent.slice(0, 2));
+  const startOf = (selector) => {
+    const box = doc.querySelector(selector).closest(".cc-tg-box");
+    return firstHour * 60 + Number(/--cc-tg-top:(-?\d+)/.exec(box.getAttribute("style"))[1]);
+  };
+  assert.equal(startOf('.cc-tg-col [data-key="planned:batch-2"]'), 17 * 60 + 30, "at its minute, 17:30 (no longer the top of the 17:00 row)");
+  // K5-2 (contract 2.4): a chip sits at its time like a card, and in the No set time row without a time.
+  assert.ok(doc.querySelector('.cc-tg-box.is-chip .cc-daychip[data-key="activity:act-gps"]'));
+  assert.equal(Math.floor(startOf('.cc-tg-col [data-key="activity:act-gps"]') / 60), 19, "in the 19:00 hour");
+  assert.equal(Math.floor(startOf('.cc-tg-col [data-key="test:tsch-1:d2"]') / 60), 9, "in the 09:00 hour");
   const untimed = [...doc.querySelectorAll(".cc-timegrid-untimed :is(.cc-card, .cc-daychip)")].map((card) => card.dataset.key);
   assert.deepEqual(untimed, ["planned:batch-1", "external:sch-2:d3", "test:tsch-2:d4", "external:sch-3:d5", "activity:act-manual"], "every card without a start time, day by day");
   assert.equal(doc.querySelector('.cc-mode-switch [data-mode="grid"]').getAttribute("aria-pressed"), "true");

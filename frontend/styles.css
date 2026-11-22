@@ -3002,7 +3002,8 @@ input:focus {
 }
 
 .athlete-mode .athlete-toolbar-row {
-  grid-template-columns: minmax(360px, 0.46fr) minmax(360px, 0.54fr);
+  /* min 0, not 360px: two 360 px minimums pushed the whole page wider than a 761-830 px window (a zoomed-in browser). */
+  grid-template-columns: minmax(0, 0.46fr) minmax(0, 0.54fr);
 }
 
 .athlete-mode .athlete-hero {
@@ -5240,6 +5241,23 @@ body.specific-program-open {
 .athlete-mode .calendar-day {
   min-width: 165px;
   min-height: 340px;
+}
+
+/* On a wide window the seven days share the width (as the coach's week does) instead of a sideways-scrolling strip of
+   165 px days that cut off Saturday and Sunday; narrower windows keep the strip. */
+@media (min-width: 1180px) {
+  .athlete-mode .calendar-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    overflow-x: visible;
+    scroll-snap-type: none;
+    /* scrollWeekToDay gives a sideways strip trailing space inline; a window widened afterwards must not keep it. */
+    padding-right: 0 !important;
+  }
+
+  .athlete-mode .calendar-day {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
 }
 
 .calendar-day:last-child {
@@ -9130,6 +9148,14 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     padding: 0 8px;
     gap: 3px;
     font-size: 10px;
+  }
+
+  /* The chip's own label already ellipsises; without a zero minimum the chip, its menu and the actions row kept their
+     full width and pushed the bell and sign-out past a 360 px window (an athlete who also holds another workspace). */
+  .athlete-mode .topbar-actions,
+  .athlete-mode .workspace-menu,
+  .athlete-mode .workspace-toggle[data-action="workspace-toggle"] {
+    min-width: 0;
   }
 
   /* hotfix/athlete-mobile-navigation: stacks directly under the sticky
@@ -21315,6 +21341,259 @@ body.exercise-header-pinned #viewToolbar {
 
 .cc-timegrid .cc-card-kind {
   display: none;
+}
+
+/* K7 (docs/ai/central-calendar-k7-timegrid-contract.md 2, 4): the hours as positioned day columns, like a
+   professional calendar. Every box takes its top and height in minutes and its left and width as fractions of the
+   column (central-calendar-timegrid.js); one custom property turns minutes into pixels. */
+.cc-timegrid {
+  --cc-hour-px: 48px;
+}
+
+.cc-timegrid-day .cc-timegrid-row {
+  grid-template-columns: 56px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.cc-timegrid-body {
+  align-items: start;
+}
+
+.cc-tg-gutter,
+.cc-tg-col {
+  position: relative;
+  height: calc(var(--cc-hour-px) * var(--cc-tg-hours));
+}
+
+/* The hour lines are one repeating background, not one element per hour. */
+.cc-tg-col {
+  min-width: 0;
+  background-image: repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px var(--cc-hour-px));
+}
+
+.cc-tg-col.is-today {
+  background-color: rgba(31, 111, 104, 0.05);
+}
+
+.cc-tg-hour {
+  position: absolute;
+  top: calc(var(--cc-hour-px) * var(--cc-tg-top) / 60);
+  right: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.cc-tg-box {
+  position: absolute;
+  top: calc(var(--cc-hour-px) * var(--cc-tg-top) / 60);
+  left: calc(var(--cc-tg-left) * 100%);
+  width: calc(var(--cc-tg-width) * 100% - 2px);
+  height: calc(var(--cc-hour-px) * var(--cc-tg-height) / 60);
+  display: flex;
+  min-width: 0;
+  padding: 1px 0;
+  box-sizing: border-box;
+}
+
+.cc-tg-box > .cc-card {
+  min-height: 0;
+  height: 100%;
+  gap: 6px;
+}
+
+.cc-tg-box .cc-card-body {
+  align-content: start;
+  gap: 2px;
+  padding: 3px 6px 3px 0;
+  overflow: hidden;
+}
+
+/* A box shows its time first and its title on one line; the rest is in its tooltip and label. */
+.cc-tg-box .cc-card-top {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.cc-tg-box .cc-card-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-size: 13px;
+}
+
+.cc-tg-box .cc-card-place,
+.cc-tg-box .cc-card-note,
+.cc-tg-box .cc-card-meta,
+.cc-tg-box .cc-card-span,
+.cc-tg-box .cc-card-marks {
+  display: none;
+}
+
+/* A narrow box (a shared cluster) keeps its colour stripe and time; the icon goes. */
+.cc-tg-box.is-narrow .cc-card-icon {
+  display: none;
+}
+
+/* Under 45 minutes high: the time and the title on one line ("10:00 Title"), the title cut with an ellipsis. */
+.cc-tg-box.is-short .cc-card-body {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.cc-tg-box.is-short .cc-card-top {
+  flex: none;
+}
+
+.cc-tg-box.is-short .cc-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The box's own width decides what fits (UX and mobile review): the end time hides only when the box is narrow, and
+   a very narrow box tightens its card so its start still shows. The tooltip and the label keep everything. */
+.cc-tg-box {
+  container-type: inline-size;
+}
+
+@container (max-width: 100px) {
+  .cc-card-when-end {
+    display: none;
+  }
+}
+
+/* Under 120 px the type icon gives its room to the title (the stripe keeps the colour). */
+@container (max-width: 120px) {
+  .cc-tg-box .cc-card-icon {
+    display: none;
+  }
+}
+
+@container (max-width: 60px) {
+  .cc-tg-box > .cc-card {
+    grid-template-columns: 3px minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .cc-tg-box .cc-card-body {
+    padding-right: 1px;
+  }
+
+  .cc-tg-box .cc-card-when {
+    font-size: 11px;
+    letter-spacing: -0.02em;
+  }
+
+  .cc-tg-box .cc-card-title {
+    font-size: 11px;
+  }
+}
+
+/* A third of a week column on a 1024 px screen (about 33 px): the thinnest stripe, no side border, the start in
+   10 px tabular figures so "10:00" still shows whole. */
+@container (max-width: 44px) {
+  .cc-tg-box > .cc-card {
+    grid-template-columns: 2px minmax(0, 1fr);
+    gap: 1px;
+    border-right-width: 0;
+  }
+
+  .cc-tg-box .cc-card-body {
+    padding-right: 0;
+  }
+
+  .cc-tg-box .cc-card-when {
+    font-size: 10px;
+    letter-spacing: -0.04em;
+  }
+
+  .cc-tg-box .cc-card-title {
+    font-size: 10px;
+  }
+}
+
+/* "+3 more" in a narrow column: "+3" alone (its label keeps the sentence). */
+@container (max-width: 70px) {
+  .cc-tg-more-word {
+    display: none;
+  }
+
+  .cc-tg-more {
+    padding: 2px;
+    text-align: center;
+  }
+}
+
+/* No end time (Q2): the lower edge fades instead of claiming a length the calendar does not know. */
+.cc-tg-box.is-open-end > .cc-card {
+  border-bottom-color: transparent;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+}
+
+/* A chip with a time: one chip high (at least 24 px), at its minute. */
+.cc-tg-box.is-chip {
+  height: auto;
+}
+
+.cc-tg-box.is-chip > .cc-daychip {
+  width: 100%;
+  min-height: 24px;
+}
+
+.cc-tg-more {
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+  align-self: stretch;
+  cursor: pointer;
+}
+
+.cc-tg-more:hover {
+  background: var(--accent-soft);
+}
+
+.cc-timegrid-untimed .cc-tg-more {
+  min-height: 30px;
+}
+
+/* A touch screen of 1024 px and up keeps K5-2's 44 px touch target (code review): a short box, a chip and "+N more"
+   then reach past their time slot, and the one under the finger or the focus is drawn on top. */
+@media (pointer: coarse) {
+  .cc-tg-box.is-short,
+  .cc-tg-box.is-chip {
+    min-height: 46px;
+  }
+
+  .cc-tg-box.is-short > .cc-card {
+    min-height: 44px;
+  }
+
+  .cc-tg-box.is-chip > .cc-daychip,
+  .cc-tg-more {
+    min-height: 44px;
+  }
+
+  .cc-tg-box:hover,
+  .cc-tg-box:focus-within {
+    z-index: 2;
+  }
 }
 
 /* The month grid. */

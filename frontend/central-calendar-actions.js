@@ -635,6 +635,7 @@ export function openCentralCalendarAt({ date, key = "" } = {}) {
   if (!cal || !date) return;
   cal.anchor = date;
   cal.selectedDate = date;
+  cal.dayList = false;
   if (key && !cal.form) {
     // The same reset as an ordinary open: nothing of an earlier panel stays.
     resetPanelReads(cal);
@@ -650,6 +651,8 @@ export function restoreCentralCalendarPlace(place) {
   const cal = state.centralCalendar;
   if (!cal || !place) return;
   if (CENTRAL_CALENDAR_VIEWS.includes(place.view)) cal.view = place.view;
+  // K7: Back shows the coach's stored Day layout, never a Day list "+N more" opened elsewhere.
+  cal.dayList = false;
   cal.anchor = place.anchor || "";
   cal.selectedDate = place.selectedDate || "";
   if (!cal.form) {
@@ -2222,6 +2225,10 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
 
+  // K7: the Day list "+N more" opened lasts until the next view, day or mode change.
+  if (["central-calendar-prev", "central-calendar-next", "central-calendar-today", "central-calendar-view", "central-calendar-mode", "central-calendar-open-day"].includes(type)) {
+    cal.dayList = type === "central-calendar-open-day" && action.dataset.dayList === "1" && isIsoDate(action.dataset.date);
+  }
   if (type === "central-calendar-prev" || type === "central-calendar-next") {
     cal.anchor = movedAnchor(cal, type === "central-calendar-prev" ? -1 : 1);
     cal.selectedDate = cal.anchor;
@@ -2240,7 +2247,12 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-view") {
     const view = action.dataset.view;
-    if (!CENTRAL_CALENDAR_VIEWS.includes(view) || view === cal.view) return true;
+    if (!CENTRAL_CALENDAR_VIEWS.includes(view)) return true;
+    // The same view again: only the Day list "+N more" opened ends (K7), drawn at once.
+    if (view === cal.view) {
+      render?.();
+      return true;
+    }
     // Day shows the day a phone's strip or the month grid pointed at.
     if (view === "day" && isIsoDate(cal.selectedDate)) cal.anchor = cal.selectedDate;
     cal.view = view;
