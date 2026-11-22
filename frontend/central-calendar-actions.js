@@ -17,7 +17,7 @@ import {
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
-import { weeklyFlowFromCalendar } from "./weekly-k6-actions.js";
+import { weeklyFlowFromCalendar, weeklyFlowFromPanel } from "./weekly-k6-actions.js";
 import {
   CC_SWITCHER_ACTIONS,
   buildCentralCalendarSwitcherModel,
@@ -27,6 +27,7 @@ import {
   centralCalendarEventSlots,
   ensureCentralCalendarSwitcherOrg,
   renderCentralCalendarSearchResultsHtml,
+  toggleCentralCalendarStripHidden,
 } from "./central-calendar-switcher.js";
 import { k3SheetAction, k3StartFromPanel } from "./central-calendar-k3-actions.js";
 import { ccAnswersPaths, ccAnswersReadable, ccMergeWeekly } from "./central-calendar-answers.js";
@@ -373,7 +374,7 @@ async function chooseTeam(cal, teamId, render) {
   await scopeChanged(cal, render);
 }
 
-async function chooseAthlete(cal, key, render, { teamId } = {}) {
+async function chooseAthlete(cal, key, render, { teamId, keepOpen = false } = {}) {
   const type = cal.data?.workspace?.type || "";
   if (key && (type === "platform" || !rosterHasAthlete(key))) return;
   if (teamId !== undefined) cal.filters.teamIds = teamId ? [teamId] : [];
@@ -381,8 +382,8 @@ async function chooseAthlete(cal, key, render, { teamId } = {}) {
   cal.switcher.athleteKey = key;
   cal.switcher.query = "";
   cal.switcher.activeIndex = 0;
-  // Choosing an athlete folds a phone's box again.
-  cal.switcher.open = false;
+  // Choosing an athlete folds a phone's box again; the ‹ › arrows page through the athletes, so they keep it open.
+  if (!keepOpen) cal.switcher.open = false;
   if (!key) {
     cal.switcher.answer = null;
     cal.switcher.status = "idle";
@@ -2340,7 +2341,12 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === CC_SWITCHER_ACTIONS.pick) {
-    await chooseAthlete(cal, action.dataset.athleteKey || "", render);
+    await chooseAthlete(cal, action.dataset.athleteKey || "", render, { keepOpen: Boolean(action.classList?.contains?.("icon-button")) });
+    return true;
+  }
+  if (type === CC_SWITCHER_ACTIONS.hide) {
+    toggleCentralCalendarStripHidden(cal);
+    render?.();
     return true;
   }
   if (type === CC_SWITCHER_ACTIONS.result) {
@@ -2593,7 +2599,9 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     const rosterAthleteId = centralCalendarRosterAthleteId(athleteUuid);
     if (!rosterAthleteId) return true;
     // K6-2: the plan carries the athlete switcher (the calendar's list for the chosen team).
-    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date, { flow: weeklyFlowFromCalendar(athleteUuid) });
+    // PR2: an athlete's row in the open panel opens the plan with the athletes of THAT item on that day in the switcher.
+    const panelItem = action.dataset.athleteList === "panel" && cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
+    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date, { flow: panelItem ? weeklyFlowFromPanel(athleteUuid, panelItem) : weeklyFlowFromCalendar(athleteUuid) });
     return true;
   }
   // K6-3: See each athlete / Open the week from an event's panel.

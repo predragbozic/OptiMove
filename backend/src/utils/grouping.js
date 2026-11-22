@@ -130,7 +130,7 @@ export function buildPrograms(programSummaries, itemRowsByPlanId) {
 }
 
 export function buildProgramData(program, rows) {
-  const hasMicrocycles = rows.some((row) => row.block_name && row.block_type === "week_day");
+  const hasMicrocycles = rows.some((row) => row.block_name && (row.block_type === "week_day" || row.block_type === "template_week_day"));
   const items = rows.map(toPlanItem);
 
   if (hasMicrocycles) {

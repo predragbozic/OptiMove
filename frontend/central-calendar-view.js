@@ -1150,7 +1150,7 @@ function renderPanelAthletesHtml(item, cal, roster) {
         const spoken = manager
           ? [athlete.name || "Athlete", ccSpokenAnswerText(answerText || stateLabel), changedText, excluded ? "no longer in this event" : "", `open the weekly plan on ${centralCalendarLongDate(item.date)}`].filter(Boolean).join(", ")
           : `${athlete.name || "Athlete"}, open the weekly plan on ${centralCalendarLongDate(item.date)}`;
-        return `<li><button type="button" class="cc-athlete" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(athlete.athleteId)}" data-date="${escapeAttr(item.date)}" aria-label="${escapeAttr(spoken)}">
+        return `<li><button type="button" class="cc-athlete" data-action="central-calendar-open-athlete" data-athlete-list="panel" data-athlete-id="${escapeAttr(athlete.athleteId)}" data-date="${escapeAttr(item.date)}" aria-label="${escapeAttr(spoken)}">
             <span class="cc-athlete-name">${escapeHtml(athlete.name || "Athlete")}</span>
             ${side}</span>${manager ? `
             <span class="cc-athlete-go" aria-hidden="true">Weekly plan ›</span>` : ""}

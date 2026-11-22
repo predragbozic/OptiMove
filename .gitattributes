@@ -71,6 +71,12 @@ docs/runbooks/calculated-variables-v78*.sql text eol=lf
 docs/runbooks/calendar-questions-v81*.sql text eol=lf
 # ST-1 (v85): the rehearsal and the migration test read the runbook SQL by blocks and run the rollback as one script.
 docs/runbooks/session-types-v85*.sql text eol=lf
+# Positions (v87): the rollback restores v69's estimate_basis_ok and v64's validate_metric_value_estimate verbatim, and
+# v87's gate, the preflight and the rollback itself compare them by md5; a CRLF checkout broke the owner's PG17 rehearsal
+# (2026-11-22). Already LF in git, so nothing is renormalized.
+docs/runbooks/athlete-positions-v87*.sql text eol=lf
+# Its bash wrapper too: a CRLF script stops under Git Bash ("$'\r': command not found").
+backend/scripts/athlete-positions-v87-rehearsal.sh text eol=lf
 # ST-4 (v88): the rollback restores three bodies and compares them by md5; the rehearsal runs the runbook SQL as written.
 docs/runbooks/manual-values-v88*.sql text eol=lf
 backend/scripts/manual-values-v88-rehearsal.sh text eol=lf

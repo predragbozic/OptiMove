@@ -31,7 +31,8 @@ the K2c plan, sections 1 (K2c-1), 2 (K2c-2) and 3 (K3, named only).
   `:457-458`).
 - **One weekly plan per athlete and week.** `ensureWeeklySlot` (`:3045-3071`) refuses the create (`409`, "Athlete X
   already has a weekly plan for that week.") when **any** active, non-edit-draft weekly plan of that athlete and week
-  exists, whoever made it. The only exception: an **empty** Builder plan of the same coach is deleted first. So a
+  exists, whoever made it. The only exception: the same coach's own Builder **draft with no session and no day note** is
+  deleted first (`weeklySlotPlanIsFree`; a published plan, or a plan with any session or day note, is never removed). So a
   batch create for N athletes fails as a whole if one of them already has a plan.
 - **The Builder's athlete ids are not the calendar's.** The Builder takes `public.athletes.athlete_id` or
   `source_external_id` (`findAthlete`, `:3018-3024`); the calendar answers `public.athletes.id`, the UUID

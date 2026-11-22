@@ -66,13 +66,18 @@ export function renderImportBlockIconButton() {
 // meaningless, and the backend already rejects it) - a cross-plan-block
 // clipboard has no such self-collision (its id belongs to a different
 // plan entirely), so it shows on every weekly day.
-function renderPasteDayIconButton(dayId, context) {
+// `crossPlanOnly`: a program or template block takes only content copied from
+// another plan (a weekly plan's day, via the import dialog), never a
+// same-plan "day" clipboard, which only a weekly plan can make.
+function renderPasteDayIconButton(dayId, context, { crossPlanOnly = false } = {}) {
   const clipboard = context.clipboard;
-  if (clipboard?.type === "day") {
+  if (clipboard?.type === "day" && !crossPlanOnly) {
     if (clipboard.dayId === dayId) return "";
   } else if (clipboard?.type !== "cross-plan-block") {
     return "";
   }
+  // The server refuses a program or template source for a program or template block.
+  if (crossPlanOnly && clipboard.sourcePlanType !== "weekly") return "";
   const title = `Paste "${clipboard.name || "day"}"`;
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-day" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
@@ -82,9 +87,10 @@ function renderPasteDayIconButton(dayId, context) {
 // piggyback on (a session has only ever been created one at a time), so
 // this is its own button appending a new session to the target day rather
 // than overwriting anything, unlike Paste day.
-function renderPasteSessionIconButton(dayId, context) {
+function renderPasteSessionIconButton(dayId, context, { weeklySourceOnly = false } = {}) {
   const clipboard = context.clipboard;
   if (clipboard?.type !== "cross-plan-session") return "";
+  if (weeklySourceOnly && clipboard.sourcePlanType !== "weekly") return "";
   const title = `Paste session "${clipboard.name || "Session"}"`;
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-session" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
@@ -368,8 +374,11 @@ export function renderBuilderTrainingLoadSettings(draft) {
 }
 
 export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isWeekly = false, context) {
+  // A weekly program template's day (docs/ai/weekly-program-template-plan.md):
+  // "Day N" of its template week, no rename and no single-day delete.
+  const templateDay = context.templateDayOf?.(block) || 0;
   const defaultDayName = isWeekly ? weekDayName(block.date) : "";
-  const kicker = isWeekly ? defaultDayName : `Block ${block.index}`;
+  const kicker = templateDay ? `Day ${templateDay}` : isWeekly ? defaultDayName : `Block ${block.index}`;
   const secondary = isWeekly ? (block.date ? formatDate(block.date) : "") : (block.note || "");
   const namePlaceholder = isWeekly ? "e.g. MD-1, Match day" : `Block ${block.index}`;
   const nameLabel = isWeekly ? "Day label" : "Block name";
@@ -378,12 +387,12 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
       <div class="builder-block-head">
         <div class="builder-block-head-text">
           ${kicker ? `<span class="builder-block-kicker">${escapeHtml(kicker)}</span>` : ""}${context.k3DayMark?.(block) || ""}
-          <form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>
+          ${templateDay ? "" : `<form class="builder-day-label-inline" data-builder-form="update-block" data-builder-autosave data-block-id="${escapeAttr(block.id)}"><input name="name" class="builder-block-title-input" value="${escapeAttr(block.name || "")}" placeholder="${escapeAttr(namePlaceholder)}" aria-label="${escapeAttr(nameLabel)}"></form>`}
           ${secondary ? `<span class="builder-block-secondary">${escapeHtml(secondary)}</span>` : ""}
         </div>
-        ${isWeekly
+        ${templateDay ? "" : isWeekly
           ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}${renderPasteSessionIconButton(block.id, context)}</div>`
-          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
+          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderPasteDayIconButton(block.id, context, { crossPlanOnly: true })}${renderPasteSessionIconButton(block.id, context, { weeklySourceOnly: true })}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
       ${isWeekly ? context.eventsRow?.(block) || "" : ""}
       <div class="builder-sessions">

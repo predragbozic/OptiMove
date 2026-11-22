@@ -342,6 +342,11 @@ test("3. the proposal: the session's variables (a max variable is not estimable,
   const r3 = await proposal(team, s, team.athleteIds[EVA]);
   assert.equal(r3.body.methods.proportional.available, false);
   assert.equal(r3.body.methods.proportional.reason, "too_few_sessions");
+  // v87's position average on a database without v87 (this suite's): not available with its reason, never another method.
+  assert.deepEqual([r3.body.methods.position_average.available, r3.body.methods.position_average.reason, r3.body.methods.position_average.position],
+    [false, "positions_not_available", null]);
+  const noPositions = await save(team, s, { athleteId: team.athleteIds[EVA], method: "position_average" });
+  assert.deepEqual([noPositions.status, noPositions.body.error], [409, "positions_not_available"]);
   assert.deepEqual(r3.body.methods.proportional.sessionDays, []);
   // The days themselves (code review LOW): one entry per session across variables, two sessions on one day stay two,
   // newest first. The world above has every session on one day, so the order and the dedup are proven here.
