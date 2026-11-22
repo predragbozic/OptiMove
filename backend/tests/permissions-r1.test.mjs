@@ -984,9 +984,10 @@ test("c1. every write of user_club_roles / user_team_roles in the code writes on
     "backend/src/routes/organization.js:update:user_team_roles",
   ]) assert.equal(found.filter((f) => f === expected).length, 1, expected);
   // Nothing else in the application writes them: a new writer is added to this list on purpose.
-  // The v84 rehearsal plants one row of each table in its own disposable database (the literals checked above).
+  // The v84 rehearsal plants one row of each table in its own disposable database (the literals checked above); the v85
+  // rehearsal (session types, ST-1) plants one club_admin row the same way.
   assert.deepEqual([...new Set(found.filter((f) => f.startsWith("backend/")).map((f) => f.split(":")[0]))].sort(),
-    ["backend/scripts/permission-roles-v84-rehearsal.mjs", "backend/src/routes/organization.js"]);
+    ["backend/scripts/permission-roles-v84-rehearsal.mjs", "backend/scripts/session-types-v85-rehearsal.mjs", "backend/src/routes/organization.js"]);
 });
 
 test("c1m. the migrations: only the allowlisted historical file writes these tables, and only the right literal", () => {
