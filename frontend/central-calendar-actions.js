@@ -17,11 +17,14 @@ import {
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
+import { weeklyFlowFromCalendar } from "./weekly-k6-actions.js";
 import {
   CC_SWITCHER_ACTIONS,
   buildCentralCalendarSwitcherModel,
   centralCalendarChosenAthlete,
   centralCalendarSwitcherResults,
+  centralCalendarEventAthletes,
+  centralCalendarEventSlots,
   ensureCentralCalendarSwitcherOrg,
   renderCentralCalendarSearchResultsHtml,
 } from "./central-calendar-switcher.js";
@@ -467,6 +470,29 @@ function handleSwitcherSearchKeydown(event, render) {
     return true;
   }
   return false;
+}
+
+// K6-3 (contract 4.2): the switcher holds the event's athletes (roster-intersected); the first one with a linked
+// session opens on the event's day and slot, one history entry per level, as a tap does.
+async function openEventAthletes(cal, slotIndex, openWeekly) {
+  const item = findItemOnDay(cal, cal.panel.key, cal.panel.date);
+  if (!item || item.kind !== "event" || cal.form) return;
+  const event = centralCalendarEventAthletes(cal);
+  if (!event || !event.listed.length) return;
+  const { manager, slots } = centralCalendarEventSlots(cal, item);
+  const slot = manager && slots[Number(slotIndex)] ? slots[Number(slotIndex)] : null;
+  const keys = event.listed.map((entry) => entry.key);
+  // An athlete with a session link of that slot on that day is "in"; every other target is not in this session (F6).
+  const inKeys = slot ? keys.filter((key) => slot.athleteIds.has(key)) : keys;
+  const notInKeys = slot ? keys.filter((key) => !slot.athleteIds.has(key)) : [];
+  const first = inKeys[0] || keys[0];
+  const rosterId = centralCalendarRosterAthleteId(first);
+  if (!rosterId) return;
+  const flow = {
+    keys, currentKey: first, eventKey: item.key, eventTitle: centralCalendarTitle(item), slot: slot ? { amPm: slot.amPm, bta: slot.bta } : null,
+    notInKeys, notInLine: "", hiddenCount: manager ? event.hidden : 0, line: "", kept: "", busy: false,
+  };
+  await openWeekly?.(rosterId, item.date, { flow, slot: flow.slot });
 }
 
 function toggleValue(list, value) {
@@ -2548,7 +2574,13 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     if (!athleteUuid || !isIsoDate(date)) return true;
     const rosterAthleteId = centralCalendarRosterAthleteId(athleteUuid);
     if (!rosterAthleteId) return true;
-    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date);
+    // K6-2: the plan carries the athlete switcher (the calendar's list for the chosen team).
+    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date, { flow: weeklyFlowFromCalendar(athleteUuid) });
+    return true;
+  }
+  // K6-3: See each athlete / Open the week from an event's panel.
+  if (type === "central-calendar-see-each-athlete") {
+    await openEventAthletes(cal, action.dataset.slotIndex, openWeeklyPlanForAthleteOnDate);
     return true;
   }
   return false;

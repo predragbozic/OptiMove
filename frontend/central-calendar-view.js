@@ -43,6 +43,7 @@ import { isLibraryKey, renderIconSvg } from "./icon-render.js";
 import {
   buildCentralCalendarSwitcherModel,
   centralCalendarChosenAthlete,
+  renderCentralCalendarSeeEachHtml,
   renderCentralCalendarShowingLineHtml,
   renderCentralCalendarSwitcherHtml,
 } from "./central-calendar-switcher.js";
@@ -1414,6 +1415,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       ${renderEventActionsHtml(item, { locked: linksLocked })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
       ${item.kind === "event" ? "" : renderGoThereHtml(item)}
+      ${renderCentralCalendarSeeEachHtml(cal, item)}
       <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`;
   return panelHost(body, layout);
 }

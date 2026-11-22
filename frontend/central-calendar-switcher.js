@@ -270,5 +270,59 @@ export function renderCentralCalendarShowingLineHtml(cal, model, { onlyLabel = "
   const parts = [`Showing <strong>${escapeHtml(athlete)}</strong>`];
   if (model.type === "club" && team) parts.push(escapeHtml(team));
   if (onlyLabel) parts.push(escapeHtml(onlyLabel));
-  return `<p class="cc-showonly-line cc-athlete-line" role="status"><span>${parts.join(" · ")}</span><button type="button" class="plain-button cc-inline-button cc-showonly-all" data-action="${CC_SWITCHER_ACTIONS.everyone}">Show everyone</button></p>`;
+  return `<p class="cc-showonly-line cc-athlete-line" role="status"><span>${parts.join(" · ")}</span><button type="button" class="plain-button cc-inline-button cc-showonly-all" data-action="${CC_SWITCHER_ACTIONS.everyone}">Show everyone</button><button type="button" class="plain-button cc-inline-button" data-action="central-calendar-open-athlete" data-athlete-id="${escapeAttr(model.athleteKey)}" data-date="${escapeAttr(cal.selectedDate || cal.anchor || "")}">Open the week</button></p>`;
+}
+
+// --- K6-3: See each athlete (contract section 4) ---------------------------------
+
+// The athletes of the open event's day (the day read's list), INTERSECTED with the roster, in the panel's order
+// (by name); `hidden` counts the ones the server already named to this viewer in the panel that the roster does not
+// hold (4.2). A manager's only: a reader gets no sentence.
+export function centralCalendarEventAthletes(cal, athletes = state.athletes) {
+  const panelList = Array.isArray(cal?.panel?.athletes) ? cal.panel.athletes : null;
+  if (!panelList) return null;
+  const roster = new Map((athletes || []).filter((row) => rowUuid(row)).map((row) => [rowUuid(row), row]));
+  const listed = panelList
+    .filter((entry) => roster.has(String(entry.athleteId)))
+    .map((entry) => ({ key: String(entry.athleteId), name: String(roster.get(String(entry.athleteId)).athlete || entry.name || "Athlete"), targeted: entry.targeted !== false }))
+    .sort(byName);
+  return { listed, hidden: panelList.length - listed.length };
+}
+
+const slotKey = (amPm, bta) => `${amPm || ""}|${bta || ""}`;
+
+// The event's linked slots on its day, from the manager's read (`sessionLinks`: planId, day, amPm, bta, athleteId).
+export function centralCalendarEventSlots(cal, item) {
+  const view = cal?.panelEvent && cal.panelEvent.key === item?.key ? cal.panelEvent.event : null;
+  const links = Array.isArray(view?.sessionLinks) ? view.sessionLinks : null;
+  if (!links) return { manager: false, slots: [] };
+  const slots = [];
+  for (const link of links) {
+    if (!link.planId || link.day !== item.date) continue;
+    const key = slotKey(link.amPm, link.bta);
+    let slot = slots.find((entry) => entry.key === key);
+    if (!slot) {
+      slot = { key, amPm: link.amPm || "", bta: link.bta || "", name: link.sessionName || "", athleteIds: new Set() };
+      slots.push(slot);
+    }
+    if (link.athleteId) slot.athleteIds.add(String(link.athleteId));
+  }
+  return { manager: true, slots };
+}
+
+export function renderCentralCalendarSeeEachHtml(cal, item) {
+  if (item?.kind !== "event" || cal.form || centralCalendarWorkspaceType(cal) === "platform") return "";
+  const event = centralCalendarEventAthletes(cal);
+  if (!event || !event.listed.length) return "";
+  const { manager, slots } = centralCalendarEventSlots(cal, item);
+  const count = event.listed.length;
+  const button = (label, slotIndex, primary) => `<button type="button" class="plain-button${primary ? " cc-primary" : ""} cc-panel-button" data-action="central-calendar-see-each-athlete" data-slot-index="${slotIndex}">${escapeHtml(label)}</button>`;
+  if (manager && slots.length) {
+    const named = slots.length > 1;
+    return `<section class="cc-see-each" aria-label="See each athlete">${slots.map((slot, index) => {
+      const slotName = slot.name || "Session";
+      return `${button(named ? `See each athlete · ${slotName}` : "See each athlete", index, index === 0)}<p class="cc-panel-note">Opens ${escapeHtml(slotName)}, one athlete at a time, only the ${count} of this event.</p>`;
+    }).join("")}${event.hidden > 0 && manager ? `<p class="cc-panel-note">${event.hidden} athlete${event.hidden === 1 ? "" : "s"} of this event ${event.hidden === 1 ? "is" : "are"} not in your roster.</p>` : ""}</section>`;
+  }
+  return `<section class="cc-see-each" aria-label="Open the week">${button("Open the week", "", true)}<p class="cc-panel-note">Opens the weekly plan on this day, one athlete at a time, only the ${count} of this event.</p></section>`;
 }

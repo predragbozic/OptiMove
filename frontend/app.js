@@ -89,6 +89,8 @@ import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, re
 import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsResetForWorkspaceChange, checkBuilderEventsResult, chooseSessionEvent, chooseWholeDay, loadBuilderEvents, setBuilderEventsRender } from "./builder-events-row.js";
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
+import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, weeklyBackToCalendar } from "./weekly-k6-actions.js";
+import { slotPathFor, weeklyDayItems } from "./weekly-k6.js";
 import { captureCentralCalendarView,centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
@@ -2995,10 +2997,27 @@ function renderActiveTrainingLoadSurface() {
 // ne pravi poseban RPE schedule") - reuses the EXACT same navigation
 // coach-home-open-athlete already does (select the athlete, land on a
 // specific date in the real Weekly plan Calendar), never a new view.
-async function openWeeklyPlanForAthleteOnDate(athleteId, date) {
+async function openWeeklyPlanForAthleteOnDate(athleteId, date, { flow = null, slot = null } = {}) {
+  // K6-2: only a plan opened from the calendar carries the athlete switcher; any other way in ends it.
+  state.centralCalendar.weeklyFlow = flow;
   state.selectedAthleteId = athleteId;
   state.athletesExpanded = false;
   await openWeeklyPlanOnDate(date);
+  // K6-3: an event's slot opens by the same drill-in as a tap (one history entry per level); an athlete without
+  // that session keeps the day open and says so (F6).
+  if (flow && slot && state.centralCalendar.weeklyFlow === flow) {
+    const path = slotPathFor(weeklyDayItems(state.lastWeeklyData, weekMondayIso(date), date), slot);
+    if (path.length) {
+      for (const node of path) {
+        pushAppHistory();
+        state.navStack.push(node);
+      }
+      renderCurrentNode();
+    } else {
+      noteNotInSession(flow, date);
+      renderWeeklyRoot(state.lastWeeklyData);
+    }
+  }
 }
 
 // Mirrors weekly-actions.js's "week-day-select" branch exactly (same
@@ -3243,6 +3262,27 @@ async function handleContentClick(event) {
   }
   if (type.startsWith("builder-")) {
     void handleBuilderAction(action).catch(renderBuilderError);
+    return;
+  }
+  if (type === "weekly-k6-pick") {
+    await switchWeeklyAthlete(action.dataset.athleteKey || "", { loadWeekly, renderCurrent: renderCurrentNode });
+    return;
+  }
+  if (type === "weekly-k6-group") {
+    await chooseWeeklyGroup(action.dataset.teamId || "", { loadWeekly, renderCurrent: renderCurrentNode });
+    return;
+  }
+  if (type === "weekly-back-to-calendar") {
+    weeklyBackToCalendar({
+      renderCurrent: () => {},
+      goBack: () => window.history.back(),
+      fallback: () => {
+        state.activeTab = "central-calendar";
+        renderTabs();
+        renderLibraryNav();
+        void Promise.resolve(loadActiveTab()).catch(() => {});
+      },
+    });
     return;
   }
   if (type.startsWith("central-calendar-")) {
@@ -4057,7 +4097,8 @@ function renderWeeklyRoot(data) {
 
   // K4a: Back to calendar, only on the step Open training pushed (athlete-calendar-data.js).
   const calendarBack = isAthleteMode() ? renderAthleteCalendarBackBarHtml(athleteCalendarReturnFor(appHistoryTopEntry()), activeWeek.weekStart) : "";
-  els.content.innerHTML = calendarBack + renderWeeklyRootHtml({
+  // K6-2: the athlete switcher of a plan opened from the calendar (weekly-k6-actions.js).
+  els.content.innerHTML = renderWeeklyK6Html({ noPlan: !activeWeek.planId }) + calendarBack + renderWeeklyRootHtml({
     activeWeek,
     copyPlanModal: renderCopyPlanModal(state),
     makeNode,
@@ -4249,7 +4290,8 @@ function renderNode(node) {
   const next = nextNodes(node);
   const crumbs = state.navStack.map((entry) => entry.label);
   const siblingState = nodeSiblingState();
-  const detailHtml = renderNodeDetailHtml({
+  // K6-2: the athlete switcher stays drawn at every level of a plan opened from the calendar.
+  const detailHtml = renderWeeklyK6Html() + renderNodeDetailHtml({
     crumbs,
     next,
     node,
