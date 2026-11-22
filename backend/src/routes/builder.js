@@ -1019,7 +1019,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
 // alone (Skip). A session with results or a live event link is never removed
 // (task 5, #702): it stays and the template's sessions of that day follow it.
 // A copy, never a link: nothing ties the written plans to the template.
-export const weeklyAssignTestHooks = { afterPlanLocks: null, afterSaveRights: null };
+export const weeklyAssignTestHooks = { afterPlanLocks: null };
 const MAX_ASSIGN_PLACEMENTS = 400;
 
 router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res, next) => {
@@ -1292,6 +1292,8 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
 // plan.md, section 3.2): any weeks the coach may open, in date order, each one
 // template week (Monday = Day 1). Content only - sessions and their trees with
 // fresh logical ids, day notes; never results, RPE, event links or ids.
+export const weeklySaveTestHooks = { afterRights: null };
+
 router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
@@ -1307,7 +1309,7 @@ router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
       sources.push(plan);
     }
     sources.sort((a, b) => String(a.week_start).localeCompare(String(b.week_start)) || (String(a.id) < String(b.id) ? -1 : 1));
-    if (weeklyAssignTestHooks.afterSaveRights) await weeklyAssignTestHooks.afterSaveRights({ planIds: sources.map((p) => p.id) });
+    if (weeklySaveTestHooks.afterRights) await weeklySaveTestHooks.afterRights({ planIds: sources.map((p) => p.id) });
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);

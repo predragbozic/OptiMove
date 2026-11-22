@@ -20,7 +20,9 @@ import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoMo
 import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import { ensureBuilderEvents } from "./builder-events-row.js";
 import { renderBuilderSessionsLockedHtml } from "./builder-sessions-locked.js";
-import { currentTemplateWeek, dayOfBlock, isWeeklyTemplateDraft, renderSaveWeeksModalHtml, renderTemplateWeekStripHtml, renderWeeklyAssignModalHtml, templateWeekBlocks } from "./builder-weekly-template-view.js";
+import { currentTemplateWeek, dayOfBlock, isWeeklyTemplateDraft, renderTemplateWeekStripHtml, templateWeekBlocks } from "./builder-weekly-template-view.js";
+import { renderWeeklyAssignModalHtml } from "./builder-weekly-assign-view.js";
+import { renderSaveWeeksModalHtml } from "./builder-weekly-save-view.js";
 import { renderBuilderEventsAskHtml, renderBuilderEventsRowHtml, renderBuilderSessionEventHtml, renderBuilderSessionEventNoteHtml } from "./builder-events-row-view.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
