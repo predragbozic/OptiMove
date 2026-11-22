@@ -9,7 +9,9 @@
             "command": "node",
             "args": [
               "${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"
-            ]
+            ],
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       },
@@ -21,7 +23,9 @@
             "command": "node",
             "args": [
               "${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"
-            ]
+            ],
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       },
@@ -33,7 +37,23 @@
             "command": "node",
             "args": [
               "${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs"
-            ]
+            ],
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/hook-selfcheck.mjs"
+            ],
+            "timeout": 60
           }
         ]
       }
