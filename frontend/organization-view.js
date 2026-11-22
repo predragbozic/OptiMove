@@ -14,7 +14,8 @@ import { renderContentLanguageOptions } from "./account-language.js";
 // "1 team", "12 athletes": the count with its noun in the right number.
 const countLabel = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 import { athleteFilterAttrs, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
-import { COACH_SETTINGS_SECTIONS, isCoachSettings, renderSettingsNavHtml } from "./navigation.js";
+import { isCoachSettings, renderSettingsNavHtml } from "./navigation.js";
+import { coachSettingsSections, holdsPermission, permissionTabAllowed } from "./permission-nav.js";
 import { renderIconGalleryHtml } from "./icon-gallery.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
@@ -124,7 +125,9 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
   if (state.organization.section === "roles" && !rolesContext(data)) state.organization.section = "overview";
   // A coach's Settings is "My team": a section outside its few tabs falls back to Athletes.
   const coach = isCoachSettings();
-  if (coach && !COACH_SETTINGS_SECTIONS.includes(state.organization.section)) state.organization.section = "athletes";
+  if (coach && !coachSettingsSections().includes(state.organization.section)) state.organization.section = "athletes";
+  // A section the held permissions do not give (Settings tabs by word) falls back to the first one that stays.
+  if (!coach && !permissionTabAllowed(state.organization.section)) state.organization.section = permissionTabAllowed("overview") ? "overview" : "athletes";
   const privateCoach = state.currentUser?.activeWorkspace?.type === "private_coach";
   const hero = coach ? `
       <section class="panel organization-hero organization-hero-coach">
@@ -168,7 +171,8 @@ const organizationAddFormConfig = {
   clubs: (data) => (data.canCreateClub ? { icon: ICON_ADD_CLUB, label: "Add club", render: () => renderOrganizationClubForm() } : null),
   teams: (data) => (data.canCreateTeam ? { icon: ICON_ADD_TEAM, label: "Add team", render: () => renderOrganizationTeamForm(data.clubs) } : null),
   athletes: (data) => (data.canCreateAthlete ? { icon: ICON_ADD_ATHLETE, label: "Add athlete", render: () => renderOrganizationAthleteForm(data.clubs, data.teams) } : null),
-  users: (data) => (data.canCreateUser || (data.users || []).length
+  // "Give access" follows staff.assign when /me carries permissions; without them it is today's rule.
+  users: (data) => (holdsPermission("staff.assign", true) && (data.canCreateUser || (data.users || []).length)
     ? { icon: ICON_MANAGE_USERS, label: data.canCreateUser ? "Add user" : "Give access", render: () => renderOrganizationUserForms(data) }
     : null),
   // A join link's context comes from the account's own CURRENT active
