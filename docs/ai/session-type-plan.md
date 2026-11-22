@@ -556,7 +556,11 @@ Verified against `be5f62b9` (`origin/main`, merge of PR #709).
     (ADR-006), decided under the lock, also when the type was archived after the choice preview. Nothing is written or
     stored.
   - `409 session_type_fixed` for another type on a session that is already imported.
-  - The type the approver chose again as the suggestion is the suggestion: the same preview, the same hash.
+  - A chosen type is a choice whatever the team's suggestion is at that moment, so the hash of a choice preview does not
+    depend on the suggestion row. Two sessions of one category, previewed with the same type, import in one batch although
+    the first approval rewrites the suggestion. Only an imported session's own type chosen again is no choice.
+  - Another club's type is refused by a plain read without a lock: its row is never locked or waited on, so the answer
+    for it is the answer for an unknown key, in time as well.
 - **Deviation from section 11, test 3** ("a type not offered → 400, before any lock"): a well-formed key that is not
   offered is `409 session_type_not_offered` under the lock, as section 4 says. A `400` there would tell an unknown key
   from another club's.
@@ -565,8 +569,19 @@ Verified against `be5f62b9` (`origin/main`, merge of PR #709).
   (`session_type_not_offered`); neither stops the batch. Athletes are still left out only in a single approval.
 - **The suggestion's write** (`backend/src/gpexeSessionTypeSuggestion.js`). After a confirmed approval whose type was a
   choice (also one verified after a lost COMMIT answer), the team's row for that category is set to the chosen type, by
-  the approver, in its own short bounded transaction on another connection. It never takes the team's import lock. A
-  failure, or a refusal of v85's guard, leaves the suggestion as it was and the import committed.
+  the approver, in its own short bounded transaction, after the approval's connection is back in the pool. It never
+  takes the team's import lock. A failure, or a refusal of v85's guard, leaves the suggestion as it was and the import
+  committed. It can add up to about 12 seconds to an approval's answer in the worst case (5 s for a connection, 5 s for
+  the write, 2 s for its rollback); the batch's 45-second budget does not count it. Two approvers' writes for one
+  category are not ordered by the team lock: the later COMMIT wins.
+- **A database without v85** (a test world built to an older migration): `resolveSessionType` asks once whether v85 is
+  installed, as v72's and v80's code does. Without it the built-in pair is the only suggestion and a type is any active
+  row of `training.activity_types`.
+- **For ST-3 (a precondition):** the read of an imported session's type takes no lock on the activity row. Nothing
+  changes a confirmed activity's type today; when ST-3 adds that route, this read locks the activity row `FOR SHARE`
+  (activity, then type, as v85's guard does).
+- **An ended source instance (7g):** the session's event is looked for on the team's active instance only. After an
+  end, a re-import is a new import with a type of its own, as the writer starts a new instance.
 - **The approval row (a limit, no migration).** v59's CHECK stores `subset_hash` only together with athletes left out.
   A type chosen without leaving anybody out is bound by `subsetHash` at the approval all the same, but the row stores no
   hash for it. What it wrote is on the activity (its type and creator); a later change of the type is in the correction
@@ -584,5 +599,5 @@ Verified against `be5f62b9` (`origin/main`, merge of PR #709).
     session read "stays out";
   - the calendar event's suggestion (section 4 (a)): an import has no link at approval time;
   - `replaceManual` (ST-4).
-- **Tests:** `backend/tests/gpexe-session-type-st2.test.mjs` (disposable; 16 tests), with the mutations of section 11,
+- **Tests:** `backend/tests/gpexe-session-type-st2.test.mjs` (disposable; 19 tests), with the mutations of section 11,
   item 9.

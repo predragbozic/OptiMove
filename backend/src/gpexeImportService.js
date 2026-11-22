@@ -2885,6 +2885,11 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       await rememberChoice();
       return verified;
     }
+    // The COMMIT is confirmed: the approval's connection goes back to the pool BEFORE the suggestion takes one of its own
+    // (db review of ST-2), so an approval never holds one connection while it waits for another.
+    released = true;
+    client.removeListener("error", onClientError);
+    client.release();
     await rememberChoice();
     return result;
   } catch (error) {

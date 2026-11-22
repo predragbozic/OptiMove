@@ -1908,7 +1908,8 @@ whole team; the screen's sentence sent the admin to a search that could not help
   - `session.newerNotUsable` counts the newer sessions that were tried and refused, or that the import's gates had
     refused.
 - **None taken:** `409 no_usable_session` with `current: { reason, tried }`; `reason` is the one reason all of them
-  share (`unsupported_category`, for one) or `mixed`, and `tried` is how many were read. With no stored session at
+  share (`session_stats_invalid`, for one; before ST-2 also `unsupported_category`, which only a preview stored before
+  ST-2 still carries - `docs/ai/session-type-plan.md` section 15) or `mixed`, and `tried` is how many were read. With no stored session at
   all it is `409 no_stored_session`, as before. The look-back is bounded: an older usable session behind ten
   unusable ones is not reached by default.
 - **A stored session whose plan fails in a way the import's gates do not name** (a bundle of an unexpected shape) is

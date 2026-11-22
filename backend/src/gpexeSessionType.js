@@ -6,12 +6,16 @@
 //   3. the team's suggestion for the source's category (training_load.source_session_types, v85; a team without a row
 //      takes the built-in pair below, which is exactly what v85 seeded for the teams bound then) - "team_suggestion";
 //   4. nothing: the candidate waits with the blocker session_type_required - "none".
-// Every type is checked through training.session_type_offered(key, club, true), which locks the type row FOR SHARE: an
-// archive (FOR UPDATE of that row) waits for a transaction that read it here, and a type archived or not the club's is
-// never used. The caller holds the team's import lock; the type row is the last lock this read takes.
+// A type the team's club can see (a system type, or its own club's) is checked through
+// training.session_type_offered(key, club, true), which locks the type row FOR SHARE: an archive (FOR UPDATE of that
+// row) waits for a transaction that read it here, and an archived type is never used. A key that names no type, or
+// another club's type, is refused by a plain read WITHOUT a lock (security review of ST-2): another club's row is never
+// locked or waited on, so the answer for it is the answer for an unknown key, in time as well as in words. The caller
+// holds the team's import lock; the type row is the last lock this read takes.
 //
 // No database pool here: every read runs on the caller's client, inside its transaction (the preview and the writer
 // import this module and take no connection of their own). The suggestion's write is gpexeSessionTypeSuggestion.js.
+import { boundedText } from "./metricTextRules.js";
 
 export const SESSION_TYPE_SOURCE_SYSTEM = "gpexe";
 // The pair the importer had in code before ST-2, and v85's seed.
@@ -24,9 +28,11 @@ export function isSessionTypeKey(value) {
   return typeof value === "string" && SESSION_TYPE_KEY.test(value);
 }
 
-// A category the suggestion table can hold (its CHECK refuses the rest); anything else has no suggestion.
+// A category the suggestion table can hold: its CHECK is source_metric_text_ok(category_name, 80), whose application
+// twin is boundedText (one line, no blank edge, no invisible character). Anything else has no suggestion, and none is
+// ever written for it.
 export function usableCategory(categoryName) {
-  return typeof categoryName === "string" && categoryName.trim() !== "" && categoryName.length <= CATEGORY_NAME_MAX ? categoryName : null;
+  return boundedText(categoryName, CATEGORY_NAME_MAX) ? categoryName : null;
 }
 
 // Whether v85 is installed on this database (its suggestion table; every v85 object comes and goes together). Without it
@@ -41,6 +47,12 @@ async function offered(client, key, clubId, installed) {
   if (!installed) {
     return (await client.query(`select 1 from training.activity_types where key = $1 and is_active = true for share`, [key])).rowCount === 1;
   }
+  // No lock: is there such a type, and may this club see it at all? key and owner are write-once (v85's guard), so this
+  // answer cannot change under a later lock.
+  const visible = (await client.query(
+    `select 1 from training.activity_types where key = $1 and (owner_scope = 'system' or owner_club_id = $2)`, [key, clubId],
+  )).rowCount === 1;
+  if (!visible) return false;
   return (await client.query(`select training.session_type_offered($1, $2, true) as ok`, [key, clubId])).rows[0].ok === true;
 }
 
@@ -51,6 +63,9 @@ async function offered(client, key, clubId, installed) {
 //             changes on the session, not through an import). With a refusal the other two fields say what the import
 //             would do WITHOUT the choice; the caller writes nothing.
 // chosenKey: undefined (no choice) or a key already checked with isSessionTypeKey.
+// A chosen type is "choice" whatever the team's suggestion is at that moment (code review of ST-2): the hash of a choice
+// preview must not depend on the suggestion row, which the approval of another session of the same category rewrites.
+// Only an imported session's own type chosen again is no choice.
 export async function resolveSessionType(client, { ownerTeamId, categoryName, sourceExternalId, chosenKey = undefined }) {
   const category = usableCategory(categoryName);
   const installed = await sessionTypesInstalled(client);
@@ -78,17 +93,18 @@ export async function resolveSessionType(client, { ownerTeamId, categoryName, so
     [ownerTeamId, sourceExternalId, SESSION_TYPE_SOURCE_SYSTEM, category],
   )).rows[0];
   if (!row) return { activityTypeKey: null, source: "none", refusal: chosenKey === undefined ? null : "session_type_not_offered" };
+  // The session's event on the team's ACTIVE source instance: after an ended instance (7g) the writer starts a new one,
+  // and the session is imported anew, with a type of its own.
   if (row.activity_id) {
     const current = row.activity_type_key ?? null;
     return { activityTypeKey: current, source: "imported_session", refusal: chosenKey !== undefined && chosenKey !== current ? "session_type_fixed" : null };
+  }
+  if (chosenKey !== undefined) {
+    if (await offered(client, chosenKey, row.club_id, installed)) return { activityTypeKey: chosenKey, source: "choice", refusal: null };
   }
   const suggestedKey = row.suggested ?? (category ? DEFAULT_TYPE_BY_CATEGORY.get(category) ?? null : null);
   const suggestion = suggestedKey && await offered(client, suggestedKey, row.club_id, installed)
     ? { activityTypeKey: suggestedKey, source: "team_suggestion" }
     : { activityTypeKey: null, source: "none" };
-  if (chosenKey === undefined) return { ...suggestion, refusal: null };
-  // The suggestion chosen again is the suggestion: one preview, one hash.
-  if (chosenKey === suggestedKey) return { ...suggestion, refusal: suggestion.source === "none" ? "session_type_not_offered" : null };
-  if (!(await offered(client, chosenKey, row.club_id, installed))) return { ...suggestion, refusal: "session_type_not_offered" };
-  return { activityTypeKey: chosenKey, source: "choice", refusal: null };
+  return { ...suggestion, refusal: chosenKey === undefined ? null : "session_type_not_offered" };
 }

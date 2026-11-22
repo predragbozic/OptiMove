@@ -21,6 +21,10 @@
 //      import itself; the suggestion is written on another connection after the COMMIT
 //  15  an archived suggestion is no suggestion: the next review asks for a type
 //  16  the direct import path (the CLI's) never writes a session without a type
+//  17  two sessions of one category with the same chosen type import in one batch (a choice's hash does not depend on
+//      the suggestion the first approval rewrites)
+//  18  another club's type is never locked or waited on
+//  19  a null key is no choice; a category the suggestion table cannot hold
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -563,11 +567,17 @@ test("14. the SQL order of an approval with a choice: the type's read comes afte
   assert.ok(importStart > typeRead, "and before the import itself starts (its savepoint)");
   assert.equal(approval.filter((s) => s.sql.includes("session_type_offered")).length, 1, "one type is checked: the chosen one (the category has no suggestion)");
   assert.ok(commit > importStart);
-  assert.ok(!approval.some((s) => s.sql.includes("source_session_types") && s.sql.startsWith("insert")), "the approval's transaction never writes the suggestion");
-  const suggestion = seen.find((l) => l.some((s) => s.sql.startsWith("insert into training_load.source_session_types")));
-  assert.ok(suggestion && suggestion !== approval, "the suggestion has its own connection");
-  assert.ok(suggestion[0].at > commit, "its transaction starts after the approval's COMMIT");
-  assert.ok(!suggestion.some((s) => s.sql.includes("pg_advisory_xact_lock")), "and never takes the team's import lock");
+  // Everything sent on any connection, in order. The approval's connection is released before the suggestion takes one
+  // (db review of ST-2), so the pool may hand the same connection back: the proof is the order, not the connection.
+  const all = seen.flat().sort((x, y) => x.at - y.at);
+  const suggestionInsert = all.find((s) => s.sql.startsWith("insert into training_load.source_session_types"));
+  assert.ok(suggestionInsert, "the suggestion was written");
+  assert.ok(suggestionInsert.at > commit, "after the approval's COMMIT: the approval's transaction never writes the suggestion");
+  const after = all.filter((s) => s.at > commit);
+  const begin = after.find((s) => s.sql === "begin");
+  assert.ok(begin && begin.at < suggestionInsert.at, "in a transaction of its own, begun after the approval's COMMIT");
+  assert.ok(!after.some((s) => s.sql.includes("pg_advisory_xact_lock")), "which never takes the team's import lock");
+  assert.ok(after.some((s) => s.sql === "commit" && s.at > suggestionInsert.at), "and commits on its own");
 });
 
 test("15. an archived suggestion is no suggestion: the next review of a session of that category asks for a type", async () => {
@@ -588,6 +598,63 @@ test("15. an archived suggestion is no suggestion: the next review of a session 
   assert.deepEqual([again.status, again.body.error], [409, "session_type_required"]);
   assert.deepEqual(await activityTypes(t.teamId), [type.key], "only the first session was imported");
   assert.equal((await approveWithType(t, now, "match")).status, 200);
+});
+
+test("17. two sessions of one category, the same type chosen for both before either is approved: one batch imports both - the hash of a choice does not depend on the team's suggestion, which the first approval rewrites", async () => {
+  const t = await team();
+  const a = bundle(t, { category: MATCH, clean: true });
+  const b = bundle(t, { category: MATCH, clean: true });
+  await check(t, [a, b]);
+  const [ca, cb] = [await candidateOf(t, a), await candidateOf(t, b)];
+  const pa = (await choicePreview(t, ca.id, { activityTypeKey: "match" })).body.subset;
+  const pb = (await choicePreview(t, cb.id, { activityTypeKey: "match" })).body.subset;
+  const r = await batch(t, { candidateIds: [ca.id, cb.id], previewHashes: { [ca.id]: ca.preview_hash, [cb.id]: cb.preview_hash },
+    choices: { [ca.id]: { activityTypeKey: "match", subsetHash: pa.subsetHash }, [cb.id]: { activityTypeKey: "match", subsetHash: pb.subsetHash } } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.results.map((x) => [x.outcome, x.code]), [["imported", null], ["imported", null]]);
+  assert.deepEqual(await activityTypes(t.teamId), ["match", "match"]);
+  // The suggestion chosen again is still a choice (its own hash), and imports.
+  const c = await world({ team: t, category: MATCH, clean: true });
+  assert.equal(c.c.preview.session.activityTypeSource, "team_suggestion");
+  const pc = (await choicePreview(t, c.c.id, { activityTypeKey: "match" })).body.subset;
+  assert.equal(pc.preview.session.activityTypeSource, "choice");
+  assert.notEqual(pc.subsetHash, c.c.preview_hash);
+  assert.equal((await approve(t, c.c.id, { previewHash: c.c.preview_hash, subsetHash: pc.subsetHash, activityTypeKey: "match" })).status, 200);
+});
+
+test("18. another club's type is never locked or waited on: with its row held FOR UPDATE elsewhere, a choice of it is the immediate 409 of an unknown key (security review); the team's own type held the same way is waited for", async () => {
+  const { t, c } = await world({ category: MATCH });
+  const foreign = await clubType((await createGpexePilotOrg(admin, { athleteNames: ["Y01"] })).clubId, "Held elsewhere");
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select 1 from training.activity_types where key = $1 for update`, [foreign.key]);
+    const started = Date.now();
+    const p = await choicePreview(t, c.id, { activityTypeKey: foreign.key });
+    const a = await approve(t, c.id, { previewHash: c.preview_hash, subsetHash: "a".repeat(64), activityTypeKey: foreign.key });
+    const unknown = await choicePreview(t, c.id, { activityTypeKey: "no_such_type" });
+    assert.deepEqual([p.status, p.body.error, a.status, a.body.error], [409, "session_type_not_offered", 409, "session_type_not_offered"]);
+    assert.deepEqual(p.body, unknown.body, "the same body as an unknown key");
+    assert.ok(Date.now() - started < 3000, "no wait on the other club's row (the lock bound is 5 s)");
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end();
+  }
+  assert.equal(await written(t.teamId), NOTHING);
+});
+
+test("19. small contracts: a null activityTypeKey is no choice on the preview route; a category the suggestion table cannot hold has no suggestion and none is written", async () => {
+  const { t, c } = await world();
+  const r = await choicePreview(t, c.id, { activityTypeKey: null });
+  assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+  assert.ok(r.body.candidate && !r.body.subset, "the plain review update, not a choice preview");
+  const types = await import("../src/gpexeSessionType.js");
+  for (const bad of [" MATCH", "MATCH ", "", "A​B", "x".repeat(81), null, 7]) assert.equal(types.usableCategory(bad), null, JSON.stringify(bad));
+  assert.equal(types.usableCategory("OFFICIAL MATCH"), "OFFICIAL MATCH");
+  assert.deepEqual(await sessionType.recordTeamSessionTypeSuggestion({ teamId: t.teamId, userId: t.padmin.id, categoryName: " MATCH ", activityTypeKey: "match" }),
+    { written: false, reason: "not_recordable" });
+  assert.deepEqual(await suggestions(t.teamId), []);
 });
 
 test("16. the direct import path (the CLI's and the tests') never writes a session without a type: session_type_required, or the given type", async () => {

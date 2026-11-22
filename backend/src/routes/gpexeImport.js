@@ -417,7 +417,8 @@ router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req,
   if (!UUID.test(req.params.candidateId)) return notFound(res);
   // J20-B: with excludedAthleteIds this is the SUBSET preview - it stores nothing (service.previewCandidateSubset).
   // ST-2: so it is with activityTypeKey (the approver's choice of the session type), alone or with athletes left out.
-  if (req.body && (req.body.excludedAthleteIds !== undefined || req.body.activityTypeKey !== undefined)) {
+  // (A null activityTypeKey is no choice, as in the approval's body.)
+  if (req.body && (req.body.excludedAthleteIds !== undefined || (req.body.activityTypeKey !== undefined && req.body.activityTypeKey !== null))) {
     const unknown = Object.keys(req.body).filter((key) => key !== "excludedAthleteIds" && key !== "activityTypeKey");
     if (unknown.length) return res.status(400).json({ error: "invalid_body", message: "The body must be { excludedAthleteIds: [...], activityTypeKey } (either or both) or empty." });
     const subset = await service.previewCandidateSubset(access.teamId, req.params.candidateId, {

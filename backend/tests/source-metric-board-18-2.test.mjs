@@ -799,7 +799,8 @@ test("7e. the default session is the newest one the import would take: sessions 
   const mark = (id, sets) => k.query(`update training_load.gpexe_import_candidates set ${sets} where id = $1`, [id]);
   // ST-2: no category is refused by the import any more, so "a session the import's gates refuse" is one GPEXE marks as
   // not valid (the name MATCH is kept: production's case was two matches at the top of the list).
-  const MATCH = `raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'false')`;
+  // It still carries the source's own word "Match", which no answer may repeat (asserted below).
+  const MATCH = `raw_bundle = jsonb_set(jsonb_set(raw_bundle, '{teamSession,category_name}', '"Match"'), '{teamSession,is_stats_valid}', 'false')`;
   const TAKEN_AGAIN = `raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'true')`;
   const OTHER_REFUSAL = `raw_bundle = jsonb_set(jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'true'), '{teamSession,drills_count}', '-1')`;
   // The statements one board read sends about the stored sessions: the list, then each session read alone.
