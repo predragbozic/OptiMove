@@ -45,9 +45,6 @@ const DUPLICATE_ROW_IDENTITY = new Set(["id", "athlete", "track", "teamsession"]
 const duplicateRowFields = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((f) => !DUPLICATE_ROW_IDENTITY.has(f));
 const DUPLICATE_TRACK_FIELDS = Object.freeze(["utc_timestamp", "timestamp", "timezone"]);
 
-// Only categories whose meaning is confirmed for the pilot are importable.
-const ACTIVITY_TYPE_BY_CATEGORY = new Map([["FULL TRAINING", "training_session"]]);
-
 // The one rule for a GPEXE athlete id, wherever it enters (the raw rows of
 // a snapshot, the link route, the source-athletes SQL): "0" or a number
 // without a leading zero, at most 12 digits. "104" is an id; "0104" is not
@@ -360,13 +357,15 @@ function scaleWholeSession({ results, metricSpecs, leftOut, gpexeAthleteId, targ
 // matters only for an athlete with more than one track that is not one recording (MT-0): a 'track' or 'none' choice whose
 // fingerprint equals the athlete's track set is applied; any other is ignored (a stale one is marked). Without a choice the
 // plan is exactly the one before MT-B.
-export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null, trackChoices = null } = {}) {
+// activityTypeKey (ST-2, docs/ai/session-type-plan.md section 4): the session type the import writes, decided by OptiMove
+// (gpexeSessionType.js resolveSessionType: the imported session's own type, the approver's choice or the team's suggestion
+// for the source's category), never by the source. The mapper stays pure and refuses no category: without a type the plan
+// carries null, and the candidate waits with session_type_required.
+export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null, trackChoices = null, activityTypeKey = null } = {}) {
   if (!Array.isArray(metricSpecs)) throw new TypeError("metricSpecs must be an array");
   const session = bundle?.teamSession;
   if (!session?.id) throw new GpexeMappingError("session_missing", "teamSession is required.");
   if (session.is_stats_valid !== true) throw new GpexeMappingError("session_stats_invalid", `team_session ${session.id} has is_stats_valid=${session.is_stats_valid}.`);
-  const activityTypeKey = ACTIVITY_TYPE_BY_CATEGORY.get(session.category_name);
-  if (!activityTypeKey) throw new GpexeMappingError("unsupported_category", `team_session ${session.id} category "${session.category_name}" is not importable in the pilot.`);
   const sessionId = String(session.id);
   const startInstant = parseNaiveUtc(session.start_timestamp, "team_session.start_timestamp");
   const endInstant = parseNaiveUtc(session.end_timestamp, "team_session.end_timestamp");
@@ -596,8 +595,9 @@ export function buildGpexeImportPlan(bundle, { metricSpecs, teamTimezone = null,
     thresholdsUsed,
     event: {
       sourceExternalId: `team_session:${sessionId}`,
-      name: `GPEXE ${session.category_name} ${localDateInTimezone(startInstant, timezone)} ${localTimeInTimezone(startInstant, timezone)}`,
-      activityTypeKey,
+      name: `GPEXE ${typeof session.category_name === "string" && session.category_name.trim() !== "" ? session.category_name : "session"} ${localDateInTimezone(startInstant, timezone)} ${localTimeInTimezone(startInstant, timezone)}`,
+      activityTypeKey: activityTypeKey ?? null,
+      categoryName: typeof session.category_name === "string" ? session.category_name : null,
       occurredInstant: startInstant.toISOString(),
       endedInstant: endInstant.toISOString(),
       occurredLocalDate: localDateInTimezone(startInstant, timezone),

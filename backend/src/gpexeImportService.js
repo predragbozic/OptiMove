@@ -25,7 +25,9 @@ import {
 } from "./sourceImportCredentialResolver.js";
 import { buildGpexeImportPlan, GpexeMappingError, GPEXE_ATHLETE_ID_PATTERN, isCanonicalGpexeAthleteId, wholeRowHelperValues } from "./gpexeImportMapper.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
-import { candidateReasons } from "./gpexeImportReasons.js";
+import { candidateReasons, sessionTypeRequired } from "./gpexeImportReasons.js";
+import { isSessionTypeKey } from "./gpexeSessionType.js";
+import { recordTeamSessionTypeSuggestion } from "./gpexeSessionTypeSuggestion.js";
 import { createFieldCollector } from "./sourceFieldInventory.js";
 import { PinnedFieldsError, PINNED_FIELDS_SQL, pinnedFieldsFromKeys, readPinnedFields } from "./sourcePinnedFields.js";
 import { candidateState } from "./gpexeImportState.js";
@@ -1431,6 +1433,8 @@ function approvalBlockers(row, snapshot, preview) {
   if (row.status === "blocked") blockers.push("blocked");
   if (!snapshot.available) blockers.push("snapshot_expired_check_again");
   if (preview && preview.status === "no_changes") blockers.push("nothing_to_import");
+  // ST-2: no session type is decided for this session; the approval needs the approver's choice (activityTypeKey).
+  if (row.status === "pending" && sessionTypeRequired(preview)) blockers.push("session_type_required");
   // v33: a candidate of a check that has not (atomically) succeeded, one
   // waiting to reappear, or one without a confirmed drill-parameter effect.
   // One generic word: never the proof or the reason.
@@ -1471,6 +1475,10 @@ function candidateSummary(row, audience = "other") {
     // gates refused (blockedByMapping) lists no athlete at all: its count is unknown, never 0.
     athleteCount: Array.isArray(preview?.athletes) && !(preview.status === "blocked" && preview.athletes.length === 0) ? preview.athletes.length : null,
     drillsCount: Number.isInteger(preview?.session?.drillsCount) ? preview.session.drillsCount : null,
+    // ST-2, additive: the session type an import would write as the stored preview decided it (the team's suggestion, or
+    // the imported session's own type); null while a type has to be chosen (the blocker session_type_required) or the
+    // snapshot is gone. A key, never a label: the labels are the session-types route's.
+    suggestedActivityTypeKey: typeof preview?.session?.activityTypeKey === "string" ? preview.session.activityTypeKey : null,
     // The approval must carry acceptChanges = true when this is > 0.
     changesToImported: preview ? (preview.changesToImported?.length ?? 0) : null,
     firstSeenAt: row.first_seen_at,
@@ -1562,7 +1570,7 @@ export async function listCandidates(teamId, options = {}) {
 const CALENDAR_PREVIEW = `case when preview is null then null else jsonb_build_object(
     'status', preview->'status',
     'blocked', jsonb_build_object('code', preview->'blocked'->'code'),
-    'session', jsonb_build_object('categoryName', preview->'session'->'categoryName'),
+    'session', jsonb_build_object('categoryName', preview->'session'->'categoryName', 'activityTypeSource', preview->'session'->'activityTypeSource'),
     'changesToImported', case when jsonb_typeof(preview->'changesToImported') = 'array'
       then (select coalesce(jsonb_agg(null::jsonb), '[]'::jsonb) from jsonb_array_elements(preview->'changesToImported')) end,
     'athletes', case when jsonb_typeof(preview->'athletes') = 'array'
@@ -2591,18 +2599,39 @@ function checkExclusionAgainstPreview(preview, excluded) {
   if (!remaining.length) throw refusal(409, "no_importable_athlete", "Leaving these athletes out would leave nobody to import.");
 }
 
-export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges, expectedClubId = undefined, excludedAthleteIds = undefined, subsetHash = undefined }) {
+// ST-2: the approver's choice of the session type, in its one canonical form: undefined (no choice) or a key in the
+// shape of a session type key, else a 400. Whether the key is a type offered to the team is decided under the locks
+// (409 session_type_not_offered - one answer for an unknown, another club's and an archived type).
+export function canonicalChosenSessionType(value) {
+  if (value === undefined || value === null) return undefined;
+  if (!isSessionTypeKey(value)) throw refusal(400, "invalid_activity_type_key", "activityTypeKey must be the key of a session type.");
+  return value;
+}
+
+function sessionTypeRefusal(code) {
+  return code === "session_type_fixed"
+    ? refusal(409, "session_type_fixed", "This session is already imported with its own session type; nothing was imported. Change the type on the session itself.")
+    : refusal(409, "session_type_not_offered", "The chosen session type is not offered to this team any more; nothing was imported. Choose again.");
+}
+const SESSION_TYPE_REQUIRED = "Choose the session type before importing this session.";
+
+export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges, expectedClubId = undefined, excludedAthleteIds = undefined, subsetHash = undefined, activityTypeKey = undefined }) {
   if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
     throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
   }
   // J20-B: the set and its hash travel together. Checked before any connection is taken.
+  // ST-2: so does the chosen session type. A CHOICE is anything the approver decided beyond the stored preview - athletes
+  // left out, a session type - and it is bound by subsetHash, the hash of the preview recomputed with the choice (still
+  // called subsetHash for compatibility). The stored preview_hash stays the hash of the team's suggestion.
   const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
+  const chosenType = canonicalChosenSessionType(activityTypeKey);
   const subset = excluded.length > 0;
-  if (subset && (typeof subsetHash !== "string" || !HASH.test(subsetHash))) {
-    throw refusal(400, "invalid_subset_hash", "subsetHash must be the hash of the subset preview you reviewed.");
+  const choice = subset || chosenType !== undefined;
+  if (choice && (typeof subsetHash !== "string" || !HASH.test(subsetHash))) {
+    throw refusal(400, "invalid_subset_hash", "subsetHash must be the hash of the preview of your choice (athletes left out, session type) that you reviewed.");
   }
-  if (!subset && subsetHash !== undefined && subsetHash !== null) {
-    throw refusal(400, "subset_hash_without_exclusion", "subsetHash is only sent together with excludedAthleteIds.");
+  if (!choice && subsetHash !== undefined && subsetHash !== null) {
+    throw refusal(400, "subset_hash_without_exclusion", "subsetHash is only sent together with a choice (excludedAthleteIds or activityTypeKey).");
   }
   if (acceptChanges !== undefined && typeof acceptChanges !== "boolean") {
     throw refusal(400, "invalid_accept_changes", "acceptChanges must be true or false.");
@@ -2670,6 +2699,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       throw previewChanged(teamId, candidateId, "The preview was recomputed after you reviewed it; review the candidate again.");
     }
     if (row.preview?.status === "no_changes") throw refusal(409, "nothing_to_import", "This candidate would write nothing.");
+    // ST-2: a session without a decided type is imported only with the approver's choice. Decided again under the locks.
+    if (sessionTypeRequired(row.preview) && chosenType === undefined) throw refusal(409, "session_type_required", SESSION_TYPE_REQUIRED);
     checkExclusionAgainstPreview(row.preview, excluded);
     const changesToImported = row.preview?.changesToImported?.length ?? 0;
     if (changesToImported > 0 && acceptChanges !== true) {
@@ -2695,8 +2726,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     const binding = bindingId ? await readImportBinding(client, { teamId, bindingId }) : null;
     if (!binding) {
       const blocked = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId });
-      // J20-B: a subset approval never stores a refreshed preview (the full hash is the candidate's; the next full review recomputes it).
-      if (!subset) refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
+      // J20-B: an approval with a choice never stores a refreshed preview (the full hash is the candidate's; the next full review recomputes it).
+      if (!choice) refreshed = { expectedPreviewHash: row.preview_hash, preview: blocked.preview, previewHash: blocked.previewHash };
       throw previewChanged(teamId, candidateId, "This session can no longer be imported through the team's source binding; nothing was imported. Review the candidate again.");
     }
     // Steps 4-6: the activations, the registry locks and their re-check, the
@@ -2741,30 +2772,40 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // Steps 7-11: the plan, the classification and the import, inside the
     // preview (previewLocked); a block there is a blocked preview, refused at
     // step 12 below as a changed preview.
-    const fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded });
+    const fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded, activityTypeKey: chosenType });
     if (approvalObserver) await approvalObserver({ client, candidateId, freshPreviewHash: fresh.previewHash });
+    // ST-2: the chosen type against the types offered to the team NOW, decided inside previewLocked under the type row's
+    // FOR SHARE (an archive waits for this transaction). A stale choice writes nothing and stores nothing.
+    if (fresh.sessionType?.refusal) throw sessionTypeRefusal(fresh.sessionType.refusal);
 
     // Step 12: the hash compared again. A full approval compares the candidate's hash and, if it differs,
     // stores the recomputed preview for the next review (as before). A subset approval compares the SUBSET
     // hash against the preview recomputed with the set, re-validates the set against the athletes recomputed
     // under the lock (an id that disappeared or became left-out is a changed preview, not a validation
     // error), and NEVER stores anything: the list, the batch and other coaches rely on the stored full preview.
-    if (subset && fresh.preview.status === "no_changes" && !fresh.invalidExclusions.length) {
-      throw refusal(409, "nothing_to_import", "The athletes that remain would write nothing.");
+    // ST-2: a session type chosen without leaving anybody out is bound the same way (the choice preview against
+    // subsetHash, never against the stored hash, and nothing stored).
+    if (choice && fresh.preview.status === "no_changes" && !fresh.invalidExclusions.length) {
+      throw refusal(409, "nothing_to_import", subset ? "The athletes that remain would write nothing." : "This candidate would write nothing.");
     }
-    if (subset) {
+    if (choice) {
       if (fresh.invalidExclusions.length || fresh.previewHash !== subsetHash || fresh.preview.status !== "ready" || !fresh.summary
           || (fresh.preview.changesToImported?.length ?? 0) !== changesToImported) {
-        // The recomputed subset preview travels in the body only (the route projects it for the audience); it is never stored.
+        // The recomputed choice preview travels in the body only (the route projects it for the audience); it is never stored.
         throw previewChanged(teamId, candidateId, "What this import would do has changed since the preview was made; nothing was imported. Review the candidate again.",
-          { subsetPreview: fresh.preview, subsetHash: fresh.previewHash, excludedAthleteIds: excluded });
+          { subsetPreview: fresh.preview, subsetHash: fresh.previewHash, excludedAthleteIds: excluded, ...(chosenType !== undefined ? { activityTypeKey: chosenType } : {}) });
       }
     } else if (fresh.previewHash !== previewHash || fresh.preview.status !== "ready" || !fresh.summary) {
       refreshed = { expectedPreviewHash: row.preview_hash, preview: fresh.preview, previewHash: fresh.previewHash };
       throw previewChanged(teamId, candidateId, "What this import would do has changed since the preview was made; nothing was imported. Review the candidate again.");
     }
+    // ST-2: never an import without a session type, whatever the hashes said (the recomputed preview is the judge).
+    if (sessionTypeRequired(fresh.preview)) throw refusal(409, "session_type_required", SESSION_TYPE_REQUIRED);
 
     // The approval row, the candidate imported, the observations.
+    // ST-2: subset_hash is stored only with athletes left out - v59's CHECK pairs the column with excluded_athlete_ids,
+    // and ST-2 has no migration. A session type chosen without leaving anybody out is bound by subsetHash above all the
+    // same; what it wrote is on the activity (its type, its creator), and a later change of it is in the correction log.
     const summary = fresh.summary;
     const approval = (await client.query(
       `insert into training_load.gpexe_import_approvals
@@ -2792,11 +2833,26 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       ...gpexeRosterObservations(fresh.preview),
       adapterRef: { approvalId: approval.id, candidateId },
     });
+    // ST-2: the type the import wrote (or the imported session keeps), as decided under the locks; never a preview.
+    const typeWritten = { activityTypeKey: fresh.sessionType?.activityTypeKey ?? null, source: fresh.sessionType?.source ?? null };
     const result = {
       outcome: "imported",
       commitConfirmation: "confirmed",
       approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported, excludedAthleteIds: excluded, subsetHash: subset ? subsetHash : null },
-      import: { eventId: summary.eventId, activityId: summary.activityId, importBatchId: summary.importBatchId, counts: summary.counts },
+      import: {
+        eventId: summary.eventId, activityId: summary.activityId, importBatchId: summary.importBatchId, counts: summary.counts,
+        // ST-2: the session type of the imported session and where it came from (choice, team_suggestion, imported_session).
+        activityTypeKey: typeWritten.activityTypeKey, activityTypeSource: typeWritten.source,
+      },
+    };
+    // ST-2: the team's suggestion for this source category follows the approver's choice - after the COMMIT is confirmed,
+    // in its own short transaction, best effort (recordTeamSessionTypeSuggestion never throws and never touches the import).
+    const rememberChoice = async () => {
+      if (fresh.sessionType?.source !== "choice") return;
+      // The import is committed: nothing here may turn its answer into a failure.
+      try {
+        await recordTeamSessionTypeSuggestion({ teamId, userId, categoryName: fresh.preview.session?.categoryName ?? null, activityTypeKey: fresh.sessionType.activityTypeKey });
+      } catch { /* best effort */ }
     };
     // Switch condition 2: the deferred trigger and constraint work runs now,
     // as a statement the server bounds. PostgreSQL does not apply
@@ -2824,8 +2880,17 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       released = true;
       client.removeListener("error", onClientError);
       client.release(true);
-      return await resolveUncertainCommit(teamId, candidateId, { approvalId: approval.id, result, commitError });
+      // Returns only when the approval was found committed (else it throws import_outcome_unknown).
+      const verified = await resolveUncertainCommit(teamId, candidateId, { approvalId: approval.id, result, commitError });
+      await rememberChoice();
+      return verified;
     }
+    // The COMMIT is confirmed: the approval's connection goes back to the pool BEFORE the suggestion takes one of its own
+    // (db review of ST-2), so an approval never holds one connection while it waits for another.
+    released = true;
+    client.removeListener("error", onClientError);
+    client.release();
+    await rememberChoice();
     return result;
   } catch (error) {
     if (!commitSent) await client.query("rollback").catch(() => {});
@@ -3095,9 +3160,13 @@ async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expe
 // changes, so the stored full preview and its hash stay byte for byte as they
 // were (the list, the batch and other coaches rely on them). A lost answer is
 // harmless: there is nothing to confirm. Throttled per user and team.
-export async function previewCandidateSubset(teamId, candidateId, { userId, excludedAthleteIds, expectedClubId = undefined }) {
+//
+// ST-2: the same route previews a chosen session type (activityTypeKey), alone or together with athletes left out; the
+// hash it answers (subsetHash) is the hash of the preview with every choice of the body.
+export async function previewCandidateSubset(teamId, candidateId, { userId, excludedAthleteIds, activityTypeKey = undefined, expectedClubId = undefined }) {
   const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
-  if (!excluded.length) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must name at least one athlete to leave out.");
+  const chosenType = canonicalChosenSessionType(activityTypeKey);
+  if (!excluded.length && chosenType === undefined) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must name at least one athlete to leave out.");
   // Its own in-flight set (a member without the approver right must not hold the slot of A1's recompute), and the interval slot is
   // taken only once the approver right is confirmed (a refused request does not use it up).
   if (recomputeInFlight.has(String(teamId)) || subsetInFlight.has(String(teamId))) {
@@ -3124,14 +3193,14 @@ export async function previewCandidateSubset(teamId, candidateId, { userId, excl
     takeSlot();
   };
   try {
-    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot: holdSlot });
+    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, chosenType, expectedClubId, takeSlot: holdSlot });
   } finally {
     if (held) subsetInFlight.delete(String(teamId));
   }
 }
 
 const subsetInFlight = new Set();
-async function previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, expectedClubId, takeSlot }) {
+async function previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, chosenType, expectedClubId, takeSlot }) {
   const client = await pool.connect();
   let sessionLost = false;
   const onClientError = () => { sessionLost = true; };
@@ -3178,7 +3247,7 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
     const binding = bindingId ? await readImportBinding(client, { teamId, bindingId }) : null;
     let fresh;
     if (!binding) {
-      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded });
+      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping: { block: "mapping_not_usable", rows: [], activationSet: [], unactivated: [] }, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded, activityTypeKey: chosenType });
     } else {
       let mapping;
       try {
@@ -3198,22 +3267,28 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
         }
         throw error;
       }
-      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded });
+      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded, activityTypeKey: chosenType });
     }
+    // ST-2: a chosen type that is not offered to the team now (or a session that keeps its own) is refused with its own code.
+    if (fresh.sessionType?.refusal) throw sessionTypeRefusal(fresh.sessionType.refusal);
     // A set that leaves the session blocked (an athlete imported earlier, a mapping that changed) is refused here with its own code,
     // never handed to the coach as a review that can only fail at the approval.
     if (fresh.preview.status === "blocked") {
       throw refusal(409, "subset_blocked", "This session can't be imported right now; nothing was changed. Update the review and choose again.");
     }
     if (fresh.preview.status === "no_changes") {
-      throw refusal(409, "nothing_to_import", "The athletes that remain would write nothing.");
+      throw refusal(409, "nothing_to_import", excluded.length ? "The athletes that remain would write nothing." : "This candidate would write nothing.");
     }
     // The set re-validated against the athletes recomputed under the lock.
     if (fresh.invalidExclusions.length) {
       throw refusal(400, "invalid_exclusion", "A GPEXE athlete you chose to leave out cannot be left out of this import.");
     }
+    // ST-2: athletes left out of a session that still has no type - the answer says a type has to be chosen with them.
+    if (sessionTypeRequired(fresh.preview)) throw refusal(409, "session_type_required", SESSION_TYPE_REQUIRED);
     const result = {
       excludedAthleteIds: excluded,
+      // The chosen session type as sent (undefined = no choice); the preview's session names the type the import writes.
+      ...(chosenType !== undefined ? { activityTypeKey: chosenType } : {}),
       // The candidate's stored full hash: what the approval sends as previewHash (the route names it).
       fullHash: row.preview_hash,
       subsetHash: fresh.previewHash,
@@ -3288,7 +3363,7 @@ export function parseBatchApproveBody(body) {
   if (Object.hasOwn(body, "acceptChanges")) {
     throw refusal(400, "accept_changes_not_allowed", "Changes to already imported results are accepted one candidate at a time, not in a batch.");
   }
-  const unknown = Object.keys(body).filter((key) => key !== "candidateIds" && key !== "previewHashes");
+  const unknown = Object.keys(body).filter((key) => key !== "candidateIds" && key !== "previewHashes" && key !== "choices");
   if (unknown.length) throw refusal(400, "unknown_field", `Unknown field: ${unknown[0].slice(0, 40)}.`);
   const ids = body.candidateIds;
   if (!Array.isArray(ids) || !ids.length) throw refusal(400, "candidate_ids_required", "candidateIds must be a non-empty list of candidate ids.");
@@ -3314,7 +3389,27 @@ export function parseBatchApproveBody(body) {
     byId.set(id, value);
   }
   if (byId.size !== normal.length) throw refusal(400, "preview_hashes_mismatch", "previewHashes must name exactly the candidates in candidateIds, once each.");
-  return { candidates: normal.map((candidateId) => ({ candidateId, previewHash: byId.get(candidateId) })) };
+  // ST-2: choices: { <candidateId>: { activityTypeKey, subsetHash } } - optional, only for candidates of candidateIds; a
+  // choice is the session type the approver chose for that one session, with the hash of its choice preview (the
+  // preview route's subsetHash). Leaving athletes out stays a single approval's matter.
+  const choices = new Map();
+  if (Object.hasOwn(body, "choices")) {
+    const raw = body.choices;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw refusal(400, "invalid_choices", "choices must give, per candidate, { activityTypeKey, subsetHash }.");
+    for (const [key, value] of Object.entries(raw)) {
+      const id = key.toLowerCase();
+      if (!normal.includes(id) || choices.has(id)) throw refusal(400, "invalid_choices", "choices may name only candidates of candidateIds, once each.");
+      if (!value || typeof value !== "object" || Array.isArray(value)
+          || Object.keys(value).some((k) => k !== "activityTypeKey" && k !== "subsetHash")) {
+        throw refusal(400, "invalid_choices", "A choice is { activityTypeKey, subsetHash }.");
+      }
+      const activityTypeKey = canonicalChosenSessionType(value.activityTypeKey);
+      if (activityTypeKey === undefined) throw refusal(400, "invalid_activity_type_key", "A choice names the key of a session type.");
+      if (typeof value.subsetHash !== "string" || !HASH.test(value.subsetHash)) throw refusal(400, "invalid_subset_hash", "A choice carries the hash of its choice preview.");
+      choices.set(id, { activityTypeKey, subsetHash: value.subsetHash });
+    }
+  }
+  return { candidates: normal.map((candidateId) => ({ candidateId, previewHash: byId.get(candidateId), ...(choices.get(candidateId) ?? {}) })) };
 }
 
 // A refusal that holds for every remaining candidate (the switch was turned
@@ -3349,7 +3444,9 @@ function refusedResult(candidateId, code, details = {}) {
 // import is linked, in the team and needs no manual step). This is only the
 // entry test; approveCandidate checks everything again under its locks,
 // against the same hash.
-function batchIneligibility(teamId, candidateId, row, previewHash) {
+// ST-2: `chosen` is true when the batch item carries a session type choice; a session that waits for a type is refused
+// without one (session_type_required, its own code) and goes on to the single approval with one.
+function batchIneligibility(teamId, candidateId, row, previewHash, chosen = false) {
   if (row.status === "imported" && row.import_undone_at) return refusedResult(candidateId, "import_undone");
   if (row.status === "imported") return batchResult(candidateId, "already_imported", "already_imported", { approvalId: row.approval_id ?? null });
   if (row.status === "superseded" && !row.superseded_by_candidate_id) return refusedResult(candidateId, "candidate_not_actionable");
@@ -3367,7 +3464,8 @@ function batchIneligibility(teamId, candidateId, row, previewHash) {
   if (preview.status !== "ready") return refusedResult(candidateId, "not_ready", { reviewAgain: reviewAgain(teamId, candidateId) });
   const changesToImported = preview.changesToImported?.length ?? 0;
   if (changesToImported > 0) return refusedResult(candidateId, "changes_need_acceptance", { changesToImported, reviewAgain: reviewAgain(teamId, candidateId) });
-  const { reasons } = candidateReasons(row.status, preview);
+  if (sessionTypeRequired(preview) && !chosen) return refusedResult(candidateId, "session_type_required", { reviewAgain: reviewAgain(teamId, candidateId) });
+  const reasons = candidateReasons(row.status, preview).reasons.filter((r) => !(chosen && r.code === "session_type_required"));
   if (reasons.length) return refusedResult(candidateId, "not_ready", { reasons, reviewAgain: reviewAgain(teamId, candidateId) });
   return null;
 }
@@ -3386,7 +3484,7 @@ async function approvalIdOf(teamId, candidateId) {
 // single approval itself (approveCandidate), bound to the preview hash the
 // approver saw, never accepting changes. Never throws: every outcome is a
 // result.
-async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId, expectedClubId) {
+async function approveOneOfBatch(teamId, { candidateId, previewHash, activityTypeKey = undefined, subsetHash = undefined }, userId, expectedClubId) {
   let early;
   try {
     const row = (await query(
@@ -3397,14 +3495,17 @@ async function approveOneOfBatch(teamId, { candidateId, previewHash }, userId, e
          from training_load.gpexe_import_candidates c where c.id = $1 and c.owner_team_id = $2`,
       [candidateId, teamId],
     )).rows[0];
-    early = row ? batchIneligibility(teamId, candidateId, row, previewHash) : refusedResult(candidateId, "notFound");
+    early = row ? batchIneligibility(teamId, candidateId, row, previewHash, activityTypeKey !== undefined) : refusedResult(candidateId, "notFound");
   } catch (error) {
     console.error(`[gpexe] batch: reading candidate ${candidateId} failed: ${formatDbError(error)}`);
     return refusedResult(candidateId, "internal_error");
   }
   if (early) return early;
   try {
-    const done = await approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges: false, expectedClubId });
+    const done = await approveCandidate(teamId, candidateId, {
+      userId, previewHash, acceptChanges: false, expectedClubId,
+      ...(activityTypeKey !== undefined ? { activityTypeKey, subsetHash } : {}),
+    });
     return batchResult(candidateId, "imported", null, { approvalId: done.approval.id, commitConfirmation: done.commitConfirmation });
   } catch (error) {
     if (!(error instanceof GpexeImportServiceError)) {
