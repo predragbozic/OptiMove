@@ -39,3 +39,24 @@ migrator runs, under a later migration, over a changed v86 body, and once v86's 
 manual removal, an approval choice): from then on the way back is forward only.
 
 Rehearsed on disposable databases: `backend/tests/manual-values-st4.test.mjs` tests 13 and 14.
+
+## Before the merge: the rehearsal on PostgreSQL 17
+
+`backend/scripts/manual-values-v86-rehearsal.mjs` (wrappers `.sh` and `.ps1`, the v85 pattern) runs on any local server
+and prints PASS / FAIL per step and `RESULT: PASS`. It builds a disposable database through v85 with the real runner,
+runs the preflight, applies v86 (checksum = the file's sha256), writes a guarded manual entry as the service does (rolled
+back, then committed) with the five refusals (no acting user, a forged author, no provenance by COMMIT, a value after the
+provenance, a TRUNCATE), runs the post-check, the runner again, the rollback (the catalog of `training` and
+`training_load` equal to the one before v86), v86 again, the rollback's refusal once a manual value exists, and a
+`pg_dump -Fc` / `pg_restore` read-back of v86's objects. Loopback only; it creates and drops only its own
+`optimove_tests_st4rehearsal_*` databases and takes no database name. Needs `npm --prefix backend ci` and `pg_dump` /
+`pg_restore` of the server's major version.
+
+    backend/scripts/manual-values-v86-rehearsal.sh --host 127.0.0.1 --port 5432 --user postgres --pg-bin /usr/lib/postgresql/17/bin
+
+    powershell -ExecutionPolicy Bypass -File backend\scripts\manual-values-v86-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres -PgBin "C:\Program Files\PostgreSQL\17\bin"
+
+The password comes from `PGPASSWORD` if set, otherwise it is asked once, hidden, and never printed. In step 8 a restore
+re-prints a varchar IN-list (`ARRAY['a'::character varying]::text[]` as `ARRAY[('a'::character varying)::text]`; a v21
+constraint shows it too): constraints are compared with those casts and parentheses taken out, and the count of such
+constraints is printed. Run on PostgreSQL 16.15 here: `RESULT: PASS` (6 constraints equal after that re-print).
