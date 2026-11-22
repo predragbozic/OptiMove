@@ -69,3 +69,5 @@ docs/runbooks/scale-recording-v6*.sql text eol=lf
 docs/runbooks/calculated-variables-v78*.sql text eol=lf
 # K2b-2a-1 (v81): the rollback restores the phase-4 and v51 bodies verbatim and compares them by md5; new files only.
 docs/runbooks/calendar-questions-v81*.sql text eol=lf
+# ST-1 (v85): the rehearsal and the migration test read the runbook SQL by blocks and run the rollback as one script.
+docs/runbooks/session-types-v85*.sql text eol=lf
