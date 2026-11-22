@@ -118,7 +118,7 @@ for (const width of [1280, 390, 375, 360]) {
   });
 }
 
-test("(360x640) the question with three athletes and a kept session: Replace / Skip / Back can be reached and pressed", async () => {
+test("(360x640) the question with three athletes: Replace and Skip can be reached and pressed", async () => {
   const world = await startWorld();
   try {
     const { templateId, wednesday, monday } = await setUp(world);
