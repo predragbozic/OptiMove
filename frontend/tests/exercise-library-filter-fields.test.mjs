@@ -140,7 +140,7 @@ test("Builder: app.js hands typing to syncExerciseFilterSearch and writes the hi
   assert.match(branch('event.target.closest("[data-exercise-filter-search]")', 200), /syncExerciseFilterSearch\(exerciseFilterSearch\);\s*return;/);
   assert.match(branch('event.target.closest("[data-builder-exercise-filter]")', 300), /state\.builder\.exerciseFilters\[builderFilter\.dataset\.builderExerciseFilter\] =\s*builderFilter\.type === "checkbox" \? builderFilter\.checked : builderFilter\.value;/);
   const contentListener = appSource.indexOf('els.content.addEventListener("input", handleContentInput)');
-  assert.ok(contentListener >= 0 && appSource.indexOf('els.content.addEventListener("change", handleContentChange)') >= 0, "both are delegated on #content");
+  assert.ok(contentListener >= 0 && appSource.indexOf('els.content.addEventListener("change", guardHandler(handleContentChange))') >= 0, "both are delegated on #content");
 });
 
 test("Builder: typing in its Purpose field sets the filter once; typing on without naming an option sends one clearing change only", () => {
