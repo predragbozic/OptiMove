@@ -77,15 +77,18 @@ async function squad(label) {
   const teamId = (await q(`insert into public.teams (club_id, name) values ($1,$2) returning id`, [clubId, `${label} Team ${uid()}`]))[0].id;
   const coach = await makeCoach(`${label} Coach`, teamId);
   const second = await makeCoach(`${label} Second`, teamId);
-  const name = `${label} Athlete`;
-  const userId = await makeUser(name);
-  const row = (await q(
-    `insert into public.athletes (athlete_id, user_id, first_name, last_name, full_name, display_name, device_timezone)
-     values (nextval('public.athlete_generated_id_seq')::text, $1, $2, 'Athlete', $3, $3, 'UTC') returning id, athlete_id`,
-    [userId, label, name]))[0];
-  await q(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,null,'club','active','2026-01-01T00:00:00Z')`, [row.id, clubId]);
-  await q(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [row.id, clubId, teamId]);
-  return { clubId, teamId, coach, second, athlete: { athleteId: row.id, externalId: row.athlete_id } };
+  const makeAthlete = async (last) => {
+    const name = `${label} ${last}`;
+    const userId = await makeUser(name);
+    const row = (await q(
+      `insert into public.athletes (athlete_id, user_id, first_name, last_name, full_name, display_name, device_timezone)
+       values (nextval('public.athlete_generated_id_seq')::text, $1, $2, $3, $4, $4, 'UTC') returning id, athlete_id`,
+      [userId, label, last, name]))[0];
+    await q(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,null,'club','active','2026-01-01T00:00:00Z')`, [row.id, clubId]);
+    await q(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status, starts_at) values ($1,$2,$3,'team','active','2026-01-01T00:00:00Z')`, [row.id, clubId, teamId]);
+    return { athleteId: row.id, externalId: row.athlete_id };
+  };
+  return { clubId, teamId, coach, second, athlete: await makeAthlete("Athlete"), athlete2: await makeAthlete("AthleteTwo") };
 }
 
 const sessionsOf = (draft) => (draft.blocks || []).flatMap((b) => (b.sessions || []).map((s) => ({ ...s, blockId: b.id })));
@@ -99,8 +102,8 @@ const copyInto = (cookie, sourcePlanId, athlete, weekStart = WEEK) => api(`/api/
 
 // A weekly draft of `athlete`; `sessions` names the sessions added on Monday,
 // each with one named node when `content`.
-async function weeklyDraft(s, { cookie = s.coach.cookie, weekStart = WEEK, sessions = [], content = true } = {}) {
-  const created = ok(await createWeekly(cookie, s.athlete, weekStart), 201);
+async function weeklyDraft(s, { cookie = s.coach.cookie, athlete = s.athlete, weekStart = WEEK, sessions = [], content = true } = {}) {
+  const created = ok(await createWeekly(cookie, athlete, weekStart), 201);
   const planId = created.plan.id;
   let draft = created;
   for (const name of sessions) {
@@ -265,4 +268,41 @@ test("7. another coach's empty draft, and the caller's own plan that is not a Bu
   const own = await weeklyDraft(s);
   await q(`update plans.plans set source_type = 'import' where id = $1`, [own]);
   await assertBothRefused(s, own, { source });
+});
+
+const batchCreate = (cookie, athletes) => api("/api/builder/plans", {
+  method: "POST", cookie, body: { planType: "weekly", weekStart: WEEK, athleteIds: athletes.map((a) => a.externalId), name: "Week" },
+});
+const planCount = async () => (await q(`select count(*)::int as n from plans.plans`))[0].n;
+
+test("8. a batch create refused for one athlete removes no other athlete's free draft (nothing written)", async () => {
+  const s = await squad("batch");
+  const free = await weeklyDraft(s);
+  const taken = await weeklyDraft(s, { athlete: s.athlete2, sessions: ["Main"], content: false });
+  const before = [await digestOf(free), await digestOf(taken), await planCount()];
+  // The free draft's athlete first: its draft is removed inside the transaction before the conflict is known.
+  const res = await batchCreate(s.coach.cookie, [s.athlete, s.athlete2]);
+  assert.equal(res.status, 409, res.text);
+  assert.match(res.body.error, REFUSAL);
+  assert.deepEqual([await digestOf(free), await digestOf(taken), await planCount()], before, "both drafts as they were, no plan created");
+});
+
+test("9. a refused create takes no lock: it answers while another transaction holds the rows of the plans it refuses on", async () => {
+  const s = await squad("nolock");
+  const published = await publishedBarePlan(s);
+  const draft = await weeklyDraft(s, { athlete: s.athlete2, sessions: ["Main"], content: false });
+  const holder = new pg.Client({ connectionString: db.url });
+  await holder.connect();
+  try {
+    await holder.query("begin");
+    await holder.query(`select id from plans.plans where id = any($1::uuid[]) for update`, [[published, draft]]);
+    await holder.query(`select id from plans.plan_days where plan_id = any($1::uuid[]) for update`, [[published, draft]]);
+    const timeout = new Promise((resolve) => setTimeout(() => resolve("waited"), 5000));
+    const res = await Promise.race([batchCreate(s.coach.cookie, [s.athlete2, s.athlete]), timeout]);
+    assert.notEqual(res, "waited", "the refused create waited on a row lock");
+    assert.equal(res.status, 409, res.text);
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await holder.end().catch(() => {});
+  }
 });

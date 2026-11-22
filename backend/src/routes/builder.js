@@ -363,7 +363,8 @@ router.get("/weekly-plans", async (req, res, next) => {
               -- ensureWeeklySlot's skip: the caller's own Builder DRAFT with
               -- no session at all is removed by POST /plans, so it is not
               -- reported either (weeklySlotPlanIsFree's rule: a published
-              -- plan, or a plan with any session, is never removed).
+              -- plan, or a plan with any session, is never removed; change
+              -- the two together).
               and not (
                 p.source_type = 'builder' and p.created_by_user_id = $3
                 and p.status = 'draft'
@@ -3532,7 +3533,7 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
       existingPlan.source_type === "builder"
       && String(existingPlan.created_by_user_id) === String(userId)
     ) {
-      if (await weeklySlotPlanIsFree(client, existingPlan)) {
+      if (await weeklySlotPlanIsFree(client, existingPlan, userId)) {
         await deletePlanTreeWithClient(client, existingPlan.id);
         continue;
       }
@@ -3548,30 +3549,43 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
 // carry RPE or an event link; removing it leaves those records naming a
 // logical id no session has).
 //
-// Three conditions, each read under the plan's row lock, each refusing by
-// itself:
+// Three conditions:
 //   1. the status is 'draft';
 //   2. the plan has no session;
 //   3. no session of the plan has results or a live event link made for it
 //      (Task 5, docs/ai/builder-batch-edit-plan.md section 12: the plan
 //      delete's own check, blockedPlanSessions, whatever the status). Today 2
-//      implies 3; 3 stays so the guard holds if 1 or 2 is ever loosened.
+//      implies 3, so 3 decides only if 1 or 2 is ever loosened; it stays for
+//      that.
 //
-// Locks, in the plan delete's order (12.4): the plan row FOR UPDATE (the
-// removal takes it anyway), then its days FOR UPDATE in ascending id - a
-// session insert holds its day FOR KEY SHARE, so none can land between this
-// check and the removal - then, inside blockedPlanSessions, the session rows.
-// A plan the first read saw as published is refused without a lock.
-async function weeklySlotPlanIsFree(client, existingPlan) {
+// A refusal needs no lock: a plan the unlocked reads see as published or as
+// having a session is refused at once (a stale read can only refuse), so a
+// create that is refused never waits on, or holds, another plan's rows. Only a
+// plan about to be removed is locked, and all three conditions are then read
+// again under the locks: the plan row FOR UPDATE (still the caller's own
+// active Builder plan), then - new here, the plan delete takes no day lock -
+// its days FOR UPDATE in ascending id, then, inside blockedPlanSessions, the
+// session rows as the plan delete does. A new day needs the plan row FOR KEY
+// SHARE and a new session its day FOR KEY SHARE, so neither can land between
+// this check and the removal.
+//
+// GET /weekly-plans skips exactly this plan (its lateral's `and not (...)`):
+// change the two together.
+async function weeklySlotPlanIsFree(client, existingPlan, userId) {
+  const hasSessionSql = `select exists (select 1 from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1) as has_session`;
   if (existingPlan.status !== "draft") return false;
-  const locked = (await client.query("select status from plans.plans where id = $1 for update", [existingPlan.id])).rows[0];
+  if ((await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false) return false;
+  const locked = (await client.query(
+    `select status from plans.plans
+      where id = $1 and plan_type = 'weekly' and source_type = 'builder' and created_by_user_id = $2
+        and coalesce(is_active, true) and not coalesce(is_edit_draft, false)
+      for update`,
+    [existingPlan.id, userId],
+  )).rows[0];
   if (!locked) return false;
   await client.query("select id from plans.plan_days where plan_id = $1 order by id for update", [existingPlan.id]);
   const isDraft = locked.status === "draft";
-  const hasSession = (await client.query(
-    `select exists (select 1 from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1) as has_session`,
-    [existingPlan.id],
-  )).rows[0]?.has_session === true;
+  const hasSession = (await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false;
   const guarded = await blockedPlanSessions(client, await loadWeeklyTree(client, existingPlan.id));
   return isDraft && !hasSession && guarded.length === 0;
 }
