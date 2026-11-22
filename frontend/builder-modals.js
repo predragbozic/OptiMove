@@ -118,12 +118,15 @@ export function renderCopyPlanModal(state) {
 // to call again with confirmOverwrite: true.
 export function renderOverwriteDayConfirmHtml(state) {
   if (!state.builder.overwriteDayConfirm) return "";
+  // A program or a block template has blocks, not days: the target's own word.
+  const planType = state.builder.draft?.plan?.planType;
+  const unit = planType && planType !== "weekly" ? "block" : "day";
   return `
     <div class="exit-confirm-modal builder-overwrite-day-confirm-modal">
       <div class="exit-confirm-backdrop" data-action="builder-overwrite-day-cancel"></div>
       <div class="exit-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="builderOverwriteDayTitle" aria-describedby="builderOverwriteDayText">
-        <h3 id="builderOverwriteDayTitle">Replace this day's content?</h3>
-        <p id="builderOverwriteDayText">This day already has sessions. Pasting will remove them and put the copied day in their place.</p>
+        <h3 id="builderOverwriteDayTitle">Replace this ${unit}'s content?</h3>
+        <p id="builderOverwriteDayText">This ${unit} already has sessions. Pasting will remove them and put the copied ${unit === "block" ? "content" : "day"} in their place.</p>
         <div class="exit-confirm-actions">
           <button class="plain-button" type="button" data-action="builder-overwrite-day-cancel">Cancel</button>
           <button class="plain-button exit-confirm-exit-button" type="button" data-action="builder-overwrite-day-confirm">Replace</button>
