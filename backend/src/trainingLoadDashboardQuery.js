@@ -35,6 +35,7 @@
 //    history — nothing here checks metric_definitions.state at query
 //    time, only at BINDING time (schema triggers).
 import { query } from "./db.js";
+import { assertDashboardAggregation, queryRatioBuckets } from "./dashboardRatios.js";
 import { athleteOwnParticipationSql } from "./trainingActivityAccess.js";
 
 // How a value an athlete may see was entered (v63): by hand or by an import - never an estimate.
@@ -146,17 +147,19 @@ async function fetchOccasionContexts(occasionIds, queryRunner) {
   }]));
 }
 
-async function fetchVersionInfo(versionIds, queryRunner) {
+async function fetchVersionInfo(versionIds, queryRunner, definitionIds = []) {
   const uniq = [...new Set(versionIds)];
-  if (!uniq.length) return {};
+  if (!uniq.length && !definitionIds.length) return {};
   // J21: v77's calculation is read through the whole row, so a database before v77 reads every version as not calculated.
   const r = await queryRunner(
-    `select id, daily_aggregation_method, value_type,
+    `select v.id, v.metric_definition_id, v.unit, (select current_version_id from training_load.metric_definitions d where d.id=v.metric_definition_id)=v.id as is_current,
+            to_jsonb(v.*)->'calculation' as calculation, daily_aggregation_method, value_type,
             coalesce(to_jsonb(v.*) -> 'calculation', 'null'::jsonb) <> 'null'::jsonb as calculated
-       from training_load.metric_definition_versions v where id = any($1::uuid[])`,
-    [uniq],
+       from training_load.metric_definition_versions v where id = any($1::uuid[])
+         or id in (select current_version_id from training_load.metric_definitions where id=any($2::uuid[]))`,
+    [uniq, definitionIds],
   );
-  return Object.fromEntries(r.rows.map((row) => [row.id, { dailyAggregationMethod: row.daily_aggregation_method, valueType: row.value_type, calculated: row.calculated === true }]));
+  return Object.fromEntries(r.rows.map((row) => [row.id, { ...row, dailyAggregationMethod: row.daily_aggregation_method, valueType: row.value_type, calculated: row.calculated === true }]));
 }
 
 // J21 (C141-C148): a calculated variable's own value - OptiMove's sum of its inputs, written beside them as a derived_rollup
@@ -251,7 +254,7 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
 // what makes the batch endpoint genuinely set-based: N widgets against
 // the SAME range never cost more DB round trips than 1 widget would.
 // ------------------------------------------------------------
-async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId }, dayScopeMetricIds, builtinCatalog, queryRunner) {
+async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId, definitionIds = [] }, dayScopeMetricIds, builtinCatalog, queryRunner) {
   const workspaceArgs = { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds };
   let authorizedActivityIds = await fetchAuthorizedActivityIds(workspaceArgs, queryRunner);
 
@@ -284,7 +287,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
   const metricValueRows = factRows.filter((r) => r.fact_kind === "metric_value");
   const rpeRows = factRows.filter((r) => r.fact_kind === "rpe");
   const occContext = await fetchOccasionContexts(metricValueRows.map((r) => r.detail.occasionId), queryRunner);
-  const versionInfo = await fetchVersionInfo(metricValueRows.map((r) => r.detail.metricDefinitionVersionId), queryRunner);
+  const versionInfo = await fetchVersionInfo(metricValueRows.map((r) => r.detail.metricDefinitionVersionId), queryRunner, definitionIds);
 
   // Every real Metrics-Core metric_value fact, canonicalized exactly like
   // the design proof's own queryMetricSeries() — grain/component identity
@@ -306,7 +309,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
       activityId: row.activity_id, componentKey: d.segmentId ?? null, canonicalComponentId,
       grain, grainKey: grain === "component" ? canonicalComponentId : row.activity_id,
       date: dt.localDate, startedAt: dt.startedAt ?? occ.eventInstant ?? null,
-      occasionId: d.occasionId, versionId: d.metricDefinitionVersionId,
+      occasionStart: occ.eventInstant ?? null, occasionId: d.occasionId, versionId: d.metricDefinitionVersionId,
       dailyAggregationMethod: ver.dailyAggregationMethod ?? null, valueType: ver.valueType ?? "numeric",
       unit: d.unitAtCapture,
       aggregationRole: d.aggregationRole, coverage: d.coverage,
@@ -338,7 +341,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     // returns ZERO rows, structurally — the day-level fetch is never even
     // attempted when either filter narrowed the set.
     if (!activityId && !componentId) {
-      const rows = await fetchDayLevelFactsForMetrics(dayScopeMetricIds, workspaceArgs, queryRunner);
+      const rows = await fetchDayLevelFactsForMetrics([...new Set([...dayScopeMetricIds, ...Object.values(versionInfo).filter(v => v.is_current && v.calculation?.kind === "ratio" && dayScopeMetricIds.includes(v.metric_definition_id)).flatMap(v => v.calculation.inputs)])], workspaceArgs, queryRunner);
       for (const f of rows) {
         if (!dayLevelFactsByDefinition.has(f.metricDefinitionId)) dayLevelFactsByDefinition.set(f.metricDefinitionId, []);
         dayLevelFactsByDefinition.get(f.metricDefinitionId).push(f);
@@ -356,7 +359,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
       for (const [definitionId, list] of facts) facts.set(definitionId, list.filter((f) => MEASURED_ENTRY_METHODS.has(f.entryMethod) && f.calculated !== true));
     }
   }
-  return { authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };
+  return { currentDefinitions: new Map(Object.values(versionInfo).filter(v => v.is_current).map(v => [v.metric_definition_id, v])), authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };
 }
 
 // ------------------------------------------------------------
@@ -693,6 +696,7 @@ function mergeFilters(...layers) {
 // ------------------------------------------------------------
 export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query } = {}) {
   const rangeCache = new Map();
+  const ratioCache = new Map();
 
   function athleteIdsKey(athleteIds) {
     return athleteIds ? [...athleteIds].sort().join(",") : "";
@@ -722,7 +726,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
     if (!rangeCache.has(cacheKey)) {
       const dayScopeMetricIds = [...(dayScopeMetricIdsByFilterKey.get(fk) || [])];
       rangeCache.set(cacheKey, buildRangeContext(
-        { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId },
+        { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId, definitionIds: [...new Set(specs.filter(s => s.metricDefinitionId).map(s => s.metricDefinitionId))] },
         dayScopeMetricIds,
         builtinCatalog,
         queryRunner,
@@ -748,30 +752,75 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
             aggregationRolePolicy: spec.aggregationRolePolicy, coveragePolicy: spec.coveragePolicy,
             sourcePolicy: spec.sourcePolicy, sourceConnectionId: spec.sourceConnectionId, athleteIds: effectiveAthleteIds,
           });
-      // v79: a ratio is never totalled or averaged, and its own rule (the sum of numerators over the sum of denominators) is not
-      // computed here yet - so a ratio's series under sum, avg or ratio is an error (the dashboards refuse to save one;
-      // this keeps a direct caller from adding ratios up across athletes). Highest, latest and each value stay themselves.
-      if (["sum", "avg", "ratio"].includes(analyticalAggregation)
-          && rows.some((row) => (row.values || []).some((v) => v.dailyAggregationMethod === "ratio"))) {
-        throw new Error(`a ratio series is not combined as ${analyticalAggregation}`);
+      const definition = ctx.currentDefinitions.get(spec.metricDefinitionId);
+      const calculation = definition?.calculation;
+      assertDashboardAggregation(calculation, analyticalAggregation, spec.aggregationRolePolicy ?? 'standalone_and_source_rollup');
+      if (calculation?.kind === 'ratio') {
+        if (dataWorkspaceType === 'athlete') throw new Error('Calculated variable unavailable');
+        const allFacts = spec.dataScopeLevel === 'day' ? ctx.dayLevelFactsByDefinition : ctx.metricFactsByDefinition;
+        const options = {
+          dataScopeLevel: spec.dataScopeLevel, athleteIds: effectiveAthleteIds, aggregationRolePolicy: 'all_including_derived', coveragePolicy: spec.coveragePolicy,
+          sourcePolicy: spec.sourcePolicy === 'derived' ? 'all_with_conflicts' : spec.sourcePolicy, sourceConnectionId: spec.sourceConnectionId,
+        };
+        // Target identity does not include a definition: never resolve different metrics together.
+        const ratioRows = resolveFactsToRows(allFacts.get(spec.metricDefinitionId) ?? [], options);
+        const inputRows = (calculation.inputs ?? []).flatMap(id => resolveFactsToRows(allFacts.get(id) ?? [], options));
+        const seedFor = f => {
+          const bucketKey = groupBy === 'day' ? f.date : groupBy === 'week' ? isoWeekKey(f.date) : groupBy === 'athlete' ? f.athleteId : groupBy === 'cohort' ? 'all'
+            : groupBy === 'session' ? (f.grain === 'component' ? f.activityId : f.grain === 'session' ? f.grainKey : null) : f.grain === 'component' ? f.grainKey : null;
+          return bucketKey == null ? null : { occasionId: f.occasionId, athleteId: groupBy === 'athlete' || analyticalAggregation === 'none' ? f.athleteId : null, bucketKey, instant: f.occasionStart ?? f.startedAt };
+        };
+        const blockedOccasions = new Set();
+        const conflicts = new Map();
+        const rowKey = row => JSON.stringify([row.bucketKey, row.athleteId, row.unit]);
+        for (const conflict of ratioRows.flatMap(row => row.targetConflicts)) {
+          for (const fact of conflict.candidates) {
+            blockedOccasions.add(fact.occasionId);
+            const seed = seedFor(fact);
+            if (seed) { const row = { bucketKey: seed.bucketKey, athleteId: seed.athleteId, unit: fact.unit, value: null,
+              numerator: null, denominator: null, includedOccasions: 0, leftOutOccasions: 0, conflict: true };
+              conflicts.set(rowKey(row), row); }
+          }
+        }
+        const eligibleRatios = ratioRows.flatMap(row => row.values);
+        const eligibleOccasions = new Set(eligibleRatios.map(fact => fact.occasionId));
+        // Inputs nominate occasions for coverage, not arithmetic. A current input
+        // may exist on an occasion without a stored ratio even if another source disagrees.
+        const coverageInputs = inputRows.flatMap(row => [...row.values, ...row.targetConflicts.flatMap(conflict => conflict.candidates)]);
+        const seeds = new Map();
+        for (const f of [...eligibleRatios, ...coverageInputs]) {
+          if (blockedOccasions.has(f.occasionId)) continue;
+          const seed = seedFor(f);
+          if (seed) seeds.set(f.occasionId, { ...seed, ratioValueAllowed: eligibleOccasions.has(f.occasionId) });
+        }
+        const ratioKey = JSON.stringify([rDateFrom,rDateTo,filterKeyFor(spec.athleteIds,spec.activityId,spec.componentId),spec.metricDefinitionId,spec.dataScopeLevel,analyticalAggregation,groupBy,spec.sourcePolicy,spec.sourceConnectionId,spec.coveragePolicy]);
+        if (!ratioCache.has(ratioKey)) ratioCache.set(ratioKey, queryRatioBuckets(queryRunner, [...seeds.values()], spec.metricDefinitionId, analyticalAggregation, definition.id));
+        const result = await ratioCache.get(ratioKey);
+        return { ratio: true, calculationKey: result.calculationKey, current: [...result.rows.filter(row => !conflicts.has(rowKey(row))), ...conflicts.values()], coverage: result.coverage,
+          calculation: result.calculation ?? { kind: 'ratio', scale: calculation.scale, unit: definition.unit } };
       }
-      return reduceRows(rows, { groupBy, analyticalAggregation });
+      return { ordinary: true, current: reduceRows(rows, { groupBy, analyticalAggregation }), calculation: calculation ? { kind: calculation.kind, unit: definition.unit } : null };
     }
 
-    const current = await runForRange(dateFrom, dateTo);
+    const currentResult = await runForRange(dateFrom, dateTo);
+    const current = currentResult?.ratio || currentResult?.ordinary ? currentResult.current : currentResult;
     let comparison = null;
     let comparisonRange = null;
     if (spec.comparisonPeriod) {
       comparisonRange = shiftDateRange(dateFrom, dateTo, spec.comparisonPeriod);
-      comparison = await runForRange(comparisonRange.dateFrom, comparisonRange.dateTo);
+      const compared = await runForRange(comparisonRange.dateFrom, comparisonRange.dateTo);
+      if (currentResult?.calculationKey && compared?.calculationKey && JSON.stringify(currentResult.calculationKey) !== JSON.stringify(compared.calculationKey)) {
+        throw Object.assign(new Error('The calculation changed during this period. Choose a shorter period.'), { code: 'calculation_changed_in_period' });
+      }
+      comparison = compared?.ratio || compared?.ordinary ? compared.current : compared;
     }
-    return { current, comparison, comparisonRange };
+    return { current, comparison, comparisonRange, ...(currentResult?.calculation ? { calculation: currentResult.calculation } : {}), ...(currentResult?.ratio ? { coverage: currentResult.coverage } : {}) };
   }
 
   const results = await Promise.all(specs.map(async (spec) => {
     try {
-      const data = await runOne(spec);
-      return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "ok", data };
+      const { calculation, coverage, ...data } = await runOne(spec);
+      return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "ok", data, ...(calculation ? { calculation } : {}), ...(coverage ? { coverage } : {}) };
     } catch (error) {
       // Merge-readiness corrective round, finding #2: the raw error
       // (which could carry a SQLSTATE, a constraint/table name, or a
@@ -782,8 +831,9 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
       // their own distinct placeholder statuses (set by queryDashboard
       // below, never routed through this catch at all) — this branch is
       // ONLY for a genuinely unexpected execution failure.
+      if (["aggregation_not_allowed", "calculation_changed_in_period"].includes(error.code)) return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "error", error: error.code };
       console.error(`[trainingLoadDashboardQuery] series query failed — widgetId=${spec.widgetId} seriesId=${spec.seriesId}:`, error);
-      return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "error", error: "seriesQueryFailed" };
+      return { widgetId: spec.widgetId, seriesId: spec.seriesId, status: "error", error: ["aggregation_not_allowed", "calculation_changed_in_period"].includes(error.code) ? error.code : "seriesQueryFailed" };
     }
   }));
   return results;

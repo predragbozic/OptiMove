@@ -1,6 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import crypto, { randomBytes } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
@@ -168,3 +168,30 @@ for (const role of ["team_coach", "club_admin"]) {
     } finally { await context.close(); }
   });
 }
+
+for (const width of [360, 375, WIDTHS.phone, WIDTHS.desktop]) test('('+width+'px) calculated ratio picker, preview, save and reload keep the contract', async()=>{
+  const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',width);
+  try{
+    const admin=world.baseUrl+'/api/training-load/sources/metrics/variables';
+    const create=async(body)=>{const response=await context.request.post(admin,{data:{requestKey:crypto.randomUUID(),...(!body.calculation?{dailyAggregationMethod:'sum'}:{}),...body}});assert.equal(response.status(),201,await response.text());return (await response.json()).variable;};
+    const numerator=await create({label:'Distance ratio test '+width,unit:'m',levels:['session']});
+    const denominator=await create({label:'Duration ratio test '+width,unit:'min',levels:['session']});
+    const ratio=await create({label:'Metres per minute '+width,unit:'m/min',levels:['session'],calculation:{kind:'ratio',scale:1,inputs:[numerator.id,denominator.id]}});
+    const response=await context.request.post(world.baseUrl+'/api/training-load/dashboards',{data:{name:'Ratio test '+width}});assert.equal(response.status(),201,await response.text());const {dashboard}=await response.json();
+    await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();
+    const dashboards=page.getByRole('tab',{name:'Dashboards'});if(await dashboards.isVisible())await dashboards.click();
+    await action(page,'analysis-open-picker').click();await page.locator('[data-dashboard-id="'+dashboard.id+'"]').first().click();await action(page,'analysis-add-widget').click();
+    await action(page,'simple-search').fill('Metres per minute '+width);
+    await page.locator('[data-action="training-load-simple-metric"][data-id="'+ratio.id+'"]').click();
+    await action(page,'simple-next').click();await action(page,'simple-next').click();
+    const choices=await action(page,'simple-aggregation').locator('option').evaluateAll(options=>options.filter(o=>!o.disabled).map(o=>o.value));assert.deepEqual(choices,['ratio','max','last','none']);
+    assert.equal(await action(page,'simple-aggregation').inputValue(),'ratio');
+    await action(page,'simple-title').fill('Saved ratio '+width);await action(page,'simple-preview').click();await page.locator('.tl-simple-preview-status[data-ready=true]').waitFor();
+    await page.getByText('No sessions with a value.',{exact:true}).first().waitFor();
+    await action(page,'simple-save').click();await page.locator('.tl-simple-editor').waitFor({state:'hidden'});
+    const widget=page.locator('.tl-analysis-widget').filter({has:page.getByRole('heading',{name:'Saved ratio '+width,exact:true})});
+    await widget.getByText('No sessions with a value.',{exact:true}).waitFor();
+    await page.reload();await page.getByText('Sign out').first().waitFor();await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();if(await dashboards.isVisible())await dashboards.click();await action(page,'analysis-open-picker').click();await page.locator('[data-dashboard-id="'+dashboard.id+'"]').first().click();await widget.getByText('No sessions with a value.',{exact:true}).waitFor();
+    assert.match(await widget.innerText(),/Calculated/);assert.ok(!(await widget.innerText()).includes(numerator.id));assert.deepEqual(pageErrors,[]);
+  }finally{await context.close();}
+});

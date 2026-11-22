@@ -92,7 +92,7 @@ const CASES = [
   ["git push -f origin main", bash("git push -f origin main"), DENY], // force wins even though target is also main
 
   // ---- ALLOW: normal feature push ----
-  ["git push origin feature/foo", bash("git push origin feature/foo"), ALLOW],
+  ["git push origin feature/foo", bash("git push origin feature/foo"), ASK], // P3: only the branch checked out here
 
   // ---- DENY: recursive root delete (Unix) ----
   ["rm -rf /", bash("rm -rf /"), DENY],
@@ -102,8 +102,8 @@ const CASES = [
   ["rm -fr . (flags reversed)", bash("rm -fr ."), DENY],
 
   // ---- ALLOW: scoped delete ----
-  ["rm -rf node_modules", bash("rm -rf node_modules"), ALLOW],
-  ["rm -rf ./dist/subdir", bash("rm -rf ./dist/subdir"), ALLOW],
+  ["rm -rf node_modules", bash("rm -rf node_modules"), ASK], // P5: outside the own temp folder (asked by Claude Code before too)
+  ["rm -rf ./dist/subdir", bash("rm -rf ./dist/subdir"), ASK],
 
   // ---- DENY: recursive root delete (PowerShell) ----
   ["Remove-Item -Recurse -Force C:\\", pwsh("Remove-Item -Recurse -Force C:\\"), DENY],
@@ -354,13 +354,13 @@ test("git checkout <tracked file path> without -- is denied (real discard risk, 
   assert.equal(result?.decision, "deny", "a tracked file path, not a valid revision, must not be silently treated as a safe branch switch");
 });
 
-test("commit/push-to-main checks degrade to 'unknown, don't ask' outside any git repo", () => {
+test("outside any git repo: a commit is 'unknown, don't ask'; a push asks (P3: silent only to the branch checked out)", () => {
   const nonRepoDir = mkdtempSync(path.join(tmpdir(), "safety-guard-non-repo-"));
   try {
     const commitResult = classifyToolCall(bash("git commit -m wip", nonRepoDir));
     const pushResult = classifyToolCall(bash("git push", nonRepoDir));
     assert.equal(commitResult, null);
-    assert.equal(pushResult, null);
+    assert.equal(pushResult?.decision, "ask");
   } finally {
     rmSync(nonRepoDir, { recursive: true, force: true });
   }
@@ -1141,7 +1141,7 @@ test("new ASK rules: stash pop, branch -D, deleting a remote branch, pull --reba
     ["git branch -d x", ALLOW], ["git branch --show-current", ALLOW], ["git branch -f x HEAD", ASK], ["git branch", ALLOW],
     ["git push origin --delete x", ASK], ["git push -d origin x", ASK], ["git push origin :x", ASK], ["git push origin +:x", ASK],
     ["git push --prune origin", ASK], ["git push --mirror", ASK],
-    ["git push origin x:y", ASK], ["git push -u origin fix/x", ALLOW], ["git push --dry-run origin x", ALLOW],
+    ["git push origin x:y", ASK], ["git push -u origin fix/x", ASK], ["git push --dry-run origin x", ASK], // P3: not the branch checked out here
     ["git pull --rebase", ASK], ["git pull --rebase=merges", ASK], ["git pull --rebase=interactive origin main", ASK], ["git pull -r", ASK], ["git pull -qr", ASK],
     ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW], ["git pull", ALLOW], ["git pull --ff-only", ALLOW],
   ]);
@@ -1240,9 +1240,16 @@ test("settings.json: the wider allow list is exactly the read and test commands 
   ];
   for (const entry of added) assert.ok(allow.includes(entry), `missing ${entry}`);
   const forbidden = /^Bash\((rm|mv|cp|curl|wget|psql|pg_dump|pg_restore|chmod|chown|tee|dd|awk|xargs|sh|bash|python|python3)\b|^Bash\(npx (?!vite build:\*\)$)|^Bash\(git (add|commit|reset|clean|stash|rebase|checkout|restore|switch|branch -[dD]|pull|merge)(?![-\w])|^Bash\(sed(?! -n)|\.claude|^mcp__(?!claude-code-remote__send_message$)|^Bash\(\*|^Bash\(.*\*.*\*/;
-  const offending = allow.filter((entry) => forbidden.test(entry));
+  // P3-P5 (owner, in the executor's session, 2026-11-20): these entries let the commands through by
+  // name; the hook asks for every form outside the approved scope (tests "P3" and "P5" below).
+  const approvedP3P5 = ["Bash(git add:*)", "Bash(git commit:*)", "Bash(git push -u origin:*)", "Bash(git push origin:*)", "Bash(rm:*)", "Bash(rmdir:*)",
+    "Bash(cp:*)", "Bash(mv:*)", "Bash(mkdir:*)", "Bash(ln:*)", "Bash(touch:*)"];
+  // (g): stopping a cluster is decided by the hook (P4 test below), never by a settings entry
+  assert.ok(!allow.some((e) => /pg_ctlcluster .* stop/.test(e)), "no stop of a cluster by name");
+  for (const entry of approvedP3P5) assert.ok(allow.includes(entry), `missing ${entry}`);
+  const offending = allow.filter((entry) => forbidden.test(entry) && !approvedP3P5.includes(entry));
   assert.deepEqual(offending, []);
-  assert.equal(allow.filter((e) => /^Bash\(git push/.test(e)).every((e) => /^Bash\(git push -u origin (design|feature|fix|docs)\/:\*\)$/.test(e)), true, "only the four branch-prefix pushes that were there before");
+  assert.equal(allow.filter((e) => /^Bash\(git push/.test(e)).every((e) => /^Bash\(git push -u origin (design|feature|fix|docs)\/:\*\)$/.test(e) || approvedP3P5.includes(e)), true, "no other push pattern");
 });
 
 // ------------------------------------------------------------------
@@ -1558,7 +1565,7 @@ test("a redirect sees only the assignments made before it in the line", () => {
   try {
     expectAll([
       [`cat x > $S/a; S=${tmp}`, ASK], [`cat x > $S/a && S=${tmp} && cat y > $S/b`, ASK], [`S=${tmp}; cat x > $S/a`, ALLOW],
-      [`S=${tmp} && grep -n y f > $S/b.txt && S=/etc`, ALLOW], [`S=${tmp}; S=/etc; cat x > $S/a`, ASK], [`S=/etc; cat x > $S/a; S=${tmp}`, ASK],
+      [`S=${tmp} && grep -n y f > $S/b.txt && S=/etc`, ASK], // P5 review: a name assigned twice in the line is never put in [`S=${tmp}; S=/etc; cat x > $S/a`, ASK], [`S=/etc; cat x > $S/a; S=${tmp}`, ASK],
       [`bash -c "cat x > \\$S/a"; S=${tmp}`, ASK],
     ]);
   } finally { rmSync(tmp, { recursive: true, force: true }); }
@@ -1639,7 +1646,7 @@ test("HIGH-2: every git rule reads a long option as a possible prefix", () => {
     ["git reset --har", DENY], ["git reset --h HEAD~1", DENY], ["git reset --mer", ASK], ["git reset --kee HEAD~1", ASK], ["git reset --soft HEAD~1", ALLOW],
     ["git clean --forc", DENY], ["git clean -d --fo", DENY], ["git clean --forc --dry", ASK], ["git clean -n -d", ALLOW],
     ["git push --force-w origin x", DENY], ["git push --forc origin x", DENY], ["git push -uf origin x", DENY], ["git push origin +x", DENY], ["git push origin +x:y", DENY],
-    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ALLOW], ["git push --follow-tags origin x", ASK],
+    ["git push --del origin x", ASK], ["git push --mir", ASK], ["git push --pru origin", ASK], ["git push -u origin x", ASK], ["git push --follow-tags origin x", ASK],
     ["git branch --del --forc x", ASK], ["git branch --del x", ASK], ["git branch --delete x", ALLOW],
     ["git restore --work f", DENY], ["git restore --stag f", ASK], ["git restore --staged f", ALLOW], ["git restore --stag --work f", DENY],
     ["git pull --reb", ASK], ["git pull --reb=false", ASK], ["git pull --no-reb", ASK], ["git pull --rebase=false", ALLOW], ["git pull --no-rebase", ALLOW],
@@ -1839,4 +1846,305 @@ test("LOW-1 (#665): `git config <subcommand>` that writes asks; get/list read", 
     ["git config rename-section a b", ASK], ["git config remove-section a", ASK], ["git config -e", ASK], ["git config user.name x", ASK],
     ["git config get user.name", ALLOW], ["git config list", ALLOW], ["git config --get user.name", ALLOW], ["git config user.name", ALLOW],
   ]);
+});
+
+// ------------------------------------------------------------------
+// P3-P5 (owner, in the executor's session, 2026-11-20): commit and push to one's own work branch,
+// the local test database, deleting and changing files in one's own temporary folder. Settings
+// let the commands through by name; the hook asks for every form outside that scope.
+// ------------------------------------------------------------------
+
+const SID = "0a1b2c3d-4e5f-4061-8a9b-0c1d2e3f4a5b";
+function makeScratch() {
+  const base = mkdtempSync(path.join(tmpdir(), "claude-test-"));
+  const scratch = path.join(base, "-proj", SID, "scratchpad");
+  mkdirSync(scratch, { recursive: true });
+  return { base, scratch };
+}
+const verdictIn = (command, cwd, sid = SID) => classifyToolCall({ ...bash(command, cwd), session_id: sid })?.decision ?? null;
+
+test("P5 (proof by execution): a hard link or a symlink in the scratch folder writes into the repository", () => {
+  const repo = makeRepo("sg-p5-link-", "feature/x");
+  const { base, scratch } = makeScratch();
+  try {
+    writeFileSync(path.join(repo, "f.txt"), "original\n");
+    execFileSync("ln", [path.join(repo, "f.txt"), path.join(scratch, "hard.txt")]);
+    execFileSync("ln", ["-s", path.join(repo, "f.txt"), path.join(scratch, "sym.txt")]);
+    for (const name of ["hard.txt", "sym.txt"]) {
+      const line = `cat /dev/null > ${path.join(scratch, name)}`;
+      writeFileSync(path.join(repo, "f.txt"), "original\n");
+      execFileSync("bash", ["-c", line]);
+      assert.equal(readFileSync(path.join(repo, "f.txt"), "utf8"), "", `bash did not write through ${name}`);
+      assert.equal(verdictIn(line, repo), ASK, line);
+      assert.equal(verdictIn(`cp /dev/null ${path.join(scratch, name)}`, repo), ASK);
+    }
+    // a hard link is never made without a question; a symbolic link only as text
+    assert.equal(verdictIn(`ln ${path.join(repo, "f.txt")} ${path.join(scratch, "h2")}`, repo), ASK);
+    assert.equal(verdictIn(`cp -l ${path.join(repo, "f.txt")} ${path.join(scratch, "h3")}`, repo), ASK);
+    assert.equal(verdictIn(`ln -s ${path.join(repo, "f.txt")} ${path.join(scratch, "s2")}`, repo), ASK); // a link to outside the folder
+    assert.equal(verdictIn(`ln -s ${path.join(scratch, "hard.txt")} ${path.join(scratch, "s3")}`, repo), ALLOW); // a link inside it
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("P5: files in the own scratch folder are deleted and changed without a question; nothing else is", () => {
+  const repo = makeRepo("sg-p5-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const other = path.join(base, "-proj", "ffffffff-0000-4000-8000-000000000000", "scratchpad");
+  try {
+    mkdirSync(other, { recursive: true });
+    writeFileSync(path.join(scratch, "plain.txt"), "x");
+    writeFileSync(path.join(other, "theirs.txt"), "x");
+    mkdirSync(path.join(scratch, "empty"));
+    mkdirSync(path.join(scratch, "holds-wt", "w"), { recursive: true });
+    writeFileSync(path.join(scratch, "holds-wt", "w", ".git"), "gitdir: x\n");
+    execFileSync("git", ["init", "-q", path.join(scratch, "wt")]);
+    const s = scratch;
+    const rows = [
+      [`rm ${s}/plain.txt`, ALLOW], [`rm -f ${s}/plain.txt 2>/dev/null`, ALLOW], [`rm -rf ${s}/empty`, ALLOW], [`rm ${s}/*.txt`, ALLOW], [`rmdir ${s}/empty`, ALLOW],
+      [`S=${s}; rm $S/plain.txt`, ALLOW], [`mkdir -p ${s}/a/b`, ALLOW], [`touch ${s}/new.txt`, ALLOW], [`cp README.md ${s}/copy.md`, ALLOW],
+      [`mv ${s}/plain.txt ${s}/renamed.txt`, ALLOW], [`ln -s README.md ${s}/link`, ALLOW], [`cat README.md > ${s}/plain.txt`, ALLOW],
+      // outside the own folder, the folder itself, a work tree, or not readable here
+      [`rm ${s}`, ASK], [`rm -rf ${s}`, ASK], [`rm ${other}/theirs.txt`, ASK], [`cat README.md > ${other}/theirs.txt`, ASK], [`rm -rf ${s}/wt`, ASK],
+      [`rm -rf ${s}/wt/x`, ASK], [`rm -rf ${s}/holds-wt`, ASK], [`mv ${s}/holds-wt ${s}/elsewhere`, ASK], [`rm -rf ${s}/*`, ASK], [`rm ${repo}/f`, ASK],
+      [`rm plain.txt`, ASK], [`rm $X/plain.txt`, ASK], [`rm ${s}/../x`, ASK], [`rm ~/x`, ASK], [`rm -i ${s}/plain.txt`, ASK], [`rm --no-preserve-root ${s}/x`, ASK],
+      [`mv ${s}/plain.txt ${repo}/x`, ASK], [`mv ${repo}/README.md ${s}/x`, ASK], [`cp README.md ${repo}/x`, ASK], [`mkdir ${repo}/d`, ASK], [`touch ${repo}/t`, ASK],
+      [`rm ${s}/plain.txt; rm -f ${repo}/x`, ASK], [`echo $(rm ${repo}/x)`, ASK],
+      // brace expansion and substitutions are computed by bash after the hook looked: {..,a} is ../
+      [`rm ${s}/{..,a}/plain.txt`, ASK], [`rm -rf ${s}/{a,..}`, ASK], [`rm ${s}/\`echo x\``, ASK], [`rm ${s}/$(echo ../../x)`, ASK], [`rm -rf ${s}/\`printf %s ../../../x\``, ASK], [`touch ${s}/a\\b`, ASK],
+    ];
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+    // the own folder is the one of THIS session: another id, or none, asks
+    assert.equal(verdictIn(`rm ${s}/plain.txt`, repo, "ffffffff-0000-4000-8000-000000000000"), ASK);
+    assert.equal(classifyToolCall(bash(`rm ${s}/plain.txt`, repo))?.decision, ASK);
+    // a relative path is read against the hook's own process folder, not the command's: it asks
+    const here = process.cwd();
+    try {
+      process.chdir(s);
+      assert.equal(verdictIn("rm plain.txt", s), ASK);
+      assert.equal(verdictIn("touch ./new.txt", s), ASK);
+    } finally { process.chdir(here); }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("P3: commit and push to the own work branch without a question; everything else asks", () => {
+  const repo = makeRepo("sg-p3-", "feature/own");
+  const onMaster = makeRepo("sg-p3-master-", "master");
+  try {
+    expectAll([
+      ["git add src/a.js", ALLOW], ["git add -- a.js b.js", ALLOW], ["git commit -m x", ALLOW], ["git commit --amend --no-edit", ASK], ["git commit --amen -m y", ASK], ["git commit --no-verify -m x", ASK],
+      ["git push -u origin feature/own", ALLOW], ["git push origin feature/own", ALLOW], ["git push -q --set-upstream origin feature/own", ALLOW],
+      [`git -C ${repo} push -u origin feature/own`, ALLOW],
+      ["git add -u", ASK], ["git add --update", ASK], ["git add -f .env.example", ASK], ["git add --force x", ASK], ["git add 'src/*.js'", ASK],
+      ["git add :/", ASK], ["git add --pathspec-from-file=list", ASK], ["git commit -am x", ASK], ["git commit -a -m x", ASK], ["git commit --all -m x", ASK],
+      ["git push", ASK], ["git push origin", ASK], ["git push origin feature/other", ASK], ["git push upstream feature/own", ASK],
+      ["git push origin feature/own:main", ASK], ["git push origin feature/own:feature/other", ASK], ["git push --tags", ASK], ["git push origin v1", ASK],
+      ["git push --no-verify origin feature/own", ASK], ["git push -v origin feature/own", ASK], ["git push --dry-run origin feature/own", ASK], ["git push origin main", ASK], ["git push -f origin feature/own", DENY],
+    ], repo);
+    assert.equal(verdict("git commit -m x", onMaster), ASK);
+    assert.equal(verdict("git push -u origin master", onMaster), ASK);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(onMaster, { recursive: true, force: true });
+  }
+});
+
+test("P4: stopping a PostgreSQL cluster asks unless it is the session's own test cluster; su/runuser always ask", () => {
+  const repo = makeRepo("sg-p4-", "feature/x");
+  const { base, scratch } = makeScratch();
+  try {
+    mkdirSync(path.join(scratch, "pg"));
+    const pg = path.join(scratch, "pg");
+    const rows = [
+      [`pg_ctl -D ${pg} stop`, ALLOW], [`pg_ctl -D${pg} stop`, ALLOW], [`pg_ctl --pgdata=${pg} restart`, ALLOW], [`S=${scratch}; pg_ctl -D $S/pg stop`, ALLOW],
+      [`/usr/lib/postgresql/16/bin/pg_ctl -D ${pg} -o '-p 5544' start`, ALLOW], [`pg_ctl -D ${pg} status`, ALLOW], ["pg_ctlcluster 16 main start", ALLOW],
+      ["pg_ctl -D /var/lib/postgresql/16/main start", ALLOW], // starting is left alone
+      ["pg_ctl -D /var/lib/postgresql/16/main stop", ASK], ["/usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/16/main restart", ASK],
+      ["pg_ctl stop", ASK], ["pg_ctl -D $X stop", ASK], [`pg_ctl -D ${scratch} stop`, ASK], [`pg_ctl -D ${pg}/../.. stop`, ASK],
+      [`pg_ctl -D ${pg} kill INT 123`, ASK], [`pg_ctl -D ${pg} promote`, ALLOW], [`pg_ctl -D $(echo ${pg}) stop`, ASK],
+      // looks inside the own folder on the line, but bash computes the rest after the hook looked
+      [`pg_ctl -D ${pg}/$X stop`, ASK], [`pg_ctl -D ${pg}$(printf /../..) stop`, ASK], [`pg_ctl -D ${pg}/../pg stop`, ASK],
+      ["pg_ctlcluster 16 main stop", ASK], ["pg_ctlcluster 16 main restart", ASK], ["pg_ctlcluster 16 main reload", ASK],
+      ["sudo -u postgres pg_ctl -D /var/lib/postgresql/16/main stop", ASK], ["sudo -u postgres pg_ctlcluster 16 main stop", ASK],
+      ["su postgres -c 'pg_ctlcluster 16 main stop'", ASK], ["su - postgres", ASK], ["runuser -u postgres -- ls", ASK], ["/bin/su postgres -c id", ASK],
+    ];
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+    // another session's scratch folder is not this session's test cluster
+    assert.equal(verdictIn(`pg_ctl -D ${pg} stop`, repo, "ffffffff-0000-4000-8000-000000000000"), ASK);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------
+// Internal review of P3-P5 (code-reviewer and security-reviewer, 2026-11-20): every line below ran
+// without a question before the fix and reaches outside the approved scope.
+// ------------------------------------------------------------------
+
+test("P5 review (proof by execution): a trailing slash and a link in a destination folder reach outside", () => {
+  const repo = makeRepo("sg-p5r-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const outside = mkdtempSync(path.join(tmpdir(), "sg-p5r-outside-"));
+  const s = scratch;
+  try {
+    // rm -rf link/ deletes what the link points to
+    writeFileSync(path.join(outside, "keep.txt"), "x");
+    execFileSync("ln", ["-s", outside, path.join(s, "k")]);
+    execFileSync("bash", ["-c", `rm -rf ${s}/k/`]);
+    assert.equal(existsSync(path.join(outside, "keep.txt")), false, "bash did not delete through k/");
+    writeFileSync(path.join(outside, "keep.txt"), "x");
+    assert.equal(verdictIn(`rm -rf ${s}/k/`, repo), ASK);
+    assert.equal(verdictIn(`rm -rf ${s}/k/.`, repo), ASK);
+    assert.equal(verdictIn(`rm ${s}/k`, repo), ALLOW); // the link itself
+    // cp into a folder writes through a link that is already in it
+    mkdirSync(path.join(s, "d"));
+    mkdirSync(path.join(s, "new"));
+    writeFileSync(path.join(repo, "app.js"), "original\n");
+    writeFileSync(path.join(s, "new", "app.js"), "payload\n");
+    execFileSync("ln", ["-s", path.join(repo, "app.js"), path.join(s, "d", "app.js")]);
+    execFileSync("bash", ["-c", `cp ${s}/new/app.js ${s}/d`]);
+    assert.equal(readFileSync(path.join(repo, "app.js"), "utf8"), "payload\n", "bash did not write through d/app.js");
+    assert.equal(verdictIn(`cp ${s}/new/app.js ${s}/d`, repo), ASK);
+    // mv into a link to a folder lands outside
+    writeFileSync(path.join(s, "a"), "x");
+    assert.equal(verdictIn(`mv ${s}/a ${s}/k`, repo), ASK);
+    assert.equal(verdictIn(`ln -sf ${s}/a ${s}/k`, repo), ASK);
+    // into a plain scratch folder: fine
+    assert.equal(verdictIn(`cp ${s}/a ${s}/new`, repo), ALLOW);
+    assert.equal(verdictIn(`mv ${s}/a ${s}/new`, repo), ALLOW);
+  } finally {
+    for (const d of [base, repo, outside]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("P5 review: whole variable names, links made on the same line, link copies, xargs, rmdir -p", () => {
+  const repo = makeRepo("sg-p5r2-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const s = scratch;
+  try {
+    mkdirSync(path.join(s, "pg"));
+    const rows = [
+      // a variable is put in only by its whole name: $Db and $PWD are other variables
+      [`D=${s}/x; rm -rf $Db/etc`, ASK], [`D=${s}/x; cat README.md > $Db/tmp/f`, ASK], [`P=${s}/x; rm -rf $PWD`, ASK],
+      [`P=${s}/pg; pg_ctl -D $Px stop`, ASK], [`D=${s}/x; rm -rf $D/old`, ALLOW], [`D=${s}/x; rm -rf \${D}/old`, ALLOW],
+      // a link or work tree made on the same line: the other paths were judged before it existed
+      [`ln -s ${repo} ${s}/r && rm -rf ${s}/r/backend`, ASK], [`ln -s ${repo}/f ${s}/f; cat README.md > ${s}/f`, ASK],
+      [`git worktree add -q -b feature/n ${s}/w origin/main && rm -rf ${s}/w/backend`, ASK], [`mv ${s}/a ${s}/b && touch ${s}/b/x`, ASK],
+      [`cp -r ${repo} ${s}/c && rm -rf ${s}/c/x`, ASK], [`ln -s /var/lib/postgresql/16/main ${s}/pg2; pg_ctl -D ${s}/pg2 stop`, ASK],
+      [`mkdir -p ${s}/n && touch ${s}/n/x`, ALLOW],
+      // link copies, a link pointing outside, operands added by xargs, rmdir -p
+      [`cp -a ${repo} ${s}/c2`, ASK], [`cp -P /proc/self/cwd ${s}/l`, ASK], [`cp -d x ${s}/l`, ASK], [`ln -s /proc/self/cwd ${s}/l`, ASK],
+      [`ln -s ${repo} ${s}/r2`, ASK], [`ln -s ${s}/pg ${s}/pglink`, ALLOW], [`echo x | xargs rm -f ${s}/x`, ASK], [`xargs rm < ${s}/list`, ASK],
+      [`rmdir -p ${s}/a/b`, ASK], [`rmdir ${s}/pg`, ALLOW],
+      // pg_ctl: more than one data folder, an abbreviation of --pgdata
+      [`pg_ctl -D ${s}/pg -D /var/lib/postgresql/16/main stop`, ASK], [`pg_ctl -D ${s}/pg --pgdata=/var/lib/postgresql/16/main stop`, ASK],
+      [`pg_ctl --pgd=${s}/pg stop`, ASK], [`pg_ctl -D ${s}/pg --pgd=/var/lib/postgresql/16/main stop`, ASK], [`pg_ctl -D ${s}/pg stop`, ALLOW],
+    ];
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+    // a stop signals the PID in postmaster.pid: a PID of another process asks
+    writeFileSync(path.join(s, "pg", "postmaster.pid"), `${process.pid}\n${s}/pg\n`);
+    assert.equal(verdictIn(`pg_ctl -D ${s}/pg stop`, repo), ASK);
+    writeFileSync(path.join(s, "pg", "postmaster.pid"), "not a pid\n");
+    assert.equal(verdictIn(`pg_ctl -D ${s}/pg stop`, repo), ASK);
+  } finally {
+    for (const d of [base, repo]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("P3 review: broad add/commit forms, a cd on the line, push redirected by git config", () => {
+  const repo = makeRepo("sg-p3r-", "feature/own");
+  const onMaster = makeRepo("sg-p3r-master-", "master");
+  try {
+    mkdirSync(path.join(repo, "backend", "src"), { recursive: true });
+    writeFileSync(path.join(repo, "backend", "src", "a.js"), "x");
+    expectAll([
+      ["git add backend/..", ASK], ["git add ./.", ASK], ["git add ..", ASK], ['git add "$PWD"', ASK], [`git add ${repo}/backend/src/a.js`, ASK],
+      ["git add nothere/..", ASK], ["git add gone/../backend", ASK], // git reads these as . and backend: no stat possible
+      ["git add backend/src", ASK], ["git add backend/src/", ASK], ["git add backend/src/a.js", ALLOW], ["git add ./backend/src/a.js", ALLOW],
+      ["git commit -m x .", ASK], ["git commit -m x -- .", ASK], ["git commit -m x -- backend", ASK], ["git commit -m x backend/src/a.js", ASK],
+      ['git commit -m "fix: two words"', ALLOW], ["git commit -q -m x --no-edit", ALLOW], ["git commit -F msg.txt", ALLOW],
+      [`cd ${onMaster} && git commit -m x`, ASK], [`cd ${repo} && git push origin feature/own`, ASK], ["git checkout -b y && git commit -m x", ASK],
+    ], repo);
+    // git configuration that sends `git push origin <B>` elsewhere
+    const g = (...a) => execFileSync("git", a, { cwd: repo });
+    assert.equal(verdict("git push origin feature/own", repo), ALLOW);
+    g("config", "push.default", "upstream"); g("config", "branch.feature/own.merge", "refs/heads/main");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+    g("config", "--unset", "push.default"); g("config", "--unset", "branch.feature/own.merge");
+    g("config", "remote.origin.push", "refs/heads/*:refs/heads/main");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+    g("config", "--unset", "remote.origin.push"); g("config", "remote.origin.pushurl", "https://example.com/other.git");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+  } finally {
+    for (const d of [repo, onMaster]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------
+// Nezavisni, #698 HIGH-1 (2026-11-20): the variables were kept by the TEXT of a part, so two
+// identical parts shared the first one's values. Proven with real deletion in a test folder.
+// ------------------------------------------------------------------
+
+test("#698 HIGH-1 (proof by execution): a repeated part with a reassigned variable is never silent", () => {
+  const repo = makeRepo("sg-698-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const victim = mkdtempSync(path.join(tmpdir(), "sg-698-victim-"));
+  const s = scratch;
+  try {
+    mkdirSync(path.join(s, "pg"));
+    // the attack runs for real: the second rm deletes the victim folder
+    writeFileSync(path.join(victim, "keep.txt"), "x");
+    mkdirSync(path.join(s, "d"));
+    const attack = `S=${s}/d; rm -rf $S; S=${victim}; rm -rf $S`;
+    execFileSync("bash", ["-c", attack]);
+    assert.equal(existsSync(victim), false, "bash did not delete the victim");
+    mkdirSync(victim);
+    const lines = [
+      attack, `S=${s}/d; rm -rf $S && S=${victim} && rm -rf $S`, `S=${s}/d; rm -rf $S || S=${victim}; rm -rf $S`,
+      `S=${s}/d\nrm -f $S\nS=${victim}/keep.txt\nrm -f $S`, `{ S=${s}/d; rm -rf $S; S=${victim}; rm -rf $S; }`,
+      `for S in ${s}/d ${victim}; do rm -rf $S; done`, `S=${s}/d; cp README.md $S; S=${victim}/x; cp README.md $S`,
+      `S=${s}/d; cp README.md $S.bak; S=${victim}/x; cp README.md $S.bak`, `S=${s}/d; mkdir -p $S; S=${victim}/n; mkdir -p $S`,
+      `S=${s}/d; touch $S; S=${victim}/t; touch $S`, `S=${s}/a; mv $S ${s}/b; S=${victim}; mv $S ${s}/c`,
+      `S=${s}/l; ln -s ${s}/pg $S; S=${victim}/l; ln -s ${s}/pg $S`, `S=${s}/o; cat README.md > $S; S=${victim}/o; cat README.md > $S`,
+      `D=${s}/pg; pg_ctl -D $D stop; D=/var/lib/postgresql/16/main; pg_ctl -D $D stop`,
+      `B=feature/x; git push origin $B; B=main; git push origin $B`, `S=${s}/x; read S < list; rm -rf $S`,
+    ];
+    const silent = lines.filter((c) => verdictIn(c, repo) !== ASK);
+    assert.deepEqual(silent, []);
+    // a name assigned once still works
+    assert.equal(verdictIn(`S=${s}/d; rm -rf $S/old; rm -rf $S/older`, repo), ALLOW);
+  } finally {
+    for (const d of [base, repo, victim]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("#698: a file operation the hook cannot place asks (fail-closed backstop); cp of a link or /proc path asks", () => {
+  const repo = makeRepo("sg-698b-", "feature/x");
+  const { base, scratch } = makeScratch();
+  const s = scratch;
+  try {
+    expectAll([]);
+    const rows = [
+      [`f() { rm -rf /home/user/x; }; f`, ASK], [`alias r=rm; r -rf /x`, ASK], [`echo ok; rm -rf ${s}/a`, ALLOW],
+      [`cp -r /proc/self/cwd ${s}/x`, ASK], [`cp /dev/stdin ${s}/x`, ASK], [`cp /proc/self/environ ${s}/env`, ASK], [`cp README.md ${s}/x`, ALLOW],
+      // forms whose rm the part parser does not place: only the backstop sees them
+      ["case x in x) rm -rf /home/user/x;; esac", ASK], ["case $x in a|b) cp a /home/user/b ;; esac", ASK], ["coproc rm -rf /home/user/x", ASK],
+      ['cmd=(rm -rf /home/user/x); "${cmd[@]}"', ASK], ['git commit -m "docs: note about rm"', ALLOW], ["grep -n rm README.md", ALLOW],
+    ];
+    execFileSync("ln", ["-s", repo, path.join(s, "repolink")]);
+    rows.push([`cp -r ${s}/repolink ${s}/copy`, ASK]);
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+  } finally {
+    for (const d of [base, repo]) rmSync(d, { recursive: true, force: true });
+  }
 });

@@ -5,7 +5,7 @@ import { validateEditorDraft, validateContract } from './schema.js';
 import { bindingVisible } from './capabilities.js';
 const charts = new Set(['line_chart', 'bar_chart']);
 const composed = new Set(['day', 'week', 'athlete']);
-const aggs = ['sum', 'avg', 'max', 'last', 'none'];
+const aggs = ['sum', 'avg', 'max', 'last', 'none', 'ratio'];
 const sourcePolicies = ['all_with_conflicts', 'source_connection', 'manual', 'api_import', 'csv_import', 'derived', 'not_applicable'];
 const own = (o, k) => Object.hasOwn(o ?? {}, k);
 const clone = v => structuredClone(v);
@@ -51,6 +51,10 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
   if (previous?.template_metric_key_hints || previous?.template_resolution_candidates) return { status: 'advancedRequired', issues: [{ code: 'advancedRequired', path: '$.metricRef' }] };
   if (existing && Object.keys(existing.local_filter_override ?? {}).some(k => !['athleteIds', 'activityId', 'componentId'].includes(k))) return { status: 'advancedRequired', issues: [{ code: 'advancedRequired', path: '$.advancedFilter' }] };
   const view = clone(draft.view);
+  const ratio = m.calculation?.kind === 'ratio';
+  if (m.calculation?.inputs?.some(input => !input.definitionId)) return { status: 'invalid', issues: [{ code: 'calculationInputUnavailable', path: '$.metricRef' }] };
+  if (!existing && ratio && !view.analyticalAggregation) view.analyticalAggregation = 'ratio';
+  if ((ratio && !['ratio','max','last','none'].includes(view.analyticalAggregation)) || (!ratio && view.analyticalAggregation === 'ratio')) issue('aggregation_not_allowed', '$.view.analyticalAggregation');
   const scopes = builtin ? [m.fixed_data_scope_level] : m.scope_capabilities;
   if (!Array.isArray(scopes) || scopes.some(scope => !['day', 'session', 'component'].includes(scope))) return { status: 'invalid', issues: [{ code: 'invalidCatalogMetadata', path: '$.metricRef' }] };
   if (!view.dataScopeLevel && scopes.length === 1) view.dataScopeLevel = scopes[0];
@@ -97,7 +101,8 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
     && pin.source_connection_id === connectionId && pin.metric_definition_id === m.id
     && previous.metric_definition_id === m.id && pin.built_in_series_key == null && !builtin;
   if (connectionId && (snapshot.connection?.id !== connectionId || (snapshot.connection.state !== 'active' && !(snapshot.connection.state === 'inactive' && retainedPin)) || !bindingVisible(snapshot.dashboard, snapshot.connection))) issue('notFound', '$.metricRef');
-  const rolePolicy = previous?.aggregation_role_policy ?? 'standalone_and_source_rollup';
+  const rolePolicy = previous?.aggregation_role_policy ?? (ratio ? 'all_including_derived' : 'standalone_and_source_rollup');
+  if (ratio && rolePolicy !== 'all_including_derived') issue('aggregation_not_allowed', '$.metricRef');
   const coveragePolicy = previous?.coverage_policy ?? 'complete_and_partial';
   if (!['standalone_only', 'standalone_and_source_rollup', 'all_including_derived'].includes(rolePolicy)) issue('aggregationRolePolicy', '$.metricRef');
   if (!['complete_only', 'complete_and_partial', 'any'].includes(coveragePolicy)) issue('coveragePolicy', '$.metricRef');

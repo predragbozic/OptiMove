@@ -583,6 +583,24 @@ test("14. a batch refused for one team names it (never its id) and offers the ot
   assert.deepEqual(second.body.bindings.map((b) => b.bindingId).sort(), [B2, id("b1b1b1b1", 4)].sort());
 });
 
+test("14b (v80, code review LOW-3 on #690). a team refused because its GPEXE setting is not the variable's names the team and shows the server's sentence naming both settings", async () => {
+  db.activations = db.activations.filter((a) => a.bindingId !== B1);
+  const message = "This column counts events at or above 2.5 m/s² lasting 0.5 s (First team's setting in GPEXE); Accelerations counts events at or above 2.5 m/s² lasting 0.3 s. Choose a variable with the same setting, or change the team's setting in GPEXE.";
+  let first = true;
+  overrides.push((c) => (c.method === "POST" && c.url === `${B}/activations` && first ? ((first = false), ok({ error: "team_setting_mismatch", message, current: { bindingId: B1 } }, 409)) : null));
+  await open("detail");
+  await click(`[data-action="metric-mappings-switch-on-open"][data-version-id="${V1}"]`);
+  await input('[data-mm-field="club"]', CLUB);
+  await click(`[data-action="metric-mappings-every-team"][data-connection-id="${CONN}"]`);
+  await input('[data-mm-field="requirement"][value="optional"]', true);
+  await input('[data-mm-field="reason"]', "Start.");
+  await click('[data-action="metric-mappings-review"]');
+  await click('[data-action="metric-mappings-confirm"]');
+  render();
+  assert.match(text(), /“First team” has another setting in GPEXE than this variable counts, so nothing was saved\. This column counts events at or above 2\.5 m\/s² lasting 0\.5 s/);
+  assert.match(text(), /Accelerations counts events at or above 2\.5 m\/s² lasting 0\.3 s\./);
+});
+
 test("15. switch off: one confirmation naming the team, its link and the version, then the body", async () => {
   await open("detail");
   await click(`[data-action="metric-mappings-switch-off-open"][data-activation-id="${id("ac000000", 1)}"]`);
@@ -784,7 +802,8 @@ test("23. every row of the refusal table (J16 section 8) has its own sentence; r
   assert.equal(data.refusalText("activate", { code: "condition_mismatch", status: 409 }),
     "This version cannot be activated now: this variable counts only values under a condition, and this field has none, so it cannot fill it.");
   assert.equal(data.checkSettles("activate", { code: "condition_mismatch", status: 409 }), true);
-  assert.deepEqual([...data.TEAM_CODES].sort(), ["activation_exists", "binding_not_active", "binding_source_mismatch", "variable_taken_on_binding"]);
+  // v80 step C2: the three refusals of a column matched through the team's GPEXE setting name the team too.
+  assert.deepEqual([...data.TEAM_CODES].sort(), ["activation_exists", "binding_not_active", "binding_source_mismatch", "event_setting_not_confirmed", "team_setting_mismatch", "team_setting_missing", "variable_taken_on_binding"]);
   for (const code of data.TEAM_CODES) assert.ok(data.TEAM_CODE_TEXT[code], code);
   for (const act of ["create", "draft", "submit", "activate", "disable", "switchOn", "switchOff"]) {
     assert.equal(data.refusalText(act, { code: "invalid_body", status: 400 }), "The screen sent something the server does not accept. Nothing was saved.");
@@ -1534,6 +1553,25 @@ test("45. a club's admin saves and activates a new mapping with one team switche
   assert.match(text(), /Version 1 is active\. 1 team is switched on\./);
   assert.equal(data.mappingsState().chain, null);
   assert.ok(interactions <= 10, `a club's path with one team takes ${interactions} interactions`);
+});
+
+test("45b (v80, code review LOW on the estimate-panel PR). Save and activate stopped by team_setting_mismatch names the team and shows the server's sentence naming both settings", async () => {
+  chainWorld();
+  const BOTH = "In GPEXE this team's setting is 3 zones; the variable expects 5 zones.";
+  overrides.push((c) => (c.method === "POST" && c.url.endsWith("/activate") ? ok({ error: "team_setting_mismatch", message: BOTH, current: { bindingId: B1 } }, 409) : null), statusful);
+  asClub();
+  await toStep4(FV, TC);
+  await input('[data-mm-field="withTeams"]', true);
+  for (let i = 0; i < 12; i += 1) await settle();
+  render();
+  await input(`[data-mm-field="team"][data-binding-id="${B1}"]`, true);
+  await input('[data-mm-field="requirement"][value="required"]', true);
+  await input('[data-mm-field="reason"]', "Our club's distance.");
+  await click('[data-action="metric-mappings-flow-save-activate"]');
+  render();
+  assert.equal(posts().length, 4);
+  assert.ok(text().includes(BOTH), "the server's sentence naming both settings is shown in the chain's stop");
+  assert.match(text(), /“[^”]+” /, "the team is named");
 });
 
 test("46. a platform admin saves and activates a system mapping with no team: three writes after create, the last one without activations", async () => {

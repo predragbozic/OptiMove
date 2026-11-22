@@ -44,6 +44,17 @@ export function inventoryBundles(sourceTeam = 7001) {
   });
 }
 
+// v80 step C: the inventory sessions with a GPEXE details acceleration events count (different per athlete, so it can be
+// compared), under the team's default events setting (2.5 m/s² lasting 0.3 s).
+export function eventsBundles(sourceTeam = 7001) {
+  return inventoryBundles(sourceTeam).map((bundle) => {
+    for (const part of [bundle.details.full, ...Object.values(bundle.details.drills)]) {
+      Object.values(part.players).forEach((values, i) => { values.acceleration_events = { unit: "number", value: 14 + 3 * i }; });
+    }
+    return bundle;
+  });
+}
+
 // U6a-3: three sessions with only linked athletes (101..103), all Ready - the batch series scenario.
 export const SERIES_SESSIONS = [9111, 9112, 9113];
 export function seriesBundles(sourceTeam = 7001) {
@@ -51,6 +62,21 @@ export function seriesBundles(sourceTeam = 7001) {
     sessionId, gpexeTeamId: Number(sourceTeam), start: `2026-11-0${i + 2}T09:08:12`, updatedOn: `2026-11-0${i + 2}T11:18:09.337`,
     category: "FULL TRAINING", athletes: [101, 102, 103].map((id) => athlete(id, sessionId)), detailsDrills: [0, 1],
   }));
+}
+
+// K5-4, the calendar's GPS marks: two sessions waiting on 05.11.2026 (one Ready, one that needs athlete 121 linked)
+// and one on 04.11.2026 the scenario imports, so that day has nothing waiting.
+export const K54_SESSIONS = { ready: 9161, needs: 9162, imported: 9163 };
+export function calendarMarkBundles(sourceTeam = 7001) {
+  const mk = (sessionId, start, ids) => makeBundle({
+    sessionId, gpexeTeamId: Number(sourceTeam), start, updatedOn: `${start.slice(0, 10)}T20:18:09.337`,
+    category: "FULL TRAINING", athletes: ids.map((id) => athlete(id, sessionId)), detailsDrills: [0, 1],
+  });
+  return [
+    mk(K54_SESSIONS.ready, "2026-11-05T09:08:12", [101, 102, 103]),
+    mk(K54_SESSIONS.needs, "2026-11-05T17:08:12", [101, 102, 121]),
+    mk(K54_SESSIONS.imported, "2026-11-04T09:08:12", [101, 102, 103]),
+  ];
 }
 
 // J18, the board: one Ready session whose three linked athletes have different values, so the board finds two

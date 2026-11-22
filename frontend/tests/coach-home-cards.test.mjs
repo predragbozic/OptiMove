@@ -111,7 +111,7 @@ test("another day: loading, then its athletes with that date, its own count, an 
   assert.equal(page.querySelector(".coach-home-day-count"), null, "no count before the day's answer");
   assert.equal(page.querySelector("#coachHomeDayTitle").textContent, "Sat 24 Oct");
   assert.ok(page.querySelector('[data-action="coach-home-day-today"]'));
-  assert.equal(page.querySelector('[data-date="2026-10-24"]').getAttribute("aria-pressed"), "true");
+  assert.equal(page.querySelector('[data-action="coach-home-day-select"][data-date="2026-10-24"]').getAttribute("aria-pressed"), "true");
 
   home.day = { date: "2026-10-24", rows: [{ ...roster[1], hasTrainingToday: true, sessionCount: 2 }, { ...roster[0], hasTrainingToday: false, sessionCount: 0 }], loading: false, error: "" };
   page = render();
