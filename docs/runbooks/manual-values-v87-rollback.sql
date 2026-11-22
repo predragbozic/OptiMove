@@ -27,8 +27,9 @@ begin
   end if;
 end $$;
 
--- Nothing may be written to these tables between the checks below and the restore; taken up front, in the order the undo
--- and the import take them (occasions and values before the log and the approvals).
+-- Nothing may be written to these tables between the checks below and the restore; taken up front (occasions before values
+-- is the import's order; an undo running at the same moment can deadlock with this, which fails closed - run it at a quiet
+-- moment).
 lock table training_load.metric_measurement_occasions in access exclusive mode;
 lock table training_load.metric_values in access exclusive mode;
 lock table training_load.import_deletion_log in access exclusive mode;
@@ -39,7 +40,7 @@ do $$
 declare
   v87 constant text := 'migrations_v2/202611221100_training_load_v87_manual_values.sql';
   expected constant text[][] := array[
-    ['training_load', 'undo_imported_session', 'e305fef2a7afb42c63904f1928cc4520'],
+    ['training_load', 'undo_imported_session', '785246086cfea1c27f2241cc97faba61'],
     ['training_load', 'session_undo_scope', '59c475a5b91fd6aee611da80713704f1'],
     ['training', 'activity_roster_needs_state', '3138bad54c53cc7c381a5ebbfcbb07b0'],
     ['training_load', 'validate_metric_manual_value', '7beab291d0e26e7b5998d4fc9241b4df'],

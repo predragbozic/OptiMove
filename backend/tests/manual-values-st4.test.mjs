@@ -707,6 +707,31 @@ test("16. the undo refuses a session whose manual value left a Metrics-screen wr
   assert.deepEqual([undone.status, undone.body.error], [409, "manual_write_request_exists"]);
 });
 
+test("17. a session with manual values and a calendar link: the undo refuses calendar_link_exists before it asks to confirm the manual values", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9707, hour: 17, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const entry = await saveValues(s, { athleteId: team.athleteIds[EVA], values: [{ metricDefinitionId: distance, value: 800 }] }, team.coach.cookie);
+  assert.equal(entry.status, 201, entry.text);
+  const typeId = (await admin.query(`select id from calendar.event_types limit 1`)).rows[0].id;
+  // The event is inserted with the table's user triggers off (the table owner may), as session-undo-u5 test 9 does.
+  await admin.query("begin");
+  await admin.query(`alter table calendar.events disable trigger user`);
+  const eventId = (await admin.query(
+    `insert into calendar.events (owner_scope, owner_team_id, event_type_id, title, day, timezone, created_by_user_id)
+     values ('team', $1, $2, 'Training', '2026-09-14', 'Europe/Sarajevo', $3) returning id`,
+    [team.teamId, typeId, team.padmin.id],
+  )).rows[0].id;
+  await admin.query(`alter table calendar.events enable trigger user`);
+  await admin.query("commit");
+  await admin.query(`insert into calendar.event_activity_links (event_id, activity_id, linked_by_user_id) values ($1, $2, $3)`, [eventId, s.activityId, team.padmin.id]);
+  const undone = await api(`/teams/${team.teamId}/candidates/${s.candidateId}/undo-import`, {
+    method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "wrong session", expected: { eventId: s.eventId } },
+  });
+  assert.deepEqual([undone.status, undone.body.error], [409, "calendar_link_exists"]);
+  assert.equal(undone.body.manualValues, undefined, "no list to confirm");
+});
+
 test("15. the COMMIT outcome: a COMMIT whose answer is lost after it committed answers 201 (verified by the request key) and a repeat replays it; a COMMIT the server refused answers 500 with nothing saved; an unknown outcome found nowhere answers 503 outcome_unknown, and the same key then writes once", async () => {
   const team = await setupTeam();
   const s = await importSession(team, bundleOf({ sessionId: 9705, hour: 14, ids: [101, 102, 104] }));

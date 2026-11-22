@@ -7,7 +7,7 @@ select (select count(*) from public.schema_migrations where migration_name = 'mi
 
 -- 2. The bodies in force are v87's.
 select (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-         where n.nspname = 'training_load' and p.proname = 'undo_imported_session') = 'e305fef2a7afb42c63904f1928cc4520' as undo_is_v87,
+         where n.nspname = 'training_load' and p.proname = 'undo_imported_session') = '785246086cfea1c27f2241cc97faba61' as undo_is_v87,
        (select array_agg(pg_get_function_identity_arguments(p.oid)) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = 'training_load' and p.proname = 'undo_imported_session')
          = array['p_actor uuid, p_team uuid, p_candidate uuid, p_request_key uuid, p_reason text, p_expected_event uuid, p_later_roster_fingerprint text, p_manual_values_fingerprint text'] as undo_one_eight_argument_function,

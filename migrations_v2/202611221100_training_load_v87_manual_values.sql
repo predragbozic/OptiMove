@@ -31,11 +31,12 @@
 --
 -- Bodies are replaced after an md5 check of the bodies in force (v76's undo, v63's scope, v26's needs-state). New lines sit
 -- between "-- v87 begin" and "-- v87 end".
--- Locks, all up front and in the order the undo and the import take these tables (occasions and values before the deletion
--- log and the approvals), lock_timeout 5 s: the occasions and values SHARE ROW EXCLUSIVE (the new foreign keys and
--- triggers), then the deletion log and the approvals ACCESS EXCLUSIVE (their new columns and CHECKs). Every other lock the
--- DDL takes (public.users and training.activity_types for the new foreign keys) is a share lock no writer path holds
--- against them. A busy table fails the migration with nothing applied; deploy at a quiet moment.
+-- Locks, all up front, lock_timeout 5 s: the occasions and values SHARE ROW EXCLUSIVE (the new foreign keys and triggers),
+-- then the deletion log and the approvals ACCESS EXCLUSIVE (their new columns and CHECKs). Occasions before values is the
+-- order of the import and the manual and estimate writes; the session undo deletes values before occasions, so an undo
+-- running at the same moment can end in a deadlock with this migration, which fails closed (one side rolls back, nothing
+-- is half applied). Hence: deploy at a quiet moment (no import, check or undo running). The other locks the DDL takes
+-- (public.users and training.activity_types for the new foreign keys) conflict with no writer of those tables' rows.
 -- Runbook: docs/runbooks/manual-values-v87.md (preflight, post-check and rollback; the rollback refuses once a provenance
 -- row, a logged manual removal or an approval choice exists).
 
@@ -653,23 +654,10 @@ begin
     end if;
   end loop;
   -- v87 begin: manual values never block for good (the owner's answer Q3 of 2026-11-20): they are removed only with a
-  -- confirmation of exactly the list computed here, under the team's import lock (every manual write takes it too).
-  -- A manual entry of another path that left a write request refuses for good: checked first, so a person is never asked
-  -- to confirm a list that is then refused anyway.
+  -- confirmation of exactly the list computed below, under the team's import lock (every manual write takes it too). A
+  -- manual entry of another path that left a write request refuses for good, checked here first.
   if (v_scope ->> 'manualWriteRequestCount')::int > 0 then
     perform training_load.session_undo_refuse('manual_write_request_exists');
-  end if;
-  v_manual := v_scope -> 'manualValues';
-  if (v_scope ->> 'manualOccasionCount')::int > 0 then
-    if p_manual_values_fingerprint is null then
-      perform training_load.session_undo_refuse('manual_values_need_confirmation', v_manual::text);
-    end if;
-    if p_manual_values_fingerprint is distinct from v_manual ->> 'fingerprint' then
-      perform training_load.session_undo_refuse('manual_values_changed', v_manual::text);
-    end if;
-  elsif p_manual_values_fingerprint is not null then
-    -- A fingerprint confirms a list; with no manual value at all that list is gone.
-    perform training_load.session_undo_refuse('manual_values_changed', '{"count":0,"list":[],"fingerprint":null}');
   end if;
   -- v87 end
   if (v_scope ->> 'sharedActivityCount')::int > 0 then
@@ -684,6 +672,21 @@ begin
   if (v_scope ->> 'calendarLinkCount')::int > 0 then
     perform training_load.session_undo_refuse('calendar_link_exists', v_scope ->> 'calendarLinkCount');
   end if;
+  -- v87 begin: the manual values' confirmation, after every refusal that is final (as v60's below), so a person is never
+  -- asked to confirm a list that is then refused anyway.
+  v_manual := v_scope -> 'manualValues';
+  if (v_scope ->> 'manualOccasionCount')::int > 0 then
+    if p_manual_values_fingerprint is null then
+      perform training_load.session_undo_refuse('manual_values_need_confirmation', v_manual::text);
+    end if;
+    if p_manual_values_fingerprint is distinct from v_manual ->> 'fingerprint' then
+      perform training_load.session_undo_refuse('manual_values_changed', v_manual::text);
+    end if;
+  elsif p_manual_values_fingerprint is not null then
+    -- A fingerprint confirms a list; with no manual value at all that list is gone.
+    perform training_load.session_undo_refuse('manual_values_changed', '{"count":0,"list":[],"fingerprint":null}');
+  end if;
+  -- v87 end
   -- v60 (O1): the roster work never blocks what the import wrote; LATER work is removed only with a confirmation of
   -- exactly the list computed here, under the team's import lock (every roster command takes it too).
   v_work := v_scope -> 'rosterWork';
