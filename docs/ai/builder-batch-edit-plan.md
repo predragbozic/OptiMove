@@ -509,8 +509,9 @@ lock, and then runs the Save's check over the chosen sessions (their rows `FOR U
   delete again. … The plan stays as it is. You can still edit it."). Rights first: a caller who may not edit the plan
   gets the plain 404 before any 409. A draft (an edit draft's discard included) and a published plan with no such
   session are deleted as before.
-- **A published program with entered RPE stays as it is (the owner's decision, 2026-11-22).** It cannot be deleted
-  and it is not archived; nor is there a delete of only the sessions that were not done. No archive or other way out
+- **A published program with entered RPE stays as it is (the owner's decision, 2026-11-22, in the owner's words as
+  relayed).** The manager's reading: RPE and event links attach to weekly-plan sessions (12.6), so in practice this is
+  the published plan this section guards, of any kind. It cannot be deleted and it is not archived; nor is there a delete of only the sessions that were not done. No archive or other way out
   is built. The block above (`409 edit_sessions_locked` / `409 plan_sessions_locked`, Task 5 as merged in #702) is
   final.
 - **A program's Save** (`copyProgramTree`) does not keep logical ids, so every session of a published program counts
