@@ -58,7 +58,7 @@ router.get("/", async (req, res, next) => {
       ) summary on summary.athlete_uuid = a.id
       where coalesce(a.is_active, true)
         ${filter.sql}
-      order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::int nulls last,
+      order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::numeric nulls last,
                athlete_name
     `, filter.params);
     res.json({
@@ -347,7 +347,7 @@ async function getAthleteRows(req = null) {
     from public.athletes a
     where coalesce(a.is_active, true)
       ${filter.sql}
-    order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::int nulls last,
+    order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::numeric nulls last,
              athlete_name
   `, filter.params);
   return result.rows.map((row) => ({
