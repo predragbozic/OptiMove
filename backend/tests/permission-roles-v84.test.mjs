@@ -14,6 +14,10 @@ import { runMigrations } from "../src/migrate.js";
 import { BASIC_ROLE_PERMISSIONS, PERMISSION_GROUPS, PERMISSIONS } from "../src/permissions.js";
 import { asActor, buildDatabase, fixtures, migrationsWithout, MIGRATIONS, NIL, ROLE_IDS, RUNBOOKS, V84_FILE, V84_NAME } from "./support/permission-roles-world.mjs";
 
+// The repository's migrations up to v84 (v85 on left out; see migrationsWithout).
+const UP_TO_V84 = migrationsWithout([]);
+process.on("exit", () => UP_TO_V84.cleanup());
+
 let db, k, F;
 before(async () => {
   db = await buildDatabase({ label: "v84" });
@@ -94,19 +98,19 @@ test("1. v84 applied by the runner rewrites no existing role row; applied twice 
     await c.query(`insert into public.user_global_roles (user_id, role, is_active) values ($1,'platform_admin',true), ($2,'independent_coach',true)`, [p, a]);
     const before = await digestOfRoleTables(c);
     const catalogBefore = (await c.query(CATALOG_SQL)).rows[0];
-    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V84.dir });
     assert.deepEqual(await digestOfRoleTables(c), before, "v84 rewrites no row of the three old role tables");
     const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V84_NAME])).rows;
     assert.equal(recorded.length, 1);
     assert.equal(recorded[0].checksum, crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V84_FILE))).digest("hex"));
     const count = Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count);
-    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V84.dir });
     assert.equal(Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count), count, "the second run applies nothing");
     // The rollback (the runbook's file), then the catalog equals the one before v84, then v84 again.
     await c.query(fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-rollback.sql"), "utf8"));
     assert.deepEqual((await c.query(CATALOG_SQL)).rows[0], catalogBefore, "the catalog after the rollback equals the one before v84");
     assert.deepEqual(await digestOfRoleTables(c), before);
-    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V84.dir });
     assert.equal(Number((await c.query(`select count(*) from public.permissions`)).rows[0].count), 52, "v84 applies again");
   } finally {
     await c.end().catch(() => {});
@@ -284,13 +288,13 @@ test("3. v84 refuses to run with a planted row of another word in user_club_role
     };
     for (const active of [true, false]) {
       const row = (await c.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_manager',$3) returning id`, [u, club, active])).rows[0].id;
-      await assert.rejects(runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS }), (e) => /user_club_roles holds a role word other than club_admin/.test(`${e.message} ${e.cause?.message ?? ""}`));
+      await assert.rejects(runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V84.dir }), (e) => /user_club_roles holds a role word other than club_admin/.test(`${e.message} ${e.cause?.message ?? ""}`));
       await nothingOfV84();
       await c.query(`delete from public.user_club_roles where id = $1`, [row]);
     }
     for (const active of [true, false]) {
       const row = (await c.query(`insert into public.user_team_roles (user_id, team_id, role, is_active) values ($1,$2,'team_trainer',$3) returning id`, [u, team, active])).rows[0].id;
-      await assert.rejects(runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS }), (e) => /user_team_roles holds a role word other than team_coach/.test(`${e.message} ${e.cause?.message ?? ""}`));
+      await assert.rejects(runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V84.dir }), (e) => /user_team_roles holds a role word other than team_coach/.test(`${e.message} ${e.cause?.message ?? ""}`));
       await nothingOfV84();
       await c.query(`delete from public.user_team_roles where id = $1`, [row]);
     }
@@ -399,7 +403,7 @@ test("6b. the platform's roles (anon, authenticated, service_role), granted ever
       await c.query(`alter default privileges in schema public grant all on tables to ${r}`);
       await c.query(`alter default privileges in schema public grant execute on functions to ${r}`);
     }
-    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V84.dir });
     const fns = (await c.query(`select p.oid::regprocedure::text as f from pg_proc p where p.pronamespace = 'public'::regnamespace
         and (p.proname like 'permission%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor') or p.proname like 'user_role_assignments%')`)).rows.map((r) => r.f);
     assert.ok(fns.length >= 29);

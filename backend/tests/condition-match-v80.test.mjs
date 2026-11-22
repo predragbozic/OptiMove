@@ -237,6 +237,10 @@ test("3. the rollback refuses on the mapped database once a version carries a ru
     await k.query("begin");
     try {
       await k.query("set local session_replication_role = replica");
+      // The mapped database carries every test migration; a later training_load migration (v85 on) makes the rollback
+      // refuse first for that reason, which is right but not what this test checks. Inside this rolled-back transaction
+      // the later ones are unrecorded, so v80's own refusals are the ones reached.
+      await k.query(`delete from public.schema_migrations where migration_name > $1 and migration_name like '%training_load%'`, [`migrations_v2/${V80}`]);
       await k.query(`update training_load.${table} set ${set} where id = (select id from training_load.${table} order by id limit 1)`);
       await assert.rejects(k.query((await fsp.readFile(ROLLBACK_PATH, "utf8")).replace(/^begin;$/m, "savepoint v80_rb;").replace(/^commit;$/m, "release savepoint v80_rb;")), pattern, label);
     } finally {
