@@ -13,6 +13,7 @@ designer's open questions F1–F6 taken as recommended. Next: a UI contract and 
 | **S3** | „To već imamo vrv" | The team filter already exists in the calendar: the *Groups* chips in Filters. K6 reuses it and builds no second team control; it only brings it next to the athlete strip, so a team can be chosen in one tap. |
 | **S4** | „U suštini jedan admin kluba bi mogao da vidi sve timove i sve sportiste da filtrira i lako pronalazi sve" | A club admin sees every team and every athlete of the club, filters by them, and finds anyone quickly. |
 | **S5** | „Timski trener sve to samo za svoj tim" | A team coach gets the same strip, arrows and search, but only for their own team. |
+| **S6** | (2026-11-20, relayed by the stream manager) „Weekly kalendaru trenera treba da ima filter po sportistima kao i da taj filter postoji unutar domena, kategorije ili sekcije (ako je naziv isti za vise od njih) da odmah prebacuje kako bi trener efikasno mogao da vodi vise sportista i da brzo proverava sadržaj treninga" | The coach's Weekly plan carries the athlete switcher at every level the coach drills into: the week or day, the session, and inside a domain, a category or a section. ‹ › opens the same place in the next athlete's plan, the domain, category and section matched by name; where the next athlete has no node of that name, or two, it stops at the deepest clear match and says what is missing. The rule is in the K6 contract, section 3.2. |
 
 ## 1. What exists today (`920459c0`)
 
