@@ -32,6 +32,7 @@ const ROSTER = [
   { athlete_uuid: uuid(4), athlete_id: "R4", athlete: "Cara Both" },
 ];
 const ARCHIVED_ONLY = uuid(9);
+const OUTSIDE_ROSTER = uuid(10);
 const ORG = {
   users: [{ id: "u1", email: "secret@example.com" }], joinLinks: [{ token: "tok" }],
   athletes: [
@@ -40,6 +41,7 @@ const ORG = {
     { id: uuid(3), name: "Marko Stone", memberships: [{ membershipType: "team", status: "active", teamId: B }] },
     { id: uuid(4), name: "Cara Both", memberships: [{ membershipType: "team", status: "active", teamId: A }, { membershipType: "team", status: "active", teamId: B }, { membershipType: "team", status: "active", teamId: OTHER_TEAM, teamName: "Foreign Team", clubName: "Foreign Club" }] },
     { id: ARCHIVED_ONLY, name: "Archived Person", memberships: [{ membershipType: "team", status: "archived", teamId: A }] },
+    { id: OUTSIDE_ROSTER, name: "Outside Person", memberships: [{ membershipType: "team", status: "active", teamId: A }] },
   ],
 };
 
@@ -270,12 +272,14 @@ test("K6-1j. the empty sentence depends only on the typed text: an athlete of an
 test("F-H2. another club's names, an archived-only tie and the raw answer never reach the DOM or the state", async () => {
   await open();
   const html = rendered;
-  assert.equal(/Foreign Team|Foreign Club|Archived Person|secret@example\.com/.test(html), false);
+  assert.equal(/Foreign Team|Foreign Club|Archived Person|Outside Person|secret@example\.com/.test(html), false);
   const stored = JSON.stringify(state.centralCalendar);
   assert.equal(/Foreign|Archived|secret@example|tok"/.test(stored), false, "only { athleteUuid, teamId } pairs are kept");
   for (const pair of state.centralCalendar.switcher.org.pairs) assert.deepEqual(Object.keys(pair).sort(), ["athleteUuid", "teamId"]);
   assert.equal(state.centralCalendar.switcher.org.pairs.some((pair) => pair.teamId === OTHER_TEAM), false);
   assert.equal(state.centralCalendar.switcher.org.pairs.some((pair) => pair.athleteUuid === ARCHIVED_ONLY), false);
+  assert.equal(state.centralCalendar.switcher.org.pairs.some((pair) => pair.athleteUuid === OUTSIDE_ROSTER), false, "an active athlete the roster does not hold is never kept");
+  assert.equal(buildCentralCalendarSwitcherModel(state.centralCalendar).searchList.some((entry) => entry.key === OUTSIDE_ROSTER), false);
   assert.deepEqual(reduceOrganizationPairs(ORG, ROSTER, TEAMS).filter((p) => p.athleteUuid === uuid(4)).map((p) => p.teamId), [A, B]);
 });
 

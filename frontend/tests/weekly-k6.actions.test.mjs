@@ -89,6 +89,19 @@ test("the slot is matched by its key, never by a label: sessions named different
   assert.deepEqual(m.path.map((n) => n.label), ["Strength"]);
 });
 
+test("the session levels (an event's slot path) are matched by slot key; sessions named differently and a differing label still match", () => {
+  const named = (name, time) => mk([{ ...item({ amPm: "PM", domain: "Strength", section: "Power" }), sessionName: name, sessionTime: time }]);
+  const aItems = named("Main session", "18:00");
+  const bItems = named("Their own name", "19:30");
+  const aPath = K.slotPathFor(aItems, { amPm: "PM", bta: "T" });
+  assert.deepEqual(aPath.map((n) => n.type), ["amPm", "bta"]);
+  const p = place(aPath, aItems);
+  const m = K.matchWeeklyPlace(p, bItems, { aName: "Ana", bName: "Ben" });
+  assert.deepEqual(m.path.map((n) => n.type), ["amPm", "bta"]);
+  assert.notEqual(m.path[1].label, aPath[1].label, "the labels differ; the slot key is what matched");
+  assert.equal(m.line, "");
+});
+
 test("a node named like markup is text in the header's line", () => {
   const flow = { keys: ["a", "b"], currentKey: "a", line: "Ben has no ‘<img src=x onerror=alert(1)>’ section in Strength.", kept: "", eventKey: "", notInKeys: [] };
   const html = K.renderWeeklySwitcherHtml({ flow, items: [{ key: "a", name: "Ana" }, { key: "b", name: "Ben" }], currentKey: "a" });
