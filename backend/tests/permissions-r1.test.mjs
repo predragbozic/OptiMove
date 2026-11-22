@@ -376,6 +376,9 @@ const ROUTE_TABLE = {
   revokeClubAdminRole: [["staff.assign", "clubScope(clubId)", "!can", "canAssignClubRole"]],
   grantTeamCoachRole: [["staff.assign", "teamScope(teamId)", "!can", "canAssignTeamRole"]],
   revokeTeamCoachRole: [["staff.assign", "teamScope(teamId)", "!can", "canAssignTeamRole"]],
+  // The club's admin seeing its club's members in Settings > Users (2026-11-22); no predicate stood here before, the
+  // club's admin predicate is the one it means.
+  clubMembersViewClubId: [["staff.assign", "clubScope(workspace.scopeId)", "can", "canAssignClubRole"]],
   resolveAthleteClubTeam: [
     ["athletes.manage", "clubScope(clubId)", "!can", "canManageClub"],
     ["athletes.manage", "teamScope(teamId)", "!can", "canManageTeamById"],
@@ -454,10 +457,10 @@ test("b1. the per-call-site table is exactly the can() calls of routes/organizat
   const expected = Object.fromEntries(Object.entries(ROUTE_TABLE).map(([handler, sites]) => [handler, sites.map(([word, scope, shape]) => [word, scope, shape])]));
   assert.deepEqual(table, expected);
   assert.deepEqual(Object.keys(table), Object.keys(ROUTE_TABLE), "handlers in source order");
-  assert.equal(Object.keys(ROUTE_TABLE).length, 29);
-  assert.equal(CALL_SITES.length, 36);
+  assert.equal(Object.keys(ROUTE_TABLE).length, 30);
+  assert.equal(CALL_SITES.length, 37);
   // The comment that mentions can() is not a call: the raw text has one more.
-  assert.equal([...ORGANIZATION_JS.matchAll(/(?<![\w.$])can\(req\.authz\b/g)].length, 37);
+  assert.equal([...ORGANIZATION_JS.matchAll(/(?<![\w.$])can\(req\.authz\b/g)].length, 38);
   for (const site of CALL_SITES) {
     assert.ok(Object.hasOwn(PERMISSIONS, site.permission), `${site.handler}: ${site.permission} is a catalog word`);
     assert.ok(OLD[site.oldName], `${site.handler}: ${site.oldName} is a predicate of authz.js`);

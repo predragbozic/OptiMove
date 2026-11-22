@@ -59,8 +59,9 @@ after(async () => {
 
 const read = (cookie, query) => api(`/api/builder/weekly-plans?${query}`, { cookie });
 const ids = (list) => `athleteIds=${list.map(encodeURIComponent).join(",")}`;
-// A weekly plan; `content` gives it one session with a named node (a Builder
-// plan without content is the one POST /plans would delete and replace).
+// A weekly plan; `content` gives it one session with a named node (the
+// caller's own Builder draft with no session is the one POST /plans would
+// delete and replace).
 async function weeklyPlan({ athleteId, createdBy, weekStart = MONDAY, status = "active", batchId = null, editSourcePlanId = null, isActive = true, sourceType = "builder", content = true }) {
   const id = (await q(
     `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, status, week_start, is_active, is_edit_draft, edit_source_plan_id, builder_batch_id, source_type)
@@ -200,21 +201,31 @@ test("7. weeklyPlansReadAnswer: a plan the caller may not open is { editable:fal
   assert.deepEqual(weeklyPlansReadAnswer({ ...row, plannable: null }), { athleteId: "a", plannable: false });
 });
 
-test("8. the caller's own EMPTY Builder plan is skipped, as POST /plans skips it: the next plan (another creator's) is reported, or none", async () => {
+test("8. the caller's own Builder DRAFT with no session is skipped, as POST /plans removes it: the next plan (another creator's) is reported, or none; a published plan or a plan with a bare session is reported, as POST /plans refuses on it", async () => {
   const coach = m.roles.teamCoach;
   const a = await fx.makeAthlete("k3r empty then other", { clubId: m.clubs.c1, teamId: m.teams.t1 });
   const b = await fx.makeAthlete("k3r empty only", { clubId: m.clubs.c1, teamId: m.teams.t1 });
   const c = await fx.makeAthlete("k3r someone else's empty", { clubId: m.clubs.c1, teamId: m.teams.t1 });
-  await weeklyPlan({ athleteId: a.athleteId, createdBy: coach.id, content: false });
+  const d = await fx.makeAthlete("k3r published empty", { clubId: m.clubs.c1, teamId: m.teams.t1 });
+  const e = await fx.makeAthlete("k3r draft bare session", { clubId: m.clubs.c1, teamId: m.teams.t1 });
+  await weeklyPlan({ athleteId: a.athleteId, createdBy: coach.id, content: false, status: "draft" });
   const other = await weeklyPlan({ athleteId: a.athleteId, createdBy: m.roles.clubAdmin.id });
   await weeklyPlan({ athleteId: b.athleteId, createdBy: coach.id, content: false, status: "draft" });
   const othersEmpty = await weeklyPlan({ athleteId: c.athleteId, createdBy: m.roles.clubAdmin.id, content: false });
-  const res = await read(coach.cookie, `weekStart=${MONDAY}&${ids([a.athleteId, b.athleteId, c.athleteId])}`);
+  // The caller's own PUBLISHED plan with no session: never removed by the create, so reported.
+  const publishedEmpty = await weeklyPlan({ athleteId: d.athleteId, createdBy: coach.id, content: false });
+  // The caller's own draft whose session has no item and no named node: a session is content.
+  const bare = await weeklyPlan({ athleteId: e.athleteId, createdBy: coach.id, status: "draft" });
+  await q(`delete from plans.plan_nodes where plan_session_id in (select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1)`, [bare]);
+  const res = await read(coach.cookie, `weekStart=${MONDAY}&${ids([a.athleteId, b.athleteId, c.athleteId, d.athleteId, e.athleteId])}`);
   assert.equal(res.status, 200, res.text);
   assert.equal(res.body.athletes[0].plan.planId, other);
   assert.equal(res.body.athletes[0].plan.mine, false);
-  assert.equal(res.body.athletes[1].plan, null, "only the caller's own empty plan: none, as the create would make a new one");
+  assert.equal(res.body.athletes[1].plan, null, "only the caller's own empty draft: none, as the create would make a new one");
   assert.equal(res.body.athletes[2].plan.planId, othersEmpty, "another creator's empty plan still blocks the create, so it is reported");
+  assert.equal(res.body.athletes[3].plan.planId, publishedEmpty, "the caller's own published plan blocks the create, so it is reported");
+  assert.equal(res.body.athletes[3].plan.status, "active");
+  assert.equal(res.body.athletes[4].plan.planId, bare, "the caller's own draft with a bare session blocks the create, so it is reported");
 });
 
 // The Independent's LOW on #650: the SQL `editable` predicate was never false

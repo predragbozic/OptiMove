@@ -385,7 +385,7 @@ router.get("/", async (req, res, next) => {
       ${classificationJoinSql}
       ${exerciseMediaJoinSql}
       ${where}
-      order by ${searchOrder}nullif(regexp_replace(e.exercise_code, '\\D', '', 'g'), '')::int nulls last, e.name, e.id
+      order by ${searchOrder}nullif(regexp_replace(e.exercise_code, '\\D', '', 'g'), '')::numeric nulls last, e.name, e.id
       limit $${params.length - 1} offset $${params.length}
       `,
       params,
