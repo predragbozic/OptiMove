@@ -86,6 +86,14 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- 1. The registry: owner, archive, creator, order; the seed
 -- ---------------------------------------------------------------------------
+-- Locks, all up front, lock_timeout 5 s (the Nezavisni revizor's L1): the two tables v87 alters ACCESS EXCLUSIVE (a
+-- dropped and added constraint, new columns), public.sports SHARE ROW EXCLUSIVE (its one new row and the new foreign
+-- keys). Behind a long transaction the deploy stops after 5 s instead of waiting and holding up the readers of estimates.
+set local lock_timeout = '5s';
+lock table public.sport_positions in access exclusive mode;
+lock table training_load.metric_value_estimates in access exclusive mode;
+lock table public.sports in share row exclusive mode;
+
 insert into public.sports (name) values ('Football');
 
 alter table public.sport_positions
@@ -526,7 +534,7 @@ begin
     raise exception 'public.athlete_positions: the acting user may not set this athlete''s position' using errcode = '42501';
   end if;
   -- The athlete row last: two changes of one athlete are decided one after the other.
-  perform 1 from public.athletes a where a.id = new.athlete_id for update;
+  perform 1 from public.athletes a where a.id = new.athlete_id for no key update;
   if new.position_id is not null and not public.sport_position_offered(new.position_id, new.club_id, true) then
     raise exception 'public.athlete_positions: the position is not offered to this club' using errcode = '23514';
   end if;

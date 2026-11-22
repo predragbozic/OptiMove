@@ -285,6 +285,41 @@ test("3. the position average: the mean of the three measured forwards (not the 
   assert.deepEqual(row.basis, { athletes: 3, positionId: forward });
 });
 
+test("5. a club's own position is named only to its club: after the team belongs to another club the label carries no position name (the Nezavisni revizor's MEDIUM-1)", async () => {
+  const { team, s, distance } = await positionWorld();
+  const cadmin = await withRole("club admin", `insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [team.clubId], ["club", team.clubId]);
+  const created = await call(`/api/positions`, { method: "POST", cookie: cadmin.cookie, body: { requestKey: key(), name: "Pivot" } });
+  assert.equal(created.status, 200, created.text);
+  for (const idx of [DAN, ANA, EVA, FIL]) {
+    const athleteId = team.athleteIds[idx];
+    const current = (await admin.query(`select public.athlete_position_in_force($1, $2) as p`, [athleteId, team.clubId])).rows[0].p;
+    const r = await call(`/api/positions/athletes/${athleteId}`, { method: "PUT", cookie: team.coach.cookie, body: { requestKey: key(), positionId: created.body.position.id, expectedPositionId: current } });
+    assert.equal(r.status, 200, r.text);
+  }
+  const w = await save(team, s, { athleteId: team.athleteIds[DAN], method: "position_average" });
+  assert.equal(w.status, 201, w.text);
+  const saved = w.body.estimates.find((e) => e.metricDefinitionId === distance);
+  const label = async () => labels.estimateLabelFor((await labels.readEstimateLabels(admin, [saved.occasionId])).get(saved.occasionId), () => null);
+  assert.equal((await label()).positionName, "Pivot");
+  // The position now belongs to another club than the estimate's team (a team cannot move: its memberships pin it, D43;
+  // so the position's owner is changed instead - a raw write with v87's write-once guard switched off for this one
+  // statement in this disposable database). The label names no other club's own position.
+  const other = (await admin.query(`insert into public.clubs (name) values ('Another pilot club') returning id`)).rows[0].id;
+  await admin.query("alter table public.sport_positions disable trigger sport_positions_before_write");
+  await admin.query("alter table public.sport_positions disable trigger sport_positions_change_logged");
+  try {
+    await admin.query(`update public.sport_positions set owner_club_id = $2 where id = $1`, [created.body.position.id, other]);
+    const moved = await label();
+    assert.equal(moved.positionName, null, "another club's own position is not named");
+    assert.equal(moved.athleteCount, 3);
+    await admin.query(`update public.sport_positions set owner_club_id = $2 where id = $1`, [created.body.position.id, team.clubId]);
+  } finally {
+    await admin.query("alter table public.sport_positions enable trigger sport_positions_before_write");
+    await admin.query("alter table public.sport_positions enable trigger sport_positions_change_logged");
+  }
+  assert.equal((await label()).positionName, "Pivot");
+});
+
 test("4. the database: the method CHECK takes position_average; its basis is exactly athletes >= 3 and a positionId uuid; the other branches are unchanged", async () => {
   const ok = async (method, basis) => (await admin.query(`select training_load.estimate_basis_ok($1, $2::jsonb) as ok`, [method, JSON.stringify(basis)])).rows[0].ok;
   const id = crypto.randomUUID();

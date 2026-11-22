@@ -55,7 +55,7 @@ async function workspaceScope(ctx, client) {
   if (w.type === "club") return { clubId: String(w.scopeId), teamId: null };
   if (w.type === "team") {
     const r = await client.query(`select club_id from public.teams where id = $1 and is_active = true`, [w.scopeId]);
-    if (!r.rowCount) throw notFound();
+    if (!r.rowCount || !r.rows[0].club_id) throw notFound();
     return { clubId: String(r.rows[0].club_id), teamId: String(w.scopeId) };
   }
   throw notFound();
@@ -131,11 +131,8 @@ function settingBasis(ctx, scope) {
     if (isPlatformAdministrator(ctx.authz)) return { basis: "platform_admin", teamId: null };
     return null;
   }
-  if (w.type === "team") {
-    if (holdsTeamCoachRole(ctx.authz, w.scopeId)) return { basis: "team_coach", teamId: String(w.scopeId) };
-    if (holdsClubAdminRole(ctx.authz, scope.clubId)) return { basis: "club_admin", teamId: null };
-    if (isPlatformAdministrator(ctx.authz)) return { basis: "platform_admin", teamId: null };
-  }
+  // A team workspace is offered only to the team's coach (workspace.js loadAvailableWorkspaces).
+  if (w.type === "team" && holdsTeamCoachRole(ctx.authz, w.scopeId)) return { basis: "team_coach", teamId: String(w.scopeId) };
   return null;
 }
 
@@ -316,7 +313,7 @@ export async function createPosition(ctx, body) {
       const row = (await client.query(
         `insert into public.sport_positions (sport_id, name, owner_scope, owner_club_id, created_by_user_id, sort_order)
          values ($1, $2, $3, $4, $5,
-                 (select coalesce(max(sort_order), 0) + 10 from public.sport_positions
+                 (select least(coalesce(max(sort_order), 0) + 10, 10000) from public.sport_positions
                    where sport_id = $1 and (owner_scope = 'system' or owner_club_id = $4) and sort_order < 10000))
          ${RETURNING}`,
         [sport, name, owner.ownerScope, owner.clubId, ctx.userId],
@@ -491,7 +488,7 @@ export async function setAthletePosition(ctx, rawAthleteId, body) {
       return { athleteId, positionId: seen.position_id ? String(seen.position_id) : null, replayed: true };
     }
     // The athlete row: two changes of one athlete are decided one after the other (the guard takes the same lock).
-    await client.query(`select 1 from public.athletes where id = $1 for update`, [athleteId]);
+    await client.query(`select 1 from public.athletes where id = $1 for no key update`, [athleteId]);
     const current = (await client.query(`select public.athlete_position_in_force($1, $2) as p`, [athleteId, scope.clubId])).rows[0].p;
     const currentId = current ? String(current) : null;
     if (currentId !== expectedPositionId) throw conflict("position_changed", "The position was changed meanwhile.", { current: { positionId: currentId } });

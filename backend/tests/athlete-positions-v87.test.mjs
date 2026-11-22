@@ -302,6 +302,39 @@ test("12. one club's list is changed one write at a time: two admins renaming a 
   assert.deepEqual([rc.status, rd.status, rd.body.error], [200, 409, "name_taken"]);
 });
 
+test("13. each layer on its own (the Nezavisni revizor's MEDIUM-1): the database refuses a coach for an athlete outside the coach's team; the service refuses an athlete outside the workspace's team; a replay answers only the owner it was made for", async () => {
+  const gk = await systemId("Goalkeeper");
+  // (a) The database: an active coach of t1, an athlete of the club with no membership in t1 -> 42501.
+  const clubOnly = await fx.makeAthlete("pos87 club-only athlete", { clubId: m.clubs.c1 });
+  const coach = role("teamCoach");
+  const rawSet = (athleteId) => raw(async (c) => {
+    await c.query("begin");
+    await asActor(c, coach.id);
+    return refusal(c.query(
+      `insert into public.athlete_positions (athlete_id, club_id, position_id, set_by_user_id, basis, via_team_id, request_key, request_hash)
+       values ($1, $2, $3, $4, 'team_coach', $5, $6, $7)`, [athleteId, m.clubs.c1, gk, coach.id, m.teams.t1, newKey(), "e".repeat(64)]));
+  });
+  assert.equal(await rawSet(clubOnly.athleteId), "42501", "no team membership: refused");
+  assert.equal(await rawSet(m.athletes.athlete.athleteId), "no refusal", "a member of t1: allowed");
+  // (b) The service's own check of the workspace's athletes is defence in depth: in every reachable state it asks what the
+  // database asks (a team workspace exists only for the team's coach, whose basis needs a membership in that team), and
+  // (a) proves the database on its own. Through the route, the coach of t2 is refused an athlete of t1 alone.
+  const coachT2 = await fx.coachOf(m.teams.t2, "pos87 coach T2 layers");
+  const outside = await put(coachT2, m.athletes.athlete.athleteId, { requestKey: newKey(), positionId: gk, expectedPositionId: null });
+  assert.deepEqual([outside.status, outside.body], [404, NOT_FOUND]);
+  // (c) A replay answers only the owner the change was made for: the admin of two clubs, the same key from c2's workspace.
+  const two = role("twoClubAdmin");
+  const key = newKey();
+  assert.equal((await post("twoClubAdmin", "", { requestKey: key, name: "Two club pivot" })).status, 200);
+  await fx.setWorkspace(two.id, "club", m.clubs.c2);
+  try {
+    const other = await post("twoClubAdmin", "", { requestKey: key, name: "Two club pivot" });
+    assert.deepEqual([other.status, other.body], [404, NOT_FOUND]);
+  } finally {
+    await fx.setWorkspace(two.id, "club", m.clubs.c1);
+  }
+});
+
 test("11. the bounded COMMIT: a COMMIT that never answers is 503 outcome_unknown with nothing saved; the same key then saves once. A revoked admin's replay is the 404", async () => {
   const svc = await import("../src/positionService.js");
   const key = newKey();

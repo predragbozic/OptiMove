@@ -40,6 +40,13 @@ wrappers.
   `unique (id, sport_id)` they rest on (`athlete-positions-v87-migration.test.mjs` test 2: before, after, and after the
   rollback). The rollback refuses (fixed message) while a Tests row names the sport Football.
 
+## Locks while it runs
+
+v87 takes every lock up front with `lock_timeout` 5 s: `public.sport_positions` and
+`training_load.metric_value_estimates` ACCESS EXCLUSIVE (constraints and columns change), `public.sports` SHARE ROW
+EXCLUSIVE. Behind a long transaction the deploy stops after 5 s with nothing changed, instead of waiting and holding up
+the readers of estimates; run it at a quiet moment (preflight block 5), as the rollback.
+
 ## Before the merge
 
 1. **PostgreSQL 17 rehearsal** (production runs 17). A PostgreSQL 17 server on loopback, `node`, and
@@ -89,6 +96,14 @@ wrappers.
 - The admin branch of `public.athlete_position_right` locks the club membership before the team memberships (ascending),
   the order of the club-membership archive and of the athlete edit (D45).
 - The users lock carries `is_active = true` (the known L1 gap of v54, inherited).
+- An athlete's position change locks the athlete row `FOR NO KEY UPDATE` (the guard and the service), so it does not
+  wait on, or hold up, an insert that only references the athlete (an import, a membership).
+- The service's own check that the athlete is one of the workspace's is defence in depth: in every reachable state it
+  asks what the database asks (a team workspace exists only for its coach); the database's check is proven on its own
+  (`athlete-positions-v87.test.mjs` test 13 (a)).
+- The three new `public` tables have no row-level security, like the other tables of `public` before v58; this holds
+  while the Supabase Data API is off.
+- A club's new position takes the next sort order up to 10000 (then they share 10000; there is no cap on how many).
 - The estimate reads the positions in force at the moment of the proposal or the save (its basis keeps the position's
   id); a later change of a position does not change a saved estimate.
 - An athlete in two clubs holds one position per club.
