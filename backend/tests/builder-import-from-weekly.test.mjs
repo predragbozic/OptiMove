@@ -120,8 +120,9 @@ async function weeklyPlan(s) {
 // holding one session with a section and `items` exercises).
 async function program(s, { template = false, status = "draft", items = null, name = "Target program" } = {}) {
   const planId = (await q(
-    `insert into plans.plans (plan_type, created_by_user_id, name, status, source_type, visibility, is_template)
-     values ('program', $1, $2, $3, 'builder', 'private', $4) returning id`, [s.coach.id, name, status, template]))[0].id;
+    // plans_type_shape_check: a block template has no athlete, any other program has one.
+    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, status, source_type, visibility, is_template)
+     values ('program', $1, $5, $2, $3, 'builder', 'private', $4) returning id`, [s.coach.id, name, status, template, template ? null : s.athletes[1].athleteId]))[0].id;
   const blockId = (await q(`insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type) values ($1, 1, 1, 'Block A', 'session') returning id`, [planId]))[0].id;
   let sessionId = null;
   let sectionId = null;
@@ -268,7 +269,7 @@ test("4. a block that already has sessions asks first; confirmed, its content is
   const target = await program(s, { items: 2 });
   const refused = await paste(s.coach.cookie, source.dayId, target.blockId);
   assert.equal(refused.status, 409, refused.text);
-  assert.deepEqual((await blockTree(target.blockId)).map((r) => r.session_name), ["Old session", "Old session", "Old session"], "nothing was replaced");
+  assert.deepEqual((await blockTree(target.blockId)).map((r) => r.session_name), ["Old session", "Old session"], "nothing was replaced (one section with two items joins to two rows)");
   ok(await paste(s.coach.cookie, source.dayId, target.blockId, { confirmOverwrite: true }));
   const names = new Set((await blockTree(target.blockId)).map((r) => r.session_name));
   assert.deepEqual([...names], ["Main"]);
