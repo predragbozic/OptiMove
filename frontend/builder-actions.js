@@ -87,6 +87,8 @@ function setBuilderDraft(nextDraft, options = {}) {
   const previousDraft = state.builder.draft;
   const previousBatch = previousDraft?.batch;
   const previousBatchId = getBuilderBatchId(previousDraft);
+  // A batch-edit question belongs to the draft it was asked for.
+  if (String(previousDraft?.plan?.id || "") !== String(nextDraft?.plan?.id || "")) state.builder.batchEditChoice = null;
   state.builder.draft = preserveBuilderItemEdits(nextDraft);
   if (
     options.preserveBatch !== false &&
@@ -1421,9 +1423,86 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   return false;
 }
 
+// docs/ai/builder-batch-edit-plan.md: a reopened WEEKLY member of a group
+// asks at Save who gets the changes (a program batch keeps "this athlete only").
+export function isBatchEditDraft(draft = state.builder.draft) {
+  const plan = draft?.plan;
+  const plans = Array.isArray(draft?.batch?.plans) ? draft.batch.plans : [];
+  return Boolean(plan?.isEditDraft && plan.planType === "weekly" && plans.length > 1
+    && plans.some((member) => String(member.id) === String(plan.editSourcePlanId || "")));
+}
+
+const BATCH_EDIT_ACTIONS = {
+  "builder-batch-edit-all": () => ({ batchScope: "all" }),
+  "builder-batch-edit-only": () => ({ batchScope: "this" }),
+  "builder-batch-edit-others": () => ({
+    batchScope: "all",
+    applyTo: state.builder.batchEditChoice?.data?.applyTo || [],
+    choiceToken: state.builder.batchEditChoice?.data?.choiceToken || "",
+  }),
+};
+
+// A lost answer, a 5xx or an abort: the outcome is unknown, never "not saved".
+function batchEditOutcomeUnknown(error) {
+  return !error?.status || error.status >= 500;
+}
+
 export async function handleBuilderDraftAction(action, handlers) {
-  const type = action.dataset.action;
+  // A batch-edit choice ("All athletes", "Only {name}", "Apply to the
+  // others") is the Save itself, with who gets the changes.
+  const batchExtra = BATCH_EDIT_ACTIONS[action.dataset.action] && isBatchEditDraft()
+    ? BATCH_EDIT_ACTIONS[action.dataset.action]() : null;
+  if (BATCH_EDIT_ACTIONS[action.dataset.action] && !batchExtra) return true;
+  const type = batchExtra ? "builder-submit-plan" : action.dataset.action;
   if (state.builder.discardingDraftId) return true;
+  if (type === "builder-batch-edit-again") {
+    state.builder.batchEditChoice = { stage: "scope" };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-batch-edit-cancel") {
+    state.builder.batchEditChoice = null;
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-batch-edit-done") {
+    const plan = state.builder.draft?.plan;
+    state.builder.clipboard = null;
+    await exitBuilderToPlanContext(plan, handlers);
+    return true;
+  }
+  if (type === "builder-batch-edit-check") {
+    // Reads only; never sends the Save again. The edit draft is deleted in the
+    // Save's COMMIT, so a draft that is gone was saved (or discarded elsewhere).
+    const draft = state.builder.draft;
+    if (!draft || action.disabled) return true;
+    action.disabled = true;
+    try {
+      await api(`/api/builder/plans/${encodeURIComponent(draft.plan.id)}`);
+      // The draft is still open: nothing was saved.
+      state.builder.batchEditChoice = { stage: "notSaved" };
+      handlers.renderBuilder();
+    } catch (error) {
+      if (error?.status === 404) {
+        invalidateBuilderDraftsCache();
+        state.builder.batchEditChoice = { stage: "closed" };
+        handlers.renderBuilder();
+      } else {
+        action.disabled = false;
+        handlers.renderBuilderError(error);
+      }
+    }
+    return true;
+  }
+  if (type === "builder-submit-plan" && !batchExtra && isBatchEditDraft()) {
+    // Save opens the question; it never sends by itself (and sends nothing
+    // while a question is open or a result is not confirmed).
+    if (!state.builder.batchEditChoice) {
+      state.builder.batchEditChoice = { stage: "scope" };
+      handlers.renderBuilder();
+    }
+    return true;
+  }
   if (type === "builder-submit-plan") {
     const draft = state.builder.draft;
     if (!draft) return true;
@@ -1450,7 +1529,7 @@ export async function handleBuilderDraftAction(action, handlers) {
       const currentDraft = state.builder.draft || draft;
       const result = await api(`/api/builder/plans/${encodeURIComponent(currentDraft.plan.id)}/submit`, {
         method: "POST",
-        body: JSON.stringify(withBatchSyncPayload({ responseMode: "summary" })),
+        body: JSON.stringify(withBatchSyncPayload({ responseMode: "summary", ...(batchExtra || {}) })),
       });
       // This plan has left 'draft' status either way - the cached drafts
       // list (see loadBuilderDrafts) must never keep showing it once the
@@ -1470,8 +1549,39 @@ export async function handleBuilderDraftAction(action, handlers) {
       // submit never touches its ids (just flips status). Exiting below
       // clears the clipboard for both kinds of plan.
       if (currentDraft.plan.isEditDraft) state.builder.clipboard = null;
+      if (batchExtra?.batchScope === "all" && result?.batchEdit) {
+        // Saved for the group: say for how many, and who was not changed.
+        state.builder.batchEditChoice = { stage: "done", summary: result.batchEdit };
+        handlers.renderBuilder();
+        return true;
+      }
+      state.builder.batchEditChoice = null;
       await exitBuilderToPlanContext(result?.plan || draft.plan, handlers);
     } catch (error) {
+      if (batchExtra) {
+        if (error?.status === 409 && error.data?.code === "batch_members_need_choice") {
+          state.builder.batchEditChoice = { stage: "ask", data: error.data };
+          handlers.renderBuilder();
+          return true;
+        }
+        if (error?.status === 409 && (error.data?.code === "try_again" || error.data?.code === "source_changed")) {
+          state.builder.batchEditChoice = { stage: error.data.code === "try_again" ? "busy" : "sourceChanged" };
+          handlers.renderBuilder();
+          return true;
+        }
+        // The draft is gone (saved, maybe from another tab, or discarded).
+        if ((error?.status === 409 && error.data?.code === "edit_draft_already_applied") || error?.status === 404) {
+          invalidateBuilderDraftsCache();
+          state.builder.batchEditChoice = { stage: "closed" };
+          handlers.renderBuilder();
+          return true;
+        }
+        if (batchEditOutcomeUnknown(error)) {
+          state.builder.batchEditChoice = { stage: "unconfirmed" };
+          handlers.renderBuilder();
+          return true;
+        }
+      }
       // A failed save must not look like a success (no navigation, no
       // "Saved" state) and must not lose the coach's local edits -
       // no local draft is cleared before a successful response, so the

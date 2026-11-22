@@ -166,6 +166,80 @@ export function renderBuilderBatchSwitcher(batchPlans, currentIndex) {
   `;
 }
 
+// Who gets the changes of a reopened weekly batch member
+// (docs/ai/builder-batch-edit-plan.md sections 4 and 10). Plain sentences,
+// one question at a time, no ids or codes.
+const BATCH_EDIT_REASON_TEXT = {
+  changed_separately: "their plan was changed separately",
+  has_results: "a session with results would be removed or moved",
+  linked_to_event: "a session on the calendar would be removed or moved",
+  being_edited: "their plan is open for editing (by you or another coach)",
+  archived: "archived",
+  not_editable: "you can't edit their plan",
+};
+// One list: everyone who will not get the changes, each with its reason.
+// Athletes the coach is not shown are a count only.
+function batchEditMemberLines(...groups) {
+  const lines = [];
+  let unnamed = 0;
+  for (const group of groups) {
+    for (const m of group?.named || []) {
+      lines.push(`<li><strong>${escapeHtml(m.name)}</strong>: ${escapeHtml((m.reasons || []).map((r) => BATCH_EDIT_REASON_TEXT[r] || "can't take these changes").join("; "))}</li>`);
+    }
+    unnamed += Number(group?.unnamedCount || 0);
+  }
+  if (unnamed) lines.push(`<li>${unnamed} other athlete${unnamed === 1 ? "" : "s"} you can't edit</li>`);
+  return lines.length ? `<ul class="builder-batch-edit-list">${lines.join("")}</ul>` : "";
+}
+const otherAthletes = (n) => `${n} other athlete${n === 1 ? "" : "s"}`;
+
+export function renderBuilderBatchEditPanel(draft, batchPlans) {
+  const choice = state.builder.batchEditChoice;
+  const name = draft.plan.athleteName || "this athlete";
+  // The group counts the members this coach may not open (hiddenCount, #664);
+  // the question counts only those the change can reach.
+  const hidden = Number(draft.batch?.hiddenCount) || 0;
+  const count = batchPlans.length;
+  const groupSize = count + hidden;
+  const primary = (actionName, label) => `<button class="plain-button builder-batch-edit-primary" type="button" data-action="${actionName}">${label}</button>`;
+  const only = `<button class="plain-button" type="button" data-action="builder-batch-edit-only">Only ${escapeHtml(name)}</button>`;
+  const cancel = `<button class="plain-button" type="button" data-action="builder-batch-edit-cancel">Cancel</button>`;
+  const actions = (...buttons) => `<div class="builder-batch-edit-actions">${buttons.join("")}</div>`;
+  let body;
+  if (!choice) {
+    body = `<p>${escapeHtml(name)} is one of ${groupSize} athletes in this group. When you save, you choose who gets the changes.</p>`;
+  } else if (choice.stage === "scope") {
+    const question = hidden ? `Apply these changes to all ${count} athletes you can edit?` : `Apply these changes to all ${count} athletes?`;
+    body = `<p><strong>${question}</strong></p>${actions(primary("builder-batch-edit-all", "All athletes"), only, cancel)}`;
+  } else if (choice.stage === "ask") {
+    const data = choice.data || {};
+    const others = Number(data.applyCount || 0);
+    const list = batchEditMemberLines(data.cannot, data.notChanged);
+    body = !list && others
+      // Only the earlier choice went out of date (nobody is left out now).
+      ? `<p><strong>Something changed since you chose.</strong> Apply these changes to ${escapeHtml(name)} and ${otherAthletes(others)}?</p>${actions(primary("builder-batch-edit-others", `Apply to ${escapeHtml(name)} and ${otherAthletes(others)}`), only, cancel)}`
+      : others
+      ? `<p><strong>These athletes won't get the changes:</strong></p>${list}${actions(primary("builder-batch-edit-others", `Apply to ${escapeHtml(name)} and ${otherAthletes(others)}`), only, cancel)}`
+      : `<p><strong>None of the other athletes can take these changes:</strong></p>${list}${actions(only, cancel)}`;
+  } else if (choice.stage === "unconfirmed") {
+    body = `<p><strong>Result not confirmed.</strong> The save may or may not have gone through.</p>${actions(primary("builder-batch-edit-check", "Check result"))}`;
+  } else if (choice.stage === "notSaved") {
+    body = `<p><strong>Not saved.</strong> Your changes are still here. Save again to choose who gets them.</p>${actions(primary("builder-batch-edit-again", "Save again"), cancel)}`;
+  } else if (choice.stage === "busy") {
+    body = `<p><strong>Nothing was saved.</strong> The plans were busy for a moment. Try again.</p>${actions(primary("builder-batch-edit-again", "Try again"), cancel)}`;
+  } else if (choice.stage === "sourceChanged") {
+    body = `<p><strong>This plan was saved by someone else after you opened it.</strong> Save your version for ${escapeHtml(name)} only, or cancel, close it and open it again.</p>${actions(only, cancel)}`;
+  } else if (choice.stage === "closed") {
+    body = `<p><strong>Your changes may already be saved.</strong> We can't tell which athletes got them. Open the group's plans to check.</p>${actions(primary("builder-batch-edit-done", "Open the plans"))}`;
+  } else {
+    const summary = choice.summary || {};
+    const applied = Number(summary.applied || 1);
+    const list = batchEditMemberLines(summary.notChanged);
+    body = `<p><strong>${escapeHtml(draft.plan.name || "The plan")} saved for ${applied} athlete${applied === 1 ? "" : "s"}.</strong></p>${list ? `<p>These athletes didn't get the changes:</p>${list}` : ""}${actions(primary("builder-batch-edit-done", "Done"))}`;
+  }
+  return `<section class="builder-batch-edit" data-builder-batch-edit role="status" aria-live="polite">${body}</section>`;
+}
+
 export function renderBuilderEditDraftBatchNote() {
   return `<p class="builder-batch-edit-note" data-builder-batch-edit-note>Changes go to this athlete only.</p>`;
 }
@@ -641,6 +715,16 @@ function renderBuilderInner() {
   const hiddenCount = Number(draft.batch?.hiddenCount) || 0;
   const isEditDraftOfBatch = isEditDraft && batchPlans.length + hiddenCount > 1 && !hasBatch
     && batchPlans.some((plan) => String(plan.id) === String(draft.plan.editSourcePlanId || ""));
+  // Step 2: a reopened WEEKLY member asks at Save who gets the changes (the
+  // panel below); a program batch keeps "Changes go to this athlete only."
+  // Only when another member the coach may open could get the change (the
+  // same rule as isBatchEditDraft in builder-actions.js); otherwise "Changes
+  // go to this athlete only." and the hidden members' sentence.
+  const batchEditPanel = isEditDraftOfBatch && isWeekly && batchPlans.length > 1 ? renderBuilderBatchEditPanel(draft, batchPlans) : "";
+  if (batchEditPanel && state.builder.batchEditChoice?.stage === "done") {
+    els.content.innerHTML = `<section class="content-section builder-workspace">${batchEditPanel}</section>`;
+    return;
+  }
   els.content.innerHTML = `
     <section class="content-section builder-workspace${k3 ? " has-k3" : ""}">
       ${k3 ? renderK3BandHtml(k3) : ""}
@@ -658,6 +742,7 @@ function renderBuilderInner() {
       </header>
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex)
+        : batchEditPanel ? batchEditPanel + (hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : "")
         : isEditDraftOfBatch ? renderBuilderEditDraftBatchNote() + (hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : "")
         : batchIndex >= 0 && hiddenCount > 0 ? `<p class="builder-batch-hidden-alone">${renderBuilderBatchHiddenNote(hiddenCount)}</p>` : ""}
       ${state.builder.clipboard?.type ? `<div class="builder-copy-hint"><span>Copied ${escapeHtml(state.builder.clipboard.type === "cross-plan-block" ? "block" : state.builder.clipboard.type)}: <strong>${escapeHtml(state.builder.clipboard.name)}</strong>${state.builder.clipboard.itemCount ? ` (${state.builder.clipboard.itemCount} exercises)` : ""}</span><button class="text-action" type="button" data-action="builder-clear-clipboard">Clear</button></div>` : ""}

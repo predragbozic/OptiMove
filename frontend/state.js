@@ -262,6 +262,9 @@ export const emptyBuilderState = (overrides = {}) => ({
   createAthleteIds: [],
   batchSync: true,
   batchSwitchPending: null,
+  // docs/ai/builder-batch-edit-plan.md: Save of a reopened weekly batch member
+  // asks who gets the changes. null | { stage: "scope" | "ask" | "unconfirmed" | "done", ... }
+  batchEditChoice: null,
   drafts: [],
   draftsLoading: false,
   openingDraftId: "",
