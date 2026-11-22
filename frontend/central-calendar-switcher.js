@@ -17,6 +17,7 @@ import { readAthleteStripHidden, writeAthleteStripHidden } from "./athlete-strip
 import { calendarTeamColorIndexes } from "./calendar-colors.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
+import { slotWords } from "./weekly-k6.js";
 import { buildContextKey } from "./view-cache.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -318,16 +319,35 @@ export function centralCalendarEventSlots(cal, item) {
   if (!links) return { manager: false, slots: [] };
   const slots = [];
   for (const link of links) {
-    if (!link.planId || link.day !== item.date) continue;
+    // A link whose Builder session was deleted ("orphaned") opens nothing: no button for it.
+    if (!link.planId || link.day !== item.date || link.state === "orphaned") continue;
     const key = slotKey(link.amPm, link.bta);
     let slot = slots.find((entry) => entry.key === key);
     if (!slot) {
       slot = { key, amPm: link.amPm || "", bta: link.bta || "", name: link.sessionName || "", athleteIds: new Set() };
       slots.push(slot);
     }
+    if (!slot.name && link.sessionName) slot.name = link.sessionName;
     if (link.athleteId) slot.athleteIds.add(String(link.athleteId));
   }
   return { manager: true, slots };
+}
+
+// Plain-English names for the linked slots, in slot order: the session's name (when it has one) and its own facts,
+// worded exactly as the Weekly plan the click opens words the same slot (`slotWords`: "Before training (AM)",
+// "Session (PM)"), never an id. Slots that would still read the same are numbered ("Session 1", "Session 2").
+export function centralCalendarSlotLabels(slots) {
+  const base = slots.map((slot) => {
+    const when = slot.amPm || slot.bta ? slotWords(slot) : "";
+    return [slot.name, when].filter(Boolean).join(" · ") || "Session";
+  });
+  const seen = new Map();
+  return base.map((label) => {
+    if (base.filter((other) => other === label).length < 2) return label;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return `${label} ${n}`;
+  });
 }
 
 export function renderCentralCalendarSeeEachHtml(cal, item) {
@@ -339,8 +359,9 @@ export function renderCentralCalendarSeeEachHtml(cal, item) {
   const button = (label, slotIndex, primary) => `<button type="button" class="plain-button${primary ? " cc-primary" : ""} cc-panel-button" data-action="central-calendar-see-each-athlete" data-slot-index="${slotIndex}">${escapeHtml(label)}</button>`;
   if (manager && slots.length) {
     const named = slots.length > 1;
+    const labels = centralCalendarSlotLabels(slots);
     return `<section class="cc-see-each" aria-label="See each athlete">${slots.map((slot, index) => {
-      const slotName = slot.name || "Session";
+      const slotName = labels[index];
       return `${button(named ? `See each athlete · ${slotName}` : "See each athlete", index, index === 0)}<p class="cc-panel-note">Opens ${escapeHtml(slotName)}, one athlete at a time, only the ${count} of this event.</p>`;
     }).join("")}${event.hidden > 0 && manager ? `<p class="cc-panel-note">${event.hidden} athlete${event.hidden === 1 ? "" : "s"} of this event ${event.hidden === 1 ? "is" : "are"} not in your roster.</p>` : ""}</section>`;
   }

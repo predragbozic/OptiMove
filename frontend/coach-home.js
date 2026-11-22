@@ -102,6 +102,14 @@ export function coachHomeDayView(rows, home, today = localDateIso()) {
   return { date, isToday: false, status: "ready", rows: day.rows, error: "" };
 }
 
+// K6 follow-up (PR2): the athletes (UUIDs, in the list's order) with a session on the day Home shows - the very rows
+// the day list draws, so nothing new is read. Empty unless that day is the one asked for and its rows are ready.
+export function coachHomeDayAthleteKeys(rows, home, date, today = localDateIso()) {
+  const day = coachHomeDayView(rows, home, today);
+  if (day.status !== "ready" || day.date !== date) return [];
+  return [...new Set(sortAthletes(day.rows.filter((row) => row.hasTrainingToday && row.athleteUuid)).map((row) => String(row.athleteUuid)))];
+}
+
 // The picker's rows: the whole roster for Training plan / Training load, the
 // chosen day's athletes with a session for the day list.
 export function coachHomePickerRows(rows, picker = {}, home = emptyCoachHomeState(), today = localDateIso()) {
@@ -240,7 +248,7 @@ function renderDayListHtml(day, today) {
             ${renderAthleteAvatar(row, "coach-home-avatar", { lazy: true })}
             <span class="coach-home-day-athlete-text"><strong>${escapeHtml(row.athlete)}</strong><small>${escapeHtml(sessionCountLabel(row.sessionCount))}</small></span>
           </button></li>`).join("");
-  return `${renderCarousel("day", `Athletes with a session on ${shortDateLabel(day.date, today)}`, items, { previousLabel: `Previous athletes, ${shortDateLabel(day.date, today)}`, nextLabel: `Next athletes, ${shortDateLabel(day.date, today)}`, trackKey: day.date })}
+  return `<p class="muted coach-home-day-hint">Tap an athlete to open their weekly plan.</p>${renderCarousel("day", `Athletes with a session on ${shortDateLabel(day.date, today)}`, items, { previousLabel: `Previous athletes, ${shortDateLabel(day.date, today)}`, nextLabel: `Next athletes, ${shortDateLabel(day.date, today)}`, trackKey: day.date })}
         ${training.length > COACH_HOME_DAY_LIST_LIMIT ? `<button class="plain-button coach-home-inline-button coach-home-day-show-all" type="button" aria-haspopup="dialog" data-action="coach-home-picker-open" data-mode="day" data-date="${escapeAttr(day.date)}">Show all ${training.length} athletes</button>` : ""}`;
 }
 

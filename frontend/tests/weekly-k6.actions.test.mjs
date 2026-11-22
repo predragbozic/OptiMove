@@ -235,3 +235,89 @@ test("K6-F4. the Weekly strip hides: no pills and no Groups, who is chosen and o
   assert.match(hidden, /2 \/ 3/);
   assert.match(hidden, /data-action="weekly-k6-strip-toggle" aria-expanded="false">Show athletes</);
 });
+
+// --- PR2: the switcher holds the athletes of one item (or of Home's day), never more than the roster returns ------
+
+test("K6-F5. a panel row opens the plan with THAT item's athletes: roster-intersected, targeted only, named for what it is", async () => {
+  const W = await import("../weekly-k6-actions.js");
+  const cal = state.centralCalendar;
+  const before = cal.panel;
+  cal.panel = { open: true, athletes: [
+    { athleteId: "ub", name: "Ben", targeted: true },
+    { athleteId: "ua", name: "Ana", targeted: true },
+    { athleteId: "not-in-roster", name: "Stranger", targeted: true },
+    { athleteId: "uc", name: "Cara", targeted: false },
+  ] };
+  try {
+    const event = W.weeklyFlowFromPanel("ua", { kind: "event" });
+    assert.deepEqual(event.keys, ["ua", "ub"], "by name, the roster's athletes only, the no-longer-targeted one left out");
+    assert.equal(event.listLabel, "in this event");
+    assert.equal(event.eventKey, "", "a plain list, not the See each athlete slot flow");
+    assert.equal(event.origin, "calendar");
+    assert.equal(W.weeklyFlowFromPanel("ua", { kind: "planned" }).listLabel, "planned on this day");
+    assert.equal(W.weeklyFlowFromPanel("ua", { kind: "activity" }).listLabel, "recorded in this session", "an imported activity's list is its recorded athletes");
+    assert.match(event.scopeNote, /^Only the athletes of this event are listed\./);
+    // An athlete the list does not hold falls back to the calendar's own strip, which still holds her.
+    const other = W.weeklyFlowFromPanel("uc", { kind: "event" });
+    assert.equal(other.listLabel, undefined);
+    assert.ok(other.keys.includes("uc"));
+    assert.equal(other.keys.includes("not-in-roster"), false);
+  } finally {
+    cal.panel = before;
+  }
+});
+
+test("K6-F6. Home's day: only roster athletes with a session; one athlete alone, or one the roster lacks, gets no switcher", async () => {
+  const W = await import("../weekly-k6-actions.js");
+  const flow = W.weeklyFlowFromHome(["ua", "ub", "not-in-roster", "ua"], "ub");
+  assert.deepEqual(flow.keys, ["ua", "ub"], "once each, the roster's only");
+  assert.equal(flow.currentKey, "ub");
+  assert.equal(flow.origin, "home");
+  assert.equal(flow.listLabel, "with a session on this day");
+  assert.equal(W.weeklyFlowFromHome(["ua"], "ua"), null, "one athlete needs no switcher");
+  assert.equal(W.weeklyFlowFromHome(["ua", "ub"], "not-in-roster"), null);
+  assert.equal(W.weeklyFlowFromHome(["not-in-roster", "other"], "not-in-roster"), null);
+});
+
+test("K6-F8. Home's day keys are the day list's own rows: training only, a UUID each, the shown day only", async () => {
+  const H = await import("../coach-home.js");
+  const { emptyCoachHomeState } = await import("../state.js");
+  const rows = [
+    { athleteId: "RB", athleteUuid: "ub", athlete: "Ben", hasTrainingToday: true },
+    { athleteId: "RA", athleteUuid: "ua", athlete: "Ana", hasTrainingToday: true },
+    { athleteId: "RC", athleteUuid: "uc", athlete: "Cara", hasTrainingToday: false },
+    { athleteId: "RX", athleteUuid: "", athlete: "No uuid", hasTrainingToday: true },
+  ];
+  const home = emptyCoachHomeState();
+  assert.deepEqual(H.coachHomeDayAthleteKeys(rows, home, "2026-10-12", "2026-10-12"), ["ua", "ub"]);
+  assert.deepEqual(H.coachHomeDayAthleteKeys(rows, home, "2026-10-13", "2026-10-12"), [], "another day than the one shown");
+  home.calendar.selected = "2026-10-14";
+  assert.deepEqual(H.coachHomeDayAthleteKeys(rows, home, "2026-10-14", "2026-10-12"), [], "another day is its own read, not ready yet");
+});
+
+test("K6-F7. a list flow says what the list is, goes Back to Home, and has no Groups to change it", async () => {
+  const W = await import("../weekly-k6-actions.js");
+  const flow = W.weeklyFlowFromHome(["ua", "ub"], "ua");
+  const html = K.renderWeeklySwitcherHtml({ flow, items: [{ key: "ua", name: "Ana" }, { key: "ub", name: "Ben" }], currentKey: "ua" });
+  assert.match(html, /1 \/ 2 with a session on this day/);
+  assert.match(html, /Back to Home/);
+  assert.equal(/Back to calendar/.test(html), false);
+  const calendar = K.renderWeeklySwitcherHtml({ flow: { ...flow, origin: undefined, listLabel: undefined }, items: [{ key: "ua", name: "Ana" }, { key: "ub", name: "Ben" }], currentKey: "ua" });
+  assert.match(calendar, /Back to calendar/);
+  assert.match(html, /Only the athletes with a session on this day are listed\. Back shows everyone\./);
+  // The team exists, so only the list flow's own guard can refuse the chip (a stale or forged click).
+  const cal = state.centralCalendar;
+  const before = { data: cal.data, teamIds: cal.filters.teamIds };
+  cal.data = { teams: [{ teamId: "t1", name: "T1" }] };
+  cal.filters.teamIds = [];
+  cal.weeklyFlow = flow;
+  state.selectedAthleteId = "RA";
+  try {
+    assert.equal(await W.chooseWeeklyGroup("t1", { loadWeekly: async () => {}, renderCurrent() {} }), false, "the list is fixed: a team chip never widens it");
+    assert.deepEqual(cal.filters.teamIds, []);
+    assert.deepEqual(flow.keys, ["ua", "ub"]);
+  } finally {
+    cal.data = before.data;
+    cal.filters.teamIds = before.teamIds;
+  }
+});

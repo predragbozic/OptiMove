@@ -17,7 +17,7 @@ import {
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
-import { weeklyFlowFromCalendar } from "./weekly-k6-actions.js";
+import { weeklyFlowFromCalendar, weeklyFlowFromPanel } from "./weekly-k6-actions.js";
 import {
   CC_SWITCHER_ACTIONS,
   buildCentralCalendarSwitcherModel,
@@ -2599,7 +2599,9 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     const rosterAthleteId = centralCalendarRosterAthleteId(athleteUuid);
     if (!rosterAthleteId) return true;
     // K6-2: the plan carries the athlete switcher (the calendar's list for the chosen team).
-    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date, { flow: weeklyFlowFromCalendar(athleteUuid) });
+    // PR2: an athlete's row in the open panel opens the plan with the athletes of THAT item on that day in the switcher.
+    const panelItem = action.dataset.athleteList === "panel" && cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
+    await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date, { flow: panelItem ? weeklyFlowFromPanel(athleteUuid, panelItem) : weeklyFlowFromCalendar(athleteUuid) });
     return true;
   }
   // K6-3: See each athlete / Open the week from an event's panel.
