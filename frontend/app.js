@@ -3035,6 +3035,7 @@ async function moveWeeklySwitcherTo(athleteId) {
   state.viewedWeekStart = weekStart;
   state.selectedWeekDay = place.date;
   let rebuilt = { navStack: [], stop: null };
+  let noPlan = false;
   await loadWeeklyData({
     setLoading: () => {},
     renderEmpty,
@@ -3043,12 +3044,31 @@ async function moveWeeklySwitcherTo(athleteId) {
     renderWeeklyRoot: (data) => {
       if (String(state.selectedAthleteId) !== next.key) return;
       rebuilt = rebuildWeeklyPlace({ data, place, makeNode });
+      noPlan = !(data?.weeks || []).find((week) => week.weekStart === weekStart)?.planId;
     },
   });
   if (String(state.selectedAthleteId) !== next.key || state.weeklySwitcher !== ctx) return;
   ctx.busy = false;
   state.viewedWeekStart = weekStart;
   state.selectedWeekDay = place.date;
+  // F5: no plan this week - the week's blank state says it once (the header's "No plan this week").
+  if (noPlan && !next.mark) {
+    state.navStack = [];
+    ctx.line = "";
+    ctx.stopLine = "";
+    renderCurrentNode();
+    document.querySelector(".weekly-k6 .builder-batch-pill.is-active")?.focus?.({ preventScroll: true });
+    return;
+  }
+  // K6-3 (F6): a target of the event without a linked session opens on the day, whatever her plan holds.
+  if (ctx.sessionLabel && next.mark) {
+    state.navStack = [];
+    ctx.line = "";
+    ctx.stopLine = `Not in this session · ${next.name} has no ${ctx.sessionLabel} linked to this event on ${weeklyKeptLine(place, [])}.`;
+    renderCurrentNode();
+    document.querySelector(".weekly-k6 .builder-batch-pill.is-active")?.focus?.({ preventScroll: true });
+    return;
+  }
   state.navStack = rebuilt.navStack;
   ctx.line = weeklyKeptLine(place, rebuilt.navStack);
   ctx.stopLine = ctx.sessionLabel && rebuilt.stop?.reason === "missing_slot"
@@ -3109,7 +3129,7 @@ function openWeeklySlot(date, slot) {
   const rebuilt = rebuildWeeklyPlace({ data: state.lastWeeklyData, place, makeNode });
   const athlete = ctx.athletes.find((entry) => entry.key === String(state.selectedAthleteId));
   ctx.place = place;
-  if (!rebuilt.navStack.length) {
+  if (!rebuilt.navStack.length || athlete?.mark) {
     ctx.stopLine = `Not in this session · ${athlete?.name || "This athlete"} has no ${ctx.sessionLabel || "session"} linked to this event on ${weeklyKeptLine(place, [])}.`;
     renderWeeklyRoot(state.lastWeeklyData);
     return;
