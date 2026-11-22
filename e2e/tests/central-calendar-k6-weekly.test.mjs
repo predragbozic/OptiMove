@@ -187,6 +187,60 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
   });
 }
 
+for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.phone], ["375 px", 375], ["360 px", 360]]) {
+  test(`(${label}) See each athlete: three unnamed slots read differently, the first is primary, targets are 44 px`, async () => {
+    const db = new pg.Client({ connectionString: world.databaseUrl });
+    await db.connect();
+    let uuidOf;
+    try {
+      await db.query("select calendar.seed_club_event_types($1)", [world.ids.clubA]).catch(() => {});
+      uuidOf = Object.fromEntries((await db.query(`select id, full_name from public.athletes`)).rows.map((r) => [r.full_name, r.id]));
+    } finally {
+      await db.end();
+    }
+    const types = (await call("club_admin", "GET", "/api/calendar/events/types")).body.types || [];
+    const made = await call("club_admin", "POST", "/api/calendar/events", {
+      requestKey: crypto.randomUUID(), eventTypeId: types.find((t) => t.kind === "training").id, title: `Unnamed slots ${label}`, day: DAY, startTime: "18:00", endTime: "19:30",
+      timezone: "UTC", expects: [], targets: [{ kind: "team", id: world.ids.teamA }],
+    });
+    assert.equal(made.status, 201, made.text);
+    const eventId = made.body.event.id;
+    const { context, page, pageErrors } = await openAs(browser, world, "club_admin", width);
+    try {
+      await withPlans(page);
+      await page.route(`**/api/calendar/events/${eventId}`, async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        const res = await route.fetch();
+        const body = await res.json();
+        const slots = [["AM", "B"], ["AM", "T"], ["PM", ""]];
+        const links = ["Ana Example", "Cara Example", "Dario Example"].map((name, i) => ({ id: `l-${i}`, planId: `plan-${i}`, day: DAY, amPm: slots[i][0], bta: slots[i][1], order: 1, state: "linked", sessionName: null, athleteId: uuidOf[name], athleteName: name }));
+        body.event = { ...body.event, sessionLinks: links };
+        return route.fulfill({ response: res, json: body });
+      });
+      await openNav(page);
+      await page.locator("#calendarToggle").click();
+      await page.waitForSelector(".central-calendar", { timeout: 20_000 });
+      const card = page.locator(`.cc-card[data-key^="event:${eventId}"]`).first();
+      await card.waitFor({ timeout: 20_000 });
+      await card.click();
+      const see = page.locator('[data-action="central-calendar-see-each-athlete"]');
+      await see.nth(2).waitFor({ timeout: 20_000 });
+      assert.deepEqual(await see.allInnerTexts(), ["See each athlete · AM · Before training", "See each athlete · AM · Training", "See each athlete · PM"]);
+      assert.match(await page.locator(".cc-see-each .cc-panel-note").nth(1).innerText(), /^Opens AM · Training, one athlete at a time/);
+      assert.equal(await see.nth(0).evaluate((el) => el.classList.contains("cc-primary")), true);
+      assert.equal(await see.nth(1).evaluate((el) => el.classList.contains("cc-primary")), false);
+      for (let i = 0; i < 3; i += 1) {
+        const box = await see.nth(i).boundingBox();
+        assert.ok(box.height >= 43.5, `button ${i} is 44 px tall (${box.height})`);
+      }
+      assert.equal(await overflow(page, width), 0);
+      assert.deepEqual(pageErrors, []);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 test("(390 px) the phone's Back steps up the drilled levels once each, never shows a view twice, then lands on the calendar", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "club_admin", 390);
   try {

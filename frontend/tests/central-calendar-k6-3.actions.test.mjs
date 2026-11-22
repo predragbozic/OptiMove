@@ -42,10 +42,31 @@ test("a manager is offered See each athlete; one button per linked slot", () => 
   const gym = { amPm: "AM", bta: "B", name: "Gym" };
   world({ panelAthletes: [1, 2, 3, 4, 5].map((n) => A(n, `Athlete ${n}`)), links: [link(1, main), link(2, main), link(3, gym)] });
   const buttons = [...dom().querySelectorAll('[data-action="central-calendar-see-each-athlete"]')];
-  assert.deepEqual(buttons.map((b) => b.textContent), ["See each athlete · Main session", "See each athlete · Gym"]);
+  assert.deepEqual(buttons.map((b) => b.textContent), ["See each athlete · Main session · PM · Training", "See each athlete · Gym · AM · Before training"]);
   world({ panelAthletes: [1, 2].map((n) => A(n, `Athlete ${n}`)), links: [link(1, main)] });
   assert.equal(dom().querySelector('[data-action="central-calendar-see-each-athlete"]').textContent, "See each athlete");
   assert.match(dom().querySelector(".cc-see-each").textContent, /one athlete at a time, only the 2 of this event/);
+});
+
+test("unnamed slots are told apart by their own facts; the note names the same slot; no ids", () => {
+  const slots = [{ amPm: "AM", bta: "B", name: "" }, { amPm: "AM", bta: "T", name: "" }, { amPm: "PM", bta: "", name: "" }, { amPm: "", bta: "A", name: "" }, { amPm: "", bta: "", name: "" }];
+  world({ panelAthletes: [1, 2, 3, 4, 5].map((n) => A(n, `Athlete ${n}`)), links: slots.map((slot, i) => link(i + 1, slot)) });
+  const doc = dom();
+  const buttons = [...doc.querySelectorAll('[data-action="central-calendar-see-each-athlete"]')];
+  assert.deepEqual(buttons.map((b) => b.textContent), [
+    "See each athlete · AM · Before training", "See each athlete · AM · Training", "See each athlete · PM",
+    "See each athlete · After training", "See each athlete · Session",
+  ]);
+  assert.equal(new Set(buttons.map((b) => b.textContent)).size, 5);
+  assert.deepEqual(buttons.map((b) => b.classList.contains("cc-primary")), [true, false, false, false, false]);
+  const notes = [...doc.querySelectorAll(".cc-see-each .cc-panel-note")].map((n) => n.textContent);
+  assert.match(notes[0], /^Opens AM · Before training, one athlete at a time, only the 5 of this event\.$/);
+  assert.equal(notes.length, 5);
+});
+
+test("slots that would still read the same are numbered in slot order", async () => {
+  const mod = await import("../central-calendar-switcher.js");
+  assert.deepEqual(mod.centralCalendarSlotLabels([{ name: "", amPm: "", bta: "" }, { name: "", amPm: "", bta: "" }, { name: "Gym", amPm: "", bta: "" }]), ["Session 1", "Session 2", "Gym"]);
 });
 
 test("a reader gets Open the week and never the not-in-your-roster sentence", () => {
