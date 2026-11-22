@@ -29,9 +29,12 @@ globalThis.fetch = async (url, options = {}) => {
 let typedReason = "";
 // v60 (O1): the later roster changes' own checkbox, present only when the screen shows it (laterBox null = not on the screen).
 let laterBox = null;
+// v87 (ST-4): the manual values' own checkbox, likewise.
+let manualBox = null;
 globalThis.document.querySelector = (selector) => {
   if (selector === "[data-gpexe-undo-reason]") return { value: typedReason };
   if (selector === "[data-gpexe-undo-later-confirm]") return laterBox;
+  if (selector === "[data-gpexe-undo-manual-confirm]") return manualBox;
   return null;
 };
 
@@ -791,4 +794,98 @@ test("20 (v76, the manager's merge condition): before the v76 deploy the old ser
   assert.doesNotMatch(html(), /training-load-gpexe-undo-open/);
   await act("training-load-gpexe-undo-open");
   assert.equal(previewCalls().length, 0, "the action sends nothing either");
+});
+
+// ---------------------------------------------------------------------------
+// v87 (ST-4): values coaches entered or corrected on the roster
+// ---------------------------------------------------------------------------
+const MFP = "c".repeat(64);
+const MFP2 = "b".repeat(64);
+const manual = (n = 2, fingerprint = MFP) => ({
+  count: n, fingerprint,
+  list: Array.from({ length: n }, (_, i) => ({ athleteId: `bbbb000${i}-0000-4000-8000-000000000001`, athleteName: `Athlete <${i}>`, kind: i === 0 ? "entry" : "correction", byUserId: COACH, byName: "Coach Example", at: "2026-11-21T09:15:00Z", values: 2 })),
+});
+const scopeWithManual = (m) => ({ ...scopeWith({ importWritten: importWritten(0), laterWork: noLater }), manualValues: m, needsManualConfirmation: m.count > 0 });
+
+test("26. manual values: their own warning lists them (names escaped, what was done, by whom); nothing is asked or sent until their own box is ticked; then their fingerprint goes with the request", async () => {
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: scopeWithManual(manual(2)) } }),
+    undo: () => { performUndo(); return { status: 200, body: { undo: okUndo({ manualValues: manual(2) }) } }; },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  let s = undoSection();
+  assert.match(s, /Coaches entered or corrected values in the Roster tab for 2 athletes\./);
+  assert.match(s, /Athlete &lt;0&gt;<\/strong>: values entered/);
+  assert.match(s, /Athlete &lt;1&gt;<\/strong>: measured values corrected/);
+  assert.match(s, /by Coach Example, \d{2}\.11\.2026 \d{2}:\d{2}/);
+  assert.match(s, /data-gpexe-undo-manual-confirm/);
+  assert.doesNotMatch(s, /data-gpexe-undo-later-confirm/, "no later roster work here");
+  assert.doesNotMatch(s, /bbbb0000-0000|dddddddd-0000/, "no ids on the screen");
+  typedReason = "Wrong link";
+  manualBox = { checked: false };
+  try {
+    await act("training-load-gpexe-undo-confirm");
+    assert.equal(confirmAsked.length, 0, "no question without the tick");
+    assert.equal(undoCalls().length, 0);
+    assert.match(undoSection(), /Tick &quot;Remove these values too&quot; to continue\. Nothing was removed\./);
+    manualBox = { checked: true };
+    await act("training-load-gpexe-undo-confirm");
+    assert.equal(confirmAsked.length, 1);
+    assert.match(confirmAsked[0], /This also removes the values coaches entered or corrected for 2 athletes\./);
+    assert.equal(undoCalls().length, 1);
+    assert.equal(undoCalls()[0].body.manualValuesFingerprint, MFP, "sending the fingerprint is the confirmation");
+    assert.equal(undoCalls()[0].body.laterRosterFingerprint, undefined);
+  } finally {
+    manualBox = null;
+  }
+});
+
+test("27. the manual values changed meanwhile (manual_values_changed): nothing removed, the new list is shown unticked with its note, and the next attempt sends the new fingerprint with a new key", async () => {
+  let n = 0;
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: scopeWithManual(n ? manual(3, MFP2) : manual(2)) } }),
+    undo: () => {
+      n += 1;
+      if (n === 1) return { status: 409, body: { error: "manual_values_changed", message: "The session's manual values changed since you reviewed them. Nothing was removed. Review the undo again.", manualValues: manual(3, MFP2) } };
+      performUndo();
+      return { status: 200, body: { undo: okUndo() } };
+    },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  typedReason = "Wrong link";
+  manualBox = { checked: true };
+  try {
+    await act("training-load-gpexe-undo-confirm");
+    assert.equal(gx().undo.step, "ready");
+    assert.equal(gx().undo.manualConfirmed, false);
+    const s = undoSection();
+    assert.match(s, /Values in this session changed since you opened this\. Nothing was removed\./);
+    assert.match(s, /for 3 athletes\./);
+    assert.doesNotMatch(s, /data-gpexe-undo-manual-confirm checked/);
+    const firstKey = undoCalls()[0].body.requestKey;
+    await act("training-load-gpexe-undo-confirm");
+    assert.equal(undoCalls().length, 2);
+    assert.equal(undoCalls()[1].body.manualValuesFingerprint, MFP2);
+    assert.notEqual(undoCalls()[1].body.requestKey, firstKey);
+  } finally {
+    manualBox = null;
+  }
+});
+
+test("28. without manual values the undo sends no manual fingerprint and shows no box", async () => {
+  setup({
+    preview: () => ({ status: 200, body: { undoPreview: scopeWithManual({ count: 0, list: [], fingerprint: null }) } }),
+    undo: () => { performUndo(); return { status: 200, body: { undo: okUndo() } }; },
+  });
+  await openImports();
+  await openCandidate("cand-imp");
+  await act("training-load-gpexe-undo-open");
+  assert.doesNotMatch(undoSection(), /data-gpexe-undo-manual-confirm/);
+  typedReason = "Wrong link";
+  await act("training-load-gpexe-undo-confirm");
+  assert.equal(undoCalls()[0].body.manualValuesFingerprint, undefined);
 });

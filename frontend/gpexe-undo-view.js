@@ -1,7 +1,7 @@
 // Imports: the undo of one imported session, as the review of an imported session shows it (J19-U5b).
 // Data and rules: gpexe-undo-data.js. The server's sentences are shown as they are; the codes stay under Technical details.
 import { isImportUndone } from "./gpexe-import-data.js";
-import { UNDO_REASON_MAX, laterChangeCount, laterRosterWork, undoAdminViewer, undoBusy, undoFor, undoOffered } from "./gpexe-undo-data.js";
+import { UNDO_REASON_MAX, laterChangeCount, laterRosterWork, manualToRemove, undoAdminViewer, undoBusy, undoFor, undoOffered } from "./gpexe-undo-data.js";
 import { escapeAttr, escapeHtml, formatDate } from "./utils.js";
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -66,6 +66,33 @@ function laterWorkHtml(u, { disabled }) {
     </div>`;
 }
 
+const MANUAL_WORDS = Object.freeze({
+  entry: "values entered",
+  correction: "measured values corrected",
+  restore: "measured values restored",
+  other: "values entered by hand",
+});
+
+// v87 (ST-4): values coaches entered or corrected in the Roster tab: listed, with their own confirmation.
+function manualValuesHtml(u, { disabled }) {
+  const manual = manualToRemove(u);
+  if (!manual) return "";
+  const list = Array.isArray(manual.list) ? manual.list : [];
+  const rows = list.map((i) => {
+    const who = i.athleteName || "An athlete";
+    const by = [i.byName ? `by ${i.byName}` : "", fmtWhen(i.at)].filter(Boolean).join(", ");
+    return `<li><strong>${escapeHtml(who)}</strong>: ${escapeHtml(MANUAL_WORDS[i.kind] || MANUAL_WORDS.other)}${by ? ` <span class="muted">(${escapeHtml(by)})</span>` : ""}</li>`;
+  }).join("");
+  return `
+    <div class="gpexe-warning gpexe-undo-later" role="note">
+      ${u.manualNote ? `<p class="gpexe-error" role="alert">${escapeHtml(u.manualNote)}</p>` : ""}
+      <p><strong>${escapeHtml(`Coaches entered or corrected values in the Roster tab for ${plural(list.length || Number(manual.count) || 0, "athlete", "athletes")}.`)}</strong> They are removed too if you delete.</p>
+      ${rows ? `<ul class="gpexe-undo-later-list" tabindex="0" aria-label="${escapeAttr("Values entered by hand")}">${rows}</ul>` : ""}
+      <label class="gpexe-undo-later-confirm"><input type="checkbox" data-gpexe-undo-manual-confirm ${u.manualConfirmed ? "checked" : ""} ${disabled ? "disabled" : ""}> Remove these values too</label>
+      ${u.manualProblem ? `<p class="gpexe-error" role="alert">${escapeHtml(u.manualProblem)}</p>` : ""}
+    </div>`;
+}
+
 function techHtml(entries, admin) {
   if (!admin) return "";
   const rows = entries.filter(([, v]) => v !== undefined && v !== null && v !== "");
@@ -109,7 +136,8 @@ function scopeHtml(u, { disabled = false } = {}) {
     <p><strong>Deleted data can't be restored.</strong> To get it back, import the session again from Imports.</p>
     ${versions > 1 ? `<p class="gpexe-warning" role="note"><strong>This session was imported more than once with different data.</strong> All ${versions} imports are deleted together.</p>` : ""}
     ${importStatesHtml(p.rosterWork)}
-    ${laterWorkHtml(u, { disabled })}`;
+    ${laterWorkHtml(u, { disabled })}
+    ${manualValuesHtml(u, { disabled })}`;
 }
 
 function sectionHtml(body) {

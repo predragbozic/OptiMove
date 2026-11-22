@@ -61,6 +61,8 @@ export function resetActivityRoster(activityId) {
   r.retryBulk = null;
   r.retry = null;
   r.estimate = null;
+  // ST-4: the manual-values panel (activity-manual-values.js).
+  r.manual = null;
 }
 
 // How the roster answer failed, in terms the view can show. A session
