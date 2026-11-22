@@ -100,25 +100,32 @@ export function generatedKey(ownerScope, label, randomHex = crypto.randomBytes(4
   return `${ownerScope === "club" ? "c" : "s"}_${randomHex}_${slug}`;
 }
 
-// One write: the replay first, then the rights, the type row, the write and its log row.
-async function write(ctx, { requestKey, hash, op, run }) {
+// One write: the rights first (users first, PR #346: the user, its role row and the club FOR SHARE), then the replay -
+// answered only while the caller still holds the right for the type's owner (security review of ST-1, MEDIUM) - then
+// the type row, the write and its log row.
+async function write(ctx, { requestKey, hash, run }) {
+  const owner = writableOwner(ctx);
+  if (!owner) throw notFound();
   const client = await pool.connect();
   try {
     await client.query("begin");
     await client.query("set local lock_timeout = '3s'");
     await client.query("set local statement_timeout = '10s'");
     await client.query(`select set_config('optimove.session_type_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [ctx.userId]);
+    const basis = (await client.query(`select training.session_type_basis($1, $2, $3) as b`, [ctx.userId, owner.ownerScope, owner.clubId])).rows[0].b;
+    if (!basis) throw notFound();
     const seen = (await client.query(
-      `select c.request_hash, t.key, t.label, t.owner_scope, t.is_active, t.sort_order
+      `select c.request_hash, t.key, t.label, t.owner_scope, t.owner_club_id, t.is_active, t.sort_order
          from training.activity_type_changes c join training.activity_types t on t.key = c.type_key
         where c.performed_by_user_id = $1 and c.request_key = $2`, [ctx.userId, requestKey],
     )).rows[0];
     if (seen) {
       await client.query("rollback");
+      if (seen.owner_scope !== owner.ownerScope || String(seen.owner_club_id ?? "") !== String(owner.clubId ?? "")) throw notFound();
       if (seen.request_hash !== hash) throw conflict("request_key_reused", "This requestKey was used for another change.");
       return { type: view(seen), replayed: true };
     }
-    const result = await run(client);
+    const result = await run(client, { owner, basis });
     if (testHooks.beforeCommit) await testHooks.beforeCommit(client);
     try {
       await client.query("commit");
@@ -133,6 +140,10 @@ async function write(ctx, { requestKey, hash, op, run }) {
     if (error?.code === "23505" && /activity_types_owner_label_live_key/.test(error.constraint ?? error.message ?? "")) {
       throw conflict("label_taken", "A session type with this name already exists.");
     }
+    // The same requestKey sent twice at once: the second insert of the log row meets the first (security review, LOW).
+    if (error?.code === "23505" && /activity_type_changes_request_key/.test(error.constraint ?? error.message ?? "")) {
+      throw conflict("try_again", "The same request is being saved. Send it again to read its result.");
+    }
     if (error?.code === "55P03" || error?.code === "40P01" || error?.code === "57014") throw conflict("try_again", "The list is being changed. Try again.");
     if (error?.code === "42501") throw notFound();
     throw error;
@@ -141,17 +152,13 @@ async function write(ctx, { requestKey, hash, op, run }) {
   }
 }
 
-async function lockedType(client, ctx, key) {
-  const owner = writableOwner(ctx);
-  if (!owner) throw notFound();
-  // Users first (PR #346): the basis locks the user, its role row and the club before the type row.
-  const basis = (await client.query(`select training.session_type_basis($1, $2, $3) as b`, [ctx.userId, owner.ownerScope, owner.clubId])).rows[0].b;
-  if (!basis) throw notFound();
+// The type row FOR UPDATE, after write() locked the rights (users first, PR #346); another owner's type is the 404.
+async function lockedType(client, owner, key) {
   const row = (await client.query(
     `select key, label, owner_scope, owner_club_id, is_active, sort_order from training.activity_types where key = $1 for update`, [key],
   )).rows[0];
   if (!row || row.owner_scope !== owner.ownerScope || String(row.owner_club_id ?? "") !== String(owner.clubId ?? "")) throw notFound();
-  return { row, basis };
+  return row;
 }
 
 async function log(client, ctx, { key, action, oldLabel, newLabel, basis, requestKey, hash }) {
@@ -162,17 +169,16 @@ async function log(client, ctx, { key, action, oldLabel, newLabel, basis, reques
 }
 
 export async function createSessionType(ctx, body) {
+  // The rights before the body (security review, LOW): a caller who may not write gets the 404 whatever it sends.
+  const owner = writableOwner(ctx);
+  if (!owner) throw notFound();
   only(body, ["requestKey", "label"]);
   const requestKey = requestKeyOf(body);
   const label = labelOf(body);
-  const owner = writableOwner(ctx);
-  if (!owner) throw notFound();
   const hash = hashOf({ op: "create", label, ownerScope: owner.ownerScope, clubId: owner.clubId });
   return write(ctx, {
-    requestKey, hash, op: "create",
-    run: async (client) => {
-      const basis = (await client.query(`select training.session_type_basis($1, $2, $3) as b`, [ctx.userId, owner.ownerScope, owner.clubId])).rows[0].b;
-      if (!basis) throw notFound();
+    requestKey, hash,
+    run: async (client, { basis }) => {
       const key = generatedKey(owner.ownerScope, label);
       const row = (await client.query(
         `insert into training.activity_types (key, label, owner_scope, owner_club_id, created_by_user_id)
@@ -191,6 +197,7 @@ function keyOf(raw) {
 }
 
 export async function renameSessionType(ctx, rawKey, body) {
+  if (!writableOwner(ctx)) throw notFound();
   const key = keyOf(rawKey);
   only(body, ["requestKey", "label", "expectedLabel"]);
   const requestKey = requestKeyOf(body);
@@ -198,9 +205,9 @@ export async function renameSessionType(ctx, rawKey, body) {
   const expectedLabel = labelOf(body, "expectedLabel");
   const hash = hashOf({ op: "rename", key, label, expectedLabel });
   return write(ctx, {
-    requestKey, hash, op: "rename",
-    run: async (client) => {
-      const { row, basis } = await lockedType(client, ctx, key);
+    requestKey, hash,
+    run: async (client, { owner, basis }) => {
+      const row = await lockedType(client, owner, key);
       if (row.label !== expectedLabel) throw conflict("label_changed", "The name was changed meanwhile.", { current: view(row) });
       if (!row.is_active) throw conflict("type_archived", "Restore the session type before renaming it.", { current: view(row) });
       if (row.label === label) throw conflict("label_unchanged", "That is already its name.", { current: view(row) });
@@ -214,15 +221,16 @@ export async function renameSessionType(ctx, rawKey, body) {
 }
 
 async function setActive(ctx, rawKey, body, active) {
+  if (!writableOwner(ctx)) throw notFound();
   const key = keyOf(rawKey);
   only(body, ["requestKey"]);
   const requestKey = requestKeyOf(body);
   const op = active ? "restore" : "archive";
   const hash = hashOf({ op, key });
   return write(ctx, {
-    requestKey, hash, op,
-    run: async (client) => {
-      const { row, basis } = await lockedType(client, ctx, key);
+    requestKey, hash,
+    run: async (client, { owner, basis }) => {
+      const row = await lockedType(client, owner, key);
       if (row.is_active === active) throw conflict(active ? "type_active" : "type_archived", active ? "The session type is not archived." : "The session type is already archived.", { current: view(row) });
       const next = (await client.query(
         `update training.activity_types

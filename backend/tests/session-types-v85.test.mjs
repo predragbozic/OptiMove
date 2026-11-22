@@ -257,7 +257,41 @@ test("10. the team's suggestion per source category: a team manager only, a type
   }), "23514");
 });
 
-test("11. bad bodies: 400 before any database work", async () => {
+test("10b. (security review) a replay re-checks the right: an admin whose role was revoked gets the identical 404 for the same key", async () => {
+  const admin = await fx.clubAdminOf(m.clubs.c1, "st1 replay admin");
+  const key = newKey();
+  const body = { requestKey: key, label: `Replay ${crypto.randomBytes(2).toString("hex")}` };
+  const made = await api(R, { method: "POST", cookie: admin.cookie, body });
+  assert.equal(made.status, 200, made.text);
+  const again = await api(R, { method: "POST", cookie: admin.cookie, body });
+  assert.equal(again.body.replayed, true);
+  const archiveBody = { requestKey: newKey() };
+  const archived = await api(`${R}/${made.body.type.key}/archive`, { method: "POST", cookie: admin.cookie, body: archiveBody });
+  assert.equal(archived.status, 200, archived.text);
+  await q(`update public.user_club_roles set is_active = false where user_id = $1`, [admin.id]);
+  for (const [path, b] of [["", body], [`/${made.body.type.key}/archive`, archiveBody]]) {
+    const revoked = await api(`${R}${path}`, { method: "POST", cookie: admin.cookie, body: b });
+    assert.equal(revoked.status, 404, `${path}: ${revoked.text}`);
+    assert.deepEqual(revoked.body, NOT_FOUND);
+    assert.equal(revoked.cacheControl, "no-store");
+  }
+});
+
+test("10c. (security review) a coach of a team in an archived club cannot set the team's suggestion", async () => {
+  const club = await fx.makeClub("st1 archived later");
+  const team = await fx.makeTeam(club, "st1 team of an archived club");
+  const coach = await fx.coachOf(team, "st1 coach of an archived club");
+  await q(`update public.clubs set is_active = false where id = $1`, [club]);
+  const code = await raw(async (c) => {
+    await c.query("begin");
+    await asActor(c, coach.id);
+    return refusal(c.query(`insert into training_load.source_session_types (owner_team_id, source_system, category_name, activity_type_key, set_by_user_id)
+                            values ($1, 'gpexe', 'FULL TRAINING', 'training_session', $2)`, [team, coach.id]));
+  });
+  assert.equal(code, "42501");
+});
+
+test("11. bad bodies: 400 before any database work; a refusal carries no-store", async () => {
   for (const [body, code] of [
     [{ label: "No key" }, "invalid_request_key"],
     [{ requestKey: "nope", label: "x" }, "invalid_request_key"],
@@ -269,5 +303,9 @@ test("11. bad bodies: 400 before any database work", async () => {
     const res = await post("clubAdmin", "", body);
     assert.equal(res.status, 400, JSON.stringify(body));
     assert.equal(res.body.error, code, JSON.stringify(body));
+    assert.equal(res.cacheControl, "no-store");
   }
+  // A caller who may not write gets the 404 whatever body it sends (the rights before the body).
+  const coachBad = await post("teamCoach", "", { label: "No key" });
+  assert.equal(coachBad.status, 404);
 });

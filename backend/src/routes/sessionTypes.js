@@ -17,6 +17,7 @@ async function contextOf(req) {
 }
 
 function respond(res, next, error) {
+  res.set("Cache-Control", "no-store");
   if (error instanceof SessionTypeError) {
     if (error.status === 404) return res.status(404).set("Cache-Control", "no-store").json(NOT_FOUND_BODY);
     return res.status(error.status).json({ error: error.code, message: error.message, ...error.extra });

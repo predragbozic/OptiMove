@@ -366,6 +366,10 @@ begin
       v_right := found;
     end if;
     select t.club_id into v_club from public.teams t where t.id = new.owner_team_id and t.is_active = true for share;
+    if found then
+      -- The team's club must be active too (the archived-club rule of the team routes).
+      perform 1 from public.clubs c where c.id = v_club and c.is_active = true for share;
+    end if;
     if not found then
       v_right := false;
     elsif not v_right then
