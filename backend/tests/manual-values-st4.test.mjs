@@ -1093,6 +1093,11 @@ test("14. the rollback refuses, changing nothing, once v88's data is used and un
   await c1.connect();
   try {
     const before = await catalogOf(c1);
+    // A migration applied after v88 (v89 on a fresh database) is refused first, by its own check: to reach the data check,
+    // the later migrations are moved before v88 inside a transaction that is rolled back.
+    await c1.query("begin");
+    await c1.query(`update public.schema_migrations set applied_at = (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/${V88_FILE}') - interval '1 minute'
+      where migration_name like 'migrations_v2/%' and applied_at > (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/${V88_FILE}')`);
     await assert.rejects(c1.query(sql), /v88 rollback refused: a manual value was written on a roster/);
     await c1.query("rollback").catch(() => {});
     assert.deepEqual(await catalogOf(c1), before, "nothing changed");
