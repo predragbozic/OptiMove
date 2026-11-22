@@ -1175,7 +1175,9 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-open-block-picker") {
-    state.builder.blockPicker = emptyBlockPicker({ open: true });
+    // A program or block template imports from weekly plans only.
+    const planType = state.builder.draft?.plan?.planType;
+    state.builder.blockPicker = emptyBlockPicker({ open: true, ...(planType && planType !== "weekly" ? { sourceType: "weekly" } : {}) });
     handlers.renderBuilder();
     return true;
   }
@@ -1205,8 +1207,21 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-block-picker-back-to-sessions") {
-    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId: "", sessionName: "", nodes: [], error: "" };
+    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId: "", sessionName: "", nodes: [], thumbSectionId: "", error: "" };
     handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-toggle-thumbs") {
+    const nodeId = action.dataset.nodeId || "";
+    if (!nodeId) return true;
+    const picker = state.builder.blockPicker;
+    state.builder.blockPicker = { ...picker, thumbSectionId: picker.thumbSectionId === nodeId ? "" : nodeId };
+    handlers.renderBuilder();
+    // The dialog is drawn again: keep the keyboard on the same button.
+    if (typeof document !== "undefined") {
+      const again = [...document.querySelectorAll('[data-action="builder-block-picker-toggle-thumbs"]')].find((button) => button.dataset.nodeId === nodeId);
+      again?.focus?.();
+    }
     return true;
   }
   if (type === "builder-block-picker-choose-source-type") {
@@ -1280,9 +1295,10 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-block-picker-copy-whole-block") {
-    const { blockId, blockName, planId } = state.builder.blockPicker;
+    const { blockId, blockName, planId, sourceType } = state.builder.blockPicker;
     if (!blockId) return true;
-    state.builder.clipboard = { type: "cross-plan-block", sourcePlanId: planId, blockId, name: blockName || "Block" };
+    // sourcePlanType: a program or template block shows Paste only for a weekly source.
+    state.builder.clipboard = { type: "cross-plan-block", sourcePlanId: planId, sourcePlanType: sourceType || "", blockId, name: blockName || "Block" };
     state.builder.blockPicker = emptyBlockPicker();
     handlers.renderBuilder();
     return true;
@@ -1291,10 +1307,12 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     const sessionId = action.dataset.sessionId || "";
     const sessionName = action.dataset.sessionName || "Session";
     if (!sessionId) return true;
-    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId, sessionName, nodesLoading: true, error: "" };
+    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId, sessionName, nodesLoading: true, thumbSectionId: "", error: "" };
     handlers.renderBuilder();
     try {
-      const result = await api(`/api/builder/sessions/${encodeURIComponent(sessionId)}/nodes`);
+      // items=1: each section also carries its first exercises (title and
+      // media) for the section's picture button.
+      const result = await api(`/api/builder/sessions/${encodeURIComponent(sessionId)}/nodes?items=1`);
       state.builder.blockPicker.nodes = result.nodes || [];
     } catch (error) {
       state.builder.blockPicker.error = error.message || "Could not load this session's structure.";
@@ -1309,9 +1327,9 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
   // session affordance (renderPasteSessionIconButton, builder-structure.js)
   // next to the existing Copy/Paste day icons.
   if (type === "builder-block-picker-copy-whole-session") {
-    const { sessionId, sessionName } = state.builder.blockPicker;
+    const { sessionId, sessionName, sourceType } = state.builder.blockPicker;
     if (!sessionId) return true;
-    state.builder.clipboard = { type: "cross-plan-session", sessionId, name: sessionName || "Session" };
+    state.builder.clipboard = { type: "cross-plan-session", sourcePlanType: sourceType || "", sessionId, name: sessionName || "Session" };
     state.builder.blockPicker = emptyBlockPicker();
     handlers.renderBuilder();
     return true;

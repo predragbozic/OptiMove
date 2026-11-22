@@ -1331,6 +1331,22 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
   }
 }));
 
+// Which plan kinds a paste may join. A weekly target (fixed seven calendar
+// days, each with a date) takes content from any plan the caller may copy
+// from, as before. A program or block-template target (blocks with no date
+// at all) takes content from a WEEKLY plan only: that is the one new
+// direction, kept narrow on purpose (program-to-program stays the block
+// copy within one program). Only content moves: sessions/nodes/items are
+// re-inserted under fresh ids (no logical_session_id is carried, so no RPE
+// result, activity link or metric event names a copy), and the day's own
+// date, note and calendar links are never touched. Rights, workspace scope
+// and the published-plan session guard are unchanged and run before this.
+function pasteKindError(targetPlan, sourcePlan, noun) {
+  if (targetPlan.plan_type === "weekly") return null;
+  if (sourcePlan.plan_type === "weekly") return null;
+  return `${noun} paste into a program or template is only available from a weekly plan.`;
+}
+
 // Content-only paste into a weekly day - replaces the target day's
 // sessions/nodes/items with the source's, but never touches either day's
 // own date/day_order row (a weekly plan always keeps its fixed 7 calendar
@@ -1347,9 +1363,14 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
 async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPlan = false } = {}) {
   let client;
   try {
+    // Rights first: an unreadable source and a missing one are the same 404,
+    // and the plan-kind rule below runs only once both ids resolved for this
+    // caller (a program or template target may take content from a weekly
+    // plan only - see pasteKindError).
     if (!target) return res.status(404).json({ error: "Target day not found." });
-    if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Day paste is only available for weekly plans." });
     if (!source) return res.status(404).json({ error: "Source not found." });
+    const kindError = pasteKindError(target.plan, source.plan, "Day");
+    if (kindError) return res.status(400).json({ error: kindError });
     if (source.plan.id === target.plan.id && source.id === target.id) return res.status(400).json({ error: "Choose a different day to paste into." });
     if (!allowCrossPlan && source.plan.id !== target.plan.id) {
       return res.status(400).json({ error: "Pasting between different plans' days isn't supported on this route - use 'Copy from another plan' instead." });
@@ -1495,6 +1516,8 @@ router.get("/blocks/:blockId/sessions", async (req, res, next) => {
 // session.nodes.filter(node => node.parentId === parentId)) for a session
 // the coach has read/copy access to - powers the "drill into a session,
 // pick any domain/category/section" picker step.
+const SECTION_THUMB_LIMIT = 12;
+
 router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
   try {
     const session = await getCopySourceSession(req, req.params.sessionId);
@@ -1507,6 +1530,40 @@ router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
        order by pn.node_order nulls last`,
       [session.id],
     );
+    // `?items=1`: the import dialog's section thumbnails. Each section also
+    // carries its first SECTION_THUMB_LIMIT exercises (title and media only,
+    // decorated like the Builder's own items so R2 pictures resolve through
+    // their plan_item access context). The same copy-source access as the
+    // nodes above, one extra bounded query, nothing when not asked for.
+    const thumbs = new Map();
+    if (req.query.items === "1") {
+      const items = await query(
+        `select id, plan_node_id, exercise_id, title, description, image_url, video_url
+         from (
+           select pi.id, pi.plan_node_id, pi.exercise_id, pi.title, pi.description, pi.image_url, pi.video_url,
+                  row_number() over (partition by pi.plan_node_id order by pi.item_order nulls last, pi.id) as place
+           from plans.plan_items pi
+           join plans.plan_nodes pn on pn.id = pi.plan_node_id
+           where pn.plan_session_id = $1 and pn.node_type = 'section'
+         ) ranked
+         where place <= $2
+         order by plan_node_id, place`,
+        [session.id, SECTION_THUMB_LIMIT],
+      );
+      await decorateMediaRows(items.rows, "plan_item", query);
+      await decoratePlanItemEnglish(items.rows, query);
+      for (const row of items.rows) {
+        if (!thumbs.has(row.plan_node_id)) thumbs.set(row.plan_node_id, []);
+        thumbs.get(row.plan_node_id).push({
+          ...(row.media ? { media: row.media } : {}),
+          id: row.id,
+          title: row.title || "",
+          titleEn: row.title_en || null,
+          imageUrl: row.image_url || "",
+          videoUrl: row.video_url || "",
+        });
+      }
+    }
     res.json({
       nodes: result.rows.map((row) => ({
         id: row.id,
@@ -1515,6 +1572,7 @@ router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
         name: row.name,
         iconUrl: row.icon_url || "",
         itemCount: row.item_count,
+        ...(req.query.items === "1" && row.node_type === "section" ? { items: thumbs.get(row.id) || [] } : {}),
       })),
     });
   } catch (error) { next(error); }
@@ -1533,7 +1591,8 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     if (!source) return res.status(404).json({ error: "Source session not found." });
     const target = await getEditableBlock(req, req.params.targetDayId);
     if (!target) return res.status(404).json({ error: "Target day not found." });
-    if (target.plan.plan_type !== "weekly") return res.status(400).json({ error: "Session paste is only available for weekly plans." });
+    const kindError = pasteKindError(target.plan, source.plan, "Session");
+    if (kindError) return res.status(400).json({ error: kindError });
 
     client = await pool.connect();
     const nextOrderResult = await client.query(
