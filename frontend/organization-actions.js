@@ -2,6 +2,7 @@ import { api } from "./api.js";
 import { resetLiveForm } from "./form-keep.js";
 import { CALENDAR_SETTINGS_ICON_HOST } from "./calendar-settings-actions.js";
 import { enterCalendarSettingsSection } from "./calendar-settings-data.js";
+import { enterRolesSection, markRolesUsersStale } from "./roles-data.js";
 import { enterDataSourcesSection } from "./data-sources-data.js";
 import { enterAppHealthSection } from "./app-health-data.js";
 import { closeIconPicker, iconPickerOpenFor } from "./icon-picker.js";
@@ -322,6 +323,8 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     // Calendar (K2b-1c) reads its catalog again - unless its form or a write
     // is still open, which the switch keeps as it was.
     if (state.organization.section === "calendar") enterCalendarSettingsSection();
+    if (state.organization.section === "roles") enterRolesSection();
+    if (state.organization.section === "users") markRolesUsersStale();
     // The icon picker belongs to the section it was opened from.
     if (next !== "calendar" && iconPickerOpenFor(CALENDAR_SETTINGS_ICON_HOST)) closeIconPicker();
     void renderOrganizationPanel({ refresh: false });
