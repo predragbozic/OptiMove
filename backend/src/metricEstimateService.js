@@ -276,9 +276,15 @@ function positionAverage(ctx, positions) {
   const positionId = positions.target.id;
   const peers = new Set(ctx.roster.filter((a) => a.athleteId !== ctx.athleteId && positions.byAthlete.get(a.athleteId) === positionId).map((a) => a.athleteId));
   return estimable.map((v) => {
-    const values = ctx.measured.filter((m) => m.def === v.metricDefinitionId && peers.has(m.athleteId) && sameUnit(m.unit, v.unit));
+    const ofPosition = ctx.measured.filter((m) => m.def === v.metricDefinitionId && peers.has(m.athleteId) && sameUnit(m.unit, v.unit));
+    // As the team average and Copy (plan section 6): only athletes who did the target's type in this session; enough
+    // athletes of the position who did another type is its own reason.
+    const values = ofPosition.filter((m) => ctx.sameType(m.athleteId));
     const athletes = new Set(values.map((m) => m.athleteId)).size;
-    if (athletes < POSITION_AVERAGE_MIN_ATHLETES) return { variable: v, value: null, reason: "too_few_athletes_in_position", basis: null };
+    if (athletes < POSITION_AVERAGE_MIN_ATHLETES) {
+      const reason = new Set(ofPosition.map((m) => m.athleteId)).size >= POSITION_AVERAGE_MIN_ATHLETES ? "too_few_same_type" : "too_few_athletes_in_position";
+      return { variable: v, value: null, reason, basis: null };
+    }
     const mean = values.reduce((s, m) => s + m.value, 0) / values.length;
     return { variable: v, value: round(mean, 3), reason: null, basis: { athletes, positionId } };
   });
