@@ -46,7 +46,13 @@ export function renderTemplatePreviewModalHtml(data) {
           <div class="builder-source-actions">
             ${preview.loading ? `<span class="item-badge">Loading</span>` : ""}
             ${selected ? `<span class="item-badge">${escapeHtml(ratingLabel(selected))}</span>` : ""}
-            ${selected && currentUserRole !== "athlete" && selected.can_assign_to_athlete !== false ? `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">${preview.assignOpen ? "Hide assign" : "Assign"}</button>` : ""}
+            ${selected && currentUserRole !== "athlete" && selected.can_assign_to_athlete !== false
+              // A weekly program is assigned from a date into the athletes'
+              // weekly plans, in the Builder (never as library access).
+              ? (selected.template_kind === "weekly"
+                ? `<button class="plain-button compact-button" type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(selected.plan_id)}" data-open-weekly-assign="true"><span>Assign to athletes</span></button>`
+                : `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">${preview.assignOpen ? "Hide assign" : "Assign"}</button>`)
+              : ""}
             ${selected && currentUserRole !== "athlete" ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${preview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
             ${selected && currentUserRole !== "athlete" ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">x</span></button>

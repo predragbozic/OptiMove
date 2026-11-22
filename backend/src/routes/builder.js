@@ -1107,11 +1107,22 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         const days = placed.filter((p) => p.weekStart === weekStart);
         const entry = { athleteUuid: String(athlete.id), athleteId: athlete.externalId, weekStart, days: days.map((d) => d.date), placed: days, kind: "new", kept: [] };
         let live = lockedPlans.filter((p) => String(p.athlete_id) === String(athlete.id) && p.week_start.slice(0, 10) === weekStart);
-        // ensureWeeklySlot's rule: an empty builder plan of this coach counts as free.
+        // Only this coach's own builder DRAFT with no session and no day note
+        // counts as free (it is replaced by the new plan). Narrower than
+        // ensureWeeklySlot's content rule on purpose: a published week, or one
+        // with a session without exercises (which can carry results), is
+        // never removed here - it is asked about like any other week.
         const remaining = [];
         for (const plan of live) {
-          if (plan.source_type === "builder" && String(plan.created_by_user_id) === String(req.user.id)
-            && !(await planHasWeeklyTrainingContentWithClient(client, plan.id))) {
+          if (plan.source_type === "builder" && plan.status === "draft" && String(plan.created_by_user_id) === String(req.user.id)
+            && !(await client.query(
+              `select 1 from plans.plan_days pd
+               where pd.plan_id = $1
+                 and (nullif(trim(coalesce(pd.day_note, '')), '') is not null
+                      or exists (select 1 from plans.plan_sessions ps where ps.plan_day_id = pd.id))
+               limit 1`,
+              [plan.id],
+            )).rowCount) {
             entry.emptyPlanIds = [...(entry.emptyPlanIds || []), plan.id];
             continue;
           }

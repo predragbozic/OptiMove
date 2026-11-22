@@ -19,6 +19,7 @@ import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoMo
 import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import { ensureBuilderEvents } from "./builder-events-row.js";
 import { renderBuilderSessionsLockedHtml } from "./builder-sessions-locked.js";
+import { currentTemplateWeek, dayOfBlock, isWeeklyTemplateDraft, renderSaveWeeksModalHtml, renderTemplateWeekStripHtml, renderWeeklyAssignModalHtml, templateWeekBlocks } from "./builder-weekly-template-view.js";
 import { renderBuilderEventsAskHtml, renderBuilderEventsRowHtml, renderBuilderSessionEventHtml, renderBuilderSessionEventNoteHtml } from "./builder-events-row-view.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
@@ -94,6 +95,9 @@ function builderStructureContext() {
     previewSectionId: state.builder.previewSectionId,
     editNodeOpen: state.builder.editNodeOpen,
     builderNodePresets: state.builder.nodePresets || [],
+    // A weekly program template's day: "Day 1".."Day 7" of its week, no
+    // rename or delete of a single day (the template changes by whole weeks).
+    templateDayOf: (block) => (isWeeklyTemplateDraft(state.builder.draft) ? dayOfBlock(block) : 0),
     blockAddOpen: state.builder.blockAddOpen,
     sessionQuickAdd: state.builder.sessionQuickAdd,
     // K2c-3: the day's events row, each session's Event: [▾] and its note.
@@ -681,6 +685,7 @@ function renderBuilderInner() {
               <div class="search-field builder-create-color-field"><span>Color</span>${renderPastelSwatches("color", state.builder.createColor, { allowCustom: true })}</div>
             </div>
             ${isWeekly ? "" : `<label class="search-field"><span>Cover image URL (optional)</span><input name="coverImageUrl" type="url" placeholder="https://..."></label>`}
+            ${isTemplate ? renderTemplateKindFieldsHtml(state.builder.createTemplateKind) : ""}
             <input type="hidden" name="planType" value="${isWeekly ? "weekly" : "program"}">
             <input type="hidden" name="athleteId" value="${escapeAttr(state.builder.createAthleteId)}">
             ${isWeekly ? `<label class="search-field builder-week-start"><span>Any date in the planned week</span><input name="weekStart" data-builder-week-start type="date" value="${escapeAttr(weekStart)}" required><small>The weekly plan will begin on Monday ${escapeHtml(formatDate(weekStart))}.</small></label>` : ""}
@@ -703,6 +708,10 @@ function renderBuilderInner() {
   const selectedNode = findBuilderNode(draft, state.builder.selectedNodeId);
   const isWeekly = draft.plan.planType === "weekly";
   const isEditDraft = Boolean(draft.plan.isEditDraft);
+  // A weekly program template (docs/ai/weekly-program-template-plan.md): one
+  // template week on screen at a time, chosen in the week strip.
+  const isWeeklyTemplate = isWeeklyTemplateDraft(draft);
+  const shownBlocks = isWeeklyTemplate ? templateWeekBlocks(draft, currentTemplateWeek(state)) : draft.blocks;
   const saveLabel = "Save";
   const structureContext = builderStructureContext();
   const batchPlans = Array.isArray(draft.batch?.plans) ? draft.batch.plans : [];
@@ -731,11 +740,13 @@ function renderBuilderInner() {
       ${k3 ? renderK3BandHtml(k3) : ""}
       ${k3 ? renderK3OutcomeHtml(k3) : ""}
       <header class="builder-program-bar">
-        <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}">${isWeekly ? "" : `<input name="coverImageUrl" type="url" class="builder-plan-cover-input" value="${escapeAttr(draft.plan.coverImageUrl || "")}" placeholder="Cover image URL (optional)" aria-label="Cover image URL">`}</form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
+        <div><p class="eyebrow">${isEditDraft ? "Editing original" : isWeekly ? "Weekly plan" : isWeeklyTemplate ? `Weekly program · ${Number(draft.plan.weekCount) || 1} week${Number(draft.plan.weekCount) === 1 ? "" : "s"}` : (draft.plan.isTemplate ? "Reusable template" : "Athlete program")}</p><form class="builder-plan-name-inline" data-builder-form="update-plan" data-builder-autosave><input name="name" class="builder-plan-title-input" value="${escapeAttr(draft.plan.name || "")}" placeholder="${isWeekly ? "e.g. Match week" : "Program name"}" aria-label="${isWeekly ? "Weekly plan name" : "Program name"}">${isWeekly ? "" : `<input name="coverImageUrl" type="url" class="builder-plan-cover-input" value="${escapeAttr(draft.plan.coverImageUrl || "")}" placeholder="Cover image URL (optional)" aria-label="Cover image URL">`}</form><p class="muted">${escapeHtml(isEditDraft ? "Changes are saved only when applied." : draft.plan.athleteName || "Private coach template")}</p></div>
         <div class="builder-program-actions">
           <span class="item-badge builder-status-chip${isEditDraft || (draft.plan.status || "draft") === "draft" ? " is-draft" : ""}">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
           <button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="Exit" aria-description="Exit and keep this draft for later.">${ICON_DOOR_EXIT}</button>
-          ${draft.plan.isTemplate && !isWeekly ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
+          ${isWeeklyTemplate ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-tw-assign-open">${ICON_CHECK}<span>Assign to athletes</span></button>` : ""}
+          ${isWeekly && draft.plan.athleteId ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-tw-save-open">Save weeks as template</button>` : ""}
+          ${draft.plan.isTemplate && !isWeekly && !isWeeklyTemplate ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
           ${draft.plan.status === "draft" && !k3 ? `<button class="plain-button icon-button builder-finish-button" type="button" data-action="builder-submit-plan" aria-label="${saveLabel}" aria-description="${isEditDraft ? "Apply changes to the original plan." : "Save and finish — marks this plan as active."}">${ICON_CHECK}</button>` : `<span class="builder-finished-label">Saved</span>`}
           ${draft.plan.status === "draft" ? `<button class="plain-button icon-button danger-action" type="button" data-action="builder-discard-current-draft" aria-label="Discard changes" aria-description="Discard all changes in this draft.">${ICON_X}</button>` : ""}
           <span class="builder-discard-status" data-builder-discard-status role="status" aria-live="polite" hidden></span>
@@ -752,16 +763,17 @@ function renderBuilderInner() {
       <div class="builder-layout">
         <section class="panel builder-outline">
           <div class="section-heading">
-            <div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : "Blocks and sessions"}</h3></div>
+            <div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : isWeeklyTemplate ? `Week ${currentTemplateWeek(state)}` : "Blocks and sessions"}</h3></div>
             <div class="builder-outline-info-buttons">
               ${isWeekly ? renderImportBlockIconButton() : `<button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program example"><span class="button-icon" aria-hidden="true">i</span><span class="builder-info-label">Program example</span></button>`}
               <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session example"><span class="button-icon" aria-hidden="true">i</span><span class="builder-info-label">Session example</span></button>
             </div>
           </div>
+          ${isWeeklyTemplate ? renderTemplateWeekStripHtml(state) : ""}
           ${draft.blocks.length || !isWeekly ? `
             <div class="builder-block-grid">
-              ${draft.blocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id, isWeekly, structureContext)).join("")}
-              ${isWeekly ? "" : renderBuilderAddBlockCard(structureContext)}
+              ${shownBlocks.map((block) => renderBuilderBlock(block, selectedSession?.id, selectedNode?.id, isWeekly, structureContext)).join("")}
+              ${isWeekly || isWeeklyTemplate ? "" : renderBuilderAddBlockCard(structureContext)}
             </div>
           ` : `
             <div class="empty builder-outline-empty">
@@ -777,9 +789,25 @@ function renderBuilderInner() {
       ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(state, selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
       ${renderCopyPlanModal(state)}
+      ${renderWeeklyAssignModalHtml(state)}
+      ${renderSaveWeeksModalHtml(state)}
       ${renderOverwriteDayConfirmHtml(state)}
       ${renderBlockPickerModal(state)}
     </section>
+  `;
+}
+
+// The create form of a template: Blocks (a program of named blocks) or a
+// Weekly program (whole weeks of seven days, assigned from a date).
+function renderTemplateKindFieldsHtml(kind) {
+  const weekly = kind === "weekly";
+  return `
+    <fieldset class="builder-template-kind">
+      <legend class="builder-field-label">Template type</legend>
+      <label class="builder-template-kind-option"><input type="radio" name="templateKind" value="weekly" data-builder-template-kind ${weekly ? "checked" : ""}><span><strong>Weekly program</strong><small>Weeks of seven days. Assigned from a date into athletes' weekly plans.</small></span></label>
+      <label class="builder-template-kind-option"><input type="radio" name="templateKind" value="blocks" data-builder-template-kind ${weekly ? "" : "checked"}><span><strong>Blocks</strong><small>Named blocks of sessions, in any order.</small></span></label>
+      ${weekly ? `<label class="search-field builder-template-weeks"><span>Number of weeks</span><input name="weeks" type="number" min="1" max="52" value="4" required><small>You can add, duplicate or remove weeks later.</small></label>` : ""}
+    </fieldset>
   `;
 }
 

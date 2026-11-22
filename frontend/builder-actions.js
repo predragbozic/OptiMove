@@ -80,7 +80,7 @@ function shouldSyncBuilderBatch() {
   return Boolean(state.builder.batchSync && (batchPlans.length > 1 || getBuilderBatchId()));
 }
 
-function setBuilderDraft(nextDraft, options = {}) {
+export function setBuilderDraft(nextDraft, options = {}) {
   if (!nextDraft) {
     state.builder.draft = nextDraft;
     return nextDraft;
@@ -92,6 +92,10 @@ function setBuilderDraft(nextDraft, options = {}) {
   if (String(previousDraft?.plan?.id || "") !== String(nextDraft?.plan?.id || "")) {
     state.builder.batchEditChoice = null;
     state.builder.sessionsLocked = null;
+    // A weekly program template's week strip starts at week 1 for another plan.
+    state.builder.templateWeek = 1;
+    state.builder.templateWeekDeleteConfirm = 0;
+    state.builder.templateWeekError = "";
   }
   state.builder.draft = preserveBuilderItemEdits(nextDraft);
   if (
@@ -149,7 +153,7 @@ function withBatchSyncPayload(payload = {}) {
 // responses -- in submission order, so nothing gets clobbered.
 let builderMutationQueue = Promise.resolve();
 let builderMutationsPending = 0;
-function queuedBuilderApi(url, options) {
+export function queuedBuilderApi(url, options) {
   builderMutationsPending += 1;
   const result = builderMutationQueue.then(() => api(url, options));
   builderMutationQueue = result.then(() => undefined, () => undefined).finally(() => { builderMutationsPending -= 1; });
@@ -283,6 +287,11 @@ export async function handleBuilderPlanAction(action, handlers) {
       state.builder.selectedSessionId = "";
       state.builder.selectedNodeId = "";
       state.builder.exerciseQuery = "";
+      // The library's "Assign to athletes" of a weekly program opens it here
+      // with the dated assign (builder-weekly-template-actions.js).
+      if (action.dataset.openWeeklyAssign === "true" && state.builder.draft?.plan?.templateKind === "weekly") {
+        state.builder.weeklyAssign = { planId: state.builder.draft.plan.id, open: true, startDate: localDateIso(), athleteIds: [], requestId: "", sending: false, conflict: null, error: "", result: null };
+      }
       // A stale "Assigned to ..." banner from whatever was open before must
       // not follow the coach into a different plan (including - the common
       // case right after an assign - the newly assigned Specific Program
@@ -1819,6 +1828,7 @@ export async function submitBuilderForm(form, handlers) {
     state.builder.weekStart = "";
     state.builder.createName = "";
     state.builder.createColor = "#C2F0E6";
+    state.builder.createTemplateKind = "";
     state.builder.addNodeOpen = false;
     handlers.renderBuilder();
     await handlers.loadBuilderExercises();

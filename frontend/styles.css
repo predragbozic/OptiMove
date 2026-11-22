@@ -29956,3 +29956,42 @@ body.athlete-questions-prompt-open {
   width: 100%;
   box-sizing: border-box;
 }
+
+/* Weekly program templates (docs/ai/weekly-program-template-plan.md):
+   the week strip, the template type choice, the dated assign's question. */
+.builder-week-strip { display: grid; gap: 10px; margin: 4px 0 14px; }
+.builder-week-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.builder-week-tab {
+  flex: 0 0 auto; display: grid; gap: 2px; min-width: 92px; min-height: 48px; padding: 6px 12px;
+  border: 1px solid var(--line, #d0d5dd); border-radius: 10px; background: #fff; text-align: left; cursor: pointer;
+}
+.builder-week-tab small { color: var(--muted); font-size: 12px; }
+.builder-week-tab.is-active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.builder-week-tab.builder-week-add { border-style: dashed; }
+.builder-week-tab:disabled { opacity: 0.55; cursor: default; }
+.builder-week-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.builder-week-actions .compact-button { min-height: 44px; }
+.builder-week-confirm { border: 1px solid var(--danger); border-radius: 10px; padding: 10px 12px; background: #fff7f7; }
+.builder-week-confirm p { margin: 0 0 8px; }
+.builder-week-confirm-actions, .builder-tw-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.builder-week-confirm-actions .plain-button, .builder-tw-conflict-actions .plain-button { min-height: 44px; }
+.builder-template-kind { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
+.builder-template-kind-option { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line, #d0d5dd); border-radius: 10px; cursor: pointer; min-height: 44px; }
+.builder-template-kind-option input { width: 20px; height: 20px; margin-top: 2px; flex: 0 0 auto; }
+.builder-template-kind-option span { display: grid; gap: 2px; }
+.builder-template-kind-option small { color: var(--muted); }
+.builder-template-weeks input { font-size: 16px; }
+.builder-tw-assign-modal input[type="date"], .builder-tw-save-modal input { font-size: 16px; }
+.builder-tw-conflict { display: grid; gap: 10px; outline: none; }
+.builder-tw-conflict-title { margin: 0; }
+.builder-tw-conflict-list { margin: 0; padding-left: 18px; display: grid; gap: 8px; max-height: 42vh; overflow-y: auto; overflow-wrap: anywhere; }
+.builder-tw-conflict-list ul { padding-left: 18px; margin: 4px 0 0; }
+.builder-tw-kept li { color: var(--muted); }
+.program-kind-chip.is-weekly { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 760px) {
+  .builder-week-actions .compact-button, .builder-tw-conflict-actions .plain-button { flex: 1 1 auto; }
+}
+.builder-tw-assign-modal .builder-copy-plan-footer .plain-button,
+.builder-tw-save-modal .builder-copy-plan-footer .plain-button,
+.builder-tw-assign-modal .builder-modal-head .icon-button,
+.builder-tw-save-modal .builder-modal-head .icon-button { min-height: 44px; min-width: 44px; }

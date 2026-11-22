@@ -318,7 +318,9 @@ test("4. existing weeks: one question per athlete; Replace keeps a session with 
   const ask = await assign(cookie, templateId, { athleteIds: [one.externalId], startDate: "2026-12-09" });
   assert.equal(ask.status, 409);
   const replace = ok(await assign(cookie, templateId, { athleteIds: [one.externalId], startDate: "2026-12-09", choice: "replace", choiceToken: ask.body.choiceToken }), 201);
-  assert.equal(replace.replaced.length, 1);
+  // Its week of 14.12 (created by the Skip above, the template's empty days 6
+  // and 7) is a published week now: asked and replaced as well, never deleted.
+  assert.equal(replace.replaced.length, 2);
   assert.equal(replace.kept, 1);
   const afterReplace = await planSessions(planId);
   assert.deepEqual(afterReplace.map((x) => `${x.date} ${x.name}`), ["2026-12-07 Before start", "2026-12-09 Rated", "2026-12-09 T Monday", "2026-12-11 T Wednesday"]);
@@ -432,4 +434,31 @@ test("7. save as template from chosen, non-consecutive weeks: content only, in d
   const outsider = await squad("save-out", 0);
   assert.equal((await api("/api/builder/weekly-templates", { method: "POST", cookie: outsider.coach.cookie, body: { name: "Steal", planIds: [early] } })).status, 404);
   assert.equal((await api("/api/builder/weekly-templates", { method: "POST", cookie, body: { name: "Missing", planIds: [crypto.randomUUID()] } })).status, 404);
+});
+
+test("8. a published week whose session has no exercise is never taken for empty: asked, and its session with results stays", async () => {
+  const s = await squad("bare", 1);
+  const cookie = s.coach.cookie;
+  let draft = await weeklyTemplate(cookie, 1, "Bare");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T Monday");
+  const athlete = s.athletes[0];
+  // A published week with one bare session (no exercise), rated by the athlete.
+  const created = ok(await api("/api/builder/plans", { method: "POST", cookie, body: { planType: "weekly", weekStart: "2027-02-01", athleteIds: [athlete.externalId], name: "Bare week" } }), 201);
+  ok(await api(`/api/builder/blocks/${created.blocks[0].id}/sessions`, { method: "POST", cookie, body: { bta: "T", name: "Bare" } }), 201);
+  // (A Save of a week with no exercise at all removes it as empty, so this
+  // shape comes from a published week edited down to bare sessions.)
+  await q(`update plans.plans set status = 'active' where id = $1`, [created.plan.id]);
+  const bare = (await planSessions(created.plan.id))[0];
+  await rpeRow(athlete.athleteId, bare.id);
+  const ask = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-02-01" });
+  assert.equal(ask.status, 409, ask.text);
+  assert.deepEqual(ask.body.athletes[0].weeks[0].kept.map((k) => [k.name, k.reasons]), [["Bare", ["has_results"]]]);
+  assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [created.plan.id]))[0].n, 1);
+  ok(await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-02-01", choice: "replace", choiceToken: ask.body.choiceToken }), 201);
+  assert.deepEqual((await planSessions(created.plan.id)).map((x) => x.name), ["Bare", "T Monday"]);
+  // This coach's own empty DRAFT week is the one thing taken for free.
+  const empty = ok(await api("/api/builder/plans", { method: "POST", cookie, body: { planType: "weekly", weekStart: "2027-02-08", athleteIds: [athlete.externalId], name: "Empty draft" } }), 201);
+  const done = ok(await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-02-08" }), 201);
+  assert.equal(done.created.length, 1);
+  assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [empty.plan.id]))[0].n, 0);
 });
