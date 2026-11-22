@@ -523,3 +523,63 @@ imported again):
 
   The Training Load calendar still shows the raw key words ("training session") until ST-5 reads the labels.
 - **Runbook:** `docs/runbooks/session-types-v85.md`, with its preflight, post-check, rollback and the rehearsal tool.
+
+## 16. ST-3 as built (migration v88, `migrations_v2/202611221300_training_load_v88_participant_session_types.sql`)
+
+The number and the prefix are provisional until the *Rukovodilac* confirms them before the merge.
+
+- **The exception.** `training.participant_activity_types` holds an athlete's own type in a session, one live row per
+  participant. A row only ever ends: `cleared`, `replaced`, `same_as_session`, `merge` or `reparent`.
+  `training.effective_activity_type(participant)` is the canonical participant's live exception, otherwise the canonical
+  activity's type.
+- **The routes** (`backend/src/activityTypeChangeService.js`, in the training-activity router):
+  - `POST /api/training-activity/:activityId/type` `{ activityTypeKey, reason?, requestKey }`. It goes through
+    `training.correct_confirmed_activity_fields` with every other field as it is.
+  - `PUT /api/training-activity/:activityId/roster/:athleteId/type` `{ activityTypeKey | null, reason?, requestKey }`.
+  - **Who:** the roster decider through the active workspace (`resolveRosterTarget`, then
+    `training.lock_activity_decider` under lock). Everyone else gets the identical 404.
+  - **Answers:** `409 session_type_not_offered` for an unknown, archived or foreign type, with one body for all
+    three; `409 same_as_session`; `409 athlete_has_no_record`; `409 activity_superseded` with the current id;
+    `409 request_key_reused`; `409 try_again`; `503 outcome_unknown`.
+  - A command that changes nothing answers `200` with `changed: false` and writes nothing, so its key stays free.
+  - A session's new type that equals an athlete's exception ends that exception (`same_as_session`); the answer names
+    the athletes in `endedExceptionAthleteIds`.
+- **The request record.** `training.activity_type_requests` is append-only: who, the basis, the old and the new type,
+  the reason, the key, its hash and the saved answer. A replay is answered after the rights are checked again.
+- **Lock order.** The team, its club, the acting user and the role row (`training.lock_activity_decider`); the
+  (user, key) advisory lock; the addressed activity row `FOR UPDATE`; the participant row; the exception row; the type
+  row `FOR SHARE`; the request row. No team import lock is taken.
+- **Merge and reparent.** v4's two functions are replaced under an md5 gate, each with one added block after its own
+  locks. A merge ends the merged participant's exception; a reparent ends the participant's.
+- **Estimates** (`backend/src/metricEstimateService.js`, `backend/src/activitySessionTypes.js`):
+  - **Own average** counts a past session when the athlete's effective type there, as it stands now, is in the
+    comparable set of the athlete's effective type in this session. D7, option 1: a friendly counts friendlies and
+    games; every other type counts itself.
+  - **Team average** takes only athletes of the target's effective type. With enough athletes but too few of that type
+    the reason is `too_few_same_type`.
+  - **Copy** offers only same-type athletes in `sources`. The others are in `otherTypeSources`, with their type. A save
+    that names one answers `409 source_type_differs`.
+  - `comparesWith` keeps `key` and `label` and gains `types`, the comparable set.
+- **The mark.** The roster read gives each athlete `sessionType` (`effectiveKey`, `exception`, `endedException`). An
+  estimated value saved while the athlete's effective type was another one carries `estimate.calculatedWhenType`
+  (`key`, `label`). It is derived on each read and never stored.
+- **Departures from sections 3 to 10, each for the reviewers:**
+  - **The reason is optional** on both routes (at most 300 characters). The plan's bodies list it; a mandatory reason
+    on every roster exception was judged too heavy for a coach.
+  - **The mark is dated against the request record, not the correction log.** The correction log's time is the
+    transaction's start, which can be earlier than an estimate saved while the change waited for its lock. The
+    request record and the exception rows carry the wall clock.
+  - **No concurrency token** (`expected…`) on the two routes: the last write wins, and the history keeps every row.
+  - **The correction log's foreign key cascades**, with a delete guard. Without it the undo of a session whose type
+    was changed would fail on that key.
+- **Limits:**
+  - An athlete with no record in a session cannot get an exception (`athlete_has_no_record`). An RTP athlete without
+    a recording is first estimated under the session's type; setting the exception then marks that estimate.
+  - The undo removes a session's type changes and exceptions without listing them (the runbook, "Known limits").
+  - A world built without v88 reads as before ST-3: the roster and the estimates probe for the table.
+  - `backend/scripts/session-types-v85-rehearsal.mjs` builds "everything but v85", so it no longer runs once a later
+    migration needs v85. v85 is applied; the tool is kept as its record.
+  - ST-2's precondition for ST-3 (the import locks the imported activity row `FOR SHARE` when it reads the type of a
+    session already imported) is built after ST-2 is on `main`, in the follow-up that also stores the chosen type on
+    the approval.
+- **Runbook:** `docs/runbooks/participant-session-types-v88.md`, with its preflight, post-check and rollback.

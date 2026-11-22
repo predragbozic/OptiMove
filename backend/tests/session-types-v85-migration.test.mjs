@@ -13,7 +13,8 @@ import { blocks, CATALOG_SQL } from "../scripts/session-types-v85-rehearsal.mjs"
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const V85 = "202611201500_training_load_v85_session_types.sql";
-const BEFORE = GPEXE_TEST_MIGRATIONS.filter((f) => f !== V85);
+// Everything before v85 (a later migration, such as v88, needs v85 and is not part of this rehearsal).
+const BEFORE = GPEXE_TEST_MIGRATIONS.filter((f) => f < V85);
 const RUNBOOK = (f) => fs.readFileSync(path.join(REPO, "docs/runbooks", f), "utf8");
 
 let db;

@@ -31,6 +31,7 @@
 // (ADR-001), never from activity_participants.participation_status (the
 // GPEXE path writes 'planned' for a measured athlete).
 import { estimateLabelFor, readEstimateLabels } from "./estimateLabels.js";
+import { athleteSessionTypeView, effectiveTypeAt, effectiveTypeOf, readSessionTypeState, sessionTypeLabels } from "./activitySessionTypes.js";
 import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { holdsClubAdminRole, holdsTeamCoachRole, isPlatformAdministrator } from "./authz.js";
@@ -168,7 +169,7 @@ export function deriveAthleteState({ decisions, facts, needsReview, observations
   return { state, group, flags, sourceReason };
 }
 
-function valuesView(facts, estimateLabels = new Map(), nameInAnswer = () => null) {
+function valuesView(facts, estimateLabels = new Map(), nameInAnswer = () => null, typeChangeOf = () => null) {
   return facts
     .filter((f) => f.segmentId === null)
     .map((f) => {
@@ -179,7 +180,12 @@ function valuesView(facts, estimateLabels = new Map(), nameInAnswer = () => null
       // 6b-C1: only an estimated value carries its label (rule 10); every other value is as before.
       if (f.entryMethod === "estimate") {
         const estimate = estimateLabelFor(estimateLabels.get(String(f.occasionId)), nameInAnswer);
-        if (estimate) view.estimate = estimate;
+        if (estimate) {
+          // ST-3: an estimate saved while the athlete's effective type was another one keeps its value and says so.
+          const typeChanged = typeChangeOf(f.athleteId, estimate.estimatedAt);
+          if (typeChanged) estimate.calculatedWhenType = typeChanged;
+          view.estimate = estimate;
+        }
       }
       return view;
     })
@@ -379,7 +385,19 @@ export async function loadRosterSnapshot(client, canonicalId) {
   const estimateLabels = await readEstimateLabels(client, facts.filter((f) => f.entryMethod === "estimate").map((f) => f.occasionId));
   const answerNames = new Map([...roster.map((r) => [String(r.athlete_id).toLowerCase(), r.name]), ...[...outsideNames].map(([id, name]) => [id.toLowerCase(), name])]);
   const nameInAnswer = (athleteId) => answerNames.get(String(athleteId).toLowerCase()) ?? null;
-  const values = (athleteFacts) => valuesView(athleteFacts, estimateLabels, nameInAnswer);
+  // ST-3 (v88): each athlete's effective session type and own exception. The mark of a saved estimate is derived, never
+  // stored: the type the athlete had when it was saved, when that differs from the type now (plan section 5).
+  const types = await readSessionTypeState(client, canonicalId, { withHistory: estimateLabels.size > 0 });
+  const typeMarks = [];
+  const typeChangeOf = (athleteId, estimatedAt) => {
+    if (!types.installed || !estimatedAt) return null;
+    const then = effectiveTypeAt(types, athleteId, new Date(estimatedAt).getTime());
+    if (then === effectiveTypeOf(types, athleteId)) return null;
+    const mark = { key: then, label: null };
+    typeMarks.push(mark);
+    return mark;
+  };
+  const values = (athleteFacts) => valuesView(athleteFacts, estimateLabels, nameInAnswer, typeChangeOf);
 
   const athletes = roster.map((r) => {
     const athleteId = String(r.athlete_id);
@@ -408,6 +426,7 @@ export async function loadRosterSnapshot(client, canonicalId) {
       flags,
       sourceReason: derived.sourceReason,
       values: values(athleteFacts),
+      ...(types.installed ? { sessionType: athleteSessionTypeView(types, athleteId) } : {}),
       // Internal (removed by publicAthlete): what the fingerprint and the
       // 5a2 commands rest on.
       decisionIds: athleteDecisions.map((d) => String(d.id)),
@@ -420,6 +439,11 @@ export async function loadRosterSnapshot(client, canonicalId) {
   const recordedOutsideRoster = outsideIds
     .map((athleteId) => ({ athleteId, name: outsideNames.get(athleteId) ?? null, state: "measured", stateLabel: ROSTER_STATE_LABELS.measured, values: values(factsByAthlete.get(athleteId) ?? []) }))
     .sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")) || a.athleteId.localeCompare(b.athleteId));
+
+  if (typeMarks.length) {
+    const labels = await sessionTypeLabels(client, typeMarks.map((m) => m.key));
+    for (const mark of typeMarks) mark.label = labels.get(mark.key) ?? null;
+  }
 
   const fingerprint = rosterFingerprint(athletes);
   // The second layer of "complete never stays true" (contract 3.4): what
