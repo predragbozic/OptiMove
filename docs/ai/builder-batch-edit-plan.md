@@ -523,6 +523,11 @@ lock, and then runs the Save's check over the chosen sessions (their rows `FOR U
   all**, and no session of it has results or a live event link (`blockedPlanSessions`, whatever the status; kept as an
   independent third condition). Otherwise the existing `409` "already has a weekly plan for that week", nothing
   written. `GET /weekly-plans` skips exactly the same plan. Tests: `backend/tests/builder-weekly-slot-guard.test.mjs`.
+  Recorded, not changed (the independent review of #726, LOW): the removal has no `lock_timeout`, so a held day row
+  makes the create wait while it holds a pool connection; a `40P01` against `removeEmptyDraftOnSubmit` (children
+  first, no plan lock) is possible and is not mapped to `try_again`; and the caller's own draft with no session but
+  with day notes is still replaced without a question, while assign-weekly counts day notes as content, so the two
+  "free week" rules differ.
 - **A program's Save** (`copyProgramTree`) does not keep logical ids, so every session of a published program counts
   as removed: a program whose session a record names refuses every Save of its edit draft, a rename included (the
   Save would orphan that record). No program session can have such a record today (RPE and calendar links take weekly
