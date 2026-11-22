@@ -92,6 +92,28 @@ test("2. the rollback refuses once an exception or a request row exists, and cha
   await refuse("an exception row");
 });
 
+test("2b. a request row names the acting user: another user's name is refused (42501), the actor's own passes", async () => {
+  const other = (await c.query(`insert into public.users (email, full_name, display_name) values ($1, 'St3 other', 'St3 other') returning id`, [`st3-o-${crypto.randomBytes(3).toString("hex")}@test.local`])).rows[0].id;
+  const request = (performedBy) => c.query(
+    `insert into training.activity_type_requests (activity_id, operation, old_type_key, new_type_key, performed_by_user_id, basis, request_key, request_hash, result)
+     values ($1, 'session_type', 'training_session', 'match', $2, 'team_coach', gen_random_uuid(), $3, '{}'::jsonb)`, [ids.activity, performedBy, "a".repeat(64)]);
+  const withActor = async (performedBy) => {
+    await c.query("begin");
+    try {
+      await c.query(`select set_config('optimove.session_type_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [ids.user]);
+      await request(performedBy);
+      return "written";
+    } catch (error) {
+      return `${error.code} ${error.message}`;
+    } finally {
+      await c.query("rollback");
+    }
+  };
+  assert.match(await withActor(other), /^42501 training\.activity_type_requests: the row names the acting user/);
+  assert.equal(await withActor(ids.user), "written");
+  assert.equal((await c.query(`select count(*)::int as n from training.activity_type_requests`)).rows[0].n, 0, "nothing was kept");
+});
+
 test("3. v89 refuses to run over a body that is not v4's, or when it is already applied", async () => {
   const fresh = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "st3mig2", migrations: BEFORE });
   const f = new pg.Client({ connectionString: fresh.url });
