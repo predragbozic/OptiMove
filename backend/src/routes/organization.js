@@ -3797,7 +3797,7 @@ async function loadManagedAthletes(req) {
            where ucr_archived.user_id = $1 and ucr_archived.is_active = true and cm_archived.athlete_id = a.id
          )
        )
-     order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::int nulls last,
+     order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::numeric nulls last,
               name`,
     [req.user.id, isPlatformAdministrator(req.authz)],
   );
