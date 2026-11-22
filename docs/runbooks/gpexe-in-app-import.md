@@ -646,6 +646,9 @@ same time: the second waits for the candidate row and is then refused with
 | 409 `snapshot_expired_check_again` | The raw data expired. | "Check now" again. |
 | 409 `nothing_to_import` | The import would write nothing. | Nothing. |
 | 409 `changes_need_acceptance` | Changes to imported results were not accepted. | Review them and send `acceptChanges: true`. |
+| 409 `session_type_required` | ST-2: the session has no session type yet, and the approval carried no choice. | Choose the type (see "The session type of an import"). |
+| 409 `session_type_not_offered` | ST-2: the chosen type is not offered to the team now (unknown, another club's, or archived since it was chosen). Nothing was imported. | Choose again. |
+| 409 `session_type_fixed` | ST-2: the session is already imported and keeps its type; the approval chose another. Nothing was imported. | Approve without a type; change the type on the session. |
 | 409 `preview_changed` | The preview is not the one reviewed, or what the import would do changed between the review and the approval. | Open `reviewAgain.href`, review the candidate again, approve the new `previewHash`. |
 | 404 `notFound` | Since 9-B: the team or its club was archived, or the team moved to another club, after the route's access check. Nothing was imported. | Nothing. |
 | 409 `try_again` | A wait before the COMMIT reached its bound: another check, import or change of the team held the team lock or a row, the server ended an idle session, or a statement ran too long. Nothing was imported. | Try again in a moment. |
@@ -657,6 +660,29 @@ preview recomputed in step 3, so reopening it shows what an import would do
 now. If the stored GPEXE data can no longer be imported at all (the
 importer's rules changed since the check), the candidate becomes `blocked`
 with that reason instead. Nothing else of that attempt remains.
+
+### The session type of an import (ST-2)
+
+OptiMove decides the session type, not GPEXE (`docs/ai/session-type-plan.md`, sections 4 and 15). No GPEXE
+category is refused.
+
+- **Where the type comes from**, first match wins:
+  1. the session is already imported: it keeps its type;
+  2. the approver's choice;
+  3. the team's suggestion for the GPEXE category. A team with no suggestion for `FULL TRAINING` gets *Full training*;
+  4. nothing.
+- **No type:** the candidate stays pending, with the approval blocker and first reason `session_type_required`. The
+  list's `suggestedActivityTypeKey` is null.
+- **Choosing:** `POST …/candidates/:id/preview` with `{ activityTypeKey }` (and `excludedAthleteIds`, if any) stores
+  nothing and answers `subset.subsetHash`. The approval sends `previewHash` (the stored one), the same choice fields
+  and that `subsetHash`. The batch takes `choices: { <candidateId>: { activityTypeKey, subsetHash } }`.
+- **After the import** the team's suggestion for that category becomes the chosen type. That write is separate and
+  best effort: if it fails, the import is still committed and the next session of that category asks again or
+  proposes the earlier type.
+- **The approval row** stores `subset_hash` only when athletes were left out. A type chosen alone leaves no hash on
+  the row; the type is on the session's activity.
+- **Until the screens (ST-5):** the app has no way to choose a type, so a session that waits for one cannot be
+  imported from the app.
 
 ### What a successful answer says
 

@@ -184,9 +184,12 @@ test("mapper: team thresholds must belong to the session's team and be valid at 
   assert.throws(() => gatesPlan(bundle), (e) => e.code === "thresholds_missing");
 });
 
-test("mapper: refuses when naive track timestamps stop being UTC, and for unsupported categories", () => {
+test("mapper: refuses when naive track timestamps stop being UTC; it refuses no category (ST-2) - the plan carries no session type of its own", () => {
   assert.throws(() => gatesPlan(makeBundle({ athletes: standardAthletes(), trackTimestampOffsetMs: 2 * 3600_000 })), (e) => e instanceof GpexeMappingError && e.code === "timestamp_semantics_changed");
-  assert.throws(() => gatesPlan(makeBundle({ athletes: standardAthletes(), category: "OFFICIAL MATCH" })), (e) => e instanceof GpexeMappingError && e.code === "unsupported_category");
+  // ST-2: OptiMove decides the session type (gpexeSessionType.js), so a match is a plan like any other, without a type.
+  const match = gatesPlan(makeBundle({ athletes: standardAthletes(), category: "OFFICIAL MATCH" }));
+  assert.deepEqual([match.event.activityTypeKey, match.event.categoryName], [null, "OFFICIAL MATCH"]);
+  assert.equal(gatesPlan(makeBundle({ athletes: standardAthletes() })).event.activityTypeKey, null, "nor does FULL TRAINING carry one: the suggestion is the team's");
 });
 
 test("mapper: a track without a timezone is refused instead of using the machine's zone", () => {
