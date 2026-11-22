@@ -1310,7 +1310,7 @@ test("11g. MEDIUM-1: a deliberate navigation (sign-out, an athlete-workspace swi
   // the button is the only way into it. Settings -> Calendar (K2b-1c) is
   // asked right after the calendar, still before the request.
   const appJs = readFileSync(new URL("../app.js", import.meta.url), "utf8");
-  assert.match(appJs, /els\.signOut\?\.addEventListener\("click", \(\) => \{\s*if \(centralCalendarMayBeLeft\(\{ final: "sign-out" \}\) && calendarSettingsMayBeLeft\(\{ final: "sign-out" \}\)\) void signOut\(\);\s*\}\);/, "sign-out asks the calendar first");
+  assert.match(appJs, /els\.signOut\?\.addEventListener\("click", \(\) => \{\s*if \(centralCalendarMayBeLeft\(\{ final: "sign-out" \}\) && calendarSettingsMayBeLeft\(\{ final: "sign-out" \}\) && rolesMayBeLeft\(\{ final: "sign-out" \}\)\) void signOut\(\);\s*\}\);/, "sign-out asks the calendar first");
   assert.equal((appJs.match(/\bsignOut\(\);/g) || []).length, 1, "signOut() is called from that listener only");
   assert.doesNotMatch(appJs, /addEventListener\("click", signOut\)/);
   assert.equal(CENTRAL_CALENDAR_STAYED, "stayed", "app.js's Back passes it on as its own BACK_STAYED");
