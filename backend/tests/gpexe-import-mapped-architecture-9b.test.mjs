@@ -293,9 +293,23 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   // J21: OptiMove's calculated values are no source value either: each is derived, a derived_rollup naming its formula
   // version and input values (v77's value guard), with no T6 row - checked below.
   const CALCULATED = "calculatedValues.js";
+  // ST-4 (v87): the roster's manual values are 'manual' occasions, never a source value: no T6 row; each occasion has its
+  // provenance row in metric_manual_values, checked below.
+  const ROSTER_MANUAL = "manualValueService.js";
   const files = all();
-  assert.deepEqual(files.filter((f) => count(f.text, VALUES) > 0).map((f) => f.rel).sort(), [CALCULATED, "gpexeImportWriter.js", ESTIMATE, MANUAL],
-    "the import writer, the calculated values, the estimate save and the manual-entry module are the only modules that insert metric_values");
+  assert.deepEqual(files.filter((f) => count(f.text, VALUES) > 0).map((f) => f.rel).sort(), [CALCULATED, "gpexeImportWriter.js", ROSTER_MANUAL, ESTIMATE, MANUAL].sort(),
+    "the import writer, the calculated values, the estimate save, the roster's manual values and the manual-entry module are the only modules that insert metric_values");
+  {
+    const rm = files.find((f) => f.rel === ROSTER_MANUAL);
+    assert.equal(count(rm.text, PROVENANCE), 0, "a roster manual value writes no T6 row");
+    assert.ok(count(rm.text, /\binsert\s+into\s+training_load\.metric_manual_values\b/gi) > 0, "it writes the v87 provenance row");
+    const OCCASIONS = /\binsert\s+into\s+training_load\.metric_measurement_occasions\b/gi;
+    assert.ok(count(rm.text, OCCASIONS) > 0, "it writes occasions");
+    for (const m of rm.text.matchAll(OCCASIONS)) {
+      const stmt = rm.text.slice(m.index, rm.text.indexOf("returning", m.index));
+      assert.match(stmt, /values \(\$1, 'manual'/, `${where(rm, m.index)}: a roster occasion is always 'manual', never a source entry method`);
+    }
+  }
   {
     const calc = files.find((f) => f.rel === CALCULATED);
     assert.equal(count(calc.text, VALUES), 1, "one calculated-value insert");
@@ -336,7 +350,7 @@ test("2. T6 (J17 section 3, step 10): every function that inserts training_load.
   const failures = [];
   const checked = [];
   for (const f of files) {
-    if (f.rel === MANUAL || f.rel === ESTIMATE || f.rel === CALCULATED) continue;
+    if (f.rel === MANUAL || f.rel === ESTIMATE || f.rel === CALCULATED || f.rel === ROSTER_MANUAL) continue;
     for (const m of f.text.matchAll(VALUES)) {
       const fn = enclosing(f, m.index);
       if (!fn) { failures.push(`${where(f, m.index)}: a metric_values insert outside any function`); continue; }

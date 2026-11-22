@@ -31,11 +31,17 @@
 --
 -- Bodies are replaced after an md5 check of the bodies in force (v76's undo, v63's scope, v26's needs-state). New lines sit
 -- between "-- v87 begin" and "-- v87 end".
--- Locks: the deletion log and the approvals ACCESS EXCLUSIVE (their new columns and CHECKs), lock_timeout 5 s, before the
--- first change.
--- Rollback: docs/runbooks/manual-values-v87.md (refuses once a provenance row or a logged manual removal exists).
+-- Locks, all up front and in the order the undo and the import take these tables (occasions and values before the deletion
+-- log and the approvals), lock_timeout 5 s: the occasions and values SHARE ROW EXCLUSIVE (the new foreign keys and
+-- triggers), then the deletion log and the approvals ACCESS EXCLUSIVE (their new columns and CHECKs). Every other lock the
+-- DDL takes (public.users and training.activity_types for the new foreign keys) is a share lock no writer path holds
+-- against them. A busy table fails the migration with nothing applied; deploy at a quiet moment.
+-- Runbook: docs/runbooks/manual-values-v87.md (preflight, post-check and rollback; the rollback refuses once a provenance
+-- row, a logged manual removal or an approval choice exists).
 
 set local lock_timeout = '5s';
+lock table training_load.metric_measurement_occasions in share row exclusive mode;
+lock table training_load.metric_values in share row exclusive mode;
 lock table training_load.import_deletion_log in access exclusive mode;
 lock table training_load.gpexe_import_approvals in access exclusive mode;
 
@@ -132,7 +138,7 @@ begin
     raise exception 'manual value: the author must be the acting user' using errcode = '42501';
   end if;
   select o.id, o.entry_method, o.segment_id, o.source_identity_id, o.import_batch_id, o.import_conflict_status,
-         o.recorded_by_user_id, o.supersedes_occasion_id, o.superseded_by_occasion_id
+         o.recorded_by_user_id, o.supersedes_occasion_id, o.superseded_by_occasion_id, o.event_participant_id
     into v_occ from training_load.metric_measurement_occasions o where o.id = new.occasion_id;
   if not found or v_occ.entry_method is distinct from 'manual' or v_occ.segment_id is not null
      or v_occ.import_batch_id is not null or v_occ.import_conflict_status is not null or v_occ.superseded_by_occasion_id is not null then
@@ -149,8 +155,10 @@ begin
       raise exception 'manual value: an entry has no source record' using errcode = '23514';
     end if;
     if new.replaced_occasion_id is not null then
-      select o.entry_method, o.source_identity_id into v_prev from training_load.metric_measurement_occasions o where o.id = new.replaced_occasion_id;
+      select o.entry_method, o.source_identity_id, o.event_participant_id into v_prev
+        from training_load.metric_measurement_occasions o where o.id = new.replaced_occasion_id;
       if v_prev.entry_method is distinct from 'manual' or v_prev.source_identity_id is not null
+         or v_prev.event_participant_id is distinct from v_occ.event_participant_id
          or not exists (select 1 from training_load.metric_manual_values m where m.occasion_id = new.replaced_occasion_id and m.kind = 'entry') then
         raise exception 'manual value: an entry replaces only an earlier entry' using errcode = '23514';
       end if;
@@ -163,23 +171,32 @@ begin
                      where si.id = v_occ.source_identity_id and si.current_occasion_id = new.occasion_id) then
     raise exception 'manual value: a correction is its source record''s current occasion' using errcode = '23514';
   end if;
+  if (select o.source_identity_id from training_load.metric_measurement_occasions o where o.id = new.replaced_occasion_id)
+       is distinct from v_occ.source_identity_id then
+    raise exception 'manual value: a correction replaces an occasion of the same record' using errcode = '23514';
+  end if;
   select o.entry_method, o.source_identity_id, o.segment_id into v_measured
     from training_load.metric_measurement_occasions o where o.id = new.measured_occasion_id;
   if v_measured.entry_method not in ('api_import', 'csv_import') or v_measured.source_identity_id is distinct from v_occ.source_identity_id
      or v_measured.segment_id is not null then
     raise exception 'manual value: a correction rests on a measured occasion of the same record' using errcode = '23514';
   end if;
+  -- Every semantic column of a value: the definition and its version, the value, the unit, the aggregation role and coverage.
   if new.kind = 'restore' and (
-       exists (select v.metric_definition_id, v.value_numeric, v.value_boolean, v.value_text from training_load.metric_values v
-                where v.occasion_id = new.occasion_id and not v.is_derived
+       exists (select v.metric_definition_id, v.metric_definition_version_id, v.value_numeric, v.value_boolean, v.value_text,
+                      v.unit_at_capture, v.aggregation_role, v.coverage
+                 from training_load.metric_values v where v.occasion_id = new.occasion_id and not v.is_derived
                except
-               select v.metric_definition_id, v.value_numeric, v.value_boolean, v.value_text from training_load.metric_values v
-                where v.occasion_id = new.measured_occasion_id and not v.is_derived)
-       or exists (select v.metric_definition_id, v.value_numeric, v.value_boolean, v.value_text from training_load.metric_values v
-                   where v.occasion_id = new.measured_occasion_id and not v.is_derived
+               select v.metric_definition_id, v.metric_definition_version_id, v.value_numeric, v.value_boolean, v.value_text,
+                      v.unit_at_capture, v.aggregation_role, v.coverage
+                 from training_load.metric_values v where v.occasion_id = new.measured_occasion_id and not v.is_derived)
+       or exists (select v.metric_definition_id, v.metric_definition_version_id, v.value_numeric, v.value_boolean, v.value_text,
+                         v.unit_at_capture, v.aggregation_role, v.coverage
+                    from training_load.metric_values v where v.occasion_id = new.measured_occasion_id and not v.is_derived
                   except
-                  select v.metric_definition_id, v.value_numeric, v.value_boolean, v.value_text from training_load.metric_values v
-                   where v.occasion_id = new.occasion_id and not v.is_derived)) then
+                  select v.metric_definition_id, v.metric_definition_version_id, v.value_numeric, v.value_boolean, v.value_text,
+                         v.unit_at_capture, v.aggregation_role, v.coverage
+                    from training_load.metric_values v where v.occasion_id = new.occasion_id and not v.is_derived)) then
     raise exception 'manual value: a restore holds exactly the measured values' using errcode = '23514';
   end if;
   return new;
@@ -204,6 +221,20 @@ create trigger metric_manual_values_protect
 create trigger metric_manual_values_no_truncate
   before truncate on training_load.metric_manual_values
   for each statement execute function training_load.forbid_update_delete();
+
+-- An occasion with its provenance row is closed: no further input value is added to it, in that transaction or later (the
+-- service writes the provenance row last, after the values and their calculated values). Calculated values pass.
+create function training_load.forbid_value_after_manual_provenance() returns trigger as $$
+begin
+  if not new.is_derived and exists (select 1 from training_load.metric_manual_values m where m.occasion_id = new.occasion_id) then
+    raise exception 'manual value: an occasion with provenance takes no further values' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+create trigger metric_values_manual_closed
+  before insert on training_load.metric_values
+  for each row execute function training_load.forbid_value_after_manual_provenance();
 
 -- A manual occasion written while the acting user is set has its provenance row by COMMIT (the service never leaves one
 -- without it). Other paths (the Metrics screen) never set the acting user and are unchanged.
@@ -622,8 +653,12 @@ begin
     end if;
   end loop;
   -- v87 begin: manual values never block for good (the owner's answer Q3 of 2026-11-20): they are removed only with a
-  -- confirmation of exactly the list computed here, under the team's import lock (every manual write takes it too). A
-  -- manual entry of another path that left a write request still refuses below (manual_write_request_exists).
+  -- confirmation of exactly the list computed here, under the team's import lock (every manual write takes it too).
+  -- A manual entry of another path that left a write request refuses for good: checked first, so a person is never asked
+  -- to confirm a list that is then refused anyway.
+  if (v_scope ->> 'manualWriteRequestCount')::int > 0 then
+    perform training_load.session_undo_refuse('manual_write_request_exists');
+  end if;
   v_manual := v_scope -> 'manualValues';
   if (v_scope ->> 'manualOccasionCount')::int > 0 then
     if p_manual_values_fingerprint is null then
@@ -648,9 +683,6 @@ begin
   end if;
   if (v_scope ->> 'calendarLinkCount')::int > 0 then
     perform training_load.session_undo_refuse('calendar_link_exists', v_scope ->> 'calendarLinkCount');
-  end if;
-  if (v_scope ->> 'manualWriteRequestCount')::int > 0 then
-    perform training_load.session_undo_refuse('manual_write_request_exists');
   end if;
   -- v60 (O1): the roster work never blocks what the import wrote; LATER work is removed only with a confirmation of
   -- exactly the list computed here, under the team's import lock (every roster command takes it too).
@@ -880,12 +912,19 @@ $function$;
 alter table training_load.gpexe_import_approvals
   add column replaced_manual_athlete_ids uuid[] not null default '{}',
   add column chosen_activity_type_key text references training.activity_types(key) on delete restrict;
+create index gpexe_import_approvals_chosen_type_idx on training_load.gpexe_import_approvals (chosen_activity_type_key)
+  where chosen_activity_type_key is not null;
 alter table training_load.gpexe_import_approvals
   add constraint gpexe_import_approvals_replaced_manual_size check (cardinality(replaced_manual_athlete_ids) <= 60),
+  -- One-dimensional, no NULL element (the approvals are append-only: a malformed row could never be fixed). Uniqueness
+  -- and order are the writer's (the re-import pull request), as v59 checks the excluded athletes.
+  add constraint gpexe_import_approvals_replaced_manual_shape check (
+    cardinality(replaced_manual_athlete_ids) = 0
+    or (array_ndims(replaced_manual_athlete_ids) = 1 and array_position(replaced_manual_athlete_ids, null) is null)),
   drop constraint gpexe_import_approvals_subset_hash_pair,
   add constraint gpexe_import_approvals_subset_hash_pair check (
     (subset_hash is null) = (cardinality(excluded_athlete_ids) = 0 and cardinality(replaced_manual_athlete_ids) = 0
                              and chosen_activity_type_key is null));
 
 comment on function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, text, text) is
-  'v87: the sanctioned undo of one imported GPEXE session, its roster work, estimates and (confirmed) manual values included, by whoever may import it (lock_gpexe_session_undo_right). See migrations_v2/202611221000_training_load_v87_manual_values.sql.';
+  'v87: the sanctioned undo of one imported GPEXE session, its roster work, estimates and (confirmed) manual values included, by whoever may import it (lock_gpexe_session_undo_right). See migrations_v2/202611221100_training_load_v87_manual_values.sql.';

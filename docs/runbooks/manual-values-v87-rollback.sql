@@ -27,7 +27,10 @@ begin
   end if;
 end $$;
 
--- Nothing may be written to these tables between the checks below and the restore.
+-- Nothing may be written to these tables between the checks below and the restore; taken up front, in the order the undo
+-- and the import take them (occasions and values before the log and the approvals).
+lock table training_load.metric_measurement_occasions in access exclusive mode;
+lock table training_load.metric_values in access exclusive mode;
 lock table training_load.import_deletion_log in access exclusive mode;
 lock table training_load.gpexe_import_approvals in access exclusive mode;
 lock table training_load.metric_manual_values in access exclusive mode;
@@ -36,11 +39,12 @@ do $$
 declare
   v87 constant text := 'migrations_v2/202611221100_training_load_v87_manual_values.sql';
   expected constant text[][] := array[
-    ['training_load', 'undo_imported_session', '291f1c20506b0b0ada736864ef7131dd'],
+    ['training_load', 'undo_imported_session', 'e305fef2a7afb42c63904f1928cc4520'],
     ['training_load', 'session_undo_scope', '59c475a5b91fd6aee611da80713704f1'],
     ['training', 'activity_roster_needs_state', '3138bad54c53cc7c381a5ebbfcbb07b0'],
-    ['training_load', 'validate_metric_manual_value', 'b0359d02e053752e9f148d302a19e844'],
-    ['training_load', 'session_undo_manual_log_ok', 'bd97ec84d17ca50bb956821f66dece96']];
+    ['training_load', 'validate_metric_manual_value', '7beab291d0e26e7b5998d4fc9241b4df'],
+    ['training_load', 'session_undo_manual_log_ok', 'bd97ec84d17ca50bb956821f66dece96'],
+    ['training_load', 'forbid_value_after_manual_provenance', '9a200df4d7b15331795782dcbf124185']];
   i int;
 begin
   if not exists (select 1 from public.schema_migrations where migration_name = v87) then
@@ -70,7 +74,9 @@ end $$;
 -- The approvals: v59's pair rule, without the choice columns.
 alter table training_load.gpexe_import_approvals
   drop constraint gpexe_import_approvals_subset_hash_pair,
-  drop constraint gpexe_import_approvals_replaced_manual_size;
+  drop constraint gpexe_import_approvals_replaced_manual_size,
+  drop constraint gpexe_import_approvals_replaced_manual_shape;
+drop index training_load.gpexe_import_approvals_chosen_type_idx;
 alter table training_load.gpexe_import_approvals
   drop column replaced_manual_athlete_ids,
   drop column chosen_activity_type_key;
@@ -620,6 +626,8 @@ drop function training_load.session_undo_manual_log_ok(jsonb, uuid);
 -- The provenance table and its guards.
 drop trigger metric_measurement_occasions_manual_provenance on training_load.metric_measurement_occasions;
 drop function training_load.check_manual_value_has_provenance();
+drop trigger metric_values_manual_closed on training_load.metric_values;
+drop function training_load.forbid_value_after_manual_provenance();
 drop table training_load.metric_manual_values;
 drop function training_load.validate_metric_manual_value();
 drop function training_load.protect_metric_manual_values();

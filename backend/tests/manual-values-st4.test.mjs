@@ -223,7 +223,8 @@ async function sessionWorld() {
   const team = await setupTeam();
   const s = await importSession(team, bundleOf({ sessionId: 9701, ids: [101, 102, 104] }));
   const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
-  world = { team, s, distance };
+  const time = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE time min %'`)).rows[0].id);
+  world = { team, s, distance, time };
   return world;
 }
 
@@ -240,6 +241,13 @@ test("1. the flag off ('false'): the form, the save and the restore are the iden
     const w = await saveValues(s, { athleteId: team.athleteIds[EVA], values: [{ metricDefinitionId: distance, value: 1000 }] }, team.coach.cookie);
     const r = await restore(s, { athleteId: team.athleteIds[ANA], expectedOccasionId: crypto.randomUUID() }, team.coach.cookie);
     for (const x of [f, w, r]) assert.deepEqual([x.status, x.body], [404, { error: "notFound" }]);
+    // A malformed body too: the flag is checked before anything of the request.
+    for (const body of [{}, { athleteId: "x" }, { requestKey: "bad" }]) {
+      for (const path of ["/manual-values", "/manual-values/restore"]) {
+        const x = await tapi(`/${s.activityId}${path}`, { method: "POST", cookie: team.coach.cookie, body });
+        assert.deepEqual([x.status, x.body], [404, { error: "notFound" }], `${path} ${JSON.stringify(body)}`);
+      }
+    }
     assert.equal((await roster(s, team.coach.cookie)).viewer.manualValues, undefined);
   } finally {
     delete process.env.MANUAL_VALUES_ENABLED;
@@ -270,6 +278,27 @@ test("2. the audience: the team's coach, the club's admin and a platform admin; 
     for (const x of [f, w, r]) assert.deepEqual([x.status, x.body], [404, { error: "notFound" }]);
   }
   assert.deepEqual(await writes(team.teamId), before, "nothing was written");
+  // A revoked role: the identical 404.
+  const revoked = await coachOf(team.teamId, "revoked");
+  await admin.query(`update public.user_team_roles set is_active = false where user_id = $1`, [revoked.id]);
+  for (const x of [await form(s, team.athleteIds[EVA], revoked.cookie), await saveValues(s, { athleteId: team.athleteIds[EVA], values: [{ metricDefinitionId: distance, value: 1 }] }, revoked.cookie)]) {
+    assert.deepEqual([x.status, x.body], [404, { error: "notFound" }]);
+  }
+  // Another team's athlete answers exactly like an unknown one; another club's variable like an unknown one.
+  const foreignAthlete = other.athleteIds[0];
+  const a1 = await saveValues(s, { athleteId: foreignAthlete, values: [{ metricDefinitionId: distance, value: 1 }] }, team.coach.cookie);
+  const a2 = await saveValues(s, { athleteId: crypto.randomUUID(), values: [{ metricDefinitionId: distance, value: 1 }] }, team.coach.cookie);
+  assert.deepEqual([a1.status, a1.body.error], [409, "athlete_not_on_roster"]);
+  assert.deepEqual([a1.status, a1.body], [a2.status, a2.body]);
+  const clubVar = (await admin.query(
+    `insert into training_load.metric_definitions (key, label, owner_scope, owner_club_id)
+     values ('st4_other_club_' || substr(md5(random()::text), 1, 8), 'Other club variable', 'club', $1) returning id`, [other.clubId],
+  )).rows[0].id;
+  const v1 = await saveValues(s, { athleteId: team.athleteIds[EVA], values: [{ metricDefinitionId: String(clubVar), value: 1 }] }, team.coach.cookie);
+  const v2 = await saveValues(s, { athleteId: team.athleteIds[EVA], values: [{ metricDefinitionId: crypto.randomUUID(), value: 1 }] }, team.coach.cookie);
+  assert.deepEqual([v1.status, v1.body.error], [409, "variable_not_in_session"]);
+  assert.deepEqual([v1.status, v1.body], [v2.status, v2.body]);
+  assert.deepEqual(await writes(team.teamId), before, "still nothing was written");
 });
 
 test("3. an entry for an athlete without a device record: a manual occasion of its own with its provenance (who, when, on which right); the roster says Manual values, by whom; the athlete no longer needs a state; a replay answers the same and a reused key with another body is refused", async () => {
@@ -307,10 +336,18 @@ test("3. an entry for an athlete without a device record: a manual occasion of i
   assert.equal(reused.status, 409);
   assert.equal(reused.body.error, "request_key_reused");
   assert.deepEqual(await writes(team.teamId), before);
+  // A replay is authorised again: once the author's role is revoked, the same request is the identical 404, not the answer.
+  await admin.query(`update public.user_team_roles set is_active = false where user_id = $1`, [team.coach.id]);
+  try {
+    const afterRevoke = await tapi(`/${s.activityId}/manual-values`, { method: "POST", cookie: team.coach.cookie, body });
+    assert.deepEqual([afterRevoke.status, afterRevoke.body], [404, { error: "notFound" }]);
+  } finally {
+    await admin.query(`update public.user_team_roles set is_active = true where user_id = $1`, [team.coach.id]);
+  }
 });
 
-test("4. a second entry supersedes the first (kept as history, named as replaced); a stale expectedOccasionId writes nothing (values_changed); a variable the session does not measure is refused", async () => {
-  const { team, s, distance } = await sessionWorld();
+test("4. (after 3) a second entry supersedes the first (kept as history, named as replaced) and carries over the values it does not name; a stale expectedOccasionId writes nothing (values_changed); a variable the session does not measure is refused", async () => {
+  const { team, s, distance, time } = await sessionWorld();
   const eva = team.athleteIds[EVA];
   const f = await form(s, eva, team.cadmin.cookie);
   assert.equal(f.body.mode, "entry");
@@ -329,6 +366,13 @@ test("4. a second entry supersedes the first (kept as history, named as replaced
   const row = rowOf(await roster(s, team.coach.cookie), eva);
   assert.equal(row.manual.enteredBy.basis, "club_admin");
   assert.deepEqual(row.values.filter((v) => v.entryMethod === "manual").map((v) => v.value), [2400]);
+  // Two values, then a later entry naming only one: the other is carried over, never lost.
+  const both = await saveValues(s, { athleteId: eva, expectedOccasionId: w.body.occasionId, values: [{ metricDefinitionId: time, value: 41 }] }, team.cadmin.cookie);
+  assert.equal(both.status, 201, both.text);
+  assert.deepEqual(both.body.values.map((v) => [v.metricDefinitionId, v.value]).sort(), [[distance, 2400], [time, 41]].sort());
+  const one = await saveValues(s, { athleteId: eva, expectedOccasionId: both.body.occasionId, values: [{ metricDefinitionId: distance, value: 2500 }] }, team.cadmin.cookie);
+  assert.equal(one.status, 201, one.text);
+  assert.deepEqual(one.body.values.map((v) => [v.metricDefinitionId, v.value]).sort(), [[distance, 2500], [time, 41]].sort(), "time carried over");
 });
 
 test("5. an entry replaces an estimate of the same variable (v63's M3); the estimate stays as history", async () => {
@@ -379,6 +423,19 @@ test("6. a correction of a measured value: the measured occasion is kept as supe
   assert.equal(String(occ.measured_superseded_by), w.body.occasionId, "the measured occasion is kept, superseded");
   assert.equal(occ.measured_method, "api_import");
   assert.equal((await admin.query(`select count(*)::int n from training_load.metric_values where occasion_id = $1 and not is_derived`, [w.body.occasionId])).rows[0].n, before, "every value copied");
+  // Every semantic column is carried over (a whole-session GPEXE value is source_rollup / complete), and a value the coach
+  // did not change keeps its stored text exactly.
+  const differs = (await admin.query(
+    `select a.metric_definition_id, (a.value_numeric::text = b.value_numeric::text) as same_value
+       from training_load.metric_values a
+       join training_load.metric_values b on b.metric_definition_id = a.metric_definition_id and b.occasion_id = $2 and not b.is_derived
+      where a.occasion_id = $1 and not a.is_derived
+        and ((a.aggregation_role, a.coverage, a.metric_definition_version_id, a.unit_at_capture)
+               is distinct from (b.aggregation_role, b.coverage, b.metric_definition_version_id, b.unit_at_capture)
+             or (a.metric_definition_id <> $3 and a.value_numeric::text is distinct from b.value_numeric::text))`,
+    [w.body.occasionId, measuredId, distance])).rows;
+  assert.deepEqual(differs, [], "role, coverage, version, unit and untouched values are the measured ones");
+  assert.ok((await admin.query(`select count(*)::int n from training_load.metric_values where occasion_id = $1 and aggregation_role = 'source_rollup'`, [measuredId])).rows[0].n > 0, "the measured whole-session values are source_rollup");
   const row = rowOf(await roster(s, team.coach.cookie), ana);
   assert.equal(row.state, "measured");
   assert.ok(row.flags.includes("corrected"));
@@ -388,7 +445,7 @@ test("6. a correction of a measured value: the measured occasion is kept as supe
   assert.ok(!(await needsState(s.activityId)).includes(ana), "a corrected athlete keeps a state");
 });
 
-test("7. the restore: only after a correction; the new manual occasion holds exactly the measured values (v87 refuses anything else, even by a raw write); a restore of a restore is nothing_to_restore", async () => {
+test("7. (after 6) the restore: only after a correction; the new manual occasion holds exactly the measured values (v87 refuses anything else, even by a raw write); a restore of a restore is nothing_to_restore", async () => {
   const { team, s, distance } = await sessionWorld();
   const ana = team.athleteIds[ANA];
   const f = await form(s, ana, team.coach.cookie);
@@ -399,6 +456,14 @@ test("7. the restore: only after a correction; the new manual occasion holds exa
   assert.equal(r.status, 201, r.text);
   assert.equal(r.body.kind, "restore");
   for (const v of r.body.values) assert.equal(v.value, v.measuredValue);
+  const measuredOf = (await admin.query(`select measured_occasion_id from training_load.metric_manual_values where occasion_id = $1`, [r.body.occasionId])).rows[0].measured_occasion_id;
+  const restoredDiffers = (await admin.query(
+    `(select metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage
+        from training_load.metric_values where occasion_id = $1 and not is_derived
+      except
+      select metric_definition_id, metric_definition_version_id, value_numeric, unit_at_capture, aggregation_role, coverage
+        from training_load.metric_values where occasion_id = $2 and not is_derived)`, [r.body.occasionId, measuredOf])).rows;
+  assert.deepEqual(restoredDiffers, [], "the restore holds the measured values with every semantic column");
   const row = rowOf(await roster(s, team.coach.cookie), ana);
   assert.equal(row.state, "measured");
   assert.ok(!row.flags.includes("corrected"));
@@ -434,9 +499,16 @@ test("7. the restore: only after a correction; the new manual occasion holds exa
   }
 });
 
-test("8. v87's guards: a provenance row without the acting user, a forged author, an UPDATE or DELETE outside the undo, and a roster manual occasion without its provenance row by COMMIT are all refused", async () => {
-  const { team, s } = await sessionWorld();
+test("8. (after 3) v87's guards: a provenance row without the acting user, a forged author, an UPDATE or DELETE outside the undo, a value added to an occasion that has its provenance, and a roster manual occasion without its provenance row by COMMIT are all refused", async () => {
+  const { team, s, distance } = await sessionWorld();
   const row = (await admin.query(`select occasion_id from training_load.metric_manual_values limit 1`)).rows[0];
+  assert.ok(distance);
+  await assert.rejects(admin.query(
+    `insert into training_load.metric_values (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric)
+     select $1, d.id, d.current_version_id, 1 from training_load.metric_definitions d
+      where d.owner_scope = 'system' and d.current_version_id is not null
+        and not exists (select 1 from training_load.metric_values v where v.occasion_id = $1 and v.metric_definition_id = d.id) limit 1`,
+    [row.occasion_id]), /takes no further values/);
   await assert.rejects(admin.query(`update training_load.metric_manual_values set note = 'x' where occasion_id = $1`, [row.occasion_id]), /append-only/);
   await assert.rejects(admin.query(`delete from training_load.metric_manual_values where occasion_id = $1`, [row.occasion_id]), /append-only/);
   await assert.rejects(admin.query(`truncate training_load.metric_manual_values`));
@@ -485,6 +557,41 @@ test("9. the team's import lock: while an import or a check holds it, a save ans
   assert.deepEqual(await writes(team.teamId), before);
 });
 
+function recordSql() {
+  const recorded = [];
+  manual.setManualValueTestHooks({
+    beforeTeamLock: ({ client }) => {
+      const original = client.query.bind(client);
+      client.query = (text, ...rest) => { recorded.push(typeof text === "string" ? text : text?.text ?? ""); return original(text, ...rest); };
+    },
+  });
+  return recorded;
+}
+const isWriteSql = (q) => /^\s*(insert|update|delete)\b/i.test(q);
+const isLockSql = (q) => /pg_(try_)?advisory_xact_lock|\bfor (update|share|key share|no key update)\b/i.test(q);
+
+test("10b. lock order (the recorded SQL of an entry over an earlier entry): the team lock, the alias set, the request lock and the earlier entry's lock come before the first write, and no locking clause follows the first write", async () => {
+  const { team, s, distance } = await sessionWorld();
+  const fil = team.athleteIds[FIL];
+  const f = await form(s, fil, team.coach.cookie);
+  assert.ok(f.body.expectedOccasionId, "Fil has an entry (test 5)");
+  const recorded = recordSql();
+  let w;
+  try {
+    w = await saveValues(s, { athleteId: fil, expectedOccasionId: f.body.expectedOccasionId, values: [{ metricDefinitionId: distance, value: 2001 }] }, team.coach.cookie);
+  } finally {
+    manual.setManualValueTestHooks(null);
+  }
+  assert.equal(w.status, 201, w.text);
+  const firstWrite = recorded.findIndex(isWriteSql);
+  const idx = (re) => recorded.findIndex((q) => re.test(q));
+  const order = [idx(/pg_try_advisory_xact_lock/), idx(/for key share/i), idx(/manual-value-request/), idx(/metric_measurement_occasions where id = \$1 for update/)];
+  assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.ok(order[order.length - 1] < firstWrite, "every lock before the first write");
+  assert.deepEqual(recorded.slice(firstWrite).filter(isLockSql), [], "no locking clause after the first write");
+});
+
 test("10. lock order (the recorded SQL of a correction): rights, the team lock, the alias set, the request lock and the record's lock are all taken before the first write, and no locking clause follows the first write", async () => {
   const { team, s, distance } = await sessionWorld();
   const bea = team.athleteIds[BEA];
@@ -526,18 +633,26 @@ test("11. the undo of a session with manual values: refused without a confirmati
   const f = await form(s, ana, team.coach.cookie);
   const corr = await saveValues(s, { athleteId: ana, expectedOccasionId: f.body.expectedOccasionId, values: [{ metricDefinitionId: distance, value: 1 }] }, team.coach.cookie);
   assert.equal(corr.status, 201, corr.text);
+  // Later roster work too (a state set after the import): the preview needs BOTH confirmations, and gets them.
+  const fil = team.athleteIds[FIL];
+  const decided = await tapi(`/${s.activityId}/roster/${fil}/decision`, { method: "PUT", cookie: team.coach.cookie, body: { requestKey: key(), kind: "participated_no_values", expectedDecisionId: null } });
+  assert.ok([200, 201].includes(decided.status), decided.text);
 
   const preview = await api(`/teams/${team.teamId}/candidates/${s.candidateId}/undo-preview`, { cookie: team.padmin.cookie });
   assert.equal(preview.status, 200, preview.text);
   const mv = preview.body.undoPreview.manualValues;
   assert.equal(preview.body.undoPreview.needsManualConfirmation, true);
+  assert.equal(preview.body.undoPreview.needsRosterConfirmation, true);
+  const rosterFp = preview.body.undoPreview.rosterWork.laterWork.fingerprint;
+  assert.match(rosterFp, /^[0-9a-f]{64}$/);
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_events where id = $1`, [s.eventId])).rows[0].n, 1, "the preview removed nothing");
   assert.equal(mv.count, 2);
   assert.deepEqual(mv.list.map((i) => [i.athleteName, i.kind, i.byName]).sort(), [["Ana", "correction", "coach"], ["Eva", "entry", "coach"]]);
   assert.match(mv.fingerprint, /^[0-9a-f]{64}$/);
   assert.equal((await admin.query(`select count(*)::int n from training_load.metric_manual_values`)).rows[0].n > 0, true, "the preview wrote and removed nothing");
 
   const undo = (extra) => api(`/teams/${team.teamId}/candidates/${s.candidateId}/undo-import`, {
-    method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "wrong session", expected: { eventId: s.eventId }, ...extra },
+    method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "wrong session", expected: { eventId: s.eventId }, laterRosterFingerprint: rosterFp, ...extra },
   });
   const unconfirmed = await undo({});
   assert.deepEqual([unconfirmed.status, unconfirmed.body.error], [409, "manual_values_need_confirmation"]);
@@ -571,6 +686,73 @@ test("11. the undo of a session with manual values: refused without a confirmati
   assert.equal(plain.status, 200, plain.text);
   assert.equal(plain.body.undo.manualValues.count, 0);
   assert.equal((await admin.query(`select manual_values_removed from training_load.import_deletion_log where event_id = $1`, [s2.eventId])).rows[0].manual_values_removed, null);
+});
+
+test("16. the undo refuses a session whose manual value left a Metrics-screen write request before it asks for any confirmation (never a list to confirm that is then refused anyway)", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9706, hour: 16, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const entry = await saveValues(s, { athleteId: team.athleteIds[EVA], values: [{ metricDefinitionId: distance, value: 900 }] }, team.coach.cookie);
+  assert.equal(entry.status, 201, entry.text);
+  await admin.query(
+    `insert into training_load.metric_write_requests (request_key, requested_by_user_id, operation_kind, owner_scope, owner_team_id, request_content_hash, result_occasion_id)
+     values (gen_random_uuid()::text, $1, 'correct_occasion', 'team', $2, repeat('a', 64), $3)`,
+    [team.coach.id, team.teamId, entry.body.occasionId]);
+  const preview = await api(`/teams/${team.teamId}/candidates/${s.candidateId}/undo-preview`, { cookie: team.padmin.cookie });
+  assert.deepEqual([preview.status, preview.body.error], [409, "manual_write_request_exists"]);
+  assert.equal(preview.body.manualValues, undefined, "no list to confirm");
+  const undone = await api(`/teams/${team.teamId}/candidates/${s.candidateId}/undo-import`, {
+    method: "POST", cookie: team.padmin.cookie, body: { requestKey: key(), reason: "wrong session", expected: { eventId: s.eventId } },
+  });
+  assert.deepEqual([undone.status, undone.body.error], [409, "manual_write_request_exists"]);
+});
+
+test("15. the COMMIT outcome: a COMMIT whose answer is lost after it committed answers 201 (verified by the request key) and a repeat replays it; a COMMIT the server refused answers 500 with nothing saved; an unknown outcome found nowhere answers 503 outcome_unknown, and the same key then writes once", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9705, hour: 14, ids: [101, 102, 104] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const rowsOf = async (k) => (await admin.query(`select count(*)::int n from training_load.metric_manual_values where request_key = $1`, [k])).rows[0].n;
+  const post = (body) => tapi(`/${s.activityId}/manual-values`, { method: "POST", cookie: team.coach.cookie, body });
+
+  // (a) Committed, then the answer is lost: verified by the key on a new connection.
+  const a = { requestKey: key(), athleteId: team.athleteIds[EVA], values: [{ metricDefinitionId: distance, value: 1111 }] };
+  manual.setManualValueTestHooks({ commit: async (client) => { await client.query("commit"); throw Object.assign(new Error("reset"), { code: "ECONNRESET" }); } });
+  let r;
+  try { r = await post(a); } finally { manual.setManualValueTestHooks(null); }
+  assert.equal(r.status, 201, r.text);
+  assert.equal(await rowsOf(a.requestKey), 1);
+  const again = await post(a);
+  assert.equal(again.status, 200);
+  assert.deepEqual(again.body, r.body, "the replay answers what was saved");
+  assert.equal(await rowsOf(a.requestKey), 1);
+
+  // (b) The server refused the COMMIT itself: nothing was saved.
+  const b = { requestKey: key(), athleteId: team.athleteIds[FIL], values: [{ metricDefinitionId: distance, value: 2222 }] };
+  manual.setManualValueTestHooks({
+    commit: async (client) => { await client.query("rollback"); throw new pg.DatabaseError("could not serialize access", 0, "error"); },
+  });
+  try {
+    const refused = await post(b);
+    assert.deepEqual([refused.status, refused.body.error], [500, "internal_error"]);
+  } finally { manual.setManualValueTestHooks(null); }
+  assert.equal(await rowsOf(b.requestKey), 0);
+
+  // (c) No answer and nothing found within the check: not confirmed, never "not saved"; the same key then writes once.
+  const c = { requestKey: key(), athleteId: team.athleteIds[FIL], values: [{ metricDefinitionId: distance, value: 3333 }] };
+  manual.setManualValueTestHooks({
+    commit: async (client) => { await client.query("rollback"); return new Promise(() => {}); },
+    commitTimeoutMs: 50, checkTimeoutMs: 2000,
+  });
+  try {
+    const unknown = await post(c);
+    assert.deepEqual([unknown.status, unknown.body.error], [503, "outcome_unknown"]);
+  } finally { manual.setManualValueTestHooks(null); }
+  assert.equal(await rowsOf(c.requestKey), 0);
+  const retried = await post(c);
+  assert.equal(retried.status, 201, retried.text);
+  assert.equal(await rowsOf(c.requestKey), 1);
+  assert.equal((await post(c)).status, 200);
+  assert.equal(await rowsOf(c.requestKey), 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -622,7 +804,7 @@ test("13. migration v87: the preflight passes before it, the post-check after it
     assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok after v87");
     const after = await catalogOf(client);
     assert.notDeepEqual(after, before);
-    for (const fn of ["undo_imported_session", "session_undo_scope", "activity_roster_needs_state", "validate_metric_manual_value", "session_undo_manual_log_ok"]) {
+    for (const fn of ["undo_imported_session", "session_undo_scope", "activity_roster_needs_state", "validate_metric_manual_value", "session_undo_manual_log_ok", "forbid_value_after_manual_provenance"]) {
       const m = (await client.query(`select md5(prosrc) m from pg_proc where proname = $1`, [fn])).rows[0].m;
       assert.match(readRunbook("manual-values-v87-rollback.sql"), new RegExp(m), `the rollback names ${fn}'s body in force`);
     }

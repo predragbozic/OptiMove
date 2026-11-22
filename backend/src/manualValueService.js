@@ -172,7 +172,7 @@ async function valuesOf(client, occasionIds) {
   if (!occasionIds.length) return [];
   return (await client.query(
     `select v.occasion_id, v.metric_definition_id, v.metric_definition_version_id, v.value_numeric::text as value_numeric,
-            v.value_boolean, v.value_text, v.unit_at_capture
+            v.value_boolean, v.value_text, v.unit_at_capture, v.aggregation_role, v.coverage
        from training_load.metric_values v
       where v.occasion_id = any($1::uuid[]) and not v.is_derived
       order by v.metric_definition_id`,
@@ -340,13 +340,13 @@ async function readSaved(client, userId, requestKey) {
       enteredBy: { userId: String(userId), basis: row.entered_by_basis },
       enteredAt: new Date(row.entered_at).toISOString(),
       note: row.note ?? null,
-      values: own.map((v) => {
+      // Only the variables named for the team's club (the form's own rule); another club's variable is never listed.
+      values: own.filter((v) => defs.get(String(v.metric_definition_id))?.named).map((v) => {
         const d = defs.get(String(v.metric_definition_id));
-        const named = Boolean(d?.named);
         return {
           metricDefinitionId: String(v.metric_definition_id),
-          key: named ? (d.key ?? null) : null,
-          label: named ? (d.label ?? null) : null,
+          key: d.key ?? null,
+          label: d.label ?? null,
           value: num(v.value_numeric),
           unit: v.unit_at_capture ?? null,
           ...(row.measured_occasion_id ? { measuredValue: num(measured.get(String(v.metric_definition_id))?.value_numeric) } : {}),
@@ -400,12 +400,17 @@ async function insertOccasion(client, { participantId, sourceIdentityId, userId,
   )).rows[0].id);
 }
 
+// A copied value (a correction, a restore, an entry's earlier values) keeps every semantic column of the value it copies -
+// its aggregation role and coverage too (a whole-session GPEXE value is source_rollup / complete); a typed new value of an
+// entry is a standalone value (the estimate save's choice).
 async function insertValue(client, occasionId, v) {
   await client.query(
     `insert into training_load.metric_values
-       (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture)
-     values ($1, $2, $3, $4, $5, $6, $7)`,
-    [occasionId, v.metric_definition_id, v.metric_definition_version_id, v.value_numeric, v.value_boolean ?? null, v.value_text ?? null, v.unit_at_capture ?? null],
+       (occasion_id, metric_definition_id, metric_definition_version_id, value_numeric, value_boolean, value_text, unit_at_capture,
+        is_derived, aggregation_role, coverage)
+     values ($1, $2, $3, $4, $5, $6, $7, false, $8, $9)`,
+    [occasionId, v.metric_definition_id, v.metric_definition_version_id, v.value_numeric, v.value_boolean ?? null, v.value_text ?? null,
+      v.unit_at_capture ?? null, v.aggregation_role ?? "standalone", v.coverage ?? "not_applicable"],
   );
 }
 
@@ -540,6 +545,8 @@ async function writeProvenance(client, { occasionId, kind, replaced, measured, u
 }
 
 export async function saveManualValues(ctx, activityId, body) {
+  // The flag first: off, every body (a malformed one too) gets the identical 404.
+  if (!manualValuesEnabled()) throw notFound();
   const input = validateSave(body);
   const canonical = {
     operation: "manual_values", activityId, athleteId: input.athleteId, expectedOccasionId: input.expectedOccasionId,
@@ -553,10 +560,15 @@ export async function saveManualValues(ctx, activityId, body) {
       const measuredId = MEASURED.includes(current.entry_method) ? String(current.id) : String(current.measured_occasion_id);
       const old = await valuesOf(client, [String(current.id)]);
       const byDef = new Map(old.map((r) => [String(r.metric_definition_id), r]));
+      // Only the variables the form offers: numeric and named for the team's club (another club's variable held in the
+      // record is copied as it is, never changed here).
+      const named = await definitionsOf(client, old.map((r) => String(r.metric_definition_id)), target.team.club_id);
       let changed = 0;
       for (const v of input.values) {
         const row = byDef.get(v.metricDefinitionId);
-        if (!row || row.value_numeric === null) throw conflict("variable_not_in_record", "A value names a variable this record does not hold.");
+        if (!row || row.value_numeric === null || !named.get(v.metricDefinitionId)?.named) {
+          throw conflict("variable_not_in_record", "A value names a variable this record does not hold.");
+        }
         if (Number(row.value_numeric) !== v.value) changed += 1;
       }
       if (changed === 0) throw conflict("nothing_changed", "These are the values already shown. Nothing was saved.");
@@ -564,7 +576,9 @@ export async function saveManualValues(ctx, activityId, body) {
       const occasionId = await insertOccasion(client, { participantId: (await participantOf(client, current.id)), sourceIdentityId: current.source_identity_id, userId: ctx.userId, supersedes: current.id });
       for (const r of old) {
         const typed = given.get(String(r.metric_definition_id));
-        await insertValue(client, occasionId, { ...r, value_numeric: typed !== undefined ? String(typed) : r.value_numeric });
+        // A value sent back unchanged keeps its stored text exactly (no round trip through a JS number).
+        const changedValue = typed !== undefined && Number(r.value_numeric) !== typed;
+        await insertValue(client, occasionId, { ...r, value_numeric: changedValue ? String(typed) : r.value_numeric });
       }
       await supersede(client, { current: String(current.id), occasionId, identityId: current.source_identity_id });
       await recalculate(client, occasionId, teamId);
@@ -592,8 +606,15 @@ export async function saveManualValues(ctx, activityId, body) {
     const linkedCanonical = (await client.query(`select training.resolve_canonical_activity_id($1) as id`, [linked])).rows[0].id;
     if (String(linkedCanonical) !== String(target.canonicalId)) throw new Error("the event's activity is not this session");
     const previous = state.current ? String(state.current.id) : null;
+    // A later entry changes the values it names; the earlier entry's other values are carried over unchanged (never lost
+    // through the supersede), as a correction does.
+    const earlier = previous ? await valuesOf(client, [previous]) : [];
     const occasionId = await insertOccasion(client, { participantId, sourceIdentityId: null, userId: ctx.userId, supersedes: previous });
     if (previous) await supersede(client, { current: previous, occasionId, identityId: null });
+    const given = new Set(input.values.map((v) => v.metricDefinitionId));
+    for (const r of earlier) {
+      if (!given.has(String(r.metric_definition_id))) await insertValue(client, occasionId, r);
+    }
     for (const v of input.values) {
       const d = variables.get(v.metricDefinitionId);
       await insertValue(client, occasionId, {
@@ -606,6 +627,7 @@ export async function saveManualValues(ctx, activityId, body) {
 }
 
 export async function restoreMeasuredValues(ctx, activityId, body) {
+  if (!manualValuesEnabled()) throw notFound();
   const input = validateRestore(body);
   const canonical = { operation: "manual_restore", activityId, athleteId: input.athleteId, expectedOccasionId: input.expectedOccasionId, note: input.note };
   return runManualWrite(ctx, activityId, input, canonical, async ({ client, target, event, basis, hash }) => {

@@ -25,9 +25,12 @@ select to_regclass('training_load.metric_manual_values') is null as no_provenanc
        (select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'training_load.gpexe_import_approvals'::regclass
          and conname = 'gpexe_import_approvals_subset_hash_pair') = 'CHECK (((cardinality(excluded_athlete_ids) = 0) = (subset_hash IS NULL)))' as pair_rule_is_v59;
 
--- 4. Nothing waits on the tables v87 locks ACCESS EXCLUSIVE (a long transaction would make the 5 s lock_timeout refuse it).
+-- 4. Nothing holds the tables v87 locks up front (a long transaction would make the 5 s lock_timeout refuse it).
 select not exists (select 1 from pg_locks l join pg_class c on c.oid = l.relation
-                    where c.relname in ('import_deletion_log', 'gpexe_import_approvals') and l.pid <> pg_backend_pid()) as tables_not_locked,
+                    join pg_namespace n on n.oid = c.relnamespace
+                    where n.nspname = 'training_load'
+                      and c.relname in ('metric_measurement_occasions', 'metric_values', 'import_deletion_log', 'gpexe_import_approvals')
+                      and l.pid <> pg_backend_pid()) as tables_not_locked,
        not exists (select 1 from pg_stat_activity where state = 'idle in transaction' and xact_start < now() - interval '1 minute') as no_old_idle_transaction;
 
 commit;
