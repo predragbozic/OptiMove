@@ -57,11 +57,11 @@ export function weeklyFlowFromCalendar(athleteUuid) {
 // intersected with the roster (`state.athletes`), so no athlete the roster does not return can be in it. `listLabel`
 // says what the list is ("in this event", "planned on this day", "with a session on this day"); `origin` is where
 // *Back* goes ("calendar" by default, "home"). Returns null when the chosen athlete is not in the roster list.
-function listFlow(keys, currentKey, { listLabel, origin }) {
+function listFlow(keys, currentKey, { listLabel, origin, scopeNote = "" }) {
   const roster = new Set(rosterRows().map((row) => String(row.athlete_uuid)));
   const kept = [...new Set((keys || []).map(String))].filter((key) => roster.has(key));
   if (!kept.includes(String(currentKey))) return null;
-  return { keys: kept, currentKey: String(currentKey), eventKey: "", eventTitle: "", slot: null, notInKeys: [], notInLine: "", hiddenCount: 0, line: "", kept: "", busy: false, listLabel, origin };
+  return { keys: kept, currentKey: String(currentKey), eventKey: "", eventTitle: "", slot: null, notInKeys: [], notInLine: "", hiddenCount: 0, line: "", kept: "", busy: false, listLabel, origin, scopeNote };
 }
 
 // An athlete's row in the open panel: the switcher holds the athletes of THAT item on THAT day (the panel's own list,
@@ -69,14 +69,17 @@ function listFlow(keys, currentKey, { listLabel, origin }) {
 export function weeklyFlowFromPanel(athleteUuid, item) {
   const cal = state.centralCalendar;
   const event = centralCalendarEventAthletes(cal);
-  const flow = event ? listFlow(event.listed.filter((entry) => entry.targeted).map((entry) => entry.key), athleteUuid, { listLabel: item?.kind === "event" ? "in this event" : "planned on this day", origin: "calendar" }) : null;
+  const kind = item?.kind;
+  const listLabel = kind === "event" ? "in this event" : kind === "activity" ? "recorded in this session" : "planned on this day";
+  const scopeNote = kind === "event" ? "Only the athletes of this event are listed. Back shows everyone." : "Only the athletes of this item on this day are listed. Back shows everyone.";
+  const flow = event ? listFlow(event.listed.filter((entry) => entry.targeted).map((entry) => entry.key), athleteUuid, { listLabel, origin: "calendar", scopeNote }) : null;
   return flow || weeklyFlowFromCalendar(athleteUuid);
 }
 
 // Coach Home's shown day: the athletes with a session that day (`keys`, already the day's rows). One athlete alone
 // needs no switcher (null).
 export function weeklyFlowFromHome(keys, athleteUuid) {
-  const flow = listFlow(keys, athleteUuid, { listLabel: "with a session on this day", origin: "home" });
+  const flow = listFlow(keys, athleteUuid, { listLabel: "with a session on this day", origin: "home", scopeNote: "Only the athletes with a session on this day are listed. Back shows everyone." });
   return flow && flow.keys.length > 1 ? flow : null;
 }
 

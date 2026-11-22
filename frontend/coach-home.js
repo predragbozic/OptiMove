@@ -248,7 +248,7 @@ function renderDayListHtml(day, today) {
             ${renderAthleteAvatar(row, "coach-home-avatar", { lazy: true })}
             <span class="coach-home-day-athlete-text"><strong>${escapeHtml(row.athlete)}</strong><small>${escapeHtml(sessionCountLabel(row.sessionCount))}</small></span>
           </button></li>`).join("");
-  return `${renderCarousel("day", `Athletes with a session on ${shortDateLabel(day.date, today)}`, items, { previousLabel: `Previous athletes, ${shortDateLabel(day.date, today)}`, nextLabel: `Next athletes, ${shortDateLabel(day.date, today)}`, trackKey: day.date })}
+  return `<p class="muted coach-home-day-hint">Tap an athlete to open their weekly plan.</p>${renderCarousel("day", `Athletes with a session on ${shortDateLabel(day.date, today)}`, items, { previousLabel: `Previous athletes, ${shortDateLabel(day.date, today)}`, nextLabel: `Next athletes, ${shortDateLabel(day.date, today)}`, trackKey: day.date })}
         ${training.length > COACH_HOME_DAY_LIST_LIMIT ? `<button class="plain-button coach-home-inline-button coach-home-day-show-all" type="button" aria-haspopup="dialog" data-action="coach-home-picker-open" data-mode="day" data-date="${escapeAttr(day.date)}">Show all ${training.length} athletes</button>` : ""}`;
 }
 

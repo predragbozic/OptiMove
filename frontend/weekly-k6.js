@@ -203,7 +203,7 @@ export function renderWeeklySwitcherHtml({ flow, items, currentKey, groupsHtml =
       ${back}
       ${stripHidden ? "" : groupsHtml}
       <div class="weekly-k6-controls"${flow.busy ? ` inert aria-busy="true"` : ""}><div class="weekly-k6-head">${summary}${toggle}</div>${stripHidden ? "" : strip}</div>
-      ${hiddenNote ? `<p class="weekly-k6-hidden">${escapeHtml(hiddenNote)}</p>` : ""}${notice}${notIn}${plan}
+      ${hiddenNote ? `<p class="weekly-k6-hidden">${escapeHtml(hiddenNote)}</p>` : ""}${flow.scopeNote ? `<p class="weekly-k6-hidden weekly-k6-scope">${escapeHtml(flow.scopeNote)}</p>` : ""}${notice}${notIn}${plan}
     </section>`;
 }
 

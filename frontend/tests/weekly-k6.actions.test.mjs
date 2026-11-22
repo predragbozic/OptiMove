@@ -255,6 +255,8 @@ test("K6-F5. a panel row opens the plan with THAT item's athletes: roster-inters
     assert.equal(event.eventKey, "", "a plain list, not the See each athlete slot flow");
     assert.equal(event.origin, "calendar");
     assert.equal(W.weeklyFlowFromPanel("ua", { kind: "planned" }).listLabel, "planned on this day");
+    assert.equal(W.weeklyFlowFromPanel("ua", { kind: "activity" }).listLabel, "recorded in this session", "an imported activity's list is its recorded athletes");
+    assert.match(event.scopeNote, /^Only the athletes of this event are listed\./);
     // An athlete the list does not hold falls back to the calendar's own strip, which still holds her.
     const other = W.weeklyFlowFromPanel("uc", { kind: "event" });
     assert.equal(other.listLabel, undefined);
@@ -302,7 +304,20 @@ test("K6-F7. a list flow says what the list is, goes Back to Home, and has no Gr
   assert.equal(/Back to calendar/.test(html), false);
   const calendar = K.renderWeeklySwitcherHtml({ flow: { ...flow, origin: undefined, listLabel: undefined }, items: [{ key: "ua", name: "Ana" }, { key: "ub", name: "Ben" }], currentKey: "ua" });
   assert.match(calendar, /Back to calendar/);
-  state.centralCalendar.weeklyFlow = flow;
+  assert.match(html, /Only the athletes with a session on this day are listed\. Back shows everyone\./);
+  // The team exists, so only the list flow's own guard can refuse the chip (a stale or forged click).
+  const cal = state.centralCalendar;
+  const before = { data: cal.data, teamIds: cal.filters.teamIds };
+  cal.data = { teams: [{ teamId: "t1", name: "T1" }] };
+  cal.filters.teamIds = [];
+  cal.weeklyFlow = flow;
   state.selectedAthleteId = "RA";
-  assert.equal(await W.chooseWeeklyGroup("t1", { loadWeekly: async () => {}, renderCurrent() {} }), false, "the list is fixed: a team chip never widens it");
+  try {
+    assert.equal(await W.chooseWeeklyGroup("t1", { loadWeekly: async () => {}, renderCurrent() {} }), false, "the list is fixed: a team chip never widens it");
+    assert.deepEqual(cal.filters.teamIds, []);
+    assert.deepEqual(flow.keys, ["ua", "ub"]);
+  } finally {
+    cal.data = before.data;
+    cal.filters.teamIds = before.teamIds;
+  }
 });
