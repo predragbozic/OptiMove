@@ -3002,7 +3002,8 @@ input:focus {
 }
 
 .athlete-mode .athlete-toolbar-row {
-  grid-template-columns: minmax(360px, 0.46fr) minmax(360px, 0.54fr);
+  /* min 0, not 360px: two 360 px minimums pushed the whole page wider than a 761-830 px window (a zoomed-in browser). */
+  grid-template-columns: minmax(0, 0.46fr) minmax(0, 0.54fr);
 }
 
 .athlete-mode .athlete-hero {
@@ -5240,6 +5241,21 @@ body.specific-program-open {
 .athlete-mode .calendar-day {
   min-width: 165px;
   min-height: 340px;
+}
+
+/* On a wide window the seven days share the width (as the coach's week does) instead of a sideways-scrolling strip of
+   165 px days that cut off Saturday and Sunday; narrower windows keep the strip. */
+@media (min-width: 1180px) {
+  .athlete-mode .calendar-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    overflow-x: visible;
+    scroll-snap-type: none;
+  }
+
+  .athlete-mode .calendar-day {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
 }
 
 .calendar-day:last-child {
