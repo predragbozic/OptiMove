@@ -125,9 +125,19 @@ test("5. an expired assignment, an archived role and a revoked assignment give n
   const w = await world();
   const role = ok(await createRole(w.adminA, { clubId: w.A, scopeTypes: ["club"], items: ["org.teams.manage"] })).role;
   const expired = await person("expired", (id) => F.grantTeam(id, w.T1));
-  ok(await grant(w.adminA, { userId: expired.id, roleId: role.id, scopeType: "club", scopeId: w.A, expiresAt: new Date(Date.now() + 1200).toISOString() }));
+  const expiring = ok(await grant(w.adminA, { userId: expired.id, roleId: role.id, scopeType: "club", scopeId: w.A, expiresAt: new Date(Date.now() + 3_600_000).toISOString() })).assignment;
   assert.ok((await inWorkspace(expired, "team", w.T1)).permissions.includes("org.teams.manage"));
-  await new Promise((r) => setTimeout(r, 1500));
+  // The expiry moved into the past by a raw write past the guards (disposable
+  // database only), so the proof does not depend on the runner's speed.
+  await k.query(`begin`);
+  try {
+    await k.query(`set local session_replication_role = replica`);
+    await k.query(`update public.user_role_assignments set created_at = now() - interval '1 hour', expires_at = now() - interval '1 second' where id = $1`, [expiring.id]);
+    await k.query(`commit`);
+  } catch (error) {
+    await k.query(`rollback`);
+    throw error;
+  }
   assert.deepEqual(sorted((await me(expired)).permissions), TEAM_COACH);
 
   const revoked = await person("revoked", (id) => F.grantTeam(id, w.T1));
