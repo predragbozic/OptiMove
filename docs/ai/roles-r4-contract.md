@@ -9,7 +9,7 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
 
 | | |
 |---|---|
-| Status | **Proposed.** Documentation only. No code and no migration file. Internal reviews (2026-11-22): `code-reviewer` NOT READY (2 HIGH), `security-reviewer` NOT READY (1 HIGH, 4 MEDIUM), `db-reviewer` READY WITH NOTES (3 HIGH-class) on `6a20328`; all fixed in `2749a4b`; narrow re-reviews: security READY (one new MEDIUM, the rule 7 race, fixed in `829b89a`), db READY WITH NON-BLOCKING NOTES (N1-N3, written in). The owner's, the stream manager's and the *Rukovodilac*'s decisions on Q1-Q16 (section 12) are in `dfa8658`. The *Nezavisni revizor* (4): PLAN REVIEW NO-GO on `c5e7229` (4 HIGH, 5 MEDIUM, 3 LOW), every finding written in with the stream manager's decisions where it offered a choice (H1 and M3 in 7.2-7.3, H2 and M4 in 7.4, H3 in 7.6, H4 in 7.2, M1 and M2 in 6, M5 in 7.7, L1 in 5.1, L2 in 7.4, L3 in 6 and 14). |
+| Status | **Proposed.** Documentation only. No code and no migration file. Internal reviews (2026-11-22): `code-reviewer` NOT READY (2 HIGH), `security-reviewer` NOT READY (1 HIGH, 4 MEDIUM), `db-reviewer` READY WITH NOTES (3 HIGH-class) on `6a20328`; all fixed in `2749a4b`; narrow re-reviews: security READY (one new MEDIUM, the rule 7 race, fixed in `829b89a`), db READY WITH NON-BLOCKING NOTES (N1-N3, written in). The owner's, the stream manager's and the *Rukovodilac*'s decisions on Q1-Q16 (section 12) are in `dfa8658`. The *Nezavisni revizor* (4): PLAN REVIEW NO-GO on `c5e7229` (4 HIGH, 5 MEDIUM, 3 LOW), every finding written in with the stream manager's decisions where it offered a choice (H1 and M3 in 7.2-7.3, H2 and M4 in 7.4, H3 in 7.6, H4 in 7.2, M1 and M2 in 6, M5 in 7.7, L1 in 5.1, L2 in 7.4, L3 in 6 and 14). The *Nezavisni revizor*: **GO to start R4-1 on `7c3ed20`**, with its conditions N1-N7 written in (7.2, 7.3, 7.6), which it checks on R4-1's code. |
 | Mark | Risky: external-review triggers 1 (a migration), 2 (auth, roles, workspace, info hiding) and 4 (lock order, idempotency) of `CLAUDE.md`. Every code pull request of section 11 that touches the server needs the *Nezavisni revizor*. |
 | Written against | `origin/main` at `9ff8c3f5` (2026-11-22), which holds R1 (`can()`, #619), R2 (migration v84 and the Roles API, #676), `/me` permissions (#706), the R3 screens (#710), the tabs from permissions (#716) and the club members list (#717). Every `file:line` below is at `9ff8c3f5`. The implementation re-checks each at its own base. |
 | Migration | One foundation migration, **vNN**: provisionally **v92**, prefix `202611241000` (the *Rukovodilac* of OptiMove, 2026-11-22; final before the freeze). One file, unless the deploy plan shows the old server must not see part of the schema. The way into a club (section 5) needs no migration. |
@@ -408,8 +408,10 @@ the version's `revision` (`expectedRevision` in the API); a race on the first cr
 answers `version_changed`.
 
 **Rule 7 when a default role changes (the *Nezavisni revizor*'s H4).** A platform admin adds W to a default role (say Team
-coach). Every club with a live version of Club admin that lacks W would then break rule 7 (its admin could not give what
-its coaches hold). **Recommendation:** in the same transaction, the role change adds W to every live Club admin version
+coach). Every club with a live version of Club admin that lacks W, **and that follows the changed role** (has no live
+version of it - a club with its own version of Team coach does not get W through this change), would then break rule 7
+(its admin could not give what its coaches hold; the *Nezavisni revizor*'s N3). **Recommendation:** in the same
+transaction, the role change adds W to the live Club admin version of exactly those clubs
 (the platform admin's own change, the only person who changes those versions, Q3), each with a change row of kind
 `default_follow`; the change's answer lists the clubs touched. The deferred check then runs over **every** club with a
 live version. Serialization: a default-role writer locks the edited role row `FOR UPDATE` (R2); every club version writer
@@ -417,7 +419,10 @@ locks all non-archived system role rows `FOR SHARE` in id order (place 4 of 7.6)
 snapshots that miss each other. The example "a club's Club admin version lacks W, the default Team coach gets W" ends with
 W added to that club's Club admin version and the club listed in the answer. The `default_follow` items pass the version
 item guard only with a platform admin as the acting user, and keep its scope-type and not-platform-only checks; they are
-written in the default writer's lock order (7.6 place 4, after the users rows), never before.
+written in the default writer's lock order (7.6 place 4, after the users rows), never before. The same all-clubs check runs
+when a word is **removed** from the default Club admin (N4): a club whose version of another role, or whose following of a
+default, still holds the word refuses the change with a stable code, `club_admin_would_lack`, naming the clubs (never a
+bare `23514` and a 500).
 
 An archived system role: its club versions stay as history and give nothing (the role gives nothing, v84 `:138`).
 
@@ -432,8 +437,10 @@ An archived system role: its club versions stay as history and give nothing (the
 **Liveness, written in SQL only (the *Nezavisni revizor*'s M3).** `holding_row_version` is written only inside SQL
 (`insert ... select r.updated_at from public.user_team_roles r where r.id = $n`), never passed through Node, so it is
 exactly the stored value. The `BEFORE UPDATE` trigger on `user_club_roles` / `user_team_roles` (3.4) also writes
-`ended_at` and `end_kind = 'role_ended'` on the live customs of that row whenever `is_active` or `revoked_at` changes (the
-revocation and the re-grant of `organization.js:3025-3033`, `:3062`), so the history shows the end; the read-time check of
+`ended_at` and `end_kind = 'role_ended'` on the live customs of that row whenever the row's **`updated_at` changes** - the
+same predicate as the liveness read (the *Nezavisni revizor*'s N2: a re-grant of an already active row,
+`organization.js:3024-3032`, changes only `updated_at` and `granted_by_user_id`; test "a re-grant of an active coach
+writes `role_ended`"), and the revocation of `:3062`; so the history shows the end; the read-time check of
 3.4 stays as the guarantee. The custom guards accept this write without an acting user only from that trigger: the trigger
 sets a transaction-local marker (`optimove.custom_role_end_tx` = the current transaction id, the pattern of v57's
 `optimove.session_undo_tx`), writes the `role_ended` change row in the same transaction, and the guard refuses a null-actor
@@ -516,6 +523,20 @@ Rewritten after the *Nezavisni revizor*'s H3. The existing rule is **every advis
      the check use the same key form, `(int4 namespace, hashtext(clubId))`, so the `pg_locks` row has `classid` = the
      namespace, `objid` = the hash, `objsubid` = 2, mode `ShareLock` (shared) or `ExclusiveLock` (exclusive), `granted`.
      The caller reads `teams.club_id` without a lock to know which club to lock (a team never moves club, D43).
+   - **The table guards check it too** (the *Nezavisni revizor*'s N1), so a forgotten caller fails closed at the write
+     itself: rows and items of `permission_club_role_versions` and `club_permission_ceiling` require the club's lock held
+     **exclusive**; rows and items of `permission_custom_roles` require it held at least **shared** (exceptions: the
+     `role_ended` write under its marker, 7.3; the migration path, which takes the exclusive lock itself, 7.4). Mutation: a
+     version writer that skips `lockClubCeiling` must fail.
+   - **Two advisory locks, one order** (N6): R2's request-key lock (`permissionRolesService.js:461-465`, "always the first
+     lock"; only same-key requests of one caller share it) comes first, then the club ceiling lock(s), then rows - on every
+     route; in the recorded-SQL test.
+   - **The 404 gate before the transaction** (N5): the route's unlocked check from `req.authz` (the club exists and the
+     caller has a right there, else the identical 404, ADR-006) runs before `BEGIN`, so a caller without a right in a club
+     never takes, or waits on, that club's exclusive lock.
+   - **`pg_locks` detail** (N7): `hashtext` returns a signed `int4` while `objid` is an `oid`; the check compares
+     `objid = (hash)::oid` through the same cast PostgreSQL uses (a test with a club whose hash is negative), and R4-1
+     measures the cost of the `pg_locks` read.
    - **Exempt, because they only shorten a custom:** the trigger-driven `role_ended` writes (7.3) and the old revocation
      routes of `organization.js` that do not call `lock_permission_actor`. R4-1 lists, by grep, every caller of
      `lock_permission_actor` that must add the helper; a missed one fails closed with `55000`, never a deadlock.
@@ -597,7 +618,7 @@ target in that club is proven, so it can never confirm that a foreign club or us
 
 Codes added: `permission_not_available_yet`, `closed_by_club_ceiling`, `admin_not_narrowable`, `custom_exists`,
 `version_changed` (stale `expectedRevision`, or a lost race on the first create of a club version), `custom_changed` (the
-same for a custom role), `question_outdated`.
+same for a custom role), `question_outdated`, `club_admin_would_lack` (7.2, N4).
 
 **Screens (frontend PR, section 11):**
 - Settings > Clubs (platform admin): *Club licence* - each module on / off, with a reason.
