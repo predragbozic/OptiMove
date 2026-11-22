@@ -238,6 +238,23 @@ leaving results naming a removed logical id. The content check runs without a lo
 added at that moment can be deleted too, and the week's event links are left without their plan
 (`calendar.event_session_links.plan_id` is set null). Not changed here; reported to the stream manager.
 
+### 7.1a The Nezavisni revizor (3) on WT-B 0e4de89 and WT-C 561a199 (merge tree with `main` 9ff8c3f5)
+
+- **WT-B, fixed:** a day with a kept session renumbers the copied sessions whatever the kept order is (0 from a paste
+  into an empty day, NULL from an import; before, offset 0 copied the template's order and a slot clash ended in a raw
+  500); any other database error of the route answers its own sentence (`500 assign_failed`), never the database's
+  text; one athlete named by both of its ids is one athlete; the start date lies in 2000–2099. New tests: the recorded
+  SQL order of the transaction (exercise-reuse lock, template, request, athlete slot locks, plans `FOR UPDATE`
+  ascending, sessions, and no lock clause between the first plan write and COMMIT; the `.claude/rules/migrations.md`
+  rule), `can_copy` and `can_assign_to_athlete` refusals, another coach's empty draft week asked about and kept, the
+  exercise-reuse refusal after the writes.
+- **WT-B, owner's question (MEDIUM-3, with the owner):** Replace writes into a published week another coach or another
+  workspace made for the same athlete, whenever the coach may open it; the question does not say whose week it is
+  today. The 409 week entry can carry a mark for it when decided.
+- **WT-C, tests added:** the exercise-reuse refusal after the copy; the 1–52 week limit.
+- **WT-C, recorded only:** the chosen plans' `FOR SHARE` has no test that a concurrent Save waits on it (LOW-1); the
+  route checks plan type and edit draft both in the rights loop and again under the lock (LOW-3, harmless).
+
 ### 7.2 Follow-ups recorded (not in this task)
 
 - Athlete codes can be told apart across clubs (unknown 404 / archived 400 / another club's 403) on `POST /plans`,
