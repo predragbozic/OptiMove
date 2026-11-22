@@ -291,6 +291,35 @@ test("10c. (security review) a coach of a team in an archived club cannot set th
   assert.equal(code, "42501");
 });
 
+test("10d. (database review) a COMMIT whose answer never comes is 503 outcome_unknown, never 'not saved'; the same key then writes once or replays", async () => {
+  const { testHooks } = await import("../src/sessionTypeService.js");
+  testHooks.commitTimeoutMs = 300;
+  try {
+    // Lost before the database committed: the connection is closed, nothing is saved, the same key writes it.
+    testHooks.commit = () => new Promise(() => {});
+    const lostBody = { requestKey: newKey(), label: `Lost ${crypto.randomBytes(2).toString("hex")}` };
+    const lost = await post("clubAdmin", "", lostBody);
+    assert.equal(lost.status, 503, lost.text);
+    assert.equal(lost.body.error, "outcome_unknown");
+    delete testHooks.commit;
+    const retried = await post("clubAdmin", "", lostBody);
+    assert.equal(retried.status, 200, retried.text);
+    assert.equal(retried.body.replayed, false);
+    // Committed, the answer lost: the same key replays the saved type, and there is one row.
+    testHooks.commit = (c) => c.query("commit").then(() => new Promise(() => {}));
+    const doneBody = { requestKey: newKey(), label: `Done ${crypto.randomBytes(2).toString("hex")}` };
+    const unknown = await post("clubAdmin", "", doneBody);
+    assert.equal(unknown.status, 503);
+    delete testHooks.commit;
+    const replay = await post("clubAdmin", "", doneBody);
+    assert.equal(replay.body.replayed, true, replay.text);
+    assert.equal((await q(`select count(*)::int as n from training.activity_types where label = $1`, [doneBody.label]))[0].n, 1);
+  } finally {
+    delete testHooks.commit;
+    delete testHooks.commitTimeoutMs;
+  }
+});
+
 test("11. bad bodies: 400 before any database work; a refusal carries no-store", async () => {
   for (const [body, code] of [
     [{ label: "No key" }, "invalid_request_key"],

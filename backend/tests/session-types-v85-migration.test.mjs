@@ -64,7 +64,7 @@ test("1. preflight, apply, seed, post-check, rollback to the same catalog, apply
   const catalogBefore = (await c.query(CATALOG_SQL)).rows[0];
 
   await applyGpexeTestMigrations(db.url, [V85]);
-  assert.deepEqual(await allBlocks("session-types-v85-preflight.sql"), ["1.v85_not_recorded", "2.v1_shape", "2.new_keys_free", "2.no_change_log", "2.no_source_map", "2.no_functions"],
+  assert.deepEqual(await allBlocks("session-types-v85-preflight.sql"), ["1.v85_not_recorded", "2.v1_shape", "2.v1_types_as_seeded", "2.new_keys_free", "2.no_change_log", "2.no_source_map", "2.no_functions"],
     "after v85 the preflight refuses exactly on the v85 objects");
   assert.deepEqual(await allBlocks("session-types-v85-postcheck.sql"), [], "the post-check passes after v85");
   const seed = (await c.query(`select owner_team_id, source_system, category_name, activity_type_key, set_by_user_id, seeded from training_load.source_session_types`)).rows;

@@ -69,3 +69,9 @@ wrappers.
 - A log row could be written without a type change, for example a "rename" log row naming the current label. It
   changes nothing.
 - The Training Load calendar shows the key words until ST-5 reads the labels.
+- The log guard checks `new_label` against the type row, not `old_label` against the label before. A `create` row for an
+  existing type passes too. These are the limits of a trusted acting user, as in v35.
+- Labels are unique per owner only, so a club type may carry a system type's name. ST-5's pickers name the owner.
+- The activity guard refuses moving an activity that holds a club type to another club's team (23514). That is the
+  intended rule, and it cannot happen today: teams do not move between clubs (D43), and a reparent stays within one
+  owner.

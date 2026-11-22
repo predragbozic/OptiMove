@@ -49,8 +49,11 @@ begin
   if exists (select 1 from training.activity_types where key in ('friendly_match', 'exercise_session', 'compensation_session', 'rtp_session')) then
     raise exception 'v85 refused: a key v85 seeds already exists' using errcode = '23514';
   end if;
-  if (select count(*) from training.activity_types where key in ('training_session', 'match', 'testing_session', 'recovery_session')) <> 4 then
-    raise exception 'v85 refused: one of the four v1 types is missing' using errcode = '23514';
+  -- The four v1 types as v1 seeded them: the rollback puts exactly these labels and states back.
+  if (select string_agg(key || '=' || label || ':' || is_active::text, ',' order by key) from training.activity_types
+       where key in ('training_session', 'match', 'testing_session', 'recovery_session'))
+     is distinct from 'match=Match:true,recovery_session=Recovery session:true,testing_session=Testing session:true,training_session=Training session:true' then
+    raise exception 'v85 refused: the four v1 types are not as v1 seeded them' using errcode = '23514';
   end if;
 end $$;
 

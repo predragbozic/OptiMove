@@ -30,8 +30,14 @@ const notFound = () => new SessionTypeError(404, "not_found", "Not found.");
 const bad = (code, message) => new SessionTypeError(400, code, message);
 const conflict = (code, message, extra) => new SessionTypeError(409, code, message, extra);
 
-// Test-only seams.
+// Test-only seams: beforeCommit(client), commit(client) in place of the COMMIT, commitTimeoutMs.
 export const testHooks = {};
+export const COMMIT_ANSWER_TIMEOUT_MS = 15_000;
+function withinBound(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 // The club whose types this workspace sees (null: system types only), or a refusal.
 async function workspaceClub(ctx, client) {
@@ -107,6 +113,7 @@ async function write(ctx, { requestKey, hash, run }) {
   const owner = writableOwner(ctx);
   if (!owner) throw notFound();
   const client = await pool.connect();
+  let destroyed = false;
   try {
     await client.query("begin");
     await client.query("set local lock_timeout = '3s'");
@@ -126,16 +133,24 @@ async function write(ctx, { requestKey, hash, run }) {
       return { type: view(seen), replayed: true };
     }
     const result = await run(client, { owner, basis });
+    // Every deferred guard now (the log row), so a refusal is definite before the COMMIT.
+    await client.query("set constraints all immediate");
     if (testHooks.beforeCommit) await testHooks.beforeCommit(client);
+    // The bounded COMMIT (the database review of ST-1): an answer that never comes is "not confirmed", never "not
+    // saved"; the connection is closed, and the same requestKey reads the saved outcome or writes it once.
     try {
-      await client.query("commit");
+      const commit = testHooks.commit ? testHooks.commit(client) : client.query("commit");
+      commit.catch(() => {});
+      await withinBound(commit, testHooks.commitTimeoutMs ?? COMMIT_ANSWER_TIMEOUT_MS);
     } catch (error) {
       if (error?.code && /^(23|42)/.test(error.code)) throw error;
+      destroyed = true;
+      client.release(true);
       throw new SessionTypeError(503, "outcome_unknown", "The result is not confirmed. Send the same request again to check it.");
     }
     return { ...result, replayed: false };
   } catch (error) {
-    await client.query("rollback").catch(() => {});
+    if (!destroyed) await client.query("rollback").catch(() => {});
     if (error instanceof SessionTypeError) throw error;
     if (error?.code === "23505" && /activity_types_owner_label_live_key/.test(error.constraint ?? error.message ?? "")) {
       throw conflict("label_taken", "A session type with this name already exists.");
@@ -148,7 +163,7 @@ async function write(ctx, { requestKey, hash, run }) {
     if (error?.code === "42501") throw notFound();
     throw error;
   } finally {
-    client.release();
+    if (!destroyed) client.release();
   }
 }
 

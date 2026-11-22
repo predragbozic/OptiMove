@@ -14,7 +14,9 @@ select current_setting('server_version_num')::int >= 150000 as server_15_or_late
 -- 2. training.activity_types is the v1 shape (key, label, is_active, created_at) and holds the four v1 types; the keys
 --    v85 seeds are free; nothing v85 adds exists.
 select (select count(*) from information_schema.columns where table_schema = 'training' and table_name = 'activity_types') = 4 as v1_shape,
-       (select count(*) from training.activity_types where key in ('training_session', 'match', 'testing_session', 'recovery_session')) = 4 as v1_types_present,
+       (select string_agg(key || '=' || label || ':' || is_active::text, ',' order by key) from training.activity_types
+         where key in ('training_session', 'match', 'testing_session', 'recovery_session'))
+         = 'match=Match:true,recovery_session=Recovery session:true,testing_session=Testing session:true,training_session=Training session:true' as v1_types_as_seeded,
        not exists (select 1 from training.activity_types where key in ('friendly_match', 'exercise_session', 'compensation_session', 'rtp_session')) as new_keys_free,
        to_regclass('training.activity_type_changes') is null as no_change_log,
        to_regclass('training_load.source_session_types') is null as no_source_map,
