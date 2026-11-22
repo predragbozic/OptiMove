@@ -22,7 +22,8 @@ select (select string_agg(column_name, ',' order by ordinal_position) from infor
        to_regclass('public.club_position_overrides') is null as no_override_table,
        not exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace
                     and proname in ('position_actor', 'sport_position_basis', 'athlete_position_right', 'sport_position_offered',
-                                    'athlete_position_in_force', 'sport_positions_before_write')) as no_functions;
+                                    'athlete_position_in_force', 'sport_positions_before_write', 'club_position_overrides_before_write',
+                                    'club_position_overrides_no_truncate', 'club_position_overrides_change_logged')) as no_functions;
 
 -- 3. The estimate guards are the bodies v87 replaces (v69's estimate_basis_ok, v64's validate_metric_value_estimate) and v69's
 --    method CHECK; no estimate holds a method v87 adds.

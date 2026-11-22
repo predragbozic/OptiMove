@@ -79,8 +79,13 @@ wrappers.
 - The rights are the basic roles (`club_admin`, `team_coach`, `platform_admin`), as v85's. A custom role of v84 does
   not grant them.
 - The database keeps names unique per owner only. Within a club, the service refuses a name that a live position of the
-  club already shows (its own, or a default it shows, under the club's name for it); two admins of one club adding the
-  same name at the same moment could both pass that check.
+  club already shows (its own, or a default it shows, under the club's name for it); every write to one club's list takes
+  that club's advisory lock (after the rights rows), so two admins of one club are decided one after the other
+  (`athlete-positions-v87.test.mjs` test 12).
+- A platform admin's rename of a default is not checked against the clubs' names: a club with its own position of that
+  name, and no own name for the default, then shows the name twice until it renames one (display only).
+- The bounded COMMIT is tested for a COMMIT that never ran (test 11); "committed, answer lost" rests on the same replay
+  by request key and is not exercised separately.
 - The admin branch of `public.athlete_position_right` locks the club membership before the team memberships (ascending),
   the order of the club-membership archive and of the athlete edit (D45).
 - The users lock carries `is_active = true` (the known L1 gap of v54, inherited).

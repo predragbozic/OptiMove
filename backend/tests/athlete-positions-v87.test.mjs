@@ -266,6 +266,42 @@ test("10. the override's database guards: no change without its log row, never a
   }), "23514");
 });
 
+test("12. one club's list is changed one write at a time: two admins renaming a default for the first time at once - one saves, the other is name_changed; a create and a rename to the same name at once - one is name_taken", async () => {
+  const svc = await import("../src/positionService.js");
+  const fb = await systemId("Full back");
+  const second = await fx.clubAdminOf(m.clubs.c1, "pos87 second admin C1");
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const inside = new Promise((resolve) => { entered = resolve; });
+  svc.testHooks.beforeCommit = async () => { entered(); await held; };
+  const a = post("clubAdmin", `/${fb}/rename`, { requestKey: newKey(), name: "Wing back", expectedName: "Full back" });
+  await inside;
+  delete svc.testHooks.beforeCommit;
+  const b = api(`${R}/${fb}/rename`, { method: "POST", cookie: second.cookie, body: { requestKey: newKey(), name: "Side back", expectedName: "Full back" } });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  release();
+  const [ra, rb] = await Promise.all([a, b]);
+  assert.equal(ra.status, 200, ra.text);
+  assert.deepEqual([rb.status, rb.body.error], [409, "name_changed"]);
+  assert.equal((await names("clubAdmin"))[fb].name, "Wing back");
+  // A create and a rename to one name at once.
+  const md = await systemId("Midfielder");
+  let release2;
+  const held2 = new Promise((resolve) => { release2 = resolve; });
+  let entered2;
+  const inside2 = new Promise((resolve) => { entered2 = resolve; });
+  svc.testHooks.beforeCommit = async () => { entered2(); await held2; };
+  const c = post("clubAdmin", "", { requestKey: newKey(), name: "Regista" });
+  await inside2;
+  delete svc.testHooks.beforeCommit;
+  const d = api(`${R}/${md}/rename`, { method: "POST", cookie: second.cookie, body: { requestKey: newKey(), name: "Regista", expectedName: "Midfielder" } });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  release2();
+  const [rc, rd] = await Promise.all([c, d]);
+  assert.deepEqual([rc.status, rd.status, rd.body.error], [200, 409, "name_taken"]);
+});
+
 test("11. the bounded COMMIT: a COMMIT that never answers is 503 outcome_unknown with nothing saved; the same key then saves once. A revoked admin's replay is the 404", async () => {
   const svc = await import("../src/positionService.js");
   const key = newKey();

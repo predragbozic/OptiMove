@@ -423,6 +423,7 @@ begin
       if not found
          or new.new_name is distinct from coalesce(o.name, v.name)
          or (new.action = 'club_rename' and new.old_name is not distinct from new.new_name)
+         or (new.action in ('club_rename', 'club_show') and v.archived_at is not null)
          or (new.action = 'club_hide' and not o.hidden)
          or (new.action = 'club_show' and o.hidden) then
         raise exception 'public.sport_position_changes: the row does not match the club''s override' using errcode = '23514';

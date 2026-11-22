@@ -233,6 +233,12 @@ async function writeList(ctx, { requestKey, hash, run }) {
   return inTransaction(ctx, async (client) => {
     const basis = (await client.query(`select public.sport_position_basis($1, $2, $3) as b`, [ctx.userId, owner.ownerScope, owner.clubId])).rows[0].b;
     if (!basis) throw notFound();
+    // One club's list is changed one write at a time (the code review of v87): its checks (the expected name, a name the
+    // club already shows) read rows a concurrent write may create - a club's first override of a default has no row to
+    // lock. Taken after the rights rows (users first), before the request key's lock.
+    if (owner.ownerScope === "club") {
+      await client.query(`select pg_advisory_xact_lock(hashtextextended('positions-club:' || $1, 87))`, [owner.clubId]);
+    }
     // The same (user, requestKey) is serialised before the replay read; taken after the rights rows (users first).
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1 || ':' || $2, 88))`, [ctx.userId, requestKey]);
     const seen = (await client.query(
