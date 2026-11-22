@@ -3055,6 +3055,21 @@ async function openWeeklyPlanOnDate(date) {
   renderWeeklyRoot(state.lastWeeklyData);
 }
 
+// K6: the switcher's own loader paints only while the coach is still in this flow on the Weekly tab: a slow answer for
+// the athlete switched to never draws over the calendar the coach went back to (review MEDIUM).
+function loadWeeklyForSwitcher() {
+  const flow = state.centralCalendar.weeklyFlow;
+  const live = () => state.activeTab === "weekly" && state.centralCalendar.weeklyFlow === flow;
+  return loadWeeklyData({
+    // No "Loading…" screen: the header (busy) and the plan being left stay in view, with Back to calendar one tap away.
+    setLoading: () => {},
+    renderEmpty: (text) => { if (live()) renderEmpty(text); },
+    renderError: (error) => { if (live()) renderError(error); },
+    renderAthleteHeader: (data) => { if (live()) renderAthleteHeader(data); },
+    renderWeeklyRoot: (data) => { if (live()) renderWeeklyRoot(data); },
+  }, {});
+}
+
 async function loadWeekly(options = {}) {
   return loadWeeklyData(
     { setLoading, renderEmpty, renderError, renderAthleteHeader, renderWeeklyRoot },
@@ -3271,11 +3286,11 @@ async function handleContentClick(event) {
     return;
   }
   if (type === "weekly-k6-pick") {
-    await switchWeeklyAthlete(action.dataset.athleteKey || "", { loadWeekly, renderCurrent: renderCurrentNode });
+    await switchWeeklyAthlete(action.dataset.athleteKey || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
     return;
   }
   if (type === "weekly-k6-group") {
-    await chooseWeeklyGroup(action.dataset.teamId || "", { loadWeekly, renderCurrent: renderCurrentNode });
+    await chooseWeeklyGroup(action.dataset.teamId || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
     return;
   }
   if (type === "weekly-back-to-calendar") {
@@ -3649,6 +3664,9 @@ function moveWeek(delta) {
 }
 
 function renderTabs() {
+  // K6: the Weekly plan's athlete switcher belongs to the calendar's flow; any other tab ends it (the flow is set and
+  // the tab becomes weekly in the same tick when a plan is opened from the calendar, before renderTabs runs).
+  if (state.activeTab !== "weekly" && state.centralCalendar) state.centralCalendar.weeklyFlow = null;
   const isLibraryTab = ["organization", "templates", "exercises", "builder", "coaches"].includes(state.activeTab);
   const tabs = document.querySelectorAll(".tab");
   const tabsContainer = tabs[0]?.closest(".tabs");

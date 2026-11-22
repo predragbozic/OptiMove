@@ -214,3 +214,11 @@ test("leaving the Weekly tab by any other way during a load draws nothing either
   assert.equal(await pending, false);
   assert.equal(drawn, before);
 });
+
+test("a failed switch restores the exercise detail's navigation too", async () => {
+  state.navStack = tap(ANA, ["Strength", "Power"]);
+  state.exerciseDetail = { ids: ["x", "y"], currentId: "x" };
+  const keep = state.exerciseDetail;
+  assert.equal(await switchWeeklyAthlete("ub", { loadWeekly: async () => {}, renderCurrent() {} }), false);
+  assert.equal(state.exerciseDetail, keep);
+});

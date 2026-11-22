@@ -113,7 +113,7 @@ export async function switchWeeklyAthlete(targetKey, deps) {
   const pathDepth = state.navStack.length;
   const aName = nameOf(flow.currentKey);
   const bName = nameOf(targetKey);
-  const before = { data: state.lastWeeklyData, athleteId: state.selectedAthleteId, navStack: state.navStack };
+  const before = { data: state.lastWeeklyData, athleteId: state.selectedAthleteId, navStack: state.navStack, exerciseDetail: state.exerciseDetail };
   flow.busy = true;
   deps.renderCurrent?.();
   state.selectedAthleteId = rosterId;
@@ -130,6 +130,7 @@ export async function switchWeeklyAthlete(targetKey, deps) {
   if (state.lastWeeklyData === before.data || state.selectedAthleteId !== rosterId) {
     state.selectedAthleteId = before.athleteId;
     state.navStack = before.navStack;
+    state.exerciseDetail = before.exerciseDetail;
     flow.line = `Could not open ${bName}'s plan. Try again.`;
     flow.kept = "";
     deps.renderCurrent?.();

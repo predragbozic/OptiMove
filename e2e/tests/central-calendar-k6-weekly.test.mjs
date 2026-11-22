@@ -216,3 +216,38 @@ test("(390 px) the phone's Back steps up the drilled levels once each, never sho
     await context.close();
   }
 });
+
+test("(390 px) Back to calendar while the next athlete's plan is still loading: the plan never paints over the calendar", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", 390);
+  try {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let held = false;
+    await page.route("**/program-data?program=__weekly__*", async (route) => {
+      const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/")[3]);
+      const name = Object.keys(rosterId).find((n) => rosterId[n] === id);
+      if (name === "Bojan Example") { held = true; await gate; }
+      const res = await route.fetch();
+      const body = await res.json();
+      body.weeks = name && PLANS[name] ? [weekOf(PLANS[name])] : [];
+      await route.fulfill({ response: res, json: body });
+    });
+    await openCalendar(page, 390);
+    await page.locator('.athlete-switcher .builder-batch-pill[aria-label="Ana Example"]').click();
+    await page.waitForSelector(".cc-athlete-line");
+    await page.locator(".cc-athlete-line [data-action='central-calendar-open-athlete']").click();
+    await page.waitForSelector(".weekly-k6");
+    await page.locator('.weekly-k6 .icon-button[aria-label="Next athlete"]').click();
+    await page.waitForFunction(() => document.querySelector(".weekly-k6-controls")?.getAttribute("aria-busy") === "true");
+    await page.locator("[data-action='weekly-back-to-calendar']").click();
+    await page.waitForSelector(".central-calendar", { timeout: 10_000 });
+    assert.ok(held, "the next athlete's read was held");
+    release();
+    await page.waitForTimeout(1200);
+    assert.equal(await page.locator(".weekly-k6").count(), 0, "no Weekly header over the calendar");
+    assert.ok(await page.locator(".central-calendar").count(), "the calendar is still the screen");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
