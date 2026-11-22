@@ -2058,10 +2058,6 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     // section is refetched immediately for instant visible feedback.
     for (const key of Object.keys(state.trainingLoad.weekly)) state.trainingLoad.weekly[key].data = null;
     renderTrainingLoad();
-    // Unreachable from the UI while the shell Filter is disabled on
-    // Dashboards (Phase F decision (b), see docs/ai/CURRENT_STATE.md) -
-    // kept for the follow-up that feeds state.trainingLoad.filter into the
-    // /query payload; not dead code to delete.
     if (state.trainingLoad.section === "analysis") {
       invalidateTrainingLoadAnalysis();
       state.trainingLoad.analysis.queryResult = null;

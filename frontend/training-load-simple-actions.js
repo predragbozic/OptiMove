@@ -56,7 +56,8 @@ function closeAndRefresh(model, options) {
 export const simpleEditor = createSimpleEditorController({ request: api, paint,
   getContext: () => ({ identity: currentUserWorkspaceContextParts(), dashboardId: analysis().dashboard?.id,
     period: { ...analysis().period, timeZone: analysis().period.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
-    runtimeFilter: analysisRuntimeFilterPayload(), inheritedAthleteIds: analysisRuntimeFilterPayload().athleteIds ?? analysis().dashboard?.default_filter?.athleteIds ?? null,
+    shellFilter: analysisRuntimeFilterPayload().shellFilter,
+    runtimeFilter: Object.fromEntries(Object.entries(analysisRuntimeFilterPayload()).filter(([key]) => key !== 'shellFilter')), inheritedAthleteIds: analysisRuntimeFilterPayload().athleteIds ?? analysis().dashboard?.default_filter?.athleteIds ?? null,
     athletes: state.trainingLoad.orgPickerData?.athletes ?? [] }),
   saved: async (receipt, target) => {
     const a = analysis();

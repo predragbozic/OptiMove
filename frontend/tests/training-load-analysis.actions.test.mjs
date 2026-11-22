@@ -1391,3 +1391,22 @@ test("+ Add widget lives in the dashboard header and shows whenever the dashboar
   html = renderTrainingLoadAnalysisHtml();
   assert.doesNotMatch(html, /data-action="training-load-analysis-add-widget"/, "a template dashboard must never offer Add widget - clone it first");
 });
+
+for (const kind of ['clubIds','teamIds','athleteIds']) test(`shell ${kind} payload and cache separate results, normalize order and reject late responses`, async()=>{
+  resetState();const a=state.trainingLoad.analysis;a.dashboard=dashboard();a.selectedDashboardId=dashboardId;a.widgets=[widget()];a.period={dateFrom:'2026-10-01',dateTo:'2026-10-07'};
+  const result=value=>({widgets:[{widgetId,series:[{seriesId,status:'ok',data:{current:[{athleteId:null,bucketKey:'all',value,unit:'AU'}]}}]}]});
+  let requests=0,finishA;installFetchMock(async call=>{if(call.url.endsWith('/query')){requests++;if(requests===1)return {status:200,body:result(1)};if(requests===2)return new Promise(resolve=>{finishA=()=>resolve({status:200,body:result(2)});});return {status:200,body:result(3)};}return {status:200,body:{}};});
+  state.trainingLoad.filter[kind]=[metricId,activityId];await queryAnalysisDashboard(()=>{});
+  const first=fetchCalls.at(-1).body;assert.deepEqual(first.shellFilter[kind],[metricId,activityId].sort());assert.equal(first.athleteIds,undefined);
+  state.trainingLoad.filter[kind]=[activityId,metricId];await queryAnalysisDashboard(()=>{});assert.equal(requests,1);
+  state.trainingLoad.filter[kind]=[componentId];const pending=queryAnalysisDashboard(()=>{});await Promise.resolve();assert.equal(a.queryResult,null,'old cohort is cleared before new fetch');
+  state.trainingLoad.filter[kind]=[];await queryAnalysisDashboard(()=>{});assert.equal(fetchCalls.at(-1).body.shellFilter,null);
+  finishA();await pending;assert.equal(a.queryResult.widgets[0].series[0].data.current[0].value,3);
+  state.trainingLoad.filter[kind]=[metricId,activityId];await queryAnalysisDashboard(()=>{});assert.equal(requests,3);assert.equal(a.queryResult.widgets[0].series[0].data.current[0].value,1);
+});
+
+test('a shell selection over the shared limit gives a plain next step, never an error code',async()=>{
+  resetState();const a=state.trainingLoad.analysis;a.dashboard=dashboard();a.selectedDashboardId=dashboardId;a.widgets=[widget()];state.trainingLoad.filter.athleteIds=Array.from({length:201},(_,i)=>`athlete-${i}`);
+  installFetchMock(async()=>({status:400,body:{error:'invalidRequest'}}));await queryAnalysisDashboard(()=>{});
+  assert.equal(a.queryError,'Choose at most 200 clubs, teams and athletes in the filter.');assert.doesNotMatch(renderTrainingLoadAnalysisHtml(),/invalidRequest/);
+});
