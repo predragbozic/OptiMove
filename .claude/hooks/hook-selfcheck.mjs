@@ -4,15 +4,17 @@
 // push, ...) and relies on safety-guard.mjs to ask or deny for everything outside the
 // approved scope. So the guard must really run. Once per session start (startup, resume, clear,
 // compact, fork; no matcher, so every source) this script checks that:
-//   1. settings.json registers safety-guard.mjs for Bash, PowerShell and mcp__.* with
+//   1. settings.json sets "disableAllHooks": false and registers safety-guard.mjs for Bash,
+//      PowerShell, the file tools (Write|Edit|MultiEdit|NotebookEdit) and mcp__.* with
 //      "onFailure": "block" (a guard that cannot start, crashes or times out then blocks the
 //      tool call instead of leaving the decision to the allow list);
 //   2. the guard, started the same way Claude Code starts it (a separate `node` process fed
-//      the call on stdin), denies a probe it must deny and stays silent on a harmless one.
+//      the call on stdin), denies or asks where it must and stays silent on harmless calls.
 // The result goes to the user (systemMessage) only when something is wrong, and always to
 // Claude's context (additionalContext). A SessionStart hook cannot block anything; if node
 // itself is missing, this script does not start either, and the PreToolUse "onFailure":
-// "block" is what keeps the session safe (every Bash / PowerShell / MCP call is blocked).
+// "block" is what keeps the session safe (every Bash / PowerShell / MCP call and every file
+// edit is blocked).
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

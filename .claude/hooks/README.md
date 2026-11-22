@@ -222,14 +222,27 @@ hook doesn't govern at all (`Read`, `Grep`, ...).
 auto-accepting mode (`acceptEdits`, `auto`) could edit its own guard or registration
 mid-session without a question, after the session-start self-check had passed. The target
 is resolved against the call's `cwd` and compared by real path (`..`, `./` and a symlink
-pointing into the folder are all caught; a file that does not exist yet is caught by its
-existing parent), ignoring letter case on Windows and macOS. A file tool call with no
-usable path asks. The same layout in another folder (a copy of the project in a scratch
+pointing into the folder are all caught, a dangling link to a file that does not exist yet
+is followed by hand, a new file is caught by its existing parent), and first by folder
+identity (device and inode of an existing ancestor, so another letter case, short name or
+mount of the same folder is caught on any system), then by path string. Every path field on
+the call counts (`file_path`, `notebook_path`, `path`); a call with no usable path, or with
+a path that is not a string, asks. A path that Claude Code may read differently from the
+guard also asks, wherever it points: surrounding spaces, a leading `~`, a `..` segment, a
+`\\?\` or `\\.\` device prefix, on Windows a path without a drive letter, and anything
+under `/proc/` or `/dev/`. The same layout in another folder (a copy of the project in a scratch
 work tree) is not the live folder and gets no decision. Verified live on Claude Code
 2.1.329 in `acceptEdits` mode: the guard answered `ask` for a write to `.claude/rules/`
 (Claude Code's own "sensitive file" protection also prompted), and a write elsewhere went
-through. Not covered here: a Bash redirect into `.claude` (`>`, `tee`), and a hard link
-to one of these files placed elsewhere.
+through. Not covered here (the owner asked not to widen the guard further): a Bash
+redirect into `.claude` (`>`, `tee`); a hard link to one of these files placed elsewhere;
+a future or renamed file-writing tool that the matcher and `FILE_EDIT_TOOLS` do not name;
+an MCP filesystem server's write tools (they go through the MCP rules, which have no
+`.claude` rule); `~/.claude/settings.json` (outside the project; its `env` block can still
+change `PATH` or `NODE_OPTIONS` for the guard's process). Worktrees made by Claude Code's
+own worktree tool live under `<repo>/.claude/worktrees/`, so every edit there would ask;
+this project does not use them (its scratch work trees live in the session's temporary
+folder).
 
 ### ASK added with the hardening (Bash + PowerShell)
 
@@ -534,14 +547,16 @@ the failure to its manager through MCP, so recovery goes through the user.
 **The SessionStart self-check** (`hook-selfcheck.mjs`, no matcher, so it runs on every
 session start: startup, resume, clear, compact, fork). It confirms once per session that:
 
-1. `settings.json` registers `safety-guard.mjs` for `Bash`, `PowerShell` and `mcp__.*`
-   in exactly the expected form - exec form, `"command": "node"`, the guard as the only
+1. `settings.json` sets `"disableAllHooks": false` and registers `safety-guard.mjs` for
+   `Bash`, `PowerShell`, `Write|Edit|MultiEdit|NotebookEdit` and `mcp__.*` in exactly the
+   expected form - exec form, `"command": "node"`, the guard as the only
    argument, not `async`, with `"onFailure": "block"` and a timeout of at most 60 s (another
    program with the same path, or an async hook, would never decide);
 2. the guard, started as Claude Code starts it - `node` from `PATH`, at the registered path
    with `${CLAUDE_PROJECT_DIR}` expanded (symlinks and letter case included), the call
    on stdin - denies `git push --force origin main` (Bash) and `git reset --hard`
-   (PowerShell) and stays silent on `ls -la`.
+   (PowerShell), stays silent on `ls -la`, asks for an Edit of its own
+   `.claude/settings.json`, and stays silent on a Write of a file outside `.claude`.
 
 It also reports `NODE_OPTIONS` that loads code into, or changes how node resolves, every
 node process (`--require`, `--import`, `--loader`, `--preserve-symlinks…`), by option name
@@ -572,8 +587,9 @@ on 2.1.329: with the guard file moved away, the session start reported the failu
 every Bash call was blocked. Tests: `node --test .claude/hooks/hook-selfcheck.test.mjs`.
 
 **What to do when it fires.** Two cases:
-- the guard cannot start, crashes or times out: every Bash / PowerShell / MCP call is
-  blocked (`onFailure`), Read / Edit / Write still work;
+- the guard cannot start, crashes or times out: every Bash / PowerShell / MCP call and
+  every file edit (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, anywhere) is blocked
+  (`onFailure`); only reading tools (`Read`, `Grep`, `Glob`) still work;
 - anything else the check reports (a wrong registration form, unexpected fields,
   `NODE_OPTIONS`, a guard that runs but answers wrongly): nothing is blocked, the session
   is simply unprotected, and only the `CLAUDE.md` rule ("do not run shell commands")
@@ -605,7 +621,10 @@ the session moves into) is not checked again. `disableAllHooks: true` switches o
 *and* the self-check together, so nothing warns. `settings.json` sets
 `"disableAllHooks": false`, which overrides a `true` in the user's own settings
 (`~/.claude/settings.json`; project settings take precedence over user settings), and the
-self-check reports it if that line is missing. It cannot override the layers above the
+self-check reports it if that line is missing. Verified live on 2.1.329 with a temporary
+home folder whose `settings.json` said `"disableAllHooks": true`: with the project's `false`
+the SessionStart and PreToolUse hooks ran (a Write to `.claude/rules/` got the guard's
+`ask`); with that one line removed, no hook ran at all. It cannot override the layers above the
 project settings: `.claude/settings.local.json` (editing it with a file tool now asks, see
 "File tools on the .claude folder"), a command-line `--settings`, or managed settings. The same holds for
 a settings layer that replaces these hook entries. `/hooks` in the session shows what is
