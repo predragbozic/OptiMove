@@ -285,6 +285,24 @@ test("3. the position average: the mean of the three measured forwards (not the 
   assert.deepEqual(row.basis, { athletes: 3, positionId: forward });
 });
 
+test("3b. the position average takes only athletes who did the target's session type (plan section 6): a forward who did RTP is left out, and with two left the method is not available (too_few_same_type); back as the session, it is available again", async () => {
+  const { team, s, distance } = await positionWorld();
+  await setPosition(team, DAN, "Forward");
+  const eva = team.athleteIds[EVA];
+  const own = (activityTypeKey) => tapi(`/${s.activityId}/roster/${eva}/type`, { method: "PUT", cookie: team.coach.cookie, body: { requestKey: key(), activityTypeKey } });
+  const set = await own("rtp_session");
+  assert.equal(set.status, 200, set.text);
+  const before = await writes();
+  const pa = (await proposal(team, s, team.athleteIds[DAN])).body.methods.position_average;
+  assert.deepEqual([pa.available, valueOf(pa, distance)?.reason ?? pa.reason], [false, "too_few_same_type"], JSON.stringify(pa));
+  const w = await save(team, s, { athleteId: team.athleteIds[DAN], method: "position_average" });
+  assert.deepEqual([w.status, w.body.error, w.body.reasons], [409, "nothing_to_estimate", ["too_few_same_type"]]);
+  assert.equal(await writes(), before, "nothing was written");
+  const cleared = await own(null);
+  assert.equal(cleared.status, 200, cleared.text);
+  assert.equal((await proposal(team, s, team.athleteIds[DAN])).body.methods.position_average.available, true);
+});
+
 test("5. a club's own position is named only to its club: after the team belongs to another club the label carries no position name (the Nezavisni revizor's MEDIUM-1)", async () => {
   const { team, s, distance } = await positionWorld();
   const cadmin = await withRole("club admin", `insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [team.clubId], ["club", team.clubId]);
