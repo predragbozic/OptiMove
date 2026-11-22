@@ -482,6 +482,11 @@ list widened. Verified on Claude Code 2.1.329 (2026-11-20) with a throwaway proj
 whose hook command did not exist: the call ran.
 
 **With `"onFailure": "block"` (what `settings.json` sets, Claude Code 2.1.295 or later).**
+Minimum versions, per the hooks reference: `onFailure` on a hook of type `command` (or
+`http`) needs 2.1.295; on a hook of type `mcp_tool` it needs 2.1.328. All three guard
+registrations here - the `mcp__.*` matcher included - are `command` hooks, so 2.1.295 is
+the minimum for all of them; the matcher is about which tool is called, not the hook
+type. (Verified on 2.1.329.)
 Every one of those failures blocks the tool call instead; Claude sees
 `PreToolUse:Bash hook error: … blocking because onFailure is "block"` with the cause
 (`its program could not be started (ENOENT)`, `timed out`, …). Verified on 2.1.329 for a
