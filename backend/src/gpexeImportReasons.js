@@ -45,6 +45,9 @@ export const BLOCKED_CODES = Object.freeze({
 // with how many athletes or results it concerns, in the order the coach
 // should read them.
 export const REASON_CODES = Object.freeze({
+  // ST-2: OptiMove has no session type for this session yet (the team has no suggestion for the source's category, or
+  // the suggested type was archived). The approver chooses one; until then it cannot be imported. Listed first.
+  session_type_required: "session_type_required",
   // No recorded athlete of the session is linked to an OptiMove athlete:
   // an import would write nothing. Listed instead of athletes_not_linked.
   no_linked_athlete: "no_linked_athlete",
@@ -60,6 +63,8 @@ export const REASON_CODES = Object.freeze({
 // GPEXE adapter codes (gpexeImportMapper.js / gpexeImportWriter.js) by the
 // neutral category they belong to.
 const SOURCE_CODE_TO_BLOCKED = new Map([
+  // Before ST-2 the mapper refused every category but one. No new preview carries this code; a preview stored before
+  // ST-2 keeps it until its session is found or reviewed again.
   ["unsupported_category", BLOCKED_CODES.unsupported_session_type],
   ["identities_missing_from_source", BLOCKED_CODES.earlier_import_left_behind],
   ...["thresholds_missing", "thresholds_wrong_team", "thresholds_not_valid_for_session", "thresholds_payload_incomplete"]
@@ -99,6 +104,12 @@ function athleteReason(athlete) {
   return null;
 }
 
+// ST-2: the stored preview says no session type could be decided for this session ("none"; a preview from before ST-2
+// has no such field and is never read as required - its first approval recomputes it).
+export function sessionTypeRequired(preview) {
+  return preview?.session?.activityTypeSource === "none";
+}
+
 // { blockedCode, blockedSourceCode, sessionType, reasons } for one candidate
 // row. `preview` is the stored preview when the snapshot is available, null
 // otherwise (then nothing is known, as for previewStatus and counts).
@@ -119,6 +130,7 @@ export function candidateReasons(status, preview) {
     if (code) counts.set(code, (counts.get(code) || 0) + 1);
   }
   const reasons = [];
+  if (sessionTypeRequired(preview)) reasons.push({ code: REASON_CODES.session_type_required, count: 1 });
   const linked = athletes.filter((a) => a.athleteId).length;
   if (athletes.length && !linked) reasons.push({ code: REASON_CODES.no_linked_athlete, count: athletes.length });
   else if (counts.has(REASON_CODES.athletes_not_linked)) reasons.push({ code: REASON_CODES.athletes_not_linked, count: counts.get(REASON_CODES.athletes_not_linked) });

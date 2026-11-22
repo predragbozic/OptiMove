@@ -22,6 +22,7 @@ import { importGpexePlanLocked, lockTeamForImport, GpexeImportError } from "./gp
 import { calculatedForOccasions } from "./calculatedValues.js";
 import { canonicalDecimal, compareDecimal } from "./sourceMetricExtractors.js";
 import { rangeWords } from "./sourceConditionRules.js";
+import { resolveSessionType } from "./gpexeSessionType.js";
 
 // 2: changesToImported (phase F2). 3: values through mapping activations (9-B,
 // J17 section 4): each value names its activation, mapping version, canonical
@@ -264,11 +265,16 @@ async function currentState(client, ownerTeamId, externalIds) {
   return byId;
 }
 
-function sessionSummary(bundle, plan) {
+// sessionType (ST-2): what resolveSessionType decided under the caller's locks - the type this import writes (or the
+// imported session keeps) and where it comes from. "none" is the blocker session_type_required. A session the import's
+// own gates refuse carries nulls: nothing about its type was decided.
+function sessionSummary(bundle, plan, sessionType = null) {
   const s = bundle?.teamSession ?? {};
   return {
     gpexeTeamSessionId: s.id !== undefined ? String(s.id) : null,
     categoryName: s.category_name ?? null,
+    activityTypeKey: sessionType?.activityTypeKey ?? null,
+    activityTypeSource: sessionType?.source ?? null,
     startTimestamp: s.start_timestamp ?? null,
     drillsCount: Number(s.drills_count ?? 0),
     name: plan?.event?.name ?? null,
@@ -417,7 +423,13 @@ export async function buildCandidatePreview(client, { bundle, ownerTeamId, perfo
 // `invalidExclusions` and changes nothing (the approval answers preview_changed,
 // the subset preview 400 invalid_exclusion). With an empty set this function
 // is byte for byte what it was.
-export async function previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId, excludedAthleteIds = [] }) {
+//
+// ST-2: `activityTypeKey` is the approver's choice of the session type (a key in its canonical shape, validated by the
+// caller; undefined = no choice). The type the import writes is decided here, under the caller's locks and before the
+// import itself runs (resolveSessionType; the type row FOR SHARE is the last lock taken before the import's own). It is
+// part of the preview's session summary and so of the hash. `sessionType.refusal` says the choice cannot be used; the
+// caller then writes nothing (the preview returned is the one WITHOUT the choice).
+export async function previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId, excludedAthleteIds = [], activityTypeKey = undefined }) {
   const excluded = new Set(excludedAthleteIds);
   const invalidExclusions = [];
   const activationSet = mapping?.activationSet ?? [];
@@ -433,6 +445,10 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     if (!(error instanceof GpexeMappingError)) throw error;
     return blockedByMapping(bundle, error, { activationSet, unactivated });
   }
+  const sessionType = await resolveSessionType(client, {
+    ownerTeamId, categoryName: gates.event.categoryName, sourceExternalId: gates.event.sourceExternalId, chosenKey: activityTypeKey,
+  });
+  gates.event.activityTypeKey = sessionType.activityTypeKey;
   let plan = gates;
   let blocked = null;
   let specs = [];
@@ -467,10 +483,10 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     else {
       specs = built.specs;
       try {
-        plan = buildGpexeImportPlan(bundle, { metricSpecs: specs, teamTimezone, trackChoices });
+        plan = buildGpexeImportPlan(bundle, { metricSpecs: specs, teamTimezone, trackChoices, activityTypeKey: sessionType.activityTypeKey });
       } catch (error) {
         if (!(error instanceof GpexeMappingError)) throw error;
-        return blockedByMapping(bundle, error, { activationSet, unactivated });
+        return { ...blockedByMapping(bundle, error, { activationSet, unactivated }), sessionType };
       }
     }
   }
@@ -744,7 +760,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     version: PREVIEW_VERSION,
     status,
     blocked,
-    session: sessionSummary(bundle, plan),
+    session: sessionSummary(bundle, plan, sessionType),
     thresholdsUsed: plan.thresholdsUsed ? { id: plan.thresholdsUsed.id ?? null } : null,
     counts,
     // Non-empty: the approval must carry acceptChanges = true.
@@ -769,5 +785,5 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   // refuses if anything differs.
   const state = [...before.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, s]) => [id, s.currentOccasionId, s.contentHash]);
   for (const id of excluded) if (!gpexeRowsByAthlete.has(id)) invalidExclusions.push(id);
-  return { preview, previewHash: hashOf(preview, state, activationSet), summary, invalidExclusions: [...new Set(invalidExclusions)].sort((a, b) => Number(a) - Number(b)) };
+  return { preview, previewHash: hashOf(preview, state, activationSet), summary, invalidExclusions: [...new Set(invalidExclusions)].sort((a, b) => Number(a) - Number(b)), sessionType };
 }
