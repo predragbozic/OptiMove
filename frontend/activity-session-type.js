@@ -107,7 +107,7 @@ async function send(target, render, command = null) {
   r.busy = { ...(r.busy || {}), [busyKey]: true };
   render();
   const result = await sendRosterCommand(cmd);
-  if (roster().activityId !== activityId) return;
+  if (roster().activityId !== activityId || roster().types !== t) return;
   const { [busyKey]: _done, ...rest } = roster().busy || {};
   roster().busy = rest;
   t.busy = null;
@@ -116,7 +116,8 @@ async function send(target, render, command = null) {
     t.notice = {
       tone: "saved", scope: target.scope, athleteId: target.athleteId ?? null, text: savedText(target, result.body, r),
       // Undo sets the previous type back; not offered when nothing changed or when the change also ended other rows.
-      undo: changed && !(result.body?.endedExceptionAthleteIds || []).length
+      // A session's type cannot be set back to "none" (the route refuses null), so no Undo when it had none.
+      undo: changed && (target.scope === "athlete" || target.previousKey) && !(result.body?.endedExceptionAthleteIds || []).length
         ? { scope: target.scope, athleteId: target.athleteId ?? null, athleteName: target.athleteName ?? null, typeKey: target.previousKey ?? null, previousKey: target.typeKey ?? null }
         : null,
     };

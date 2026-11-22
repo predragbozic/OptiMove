@@ -29,10 +29,10 @@ globalThis.fetch = async (url, options = {}) => {
 function serve(method, url, body) {
   const view = (t) => ({ key: t.key, label: t.label, ownerScope: t.ownerScope, active: t.active, sortOrder: 100 });
   if (method === "GET" && url === "/api/training-activity/session-types") {
-    if (world.role === "athlete") return { status: 404, body: { error: "not_found", message: "Not found." } };
+    if (world.role === "athlete") return { status: 404, body: { error: "notFound", message: "Not found." } };
     return { status: 200, body: { types: world.types.map((t) => ({ ...view(t), editable: world.role === "clubAdmin" && t.ownerScope === "club" })), canAdd: world.role === "clubAdmin" ? "club" : null } };
   }
-  if (method !== "POST" || world.role !== "clubAdmin") return { status: 404, body: { error: "not_found", message: "Not found." } };
+  if (method !== "POST" || world.role !== "clubAdmin") return { status: 404, body: { error: "notFound", message: "Not found." } };
   if (seen.has(body.requestKey)) return seen.get(body.requestKey);
   const answer = (() => {
     if (url === "/api/training-activity/session-types") {
@@ -43,7 +43,7 @@ function serve(method, url, body) {
     }
     const m = url.match(/^\/api\/training-activity\/session-types\/([^/]+)\/(rename|archive|restore)$/);
     const t = m && world.types.find((x) => x.key === decodeURIComponent(m[1]) && x.ownerScope === "club");
-    if (!t) return { status: 404, body: { error: "not_found", message: "Not found." } };
+    if (!t) return { status: 404, body: { error: "notFound", message: "Not found." } };
     if (m[2] === "rename") {
       if (t.label !== body.expectedLabel) return { status: 409, body: { error: "label_changed", message: "x" } };
       t.label = body.label;
@@ -175,4 +175,32 @@ test("6. a coach reads the list without any write control; an account that may n
   assert.equal(writes().length, 0);
   await open("athlete");
   assert.equal(html(), "");
+});
+
+test("7. a rename open while the role is lost: the route's 404 notFound closes the form and says nothing was saved", async () => {
+  const st = await open();
+  await act("session-types-rename", { key: "c_0000abcd_gym" });
+  assert.ok(st.editing);
+  st.editing.label = "Strength";
+  world.role = "coach";
+  await act("session-types-rename-save");
+  assert.equal(st.editing, null);
+  assert.match(html(), /You can&#039;t change this session type\. Nothing was saved\./);
+  assert.equal(writes().length, 1);
+});
+
+test("8. a write whose answer arrives after a workspace change touches nothing of the new workspace's state", async () => {
+  const st = await open();
+  fault = async (method) => {
+    if (method === "POST") {
+      resetSessionTypesForWorkspaceChange();
+      return { status: 409, body: { error: "label_taken", message: "x" } };
+    }
+    return undefined;
+  };
+  await act("session-types-archive", { key: "c_0000abcd_gym" });
+  assert.equal(st.unconfirmed, null);
+  assert.equal(st.notice, null);
+  assert.equal(st.sending, null);
+  assert.equal(writes().length, 1);
 });

@@ -2990,7 +2990,7 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
     <div class="gpexe-approve gpexe-approve-subset">
       <p><strong>${escapeHtml(`Leaving out ${plural(leave.length, "athlete", "athletes")}: ${names.join(", ")}.`)}</strong>
         <span class="muted">${leave.length === 1 ? `Nothing of ${escapeHtml(names[0])} is imported from this session.` : "Nothing of them is imported from this session."} If GPEXE later sends different data for it, you will review it again. You can set their attendance on their rows now, or later in the session's Roster tab.</span></p>
-      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(SUBSET_ERROR_TEXT[sub.error?.code] || "The review without them could not be made. Nothing was imported.")}</p>` : ""}
+      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(TYPE_CHOICE_ERROR_TEXT[sub.error?.code] || SUBSET_ERROR_TEXT[sub.error?.code] || "The review without them could not be made. Nothing was imported.")}</p>` : ""}
       ${ready ? `<p class="muted" role="status">${escapeHtml(`Reviewed without them: ${plural(after, "athlete", "athletes")} will be imported.`)}</p>` : ""}
       ${statesLineHtml(c, detail)}
       ${!ready && !loading && !failed ? `<p class="muted">First we check the import without them. Nothing is saved yet.</p>` : ""}

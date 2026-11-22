@@ -13,6 +13,16 @@ function typed(selector, fallback) {
   return fallback ?? "";
 }
 
+// The field's current text, or null when there is no such field on screen.
+function fieldValue(selector) {
+  try {
+    const el = globalThis.document?.querySelector?.(selector);
+    return el && typeof el.value === "string" ? el.value : null;
+  } catch {
+    return null;
+  }
+}
+
 function labelProblem(label) {
   if (!label) return "Type a name first.";
   if (label.length > SESSION_TYPE_LABEL_MAX) return `A name is at most ${SESSION_TYPE_LABEL_MAX} characters.`;
@@ -23,6 +33,11 @@ export async function handleSessionTypesAction(action, { render }) {
   const type = action.dataset.action;
   if (!type || !type.startsWith("session-types-")) return false;
   const st = sessionTypesState();
+  // Whatever is typed survives the repaint this action causes.
+  const newField = fieldValue("[data-session-type-new]");
+  if (newField !== null) st.newLabel = newField;
+  const renameField = fieldValue("[data-session-type-rename]");
+  if (renameField !== null && st.editing) st.editing.label = renameField;
   if (type === "session-types-reload") { await loadSessionTypesSettings(render, { force: true }); return true; }
   if (type === "session-types-check") {
     if (st.unconfirmed && !st.sending) await sendSessionTypeWrite(st.unconfirmed, render);

@@ -14,7 +14,8 @@ export function sessionTypesState() {
 
 export async function loadSessionTypesSettings(render, { force = false } = {}) {
   const st = sessionTypesState();
-  if (st.loading || (st.loaded && !force)) return;
+  if (st.loading) { if (force) st.rereadWanted = true; return; }
+  if (st.loaded && !force) return;
   const generation = (st.generation += 1);
   st.loading = true;
   st.error = "";
@@ -33,6 +34,9 @@ export async function loadSessionTypesSettings(render, { force = false } = {}) {
   } finally {
     if (generation === st.generation) {
       st.loading = false;
+      const again = st.rereadWanted;
+      st.rereadWanted = false;
+      if (again) { void loadSessionTypesSettings(render, { force: true }); return; }
       render();
     }
   }
@@ -45,7 +49,7 @@ const REFUSALS = {
   type_archived: "Restore the session type before renaming it.",
   invalid_label: `A name is 1 to ${SESSION_TYPE_LABEL_MAX} characters on one line.`,
   try_again: "The list is being changed right now. Try again in a moment.",
-  not_found: "You can't change this session type.",
+  notFound: "You can't change this session type.",
 };
 
 // One write. `write` = { kind: "add" | "rename" | "archive" | "restore", key?, label?, expectedLabel?, requestKey }.
@@ -54,6 +58,7 @@ const REFUSALS = {
 export async function sendSessionTypeWrite(write, render) {
   const st = sessionTypesState();
   if (st.sending) return;
+  const generation = st.generation;
   st.sending = write;
   st.notice = null;
   st.unconfirmed = null;
@@ -62,6 +67,7 @@ export async function sendSessionTypeWrite(write, render) {
   const body = { requestKey: write.requestKey, ...(write.kind === "add" || write.kind === "rename" ? { label: write.label } : {}), ...(write.kind === "rename" ? { expectedLabel: write.expectedLabel } : {}) };
   try {
     const answer = await api(path, { method: "POST", body: JSON.stringify(body) });
+    if (generation !== st.generation) return;
     const label = answer?.type?.label ?? write.label ?? "";
     st.notice = { tone: "saved", text: write.kind === "add" ? `Added: ${label}.` : write.kind === "rename" ? `Renamed to ${label}.` : write.kind === "archive" ? `${label} is archived. Sessions that have it keep it; it is no longer offered.` : `${label} is offered again.`,
       // An archive is undone by a restore and the other way round, by the same person, with no reason asked.
@@ -71,20 +77,22 @@ export async function sendSessionTypeWrite(write, render) {
     // The Imports review reads the list again the next time it needs it.
     if (state.trainingLoad?.gpexe) state.trainingLoad.gpexe.sessionTypes = null;
   } catch (error) {
+    if (generation !== st.generation) return;
     const code = typeof error?.data?.error === "string" ? error.data.error : null;
     const status = Number(error?.status) || 0;
     if (code && status >= 400 && status < 500) {
       st.notice = { tone: "refused", text: `${REFUSALS[code] || "The change was refused."} Nothing was saved.`, key: write.key ?? null };
       // The row is no longer what the form was opened on: the form closes and the list shows it as it is now.
-      if (code === "label_changed" || code === "type_archived" || code === "not_found") st.editing = null;
+      if (code === "label_changed" || code === "type_archived" || code === "notFound") st.editing = null;
     }
     else {
       st.unconfirmed = write;
       st.notice = { tone: "unconfirmed", text: "We can't tell yet whether the change was saved. Check the result; it will not be saved twice." };
     }
   } finally {
-    st.sending = null;
+    if (generation === st.generation) st.sending = null;
   }
+  if (generation !== st.generation) return;
   if (!st.unconfirmed) await loadSessionTypesSettings(render, { force: true });
   else render();
 }

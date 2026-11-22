@@ -290,3 +290,15 @@ test("8. an unconfirmed approval keeps the type it was sent with: the reopened r
   assert.equal(gx().detail.typeChoice, "match", "never the suggestion in its place");
   assert.equal(gx().detail.subset, null, "the reviewed hash is not kept");
 });
+
+test("9. an imported session shows its type's name from the list, which is read once for it", async () => {
+  await openReview({ candidates: [row({ status: "imported", importedAt: "2026-10-07T10:00:00Z" })] });
+  session = { activityTypeKey: "match", activityTypeSource: "imported_session", categoryName: "FULL TRAINING" };
+  await act("training-load-gpexe-close");
+  fetchCalls.length = 0;
+  gx().sessionTypes = null;
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(fetchCalls.filter((c) => c.method === "GET" && c.url === "/api/training-activity/session-types").length, 1);
+  assert.match(html(), /Session type<\/span> <strong>Game<\/strong>/);
+});

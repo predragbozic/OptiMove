@@ -538,7 +538,8 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
     gx.detail.participationReasons = Array.isArray(participationReasons) ? participationReasons : [];
     statesOf(gx.detail, gx);
     // ST-5: the session types the reviewer may choose from (read once per Imports visit).
-    if (candidate?.status === "pending") void loadSessionTypes(render);
+    // An imported or replaced session shows its type's name too, so any review that carries a type reads the list.
+    if (candidate?.preview?.session && "activityTypeSource" in candidate.preview.session) void loadSessionTypes(render);
     // 6b-C2: an imported session's review links the athletes who took part without device data to their estimate.
     if (candidate?.status === "imported") void loadEstimateTargets(gx.detail, render);
     // J20-A2 follow-up (J20 section 4): U3's suggested pair comes first in a row's chooser.
@@ -666,6 +667,8 @@ export async function reviewGpexeSubset(ids, render) {
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
     detail.subset = { status: "error", ids: [...ids], typeKey, error: errorInfo(error) };
+    // The list the chooser shows is out of date: read it again.
+    if (detail.subset.error?.code === "session_type_not_offered") gx.sessionTypes = null;
   } finally {
     if (generation === gx.generation && gx.detail === detail) render();
   }

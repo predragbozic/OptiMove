@@ -9,7 +9,7 @@ globalThis.window = { confirm: () => true, matchMedia: () => ({ matches: false }
 
 const { emptyTrainingLoadState, state } = await import("../state.js");
 const { renderActivityRosterHtml } = await import("../activity-roster-view.js");
-const { handleActivityRosterAction, loadRosterForOpenActivity, rosterMayBeLeft } = await import("../activity-roster-actions.js");
+const { handleActivityRosterAction, loadRosterForOpenActivity, rosterHasPendingOutcome } = await import("../activity-roster-actions.js");
 const { resetActivityRoster } = await import("../activity-roster-data.js");
 const { estimateLabelText } = await import("../activity-estimate.js");
 
@@ -65,6 +65,7 @@ function realWrite(method, url, body) {
   const athlete = url.match(/^\/api\/training-activity\/act-1\/roster\/([^/]+)\/type$/);
   const offered = (key) => TYPES.some((t) => t.key === key && t.active);
   if (session && method === "POST") {
+    if (typeof body.activityTypeKey !== "string") return { status: 400, body: { error: "invalid_session_type", message: "x" } };
     if (body.activityTypeKey === world.sessionType) return { status: 200, body: { changed: false, activityTypeKey: world.sessionType, endedExceptionAthleteIds: [] } };
     if (!offered(body.activityTypeKey)) return { status: 409, body: { error: "session_type_not_offered", message: "x" } };
     const previous = world.sessionType;
@@ -170,6 +171,7 @@ test("4. a lost answer is 'not confirmed': Check result repeats the same request
   let page = html();
   assert.match(page, /We can&#039;t tell yet whether the session type was saved|We can't tell yet whether the session type was saved/);
   assert.ok(roster.types.unconfirmed);
+  assert.equal(rosterHasPendingOutcome(), true, "an unconfirmed type change is a pending outcome");
   assert.match(selectOf(page, "training-load-roster-session-type")[0], /disabled/);
   assert.match(page, /data-action="training-load-roster-athlete-type" data-athlete-id="ath-1"[^>]*disabled/);
   await act("training-load-roster-athlete-type", { athleteId: "ath-1" }, "rtp_session");
@@ -180,7 +182,7 @@ test("4. a lost answer is 'not confirmed': Check result repeats the same request
   assert.deepEqual(writes()[1].body, writes()[0].body, "the same request, the same key");
   assert.equal(roster.types.unconfirmed, null);
   assert.match(html(), /Session type saved: Game\./);
-  assert.equal(typeof rosterMayBeLeft, "function");
+  assert.equal(rosterHasPendingOutcome(), false, "nothing pending after Check result");
 });
 
 test("5. a session type change that removes an athlete's equal own type says so and offers no Undo (it would not bring the own type back)", async () => {
@@ -209,4 +211,31 @@ test("6. a viewer who does not decide reads the type as text; a type a merge or 
   page = html();
   assert.match(page, /The session types could not be read\./);
   assert.deepEqual(options(page, "training-load-roster-session-type"), [["training_session", "Training session", true]]);
+});
+
+test("7. a session that had no type: choosing one is saved, but no Undo is offered (the route cannot set a session's type back to none)", async () => {
+  await openRoster({ sessionType: null });
+  await act("training-load-roster-session-type", {}, "match");
+  assert.equal(writes().length, 1);
+  assert.equal(world.sessionType, "match");
+  assert.match(html(), /Session type saved: Game\./);
+  assert.doesNotMatch(html(), /training-load-roster-type-undo/);
+});
+
+test("8. an answer that arrives after the roster moved to another session changes nothing of the new one", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await openRoster({ write: async (...args) => { await gate; return realWrite(...args); } });
+  const pending = act("training-load-roster-session-type", {}, "match");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  resetActivityRoster("act-2");
+  const fresh = state.trainingLoad.calendar.roster;
+  release();
+  await pending;
+  assert.equal(state.trainingLoad.calendar.roster, fresh);
+  assert.equal(fresh.activityId, "act-2");
+  assert.equal(fresh.types?.notice ?? null, null);
+  assert.equal(fresh.types?.busy ?? null, null);
+  assert.deepEqual(fresh.busy ?? {}, {});
+  assert.equal(requests.filter((r) => r.method === "GET" && r.url.endsWith("/roster")).length, 0, "no reread for the old session");
 });
