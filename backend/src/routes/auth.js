@@ -12,6 +12,7 @@ import {
 } from "../auth.js";
 import { accessScope, publicRole } from "../access.js";
 import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
+import { permissionsForWorkspace } from "../permissions.js";
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 import { closeUnusableJoinLinkApplications, loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
@@ -80,6 +81,9 @@ router.get("/me", async (req, res, next) => {
     ]);
     const clubNameById = new Map(clubsResult.rows.map((c) => [String(c.id), c.name]));
     const teamNameById = new Map(teamsResult.rows.map((t) => [String(t.id), t.name]));
+    // Roles R3: the words held in the active workspace, from can() over the
+    // authz this request already loaded (no query). Navigation only.
+    const workspacePermissions = permissionsForWorkspace(authz, activeWorkspace);
 
     res.json({
       user: {
@@ -94,6 +98,11 @@ router.get("/me", async (req, res, next) => {
         teams: teamRoles.map((r) => ({ id: r.teamId, name: teamNameById.get(String(r.teamId)) || null, role: r.role })),
         activeWorkspace,
         availableWorkspaces,
+        // Navigation hints only: every route still decides through can().
+        // Empty with permissionsUnavailable true when the role tables could
+        // not be read for this request (fail closed).
+        permissions: workspacePermissions.permissions,
+        permissionsUnavailable: workspacePermissions.unavailable,
         // The language of exercise content (names, instructions), not of the
         // interface.
         contentLanguage: languageResult.rows[0]?.content_language === "en" ? "en" : "sr",
