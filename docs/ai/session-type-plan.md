@@ -524,10 +524,10 @@ imported again):
   The Training Load calendar still shows the raw key words ("training session") until ST-5 reads the labels.
 - **Runbook:** `docs/runbooks/session-types-v85.md`, with its preflight, post-check, rollback and the rehearsal tool.
 
-## 16. ST-4 as built, part 1 (migration v87, `migrations_v2/202611221100_training_load_v87_manual_values.sql`)
+## 16. ST-4 as built, part 1 (migration v86, `migrations_v2/202611221100_training_load_v86_manual_values.sql`)
 
-The number and prefix are temporary until the *Rukovodilac* gives the final ones. Departures from section 7, decided
-while building, for the reviewers:
+Number and prefix given by the *Rukovodilac* on 2026-11-22. Departures from section 7, decided while building, for the
+reviewers:
 - **New roster routes instead of the Metrics-screen routes.** `GET /api/training-activity/:activityId/manual-values?athleteId=`
   (the form), `POST …/manual-values` (an entry, or a correction when the athlete has a device record) and
   `POST …/manual-values/restore` (the *Undo correction* of section 7) in `backend/src/manualValueService.js`. Audience and
@@ -536,13 +536,13 @@ while building, for the reviewers:
 - **Provenance has a table of its own** (`training_load.metric_manual_values`): who, when, on which right, which request
   (the replay reads it, as v64 does for estimates). `metric_write_requests` is not used: its foreign key would block the
   undo.
-- **A restore is a new manual occasion equal to the measured one** (v87 checks it in every semantic column); the measured
+- **A restore is a new manual occasion equal to the measured one** (v86 checks it in every semantic column); the measured
   occasion is never made current again (v13 supersedes once). It reads "Measured values restored by <coach> on <date>".
 - **A later entry carries over the values it does not name**, as a correction copies the values not changed.
 - **Roster state:** an athlete with an entry gets *Manual values* (group done, so the session can be completed); a
   corrected athlete stays *Measured* with the flag `corrected` and each corrected value's `measuredValue`;
   `training.activity_roster_needs_state` agrees. A manual value of another path (the Metrics screen) is as before.
-- **Undo (Q3):** v87's undo removes manual values only with `p_manual_values_fingerprint`, the confirmation of exactly the
+- **Undo (Q3):** v86's undo removes manual values only with `p_manual_values_fingerprint`, the confirmation of exactly the
   listed ones; a Metrics-screen write request still refuses, checked first.
 - **Approval columns for later pull requests** (agreed with the ST-2 executor on 2026-11-22):
   `gpexe_import_approvals.replaced_manual_athlete_ids` (the re-import question) and `chosen_activity_type_key` (ST-2's
@@ -551,5 +551,8 @@ while building, for the reviewers:
 - **Known limits:** v25's "measured is never overridden" decision trigger and v44's `activity_has_roster` count only
   `api_import` / `csv_import` as measured, so a corrected athlete can still be given a roster decision, and a
   one-participant imported session whose only record is corrected loses its roster (GPEXE sessions have many athletes).
+- **A `removal` kind is in the schema, with no writer yet:** an empty manual occasion that ends an entry (the athlete
+  needs a state again; the entry stays as history). The owner's open question of 2026-11-22 ("may a coach remove a
+  value or a whole entry?"); if yes, *Remove these values* is a route of the re-import pull request, with no migration.
 - **Not in part 1:** the re-import question and the `manual_replaced` writer path (after ST-2's merge), the screens.
-- **Runbook:** `docs/runbooks/manual-values-v87.md`, with its preflight, post-check and rollback.
+- **Runbook:** `docs/runbooks/manual-values-v86.md`, with its preflight, post-check and rollback.

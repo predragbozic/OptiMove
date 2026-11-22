@@ -1,7 +1,7 @@
-# Manual values on the roster: migration v87
+# Manual values on the roster: migration v86
 
-Migration: `migrations_v2/202611221100_training_load_v87_manual_values.sql` (the 12-digit prefix is temporary until the
-*Rukovodilac* gives the final one before the freeze; rename the file and every reference below together).
+Migration: `migrations_v2/202611221100_training_load_v86_manual_values.sql` (number and prefix given by the *Rukovodilac*
+on 2026-11-22).
 Plan: `docs/ai/session-type-plan.md` sections 7, 8 and 13 (Q3), and section 16 "ST-4 as built".
 
 ## What it changes
@@ -20,11 +20,11 @@ Plan: `docs/ai/session-type-plan.md` sections 7, 8 and 13 (Q3), and section 16 "
 
 ## Order of the deploy
 
-1. The owner's order naming v87, and a quiet moment (no import, check or undo running: the migration takes the occasions
+1. The owner's order naming v86, and a quiet moment (no import, check or undo running: the migration takes the occasions
    and values SHARE ROW EXCLUSIVE and the deletion log and approvals ACCESS EXCLUSIVE, `lock_timeout` 5 s).
-2. Preflight: `manual-values-v87-preflight.sql` (read only; every column true).
-3. Deploy (the migrator applies v87 at start).
-4. Post-check: `manual-values-v87-postcheck.sql` (read only; every column true).
+2. Preflight: `manual-values-v86-preflight.sql` (read only; every column true).
+3. Deploy (the migrator applies v86 at start).
+4. Post-check: `manual-values-v86-postcheck.sql` (read only; every column true).
 
 The server flag `MANUAL_VALUES_ENABLED` is on unless it is `"false"` (the *Rukovodilac*, 2026-11-22): no Render change is
 needed. Setting it to `false` makes every manual-values route the identical 404 and hides the roster action; it does not
@@ -32,10 +32,10 @@ touch data.
 
 ## Rollback
 
-`manual-values-v87-rollback.sql`, one transaction, only with the owner's approval for that database and a fresh
-restore-verified backup, and only from a commit that no longer contains the v87 file. It restores v76's undo, v63's scope
-and v26's needs-state by md5, v59's pair rule, and drops everything v87 added. It refuses, changing nothing, while the
-migrator runs, under a later migration, over a changed v87 body, and once v87's data is used (a provenance row, a logged
+`manual-values-v86-rollback.sql`, one transaction, only with the owner's approval for that database and a fresh
+restore-verified backup, and only from a commit that no longer contains the v86 file. It restores v76's undo, v63's scope
+and v26's needs-state by md5, v59's pair rule, and drops everything v86 added. It refuses, changing nothing, while the
+migrator runs, under a later migration, over a changed v86 body, and once v86's data is used (a provenance row, a logged
 manual removal, an approval choice): from then on the way back is forward only.
 
 Rehearsed on disposable databases: `backend/tests/manual-values-st4.test.mjs` tests 13 and 14.

@@ -756,7 +756,7 @@ test("15. the signature: the six-argument v57 function is gone, the seven-argume
       where n.nspname = 'training_load' and p.proname = 'undo_imported_session'`)).rows;
   assert.deepEqual(rows.map((r) => r.a), ["p_actor uuid, p_team uuid, p_candidate uuid, p_request_key uuid, p_reason text, p_expected_event uuid, p_later_roster_fingerprint text"]);
   assert.equal((await admin.query(`select to_regprocedure('training_load.undo_imported_session(uuid,uuid,uuid,uuid,text,uuid)') r`)).rows[0].r, null);
-  // v87 (ST-4) added an eighth argument with a default: the service builds both calls in one place and sends the eighth
+  // v86 (ST-4) added an eighth argument with a default: the service builds both calls in one place and sends the eighth
   // only with a manual-values confirmation, so without one it still calls with seven (this suite's database is through v60).
   const source = fs.readFileSync(new URL("../src/gpexeSessionUndoService.js", import.meta.url), "utf8");
   assert.equal(source.split("training_load.undo_imported_session(").length - 1, 1, "one call builder");

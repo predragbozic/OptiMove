@@ -1,4 +1,4 @@
--- v87: manual values on the roster - an entry for an athlete without a device record, a correction of a measured value,
+-- v86: manual values on the roster - an entry for an athlete without a device record, a correction of a measured value,
 -- the restore of the measured values - and the undo of a session that holds them (ST-4, docs/ai/session-type-plan.md
 -- sections 7, 8 and 13 Q3; the owner's decisions of 2026-11-20).
 --
@@ -30,14 +30,14 @@
 --      those pull requests write them.
 --
 -- Bodies are replaced after an md5 check of the bodies in force (v76's undo, v63's scope, v26's needs-state). New lines sit
--- between "-- v87 begin" and "-- v87 end".
+-- between "-- v86 begin" and "-- v86 end".
 -- Locks, all up front, lock_timeout 5 s: the occasions and values SHARE ROW EXCLUSIVE (the new foreign keys and triggers),
 -- then the deletion log and the approvals ACCESS EXCLUSIVE (their new columns and CHECKs). Occasions before values is the
 -- order of the import and the manual and estimate writes; the session undo deletes values before occasions, so an undo
 -- running at the same moment can end in a deadlock with this migration, which fails closed (one side rolls back, nothing
 -- is half applied). Hence: deploy at a quiet moment (no import, check or undo running). The other locks the DDL takes
 -- (public.users and training.activity_types for the new foreign keys) conflict with no writer of those tables' rows.
--- Runbook: docs/runbooks/manual-values-v87.md (preflight, post-check and rollback; the rollback refuses once a provenance
+-- Runbook: docs/runbooks/manual-values-v86.md (preflight, post-check and rollback; the rollback refuses once a provenance
 -- row, a logged manual removal or an approval choice exists).
 
 set local lock_timeout = '5s';
@@ -58,25 +58,25 @@ declare
   i integer;
 begin
   if to_regclass('training.activity_type_changes') is null then
-    raise exception 'v87 refused: v85 (session types) is not applied' using errcode = '23514';
+    raise exception 'v86 refused: v85 (session types) is not applied' using errcode = '23514';
   end if;
   for i in 1 .. array_length(expected, 1) loop
     if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = expected[i][1] and p.proname = expected[i][2]) <> 1 then
-      raise exception 'v87 refused: %.% must exist exactly once', expected[i][1], expected[i][2] using errcode = '23514';
+      raise exception 'v86 refused: %.% must exist exactly once', expected[i][1], expected[i][2] using errcode = '23514';
     end if;
     if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
          where n.nspname = expected[i][1] and p.proname = expected[i][2]) is distinct from expected[i][3] then
-      raise exception 'v87 refused: the body in force of %.% is not %''s', expected[i][1], expected[i][2], expected[i][4] using errcode = '23514';
+      raise exception 'v86 refused: the body in force of %.% is not %''s', expected[i][1], expected[i][2], expected[i][4] using errcode = '23514';
     end if;
   end loop;
   if exists (select 1 from information_schema.columns where table_schema = 'training_load' and table_name = 'import_deletion_log'
               and column_name = 'manual_values_removed') then
-    raise exception 'v87 refused: import_deletion_log.manual_values_removed already exists' using errcode = '23514';
+    raise exception 'v86 refused: import_deletion_log.manual_values_removed already exists' using errcode = '23514';
   end if;
   if (select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'training_load.gpexe_import_approvals'::regclass
        and conname = 'gpexe_import_approvals_subset_hash_pair') is distinct from 'CHECK (((cardinality(excluded_athlete_ids) = 0) = (subset_hash IS NULL)))' then
-    raise exception 'v87 refused: the subset-hash pair rule in force is not v59''s' using errcode = '23514';
+    raise exception 'v86 refused: the subset-hash pair rule in force is not v59''s' using errcode = '23514';
   end if;
 end $$;
 
@@ -108,7 +108,9 @@ $$ language sql volatile;
 create table training_load.metric_manual_values (
   id uuid primary key default gen_random_uuid(),
   occasion_id uuid not null unique references training_load.metric_measurement_occasions(id) on delete restrict,
-  kind varchar(12) not null check (kind in ('entry', 'correction', 'restore')),
+  -- 'removal' (no writer yet; the owner's open question of 2026-11-22): an empty manual occasion that ends an entry, so the
+  -- athlete has no roster value again; the entry stays as history.
+  kind varchar(12) not null check (kind in ('entry', 'correction', 'restore', 'removal')),
   -- The occasion this one superseded (a correction's or a restore's previous current occasion; an entry's previous entry).
   replaced_occasion_id uuid references training_load.metric_measurement_occasions(id) on delete restrict,
   -- A correction's or a restore's measured occasion (api_import / csv_import, same identity); null for an entry.
@@ -122,12 +124,13 @@ create table training_load.metric_manual_values (
   constraint metric_manual_values_request_unique unique (entered_by_user_id, request_key),
   constraint metric_manual_values_kind_shape check (
     (kind = 'entry' and measured_occasion_id is null)
+    or (kind = 'removal' and measured_occasion_id is null and replaced_occasion_id is not null)
     or (kind in ('correction', 'restore') and measured_occasion_id is not null and replaced_occasion_id is not null))
 );
 create index metric_manual_values_replaced_idx on training_load.metric_manual_values (replaced_occasion_id) where replaced_occasion_id is not null;
 create index metric_manual_values_measured_idx on training_load.metric_manual_values (measured_occasion_id) where measured_occasion_id is not null;
 comment on table training_load.metric_manual_values is
-  'v87: the provenance of a manual value written on the roster (entry, correction, restore): who, when, on which right, which request. Append-only; removed only by the session undo.';
+  'v86: the provenance of a manual value written on the roster (entry, correction, restore): who, when, on which right, which request. Append-only; removed only by the session undo.';
 
 create function training_load.validate_metric_manual_value() returns trigger as $$
 declare
@@ -151,6 +154,18 @@ begin
   if new.replaced_occasion_id is distinct from v_occ.supersedes_occasion_id then
     raise exception 'manual value: the replaced occasion is the one this occasion supersedes' using errcode = '23514';
   end if;
+  -- A removal: an empty occasion of the same athlete that ends an entry (no source record, no value, now or later).
+  if new.kind = 'removal' then
+    select o.entry_method, o.source_identity_id, o.event_participant_id into v_prev
+      from training_load.metric_measurement_occasions o where o.id = new.replaced_occasion_id;
+    if v_occ.source_identity_id is not null or v_prev.entry_method is distinct from 'manual' or v_prev.source_identity_id is not null
+       or v_prev.event_participant_id is distinct from v_occ.event_participant_id
+       or not exists (select 1 from training_load.metric_manual_values m where m.occasion_id = new.replaced_occasion_id and m.kind = 'entry')
+       or exists (select 1 from training_load.metric_values v where v.occasion_id = new.occasion_id) then
+      raise exception 'manual value: a removal is an empty occasion that ends an entry of the same athlete' using errcode = '23514';
+    end if;
+    return new;
+  end if;
   if new.kind = 'entry' then
     if v_occ.source_identity_id is not null then
       raise exception 'manual value: an entry has no source record' using errcode = '23514';
@@ -160,8 +175,8 @@ begin
         from training_load.metric_measurement_occasions o where o.id = new.replaced_occasion_id;
       if v_prev.entry_method is distinct from 'manual' or v_prev.source_identity_id is not null
          or v_prev.event_participant_id is distinct from v_occ.event_participant_id
-         or not exists (select 1 from training_load.metric_manual_values m where m.occasion_id = new.replaced_occasion_id and m.kind = 'entry') then
-        raise exception 'manual value: an entry replaces only an earlier entry' using errcode = '23514';
+         or not exists (select 1 from training_load.metric_manual_values m where m.occasion_id = new.replaced_occasion_id and m.kind in ('entry', 'removal')) then
+        raise exception 'manual value: an entry replaces only an earlier entry (or its removal)' using errcode = '23514';
       end if;
     end if;
     return new;
@@ -275,10 +290,10 @@ AS $function$
       from training.canonical_activity_results(p_canonical_activity_id) x
      where x.fact_kind = 'metric_value'
        and (x.detail ->> 'entryMethod' in ('api_import', 'csv_import')
-            -- v87 begin: a value entered or corrected on the roster (its provenance row) gives the athlete a state too.
+            -- v86 begin: a value entered or corrected on the roster (its provenance row) gives the athlete a state too.
             or (x.detail ->> 'entryMethod' = 'manual'
                 and exists (select 1 from training_load.metric_manual_values mv where mv.occasion_id = (x.detail ->> 'occasionId')::uuid)))
-            -- v87 end
+            -- v86 end
   )
   select r.athlete_id
     from r
@@ -312,7 +327,7 @@ begin
        or (select array_agg(k order by k) from jsonb_object_keys(v_item) k) is distinct from array['at', 'athlete', 'by', 'kind', 'values']
        or jsonb_typeof(v_item -> 'athlete') <> 'string'
        or v_item ->> 'athlete' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-       or jsonb_typeof(v_item -> 'kind') <> 'string' or (v_item ->> 'kind') not in ('entry', 'correction', 'restore', 'other')
+       or jsonb_typeof(v_item -> 'kind') <> 'string' or (v_item ->> 'kind') not in ('entry', 'correction', 'restore', 'removal', 'other')
        or not (jsonb_typeof(v_item -> 'by') = 'null'
                or (jsonb_typeof(v_item -> 'by') = 'string' and v_item ->> 'by' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'))
        or jsonb_typeof(v_item -> 'at') <> 'string'
@@ -330,7 +345,7 @@ alter table training_load.import_deletion_log
   add constraint import_deletion_log_manual_values_removed_shape
   check (training_load.session_undo_manual_log_ok(manual_values_removed, deleted_by_user_id));
 comment on column training_load.import_deletion_log.manual_values_removed is
-  'v87: the manual values the undo removed after the user confirmed them: {count, list (at most 60 current ones), fingerprint, confirmed_by}; null when there were none.';
+  'v86: the manual values the undo removed after the user confirmed them: {count, list (at most 60 current ones), fingerprint, confirmed_by}; null when there were none.';
 
 -- ---------------------------------------------------------------------------
 -- 5. The session undo: the scope lists the manual values
@@ -361,8 +376,8 @@ declare
   v_calendar integer := 0;
   v_write_requests integer := 0;
   v_work jsonb;
-  v_manual_list jsonb; -- v87
-  v_manual_fp text; -- v87
+  v_manual_list jsonb; -- v86
+  v_manual_fp text; -- v86
 begin
   select e.id, e.source_connection_id, e.source_external_id, e.owner_team_id, e.occurred_date, c.source_system
     into v_event
@@ -375,7 +390,7 @@ begin
   v_part := coalesce(array(select id from training_load.metric_event_participants where event_id = p_event order by id), '{}');
   v_occ := coalesce(array(select id from training_load.metric_measurement_occasions where event_participant_id = any(v_part) order by id), '{}');
   select count(*)::int into v_manual from training_load.metric_measurement_occasions where id = any(v_occ) and entry_method = 'manual';
-  -- v87 begin: every manual occasion (history included) is in the fingerprint; the current ones are listed (at most 60).
+  -- v86 begin: every manual occasion (history included) is in the fingerprint; the current ones are listed (at most 60).
   if v_manual > 0 then
     select encode(sha256(convert_to(string_agg(o.id::text, ',' order by o.id), 'UTF8')), 'hex') into v_manual_fp
       from training_load.metric_measurement_occasions o where o.id = any(v_occ) and o.entry_method = 'manual';
@@ -392,7 +407,7 @@ begin
                                                        where si.id = o.source_identity_id and si.current_occasion_id = o.id))
        order by o.created_at, o.id limit 60) items;
   end if;
-  -- v87 end
+  -- v86 end
   -- v63: estimates are listed and removed with the session; they never block (contract rule 8).
   select count(*)::int into v_est_occ from training_load.metric_measurement_occasions where id = any(v_occ) and entry_method = 'estimate';
   select count(*)::int into v_est_val from training_load.metric_value_estimates where occasion_id = any(v_occ);
@@ -470,7 +485,7 @@ begin
     'batchIds', to_jsonb(v_batch),
     'observationIds', to_jsonb(v_obs),
     'manualOccasionCount', v_manual,
-    -- v87: the manual values, for the confirmation (null when there are none).
+    -- v86: the manual values, for the confirmation (null when there are none).
     'manualValues', case when v_manual > 0 then jsonb_build_object('count', v_manual, 'list', v_manual_list, 'fingerprint', v_manual_fp) end,
     'estimateOccasionCount', v_est_occ,
     'estimateValueCount', v_est_val,
@@ -529,8 +544,8 @@ declare
   v_later_total integer;
   v_roster_removed jsonb;
   v_roster_n integer;
-  v_manual jsonb; -- v87
-  v_manual_removed jsonb; -- v87
+  v_manual jsonb; -- v86
+  v_manual_removed jsonb; -- v86
 begin
   if p_actor is null or p_team is null or p_candidate is null or p_request_key is null then
     raise exception 'undo_imported_session: actor, team, candidate and request key are required' using errcode = '22023';
@@ -541,15 +556,15 @@ begin
   if v_confirm and p_later_roster_fingerprint !~ '^[0-9a-f]{64}$' then
     raise exception 'undo_imported_session: the later roster work fingerprint is 64 lowercase hex characters' using errcode = '22023';
   end if;
-  -- v87 begin
+  -- v86 begin
   if p_manual_values_fingerprint is not null and p_manual_values_fingerprint !~ '^[0-9a-f]{64}$' then
     raise exception 'undo_imported_session: the manual values fingerprint is 64 lowercase hex characters' using errcode = '22023';
   end if;
-  -- v87 end
+  -- v86 end
   -- v57's hash when nothing is confirmed (a v57 request replays unchanged); a confirmation is part of the request.
   v_hash := encode(sha256(convert_to(p_candidate::text || '|' || v_reason || '|' || coalesce(p_expected_event::text, '')
                                      || case when v_confirm then '|confirm|' || p_later_roster_fingerprint else '' end
-                                     -- v87: a confirmation of manual values is part of the request too.
+                                     -- v86: a confirmation of manual values is part of the request too.
                                      || case when p_manual_values_fingerprint is not null then '|manual|' || p_manual_values_fingerprint else '' end, 'UTF8')), 'hex');
 
   -- 1. The right: -- v76 begin whoever may approve an import of this team (the owner's decision of 2026-11-17), derived by
@@ -653,13 +668,13 @@ begin
       raise exception 'undo_imported_session: the activities of the event keep changing' using errcode = '55P03';
     end if;
   end loop;
-  -- v87 begin: manual values never block for good (the owner's answer Q3 of 2026-11-20): they are removed only with a
+  -- v86 begin: manual values never block for good (the owner's answer Q3 of 2026-11-20): they are removed only with a
   -- confirmation of exactly the list computed below, under the team's import lock (every manual write takes it too). A
   -- manual entry of another path that left a write request refuses for good, checked here first.
   if (v_scope ->> 'manualWriteRequestCount')::int > 0 then
     perform training_load.session_undo_refuse('manual_write_request_exists');
   end if;
-  -- v87 end
+  -- v86 end
   if (v_scope ->> 'sharedActivityCount')::int > 0 then
     perform training_load.session_undo_refuse('shared_activity');
   end if;
@@ -672,7 +687,7 @@ begin
   if (v_scope ->> 'calendarLinkCount')::int > 0 then
     perform training_load.session_undo_refuse('calendar_link_exists', v_scope ->> 'calendarLinkCount');
   end if;
-  -- v87 begin: the manual values' confirmation, after every refusal that is final (as v60's below), so a person is never
+  -- v86 begin: the manual values' confirmation, after every refusal that is final (as v60's below), so a person is never
   -- asked to confirm a list that is then refused anyway.
   v_manual := v_scope -> 'manualValues';
   if (v_scope ->> 'manualOccasionCount')::int > 0 then
@@ -686,7 +701,7 @@ begin
     -- A fingerprint confirms a list; with no manual value at all that list is gone.
     perform training_load.session_undo_refuse('manual_values_changed', '{"count":0,"list":[],"fingerprint":null}');
   end if;
-  -- v87 end
+  -- v86 end
   -- v60 (O1): the roster work never blocks what the import wrote; LATER work is removed only with a confirmation of
   -- exactly the list computed here, under the team's import lock (every roster command takes it too).
   v_work := v_scope -> 'rosterWork';
@@ -781,11 +796,11 @@ begin
       delete from training_load.metric_value_estimates where occasion_id = any(v_occ);
       get diagnostics v_n = row_count;
       v_removed := training_load.session_undo_add(v_removed, 'estimates_removed', v_n);
-      -- v87 begin: a manual value's provenance row goes before its occasion (it references it).
+      -- v86 begin: a manual value's provenance row goes before its occasion (it references it).
       delete from training_load.metric_manual_values where occasion_id = any(v_occ);
       get diagnostics v_n = row_count;
       v_removed := training_load.session_undo_add(v_removed, 'metric_manual_values', v_n);
-      -- v87 end
+      -- v86 end
       delete from training_load.metric_values where occasion_id = any(v_occ);
       get diagnostics v_n = row_count;
       v_removed := training_load.session_undo_add(v_removed, 'metric_values', v_n);
@@ -844,18 +859,18 @@ begin
       'later_fingerprint', v_work -> 'laterWork' -> 'fingerprint',
       'confirmed_by', case when v_later_total > 0 then to_jsonb(p_actor) else 'null'::jsonb end);
   end if;
-  -- v87 begin: what was confirmed and removed.
+  -- v86 begin: what was confirmed and removed.
   if (v_scope ->> 'manualOccasionCount')::int > 0 then
     v_manual_removed := jsonb_build_object('count', (v_manual ->> 'count')::int, 'list', v_manual -> 'list',
                                            'fingerprint', v_manual -> 'fingerprint', 'confirmed_by', to_jsonb(p_actor));
   end if;
-  -- v87 end
+  -- v86 end
 
   -- 8. The deletion log (v21): one row, in this transaction, after the event is gone.
   insert into training_load.import_deletion_log
     (deleted_by_user_id, authorized_via, reason, event_id, source_system, source_connection_id, source_external_id,
      owner_team_id, occurred_date, reference_set_external_id, removed_counts, removed_total, roster_work_removed,
-     manual_values_removed /* v87 */)
+     manual_values_removed /* v86 */)
   values (p_actor, v_basis /* v76: derived above */, v_reason, v_event_id, v_scope ->> 'sourceSystem', (v_scope ->> 'connectionId')::uuid,
           v_scope ->> 'externalId', (v_scope ->> 'ownerTeamId')::uuid, (v_scope ->> 'occurredDate')::date,
           v_scope ->> 'referenceSetExternalId', v_removed, v_total, v_roster_removed, v_manual_removed)
@@ -909,7 +924,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 --   replaced_manual_athlete_ids: the athletes whose manual values the approval replaced with GPEXE's ("Use GPEXE's values").
 --   chosen_activity_type_key: the session type the coach chose when it differs from the team's suggestion; null for the
---     suggestion, for an approval of an already imported session, and for every approval before v87.
+--     suggestion, for an approval of an already imported session, and for every approval before v86.
 -- A subset hash binds a choice: present exactly when the approval has one (an excluded athlete, a replaced manual value or a
 -- chosen type) - v59's pair rule, widened.
 alter table training_load.gpexe_import_approvals
@@ -930,4 +945,4 @@ alter table training_load.gpexe_import_approvals
                              and chosen_activity_type_key is null));
 
 comment on function training_load.undo_imported_session(uuid, uuid, uuid, uuid, text, uuid, text, text) is
-  'v87: the sanctioned undo of one imported GPEXE session, its roster work, estimates and (confirmed) manual values included, by whoever may import it (lock_gpexe_session_undo_right). See migrations_v2/202611221100_training_load_v87_manual_values.sql.';
+  'v86: the sanctioned undo of one imported GPEXE session, its roster work, estimates and (confirmed) manual values included, by whoever may import it (lock_gpexe_session_undo_right). See migrations_v2/202611221100_training_load_v86_manual_values.sql.';

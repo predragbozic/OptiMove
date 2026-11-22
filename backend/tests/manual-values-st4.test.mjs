@@ -1,5 +1,5 @@
 // ST-4 (docs/ai/session-type-plan.md section 7, 13 Q3): manual values on the roster - an entry for an athlete without a
-// device record, a correction of a measured value, the restore of the measured values - migration v87's provenance table
+// device record, a correction of a measured value, the restore of the measured values - migration v86's provenance table
 // and guards, the roster's states, and the undo that removes manual values only after a confirmation that lists them.
 // Disposable databases; the imports are the real approvals through the routes.
 import { after, before, test } from "node:test";
@@ -15,7 +15,7 @@ import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding } from "./support/mapped-world.mjs";
 
 const MIGRATIONS = GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events"));
-const V87_FILE = "202611221100_training_load_v87_manual_values.sql";
+const V86_FILE = "202611221100_training_load_v86_manual_values.sql";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -37,7 +37,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  assert.equal(MIGRATIONS[MIGRATIONS.length - 1], V87_FILE, "v87 is the last migration of this suite");
+  assert.equal(MIGRATIONS[MIGRATIONS.length - 1], V86_FILE, "v86 is the last migration of this suite");
   db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "st4", migrations: MIGRATIONS });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
@@ -326,7 +326,7 @@ test("3. an entry for an athlete without a device record: a manual occasion of i
   assert.equal(row.group, "done");
   assert.equal(row.manual.kind, "entry");
   assert.equal(row.manual.enteredBy.name, "coach");
-  assert.ok(!(await needsState(s.activityId)).includes(eva), "after: Eva has a state (v87's needs-state)");
+  assert.ok(!(await needsState(s.activityId)).includes(eva), "after: Eva has a state (v86's needs-state)");
   // The replay and a reused key.
   const before = await writes(team.teamId);
   const again = await tapi(`/${s.activityId}/manual-values`, { method: "POST", cookie: team.coach.cookie, body });
@@ -445,7 +445,7 @@ test("6. a correction of a measured value: the measured occasion is kept as supe
   assert.ok(!(await needsState(s.activityId)).includes(ana), "a corrected athlete keeps a state");
 });
 
-test("7. (after 6) the restore: only after a correction; the new manual occasion holds exactly the measured values (v87 refuses anything else, even by a raw write); a restore of a restore is nothing_to_restore", async () => {
+test("7. (after 6) the restore: only after a correction; the new manual occasion holds exactly the measured values (v86 refuses anything else, even by a raw write); a restore of a restore is nothing_to_restore", async () => {
   const { team, s, distance } = await sessionWorld();
   const ana = team.athleteIds[ANA];
   const f = await form(s, ana, team.coach.cookie);
@@ -499,7 +499,7 @@ test("7. (after 6) the restore: only after a correction; the new manual occasion
   }
 });
 
-test("8. (after 3) v87's guards: a provenance row without the acting user, a forged author, an UPDATE or DELETE outside the undo, a value added to an occasion that has its provenance, and a roster manual occasion without its provenance row by COMMIT are all refused", async () => {
+test("8. (after 3) v86's guards: a provenance row without the acting user, a forged author, an UPDATE or DELETE outside the undo, a value added to an occasion that has its provenance, and a roster manual occasion without its provenance row by COMMIT are all refused", async () => {
   const { team, s, distance } = await sessionWorld();
   const row = (await admin.query(`select occasion_id from training_load.metric_manual_values limit 1`)).rows[0];
   assert.ok(distance);
@@ -707,6 +707,64 @@ test("16. the undo refuses a session whose manual value left a Metrics-screen wr
   assert.deepEqual([undone.status, undone.body.error], [409, "manual_write_request_exists"]);
 });
 
+test("18. v86's 'removal' kind (no writer yet): an empty occasion of the same athlete ends an entry and the athlete needs a state again; a removal with a value, of an occasion that is no entry, or of another athlete is refused; a later entry follows a removal", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9708, hour: 18, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const eva = team.athleteIds[EVA];
+  const entry = await saveValues(s, { athleteId: eva, values: [{ metricDefinitionId: distance, value: 700 }] }, team.coach.cookie);
+  assert.equal(entry.status, 201, entry.text);
+  const participantOf = async (athleteId) => (await admin.query(`select id from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [s.eventId, athleteId])).rows[0]?.id;
+  const evaParticipant = await participantOf(eva);
+  const asActor = async (fn) => {
+    const c = new pg.Client({ connectionString: db.url });
+    await c.connect();
+    try {
+      await c.query("begin");
+      await c.query(`select set_config('optimove.manual_value_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
+      return await fn(c);
+    } finally {
+      await c.query("rollback").catch(() => {});
+      await c.end();
+    }
+  };
+  const removal = (c, participant, replaced) => c.query(
+    `with o as (insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id, supersedes_occasion_id)
+                values ($1, 'manual', $2, $3) returning id),
+          s as (update training_load.metric_measurement_occasions set superseded_by_occasion_id = (select id from o) where id = $3)
+     insert into training_load.metric_manual_values (occasion_id, kind, replaced_occasion_id, entered_by_user_id, entered_by_basis, request_key, request_hash)
+     select id, 'removal', $3, $2, 'team_coach', gen_random_uuid(), repeat('b', 64) from o returning occasion_id`,
+    [participant, team.coach.id, replaced]);
+  // A valid removal, committed: the athlete has no roster value again.
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  try {
+    await c.query("begin");
+    await c.query(`select set_config('optimove.manual_value_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
+    await removal(c, evaParticipant, entry.body.occasionId);
+    await c.query("commit");
+  } finally {
+    await c.end();
+  }
+  assert.ok((await needsState(s.activityId)).includes(eva), "after a removal the athlete needs a state again");
+  // Refusals: the removal of something that is no entry (a measured occasion of another athlete).
+  const ana = team.athleteIds[ANA];
+  const anaMeasured = (await admin.query(
+    `select o.id from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.event_id = $1 and p.athlete_id = $2 and o.segment_id is null and o.superseded_by_occasion_id is null and o.entry_method = 'api_import'`, [s.eventId, ana])).rows[0].id;
+  await asActor(async (cl) => {
+    await assert.rejects(removal(cl, await participantOf(ana), anaMeasured), /a removal is an empty occasion that ends an entry|guard|superseded/);
+  });
+  // A later entry follows the removal through the service.
+  const f = await form(s, eva, team.coach.cookie);
+  assert.equal(f.body.mode, "entry");
+  assert.ok(f.body.expectedOccasionId, "the removal is the current occasion");
+  const again = await saveValues(s, { athleteId: eva, expectedOccasionId: f.body.expectedOccasionId, values: [{ metricDefinitionId: distance, value: 710 }] }, team.coach.cookie);
+  assert.equal(again.status, 201, again.text);
+  assert.deepEqual(again.body.values.map((v) => v.value), [710], "nothing of the removed entry is carried over");
+  assert.ok(!(await needsState(s.activityId)).includes(eva));
+});
+
 test("17. a session with manual values and a calendar link: the undo refuses calendar_link_exists before it asks to confirm the manual values", async () => {
   const team = await setupTeam();
   const s = await importSession(team, bundleOf({ sessionId: 9707, hour: 17, ids: [101, 102] }));
@@ -785,7 +843,7 @@ test("15. the COMMIT outcome: a COMMIT whose answer is lost after it committed a
 // ---------------------------------------------------------------------------
 const RUNBOOK = (name) => new URL(`../../docs/runbooks/${name}`, import.meta.url);
 const readRunbook = (name) => fs.readFileSync(RUNBOOK(name), "utf8");
-const BEFORE_V87 = MIGRATIONS.filter((m) => m !== V87_FILE);
+const BEFORE_V86 = MIGRATIONS.filter((m) => m !== V86_FILE);
 async function booleansOf(client, sql) {
   const results = [].concat(await client.query(sql));
   const out = [];
@@ -814,27 +872,27 @@ async function catalogOf(client) {
   return { constraints, columns, triggers, functions, tables, migrations };
 }
 
-test("13. migration v87: the preflight passes before it, the post-check after it, the rollback restores the catalog before v87 exactly, and v87 applies again", async () => {
-  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v87rb", migrations: BEFORE_V87 });
+test("13. migration v86: the preflight passes before it, the post-check after it, the rollback restores the catalog before v86 exactly, and v86 applies again", async () => {
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v86rb", migrations: BEFORE_V86 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
   try {
-    const pre = await booleansOf(client, readRunbook("manual-values-v87-preflight.sql"));
+    const pre = await booleansOf(client, readRunbook("manual-values-v86-preflight.sql"));
     assert.ok(pre.length >= 12, `the preflight returned its booleans (${pre.length})`);
-    assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v87");
+    assert.deepEqual(pre.filter(([, v]) => v !== true), [], "every preflight block is ok before v86");
     const before = await catalogOf(client);
     await applyGpexeTestMigrations(rb.url, MIGRATIONS);
-    const post = await booleansOf(client, readRunbook("manual-values-v87-postcheck.sql"));
+    const post = await booleansOf(client, readRunbook("manual-values-v86-postcheck.sql"));
     assert.ok(post.length >= 16, `the post-check returned its booleans (${post.length})`);
-    assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok after v87");
+    assert.deepEqual(post.filter(([, v]) => v !== true), [], "every post-check block is ok after v86");
     const after = await catalogOf(client);
     assert.notDeepEqual(after, before);
     for (const fn of ["undo_imported_session", "session_undo_scope", "activity_roster_needs_state", "validate_metric_manual_value", "session_undo_manual_log_ok", "forbid_value_after_manual_provenance"]) {
       const m = (await client.query(`select md5(prosrc) m from pg_proc where proname = $1`, [fn])).rows[0].m;
-      assert.match(readRunbook("manual-values-v87-rollback.sql"), new RegExp(m), `the rollback names ${fn}'s body in force`);
+      assert.match(readRunbook("manual-values-v86-rollback.sql"), new RegExp(m), `the rollback names ${fn}'s body in force`);
     }
-    await client.query(readRunbook("manual-values-v87-rollback.sql"));
-    assert.deepEqual(await catalogOf(client), before, "the rollback restores the catalog before v87 exactly");
+    await client.query(readRunbook("manual-values-v86-rollback.sql"));
+    assert.deepEqual(await catalogOf(client), before, "the rollback restores the catalog before v86 exactly");
     await applyGpexeTestMigrations(rb.url, MIGRATIONS);
     assert.deepEqual(await catalogOf(client), after, "re-applied: the same catalog");
   } finally {
@@ -843,34 +901,34 @@ test("13. migration v87: the preflight passes before it, the post-check after it
   }
 });
 
-test("14. the rollback refuses, changing nothing, once v87's data is used and under a later migration; the migration refuses over a replaced body", async () => {
+test("14. the rollback refuses, changing nothing, once v86's data is used and under a later migration; the migration refuses over a replaced body", async () => {
   // This suite's own database holds provenance rows and a logged manual removal (tests 3-11).
-  const sql = readRunbook("manual-values-v87-rollback.sql");
+  const sql = readRunbook("manual-values-v86-rollback.sql");
   const c1 = new pg.Client({ connectionString: db.url });
   await c1.connect();
   try {
     const before = await catalogOf(c1);
-    await assert.rejects(c1.query(sql), /v87 rollback refused: a manual value was written on a roster/);
+    await assert.rejects(c1.query(sql), /v86 rollback refused: a manual value was written on a roster/);
     await c1.query("rollback").catch(() => {});
     assert.deepEqual(await catalogOf(c1), before, "nothing changed");
   } finally {
     await c1.end();
   }
-  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v87gate", migrations: BEFORE_V87 });
+  const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v86gate", migrations: BEFORE_V86 });
   const client = new pg.Client({ connectionString: rb.url });
   await client.connect();
   try {
     for (const fn of ["training_load.undo_imported_session", "training_load.session_undo_scope", "training.activity_roster_needs_state"]) {
       const original = (await client.query(`select pg_get_functiondef(to_regproc($1)) d`, [fn])).rows[0].d;
       await client.query(original.replace(/\$function\$\s*\n/, "$function$\n-- changed\n"));
-      await assert.rejects(client.query(fs.readFileSync(new URL(`../../migrations_v2/${V87_FILE}`, import.meta.url), "utf8")), /v87 refused: the body in force of/, fn);
+      await assert.rejects(client.query(fs.readFileSync(new URL(`../../migrations_v2/${V86_FILE}`, import.meta.url), "utf8")), /v86 refused: the body in force of/, fn);
       assert.equal((await client.query(`select to_regclass('training_load.metric_manual_values') is null as n`)).rows[0].n, true, "a refused run changes nothing");
       await client.query(original);
     }
     await applyGpexeTestMigrations(rb.url, MIGRATIONS);
     await client.query(`insert into public.schema_migrations (migration_name, checksum, runner_version) values ('migrations_v2/209912310000_later.sql', repeat('0', 64), 'test')`);
     const before = await catalogOf(client);
-    await assert.rejects(client.query(readRunbook("manual-values-v87-rollback.sql")), /later migrations are applied/);
+    await assert.rejects(client.query(readRunbook("manual-values-v86-rollback.sql")), /later migrations are applied/);
     await client.query("rollback").catch(() => {});
     assert.deepEqual(await catalogOf(client), before);
   } finally {
