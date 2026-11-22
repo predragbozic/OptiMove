@@ -1,6 +1,7 @@
 import { builderIconGlyph } from "./builder-helpers.js";
 import { renderImage } from "./media.js";
 import { renderFilterableSelect } from "./organization-select.js";
+import { renderPositionsSectionHtml } from "./positions-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -66,6 +67,7 @@ export function renderTaxonomyPanelHtml(data) {
         addPlaceholder: `e.g. ${LIBRARY_KIND_META[kind].label}`,
         data,
       })).join("")}
+      ${renderPositionsSectionHtml()}
     </section>
   `;
 }

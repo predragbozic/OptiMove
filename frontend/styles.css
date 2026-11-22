@@ -29808,6 +29808,18 @@ body.athlete-questions-prompt-open {
 }
 .cc-go-meta { color: var(--muted); font-weight: 600; }
 
+/* v87: positions (Settings -> Tags & Presets, and the athlete's Edit window). */
+.positions-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.positions-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 4px 0; border-bottom: 1px solid var(--line, #dfe4e8); }
+.positions-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.positions-row.is-archived strong { color: var(--muted, #667085); }
+.positions-actions { display: flex; gap: 12px; }
+.positions-actions .text-action, .positions-rename-form .text-action { min-height: 44px; min-width: 44px; }
+.positions-rename-form { flex: 1 1 100%; }
+.positions-add-form { display: flex; flex-direction: column; gap: 8px; }
+/* 16 px at every width (iOS zoom); an older dialog rule sets 14 px on desktop, so this one is marked important. */
+.positions-section input, .positions-section select, [data-position-form] input, [data-position-form] select { font-size: 16px !important; }
+
 /* ============================================================
    Settings > Roles and the role assignment in Settings > Users (roles plan R3).
    The Roles panel is a .data-sources panel (inputs, selects and textareas are
