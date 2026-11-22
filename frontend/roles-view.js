@@ -11,10 +11,30 @@ const rs = () => state.roles;
 
 export const BASIC_ASSIGNABLE = Object.freeze({ club_admin: "club", team_coach: "team" });
 
-// "athletes.logins.manage" -> "Athletes · logins · manage" (the catalog carries no labels; the module label is the group's).
+// What each permission lets a person do, in words a club admin reads (the catalog carries codes only). A word that is
+// not listed here falls back to its code split into words, so a new permission is never blank.
+const LABELS = Object.freeze({
+  "org.view": "See the club and its teams", "org.teams.manage": "Manage teams", "org.club.edit": "Edit the club's details",
+  "accounts.manage": "Manage accounts", "staff.assign": "Give roles to people", "roles.manage": "Create and change roles", "platform.admin": "Platform administration",
+  "athletes.view": "See athletes", "athletes.manage": "Add and edit athletes", "athletes.remove": "Remove athletes", "athletes.logins.manage": "Manage athlete logins",
+  "athletes.library_access": "Set athletes' library access", "join_links.manage": "Manage join links",
+  "programs.view": "See programs", "programs.edit": "Edit programs", "programs.assign": "Assign programs", "programs.publish": "Publish programs", "programs.rpe_settings": "Change RPE settings of programs",
+  "presets.use": "Use tags and presets", "presets.manage": "Manage tags and presets", "exercise_lists.manage": "Manage exercise lists",
+  "exercises.use": "Use exercises", "exercises.add": "Add exercises", "exercises.media.upload": "Upload exercise videos and pictures", "exercises.remove": "Remove exercises", "exercises.blocks.manage": "Manage exercise blocks",
+  "calendar.view": "See the calendar", "calendar.events.manage": "Manage calendar events", "calendar.settings.manage": "Change calendar settings",
+  "load.view.team": "See the team's training load", "load.view.athlete": "See one athlete's training load", "load.schedule.manage": "Manage the training load schedule",
+  "load.roster.decide": "Decide who took part in a session", "load.estimates.manage": "Manage estimated values", "load.activities.manage": "Manage activities",
+  "dashboards.view": "See dashboards", "dashboards.manage": "Manage dashboards",
+  "import.check": "Look for new sessions to import", "import.link": "Link athletes to imported records", "import.approve": "Approve imports", "import.undo": "Undo imports",
+  "tests.view": "See tests", "tests.results.view": "See test results", "tests.schedule.manage": "Manage the tests schedule", "tests.library.manage": "Manage the tests library",
+  "messages.send": "Send messages",
+  "variables.view": "See variables", "variables.rename_archive": "Rename and archive variables", "variables.manage": "Create and change variables", "mappings.manage": "Manage mappings",
+  "sources.connect": "Connect data sources", "platform.metrics.manage": "Manage the platform's metrics",
+});
 export function permissionLabel(word) {
+  if (LABELS[word]) return LABELS[word];
   const parts = String(word).split(/[._]/).filter(Boolean);
-  return parts.map((part, index) => (index === 0 ? part.charAt(0).toUpperCase() + part.slice(1) : part)).join(" · ");
+  return parts.map((part, index) => (index === 0 ? part.charAt(0).toUpperCase() + part.slice(1) : part)).join(" ");
 }
 
 export function roleScopeLabel(role) {
@@ -29,10 +49,10 @@ export function permissionReason(word, form, catalog) {
   if (form.mode === "view") return "";
   const basicKey = form.role?.basicKey || "";
   if (cat.platformOnly) return "Only platform administrators can have this.";
-  if (cat.systemRoleOnly && basicKey !== "club_admin") return "Only the Club admin role can hold this.";
+  if (cat.systemRoleOnly && basicKey !== "club_admin") return "Only the Club admin role can have this.";
   if (!cat.honoured) return "Not in use yet - it has no effect today.";
-  if (!(catalog.held || []).includes(word)) return "You do not hold this permission yourself.";
-  if (!(catalog.delegable || []).includes(word) && basicKey !== "club_admin") return "You cannot hand this on.";
+  if (!(catalog.held || []).includes(word)) return "You don't have this permission yourself, so you can't give it.";
+  if (!(catalog.delegable || []).includes(word) && basicKey !== "club_admin") return "You can't give this to others.";
   const types = form.draft.scopeTypes || [];
   if (types.length && !cat.scopeTypes.some((t) => types.includes(t))) return "It does not apply to the chosen kind of access.";
   return "";
@@ -40,7 +60,7 @@ export function permissionReason(word, form, catalog) {
 
 function roleBadges(role) {
   const out = [];
-  if (role.owner?.scope === "system") out.push(`<span class="role-badge">${role.isBasic ? "Basic role" : "System role"}</span>`);
+  if (role.owner?.scope === "system") out.push(`<span class="role-badge">${role.actions?.change ? "Built in" : "Built in · can't be edited"}</span>`);
   if (role.archived) out.push(`<span class="user-status-badge is-disabled">Archived</span>`);
   return out.join(" ");
 }
@@ -123,11 +143,23 @@ function rowHtml(role, d) {
     </article>`;
 }
 
-// What the role would show in the app: the areas (modules) that at least one ticked permission belongs to.
+// What the role would show in the app: the areas that at least one ticked permission belongs to, each with its level
+// ("Athletes (View)"), so "Organization and staff" never reads as full control when only viewing is ticked.
 export function roleSections(items, catalog) {
   const words = new Set(items || []);
-  const modules = new Set((catalog?.permissions || []).filter((p) => words.has(p.word)).map((p) => p.module));
-  return (catalog?.modules || []).filter((m) => modules.has(m.word)).map((m) => m.label);
+  const out = [];
+  for (const group of catalog?.groups || []) {
+    const own = group.permissions.filter((w) => words.has(w));
+    if (!own.length) continue;
+    const exact = (group.levels || []).find((l) => l.permissions.length === own.length && l.permissions.every((w) => own.includes(w)));
+    out.push(`${group.label} (${exact ? exact.label.toLowerCase() : "custom"})`);
+  }
+  return out;
+}
+
+function wordHtml(word, draft, reason, readOnly) {
+  const disabled = readOnly || Boolean(reason);
+  return `<li><label><input type="checkbox" data-roles-word="${escapeAttr(word)}"${draft.items.includes(word) ? " checked" : ""}${disabled ? " disabled" : ""}> ${escapeHtml(permissionLabel(word))}</label>${reason ? `<small class="roles-reason">${escapeHtml(reason)}</small>` : ""}</li>`;
 }
 
 function groupHtml(group, form, catalog) {
@@ -137,6 +169,7 @@ function groupHtml(group, form, catalog) {
   const own = group.permissions.filter((w) => draft.items.includes(w));
   const exact = (group.levels || []).find((l) => l.permissions.length === own.length && l.permissions.every((w) => own.includes(w)));
   const customLevel = !exact;
+  const unavailable = readOnly ? [] : group.permissions.filter((w) => reasons[w] && !draft.items.includes(w));
   const levelKey = exact?.key;
   return `
     <fieldset class="roles-group" data-roles-group="${escapeAttr(group.key)}">
@@ -148,12 +181,9 @@ function groupHtml(group, form, catalog) {
         </select>
       </label>
       <ul class="roles-words">
-        ${group.permissions.map((word) => {
-          const reason = reasons[word];
-          const disabled = readOnly || Boolean(reason);
-          return `<li><label><input type="checkbox" data-roles-word="${escapeAttr(word)}"${draft.items.includes(word) ? " checked" : ""}${disabled ? " disabled" : ""}> ${escapeHtml(permissionLabel(word))}</label>${reason ? `<small class="roles-reason">${escapeHtml(reason)}</small>` : ""}</li>`;
-        }).join("")}
+        ${group.permissions.filter((w) => !reasons[w] || draft.items.includes(w) || readOnly).map((word) => wordHtml(word, draft, reasons[word], readOnly)).join("")}
       </ul>
+      ${unavailable.length ? `<details class="roles-unavailable"><summary>${unavailable.length} more ${unavailable.length === 1 ? "permission" : "permissions"} can't be ticked</summary><ul class="roles-words">${unavailable.map((word) => wordHtml(word, draft, reasons[word], readOnly)).join("")}</ul></details>` : ""}
     </fieldset>`;
 }
 
@@ -173,7 +203,9 @@ function formHtml(d, ctx) {
   const submit = { create: "Create role", edit: "Save changes", copy: "Copy role", archive: "Archive role" }[mode];
   let body;
   if (mode === "archive") {
-    body = `<p>${holders ? `${holders} ${holders === 1 ? "person holds" : "people hold"} this role now. A role that is held can't be archived: take it from them first.` : "Nobody holds this role. It will be archived and can no longer be given."}</p>${reasonField}`;
+    body = holders
+      ? `<p>${holders} ${holders === 1 ? "person has" : "people have"} this role. Take it from them first: in Users, open "Who holds what", choose this role and revoke it.</p>`
+      : `<p>Nobody has this role. It will be archived and can no longer be given.</p>${reasonField}`;
   } else if (mode === "copy") {
     body = `<p class="muted">A copy keeps the permissions you may hand on. The rest are listed after the copy is made.</p>
       <label class="search-field"><span>Name of the copy (optional)</span><input data-roles-field="name" value="${escapeAttr(draft.name || "")}" maxlength="80" autocomplete="off"></label>`;
@@ -187,11 +219,11 @@ function formHtml(d, ctx) {
       </fieldset>
       ${mode === "edit" && holders ? `<p class="muted">${holders} ${holders === 1 ? "person holds" : "people hold"} this role. A change applies to all of them.</p>` : ""}
       ${readOnly && role ? `<p class="muted">You can read this role but not change it.</p>` : ""}
-      ${(catalog?.groups || []).map((g) => groupHtml(g, form, catalog)).join("")}
       <section class="roles-preview" aria-live="polite" data-roles-preview>
         <h4>What this role sees</h4>
         ${sections.length ? `<ul>${sections.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>` : `<p class="muted">Nothing yet. Tick at least one permission.</p>`}
       </section>
+      ${(catalog?.groups || []).map((g) => groupHtml(g, form, catalog)).join("")}
       ${reasonField}
       ${readOnly ? historyHtml(form) : ""}
       ${mode === "edit" ? historyHtml(form) : ""}`;
@@ -203,7 +235,7 @@ function formHtml(d, ctx) {
       ${form.error ? `<p class="builder-error" role="alert">${escapeHtml(form.error)}</p>` : ""}
       <div class="data-sources-form-actions">
         <button class="plain-button" type="button" data-action="roles-cancel"${busy && !readOnly ? " disabled" : ""}>${readOnly ? "Close" : "Cancel"}</button>
-        ${readOnly || form.loading ? "" : `<button class="plain-button data-sources-primary${mode === "archive" ? " danger-button" : ""}" type="submit"${busy ? " disabled" : ""}>${escapeHtml(submit)}</button>`}
+        ${readOnly || form.loading || (mode === "archive" && holders) ? "" : `<button class="plain-button data-sources-primary${mode === "archive" ? " danger-button" : ""}" type="submit"${busy ? " disabled" : ""}>${escapeHtml(submit)}</button>`}
       </div>
     </form>`;
 }
@@ -266,15 +298,15 @@ export function renderRolesAssignHtml(data) {
         </label>
         ${list?.error ? `<p class="builder-error" role="alert">${escapeHtml(list.error)}</p>` : ""}
         ${role && !basic ? `
-          <label class="search-field"><span>Title shown next to the name (optional)</span><input name="displayTitle" data-roles-assign-field="displayTitle" value="${escapeAttr(a.draft.displayTitle)}" maxlength="80" autocomplete="off"></label>
+          <label class="search-field"><span>Title shown next to the name in Users and Roles (optional)</span><input name="displayTitle" data-roles-assign-field="displayTitle" value="${escapeAttr(a.draft.displayTitle)}" maxlength="80" autocomplete="off"></label>
           <label class="search-field"><span>Ends on (optional)</span><input type="date" name="expiresAt" data-roles-assign-field="expiresAt" value="${escapeAttr(a.draft.expiresAt)}"></label>
           <label class="search-field"><span>Reason (kept in the history)</span><textarea name="reason" data-roles-assign-field="reason" rows="2" maxlength="500" required>${escapeHtml(a.draft.reason)}</textarea></label>` : ""}
-        ${basic ? `<p class="muted">A basic role has no title, end date or reason.</p>` : ""}
+        ${basic && role.basicKey === "club_admin" ? `<p class="muted" role="status">A Club admin can change everything in this club, including who else is an admin.</p>` : ""}
         ${a.error ? `<p class="builder-error" role="alert">${escapeHtml(a.error)}</p>` : ""}
         ${a.notice ? `<p class="muted" role="status" tabindex="-1" data-roles-assign-notice>${escapeHtml(a.notice)}</p>` : ""}
         ${cmd?.unconfirmed ? `<div class="data-sources-error" role="alert"><p><strong>Result not confirmed.</strong> ${escapeHtml(cmd.checkNote || "The answer was lost, so it is not known whether the role was given.")}</p><button class="plain-button data-sources-primary" type="button" data-action="roles-assign-check"${cmd.busy ? " disabled" : ""}>Check result</button></div>` : ""}
         <div class="organization-form-footer">
-          <button class="plain-button data-sources-primary" type="submit"${!role || cmd ? " disabled" : ""}>${cmd?.busy ? "Saving…" : "Give role"}</button>
+          <button class="plain-button data-sources-primary" type="submit"${!role || cmd ? " disabled" : ""}>${cmd?.busy ? "Saving…" : role?.basicKey === "club_admin" ? "Give Club admin" : "Give role"}</button>
         </div>
       </form>
     </div>`;
@@ -290,6 +322,8 @@ export function renderRolesWhoHtml(data) {
   const clubs = data.clubs || [];
   const clubId = who.clubId || ctx?.clubId || "";
   const roles = (d.assign.byClub[clubId]?.roles || []).filter((r) => !r.archived);
+  const ended = who.rows.filter((r) => r.state !== "active");
+  const shown = who.showEnded ? who.rows : who.rows.filter((r) => r.state === "active");
   const teamName = (id) => (data.teams || []).find((t) => String(t.id) === String(id))?.name || "Team";
   const clubName = (id) => clubs.find((c) => String(c.id) === String(id))?.name || "Club";
   const date = (value) => { const t = new Date(value); return Number.isNaN(t.getTime()) ? "" : t.toLocaleDateString("en-GB"); };
@@ -303,8 +337,9 @@ export function renderRolesWhoHtml(data) {
       ${who.error ? `<p class="builder-error" role="alert">${escapeHtml(who.error)}</p>` : ""}
       ${who.notice ? `<p class="muted" role="status" tabindex="-1" data-roles-who-notice>${escapeHtml(who.notice)}</p>` : ""}
       <div class="roles-who-list">
-        ${who.rows.length ? who.rows.map((row) => whoRowHtml(row, who, { teamName, clubName, date })).join("") : who.loading || !who.loaded ? `<p class="muted" role="status">Loading…</p>` : `<p class="muted">Nobody holds a role here yet.</p>`}
+        ${shown.length ? shown.map((row) => whoRowHtml(row, who, { teamName, clubName, date })).join("") : who.loading || !who.loaded ? `<p class="muted" role="status">Loading…</p>` : `<p class="muted">Nobody holds a role here yet.</p>`}
       </div>
+      ${ended.length ? `<button class="plain-button compact-button" type="button" data-action="roles-who-ended" aria-pressed="${who.showEnded}">${who.showEnded ? "Hide ended" : `Show ended (${ended.length})`}</button>` : ""}
       ${who.nextCursor ? `<button class="plain-button compact-button" type="button" data-action="roles-who-more"${who.loading ? " disabled" : ""}>Show more</button>` : ""}
     </section>`;
 }
@@ -321,12 +356,13 @@ function whoRowHtml(row, who, { teamName, clubName, date }) {
         <span>${escapeHtml(row.roleName || "Role")}${row.title ? ` · ${escapeHtml(row.title)}` : ""}</span>
         <small>${escapeHtml(scope)} · ${escapeHtml(stateWord)}${row.expiresAt ? ` · until ${escapeHtml(date(row.expiresAt))}` : ""}</small>
       </div>
-      <div class="roles-row-actions">
+      ${(canRevoke && !revoking) || (row.source === "basic" && row.state === "active") ? `<div class="roles-row-actions">
         ${canRevoke && !revoking ? `<button class="plain-button compact-button danger-button" type="button" data-action="roles-revoke-open" data-assignment-id="${escapeAttr(row.id)}">Revoke</button>` : ""}
-        ${row.source === "basic" && row.state === "active" ? `<button class="plain-button compact-button" type="button" data-action="organization-manage-account-open" data-user-id="${escapeAttr(row.userId)}">Manage account</button>` : ""}
-      </div>
+        ${row.source === "basic" && row.state === "active" ? `<button class="plain-button compact-button" type="button" data-action="organization-manage-account-open" data-user-id="${escapeAttr(row.userId)}">Remove in Manage account</button>` : ""}
+      </div>` : ""}
       ${revoking ? `
         <form class="roles-revoke-form" data-roles-form="revoke" novalidate>
+          <h4 class="data-sources-form-title">Take ${escapeHtml(row.roleName || "this role")} from ${escapeHtml(row.userName || "this person")}</h4>
           <label class="search-field"><span>Reason (kept in the history)</span><textarea data-roles-revoke-reason rows="2" maxlength="500" required>${escapeHtml(revoking.reason)}</textarea></label>
           ${revoking.error ? `<p class="builder-error" role="alert">${escapeHtml(revoking.error)}</p>` : ""}
           ${revoking.unconfirmed ? `<p class="builder-error" role="alert"><strong>Result not confirmed.</strong> ${escapeHtml(revoking.checkNote || "The answer was lost.")}</p>` : ""}

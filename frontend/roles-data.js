@@ -12,7 +12,7 @@ export const newRolesRequestKey = newCentralCalendarRequestKey;
 export const rolesOutcomeUnknown = centralCalendarOutcomeUnknown;
 
 let generation = 0;
-let usersGeneration = 0;
+let whoGeneration = 0;
 
 const rs = () => state.roles;
 
@@ -35,7 +35,7 @@ export function rolesContext(data = state.organization?.data) {
 export function resetRolesForWorkspaceChange() {
   state.roles = emptyRoles();
   generation += 1;
-  usersGeneration += 1;
+  whoGeneration += 1;
 }
 
 const query = (params) => {
@@ -154,7 +154,6 @@ export async function loadRolesOfClub(clubId, render) {
   const a = d.assign;
   if (!clubId || a.byClub[clubId]?.loading || a.byClub[clubId]?.roles) return;
   a.byClub[clubId] = { loading: true, roles: null, error: "" };
-  const mine = ++usersGeneration;
   render?.();
   try {
     const list = await api(`${ROLES_BASE}${query({ clubId, state: "active" })}`);
@@ -163,12 +162,9 @@ export async function loadRolesOfClub(clubId, render) {
     a.known = true;
   } catch (error) {
     if (state.roles !== d) return;
-    const status = Number(error?.status) || 0;
+    // One club's list failing does not hide the other functions: only "who holds what" answering 404 does.
     a.byClub[clubId] = { loading: false, roles: null, error: describeRolesReadError(error) };
-    // No standing in the Roles API at all: the old forms stay for this account.
-    if (status === 404 || status === 403) a.unavailable = true;
   }
-  void mine;
   render?.();
 }
 
@@ -176,38 +172,42 @@ export function whoQueryOf(who) {
   return { clubId: who.clubId, roleId: who.roleId };
 }
 
+// Each call is its own generation and remembers the query it asked; only the newest answer is used, and the newest
+// always clears `loading`. A filter changed during a read simply starts the next one.
 export async function loadWho({ more = false } = {}, render) {
   const d = rs();
   const who = d.who;
-  if (who.loading) return;
-  const mine = ++usersGeneration;
+  const mine = ++whoGeneration;
+  const key = `${who.clubId}|${who.roleId}`;
+  const cursor = more ? who.nextCursor : "";
   who.loading = true;
+  who.pendingKey = key;
   who.error = "";
   render?.();
   try {
-    const answer = await api(`${ROLES_BASE}/assignments${query({ clubId: who.clubId, roleId: who.roleId, cursor: more ? who.nextCursor : "" })}`);
-    if (state.roles !== d || mine !== usersGeneration) return;
+    const answer = await api(`${ROLES_BASE}/assignments${query({ clubId: who.clubId, roleId: who.roleId, cursor })}`);
+    if (state.roles !== d || mine !== whoGeneration) return;
     const rows = Array.isArray(answer?.assignments) ? answer.assignments : [];
     who.rows = more ? [...who.rows, ...rows] : rows;
     who.nextCursor = typeof answer?.nextCursor === "string" ? answer.nextCursor : "";
     who.loaded = true;
-    who.queryKey = `${who.clubId}|${who.roleId}`;
+    who.queryKey = key;
   } catch (error) {
-    if (state.roles !== d || mine !== usersGeneration) return;
+    if (state.roles !== d || mine !== whoGeneration) return;
     const status = Number(error?.status) || 0;
     who.error = describeRolesReadError(error);
-    if (status === 404 || status === 403) { who.unavailable = true; d.assign.unavailable = true; }
+    if (status === 404) { who.unavailable = true; d.assign.unavailable = true; }
     who.loaded = true;
-    who.queryKey = `${who.clubId}|${who.roleId}`;
+    who.queryKey = key;
   } finally {
-    if (state.roles === d && mine === usersGeneration) who.loading = false;
+    if (state.roles === d && mine === whoGeneration) { who.loading = false; who.pendingKey = ""; }
   }
   render?.();
 }
 
 export function whoNeedsLoad() {
   const who = rs().who;
-  return !who.loading && !who.unavailable && (!who.loaded || who.queryKey !== `${who.clubId}|${who.roleId}`);
+  return !who.unavailable && (!who.loaded || who.queryKey !== `${who.clubId}|${who.roleId}`) && !(who.loading && who.pendingKey === `${who.clubId}|${who.roleId}`);
 }
 
 // Leaving the Users section or the Roles tab drops what was read; the next entry reads again.

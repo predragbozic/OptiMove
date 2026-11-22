@@ -4,7 +4,7 @@
 // is shown as one plain sentence; the server decided it.
 import { api } from "./api.js";
 import {
-  loadRoleDetail, loadRoles, loadRolesOfClub, loadWho, newRolesRequestKey, rolesCheckSettles, rolesContext, rolesErrorInfo,
+  loadRoleDetail, loadRoles, loadRolesOfClub, loadWho, markRolesUsersStale, newRolesRequestKey, rolesCheckSettles, rolesContext, rolesErrorInfo,
   rolesOutcomeUnknown, sendRolesWrite,
 } from "./roles-data.js";
 import { assignScopeOptions, assignableRoles, permissionLabel, permissionReason, BASIC_ASSIGNABLE } from "./roles-view.js";
@@ -210,6 +210,7 @@ export async function handleRolesAction(action, { render, renderUsers, refreshOr
       }
       return true;
     }
+    case "roles-who-ended": d.who.showEnded = !d.who.showEnded; renderUsers?.(); return true;
     case "roles-who-more": await loadWho({ more: true }, renderUsers); return true;
     case "roles-revoke-open": {
       if (d.who.command) return true;
@@ -219,7 +220,8 @@ export async function handleRolesAction(action, { render, renderUsers, refreshOr
       return true;
     }
     case "roles-revoke-cancel":
-      if (d.who.command?.busy) return true;
+      // A write whose outcome is not known stays: only Check result may settle it.
+      if (d.who.command?.busy || d.who.command?.unconfirmed) return true;
       d.who.revoke = null;
       d.who.command = null;
       renderUsers?.();
@@ -284,8 +286,9 @@ export function handleRolesInput(target, { render, renderUsers } = {}, eventType
     const name = assignField.dataset.rolesAssignField;
     a.draft[name] = assignField.value;
     if (form?.elements?.userId) a.draft.userId = form.elements.userId.value;
-    // Only a choice of place or role repaints; typed fields just keep their value.
+    // Only a choice of place or role repaints (once, on its change); typed fields just keep their value.
     if (name !== "scope" && name !== "roleId") return true;
+    if (eventType !== "change") return true;
     if (name === "scope") {
       a.draft.roleId = "";
       a.error = "";
@@ -324,6 +327,8 @@ async function settleRolesCommand(result, cmd, render) {
   const form = cmd.form && d.form === cmd.form ? cmd.form : null;
   if (result.data) {
     if (form) d.form = null;
+    // The Users screen caches the club's roles and who holds them: a settled write makes both old.
+    markRolesUsersStale();
     setNotice(savedText(cmd, result.data));
     render?.();
     focusSoon("[data-roles-notice]");
@@ -404,7 +409,7 @@ async function settleAssign(result, cmd, { renderUsers, refreshOrganization }) {
   if (result.data) {
     a.draft = { ...a.draft, roleId: "", displayTitle: "", expiresAt: "", reason: "", userId: "" };
     a.error = "";
-    a.notice = "Role given.";
+    a.notice = cmd.notice || "Role given.";
     d.who.loaded = false;
     renderUsers?.();
     focusSoon("[data-roles-assign-notice]");
@@ -417,6 +422,12 @@ async function settleAssign(result, cmd, { renderUsers, refreshOrganization }) {
   a.notice = "";
   renderUsers?.();
   void refreshOrganization;
+}
+
+// "Ana now has Assistant in FK Borac." - who, what and where, so the admin can see the right person got the right role.
+function givenText(data, scope, role, userId) {
+  const user = (data.users || []).find((u) => String(u.id) === String(userId));
+  return `${user?.name || user?.email || "The person"} now has ${role.name} in ${String(scope.label).replace(/^(Club|Team): /, "")}.`;
 }
 
 async function submitAssign(formEl, { renderUsers, refreshOrganization }) {
@@ -439,15 +450,17 @@ async function submitAssign(formEl, { renderUsers, refreshOrganization }) {
   if (role.isBasic && BASIC_ASSIGNABLE[role.basicKey] === scope.type) {
     // Basic roles keep their own routes (the Roles API does not grant them).
     const route = scope.type === "club" ? "/api/organization/club-roles" : "/api/organization/team-roles";
-    const body = scope.type === "club" ? { userId: a.draft.userId, clubId: scopeId } : { userId: a.draft.userId, teamId: scopeId };
+    const userIdSent = a.draft.userId;
+    const body = scope.type === "club" ? { userId: userIdSent, clubId: scopeId } : { userId: userIdSent, teamId: scopeId };
     a.command = { busy: true, basic: true };
     renderUsers?.();
     try {
       await api(route, { method: "POST", body: JSON.stringify(body) });
       if (state.roles !== d) return;
       a.command = null;
+      const noticeText = givenText(data, scope, role, userIdSent);
       a.draft = { ...a.draft, roleId: "", userId: "" };
-      a.notice = "Role given.";
+      a.notice = noticeText;
       renderUsers?.();
       await refreshOrganization?.();
       d.who.loaded = false;
@@ -455,6 +468,15 @@ async function submitAssign(formEl, { renderUsers, refreshOrganization }) {
     } catch (error) {
       if (state.roles !== d) return;
       a.command = null;
+      const info = rolesErrorInfo(error);
+      if (rolesOutcomeUnknown(info)) {
+        // The old route takes no request key, so it is never sent again blindly: the check is a read of who holds what.
+        a.error = "Result not confirmed. The list below was read again; check whether the role was given before you try again.";
+        d.who.loaded = false;
+        renderUsers?.();
+        await loadWho({}, renderUsers);
+        return;
+      }
       a.error = error?.message || "The role could not be given.";
       renderUsers?.();
     }
@@ -469,7 +491,7 @@ async function submitAssign(formEl, { renderUsers, refreshOrganization }) {
     if (Number.isNaN(t.getTime()) || t.getTime() <= Date.now()) { a.error = "Choose an end date in the future."; renderUsers?.(); return; }
     body.expiresAt = t.toISOString();
   }
-  const cmd = { verb: "assign", path: "/assignments", body };
+  const cmd = { verb: "assign", path: "/assignments", body, notice: givenText(data, scope, role, a.draft.userId) };
   await settleAssign(await execute(cmd, { holder: a, owner: d, render: renderUsers }), cmd, { renderUsers, refreshOrganization });
 }
 

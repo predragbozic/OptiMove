@@ -124,10 +124,11 @@ test("4. a word the editor can't tick is disabled with the reason as text", asyn
   assert.match(permissionReason("platform.metrics.manage", form, state.roles.catalog), /platform administrators/);
   assert.match(permissionReason("roles.manage", form, state.roles.catalog), /Club admin role/);
   assert.match(permissionReason("calendar.view", form, state.roles.catalog), /no effect today/);
-  assert.match(permissionReason("exercises.use", form, state.roles.catalog), /do not hold/);
+  assert.match(permissionReason("exercises.use", form, state.roles.catalog), /don't have this permission yourself/);
   assert.equal(permissionReason("athletes.view", form, state.roles.catalog), "");
   assert.match(permissionReason("athletes.view", { ...form, draft: { scopeTypes: ["global"], items: [] } }, state.roles.catalog), /does not apply/);
-  assert.deepEqual(roleSections(["athletes.view"], state.roles.catalog), ["Athletes"]);
+  assert.deepEqual(roleSections(["athletes.view"], state.roles.catalog), ["Athletes (view)"]);
+  assert.deepEqual(roleSections(["athletes.view", "athletes.manage"], state.roles.catalog), ["Athletes (add and edit)"]);
   await handleRolesAction(action("roles-new"), {});
   const html = renderRolesPanelHtml();
   assert.match(html, /What this role sees/);
@@ -213,7 +214,7 @@ test("9. a role id the server does not show is the same sentence for everyone: n
   await submitRolesForm({ dataset: { rolesForm: "role" } }, {});
   assert.equal(writes()[0].body.clubId, CLUB);
   assert.match(renderRolesPanelHtml(), /Roles are not available in this workspace/);
-  assert.equal(rolesRefusalText({ status: 409, code: "permission_not_held", words: ["athletes.manage"] }), "You do not hold Athletes · manage yourself, so you can't hand it on.");
+  assert.equal(rolesRefusalText({ status: 409, code: "permission_not_held", words: ["athletes.manage"] }), "You do not hold Add and edit athletes yourself, so you can't hand it on.");
 });
 
 function assignSetup() {
@@ -292,4 +293,85 @@ test("13. the Roles API answering 404 to Users leaves the old forms in place", a
   const { rolesUsersAvailable } = await import("../roles-data.js");
   assert.equal(rolesUsersAvailable(state.organization.data), false);
   assert.equal(renderRolesWhoHtml(state.organization.data), "");
+});
+
+test("14. an older who-holds-what answer never overwrites a newer one and loading always ends", async () => {
+  assignSetup();
+  const gates = [];
+  calls = installFetchMock((call) => {
+    if (!call.url.includes("/assignments")) return { status: 200, body: { roles: [], assignments: [] } };
+    return new Promise((resolve) => gates.push(() => resolve({ status: 200, body: { assignments: [{ id: `a${gates.length}`, source: "assignment", userId: USER, userName: call.url.includes("roleId") ? "Filtered" : "Everyone", roleId: ROLE, roleName: "Assistant", scopeType: "club", scopeId: CLUB, state: "active" }], nextCursor: null } })));
+  });
+  const who = state.roles.who;
+  who.clubId = CLUB;
+  const first = loadWho({});
+  who.roleId = ROLE;
+  const second = loadWho({});
+  gates[1]();
+  await second;
+  gates[0]();
+  await first;
+  assert.equal(who.loading, false, "loading is cleared by the newest read");
+  assert.equal(who.queryKey, `${CLUB}|${ROLE}`);
+  assert.equal(who.rows[0].userName, "Filtered", "the older answer did not replace the newer rows");
+});
+
+test("15. Cancel on a revoke whose answer is lost keeps the unconfirmed write; Check result sends the same key", async () => {
+  assignSetup();
+  let n = 0;
+  const rows = [{ id: ASSIGNMENT, source: "assignment", userId: USER, userName: "Ana", roleId: ROLE, roleName: "Assistant", scopeType: "club", scopeId: CLUB, state: "active" }];
+  server({ roles: [role(), BASIC], assignments: rows, write: (c) => (c.method === "POST" ? (++n === 1 ? { throwNetworkError: true } : { status: 200, body: { assignment: {} } }) : null) });
+  state.roles.who.clubId = CLUB;
+  await loadWho({});
+  await handleRolesAction(action("roles-revoke-open", { assignmentId: ASSIGNMENT }), { renderUsers() {} });
+  handleRolesInput({ closest: (s) => (s === "[data-roles-revoke-reason]" ? { value: "Left" } : null) }, {});
+  await submitRolesForm({ dataset: { rolesForm: "revoke" } }, { renderUsers() {} });
+  assert.match(renderRolesWhoHtml(state.organization.data), /Result not confirmed/);
+  await handleRolesAction(action("roles-revoke-cancel"), { renderUsers() {} });
+  assert.ok(state.roles.who.command, "cancel did not drop the unconfirmed write");
+  assert.match(renderRolesWhoHtml(state.organization.data), /roles-revoke-check/);
+  await handleRolesAction(action("roles-revoke-check"), { renderUsers() {} });
+  assert.equal(writes().length, 2);
+  assert.deepEqual(writes()[1].body, writes()[0].body);
+});
+
+test("16. a lost answer to a basic role is Result not confirmed (no raw transport text) and nothing is sent twice by itself", async () => {
+  assignSetup();
+  server({ roles: [role({ scopeTypes: ["club", "team"] }), { ...BASIC, scopeTypes: ["club"], actions: { change: false, archive: false, copy: false, assign: false } }], write: (c) => (c.method === "POST" ? { throwNetworkError: true } : null) });
+  await chooseScope(`club:${CLUB}`);
+  assignField("roleId", BASIC_CLUB_ADMIN);
+  await submitRolesForm({ dataset: { rolesForm: "assign" }, elements: { userId: { value: USER } } }, { renderUsers() {}, refreshOrganization: async () => {} });
+  assert.equal(writes().length, 1);
+  assert.match(state.roles.assign.error, /Result not confirmed/);
+  assert.doesNotMatch(state.roles.assign.error, /Failed to fetch/);
+});
+
+test("17. a settled role write makes the Users screen's cached roles old; who and what are named after Give role", async () => {
+  assignSetup();
+  server({ write: (c) => (c.method === "POST" ? { status: 200, body: { role: role(), assignment: {} } } : null) });
+  await loadRoles();
+  await chooseScope(`club:${CLUB}`);
+  assert.ok(state.roles.assign.byClub[CLUB].roles);
+  await handleRolesAction(action("roles-archive", { roleId: ROLE }), {});
+  handleRolesInput(el("data-roles-field", { rolesField: "reason" }, { value: "Not needed" }), {});
+  await submitRolesForm({ dataset: { rolesForm: "role" } }, {});
+  assert.deepEqual(state.roles.assign.byClub, {}, "the cache was dropped");
+});
+
+test("18. a role that people hold can't be archived from the screen; the dead end is not offered", async () => {
+  asClubAdmin();
+  server();
+  await loadRoles();
+  await handleRolesAction(action("roles-archive", { roleId: ROLE }), {});
+  const html = renderRolesPanelHtml();
+  assert.match(html, /2 people have this role/);
+  assert.doesNotMatch(html, /type="submit"/);
+});
+
+test("19. app.js guards sign-out, workspace switch and the update watch with rolesMayBeLeft like the calendar's settings", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  const withCalendar = src.match(/calendarSettingsMayBeLeft\(/g).length;
+  const withRoles = src.match(/rolesMayBeLeft\(/g).length;
+  assert.ok(withRoles >= 3, `rolesMayBeLeft appears ${withRoles} times, calendar's ${withCalendar}`);
 });

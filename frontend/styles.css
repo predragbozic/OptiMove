@@ -29653,3 +29653,19 @@ body.athlete-questions-prompt-open {
   padding: 10px 0;
   min-width: 0;
 }
+.roles-unavailable {
+  margin: 4px 0 0;
+}
+.roles-unavailable summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.roles-assign-form input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 44px;
+  width: 100%;
+  box-sizing: border-box;
+}

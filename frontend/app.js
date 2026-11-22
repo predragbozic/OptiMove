@@ -169,8 +169,8 @@ import { startAppUpdateWatch } from "./app-update.js";
 import { CALENDAR_SETTINGS_ICON_HOST, calendarSettingsMayBeLeft, handleCalendarSettingsAction, handleCalendarSettingsBeforeUnload, handleCalendarSettingsInput, submitCalendarSettingsForm } from "./calendar-settings-actions.js";
 import { calendarSettingsNeedLoad, enterCalendarSettingsSection, loadCalendarSettings, resetCalendarSettingsForWorkspaceChange } from "./calendar-settings-data.js";
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
-import { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, submitRolesForm } from "./roles-actions.js";
-import { enterRolesSection, loadRoles, loadWho, resetRolesForWorkspaceChange, rolesContext, rolesNeedLoad, rolesUsersAvailable, whoNeedsLoad } from "./roles-data.js";
+import { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, rolesMayBeLeft, submitRolesForm } from "./roles-actions.js";
+import { enterRolesSection, loadRoles, markRolesUsersStale, loadWho, resetRolesForWorkspaceChange, rolesContext, rolesNeedLoad, rolesUsersAvailable, whoNeedsLoad } from "./roles-data.js";
 import { renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml } from "./roles-view.js";
 import { installThumbnailResolver, retryExpiredMediaImage } from "./media-playback.js";
 import {
@@ -350,7 +350,7 @@ async function init() {
   // Refresh and Later (the app installed on an iPhone keeps an old version
   // until iOS restarts it). Never refreshes by itself; an unsaved Training
   // Load draft (a dashboard layout, Advanced settings) is asked about first.
-  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() && calendarSettingsMayBeLeft() });
+  startAppUpdateWatch({ mayLeave: () => confirmLeaveTrainingLoad(null, { discard: false }) && centralCalendarMayBeLeft() && calendarSettingsMayBeLeft() && rolesMayBeLeft() });
   if (window.location.pathname === "/invite") {
     await renderInviteAcceptAction({ renderUserControls, setStatus });
     return;
@@ -479,7 +479,7 @@ function bindEvents() {
   // The central calendar's event form (K2a-2) is asked before the logout
   // request, never after it: a "No" keeps the session and the form.
   els.signOut?.addEventListener("click", () => {
-    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" })) void signOut();
+    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" }) && rolesMayBeLeft()) void signOut();
   });
   els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
   // The central calendar draws itself again when a layout breakpoint is
@@ -2049,7 +2049,7 @@ async function handleGlobalClick(event) {
     return;
   }
   // A workspace switch resets the central calendar too: its event form asks first (K2a-2).
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) })) {
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) && rolesMayBeLeft() })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openCalendarQuestion: (questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers()), openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
@@ -2492,6 +2492,8 @@ async function loadActiveTab() {
     if (state.organization.section === "icons") enterIconGallery();
     if (state.organization.section === "calendar") enterCalendarSettingsSection();
     if (state.organization.section === "roles") enterRolesSection();
+    // Users reads the club's roles and who holds them again on entry (a role may have changed in Roles meanwhile).
+    if (state.organization.section === "users") markRolesUsersStale();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();

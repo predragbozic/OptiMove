@@ -84,7 +84,7 @@ export const emptyRolesState = () => ({
   form: null,
   command: null,
   assign: { byClub: {}, unavailable: false, known: null, draft: { scope: "", roleId: "", displayTitle: "", expiresAt: "", reason: "", userId: "" }, error: "", command: null, notice: "" },
-  who: { clubId: "", roleId: "", rows: [], nextCursor: "", loaded: false, loading: false, error: "", unavailable: false, queryKey: "", revoke: null, command: null, notice: "" },
+  who: { clubId: "", roleId: "", rows: [], nextCursor: "", loaded: false, loading: false, error: "", unavailable: false, queryKey: "", revoke: null, command: null, notice: "", showEnded: false, pendingKey: "" },
 });
 
 // The central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): one
