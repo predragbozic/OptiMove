@@ -515,6 +515,14 @@ lock, and then runs the Save's check over the chosen sessions (their rows `FOR U
   deleted and it is not archived; nor is there a delete of only the sessions that were not done. No archive or other
   way out is built. The block above (`409 edit_sessions_locked` / `409 plan_sessions_locked`, Task 5 as merged in
   #702) is final.
+- **The weekly slot** (`ensureWeeklySlot`, called by `POST /plans` and `POST /plans/:id/duplicate` for a weekly
+  target; found after #702): it removed the caller's own Builder plan of that athlete and week whenever the plan had
+  no item and no named node, without reading its status and with no session check, so a published week of bare
+  sessions (which can carry RPE or an event link) was deleted by a create or a copy into that week. Now
+  (`weeklySlotPlanIsFree`) the plan is removed only when, under its row lock, it is a **draft**, has **no session at
+  all**, and no session of it has results or a live event link (`blockedPlanSessions`, whatever the status; kept as an
+  independent third condition). Otherwise the existing `409` "already has a weekly plan for that week", nothing
+  written. `GET /weekly-plans` skips exactly the same plan. Tests: `backend/tests/builder-weekly-slot-guard.test.mjs`.
 - **A program's Save** (`copyProgramTree`) does not keep logical ids, so every session of a published program counts
   as removed: a program whose session a record names refuses every Save of its edit draft, a rename included (the
   Save would orphan that record). No program session can have such a record today (RPE and calendar links take weekly
