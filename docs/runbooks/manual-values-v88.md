@@ -36,7 +36,8 @@ touch data.
 `manual-values-v88-rollback.sql`, one transaction, only with the owner's approval for that database and a fresh
 restore-verified backup, and only from a commit that no longer contains the v88 file. It restores v76's undo, v63's scope
 and v26's needs-state by md5, v59's pair rule, and drops everything v88 added. It refuses, changing nothing, while the
-migrator runs, under a later migration, over a changed v88 body, and once v88's data is used (a provenance row, a logged
+migrator runs, under a migration applied after v88 (by `applied_at`: v89, applied before v88 on production by the
+runner's name order, does not block), over a changed v88 body, and once v88's data is used (a provenance row, a logged
 manual removal, an approval choice): from then on the way back is forward only.
 
 Rehearsed on disposable databases: `backend/tests/manual-values-st4.test.mjs` tests 13 and 14.

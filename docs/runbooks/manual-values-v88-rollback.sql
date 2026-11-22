@@ -11,7 +11,8 @@
 -- pair rule, drops the provenance table with its guards, the deletion log's and the approvals' new columns, and removes the
 -- v88 record. It changes no other row. It refuses, changing nothing, when
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v88 is not recorded, or any later migrations_v2 migration is;
+--   * v88 is not recorded, or any migrations_v2 migration was applied after it (by applied_at: a later file name applied
+--     BEFORE v88 - v89 on production, which the runner applied first - does not depend on v88 and does not block);
 --   * the body in force of a v88 function is not v88's (by md5);
 --   * a manual value was written on a roster (a provenance row exists), an undo logged removed manual values, or an approval
 --     recorded a replaced manual value or a chosen type (the way back is forward-only once v88's data is used).
@@ -51,7 +52,9 @@ begin
   if not exists (select 1 from public.schema_migrations where migration_name = v88) then
     raise exception 'v88 rollback refused: v88 is not recorded on this database';
   end if;
-  if exists (select 1 from public.schema_migrations where migration_name like 'migrations_v2/%' and migration_name > v88) then
+  if exists (select 1 from public.schema_migrations m
+              where m.migration_name like 'migrations_v2/%' and m.migration_name <> v88
+                and m.applied_at > (select applied_at from public.schema_migrations where migration_name = v88)) then
     raise exception 'v88 rollback refused: later migrations are applied';
   end if;
   for i in 1 .. array_length(expected, 1) loop

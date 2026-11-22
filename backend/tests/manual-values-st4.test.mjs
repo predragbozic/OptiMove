@@ -37,7 +37,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  assert.equal(MIGRATIONS[MIGRATIONS.length - 1], V88_FILE, "v88 is the last migration of this suite");
+  assert.ok(MIGRATIONS.includes(V88_FILE), "v88 is in this suite's migrations");
   db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "st4", migrations: MIGRATIONS });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
@@ -1071,7 +1071,12 @@ test("13. migration v88: the preflight passes before it, the post-check after it
       const m = (await client.query(`select md5(prosrc) m from pg_proc where proname = $1`, [fn])).rows[0].m;
       assert.match(readRunbook("manual-values-v88-rollback.sql"), new RegExp(m), `the rollback names ${fn}'s body in force`);
     }
+    // A later file name applied BEFORE v88 (as v89 is on production, where the runner applied it first) does not block.
+    await client.query(`insert into public.schema_migrations (migration_name, checksum, runner_version, applied_at)
+      select 'migrations_v2/209912300000_applied_before.sql', repeat('0', 64), 'test', applied_at - interval '1 minute'
+        from public.schema_migrations where migration_name = 'migrations_v2/${V88_FILE}'`);
     await client.query(readRunbook("manual-values-v88-rollback.sql"));
+    await client.query(`delete from public.schema_migrations where migration_name = 'migrations_v2/209912300000_applied_before.sql'`);
     assert.deepEqual(await catalogOf(client), before, "the rollback restores the catalog before v88 exactly");
     await applyGpexeTestMigrations(rb.url, MIGRATIONS);
     assert.deepEqual(await catalogOf(client), after, "re-applied: the same catalog");
