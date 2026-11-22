@@ -151,7 +151,7 @@ export function ensureTemplateScopeIsVisible() {
 
 export function renderSettingsNavHtml(data = {}, section = state.organization.section || "overview") {
   if (isCoachSettings()) {
-    const labels = { athletes: "Athletes", joinLinks: "Join links", presets: "Tags & Presets", icons: "Icons", clubs: "Clubs", teams: "Teams", users: "Users" };
+    const labels = { athletes: "Athletes", joinLinks: "Join links", presets: "Tags & Presets", icons: "Icons" };
     return `
     <nav class="settings-tabs om-tabs" aria-label="Settings sections">
       ${coachSettingsSections().map((value) => `<button class="settings-tab om-tab ${section === value ? "is-active" : ""}" type="button"${section === value ? ' aria-current="page"' : ""} data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(labels[value])}</button>`).join("")}
