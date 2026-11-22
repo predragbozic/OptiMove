@@ -249,6 +249,14 @@ test("1. the athlete's own RPE: removing or moving the session is refused (has_r
   const now = byName(await treeOf(a), "Wednesday easy");
   assert.equal(String(now.logical_session_id), String(was.logical_session_id), "the same session, changed in place");
   assert.equal((await q(`select count(*)::int as n from training_load.session_feedback where logical_session_id = $1`, [now.logical_session_id]))[0].n, 1);
+  // Plan 12.5: the RPE's stale `session_date` snapshot still names the day the live plan shows the session on, since
+  // the session could not be moved off it.
+  const [{ snapshot, live }] = await q(
+    `select sf.session_date::text as snapshot, pd.date::text as live from training_load.session_feedback sf
+       join plans.plan_sessions ps on ps.logical_session_id = sf.logical_session_id join plans.plan_days pd on pd.id = ps.plan_day_id
+      where sf.logical_session_id = $1 and ps.id = $2`, [now.logical_session_id, now.id]);
+  assert.equal(snapshot, WEDNESDAY);
+  assert.equal(live, snapshot, "the snapshot day and the live day agree");
 });
 
 test("2. an activity linked to the session (no RPE): removing and moving are refused (has_results)", async () => {
@@ -265,6 +273,12 @@ test("2. an activity linked to the session (no RPE): removing and moving are ref
   const draft2 = await reopen(s.coach.cookie, a);
   await moveToPm(s.coach.cookie, draft2, "Main");
   await assertLocked(s, plans, draft2, { name: "Main", day: WEEK, change: "moved", reasons: ["has_results"] });
+  // Plan 12.5: the activity is dated by the day it was made for, which is still the day the live plan shows.
+  const [{ occurred }] = await q(
+    `select a.occurred_local_date::text as occurred from training.activities a join training.activity_participants p on p.activity_id = a.id
+       join training.activity_participant_session_links l on l.activity_participant_id = p.id where l.logical_session_id = $1`, [main.logical_session_id]);
+  assert.equal(occurred, WEEK);
+  assert.equal((await q(`select pd.date::text as d from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.logical_session_id = $1 and pd.plan_id = $2`, [main.logical_session_id, a]))[0].d, occurred, "the activity's day and the live day agree");
 });
 
 test("3. a metric event naming the session (no RPE): removing it is refused (has_results)", async () => {

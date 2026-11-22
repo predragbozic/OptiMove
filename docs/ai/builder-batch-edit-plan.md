@@ -454,7 +454,17 @@ immutability triggers of v2, v5 and v83). Readers:
   shows the session on the new day while its activity and its Dashboards values stay on the old one.
 
 With this rule a session with results can no longer be moved or removed by the Builder Save, so no new stale or
-dangling row is made this way. Rows made before stay as they are (this change touches no data).
+dangling row is made this way. Rows made before stay as they are (this change touches no data). Pinned by
+`builder-source-session-guard` test 1 (after the refused remove and move, the RPE's `session_date` equals the live plan
+day of its session) and test 2 (the activity's `occurred_local_date` equals it).
+
+**The calendar's orphan tests (#694, after the merge with main).** `central-calendar-link-identity-guard.test.mjs` made
+its orphans through the Builder Save (a linked session removed and replaced, moved, pasted over, moved in), which this
+rule now refuses (`409 edit_sessions_locked`, `linked_to_event`). Its tests 1-6 now make the orphan with raw SQL on the
+published plan's sessions, in the shape each path used to leave (a row written before this guard, or the race of 12.4),
+with every assertion on the fold, the time and the align unchanged. Its new test 7 pins the guarantee: every one of
+those Builder Saves, the session PATCH and DELETE, the day paste and the plan delete is refused, the published plan's
+sessions are unchanged and the link still reads as linked, with the event's time.
 
 ### 12.6 Out of scope
 
