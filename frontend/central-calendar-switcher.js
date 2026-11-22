@@ -318,13 +318,15 @@ export function centralCalendarEventSlots(cal, item) {
   if (!links) return { manager: false, slots: [] };
   const slots = [];
   for (const link of links) {
-    if (!link.planId || link.day !== item.date) continue;
+    // A link whose Builder session was deleted ("orphaned") opens nothing: no button for it.
+    if (!link.planId || link.day !== item.date || link.state === "orphaned") continue;
     const key = slotKey(link.amPm, link.bta);
     let slot = slots.find((entry) => entry.key === key);
     if (!slot) {
       slot = { key, amPm: link.amPm || "", bta: link.bta || "", name: link.sessionName || "", athleteIds: new Set() };
       slots.push(slot);
     }
+    if (!slot.name && link.sessionName) slot.name = link.sessionName;
     if (link.athleteId) slot.athleteIds.add(String(link.athleteId));
   }
   return { manager: true, slots };
