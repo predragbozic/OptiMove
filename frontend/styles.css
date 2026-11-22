@@ -27308,10 +27308,15 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
 .tl-roster-athlete-type { margin: 10px 0; }
 .tl-roster-athlete-type > p { margin: 4px 0 0; }
 .tl-roster-type-notice { margin-top: 8px; }
+.tl-roster-type-notice.is-row { margin: 8px 12px 10px; }
+.tl-roster-row-notes p { overflow-wrap: anywhere; min-width: 0; }
 .tl-roster-type-notice .tl-roster-button { min-height: 44px; }
 
 /* ST-5: Settings -> Tags & Presets -> Session types. Fields keep 16 px; buttons a 44 px target on phones. */
 .session-types-settings { overflow-wrap: anywhere; }
+.session-types-settings .primary-button { border: 1px solid var(--accent); border-radius: var(--radius, 8px); background: var(--accent); color: #ffffff; font-weight: 600; padding: 0 16px; min-height: 40px; }
+.session-types-settings .primary-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.tl-roster-type-hint { margin: 4px 0 0; flex-basis: 100%; }
 .session-types-list { list-style: none; margin: 8px 0; padding: 0; }
 .session-types-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--om-border, #e3e7eb); }
 .session-types-actions { display: flex; flex-wrap: wrap; gap: 8px; }

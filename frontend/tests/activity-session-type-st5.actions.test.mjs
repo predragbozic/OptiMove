@@ -154,7 +154,7 @@ test("2. an athlete's own type: chosen in the row's Details, saved at once, said
 test("3. refusals say what happened and that nothing was saved: an athlete without a record, a type no longer offered", async () => {
   await openRoster();
   await act("training-load-roster-athlete-type", { athleteId: "ath-3" }, "rtp_session");
-  assert.match(html(), /This athlete has no values in this session yet\. Estimate the values first, then set the type\. Nothing was saved\./);
+  assert.match(html(), /This athlete has no values in this session yet\. Use &quot;Estimate values…&quot; in the athlete&#039;s row first, then set the type\. Nothing was saved\./);
   await openRoster({ write: () => ({ status: 409, body: { error: "session_type_not_offered", message: "x" } }) });
   await act("training-load-roster-session-type", {}, "match");
   const page = html();
@@ -199,7 +199,7 @@ test("6. a viewer who does not decide reads the type as text; a type a merge or 
   assert.doesNotMatch(page, /training-load-roster-athlete-type/);
   assert.match(page, /The athlete&#039;s own type \(RTP\) was removed when two sessions were merged|The athlete's own type \(RTP\) was removed when two sessions were merged/);
   assert.equal(estimateLabelText({ method: "team_average", athleteCount: 3, estimatedBy: "Coach A", estimatedAt: "2026-09-19T10:00:00Z", calculatedWhenType: { key: "training_session", label: "Full training" } }),
-    "Estimate · team average (3 athletes) · Coach A, 19.09.2026 · calculated when this was Full training");
+    `Estimate · team average (3 athletes) · Coach A, 19.09.2026 · calculated when the athlete's type was Full training; use "Change the estimate…" to recalculate`);
   assert.doesNotMatch(estimateLabelText({ method: "team_average", athleteCount: 3 }), /calculated when/);
   await openRoster();
   typesAnswer = () => ({ status: 500, body: { error: "internal_error" } });

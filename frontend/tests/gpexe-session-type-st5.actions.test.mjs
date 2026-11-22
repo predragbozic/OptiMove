@@ -181,7 +181,7 @@ test("2. a changed type is reviewed at once (one request with the type alone), t
   assert.deepEqual(subsets()[0].body, { activityTypeKey: "match" });
   let page = html();
   assert.deepEqual(optionsOf(page).find((o) => o[2]), ["match", "Game", true]);
-  assert.match(page, /Imported as Game\./);
+  assert.match(page, /Will be imported as Game\./);
   assert.match(page, /data-action="training-load-gpexe-approve"[^>]*>Import 3 athletes</);
   await act("training-load-gpexe-approve");
   assert.equal(approvals().length, 1);
@@ -201,7 +201,7 @@ test("3. a session of an unknown category: listed with its step, no Import until
   await openReview({}, { unknown: true });
   let page = html();
   assert.deepEqual(optionsOf(page)[0], ["", "Choose...", true]);
-  assert.match(page, /OptiMove has no session type for GPEXE &quot;GYM&quot; yet\. Your choice is remembered for the next one\./);
+  assert.match(page, /OptiMove has no session type for GPEXE &quot;GYM&quot; yet\. After the import, OptiMove suggests your choice for the next session of that kind\./);
   assert.match(page, /Choose the session type above\. Then you can import it\./);
   assert.doesNotMatch(page, /data-action="training-load-gpexe-approve"/);
   await act("training-load-gpexe-approve");

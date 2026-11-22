@@ -49,7 +49,7 @@ export function renderSessionTypesPanelHtml() {
     <section class="panel session-types-settings">
       <p class="eyebrow">Training Load</p>
       <h3>Session types</h3>
-      <p class="muted">What a session was: chosen when a session is imported, and on the session's roster for an athlete who did something else. Estimates compare a session only with sessions of the same type.</p>
+      <p class="muted">What a session was: chosen when a session is imported, and on the session's roster for an athlete who did something else. Estimates compare a session only with sessions of the same type (a friendly game also counts games).</p>
       ${st.error ? `<p class="builder-error" role="alert">${escapeHtml(st.error)} <button type="button" class="plain-button" data-action="session-types-reload">Try again</button></p>` : ""}
       ${st.loading && !st.loaded ? `<p class="muted" role="status">Loading...</p>` : ""}
       ${noticeHtml(st)}

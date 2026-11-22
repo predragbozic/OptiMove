@@ -65,9 +65,9 @@ export async function loadRosterSessionTypes(render, { again = false } = {}) {
 
 const REFUSAL_TEXT = {
   session_type_not_offered: "That session type is no longer offered. Choose another. Nothing was saved.",
-  same_as_session: "That is the session's own type, so there is nothing to set. Nothing was saved.",
-  athlete_has_no_record: "This athlete has no values in this session yet. Estimate the values first, then set the type. Nothing was saved.",
-  activity_superseded: "This session was merged into another. Open the current session. Nothing was saved.",
+  same_as_session: "That is already the session's type, so there is nothing to set. Nothing was saved.",
+  athlete_has_no_record: "This athlete has no values in this session yet. Use \"Estimate values…\" in the athlete's row first, then set the type. Nothing was saved.",
+  activity_superseded: "This session was merged into another. Nothing was saved - open the current session.",
   try_again: "The session is being changed right now. Nothing was saved - try again in a moment.",
   roster_busy: "The session is being changed right now. Nothing was saved - try again in a moment.",
   not_a_team_coach: "You can no longer change this session. Nothing was saved.",
@@ -127,7 +127,7 @@ async function send(target, render, command = null) {
     await refreshActivityRoster(activityId, render);
   } else {
     t.unconfirmed = { target, command: cmd };
-    t.notice = { tone: "unconfirmed", scope: target.scope, athleteId: target.athleteId ?? null, text: "We can't tell yet whether the session type was saved. Check the result; it will not be saved twice." };
+    t.notice = { tone: "unconfirmed", scope: target.scope, athleteId: target.athleteId ?? null, text: `We can't tell yet whether the ${target.scope === "athlete" ? "athlete's type" : "session type"} was saved. Check the result; it will not be saved twice.` };
   }
   render();
 }
@@ -193,7 +193,7 @@ function noticeFor(r, scope, athleteId = null) {
     n.tone === "saved" && n.undo ? `<button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-type-undo" ${busy ? "disabled" : ""}>Undo</button>` : "",
     n.tone !== "unconfirmed" ? `<button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-type-dismiss">OK</button>` : "",
   ].join("");
-  return `<div class="tl-roster-notice tl-roster-type-notice is-${escapeAttr(n.tone)}" role="${n.tone === "saved" ? "status" : "alert"}"><p>${escapeHtml(n.text)}</p>${buttons}</div>`;
+  return `<div class="tl-roster-notice tl-roster-type-notice${scope === "athlete" ? " is-row" : ""} is-${escapeAttr(n.tone)}" role="${n.tone === "saved" ? "status" : "alert"}"><p>${escapeHtml(n.text)}</p>${buttons}</div>`;
 }
 
 // The header line: the session's type, with a chooser for a viewer who decides.
@@ -215,7 +215,9 @@ export function sessionTypeHeaderHtml(r, data, canDecide, locked) {
         </select>
       </label>
       ${r.types?.busy?.scope === "session" ? `<span class="muted" aria-live="polite">Saving…</span>` : ""}
+      ${!failed && r.types?.list?.status === "ready" && options.length < 2 ? `<p class="muted">No other session type to choose. Add one in Settings &gt; Tags &amp; Presets.</p>` : ""}
       ${failed ? `<p class="muted">The session types could not be read. <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-type-list-again">Try again</button></p>` : ""}
+      ${locked ? "" : `<p class="muted tl-roster-type-hint">Did one athlete do something else, for example RTP? Open Details in their row.</p>`}
       ${noticeFor(r, "session")}
     </div>
   `;
@@ -245,12 +247,14 @@ export function athleteTypeControlHtml(r, data, athlete, canDecide, locked) {
   const id = athlete.athleteId;
   if (!canDecide) return "";
   const options = optionsFor(r, current).filter((x) => x.key !== sessionKey);
+  // Nothing to choose (one active type, the session's own): no control rather than a dead one.
+  if (!options.length && !current && r.types?.list?.status === "ready") return "";
   const disabled = locked || typeChangeBusy(r) ? "disabled" : "";
   return `
     <div class="tl-roster-athlete-type">
       <label class="tl-roster-type-field">
-        <span class="tl-roster-type-label">Type in this session</span>
-        <select data-action="training-load-roster-athlete-type" data-athlete-id="${escapeAttr(id)}" aria-label="Session type of ${escapeAttr(athlete.name || "the athlete")} in this session" ${disabled}>
+        <span class="tl-roster-type-label">Athlete's own type in this session</span>
+        <select data-action="training-load-roster-athlete-type" data-athlete-id="${escapeAttr(id)}" aria-label="Athlete's own type in this session, ${escapeAttr(athlete.name || "the athlete")}" ${disabled}>
           <option value=""${current ? "" : " selected"}>${escapeHtml(sessionKey ? `As the session (${sessionTypeLabelOf(sessionKey, r)})` : "As the session")}</option>
           ${options.map((x) => `<option value="${escapeAttr(x.key)}"${x.key === current ? " selected" : ""}>${escapeHtml(x.label)}</option>`).join("")}
         </select>

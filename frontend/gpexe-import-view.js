@@ -3042,7 +3042,7 @@ function sessionTypeOriginText(c) {
   const s = c.preview?.session || {};
   if (s.activityTypeSource === "imported_session") return "This session is already imported; its type is changed in the session itself.";
   if (s.activityTypeSource === "team_suggestion" && s.categoryName) return `Suggested for GPEXE "${s.categoryName}". Change it if this session was something else.`;
-  if (s.activityTypeSource === "none") return s.categoryName ? `OptiMove has no session type for GPEXE "${s.categoryName}" yet. Your choice is remembered for the next one.` : "This session has no session type yet.";
+  if (s.activityTypeSource === "none") return s.categoryName ? `OptiMove has no session type for GPEXE "${s.categoryName}" yet. After the import, OptiMove suggests your choice for the next session of that kind.` : "This session has no session type yet.";
   return "";
 }
 
@@ -3093,7 +3093,7 @@ function renderTypeChoiceApproveHtml(c, detail, importN, changes, typeKey) {
   const n = ready ? importableAthleteCount(sub.preview) : importN;
   return `
     <div class="gpexe-approve gpexe-approve-type">
-      <p class="muted">${escapeHtml(`Imported as ${sessionTypeLabel(typeKey)}. ${approveLeftOutText(c)}`)}</p>
+      <p class="muted">${escapeHtml(`Will be imported as ${sessionTypeLabel(typeKey)}. ${approveLeftOutText(c)}`)}</p>
       ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(TYPE_CHOICE_ERROR_TEXT[sub.error?.code] || SUBSET_ERROR_TEXT[sub.error?.code] || "The review with this session type could not be made. Nothing was imported.")}</p>` : ""}
       ${n === 0 && !loading ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
       ${statesLineHtml(c, detail)}

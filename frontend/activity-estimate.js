@@ -93,7 +93,7 @@ export function estimateLabelText(e) {
   else how = "estimate";
   const who = [e.estimatedBy, e.estimatedAt ? localDay(e.estimatedAt) : ""].filter(Boolean).join(", ");
   // ST-5: saved while the athlete's session type was another one; the value is kept, never recalculated silently.
-  const then = e.calculatedWhenType ? ` · calculated when this was ${e.calculatedWhenType.label || "another session type"}` : "";
+  const then = e.calculatedWhenType ? ` · calculated when the athlete's type was ${e.calculatedWhenType.label || "another session type"}; use "Change the estimate…" to recalculate` : "";
   return `Estimate · ${how}${who ? ` · ${who}` : ""}${then}`;
 }
 
