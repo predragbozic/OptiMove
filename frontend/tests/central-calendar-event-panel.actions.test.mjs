@@ -481,7 +481,9 @@ test("P7. the row opens the athlete's Weekly plan on the day; 'Weekly plan ›' 
   assert.match(cyra.textContent, /Not in this workspace's roster/);
   const opened = [];
   await act({ action: ben.dataset.action, athleteId: ben.dataset.athleteId, date: ben.dataset.date }, { openWeeklyPlanForAthleteOnDate: async (...args) => opened.push(args) });
-  assert.deepEqual(opened, [["R-2", EV_DAY]]);
+  assert.equal(opened.length, 1);
+  assert.deepEqual(opened[0].slice(0, 2), ["R-2", EV_DAY]);
+  assert.equal(opened[0][2].flow.currentKey, ben.dataset.athleteId, "K6-2: the plan opens with the athlete switcher's flow");
 });
 
 // --- P8: nothing of it outside a manager's event -----------------------------------
