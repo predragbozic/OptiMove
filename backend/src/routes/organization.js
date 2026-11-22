@@ -350,7 +350,7 @@ router.get("/", async (req, res, next) => {
     const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
     // After the workspace filter, which decides on the full rows (an account whose only active role is in another club
     // must never become "unassigned" here and pass as the viewer's own creation).
-    const memberClubId = clubMembersViewClubId(req.authz, activeWorkspace);
+    const memberClubId = clubMembersViewClubId(req, activeWorkspace);
     if (memberClubId) scoped.users = scoped.users.map((row) => narrowUserRowToClub(row, memberClubId));
     const scopedArchivedTeams = archivedTeamsForWorkspace(activeWorkspace, archivedTeams);
     // Independent of each other - neither reads the other's result - so they
@@ -3359,10 +3359,10 @@ const CLUB_MEMBERS_ACTIVE_ROLES_ONLY = true;
 // The club whose members this viewer sees as a club's admin: the active club workspace's club, when the viewer is not a
 // platform admin (whose branch sees everything already) and holds staff.assign there (the club's admin, a system-role
 // word). Anyone else: null, and loadUsers behaves exactly as before.
-function clubMembersViewClubId(authz, workspace) {
-  if (isPlatformAdministrator(authz)) return null;
+function clubMembersViewClubId(req, workspace) {
+  if (isPlatformAdministrator(req.authz)) return null;
   if (workspace?.type !== "club" || !workspace.scopeId) return null;
-  return can(authz, "staff.assign", clubScope(workspace.scopeId)) ? String(workspace.scopeId) : null;
+  return can(req.authz, "staff.assign", clubScope(workspace.scopeId)) ? String(workspace.scopeId) : null;
 }
 
 // What a club's admin is shown of an account in its club's workspace: its roles in this club and this club's teams only
@@ -3379,7 +3379,7 @@ function narrowUserRowToClub(row, clubId) {
 async function loadUsers(req, workspacePromise) {
   const actorIsPlatformAdmin = isPlatformAdministrator(req.authz);
   const { workspace } = await workspacePromise;
-  const memberClubId = clubMembersViewClubId(req.authz, workspace);
+  const memberClubId = clubMembersViewClubId(req, workspace);
   const result = await query(
     `select distinct
        u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name,
