@@ -204,3 +204,30 @@ test("3. a week with two sessions in one slot ordered NULL and 1 (legacy) is sav
   const draft = ok(await api("/api/builder/weekly-templates", { method: "POST", cookie, body: { name: "Legacy order", planIds: [weekId] } }), 201);
   assert.deepEqual(sessionsOf(draft).map((x) => x.name).sort(), ["Ordered", "Unordered"]);
 });
+
+// ---- Nezavisni revizor (3) on 561a199: MEDIUM-1, LOW-2.
+
+test("4. a week holding an exercise the coach may no longer use: refused after the copy, no template stays", async () => {
+  const s = await squad("saverevoked", 1);
+  const cookie = s.coach.cookie;
+  const athlete = s.athletes[0];
+  const weekId = await publishedWeek(s, athlete, "2028-02-07", [[1, "Revoked"]]);
+  const exerciseId = (await q(`select pi.exercise_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 limit 1`, [weekId]))[0].exercise_id;
+  await q(`update library.exercises set is_active = false where id = $1`, [exerciseId]);
+  const res = await api("/api/builder/weekly-templates", { method: "POST", cookie, body: { name: "Revoked template", planIds: [weekId] } });
+  assert.equal(res.status, 409, res.text);
+  assert.equal((await q(`select count(*)::int as n from plans.plans where name = 'Revoked template'`))[0].n, 0);
+});
+
+test("5. 1 to 52 weeks: none or 53 is a 400 before anything is read", async () => {
+  const s = await squad("savelimit", 0);
+  const ids = Array.from({ length: 53 }, () => crypto.randomUUID());
+  for (const planIds of [[], ids]) {
+    const res = await api("/api/builder/weekly-templates", { method: "POST", cookie: s.coach.cookie, body: { name: "Too many", planIds } });
+    assert.equal(res.status, 400, res.text);
+    assert.equal(res.body.code, "weeks");
+  }
+  // 52 unknown ids pass the count check and are the 404 of a missing week.
+  const res52 = await api("/api/builder/weekly-templates", { method: "POST", cookie: s.coach.cookie, body: { name: "Fifty-two", planIds: ids.slice(0, 52) } });
+  assert.equal(res52.status, 404, res52.text);
+});
