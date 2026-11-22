@@ -62,6 +62,9 @@ router.get("/", async (req, res, next) => {
         user_access.access_type as user_access_type,
         user_access.used_at as user_access_used_at,
         user_access.expires_at as user_access_expires_at,
+        max(template_days.total) as template_day_count,
+        max(template_days.weekly) as template_week_day_count,
+        max(template_days.last_index) as template_last_index,
         coalesce(max(access_requests.pending_count), 0)::int as pending_access_count,
         coalesce(max(assigned_access.assigned_count), 0)::int as assigned_count,
         coalesce(
@@ -120,6 +123,15 @@ router.get("/", async (req, res, next) => {
           and pa.status in ('accessed', 'used', 'completed')
           and (pa.expires_at is null or pa.expires_at > now())
       ) assigned_access on true
+      -- A weekly program template (docs/ai/weekly-program-template-plan.md):
+      -- every block is a template_week_day.
+      left join lateral (
+        select count(*)::int as total,
+               count(*) filter (where pd.block_type = 'template_week_day')::int as weekly,
+               coalesce(max(pd.block_index), 0)::int as last_index
+        from plans.plan_days pd
+        where pd.plan_id = p.id
+      ) template_days on true
       left join library.program_tags pt on pt.plan_id = p.id
       left join library.program_tag_definitions t on t.id = pt.tag_id and t.is_active = true
       where ps.plan_type = 'program'
@@ -209,7 +221,12 @@ router.get("/", async (req, res, next) => {
       `,
       params,
     );
-    res.json({ scope: requestedScope, allowedScopes: visibleScopes, templates: result.rows });
+    const kind = normalizeChoice(req.query.kind, ["all", "weekly", "blocks"], "all");
+    const templates = result.rows.map(({ template_day_count: total, template_week_day_count: weekly, template_last_index: lastIndex, ...row }) => {
+      const isWeekly = Number(total) > 0 && Number(weekly) === Number(total);
+      return { ...row, template_kind: isWeekly ? "weekly" : "blocks", week_count: isWeekly ? Math.ceil(Number(lastIndex) / 7) : 0 };
+    }).filter((row) => kind === "all" || row.template_kind === kind);
+    res.json({ scope: requestedScope, allowedScopes: visibleScopes, templates });
   } catch (error) {
     next(error);
   }
@@ -519,6 +536,16 @@ router.post("/:planId/assignments", async (req, res, next) => {
     const plan = await loadAssignableTemplate(req, req.params.planId);
     if (!plan) return res.status(404).json({ error: "Template not found." });
     if (plan.can_assign_to_athlete === false) return res.status(403).json({ error: "This program cannot be assigned." });
+    // A weekly program template is never granted as library access: it is
+    // assigned from a date into the athletes' weekly plans
+    // (docs/ai/weekly-program-template-plan.md, Q3).
+    const weekly = await query(
+      `select count(*)::int as total, count(*) filter (where block_type = 'template_week_day')::int as weekly from plans.plan_days where plan_id = $1`,
+      [plan.id],
+    );
+    if (weekly.rows[0].total > 0 && weekly.rows[0].total === weekly.rows[0].weekly) {
+      return res.status(400).json({ error: "A weekly program is assigned from a date into the athletes' weekly plans.", code: "weekly_template_use_dated_assign" });
+    }
 
     const requestedIds = Array.isArray(req.body?.athleteIds) ? req.body.athleteIds.map(text).filter(Boolean) : [];
     const athleteIds = [...new Set(requestedIds)];
