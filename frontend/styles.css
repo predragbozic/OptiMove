@@ -21406,6 +21406,98 @@ body.exercise-header-pinned #viewToolbar {
   display: none;
 }
 
+/* Under 45 minutes high: the time and the title on one line ("10:00 Title"), the title cut with an ellipsis. */
+.cc-tg-box.is-short .cc-card-body {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.cc-tg-box.is-short .cc-card-top {
+  flex: none;
+}
+
+.cc-tg-box.is-short .cc-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The box's own width decides what fits (UX and mobile review): the end time hides only when the box is narrow, and
+   a very narrow box tightens its card so its start still shows. The tooltip and the label keep everything. */
+.cc-tg-box {
+  container-type: inline-size;
+}
+
+@container (max-width: 100px) {
+  .cc-card-when-end {
+    display: none;
+  }
+}
+
+/* Under 120 px the type icon gives its room to the title (the stripe keeps the colour). */
+@container (max-width: 120px) {
+  .cc-tg-box .cc-card-icon {
+    display: none;
+  }
+}
+
+@container (max-width: 60px) {
+  .cc-tg-box > .cc-card {
+    grid-template-columns: 3px minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .cc-tg-box .cc-card-body {
+    padding-right: 1px;
+  }
+
+  .cc-tg-box .cc-card-when {
+    font-size: 11px;
+    letter-spacing: -0.02em;
+  }
+
+  .cc-tg-box .cc-card-title {
+    font-size: 11px;
+  }
+}
+
+/* A third of a week column on a 1024 px screen (about 33 px): the thinnest stripe, no side border, the start in
+   10 px tabular figures so "10:00" still shows whole. */
+@container (max-width: 44px) {
+  .cc-tg-box > .cc-card {
+    grid-template-columns: 2px minmax(0, 1fr);
+    gap: 1px;
+    border-right-width: 0;
+  }
+
+  .cc-tg-box .cc-card-body {
+    padding-right: 0;
+  }
+
+  .cc-tg-box .cc-card-when {
+    font-size: 10px;
+    letter-spacing: -0.04em;
+  }
+
+  .cc-tg-box .cc-card-title {
+    font-size: 10px;
+  }
+}
+
+/* "+3 more" in a narrow column: "+3" alone (its label keeps the sentence). */
+@container (max-width: 70px) {
+  .cc-tg-more-word {
+    display: none;
+  }
+
+  .cc-tg-more {
+    padding: 2px;
+    text-align: center;
+  }
+}
+
 /* No end time (Q2): the lower edge fades instead of claiming a length the calendar does not know. */
 .cc-tg-box.is-open-end > .cc-card {
   border-bottom-color: transparent;
@@ -21447,6 +21539,29 @@ body.exercise-header-pinned #viewToolbar {
 
 .cc-timegrid-untimed .cc-tg-more {
   min-height: 30px;
+}
+
+/* A touch screen of 1024 px and up keeps K5-2's 44 px touch target (code review): a short box, a chip and "+N more"
+   then reach past their time slot, and the one under the finger or the focus is drawn on top. */
+@media (pointer: coarse) {
+  .cc-tg-box.is-short,
+  .cc-tg-box.is-chip {
+    min-height: 46px;
+  }
+
+  .cc-tg-box.is-short > .cc-card {
+    min-height: 44px;
+  }
+
+  .cc-tg-box.is-chip > .cc-daychip,
+  .cc-tg-more {
+    min-height: 44px;
+  }
+
+  .cc-tg-box:hover,
+  .cc-tg-box:focus-within {
+    z-index: 2;
+  }
 }
 
 /* The month grid. */

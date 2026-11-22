@@ -24,6 +24,16 @@ async function call(role, method, path, body) {
 const DAY = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
 const PAIR = [["Morning group", "00:00", "01:00"], ["Second group", "00:30", "01:29"]];
 const CLUSTER = [1, 2, 3, 4, 5].map((n) => [`Cluster ${n}`, "10:00", "11:00"]);
+// No end time: drawn 30 minutes with an open edge, one line "15:00 Quick talk".
+const SHORT = ["Quick talk", "15:00", null];
+
+// Whether an element's own content fits it (not cut by overflow) and it is drawn at all.
+const fits = (page, selector) => page.evaluate((s) => {
+  const el = document.querySelector(s);
+  if (!el) return { found: false };
+  const r = el.getBoundingClientRect();
+  return { found: true, fits: el.scrollWidth <= el.clientWidth + 1, width: r.width, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, text: el.textContent.trim() };
+}, selector);
 
 before(async () => {
   world = await startWorld();
@@ -37,9 +47,9 @@ before(async () => {
   }
   const types = (await call("team_coach", "GET", "/api/calendar/events/types")).body.types || [];
   const training = types.find((t) => t.kind === "training") || types[0];
-  for (const [title, startTime, endTime] of [...PAIR, ...CLUSTER]) {
+  for (const [title, startTime, endTime] of [...PAIR, ...CLUSTER, SHORT]) {
     const made = await call("team_coach", "POST", "/api/calendar/events", {
-      requestKey: crypto.randomUUID(), eventTypeId: training.id, title, day: DAY, startTime, endTime,
+      requestKey: crypto.randomUUID(), eventTypeId: training.id, title, day: DAY, startTime, ...(endTime ? { endTime } : {}),
       timezone: "UTC", expects: [], targets: [{ kind: "team", id: world.ids.teamA }],
     });
     assert.equal(made.status, 201, made.text);
@@ -87,8 +97,30 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["1024 px", 1024]]) {
         const col = document.querySelector(`.cc-tg-more[data-date="${day}"]`).closest(".cc-tg-col");
         return [...col.querySelectorAll("button")].map((el) => el.classList.contains("cc-tg-more") ? "more" : el.querySelector(".cc-card-title").textContent);
       }, DAY);
-      assert.deepEqual(order, ["Morning group", "Second group", "Cluster 1", "Cluster 2", "more"]);
+      assert.deepEqual(order, ["Morning group", "Second group", "Cluster 1", "Cluster 2", "more", "Quick talk"]);
+      // A box with no end (30 minutes): its time and title on one line, the title drawn inside the box.
+      const short = await page.evaluate(() => {
+        const card = [...document.querySelectorAll(".cc-tg-col .cc-card")].find((el) => el.querySelector(".cc-card-title")?.textContent === "Quick talk");
+        const box = card.closest(".cc-tg-box").getBoundingClientRect();
+        const title = card.querySelector(".cc-card-title").getBoundingClientRect();
+        const time = card.querySelector(".cc-card-when").getBoundingClientRect();
+        return { short: card.closest(".cc-tg-box").classList.contains("is-short"), inside: title.top >= box.top - 0.5 && title.bottom <= box.bottom + 0.5, oneLine: Math.abs(title.top + title.height / 2 - (time.top + time.height / 2)) <= 3, width: title.width };
+      });
+      assert.deepEqual([short.short, short.inside, short.oneLine], [true, true, true], `the short box shows its title on the time's line (${JSON.stringify(short)})`);
+      assert.ok(short.width > 20, "the title has room");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0, "no horizontal page scroll");
+      // The narrowest box (a third of a week column): its start "10:00" is drawn whole inside the card's body.
+      const narrow = await page.evaluate(() => {
+        const card = [...document.querySelectorAll(".cc-tg-box.is-narrow .cc-card")].find((el) => el.querySelector(".cc-card-title")?.textContent === "Cluster 1");
+        const when = card.querySelector(".cc-card-when");
+        const range = document.createRange();
+        range.selectNodeContents(when);
+        const text = range.getBoundingClientRect();
+        const body = card.querySelector(".cc-card-body").getBoundingClientRect();
+        return { boxWidth: card.closest(".cc-tg-box").getBoundingClientRect().width, textRight: text.right, bodyRight: body.right, text: when.innerText.trim() };
+      });
+      assert.match(narrow.text, /^10:00/, JSON.stringify(narrow));
+      assert.ok(narrow.textRight <= narrow.bodyRight + 0.5, `"10:00" not cut in a ${narrow.boxWidth}px box (${JSON.stringify(narrow)})`);
       if (width === 1024) {
         // With the panel open the grid scrolls inside its own box, the page does not.
         await page.locator(".cc-tg-col .cc-card").first().click();
@@ -99,6 +131,18 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["1024 px", 1024]]) {
         });
         assert.equal(scroll.page, 0, "no page scroll with the panel open");
         assert.ok(scroll.inner > 0, `the grid scrolls in its box (${scroll.inner})`);
+        // The narrowest case (mobile review): a third of a column still shows its start uncut, and "+3 more" fits.
+        const when = await page.evaluate(() => {
+          const card = [...document.querySelectorAll(".cc-tg-box.is-narrow .cc-card")].find((el) => el.querySelector(".cc-card-title")?.textContent === "Cluster 1");
+          const el = card?.querySelector(".cc-card-when");
+          if (!el) return { found: false, narrow: document.querySelectorAll(".cc-tg-box.is-narrow").length };
+          return { found: true, fits: el.scrollWidth <= el.clientWidth + 1, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, visible: el.getBoundingClientRect().width > 0, text: el.innerText.trim() };
+        });
+        assert.ok(when.found && when.fits && when.visible, `a narrow box's start is not cut (${JSON.stringify(when)})`);
+        assert.match(when.text, /^10:00/, JSON.stringify(when));
+        const moreFits = await fits(page, ".cc-tg-col .cc-tg-more");
+        assert.ok(moreFits.found && moreFits.fits, `"+3 more" fits its column (${JSON.stringify(moreFits)})`);
+        if (process.env.K7_SHOTS) await page.screenshot({ path: `${process.env.K7_SHOTS}/week-1024-panel.png` });
         await page.click('[data-action="central-calendar-close-panel"]');
       }
       if (process.env.K7_SHOTS) await page.screenshot({ path: `${process.env.K7_SHOTS}/week-${width}.png`, fullPage: true });
@@ -116,12 +160,39 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["1024 px", 1024]]) {
         more: document.querySelectorAll(".cc-tg-col .cc-tg-more").length,
       }));
       assert.deepEqual(dayGrid, { cluster: 5, more: 0 }, "the Day view fits five");
+      // A side-by-side card with room keeps its end time (UX review): the end hides only in a narrow box.
+      const endShown = await page.evaluate(() => {
+        const card = [...document.querySelectorAll(".cc-tg-col .cc-card")].find((el) => el.querySelector(".cc-card-title")?.textContent === "Morning group");
+        const end = card.querySelector(".cc-card-when-end");
+        return { visible: Boolean(end) && getComputedStyle(end).display !== "none", boxWidth: card.closest(".cc-tg-box").getBoundingClientRect().width };
+      });
+      assert.ok(endShown.visible, `the Day view's half-width card shows 00:00–01:00 (${JSON.stringify(endShown)})`);
       if (process.env.K7_SHOTS) await page.screenshot({ path: `${process.env.K7_SHOTS}/day-${width}.png`, fullPage: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
       assert.deepEqual(pageErrors, []);
     } finally { await context.close(); }
   });
 }
+
+test("(1280 px, touch) a tablet in landscape keeps 44 px targets: the short box and '+3 more'", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", WIDTHS.desktop, { hasTouch: true });
+  try {
+    await openCalendar(page);
+    await page.click('[data-action="central-calendar-mode"][data-mode="grid"]');
+    await page.waitForSelector(".cc-timegrid .cc-tg-col", { timeout: 20_000 });
+    const sizes = await page.evaluate(() => {
+      const card = [...document.querySelectorAll(".cc-tg-col .cc-card")].find((el) => el.querySelector(".cc-card-title")?.textContent === "Quick talk");
+      return {
+        coarse: matchMedia("(pointer: coarse)").matches,
+        short: card.getBoundingClientRect().height,
+        more: document.querySelector(".cc-tg-col .cc-tg-more").getBoundingClientRect().height,
+      };
+    });
+    assert.ok(sizes.coarse, "the context is a touch screen");
+    assert.ok(sizes.short >= 44 && sizes.more >= 44, `44 px targets on touch (${JSON.stringify(sizes)})`);
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
 
 test("(390 px) the phone is unchanged: the strip and the day list, no time grid", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", WIDTHS.phone);

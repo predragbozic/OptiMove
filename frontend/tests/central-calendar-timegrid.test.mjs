@@ -13,7 +13,7 @@ globalThis.window = { confirm: () => true, matchMedia: () => ({ matches: false }
 const tg = await import("../central-calendar-timegrid.js");
 const view = await import("../central-calendar-view.js");
 const { emptyCentralCalendarState, state } = await import("../state.js");
-const { handleCentralCalendarAction } = await import("../central-calendar-actions.js");
+const { handleCentralCalendarAction, openCentralCalendarAt, restoreCentralCalendarPlace } = await import("../central-calendar-actions.js");
 const { K7_TODAY, K7_UNCHANGED_CASES, k7CaseState } = await import("./support/central-calendar-k7-scenario.mjs");
 
 const m = (time) => tg.centralCalendarMinutesOf(time);
@@ -156,16 +156,22 @@ test("D2. the owner's pair is side by side at its minutes; the grid opens at 00:
   assert.ok(box("planned:p2").classList.contains("is-open-end"), "no end time: an open lower edge");
   assert.ok(!box("event:e1:a").classList.contains("is-open-end"));
   assert.ok(box("event:e1:a").classList.contains("is-narrow"), "a shared cluster");
-  // The team colour stays on a narrow card; it shows its start alone, the whole in its tooltip and label.
+  // The team colour stays on a narrow card; its start comes first and its end is a part of its own, which hides only
+  // when the box itself is narrow (a container query, measured in the e2e); the whole in its tooltip and label.
   const narrow = doc.querySelector('.cc-tg-col [data-key="event:e2:a"]');
   assert.match(narrow.getAttribute("style"), /--cc-team-color/);
-  assert.equal(narrow.querySelector(".cc-card-when").textContent, "00:30");
+  assert.equal(narrow.querySelector(".cc-card-when").firstChild.textContent, "00:30");
+  assert.equal(narrow.querySelector(".cc-card-when-end").textContent, "–01:29");
   assert.equal(narrow.getAttribute("title"), "00:30–01:29 Second group");
   assert.match(narrow.getAttribute("aria-label"), /00:30–01:29/);
-  // A full-width box keeps its whole time.
-  assert.equal(doc.querySelector('.cc-tg-col [data-key="planned:p2"] .cc-card-when').textContent, "17:30");
-  const camp = doc.querySelector('.cc-tg-col [data-key="event:c1:a"]');
-  assert.equal(camp.querySelector(".cc-card-when").textContent, "10:00", "a narrow cluster card: its start");
+  // No end: the start alone, nothing to hide; a box under 45 minutes puts time and title on one line.
+  const open = doc.querySelector('.cc-tg-col [data-key="planned:p2"]');
+  assert.equal(open.querySelector(".cc-card-when").textContent, "17:30");
+  assert.equal(open.querySelector(".cc-card-when-end"), null);
+  assert.ok(open.closest(".cc-tg-box").classList.contains("is-short"));
+  assert.ok(!box("event:e1:a").classList.contains("is-short"), "an hour is not short");
+  // "+N more": the number, then a word that hides in a narrow column.
+  assert.equal(doc.querySelector(".cc-tg-col .cc-tg-more .cc-tg-more-word").textContent, " more");
 });
 
 test("D3. '+N more' opens the day as the Day view's list; its label names the count, the day and the time", async () => {
@@ -186,6 +192,18 @@ test("D3. '+N more' opens the day as the Day view's list; its label names the co
   // Any next view, day or mode change ends the list.
   cal.dayList = true;
   await handleCentralCalendarAction(fakeAction({ action: "central-calendar-next" }), { render: () => {} });
+  assert.equal(cal.dayList, false);
+  // The Day button on the Day list ends the list and draws at once (code review).
+  cal.dayList = true;
+  let drawn = 0;
+  await handleCentralCalendarAction(fakeAction({ action: "central-calendar-view", view: "day" }), { render: () => { drawn += 1; } });
+  assert.deepEqual([cal.dayList, drawn > 0], [false, true]);
+  // Back and "Open in calendar" show the stored Day layout, never a list opened elsewhere.
+  cal.dayList = true;
+  restoreCentralCalendarPlace({ view: "day", anchor: "2026-10-13", selectedDate: "2026-10-13" });
+  assert.equal(view.centralCalendarDayGridShown(cal, "wide"), true);
+  cal.dayList = true;
+  openCentralCalendarAt({ date: "2026-10-14" });
   assert.equal(cal.dayList, false);
 });
 

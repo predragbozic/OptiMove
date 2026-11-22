@@ -551,12 +551,16 @@ function eventPlaceText(item) {
 }
 
 // K7, the time grid: `spanWhen` (the band) shows a multi-day event's times as "from 10:00" / "until 16:00";
-// `startOnly` (a narrow box) shows the start alone; `tooltip` gives the whole time and title as the card's title. The
-// label always keeps the whole time.
-export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today = "", shortKind = false, spanWhen = false, startOnly = false, tooltip = false } = {}) {
+// `gridBox` (a positioned box) splits the time so the end can hide when the box itself is narrow (a container query
+// in styles.css), and gives the whole time and title as the card's tooltip. The label always keeps the whole time.
+export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today = "", shortKind = false, spanWhen = false, gridBox = false } = {}) {
   const fullWhen = spanWhen ? centralCalendarSpanWhenLabel(item) : centralCalendarWhenLabel(item);
-  const when = startOnly && item.startTime ? String(item.startTime).slice(0, 5) : fullWhen;
-  const titleAttr = tooltip ? ` title="${escapeAttr([fullWhen, centralCalendarTitle(item)].filter(Boolean).join(" "))}"` : "";
+  const when = fullWhen;
+  const titleAttr = gridBox ? ` title="${escapeAttr([fullWhen, centralCalendarTitle(item)].filter(Boolean).join(" "))}"` : "";
+  const start = String(item.startTime || "").slice(0, 5);
+  const whenHtml = gridBox && item.startTime && item.endTime && fullWhen.startsWith(start)
+    ? `${escapeHtml(start)}<span class="cc-card-when-end">${escapeHtml(fullWhen.slice(start.length))}</span>`
+    : escapeHtml(when);
   const count = centralCalendarCountLabel(item);
   const span = centralCalendarSpanLabel(item);
   const firstTeam = (item.teamIds || [])[0];
@@ -568,7 +572,7 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
   return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)}${titleAttr} aria-label="${escapeAttr(cardAriaLabel(item, teams, today, { spanWhen }))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
       <span class="cc-card-stripe" aria-hidden="true"></span>
       <span class="cc-card-body">
-        <span class="cc-card-top">${itemIconHtml(item)}${renderMarksHtml(item)}${when ? `<span class="cc-card-when">${escapeHtml(when)}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
+        <span class="cc-card-top">${itemIconHtml(item)}${renderMarksHtml(item)}${when ? `<span class="cc-card-when">${whenHtml}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
         <span class="cc-card-title">${escapeHtml(centralCalendarTitle(item))}</span>
         ${place ? `<span class="cc-card-place">${escapeHtml(place)}</span>` : ""}
         ${centralCalendarScheduleSeparate(item) ? `<span class="cc-card-note">${SEPARATE_WORDS}</span>` : ""}
@@ -856,7 +860,8 @@ function bandItemsOf(items) {
 // "+N more" (2.3): opens the day as the Day view's list, where every item of the day is listed in the server's order.
 function renderTimeGridMoreHtml(date, count, { from = "" } = {}) {
   const label = `${count} more item${count === 1 ? "" : "s"}, ${centralCalendarLongDate(date)}${from ? `, from ${from}` : ""}: open the day`;
-  return `<button type="button" class="cc-tg-more" data-action="central-calendar-open-day" data-day-list="1" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(label)}">+${count} more</button>`;
+  // In a narrow column only "+3" shows (a container query); the label keeps the whole sentence.
+  return `<button type="button" class="cc-tg-more" data-action="central-calendar-open-day" data-day-list="1" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(label)}">+${count}<span class="cc-tg-more-word"> more</span></button>`;
 }
 
 const clockOf = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
@@ -899,10 +904,12 @@ function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false }
       const classes = ["cc-tg-box"];
       if (box.openEnd) classes.push("is-open-end");
       if (box.minor) classes.push("is-chip");
-      const narrow = box.span < box.columns;
-      if (narrow) classes.push("is-narrow");
-      // 2.2.5: a narrow card keeps its stripe and its start first; the whole time and title in its tooltip.
-      const inner = box.minor ? renderDayChipHtml(box.item, teams, openKey, today) : renderCentralCalendarCardHtml(box.item, { teams, openKey, today, startOnly: narrow, tooltip: true });
+      if (box.span < box.columns) classes.push("is-narrow");
+      // Under 45 minutes high the time and title share one line (2.1: "10:00 Title").
+      if (box.height < 45) classes.push("is-short");
+      // 2.2.5: a narrow card keeps its stripe and its start first (the end hides only when the box itself is narrow,
+      // a container query); the whole time and title in its tooltip and label.
+      const inner = box.minor ? renderDayChipHtml(box.item, teams, openKey, today) : renderCentralCalendarCardHtml(box.item, { teams, openKey, today, gridBox: true });
       html += `<div class="${classes.join(" ")}" role="listitem" style="${boxStyle(box)}">${inner}</div>`;
       while (next < more.length && more[next].after === index + 1) html += moreHtml(more[next++]);
     });

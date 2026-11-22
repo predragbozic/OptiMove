@@ -219,7 +219,26 @@ a "now" line; spanning multi-day bars; dragging to move or resize.
   band (2.4) shows multi-day events with "from 10:00" / "until 16:00" (`centralCalendarSpanWhenLabel`).
 - **"+N more" opens the Day list even with the switch on Time grid:** the button carries `data-day-list="1"`, which
   sets `cal.dayList`; the Day view then draws its list and the switch shows List, until the next view, day or mode
-  change. Without it, the Day time grid's own "+N more" would open itself.
+  change, Back or "Open in calendar". Without it, the Day time grid's own "+N more" would open itself.
+- **What a box shows is decided by its own width and height** (the review round), not by the column count:
+  - under 45 minutes high (`is-short`), the time and the title are on one line, with the title cut by an ellipsis;
+  - CSS container queries on `.cc-tg-box` set the rest by width:
+    - the end time ("–11:00") hides under 100 px;
+    - the type icon hides under 120 px;
+    - the card tightens under 60 px and again under 44 px, so a third of a week column at 1024 px still shows "10:00" whole;
+    - "+N more" reads "+N" under 70 px.
+  - The tooltip (`title`) and the label always carry the whole time and title.
+- **Touch screens of 1024 px and up** (`pointer: coarse`) keep K5-2's 44 px targets. A short box, a chip and "+N more"
+  then reach past their time slot where that room is free. When the next box in the same column starts right after
+  them, that box keeps its own slot (it is later in the DOM), so the earlier box's target is its own 30 minutes. A box
+  that is hovered or focused is drawn on top.
+- **Follow-ups, recorded, not built:**
+  - the grid starts at 00:00 when an event starts that early; scroll it to about 07:00 on opening;
+  - the day's count sits close to the next day's head;
+  - "+N" is decided for the whole cluster, so a chip at a free time inside a long cluster can go into "+N", and the
+    block can run for hours. Deciding per overlap point is the fix; nothing is lost, since the Day list shows everything;
+  - a chip box can be about 2 px taller than its 30-minute slot;
+  - the overlap of a short box and a touch target was checked in Chromium with `hasTouch` only, not on a real tablet.
 - **K5-4's mark** (#695) merged first, so K7 adapted (2.5): the mark is the band's last entry and counts toward its
   3 (a fourth entry goes into the band's "+N more", and the Day list shows the mark).
 - **Unchanged layouts:** `frontend/tests/support/central-calendar-k7-unchanged.json` is the HTML of 15 cases (phone and
