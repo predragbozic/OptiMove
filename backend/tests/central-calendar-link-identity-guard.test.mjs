@@ -6,6 +6,14 @@
 // aligned as the linked one: the link reads as ORPHANED. Re-linking in the same
 // event replaces the orphan; another event's orphan still holds the slot.
 //
+// How the orphans are made: since the Builder's source session guard (task 5,
+// docs/ai/builder-batch-edit-plan.md section 12), no Builder path can remove,
+// move or replace a session an event links (test 7 pins that). An orphan now
+// comes only from a row written before that guard, or from the race of plan
+// 12.4, and the readers must handle it however it arose. So tests 1-6 make it
+// with raw SQL on the published plan's sessions, in the shape each Builder
+// path used to leave behind.
+//
 // One disposable database (optimove_tests_calendar_linkguard_*): the committed
 // legacy-schema snapshot plus every migration of migrations_v2 through the real
 // runner; the real Express app in-process over HTTP with real session cookies;
@@ -139,11 +147,20 @@ async function editAndSave(w, change) {
   await change(edit);
   ok(await api(`/api/builder/plans/${edit.plan.id}/submit`, { method: "POST", cookie: w.cookie, body: { responseMode: "summary" } }));
 }
-const removeMainAddNew = (w, name) => editAndSave(w, async (edit) => {
-  const mainInDraft = sessionsOf(edit).find((s) => s.name === "Main");
-  ok(await api(`/api/builder/sessions/${mainInDraft.id}`, { method: "DELETE", cookie: w.cookie }));
-  await addSession(w.cookie, edit.blocks[0].id, name);
-});
+// The linked Main replaced in its slot by another session (another logical id, the same order, named `name`), as a
+// remove-and-add used to leave it: raw SQL on the published plan.
+async function removeMainAddNew(w, name) {
+  await q(`update plans.plan_sessions set logical_session_id = gen_random_uuid(), name = $2, updated_at = now() where id = $1`, [w.main.id, name]);
+}
+// Main deleted and `sessionId` (another day's, or another plan's) put into Main's slot, with a new logical id (a
+// paste copies under a new identity) or its own (a session moved in): raw SQL on the published plan.
+async function intoLinkedSlot(w, sessionId, { newIdentity }) {
+  const day = (await q(`select plan_day_id from plans.plan_sessions where id = $1`, [w.main.id]))[0].plan_day_id;
+  await q(`delete from plans.plan_sessions where id = $1`, [w.main.id]);
+  await q(`update plans.plan_sessions set plan_day_id = $2, am_pm = $3, bta = $4, session_order = $5, updated_at = now(),
+                  logical_session_id = case when $6::boolean then gen_random_uuid() else logical_session_id end
+            where id = $1`, [sessionId, day, w.main.am_pm, w.main.bta, w.main.session_order, newIdentity]);
+}
 
 // Everything the four guarded reads say about the event's link and the session `name`.
 async function readsOf(w, name) {
@@ -198,10 +215,7 @@ test("2. a same-name replacement (\"Main\" again) is orphaned too, never linked"
 
 test("3. the linked session moved to another slot: orphaned; the moved session gets no event time", async () => {
   const w = await linkedWorld("moved");
-  await editAndSave(w, async (edit) => {
-    const mainInDraft = sessionsOf(edit).find((s) => s.name === "Main");
-    ok(await api(`/api/builder/sessions/${mainInDraft.id}`, { method: "PATCH", cookie: w.cookie, body: { amPm: "PM" } }));
-  });
+  await q(`update plans.plan_sessions set am_pm = 'PM', updated_at = now() where id = $1`, [w.main.id]);
   const r = await readsOf(w, "Main");
   assert.equal(String(r.session.logical_session_id), String(w.main.logical_session_id), "a move keeps the logical id");
   assert.equal(r.session.am_pm, "PM");
@@ -226,14 +240,13 @@ async function linkedWorldWithTuesday(label) {
   await editAndSave(w, async (edit) => { await addSession(w.cookie, edit.blocks[1].id, "Tue"); });
   const live = await q(`select logical_session_id_at_link from calendar.event_session_links where event_id = $1 and ended_at is null`, [w.ev.id]);
   assert.equal(String(live[0].logical_session_id_at_link), String(w.main.logical_session_id), "still linked to Main");
-  return w;
+  // The Save rewrote the published plan's rows (the same logical ids, new row ids).
+  return { ...w, main: await sessionNamed(w.planId, "Main") };
 }
 
 test("3b. a DAY paste over the linked day (Tuesday pasted onto Monday, its orders copied as they are): orphaned; align writes nothing", async () => {
   const w = await linkedWorldWithTuesday("daypaste");
-  await editAndSave(w, async (edit) => {
-    ok(await api(`/api/builder/days/${edit.blocks[1].id}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: { confirmOverwrite: true } }));
-  });
+  await intoLinkedSlot(w, (await sessionNamed(w.planId, "Tue")).id, { newIdentity: true });
   const pasted = (await q(`select ps.name, ps.am_pm, ps.bta, ps.session_order, ps.logical_session_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id
                           where pd.plan_id = $1 and pd.date = $2`, [w.planId, WEEK]));
   assert.deepEqual(pasted.map((s) => s.name), ["Tue"], "Monday now holds the pasted Tue");
@@ -254,10 +267,8 @@ test("3c. a day pasted from ANOTHER plan onto the linked day: orphaned", async (
   const otherDraft = ok(await api(`/api/builder/plans/${created.plan.id}`, { cookie: w.cookie }));
   await addSession(w.cookie, otherDraft.blocks[0].id, "Other");
   ok(await api(`/api/builder/plans/${created.plan.id}/submit`, { method: "POST", cookie: w.cookie, body: { responseMode: "summary" } }));
-  const otherMonday = (await q(`select pd.id from plans.plan_days pd join plans.plans p on p.id = pd.plan_id where p.athlete_id = $1 and pd.date = '2026-11-09' and p.status = 'active' and not coalesce(p.is_edit_draft,false)`, [w.athleteId]))[0].id;
-  await editAndSave(w, async (edit) => {
-    ok(await api(`/api/builder/blocks/${otherMonday}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: { confirmOverwrite: true } }));
-  });
+  const otherPlanId = (await q(`select p.id from plans.plans p join plans.plan_days pd on pd.plan_id = p.id where p.athlete_id = $1 and pd.date = '2026-11-09' and p.status = 'active' and not coalesce(p.is_edit_draft,false)`, [w.athleteId]))[0].id;
+  await intoLinkedSlot(w, (await sessionNamed(otherPlanId, "Other")).id, { newIdentity: true });
   const r = await readsOf(w, "Other");
   assert.equal(r.links[0].state, "orphaned");
   assert.deepEqual(r.card.links.logicalSessionIds, []);
@@ -266,13 +277,7 @@ test("3c. a day pasted from ANOTHER plan onto the linked day: orphaned", async (
 
 test("3d. a session moved in from another day into the linked slot (Monday holds A then the linked Main; Main deleted, Tuesday's session cut and pasted onto Monday): orphaned", async () => {
   const w = await linkedWorld("movein", { mondayBefore: ["A"], tuesday: ["Tue"] });
-  await editAndSave(w, async (edit) => {
-    const mainInDraft = sessionsOf(edit).find((s) => s.name === "Main");
-    const tueInDraft = sessionsOf(edit).find((s) => s.name === "Tue");
-    ok(await api(`/api/builder/sessions/${mainInDraft.id}`, { method: "DELETE", cookie: w.cookie }));
-    ok(await api(`/api/builder/sessions/${tueInDraft.id}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: {} }));
-    ok(await api(`/api/builder/sessions/${tueInDraft.id}`, { method: "DELETE", cookie: w.cookie }));
-  });
+  await intoLinkedSlot(w, (await sessionNamed(w.planId, "Tue")).id, { newIdentity: false });
   const r = await readsOf(w, "Tue");
   assert.equal(r.session.am_pm, w.main.am_pm);
   assert.equal(r.session.bta, w.main.bta);
@@ -350,4 +355,59 @@ test("6. another event's orphan still holds the slot: linking the new session th
   assert.equal(res.status, 409, res.text);
   assert.equal(res.body.error, "session_already_attached");
   assert.deepEqual(await q(`select id, event_id, ended_at from calendar.event_session_links order by id`), before, "nothing written");
+});
+
+// The published plan's sessions with their slot and identity, for "nothing written".
+const slotsOf = async (planId) => q(
+  `select ps.id, ps.name, pd.date::text as date, ps.am_pm, ps.bta, ps.session_order, ps.logical_session_id
+     from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1 order by ps.id`, [planId]);
+
+test("7. the new guarantee: no Builder path makes a linked session an orphan - every Save that removes, moves or replaces it, and every direct writer, is refused; the link stays linked", async () => {
+  const w = await linkedWorld("guarded", { tuesday: ["Tue"] });
+  const before = await slotsOf(w.planId);
+  const refusedSave = async (label, change) => {
+    const edit = ok(await api(`/api/builder/plans/${w.planId}/edit`, { method: "POST", cookie: w.cookie }));
+    await change(edit);
+    const res = await api(`/api/builder/plans/${edit.plan.id}/submit`, { method: "POST", cookie: w.cookie, body: { responseMode: "summary" } });
+    assert.equal(res.status, 409, `${label}: ${res.text}`);
+    assert.equal(res.body.code, "edit_sessions_locked", label);
+    assert.ok(res.body.sessions.some((x) => x.name === "Main" && x.reasons.includes("linked_to_event")), `${label}: Main is named, linked_to_event`);
+    ok(await api(`/api/builder/plans/${edit.plan.id}`, { method: "DELETE", cookie: w.cookie }));
+  };
+  const mainIn = (edit) => sessionsOf(edit).find((s) => s.name === "Main");
+  await refusedSave("remove and add", async (edit) => {
+    ok(await api(`/api/builder/sessions/${mainIn(edit).id}`, { method: "DELETE", cookie: w.cookie }));
+    await addSession(w.cookie, edit.blocks[0].id, "Gym");
+  });
+  await refusedSave("move", async (edit) => {
+    ok(await api(`/api/builder/sessions/${mainIn(edit).id}`, { method: "PATCH", cookie: w.cookie, body: { amPm: "PM" } }));
+  });
+  await refusedSave("day paste", async (edit) => {
+    ok(await api(`/api/builder/days/${edit.blocks[1].id}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: { confirmOverwrite: true } }));
+  });
+  await refusedSave("move in", async (edit) => {
+    const tueIn = sessionsOf(edit).find((s) => s.name === "Tue");
+    ok(await api(`/api/builder/sessions/${mainIn(edit).id}`, { method: "DELETE", cookie: w.cookie }));
+    ok(await api(`/api/builder/sessions/${tueIn.id}/copy-into/${edit.blocks[0].id}`, { method: "POST", cookie: w.cookie, body: {} }));
+    ok(await api(`/api/builder/sessions/${tueIn.id}`, { method: "DELETE", cookie: w.cookie }));
+  });
+  // The direct writers of the published plan.
+  const days = await q(`select id, date::text as date from plans.plan_days where plan_id = $1 order by day_order`, [w.planId]);
+  for (const [label, res] of [
+    ["PATCH move", await api(`/api/builder/sessions/${w.main.id}`, { method: "PATCH", cookie: w.cookie, body: { amPm: "PM" } })],
+    ["DELETE session", await api(`/api/builder/sessions/${w.main.id}`, { method: "DELETE", cookie: w.cookie })],
+    ["day paste", await api(`/api/builder/days/${days[1].id}/copy-into/${days[0].id}`, { method: "POST", cookie: w.cookie, body: { confirmOverwrite: true } })],
+  ]) {
+    assert.equal(res.status, 409, `${label}: ${res.text}`);
+    assert.equal(res.body.code, "edit_sessions_locked", label);
+  }
+  const deleted = await api(`/api/builder/plans/${w.planId}`, { method: "DELETE", cookie: w.cookie });
+  assert.equal(deleted.status, 409, deleted.text);
+  assert.equal(deleted.body.code, "plan_sessions_locked");
+  assert.deepEqual(await slotsOf(w.planId), before, "the published plan's sessions are as they were");
+  const r = await readsOf(w, "Main");
+  assert.equal(r.links[0].state, "linked", "the link still reads as linked");
+  assert.deepEqual(r.card.links.logicalSessionIds, [String(w.main.logical_session_id)]);
+  assert.equal(r.card.links.orphanedSessionLinks, 0);
+  assert.ok(r.rows.length > 0 && r.rows.every((row) => row.linked_event_start_time === "10:00"), "the event's time is still on it");
 });
