@@ -45,7 +45,9 @@ wrappers.
 v87 takes every lock up front with `lock_timeout` 5 s: `public.sport_positions` and
 `training_load.metric_value_estimates` ACCESS EXCLUSIVE (constraints and columns change), `public.sports` SHARE ROW
 EXCLUSIVE. Behind a long transaction the deploy stops after 5 s with nothing changed, instead of waiting and holding up
-the readers of estimates; run it at a quiet moment (preflight block 5), as the rollback.
+the readers of estimates; run it at a quiet moment (preflight block 5), as the rollback. **If the deploy stops on the lock
+timeout** (`55P03`, "canceling statement due to lock timeout"): nothing of v87 was applied (one transaction) and the
+server did not start the new code; wait for a quiet moment, run preflight block 5 again, and deploy again.
 
 ## Before the merge
 
