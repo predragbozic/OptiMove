@@ -62,10 +62,15 @@ test("6. a cross-plan-block clipboard shows the Paste day button on every weekly
   assert.match(html, /Paste &quot;Ankle rehab&quot;|Paste "Ankle rehab"/);
 });
 
-test("7. a cross-plan-block clipboard never leaks a Paste button into a non-weekly block", () => {
+// Since 2026-11-22 a program or template block takes content imported from a
+// weekly plan, so it shows the Paste buttons for a cross-plan clipboard - but
+// never for a same-plan "day" clipboard, which only a weekly plan can make.
+test("7. a cross-plan-block clipboard shows Paste on a non-weekly block; a same-plan day clipboard never does", () => {
   const clipboard = { type: "cross-plan-block", sourcePlanId: "template-1", blockId: "block-9", name: "Ankle rehab" };
   const html = renderBuilderBlock(emptyBlock({ id: "block-1" }), "", "", false, baseContext({ clipboard }));
-  assert.doesNotMatch(html, /data-action="builder-paste-day"/);
+  assert.match(html, /data-action="builder-paste-day" data-day-id="block-1"/);
+  const dayClipboard = { type: "day", dayId: "day-1", name: "Monday" };
+  assert.doesNotMatch(renderBuilderBlock(emptyBlock({ id: "block-1" }), "", "", false, baseContext({ clipboard: dayClipboard })), /data-action="builder-paste-day"/);
 });
 
 // Phase F2: a "Copy this whole session" clipboard entry (cross-plan-session)
@@ -79,10 +84,10 @@ test("8. a cross-plan-session clipboard shows a Paste session button on every we
   assert.match(html, /Paste session &quot;AM \/ Training&quot;|Paste session "AM \/ Training"/);
 });
 
-test("9. a cross-plan-session clipboard never leaks a Paste session button into a non-weekly block", () => {
+test("9. a cross-plan-session clipboard shows the Paste session button on a program or template block too", () => {
   const clipboard = { type: "cross-plan-session", sessionId: "session-1", name: "AM / Training" };
   const html = renderBuilderBlock(emptyBlock({ id: "block-1" }), "", "", false, baseContext({ clipboard }));
-  assert.doesNotMatch(html, /data-action="builder-paste-session"/);
+  assert.match(html, /data-action="builder-paste-session" data-day-id="block-1"/);
 });
 
 test("10. a day clipboard (not a session) never shows a Paste session button", () => {

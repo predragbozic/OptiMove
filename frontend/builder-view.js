@@ -754,7 +754,7 @@ function renderBuilderInner() {
           <div class="section-heading">
             <div><p class="eyebrow">Day and session structure</p><h3>${isWeekly ? "Seven-day plan" : "Blocks and sessions"}</h3></div>
             <div class="builder-outline-info-buttons">
-              ${isWeekly ? renderImportBlockIconButton() : `<button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program example"><span class="button-icon" aria-hidden="true">i</span><span class="builder-info-label">Program example</span></button>`}
+              ${renderImportBlockIconButton()}${isWeekly ? "" : `<button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="program" aria-label="Program example"><span class="button-icon" aria-hidden="true">i</span><span class="builder-info-label">Program example</span></button>`}
               <button class="plain-button icon-button builder-info-button" type="button" data-action="builder-open-info" data-info="session" aria-label="Session example"><span class="button-icon" aria-hidden="true">i</span><span class="builder-info-label">Session example</span></button>
             </div>
           </div>

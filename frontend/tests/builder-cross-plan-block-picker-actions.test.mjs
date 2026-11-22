@@ -198,7 +198,7 @@ test("7c. drilling into a session fetches its node tree and keeps the picker ope
 
   await handleBuilderWorkspaceAction(action, noopHandlers());
 
-  assert.equal(calls[0].url, "/api/builder/sessions/s1/nodes");
+  assert.equal(calls[0].url, "/api/builder/sessions/s1/nodes?items=1");
   assert.equal(state.builder.blockPicker.sessionId, "s1");
   assert.equal(state.builder.blockPicker.sessionName, "AM / Training");
   assert.deepEqual(state.builder.blockPicker.nodes, [{ id: "d1", parentId: "", type: "domain", name: "Strength", iconUrl: "", itemCount: 0 }]);

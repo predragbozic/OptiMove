@@ -1170,7 +1170,9 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-open-block-picker") {
-    state.builder.blockPicker = emptyBlockPicker({ open: true });
+    // A program or block template imports from weekly plans only.
+    const planType = state.builder.draft?.plan?.planType;
+    state.builder.blockPicker = emptyBlockPicker({ open: true, ...(planType && planType !== "weekly" ? { sourceType: "weekly" } : {}) });
     handlers.renderBuilder();
     return true;
   }
@@ -1200,7 +1202,15 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     return true;
   }
   if (type === "builder-block-picker-back-to-sessions") {
-    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId: "", sessionName: "", nodes: [], error: "" };
+    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId: "", sessionName: "", nodes: [], thumbSectionId: "", error: "" };
+    handlers.renderBuilder();
+    return true;
+  }
+  if (type === "builder-block-picker-toggle-thumbs") {
+    const nodeId = action.dataset.nodeId || "";
+    if (!nodeId) return true;
+    const picker = state.builder.blockPicker;
+    state.builder.blockPicker = { ...picker, thumbSectionId: picker.thumbSectionId === nodeId ? "" : nodeId };
     handlers.renderBuilder();
     return true;
   }
@@ -1286,10 +1296,12 @@ export async function handleBuilderWorkspaceAction(action, handlers) {
     const sessionId = action.dataset.sessionId || "";
     const sessionName = action.dataset.sessionName || "Session";
     if (!sessionId) return true;
-    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId, sessionName, nodesLoading: true, error: "" };
+    state.builder.blockPicker = { ...state.builder.blockPicker, sessionId, sessionName, nodesLoading: true, thumbSectionId: "", error: "" };
     handlers.renderBuilder();
     try {
-      const result = await api(`/api/builder/sessions/${encodeURIComponent(sessionId)}/nodes`);
+      // items=1: each section also carries its first exercises (title and
+      // media) for the section's picture button.
+      const result = await api(`/api/builder/sessions/${encodeURIComponent(sessionId)}/nodes?items=1`);
       state.builder.blockPicker.nodes = result.nodes || [];
     } catch (error) {
       state.builder.blockPicker.error = error.message || "Could not load this session's structure.";

@@ -241,6 +241,8 @@ export const emptyBlockPicker = (overrides = {}) => ({
   sessionName: "",
   nodes: [],
   nodesLoading: false,
+  // The one section of the chosen session whose exercise pictures are open.
+  thumbSectionId: "",
   error: "",
   ...overrides,
 });

@@ -66,9 +66,12 @@ export function renderImportBlockIconButton() {
 // meaningless, and the backend already rejects it) - a cross-plan-block
 // clipboard has no such self-collision (its id belongs to a different
 // plan entirely), so it shows on every weekly day.
-function renderPasteDayIconButton(dayId, context) {
+// `crossPlanOnly`: a program or template block takes only content copied from
+// another plan (a weekly plan's day, via the import dialog), never a
+// same-plan "day" clipboard, which only a weekly plan can make.
+function renderPasteDayIconButton(dayId, context, { crossPlanOnly = false } = {}) {
   const clipboard = context.clipboard;
-  if (clipboard?.type === "day") {
+  if (clipboard?.type === "day" && !crossPlanOnly) {
     if (clipboard.dayId === dayId) return "";
   } else if (clipboard?.type !== "cross-plan-block") {
     return "";
@@ -383,7 +386,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
         </div>
         ${isWeekly
           ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}${renderPasteSessionIconButton(block.id, context)}</div>`
-          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
+          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderPasteDayIconButton(block.id, context, { crossPlanOnly: true })}${renderPasteSessionIconButton(block.id, context)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
       ${isWeekly ? context.eventsRow?.(block) || "" : ""}
       <div class="builder-sessions">

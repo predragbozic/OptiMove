@@ -2,6 +2,8 @@ import { builderIconGlyph, sessionLabel } from "./builder-helpers.js";
 import { athleteFilterAttrs, matchingAthletes, renderAthleteFilter, sortAthletes } from "./athlete-list-tools.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { renderImage } from "./media.js";
+import { renderExerciseThumb } from "./exercise-view-modes.js";
+import { planItemText } from "./exercise-text.js";
 import { escapeAttr, escapeHtml, initialsFor, localDateIso, weekMondayIso, NO_REFERRER } from "./utils.js";
 
 export function renderBuilderAthletePicker(state) {
@@ -198,23 +200,64 @@ function renderPickerNodeIcon(iconUrl) {
 // Every node here is directly clickable to copy just that node+its
 // subtree, same interaction as the Builder's own tree, just without any of
 // the editing chrome.
-function renderPickerNodeTree(nodes, parentId) {
+function renderPickerNodeTree(nodes, parentId, openSectionId = "") {
   const children = nodes.filter((node) => (node.parentId || "") === parentId);
   if (!children.length) return "";
   return `
     <div class="builder-block-picker-node-tree">
       ${children.map((node) => `
         <div class="builder-block-picker-node builder-node-${escapeAttr(node.type)}">
-          <button class="builder-block-picker-node-row" type="button" data-action="builder-block-picker-choose-node" data-node-id="${escapeAttr(node.id)}" data-node-type="${escapeAttr(node.type)}" data-node-name="${escapeAttr(node.name)}" data-item-count="${escapeAttr(node.itemCount)}">
-            <span class="builder-node-icon">${renderPickerNodeIcon(node.iconUrl)}</span>
-            <span>${escapeHtml(node.name)}</span>
-            ${node.type === "section" ? `<small>${node.itemCount} ${node.itemCount === 1 ? "exercise" : "exercises"}</small>` : ""}
-          </button>
-          ${renderPickerNodeTree(nodes, node.id)}
+          <div class="builder-block-picker-node-line">
+            <button class="builder-block-picker-node-row" type="button" data-action="builder-block-picker-choose-node" data-node-id="${escapeAttr(node.id)}" data-node-type="${escapeAttr(node.type)}" data-node-name="${escapeAttr(node.name)}" data-item-count="${escapeAttr(node.itemCount)}">
+              <span class="builder-node-icon">${renderPickerNodeIcon(node.iconUrl)}</span>
+              <span>${escapeHtml(node.name)}</span>
+              ${node.type === "section" ? `<small>${node.itemCount} ${node.itemCount === 1 ? "exercise" : "exercises"}</small>` : ""}
+            </button>
+            ${node.type === "section" ? renderPickerThumbsButton(node, openSectionId === node.id) : ""}
+          </div>
+          ${node.type === "section" && openSectionId === node.id ? renderPickerThumbs(node) : ""}
+          ${renderPickerNodeTree(nodes, node.id, openSectionId)}
         </div>
       `).join("")}
     </div>
   `;
+}
+
+// A small image button beside a section: opens the pictures of the
+// exercises in it, so the coach can see what is in a section before copying
+// it. Its own control (never nested in the copy button), a 44 px target.
+function renderPickerThumbsButton(node, isOpen) {
+  const label = `${isOpen ? "Hide" : "Show"} pictures of the exercises in ${node.name}`;
+  return `<button class="builder-block-picker-thumbs-button${isOpen ? " is-open" : ""}" type="button" data-action="builder-block-picker-toggle-thumbs" data-node-id="${escapeAttr(node.id)}" aria-label="${escapeAttr(label)}" aria-expanded="${isOpen ? "true" : "false"}" title="${escapeAttr(label)}">
+    <svg viewBox="0 0 24 24" class="rail-icon" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="1.4"></circle><path d="M5 17l4.3-4.3a1.4 1.4 0 0 1 2 0L15 16.5"></path><path d="M13.5 15l1.3-1.3a1.4 1.4 0 0 1 2 0L19.5 16.5"></path></svg>
+  </button>`;
+}
+
+// The same exercise thumbnail the Builder's own section preview uses (own
+// picture, the video's cover, an R2 picture through its access context, and
+// the initials when none loads). Only the open section renders any, so only
+// its pictures are asked for.
+function renderPickerThumbs(node) {
+  const items = node.items || [];
+  const more = Math.max(0, (Number(node.itemCount) || 0) - items.length);
+  if (!items.length) return `<p class="muted builder-block-picker-thumbs-empty" role="status">No exercises in this section yet.</p>`;
+  return `
+    <ul class="builder-block-picker-thumbs" aria-label="Exercises in ${escapeAttr(node.name)}">
+      ${items.map((item) => {
+        const title = planItemText(item, "title") || "Exercise";
+        return `<li class="builder-block-picker-thumb"><span class="builder-block-picker-thumb-frame">${renderExerciseThumb(item, "builder-block-picker-thumb-image", { name: title })}</span><span class="builder-block-picker-thumb-name">${escapeHtml(title)}</span></li>`;
+      }).join("")}
+      ${more ? `<li class="builder-block-picker-thumb-more muted">+${more} more</li>` : ""}
+    </ul>
+  `;
+}
+
+// A program or block template takes content from a weekly plan only (the
+// server refuses any other source for it), so the dialog starts there and
+// offers no other source. A weekly plan keeps all three sources.
+export function pickerSourceLocked(state) {
+  const planType = state.builder.draft?.plan?.planType;
+  return Boolean(planType) && planType !== "weekly";
 }
 
 function renderBlockPickerBody(state, picker) {
@@ -223,7 +266,7 @@ function renderBlockPickerBody(state, picker) {
     return `
       <button class="plain-button builder-block-picker-copy-whole" type="button" data-action="builder-block-picker-copy-whole-session">${ICON_CHECK}<span>Copy this whole session</span></button>
       ${picker.nodes.length
-        ? renderPickerNodeTree(picker.nodes, "")
+        ? renderPickerNodeTree(picker.nodes, "", picker.thumbSectionId || "")
         : `<p class="muted">This session has no domains, categories, or sections yet.</p>`}
       <button class="text-action" type="button" data-action="builder-block-picker-back-to-sessions">Choose a different session</button>
     `;
@@ -292,7 +335,7 @@ function renderBlockPickerBody(state, picker) {
           `).join("")}
         </div>
         </div>
-        <button class="text-action" type="button" data-action="builder-block-picker-back-to-source">Choose a different source</button>
+        ${pickerSourceLocked(state) ? "" : `<button class="text-action" type="button" data-action="builder-block-picker-back-to-source">Choose a different source</button>`}
       `;
     }
     if (picker.athletePlansLoading) return `<p class="muted">Loading ${isWeeklySource ? "weekly plans" : "programs"}...</p>`;
@@ -310,10 +353,11 @@ function renderBlockPickerBody(state, picker) {
       <button class="text-action" type="button" data-action="builder-block-picker-back-to-athletes">Choose a different athlete</button>
     `;
   }
+  const locked = pickerSourceLocked(state);
   return `
     <div class="builder-block-picker-source-choice">
-      ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="template"`, label: "Template", meta: "A reusable program from your library" })}
-      ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="program"`, label: "Specific program", meta: "An athlete's own assigned program" })}
+      ${locked ? "" : renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="template"`, label: "Template", meta: "A reusable program from your library" })}
+      ${locked ? "" : renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="program"`, label: "Specific program", meta: "An athlete's own assigned program" })}
       ${renderBlockPickerOption({ action: "builder-block-picker-choose-source-type", dataAttrs: `data-source-type="weekly"`, label: "Weekly plan", meta: "An athlete's own weekly plan" })}
     </div>
   `;
