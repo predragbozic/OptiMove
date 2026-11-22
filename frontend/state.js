@@ -67,6 +67,26 @@ export const emptyCalendarSettingsState = () => ({
   questionsForm: null,
 });
 
+// Settings > Roles and the role assignment in Settings > Users (roles plan R3): the club's (or the system's) roles
+// and the catalog the Roles API gives, one open form, one write at a time, and the Users screen's own slices -
+// the assignment form's roles per club and "who holds what" (P8). Reset by a workspace change.
+export const emptyRolesState = () => ({
+  ctxKey: "",
+  catalog: null,
+  roles: null,
+  loading: false,
+  error: "",
+  stale: false,
+  showArchived: false,
+  notice: "",
+  noticeTone: "",
+  // { mode: "create" | "edit" | "view" | "copy" | "archive", roleId, draft, base, detail, error } or null.
+  form: null,
+  command: null,
+  assign: { byClub: {}, unavailable: false, known: null, draft: { scope: "", roleId: "", displayTitle: "", expiresAt: "", reason: "", userId: "" }, error: "", command: null, notice: "" },
+  who: { clubId: "", roleId: "", rows: [], nextCursor: "", loaded: false, loading: false, error: "", unavailable: false, queryKey: "", revoke: null, command: null, notice: "" },
+});
+
 // The central calendar (K1b, docs/ai/central-calendar-k1b-plan.md): one
 // read of GET /api/calendar per visible range, shown as a month, a week
 // (a slot-ordered list, or a time grid on a wide screen) or a day. The
@@ -1233,6 +1253,7 @@ export const createInitialState = () => ({
   coachHome: emptyCoachHomeState(),
   centralCalendar: emptyCentralCalendarState(),
   calendarSettings: emptyCalendarSettingsState(),
+  roles: emptyRolesState(),
   notifications: { rows: [], unreadCount: 0, open: false, loading: false, error: "" },
   tests: emptyTestsState(),
   trainingLoad: emptyTrainingLoadState(),

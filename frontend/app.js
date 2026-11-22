@@ -169,6 +169,9 @@ import { startAppUpdateWatch } from "./app-update.js";
 import { CALENDAR_SETTINGS_ICON_HOST, calendarSettingsMayBeLeft, handleCalendarSettingsAction, handleCalendarSettingsBeforeUnload, handleCalendarSettingsInput, submitCalendarSettingsForm } from "./calendar-settings-actions.js";
 import { calendarSettingsNeedLoad, enterCalendarSettingsSection, loadCalendarSettings, resetCalendarSettingsForWorkspaceChange } from "./calendar-settings-data.js";
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
+import { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, submitRolesForm } from "./roles-actions.js";
+import { enterRolesSection, loadRoles, loadWho, resetRolesForWorkspaceChange, rolesContext, rolesNeedLoad, rolesUsersAvailable, whoNeedsLoad } from "./roles-data.js";
+import { renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml } from "./roles-view.js";
 import { installThumbnailResolver, retryExpiredMediaImage } from "./media-playback.js";
 import {
   closeMessagesIfOutside,
@@ -570,6 +573,8 @@ function bindEvents() {
   els.content.addEventListener("change", (event) => handleCentralCalendarInput(event.target, { render: renderCentralCalendar }));
   // Settings -> Calendar (K2b-1c): a choice in its form (a select, a colour, a box).
   els.content.addEventListener("change", (event) => handleCalendarSettingsInput(event.target, { render: renderCalendarSettingsSurface }));
+  // Settings -> Roles and the role assignment in Users (roles plan R3): a choice in their forms.
+  els.content.addEventListener("change", (event) => handleRolesInput(event.target, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface }, "change"));
   // Data configuration -> Mappings: a checkbox, a radio or a select reports its choice through "change".
   els.content.addEventListener("change", (event) => { if (event.target?.matches?.("select, input[type=checkbox], input[type=radio]")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface }); });
   // Imports (phase 4b): the sessions calendar is a <details>; the browser
@@ -778,6 +783,7 @@ function bindEvents() {
   window.addEventListener("beforeunload", handleCentralCalendarBeforeUnload);
   // Settings -> Calendar (K2b-1c): a setting being saved, not confirmed or not saved.
   window.addEventListener("beforeunload", handleCalendarSettingsBeforeUnload);
+  window.addEventListener("beforeunload", handleRolesBeforeUnload);
   // Import from Google Drive: an opened <details> of its card survives the
   // repaints of a running import (toggle does not bubble: caught on the way
   // down), and a repaint of its card waits while a pointer is down, then
@@ -895,6 +901,12 @@ async function handleContentSubmit(event) {
     return;
   }
 
+  const rolesForm = event.target.closest("[data-roles-form]");
+  if (rolesForm) {
+    event.preventDefault();
+    await submitRolesForm(rolesForm, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface, refreshOrganization: () => renderOrganizationPanel() });
+    return;
+  }
   const calendarSettingsForm = event.target.closest("[data-calendar-settings-form]");
   if (calendarSettingsForm) {
     event.preventDefault();
@@ -1441,6 +1453,8 @@ function handleContentInput(event) {
   if (handleCentralCalendarInput(event.target, { render: renderCentralCalendar })) return;
   // Settings -> Calendar (K2b-1c): the open form's typed values.
   if (handleCalendarSettingsInput(event.target, { render: renderCalendarSettingsSurface })) return;
+  // Settings -> Roles / Users (R3): typed values.
+  if (handleRolesInput(event.target, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface }, "input")) return;
   // Data configuration -> Mappings: typed values (a choice reports through "change").
   if (event.target?.closest?.("[data-mm-field]")) {
     if (event.target.matches?.("input[type=text], textarea")) handleMappingsInput(event.target, { render: renderActiveTrainingLoadSurface });
@@ -2477,6 +2491,7 @@ async function loadActiveTab() {
     if (state.organization.section === "storage") enterStorageAdminSection();
     if (state.organization.section === "icons") enterIconGallery();
     if (state.organization.section === "calendar") enterCalendarSettingsSection();
+    if (state.organization.section === "roles") enterRolesSection();
     return renderOrganizationPanel({ refresh: false });
   }
   if (state.activeTab === "coach-home") return loadCoachHome();
@@ -3541,6 +3556,7 @@ async function handleContentClick(event) {
   if (action.dataset.action === "source-connections-pair-team") return;
   if (await handleSourceConnectionsAction(action, { render: renderDataSourcesSurface, openDataSources: openDataSourcesFromSourceConnections })) return;
   if (await handleCalendarSettingsAction(action, { render: renderCalendarSettingsSurface })) return;
+  if (await handleRolesAction(action, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface, refreshOrganization: () => renderOrganizationPanel() })) return;
   if (await handleStorageAdminAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleDriveImportAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleOrganizationAction(action, {
@@ -3675,6 +3691,32 @@ function renderCalendarSettingsSurface() {
   panel.outerHTML = renderCalendarSettingsPanelHtml();
 }
 
+// Settings -> Roles (R3) repaints only its own panel; before it is on screen it is the Settings repaint.
+function renderRolesSurface() {
+  if (state.activeTab !== "organization" || state.organization.section !== "roles") return;
+  const panel = els.content.querySelector(".roles-panel");
+  if (!panel) {
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  panel.outerHTML = renderRolesPanelHtml();
+}
+
+// Users (R3): the assignment form and "who holds what" repaint on their own, so what is typed elsewhere stays.
+function renderRolesUsersSurface() {
+  if (state.activeTab !== "organization" || state.organization.section !== "users") return;
+  const data = state.organization.data;
+  if (!data) return;
+  const assign = els.content.querySelector("[data-roles-assign]");
+  if (assign && !rolesUsersAvailable(data)) {
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  if (assign) assign.outerHTML = renderRolesAssignHtml(data);
+  const who = els.content.querySelector("[data-roles-who]");
+  if (who) who.outerHTML = renderRolesWhoHtml(data);
+}
+
 // From Source connections to the approved pair: the existing Data sources
 // tab (platform admin only), where the GPEXE Team ID of a team is set.
 function openDataSourcesFromSourceConnections() {
@@ -3713,6 +3755,16 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     // Calendar (K2b-1c): the club's catalog, read once on entry and after a write.
     if (state.organization.section === "calendar" && calendarSettingsNeedLoad()) {
       void loadCalendarSettings(renderCalendarSettingsSurface);
+    }
+    // Roles (R3): the catalog and every role of the club (or the system), read once on entry and after a write.
+    if (state.organization.section === "roles" && rolesNeedLoad()) {
+      void loadRoles(renderRolesSurface);
+    }
+    // Users (R3): who holds what; its answer also tells whether the Roles API knows this account at all.
+    if (state.organization.section === "users" && whoNeedsLoad()) {
+      const roleCtx = rolesContext(state.organization.data);
+      if (!state.roles.who.clubId && roleCtx?.clubId) state.roles.who.clubId = roleCtx.clubId;
+      void loadWho({}, renderRolesUsersSurface);
     }
     // Storage (PR 5): the same one-shot read of the defaults and the accounts.
     if (state.organization.section === "storage" && storageAdminContext(state.organization.data) && storageAdminNeedsLoad()) {
@@ -3795,6 +3847,7 @@ async function onWorkspaceChanged() {
   clearAppHistoryEntries();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
+  resetRolesForWorkspaceChange();
   resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;
   // a create not confirmed stays in the calendar's memory under it.
