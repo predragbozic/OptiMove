@@ -82,12 +82,20 @@ async function execute(cmd, { holder, owner, render }) {
   return { info, check };
 }
 
-export function rolesMayBeLeft() {
-  const d = rs();
-  return !(d.command?.busy || d.command?.unconfirmed || d.assign.command?.busy || d.assign.command?.unconfirmed || d.who.command?.busy || d.who.command?.unconfirmed);
+const rolesAsk = (question) => Boolean(globalThis.window?.confirm?.(question));
+const rolesCommands = () => { const d = rs(); return [d.command, d.assign.command, d.who.command]; };
+// A role write in flight or not confirmed (no question: beforeunload uses this too).
+const rolesWriteOpen = () => rolesCommands().some((c) => c?.busy || c?.unconfirmed);
+
+// A workspace switch, a sign-out or the app's reload asks first, like the calendar's settings ("final" leaves the page).
+export function rolesMayBeLeft({ final = false } = {}) {
+  const verb = final === "sign-out" || final === true ? "Sign out" : final === "switch" ? "Switch" : "Leave";
+  if (rolesCommands().some((c) => c?.busy)) return rolesAsk(`A role change is still being saved. ${verb} anyway? Its result will not be shown here.`);
+  if (rolesCommands().some((c) => c?.unconfirmed)) return rolesAsk(`The last role change is not confirmed. ${verb} without checking?`);
+  return true;
 }
 export function handleRolesBeforeUnload(event) {
-  if (rolesMayBeLeft()) return;
+  if (!rolesWriteOpen()) return;
   event.preventDefault();
   event.returnValue = "";
 }

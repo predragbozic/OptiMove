@@ -213,6 +213,9 @@ export function whoNeedsLoad() {
 // Leaving the Users section or the Roles tab drops what was read; the next entry reads again.
 export function markRolesUsersStale() {
   const d = rs();
+  whoGeneration += 1; // a read begun before this cannot bring old rows back
+  d.who.loading = false;
+  d.who.pendingKey = "";
   d.who.loaded = false;
   d.who.rows = [];
   d.who.nextCursor = "";

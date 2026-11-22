@@ -479,7 +479,7 @@ function bindEvents() {
   // The central calendar's event form (K2a-2) is asked before the logout
   // request, never after it: a "No" keeps the session and the form.
   els.signOut?.addEventListener("click", () => {
-    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" }) && rolesMayBeLeft()) void signOut();
+    if (centralCalendarMayBeLeft({ final: "sign-out" }) && calendarSettingsMayBeLeft({ final: "sign-out" }) && rolesMayBeLeft({ final: "sign-out" })) void signOut();
   });
   els.calendarToggle?.addEventListener("click", openCentralCalendarFromRail);
   // The central calendar draws itself again when a layout breakpoint is
@@ -2049,7 +2049,7 @@ async function handleGlobalClick(event) {
     return;
   }
   // A workspace switch resets the central calendar too: its event form asks first (K2a-2).
-  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) && rolesMayBeLeft() })) {
+  if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) && rolesMayBeLeft({ final: "switch" }) })) {
     return;
   }
   if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openCalendarQuestion: (questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers()), openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {

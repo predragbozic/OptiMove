@@ -9,7 +9,7 @@ import { installFetchMock } from "./support/fetch-mock.mjs";
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [], body: { classList: { contains: () => false } } };
 globalThis.window = { confirm: () => true, matchMedia: () => ({ matches: false }) };
 
-const { handleRolesAction, handleRolesInput, rolesRefusalText, submitRolesForm } = await import("../roles-actions.js");
+const { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, rolesMayBeLeft, rolesRefusalText, submitRolesForm } = await import("../roles-actions.js");
 const { loadRoles, loadWho, resetRolesForWorkspaceChange, rolesContext } = await import("../roles-data.js");
 const { permissionReason, renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml, roleSections } = await import("../roles-view.js");
 const { renderSettingsNavHtml } = await import("../navigation.js");
@@ -374,4 +374,60 @@ test("19. app.js guards sign-out, workspace switch and the update watch with rol
   const withCalendar = src.match(/calendarSettingsMayBeLeft\(/g).length;
   const withRoles = src.match(/rolesMayBeLeft\(/g).length;
   assert.ok(withRoles >= 3, `rolesMayBeLeft appears ${withRoles} times, calendar's ${withCalendar}`);
+});
+
+test("20. rolesMayBeLeft asks while a write is in flight or not confirmed, and beforeunload never asks", () => {
+  resetRolesForWorkspaceChange();
+  const asked = [];
+  let answer = true;
+  globalThis.window.confirm = (q) => { asked.push(q); return answer; };
+  try {
+    // No open write: no question.
+    assert.equal(rolesMayBeLeft({ final: "sign-out" }), true);
+    assert.deepEqual(asked, []);
+    for (const [slot, where] of [["command", state.roles], ["command", state.roles.assign], ["command", state.roles.who]]) {
+      for (const [flag, text, verbs] of [["busy", /still being saved/, [["sign-out", "Sign out"], ["switch", "Switch"], [false, "Leave"]]], ["unconfirmed", /not confirmed/, [["sign-out", "Sign out"], ["switch", "Switch"], [false, "Leave"]]]]) {
+        where[slot] = { [flag]: true };
+        for (const [final, verb] of verbs) {
+          asked.length = 0;
+          answer = true;
+          assert.equal(rolesMayBeLeft({ final }), true, "yes lets it go");
+          assert.equal(asked.length, 1);
+          assert.match(asked[0], text);
+          assert.ok(asked[0].includes(verb), asked[0]);
+          answer = false;
+          assert.equal(rolesMayBeLeft({ final }), false, "no keeps it");
+        }
+        // beforeunload blocks without a question.
+        asked.length = 0;
+        const ev = { prevented: false, preventDefault() { this.prevented = true; }, returnValue: undefined };
+        handleRolesBeforeUnload(ev);
+        assert.equal(ev.prevented, true);
+        assert.deepEqual(asked, [], "beforeunload never asks");
+        where[slot] = null;
+      }
+    }
+    const ev2 = { prevented: false, preventDefault() { this.prevented = true; } };
+    handleRolesBeforeUnload(ev2);
+    assert.equal(ev2.prevented, false);
+  } finally { globalThis.window.confirm = () => true; }
+});
+
+test("21. a who read begun before markRolesUsersStale cannot bring old rows back", async () => {
+  resetRolesForWorkspaceChange();
+  const { markRolesUsersStale } = await import("../roles-data.js");
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  installFetchMock(() => ({ status: 200, body: { assignments: [{ id: "x" }], nextCursor: "" } }));
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (...a) => { await gate; return inner(...a); };
+  try {
+    const pending = loadWho({}, () => {});
+    markRolesUsersStale();
+    release();
+    await pending;
+    assert.deepEqual(state.roles.who.rows, []);
+    assert.equal(state.roles.who.loaded, false);
+    assert.equal(state.roles.who.loading, false);
+  } finally { globalThis.fetch = inner; }
 });

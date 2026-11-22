@@ -289,7 +289,7 @@ test("H4: app.js hands the ask-only question to both handlers and the discard to
   assert.match(app, /const askLeaveTrainingLoad = \(\) => confirmLeaveTrainingLoad\(null, \{ discard: false \}\);/);
   // A workspace switch also asks the central calendar's event form (K2a-2) and Settings -> Calendar
   // (K2b-1c): it resets both screens too.
-  assert.match(app, /handleWorkspaceAction\(action, \{[^}]*confirmLeave: \(leave\) => askLeaveTrainingLoad\(\) && centralCalendarMayBeLeft\(\{ final: leave\?\.reload \? "switch" : false \}\) && calendarSettingsMayBeLeft\(\{ final: "switch" \}\) && rolesMayBeLeft\(\) \}\)/);
+  assert.match(app, /handleWorkspaceAction\(action, \{[^}]*confirmLeave: \(leave\) => askLeaveTrainingLoad\(\) && centralCalendarMayBeLeft\(\{ final: leave\?\.reload \? "switch" : false \}\) && calendarSettingsMayBeLeft\(\{ final: "switch" \}\) && rolesMayBeLeft\(\{ final: "switch" \}\) \}\)/);
   assert.match(app, /handleNotificationAction\(action, \{[^}]*confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts[^}]*\}\)/);
 });
 
