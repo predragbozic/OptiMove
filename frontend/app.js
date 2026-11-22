@@ -91,6 +91,7 @@ import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEnt
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
 import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, weeklyBackToCalendar } from "./weekly-k6-actions.js";
 import { slotPathFor, weeklyDayItems } from "./weekly-k6.js";
+import { findExistingWeeklyPlan, openExistingWeeklyPlan, renderWeeklyExistingHtml } from "./weekly-open-existing.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
@@ -323,6 +324,8 @@ import { installExerciseHeaderReveal } from "./exercise-header-reveal.js";
 import { markCurrentTab, revealActiveTab } from "./om-tabs.js";
 
 let inboxPollId = null;
+// The plan "Open that draft" opens after a refused weekly create (weekly-open-existing.js); never read from the DOM.
+let weeklyExistingPlan = null;
 // The Exercise Library's top bar and search row brought back by a pull up
 // (exercise-header-reveal.js); kept in step with the screen by renderTabs().
 let exerciseHeaderReveal = null;
@@ -3526,6 +3529,29 @@ async function handleContentClick(event) {
     } catch (error) {
       state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart });
       renderBuilder();
+      // The week already holds a plan: offer to open it when the weekly-plans read returns one the caller may open.
+      const existing = error?.status === 409 && athleteId ? await findExistingWeeklyPlan(athleteId, weekStart) : null;
+      if (existing && state.activeTab === "builder" && state.builder?.weekStart === weekStart) {
+        weeklyExistingPlan = existing;
+        els.content.insertAdjacentHTML("afterbegin", renderWeeklyExistingHtml(error?.message, existing));
+      } else {
+        renderBuilderError(error);
+      }
+    }
+    return;
+  }
+  if (type === "weekly-open-existing") {
+    const existing = weeklyExistingPlan;
+    if (!existing || String(action.dataset.planId) !== existing.planId || action.disabled) return;
+    action.disabled = true;
+    setLoading("Opening weekly plan...");
+    try {
+      const draft = await openExistingWeeklyPlan(existing);
+      state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart: existing.weekStart, draft });
+      weeklyExistingPlan = null;
+      await loadBuilder();
+    } catch (error) {
+      action.disabled = false;
       renderBuilderError(error);
     }
     return;
