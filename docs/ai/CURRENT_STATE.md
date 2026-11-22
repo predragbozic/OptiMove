@@ -408,6 +408,36 @@ deploys and post-checks without a record in this file are as the stream manager 
   and the platform workspace's teams with their clubs; plan 21.9), then K2b-2 (athlete questions through the Tests
   module, D40).
 
+**The central calendar's K-plan status as of 2026-11-22 (added at `be5f62b`, merge of PR #709; read from `main`'s merge
+commits and the `docs/ai/central-calendar-*.md` files; nothing else was re-derived, and deploys and post-checks are not
+recorded here):**
+- **Merged on `main` from 2026-11-18 to 2026-11-20** (PR numbers from the merge commits; each plan file holds its own
+  "as built"): K2b-1d2 (#605) and K2b-1d3 (#611); K2b-2a-1 (#614, migration v81), K2b-2a-2 (#618), K2b-2a-2b (#625) and
+  K2b-2a-3 (#633), the athlete questions; K2c-1 (#613), K2c-2 (#622, with its backend #616 and follow-ups #624); K3
+  (#650 the read, #678 the screen) and K2c-3 (#679); K4a (#660 the fold, #675 the athlete's Calendar tab), K4b (#663,
+  migration v83; #682 the screen) and the event panel package (#686); K4 follow-ups (#685); K5 (#684 holdsImport on the
+  cards, #688 Go there and the GPS marks, #693 K5-5 Open in calendar, #695 K5-4 the GPS sessions waiting for import and
+  Imports opened on a day); the link identity guard (#694).
+- **Merged on 2026-11-22:**
+  - **Builder step 2** (#673, `e65b792`): batch edit, `docs/ai/builder-batch-edit-plan.md`.
+  - **Builder task 5, the session guard** (#702, `015db81`; plan section 12): a session with results or a live event
+    link made for it cannot be deleted or moved (`409 edit_sessions_locked`), its content (a rename, a time) can still
+    be changed, and a plan delete is refused (`409 plan_sessions_locked`). The owner's decision of the same day on a
+    published program with entered RPE is recorded in section 12.6a of the plan.
+  - **K7, the time grid** (#703, `5b046c4`): `docs/ai/central-calendar-k7-timegrid-contract.md`, "As built".
+  - **Two production errors** (#705, `d3748b8`): (a) a Builder error when picking an exercise, (b) the weekly view's
+    unhandled rejection, with the athlete calendar's Sunday test in `e2e/tests/athlete-calendar.test.mjs`.
+  - **The athlete Weekly overflow on desktop** (#711, `f8ea7d2`), with the phone header's workspace chip allowed to
+    shrink (`b1b85d9`).
+- **K6, the team and athlete switcher** (`docs/ai/central-calendar-k6-plan.md`): **in review, not merged.** Its
+  implementation is on branch `claude/central-calendar-k6-switcher`. The older branch `claude/central-calendar-k6`
+  (`d424bad7`) is abandoned.
+- **Post-deploy watches:**
+  - #705 (b), the weekly unhandled rejection, is hardening only: its `app_error_events` group stays open and is not
+    expected to close by itself.
+  - #711: the owner's 490 px screenshot also showed day cards cut off, which the e2e seed did not reproduce. If it is
+    still there after the deploy, it needs the owner's account type and a devtools screenshot.
+
 The Training Load / GPEXE record follows as last reviewed on 2026-10-15.
 
 The **Training Load Dashboards UX redesign (H-slices)** is complete: H1 (PR #89), H2
@@ -4085,6 +4115,20 @@ pre-existing; pass/fail counts don't belong in this file
   - The cause is not established; a run near midnight UTC is the candidate. Not fixed; a separate task.
 
 ## Separate tasks (recorded, waiting for the owner to schedule them)
+
+- **The central calendar's "Later" list (2026-11-22).** Each item is recorded only; nothing is built without the owner's
+  word.
+  - Home *Upcoming events*: a 401 shows no *Sign in*, and the view cache keeps a stale week after a 401.
+  - **The rail icons and Wellness (the owner's call):** the meaning of this item was not carried over in the manager
+    handoff of 2026-11-22. Ask the owner what it is before any work.
+  - Open training to the exact session (needs a backend id).
+  - The Coach Home GPS mark (needs a new read).
+  - The Day view by team.
+  - The K5-4 LOW findings (`docs/ai/central-calendar-k5-4-contract.md`).
+  - The K7 follow-ups (`docs/ai/central-calendar-k7-timegrid-contract.md` section 9, for example opening the grid at
+    about 07:00).
+  - `FOR SHARE` on the session row in the RPE and materialize writers (the race of section 12.4 of
+    `docs/ai/builder-batch-edit-plan.md`, recorded with #702).
 
 - **R17 resolves the workspace twice — done in LO-1 (PR #344, merged and deployed 2026-11-03; J14 section 18).** The
   import preview passes `access.workspace` to `resolveVariableEditor` as `known`, as 7h-V's activity route does.
