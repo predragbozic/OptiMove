@@ -29956,6 +29956,7 @@ body.athlete-questions-prompt-open {
   width: 100%;
   box-sizing: border-box;
 }
+
 /* K6 (docs/ai/central-calendar-k6-contract.md): the team and athlete switcher of the central calendar. The strip
    itself wears the Builder's batch classes (athlete-switcher.js); this is only what the calendar adds. */
 .athlete-switcher { display: grid; gap: 10px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line, #dce6ea); border-radius: 8px; background: var(--surface, #fff); box-sizing: border-box; max-width: 100%; min-width: 0; }
@@ -30013,3 +30014,33 @@ body.athlete-questions-prompt-open {
 .athlete-switcher-fold > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .athlete-switcher.is-open .cc-filters-chevron { transform: translateY(2px) rotate(-135deg); }
 .weekly-k6-controls[aria-busy="true"] { opacity: .6; pointer-events: none; }
+/* Weekly program templates, part WT-A (docs/ai/weekly-program-template-plan.md):
+   the week strip, the template type choice, the library chip. */
+.builder-week-strip { display: grid; gap: 10px; margin: 4px 0 14px; }
+.builder-week-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.builder-week-tab {
+  flex: 0 0 auto; display: grid; gap: 2px; min-width: 92px; min-height: 48px; padding: 6px 12px;
+  border: 1px solid var(--line, #d0d5dd); border-radius: 10px; background: #fff; text-align: left; cursor: pointer;
+}
+.builder-week-tab small { color: var(--muted); font-size: 12px; }
+.builder-week-tab.is-active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.builder-week-tab.builder-week-add { border-style: dashed; }
+.builder-week-tab:disabled { opacity: 0.55; cursor: default; }
+.builder-week-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.builder-week-actions .compact-button { min-height: 44px; }
+.builder-week-confirm { border: 1px solid var(--danger); border-radius: 10px; padding: 10px 12px; background: #fff7f7; }
+.builder-week-confirm p { margin: 0 0 8px; }
+.builder-week-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.builder-week-confirm-actions .plain-button { min-height: 44px; }
+.builder-tw-notice { margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--accent-soft); }
+.builder-template-kind { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; }
+.builder-template-kind-option { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line, #d0d5dd); border-radius: 10px; cursor: pointer; min-height: 44px; }
+.builder-template-kind-option input { width: 20px; height: 20px; margin-top: 2px; flex: 0 0 auto; }
+.builder-template-kind-option span { display: grid; gap: 2px; }
+.builder-template-kind-option small { color: var(--muted); }
+.builder-template-weeks input { font-size: 16px; }
+.program-kind-chip.is-weekly { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 760px) {
+  .builder-week-actions .compact-button { flex: 1 1 auto; }
+}
+/* end WT-A */
