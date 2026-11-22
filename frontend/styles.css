@@ -30002,7 +30002,7 @@ body.athlete-questions-prompt-open {
 .weekly-k6-line, .weekly-k6-kept, .weekly-k6-hidden { margin: 0; color: #667085; font-size: 13px; overflow-wrap: anywhere; }
 .weekly-k6-line { color: #344054; font-weight: 700; }
 .cc-see-each { display: grid; gap: 6px; margin: 8px 0; }
-.cc-see-each .cc-panel-button { min-height: 44px; }
+.cc-see-each .cc-panel-button { min-height: 44px; min-width: 0; max-width: 100%; padding-block: 8px; line-height: 1.25; text-align: left; overflow-wrap: anywhere; }
 .athlete-switcher .cc-chip { min-height: 44px; }
 .weekly-k6 .cc-chip, .weekly-k6 .cc-primary, .weekly-k6 .plain-button { min-height: 44px; }
 
