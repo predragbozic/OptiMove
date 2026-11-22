@@ -521,7 +521,22 @@ It also reports `NODE_OPTIONS` that loads code into, or changes how node resolve
 node process (`--require`, `--import`, `--loader`, `--preserve-symlinks…`), by option name
 only. When all is well it only adds one line to Claude's context ("Safety hook self-check
 passed …"); a session start with neither that line nor the warning means the check did
-not run and is treated as failed (`CLAUDE.md`, "Startup gate"). When anything fails it shows the user a warning that starts with
+not run and is treated as failed (`CLAUDE.md`, "Startup gate").
+
+**A session that started before this check existed** has neither line in its context.
+It runs the check once by hand from the project root:
+
+```
+node .claude/hooks/hook-selfcheck.mjs
+```
+
+It prints the same JSON as the hook. "Safety hook self-check passed" (exit 0) → carry on;
+"SAFETY HOOK SELF-CHECK FAILED" (exit 1), or the command cannot run → stop and tell the
+user. Run by hand it reads no stdin from a terminal and probes the guard at its own path
+(`CLAUDE_PROJECT_DIR` is not set outside a hook). The guard gives this command no decision,
+and it is deliberately not on the allow list (that would be a settings change), so it asks
+for permission once. As the SessionStart hook it always exits 0: Claude Code ignores the
+output of a hook that exits non-zero, so the warning would be lost. When anything fails it shows the user a warning that starts with
 `SAFETY HOOK SELF-CHECK FAILED` and names each problem, and puts the same text in
 Claude's context with the instruction to stop and fix it before running shell commands.
 A SessionStart hook cannot block anything; if `node` itself is missing, the self-check

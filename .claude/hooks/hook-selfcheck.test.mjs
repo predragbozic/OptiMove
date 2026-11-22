@@ -135,10 +135,28 @@ test("run as a hook: reads the SessionStart input, prints one JSON object and ex
   assert.equal(out.systemMessage, undefined, out.systemMessage);
 });
 
-test("run as a hook with no input at all still answers", () => {
-  const r = spawnSync(process.execPath, [SELFCHECK], { input: "", encoding: "utf8" });
+test("run by hand (no hook input) it answers too: exit 0 with the passed line", () => {
+  const r = spawnSync(process.execPath, [SELFCHECK], { input: "", encoding: "utf8", cwd: path.resolve(HOOK_DIR, "..", "..") });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.hookEventName, "SessionStart");
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /^Safety hook self-check passed/);
+});
+
+test("a failure exits 1 when run by hand and 0 as the SessionStart hook (where a non-zero exit would drop the warning)", () => {
+  withTempDir((dir) => {
+    // a copy of the project's hook folder whose guard decides nothing
+    const hooks = path.join(dir, ".claude", "hooks");
+    fs.mkdirSync(hooks, { recursive: true });
+    fs.copyFileSync(SELFCHECK, path.join(hooks, "hook-selfcheck.mjs"));
+    fs.copyFileSync(SETTINGS, path.join(dir, ".claude", "settings.json"));
+    fs.writeFileSync(path.join(hooks, "safety-guard.mjs"), "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));\n");
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: dir };
+    const manual = spawnSync(process.execPath, [path.join(hooks, "hook-selfcheck.mjs")], { input: "", encoding: "utf8", env, cwd: dir });
+    assert.equal(manual.status, 1);
+    assert.match(JSON.parse(manual.stdout).systemMessage, /^SAFETY HOOK SELF-CHECK FAILED/);
+    const hook = spawnSync(process.execPath, [path.join(hooks, "hook-selfcheck.mjs")], { input: JSON.stringify({ hook_event_name: "SessionStart", source: "startup", cwd: dir }), encoding: "utf8", env, cwd: dir });
+    assert.equal(hook.status, 0);
+    assert.match(JSON.parse(hook.stdout).systemMessage, /^SAFETY HOOK SELF-CHECK FAILED/);
+  });
 });
 
 test("behind a symlinked project folder the guard still decides and the self-check still runs (regression: both were silent no-ops)", () => {

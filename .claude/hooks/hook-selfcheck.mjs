@@ -160,13 +160,21 @@ function isMainModule() {
   return process.platform === "win32" ? invoked.toLowerCase() === thisFile.toLowerCase() : invoked === thisFile;
 }
 
+// Two ways to run it: as the SessionStart hook (Claude Code sends the event on stdin; always
+// exit 0, a non-zero exit would drop the warning), or by hand from the project root
+// (`node .claude/hooks/hook-selfcheck.mjs`, e.g. in a session that started before this check
+// existed): no stdin is read from a terminal, and a failure exits 1.
 if (isMainModule()) {
   let cwd = process.cwd();
-  try {
-    const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
-    if (typeof input.cwd === "string" && input.cwd) cwd = input.cwd;
-  } catch {
-    // no or unreadable input: probe from the current directory
+  let asHook = false;
+  if (!process.stdin.isTTY) {
+    try {
+      const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+      asHook = input?.hook_event_name === "SessionStart";
+      if (typeof input.cwd === "string" && input.cwd) cwd = input.cwd;
+    } catch {
+      // no or unreadable input: a manual run, probing from the current directory
+    }
   }
   let problems;
   try {
@@ -175,5 +183,5 @@ if (isMainModule()) {
     problems = [`the self-check itself failed (${error?.code || error?.name || "error"})`];
   }
   process.stdout.write(`${JSON.stringify(sessionStartOutput(problems))}\n`);
-  process.exit(0);
+  process.exit(asHook || !problems.length ? 0 : 1);
 }
