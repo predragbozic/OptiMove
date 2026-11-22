@@ -197,8 +197,9 @@ Where this differs from sections 1–6, this section records what the code does.
   athlete-weeks (`400 assign_too_large`, before any plan lock), which bounds the locks one transaction holds. Two assigns of the same template meet on the template row;
   of two templates on the slot lock (test 6; without it the second ends in `409 try_again` from
   `plans_weekly_unique`). A `23505` on `plans_weekly_unique`, a `40P01` or a `55P03` answers `409 try_again`, nothing written; any other
-  unique violation is a 500 (it would repeat on every resend). Template sessions take `max(order, 1) + offset`, so they
-  never share an order with a kept session.
+  unique violation is a 500 (it would repeat on every resend). After kept sessions, the copied sessions are numbered
+  1..n per day and slot in their own order and shifted past the kept ones; with nothing kept the source's own order is
+  copied (it is already unique per slot).
   **Known limit:** `POST /plans` and `/duplicate` do not take the slot lock, so a weekly plan created there for the same
   athlete and week at the same moment can still meet `plans_weekly_unique` (same creator → `try_again`) or, for another
   creator, leave two plans in that week (the existing behaviour of those routes; such a week is then answered
@@ -233,7 +234,9 @@ Where this differs from sections 1–6, this section records what the code does.
 calling coach's builder plan of that athlete and week when `planHasWeeklyTrainingContentWithClient` finds no exercise
 and no named node — whatever its status. A **published** week whose sessions have no exercise (which can carry RPE or an
 event link) is therefore deleted by a new weekly plan for that week, with its session rows (`deletePlanTreeWithClient`),
-leaving results naming a removed logical id. Not changed here; reported to the stream manager.
+leaving results naming a removed logical id. The content check runs without a lock on the plan row, so an exercise
+added at that moment can be deleted too, and the week's event links are left without their plan
+(`calendar.event_session_links.plan_id` is set null). Not changed here; reported to the stream manager.
 
 ### 7.2 Follow-ups recorded (not in this task)
 
