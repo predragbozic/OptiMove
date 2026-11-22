@@ -157,3 +157,57 @@ reused id with another payload; stale `choiceToken`; ownership snapshot and work
 with the template; save-as-template from non-consecutive weeks (no results / links / logical ids carried). Mutations on
 the kept-session check, the ascending lock and the choice token. Frontend: week strip actions, assign dialog and its
 conflict question, library mark and filter; e2e of the changed screens at 1280 / 390 / 375 / 360.
+
+## 7. As built (branch `feature/weekly-program-template`)
+
+Where this differs from sections 1–6, this section records what the code does.
+
+- **Code.** `backend/src/weeklyTemplate.js` (the block marker, week numbering, renumbering in two passes, date
+  placement, the choice token, the session copy with an order offset); in `backend/src/routes/builder.js`: the create
+  option of `POST /plans`, `changeWeeklyTemplate` and the three week routes, `POST /plans/:id/assign-weekly`,
+  `claimAssignmentRequest`, `POST /weekly-templates`; `blockedSessionIdsOf` in `backend/src/builderBatchEdit.js` (the
+  #702 check, each blocked entry also naming its session id; the other callers' 409 bodies are unchanged). Screen:
+  `frontend/builder-weekly-template-view.js` / `-actions.js`, wired from `builder-view.js`, `builder-structure.js`
+  (a template day shows "Day N", no rename and no single-day delete) and `app.js`; the library mark and Type filter in
+  `program-library.js`, the preview's *Assign to athletes* in `program-preview.js`.
+- **Free week (narrower than `ensureWeeklySlot`).** On assign, only the coach's own builder **draft** week with no
+  session and no day note is taken as free (deleted and replaced by the new plan). A published week, or any week with a
+  session (even one without exercises, which can carry results), is an existing week and is asked about.
+  `ensureWeeklySlot`'s own rule (POST /plans, /duplicate) is unchanged; see the finding below.
+- **Replace covers every day the template places in that week**, its empty (rest) days included: on a full template
+  week every day of the calendar week is replaced; only a partial first or last week leaves days outside the program
+  untouched (Q1).
+- **Concurrency.** Lock order: the exercise-reuse lock, the template row `FOR NO KEY UPDATE`, the idempotency row, one
+  transaction-scoped advisory lock per (athlete, week) in ascending key order, every existing weekly plan of those
+  athletes and weeks `FOR UPDATE` in ascending id, then (per plan, ascending plan id) the session rows of the touched
+  days `FOR UPDATE` ascending inside `blockedSessionIdsOf`. Two assigns of the same template meet on the template row;
+  of two templates on the slot lock (test 6; without it the second ends in `409 try_again` from
+  `plans_weekly_unique`). A `23505`, `40P01` or `55P03` answers `409 try_again`, nothing written.
+  **Known limit:** `POST /plans` and `/duplicate` do not take the slot lock, so a weekly plan created there for the same
+  athlete and week at the same moment can still meet `plans_weekly_unique` (same creator → `try_again`) or, for another
+  creator, leave two plans in that week (the existing behaviour of those routes; such a week is then answered
+  `several_plans` by the next assign).
+- **`not_editable`** is reachable only when the active-workspace scope and the plan access predicate disagree (both
+  read the same memberships today); it is answered by athlete and week only, with nothing about the plan.
+- **Old paths.** `/duplicate` with athletes and `/api/templates/:id/assignments` answer
+  `400 weekly_template_use_dated_assign` for a weekly template (Q3). Library preview: *Assign to athletes* opens the
+  template in the Builder with the dated assign open (an owner of the template; a coach who can only read a shared
+  weekly template cannot open it in the Builder, so it cannot be assigned from the library — recorded).
+- **Library.** `GET /api/templates` adds `template_kind` and `week_count`, and takes `kind=weekly|blocks`; the screen
+  filters in the browser (Type: All / Weekly programs / Block templates) like its other filters, and week changes
+  clear its cache.
+
+### 7.1 Finding (pre-existing, outside this task)
+
+`ensureWeeklySlot` (`builder.js`, used by `POST /plans` and `POST /plans/:id/duplicate` for weekly plans) deletes the
+calling coach's builder plan of that athlete and week when `planHasWeeklyTrainingContentWithClient` finds no exercise
+and no named node — whatever its status. A **published** week whose sessions have no exercise (which can carry RPE or an
+event link) is therefore deleted by a new weekly plan for that week, with its session rows (`deletePlanTreeWithClient`),
+leaving results naming a removed logical id. Not changed here; reported to the stream manager.
+
+### 7.2 Tests
+
+`backend/tests/builder-weekly-template.test.mjs` (8, disposable database, real routes), mutations M1–M5 (kept-session
+check, slot lock, choice token, empty-draft rule, the `/duplicate` refusal) each killed;
+`frontend/tests/builder-weekly-template.actions.test.mjs` (9); `e2e/tests/builder-weekly-template.test.mjs` at 1280,
+390, 375 and 360 px.
