@@ -5250,6 +5250,8 @@ body.specific-program-open {
     grid-template-columns: repeat(7, minmax(0, 1fr));
     overflow-x: visible;
     scroll-snap-type: none;
+    /* scrollWeekToDay gives a sideways strip trailing space inline; a window widened afterwards must not keep it. */
+    padding-right: 0 !important;
   }
 
   .athlete-mode .calendar-day {

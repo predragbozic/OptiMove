@@ -19,7 +19,7 @@ const weekDays = () => Array.from({ length: 7 }, (_, i) => { const d = monday();
 
 async function measure(width) {
   const account = world.accounts.find((a) => a.role === "athlete");
-  const context = await browser.newContext({ viewport: { width, height: 1000 } });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
   await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
   const page = await context.newPage();
   const pageErrors = [];
@@ -43,8 +43,13 @@ async function measure(width) {
   try {
     await page.goto(`${world.baseUrl}/athlete`, { waitUntil: "load" });
     await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
+    if (await page.locator("#mobileNavToggle").isVisible()) await page.locator("#mobileNavToggle").click();
     await page.locator('.sidebar [data-athlete-tab="calendar"]').first().click();
     await page.locator(".calendar-day").first().waitFor({ timeout: 20_000 });
+    // The reported path: pressing Today scrolls the week to its day, and on the old strip layout that gave the grid
+    // about 1,200 px of trailing space (Saturday cut, Sunday out of reach).
+    await page.click('[data-action="week-today"]');
+    await page.waitForTimeout(1000);
     const look = await page.evaluate(() => {
       const grid = document.querySelector(".calendar-grid");
       const days = [...grid.querySelectorAll(".calendar-day")];
@@ -54,6 +59,7 @@ async function measure(width) {
         days: days.length,
         pageSideways: document.documentElement.scrollWidth - innerWidth,
         gridSideways: grid.scrollWidth - grid.clientWidth,
+        padRight: getComputedStyle(grid).paddingRight,
         lastDayRight: Math.round(lastDay.right),
         navRight: Math.round(nav.right),
         innerWidth,
@@ -63,7 +69,7 @@ async function measure(width) {
   } finally { await context.close(); }
 }
 
-for (const width of [1920, 1745, 1536, 1440, 1280]) {
+for (const width of [1920, 1745, 1536, 1440, 1280, 490, 390, 360]) {
   test(`Weekly plan (${width} px): seven days and the header inside the window, no sideways scroll`, async () => {
     const { look, pageErrors } = await measure(width);
     assert.equal(look.days, 7);
@@ -71,6 +77,7 @@ for (const width of [1920, 1745, 1536, 1440, 1280]) {
     assert.ok(look.gridSideways <= 1, `the week scrolls inside its panel by ${look.gridSideways}px`);
     assert.ok(look.lastDayRight <= look.innerWidth, `Sunday ends at ${look.lastDayRight} of ${look.innerWidth}`);
     assert.ok(look.navRight <= look.innerWidth, `the week header ends at ${look.navRight} of ${look.innerWidth}`);
+    if (width >= 1180) assert.equal(look.padRight, "0px", "no trailing space left on the week");
     assert.deepEqual(pageErrors, []);
   });
 }
