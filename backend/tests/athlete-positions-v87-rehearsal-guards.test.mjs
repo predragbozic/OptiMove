@@ -35,6 +35,19 @@ test("G2. it drops only a database it created (optimove_tests_pos87rehearsal_ an
   assert.equal(urlFor({ host: "::1", port: "5433", user: "postgres" }, `${NAME_PREFIX}0123456789ab`, "p@ss"), `postgres://postgres:p%40ss@[::1]:5433/${NAME_PREFIX}0123456789ab`);
 });
 
+test("G4. every file the rehearsal reads keeps LF in every checkout (a CRLF rollback broke the owner's PG17 rehearsal, 2026-11-22): the migration and the runbook SQL are eol=lf", () => {
+  const REPO = path.join(HERE, "..", "..");
+  const files = [
+    "migrations_v2/202611221200_athletes_v87_positions.sql",
+    "docs/runbooks/athlete-positions-v87-preflight.sql",
+    "docs/runbooks/athlete-positions-v87-postcheck.sql",
+    "docs/runbooks/athlete-positions-v87-rollback.sql",
+    "backend/tests/support/legacy-schema.sql",
+  ];
+  const out = execFileSync("git", ["-C", REPO, "check-attr", "eol", "--", ...files], { encoding: "utf8" });
+  for (const f of files) assert.match(out, new RegExp(`^${f.replace(/[.*]/g, "\\$&")}: eol: lf$`, "m"), f);
+});
+
 test("G3. the wrappers refuse a non-loopback host before asking for a password and pass it only through the environment", () => {
   const sh = fs.readFileSync(path.join(SCRIPTS, "athlete-positions-v87-rehearsal.sh"), "utf8");
   const ps = fs.readFileSync(path.join(SCRIPTS, "athlete-positions-v87-rehearsal.ps1"), "utf8");
