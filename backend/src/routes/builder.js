@@ -1153,6 +1153,9 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
           entry.kind = "existing";
           entry.planId = String(plan.id);
           entry.planStatus = plan.status;
+          // The owner's decision (2026-11-22): Replace may write a week another
+          // coach made; the question marks it as not the caller's.
+          entry.madeByOther = String(plan.created_by_user_id) !== String(req.user.id);
           if (!(await getEditablePlan(req, plan.id, client.query.bind(client)))) { entry.cannot = "not_editable"; entries.push(entry); continue; }
           const openDraft = (await client.query("select 1 from plans.plans where edit_source_plan_id = $1 and is_edit_draft = true limit 1", [plan.id])).rowCount > 0;
           if (openDraft) { entry.cannot = "being_edited"; entries.push(entry); continue; }
@@ -1186,7 +1189,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         if (!byAthlete.has(entry.athleteUuid)) byAthlete.set(entry.athleteUuid, { athleteId: entry.athleteId, name: names.get(entry.athleteUuid) || "", weeks: [] });
         byAthlete.get(entry.athleteUuid).weeks.push(entry.cannot
           ? { weekStart: entry.weekStart, days: entry.days, cannot: entry.cannot }
-          : { weekStart: entry.weekStart, days: entry.days, contentDays: entry.contentDays, draft: entry.planStatus === "draft",
+          : { weekStart: entry.weekStart, days: entry.days, contentDays: entry.contentDays, draft: entry.planStatus === "draft", madeByOther: Boolean(entry.madeByOther),
             kept: entry.kept.map((k) => ({ name: k.name, day: k.day, amPm: k.amPm, bta: k.bta, reasons: k.reasons })) });
       }
       return res.status(409).json({

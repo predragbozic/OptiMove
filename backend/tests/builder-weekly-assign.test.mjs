@@ -217,6 +217,8 @@ test("2. existing weeks: one question per athlete; Replace keeps a session with 
   assert.equal(week.weekStart, "2026-12-07");
   assert.deepEqual(week.days, ["2026-12-09", "2026-12-10", "2026-12-11", "2026-12-12", "2026-12-13"]);
   assert.deepEqual(week.contentDays, ["2026-12-09"]);
+  // The coach's own week: not marked (the owner's decision of 2026-11-22).
+  assert.equal(week.madeByOther, false);
   assert.deepEqual(week.kept.map((k) => [k.name, k.day, k.reasons]), [["Rated", "2026-12-09", ["has_results"]]]);
   // Nothing written by the question.
   assert.deepEqual(await planSessions(planId), before);
@@ -282,6 +284,8 @@ test("3. weeks the coach cannot write: another coach's plan and an open edit dra
   const oneWeek = byName.get(one.name);
   assert.equal(oneWeek.cannot, undefined);
   assert.deepEqual(oneWeek.contentDays, ["2026-12-15"]);
+  // A week another coach made: marked as not the caller's, still replaceable.
+  assert.equal(oneWeek.madeByOther, true);
   assert.equal(byName.get(two.name).cannot, "being_edited");
   const done = ok(await assign(cookie, templateId, { athleteIds: [one.externalId, two.externalId, three.externalId], startDate: "2026-12-14", choice: "replace", choiceToken: ask.body.choiceToken }), 201);
   assert.deepEqual(done.skipped.map((x) => x.reason), ["being_edited"]);

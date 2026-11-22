@@ -62,7 +62,7 @@ test("1. assign: date and athletes, a conflict question, the choice resent with 
   answers.push({ status: 409, body: {
     error: "Some athletes already have plans in these weeks.", code: "weekly_assign_conflicts", choiceToken: "tok-1", newWeeks: 3,
     athletes: [{ athleteId: "11", name: "Example Alpha", weeks: [
-      { weekStart: "2026-12-07", days: ["2026-12-09"], contentDays: ["2026-12-09"], draft: false, kept: [{ name: "Main", day: "2026-12-09", amPm: "AM", bta: "T", reasons: ["has_results"] }] },
+      { weekStart: "2026-12-07", days: ["2026-12-09"], contentDays: ["2026-12-09"], draft: false, madeByOther: true, kept: [{ name: "Main", day: "2026-12-09", amPm: "AM", bta: "T", reasons: ["has_results"] }] },
       { weekStart: "2026-12-14", days: ["2026-12-14"], cannot: "being_edited" },
     ] }],
   } });
@@ -77,6 +77,7 @@ test("1. assign: date and athletes, a conflict question, the choice resent with 
   assert.equal(content().querySelector(".builder-tw-assign-modal").classList.contains("builder-copy-plan-modal"), false);
   assert.match(text(), /Main · Wed 09\.12 · AM has results, so it stays\./);
   assert.match(text(), /Someone is editing this week right now\. It stays as it is\./);
+  assert.match(text(), /planned on Wed 09\.12 · made by another coach/);
   assert.deepEqual([...content().querySelectorAll(".builder-tw-conflict-actions button")].map((b) => b.textContent), ["Replace", "Skip weeks that already have a plan", "Back"]);
   assert.ok(content().querySelector('[data-choice="replace"]').classList.contains("danger-action"));
   answers.push({ status: 201, body: { created: [{}, {}, {}], replaced: [{}], skipped: [{}], kept: 1 } });

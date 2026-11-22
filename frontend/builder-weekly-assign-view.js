@@ -41,7 +41,7 @@ function renderConflictHtml(conflict, changedAgain = false) {
             <ul>${athlete.weeks.map((week) => `
               <li>Week of ${escapeHtml(formatDate(week.weekStart))}: ${week.cannot
                 ? escapeHtml(CANNOT_TEXT[week.cannot] || CANNOT_TEXT.not_editable)
-                : `${(week.contentDays || []).length ? `planned on ${escapeHtml(week.contentDays.map(shortDay).join(", "))}` : "a plan without sessions on these days"}${week.draft ? " (not published yet: it stays a draft)" : ""}`}
+                : `${(week.contentDays || []).length ? `planned on ${escapeHtml(week.contentDays.map(shortDay).join(", "))}` : "a plan without sessions on these days"}${week.draft ? " (not published yet: it stays a draft)" : ""}${week.madeByOther ? " · made by another coach" : ""}`}
                 ${(week.kept || []).length ? `<ul class="builder-tw-kept">${week.kept.map((k) => `<li>${escapeHtml(k.name || "Session")} · ${escapeHtml(shortDay(k.day))}${k.amPm ? ` · ${escapeHtml(k.amPm)}` : ""} ${escapeHtml(k.reasons.map((r) => REASON_TEXT[r] || r).join(" and "))}, so it stays.</li>`).join("")}</ul>` : ""}
               </li>`).join("")}</ul>
           </li>`).join("")}
