@@ -5,6 +5,8 @@ import { renderAppHealthPanelHtml } from "./app-health-view.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
 import { renderManageAccountStorageSection, renderStorageAdminPanelHtml } from "./media-storage-admin-view.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
+import { rolesContext, rolesUsersAvailable } from "./roles-data.js";
+import { renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml } from "./roles-view.js";
 import { renderSourceConnectionsPanelHtml } from "./source-connections-view.js";
 import { renderImage } from "./media.js";
 import { renderContentLanguageOptions } from "./account-language.js";
@@ -120,6 +122,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
   if (state.organization.section === "sourceConnections" && !sourceConnectionsAdminContext()) state.organization.section = "overview";
   if (state.organization.section === "storage" && !storageAdminContext(data)) state.organization.section = "overview";
   if (state.organization.section === "calendar" && !calendarSettingsContext()) state.organization.section = "overview";
+  if (state.organization.section === "roles" && !rolesContext(data)) state.organization.section = "overview";
   // A coach's Settings is "My team": a section outside its few tabs falls back to Athletes.
   const coach = isCoachSettings();
   if (coach && !COACH_SETTINGS_SECTIONS.includes(state.organization.section)) state.organization.section = "athletes";
@@ -152,7 +155,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       ${hero}
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${state.organization.section === "appHealth" ? renderAppHealthPanelHtml() : state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "calendar" ? renderCalendarSettingsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
+      ${state.organization.section === "appHealth" ? renderAppHealthPanelHtml() : state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "roles" ? renderRolesPanelHtml() : state.organization.section === "calendar" ? renderCalendarSettingsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
         ${renderJoinLinksSection(data)}
       ` : `
         ${renderOrganizationBrowser(data)}
@@ -394,7 +397,8 @@ export function renderOrganizationBrowser(data) {
       </nav>`;
   } else if (section === "users") {
     body = `${head("Users", countLabel(activeUserCount, "active user"), organizationUsersControls(data))}
-      <section class="organization-lists organization-lists-browser">${renderOrganizationUsersSection(data, { bare: true })}</section>`;
+      <section class="organization-lists organization-lists-browser">${renderOrganizationUsersSection(data, { bare: true })}</section>
+      ${renderRolesWhoHtml(data)}`;
   } else if (section === "clubs") {
     body = `${head(selectedTeam?.name || selectedClub?.name || "Clubs", selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : countLabel(clubs.length, "club"), showAll)}
       <section class="organization-lists organization-lists-browser">
@@ -1265,7 +1269,9 @@ function renderOrganizationRoleForms(data, tab = "") {
   const clubOptions = (data.clubs || []).map((club) => ({ value: club.id, label: club.name }));
   const teamOptions = (data.teams || []).map((team) => ({ value: team.id, label: `${team.name}${team.club_name ? ` - ${team.club_name}` : ""}`, clubId: team.club_id }));
   const athleteOptions = (data.athletes || []).filter((athlete) => athlete.is_active !== false).map((athlete) => ({ value: athlete.id, label: `${athlete.name}${athlete.athlete_id ? ` - ID ${athlete.athlete_id}` : ""}` }));
-  const access = `
+  // One role assignment form (R3, owner decision Q3) when the Roles API is available to this account; the two fixed
+  // forms below stay for an account the API does not know (it answers the one 404).
+  const access = rolesUsersAvailable(data) ? renderRolesAssignHtml(data) : `
     <form class="panel organization-form" data-organization-form="clubRole">
       <div><p class="eyebrow">Club access</p><h3>Assign club admin</h3></div>
       ${renderFilterableSelect({ name: "userId", label: "User", options: userOptions, required: true, placeholder: "Type user name or email" })}

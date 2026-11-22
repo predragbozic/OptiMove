@@ -29818,3 +29818,152 @@ body.athlete-questions-prompt-open {
 .positions-rename-form { flex: 1 1 100%; }
 /* 16 px at every width (iOS zoom); an older dialog rule sets 14 px on desktop, so this one is marked important. */
 .positions-section input, .positions-section select, [data-position-form] input, [data-position-form] select { font-size: 16px !important; }
+
+/* ============================================================
+   Settings > Roles and the role assignment in Settings > Users (roles plan R3).
+   The Roles panel is a .data-sources panel (inputs, selects and textareas are
+   16 px and 44 px there); the Users widgets are not, so they get the same
+   sizes here. Everything is scoped to .roles-*.
+   ============================================================ */
+.roles-panel,
+.roles-who,
+.roles-assign-form {
+  overflow-wrap: anywhere;
+}
+.roles-panel .plain-button,
+.roles-who .plain-button,
+.roles-assign-form .plain-button {
+  min-height: 44px;
+}
+.roles-who select,
+.roles-who textarea,
+.roles-assign-form select,
+.roles-assign-form textarea,
+.roles-assign-form input:not([type="hidden"]) {
+  font-size: 16px;
+  min-height: 44px;
+}
+.roles-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.roles-archived-toggle,
+.roles-scope label,
+.roles-words label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.roles-list,
+.roles-who-list {
+  display: grid;
+  gap: 8px;
+}
+.roles-row,
+.roles-who-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line, #d9dee3);
+}
+.roles-row.is-archived {
+  opacity: 0.75;
+}
+.roles-who-row .roles-revoke-form {
+  grid-column: 1 / -1;
+}
+.roles-row-main,
+.roles-who-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.roles-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.roles-group,
+.roles-scope {
+  border: 1px solid var(--line, #d9dee3);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0 0 12px;
+}
+.roles-words {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.roles-reason {
+  display: block;
+  margin: -6px 0 6px 30px;
+  color: var(--muted, #5b6770);
+}
+.roles-preview {
+  border-left: 3px solid var(--line, #d9dee3);
+  padding: 4px 12px;
+  margin: 8px 0 12px;
+}
+.roles-who-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.roles-who-filters .search-field {
+  flex: 1 1 200px;
+}
+@media (max-width: 760px) {
+  .roles-row,
+  .roles-who-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .roles-row-actions .plain-button {
+    flex: 1 1 auto;
+  }
+}
+.roles-who-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+/* The data-sources panel makes every input full width and 44 px tall; a tick box is neither. */
+.roles-panel .roles-words input[type="checkbox"],
+.roles-panel .roles-scope input[type="checkbox"],
+.roles-panel .roles-archived-toggle input[type="checkbox"] {
+  flex: none;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  margin: 0;
+}
+.roles-words label,
+.roles-scope label {
+  align-items: flex-start;
+  padding: 10px 0;
+  min-width: 0;
+}
+.roles-unavailable {
+  margin: 4px 0 0;
+}
+.roles-unavailable summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.roles-assign-form input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 44px;
+  width: 100%;
+  box-sizing: border-box;
+}

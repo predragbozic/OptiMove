@@ -1,6 +1,7 @@
 import { hasOrganizationAccess, isAthleteMode } from "./access.js";
 import { calendarSettingsContext } from "./calendar-settings-data.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
+import { rolesContext } from "./roles-data.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
 import { els } from "./dom.js";
 import { ATHLETE_TEMPLATE_SCOPES, TEMPLATE_SCOPES, state } from "./state.js";
@@ -170,6 +171,9 @@ export function renderSettingsNavHtml(data = {}, section = state.organization.se
     // that club's club_admin role. Every route behind it decides the same
     // again (T6) and answers everyone else 403 / the one 404.
     ...(calendarSettingsContext() ? [["calendar", "Calendar"]] : []),
+    // Roles (R3): a platform admin, or the club's admin in that club's workspace, from today's /me facts. Every
+    // route behind it decides again and answers everyone else the one 404.
+    ...(rolesContext(data) ? [["roles", "Roles"]] : []),
     // Administering a data source is a platform-admin job (F3b). Hiding the
     // tab is not the protection - every route behind it checks the active
     // platform_admin role again on the server.

@@ -2,7 +2,7 @@ import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import pg from 'pg';
-import { startWorld } from '../../e2e/lib/world.mjs';
+import { startDashboardShellFixture } from './support/dashboard-shell-fixture.mjs';
 import { draft } from './fixtures/dashboard-simple/contracts.mjs';
 let world, db, actor, foreignAthlete;
 const empty = () => ({ clubIds: [], teamIds: [], athleteIds: [] });
@@ -24,6 +24,17 @@ async function dashboard() {
 }
 const read = (d, filter, extra={}) => api(`/api/training-load/dashboards/${d.id}/query`,{dateFrom:period.dateFrom,dateTo:period.dateTo,shellFilter:filter,...extra});
 const rows = response => response.body.widgets.flatMap(w => w.series.flatMap(s => s.data?.current ?? []));
+function assertEmptyOk(response) {
+  assert.equal(response.status,200,response.text);
+  assert.ok(response.body.widgets.length);
+  for (const widget of response.body.widgets) {
+    assert.ok(widget.series.length);
+    for (const series of widget.series) {
+      assert.equal(series.status,'ok',JSON.stringify(series));
+      assert.deepEqual(series.data.current,[]);
+    }
+  }
+}
 async function activity(type, scopeId, athlete) {
   const a=(await db.query(`insert into training.activities(activity_type_key,name,occurred_local_date,started_at,timezone_snapshot,owner_scope,owner_club_id,owner_team_id,owner_user_id,origin,lifecycle_state,created_by_user_id)
     values('training_session','Shell session','2026-11-03','2026-11-03T10:00:00Z','UTC',$1,$2,$3,$4,'manual','confirmed',$5) returning id`,[type,type==='club'?scopeId:null,type==='team'?scopeId:null,type==='user'?scopeId:null,actor.id])).rows[0].id;
@@ -31,7 +42,7 @@ async function activity(type, scopeId, athlete) {
 }
 before(async()=>{
   Object.assign(process.env,{DASHBOARD_SIMPLE_MODE:'enabled',DASHBOARD_SIMPLE_BUDGET_VERIFIED:'true',DASHBOARD_SIMPLE_SESSION_AFFINITY_VERIFIED:'true',DASHBOARD_SIMPLE_PREVIEW_MAX_ACTIVE:'2',DASHBOARD_SIMPLE_KEY_ID:'shell-test',DASHBOARD_SIMPLE_KEY_BASE64:crypto.randomBytes(32).toString('base64')});
-  world=await startWorld();db=new pg.Client({connectionString:world.databaseUrl});await db.connect();actor=world.accounts.find(a=>a.role==='platform_admin');
+  world=await startDashboardShellFixture();db=new pg.Client({connectionString:world.databaseUrl});await db.connect();actor=world.accounts.find(a=>a.role==='platform_admin');
   foreignAthlete=(await db.query("insert into public.athletes(athlete_id,first_name,last_name,full_name,display_name) values('shell-other','Other','Example','Other Example','Other Example') returning id")).rows[0].id;
   await db.query("insert into public.athlete_memberships(athlete_id,club_id,team_id,membership_type,status) values($1,$2,null,'club','active'),($1,$2,$3,'team','active')",[foreignAthlete,world.ids.clubB,world.ids.teamB]);
   await db.query("insert into public.user_club_roles(user_id,club_id,role,is_active) values($1,$2,'club_admin',true)",[actor.id,world.ids.clubA]);
@@ -49,23 +60,23 @@ for(const type of ['platform','club','team','private_coach','athlete'])test(`${t
   const scope=type==='club'?world.ids.clubA:type==='team'?world.ids.teamA:null;await workspace(type,scope);const d=await dashboard();
   const own=await read(d,shell('athleteIds',[world.ids.athleteIds[0]]));assert.equal(own.status,200,own.text);assert.ok(rows(own).length);assert.ok(rows(own).every(r=>r.athleteId===world.ids.athleteIds[0]));assert.equal(rows(own)[0].value,['platform','athlete'].includes(type)?4:1);
   for(const [kind,foreign] of [['clubIds',world.ids.clubB],['teamIds',world.ids.teamB],['athleteIds',foreignAthlete]]){
-    const unavailable=await read(d,shell(kind,[crypto.randomUUID()]));assert.equal(unavailable.status,200);assert.deepEqual(rows(unavailable),[]);
+    const unavailable=await read(d,shell(kind,[crypto.randomUUID()]));assert.equal(unavailable.status,200);assertEmptyOk(unavailable);
     if(type!=='platform') {const hidden=await read(d,shell(kind,[foreign]));assert.equal(hidden.text,unavailable.text);assert.deepEqual(hidden.headers,unavailable.headers);}
     const mixed=await read(d,{...shell(kind,[type==='platform'?crypto.randomUUID():foreign]),athleteIds:[world.ids.athleteIds[0]]});assert.deepEqual(rows(mixed),rows(own));
   }
   const groups=await read(d,{clubIds:[world.ids.clubA],teamIds:[world.ids.teamA],athleteIds:[]});
-  if(['private_coach','athlete'].includes(type))assert.deepEqual(rows(groups),[]);else assert.ok(rows(groups).some(r=>r.athleteId===world.ids.athleteIds[0]));
-  assert.deepEqual(rows(await read(d,empty())),[]);
+  if(['private_coach','athlete'].includes(type))assertEmptyOk(groups);else assert.ok(rows(groups).some(r=>r.athleteId===world.ids.athleteIds[0]));
+  assertEmptyOk(await read(d,empty()));
 });
 
 test('shell ONLY narrows existing dashboard facts, widget overrides cannot replace it',async()=>{
   actor=world.accounts.find(a=>a.role==='platform_admin');await workspace('club',world.ids.clubA);const d=await dashboard();
-  assert.deepEqual(rows(await read(d,shell('athleteIds',[foreignAthlete]))),[],'platform admin in club X cannot select Y-only athlete even on an X-owned activity');
+  assertEmptyOk(await read(d,shell('athleteIds',[foreignAthlete])));
   const base=await read(d,null);assert.ok(rows(base).length);
   const constrained=await read(d,shell('athleteIds',[world.ids.athleteIds[0]]));assert.ok(rows(constrained).every(r=>r.athleteId===world.ids.athleteIds[0]));
   const detail=await api(`/api/training-load/dashboards/${d.id}`,null,'GET');const w=detail.body.widgets[0];
   const patch=await api(`/api/training-load/dashboards/${d.id}/widgets/${w.id}`,{expectedWidgetRevision:w.revision,localFilterOverride:{athleteIds:[foreignAthlete]}},'PATCH');assert.equal(patch.status,200,patch.text);
-  assert.deepEqual(rows(await read(d,shell('athleteIds',[world.ids.athleteIds[0]]))),[]);
+  assertEmptyOk(await read(d,shell('athleteIds',[world.ids.athleteIds[0]])));
 });
 
 test('query/preview combined limit and unknown nested fields have size parity',async()=>{
@@ -99,10 +110,10 @@ test('current active membership changes a historical shell result; legacy runtim
   actor=world.accounts.find(a=>a.role==='platform_admin');await workspace('club',world.ids.clubA);const d=await dashboard();
   const own=world.ids.athleteIds[0];assert.ok(rows(await read(d,shell('athleteIds',[own]))).length);
   await db.query("update public.athlete_memberships set status='paused' where athlete_id=$1 and membership_type='club' and club_id=$2",[own,world.ids.clubA]);
-  try {assert.deepEqual(rows(await read(d,shell('athleteIds',[own]))),[]);} finally {await db.query("update public.athlete_memberships set status='active' where athlete_id=$1 and membership_type='club' and club_id=$2",[own,world.ids.clubA]);}
+  try {assertEmptyOk(await read(d,shell('athleteIds',[own])));} finally {await db.query("update public.athlete_memberships set status='active' where athlete_id=$1 and membership_type='club' and club_id=$2",[own,world.ids.clubA]);}
   const changed=await api(`/api/training-load/dashboards/${d.id}`,{expectedRevision:(await api(`/api/training-load/dashboards/${d.id}`,null,'GET')).body.dashboard.revision,defaultFilter:{athleteIds:[foreignAthlete]}},'PATCH');assert.equal(changed.status,200,changed.text);
-  assert.deepEqual(rows(await read(d,shell('athleteIds',[own]))),[],'saved default intersects shell');
+  assertEmptyOk(await read(d,shell('athleteIds',[own])));
   assert.ok(rows(await read(d,shell('athleteIds',[own]),{athleteIds:null})).length,'legacy null clears saved default before shell');
   assert.ok(rows(await read(d,shell('athleteIds',[own]),{athleteIds:[]})).length);
-  assert.deepEqual(rows(await read(d,shell('athleteIds',[own]),{athleteIds:[foreignAthlete]})),[]);
+  assertEmptyOk(await read(d,shell('athleteIds',[own]),{athleteIds:[foreignAthlete]}));
 });

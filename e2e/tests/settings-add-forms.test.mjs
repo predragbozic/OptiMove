@@ -52,11 +52,17 @@ for (const [role, width] of [["platform_admin", 1280], ["club_admin", 390]]) tes
       if (section === "users") {
         // What was typed in one tab is kept after visiting another.
         await page.locator('main.workspace form[data-organization-form="user"] input[name="email"]').fill("new.coach@example.invalid");
-        for (const [tab, forms] of [["Give access", ["clubRole", "teamRole"]], ["Athlete login", ["athleteLogin"]], ["New account", ["user"]]]) {
+        // R3 (owner decision Q3): "Give access" is ONE assignment form (data-roles-form="assign"); the two old fixed
+        // forms (clubRole, teamRole) must not be shown there. The other tabs keep their data-organization-form.
+        const panel = "main.workspace .organization-add-panel";
+        for (const [tab, expected] of [["Give access", { roles: ["assign"], organization: [] }], ["Athlete login", { roles: [], organization: ["athleteLogin"] }], ["New account", { roles: [], organization: ["user"] }]]) {
           await page.getByRole("tab", { name: tab, exact: true }).click();
-          await page.locator(`main.workspace form[data-organization-form="${forms[0]}"]`).waitFor();
-          const shown = await page.$$eval("main.workspace .organization-add-panel form[data-organization-form]", (f) => f.filter((x) => x.getBoundingClientRect().width > 0).map((x) => x.dataset.organizationForm));
-          assert.deepEqual(shown, forms, tab);
+          const first = expected.roles.length ? `form[data-roles-form="${expected.roles[0]}"]` : `form[data-organization-form="${expected.organization[0]}"]`;
+          await page.locator(`${panel} ${first}`).waitFor();
+          const shown = await page.$$eval(`${panel} form`, (f) => f.filter((x) => x.getBoundingClientRect().width > 0).map((x) => ({ roles: x.dataset.rolesForm || null, organization: x.dataset.organizationForm || null })));
+          assert.deepEqual(shown.filter((x) => x.roles).map((x) => x.roles), expected.roles, `${tab}: visible roles forms`);
+          assert.deepEqual(shown.filter((x) => x.organization).map((x) => x.organization), expected.organization, `${tab}: visible organization forms`);
+          assert.equal(shown.length, expected.roles.length + expected.organization.length, `${tab}: exactly these forms and no other`);
           assert.deepEqual((await measure(page, width)).small, [], `${tab}: 44 px`);
         }
         assert.equal(await page.locator('main.workspace form[data-organization-form="user"] input[name="email"]').inputValue(), "new.coach@example.invalid");
