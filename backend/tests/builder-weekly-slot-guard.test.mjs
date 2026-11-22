@@ -348,6 +348,106 @@ test("R3. the caller's empty draft stops being a Builder plan, committed while t
   assert.deepEqual(await weeklyPlansOf(s), [String(planId)], "the plan is still the week's only plan");
 });
 
+const BUSY = { error: "The plan is busy. Nothing was saved. Try again.", code: "try_again" };
+const within = (promise, ms) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve("waited"), ms))]);
+async function lockWaitSeen() {
+  for (let i = 0; i < 200; i += 1) {
+    const waiting = await q(`select 1 from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'`);
+    if (waiting.length) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return false;
+}
+
+test("L1. the removal never waits without a limit: while another transaction holds the free draft's row, the create answers 409 try_again within the lock timeout and nothing is written (both routes)", async () => {
+  for (const [route, prepare] of slotRoutes) {
+    const s = await squad("locktimeout");
+    const planId = await weeklyDraft(s);
+    const request = await prepare(s);
+    const before = [await digestOf(planId), await planCount()];
+    const holder = new pg.Client({ connectionString: db.url });
+    await holder.connect();
+    try {
+      await holder.query("begin");
+      await holder.query(`select id from plans.plans where id = $1 for update`, [planId]);
+      const res = await within(request(), 8000);
+      assert.notEqual(res, "waited", `${route}: the create waited past the lock timeout`);
+      assert.equal(res.status, 409, `${route}: ${res.text}`);
+      assert.deepEqual(res.body, BUSY, route);
+    } finally {
+      await holder.query("rollback").catch(() => {});
+      await holder.end().catch(() => {});
+    }
+    assert.deepEqual([await digestOf(planId), await planCount()], before, `${route}: the draft as it was, no plan created`);
+    // The slot is not left broken: the same create then replaces the free draft.
+    const again = await request();
+    assert.ok(again.status === 200 || again.status === 201, `${route}: ${again.text}`);
+  }
+});
+
+test("L2. a deadlock on the removal (the other side holds a day and then asks for the plan row) is 409 try_again, not a 500; nothing is written (both routes)", async () => {
+  for (const [route, prepare] of slotRoutes) {
+    const s = await squad("deadlock");
+    const planId = await weeklyDraft(s);
+    const request = await prepare(s);
+    const before = [await digestOf(planId), await planCount()];
+    const dayId = (await q(`select id from plans.plan_days where plan_id = $1 order by id limit 1`, [planId]))[0].id;
+    const other = new pg.Client({ connectionString: db.url });
+    await other.connect();
+    try {
+      await other.query("begin");
+      await other.query(`select id from plans.plan_days where id = $1 for update`, [dayId]);
+      // The request locks the plan row, then waits for the day; the other side
+      // then asks for the plan row: a cycle. The request began waiting first,
+      // so its deadlock check runs first and it is the one PostgreSQL ends.
+      const pending = request();
+      assert.equal(await lockWaitSeen(), true, `${route}: the request never waited on the held day`);
+      await other.query(`select id from plans.plans where id = $1 for update`, [planId]);
+      const res = await within(pending, 8000);
+      assert.notEqual(res, "waited", route);
+      assert.equal(res.status, 409, `${route}: ${res.text}`);
+      assert.deepEqual(res.body, BUSY, route);
+    } finally {
+      await other.query("rollback").catch(() => {});
+      await other.end().catch(() => {});
+    }
+    assert.deepEqual([await digestOf(planId), await planCount()], before, `${route}: the draft as it was, no plan created`);
+  }
+});
+
+const weeklyPlansRead = (s) => api(`/api/builder/weekly-plans?weekStart=${WEEK}&athleteIds=${s.athlete.athleteId}`, { cookie: s.coach.cookie });
+
+test("L3. the caller's own draft with no session but WITH a day note is content: refused on both routes, and the list read reports it; a blank note is not content", async () => {
+  const s = await squad("daynote");
+  const planId = await weeklyDraft(s);
+  const dayId = (await q(`select id from plans.plan_days where plan_id = $1 order by day_order limit 1`, [planId]))[0].id;
+  // Before the note the list read skips the free draft, as the create would replace it.
+  assert.equal(ok(await weeklyPlansRead(s)).athletes[0].plan, null);
+  ok(await api(`/api/builder/blocks/${dayId}`, { method: "PATCH", cookie: s.coach.cookie, body: { note: "Travel day" } }));
+  assert.equal((await q(`select day_note from plans.plan_days where id = $1`, [dayId]))[0].day_note, "Travel day");
+  await assertBothRefused(s, planId, { source: await copySource(s) });
+  assert.equal(ok(await weeklyPlansRead(s)).athletes[0].plan.planId, planId, "the list read reports the draft the create refuses on");
+  // A note of spaces only is no note: the draft is free again, for the read and for the create.
+  await q(`update plans.plan_days set day_note = '   ' where id = $1`, [dayId]);
+  assert.equal(ok(await weeklyPlansRead(s)).athletes[0].plan, null);
+  const created = ok(await createWeekly(s.coach.cookie, s.athlete), 201);
+  assert.deepEqual(await weeklyPlansOf(s), [String(created.plan.id)]);
+});
+
+test("R4. a day note written into the caller's empty draft, committed while the create is in flight: 409, the plan and the note stay", async () => {
+  const s = await squad("racenote");
+  const planId = await weeklyDraft(s);
+  const dayId = (await q(`select id from plans.plan_days where plan_id = $1 order by day_order limit 1`, [planId]))[0].id;
+  const res = await raceAgainstOpenChange(
+    (other) => other.query(`update plans.plan_days set day_note = 'Late note' where id = $1`, [dayId]),
+    () => createWeekly(s.coach.cookie, s.athlete),
+  );
+  assert.equal(res.status, 409, res.text);
+  assert.match(res.body.error, REFUSAL);
+  assert.deepEqual(await weeklyPlansOf(s), [String(planId)]);
+  assert.equal((await q(`select day_note from plans.plan_days where id = $1`, [dayId]))[0].day_note, "Late note");
+});
+
 const batchCreate = (cookie, athletes) => api("/api/builder/plans", {
   method: "POST", cookie, body: { planType: "weekly", weekStart: WEEK, athleteIds: athletes.map((a) => a.externalId), name: "Week" },
 });

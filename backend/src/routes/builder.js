@@ -270,7 +270,7 @@ router.get("/drafts", async (req, res, next) => {
 // - A plannable athlete's plan is the one ensureWeeklySlot (POST /plans)
 //   would refuse on: the oldest active, non-edit-draft weekly plan of that
 //   week, whoever made it, leaving out the caller's own Builder draft with no
-//   session (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
+//   session and no day note (which POST /plans deletes and replaces). A plan the caller may not open (getEditablePlan's
 //   rule) is `{ editable: false }` only: no id, name, author or status.
 export const WEEKLY_PLANS_READ_MAX = 200;
 const ATHLETE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -362,16 +362,17 @@ router.get("/weekly-plans", async (req, res, next) => {
             where p.plan_type = 'weekly' and p.athlete_id = a.id and p.week_start = $2::date
               and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)
               -- ensureWeeklySlot's skip: the caller's own Builder DRAFT with
-              -- no session at all is removed by POST /plans, so it is not
-              -- reported either (weeklySlotPlanIsFree's rule: a published
-              -- plan, or a plan with any session, is never removed; change
-              -- the two together).
+              -- no session and no day note is removed by POST /plans, so it
+              -- is not reported either (weeklySlotPlanIsFree's rule: a
+              -- published plan, or a plan with any session or day note, is
+              -- never removed; change the two together).
               and not (
                 p.source_type = 'builder' and p.created_by_user_id = $3
                 and p.status = 'draft'
-                and not exists (select 1 from plans.plan_sessions ps
-                                  join plans.plan_days pd on pd.id = ps.plan_day_id
-                                 where pd.plan_id = p.id)
+                and not exists (select 1 from plans.plan_days pd
+                                 where pd.plan_id = p.id
+                                   and (nullif(trim(coalesce(pd.day_note, '')), '') is not null
+                                        or exists (select 1 from plans.plan_sessions ps where ps.plan_day_id = pd.id)))
               )
             order by p.created_at
             limit 1
@@ -603,9 +604,17 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     await client.query("begin");
     if (planType === "weekly") {
       const conflicts = [];
-      for (const target of targets) {
-        const conflict = await ensureWeeklySlot(client, req.user.id, target, weekStart);
-        if (conflict) conflicts.push(conflict);
+      try {
+        for (const target of targets) {
+          const conflict = await ensureWeeklySlot(client, req.user.id, target, weekStart);
+          if (conflict) conflicts.push(conflict);
+        }
+      } catch (error) {
+        if (!weeklySlotBusy(error)) throw error;
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return res.status(409).json(WEEKLY_SLOT_BUSY_ANSWER);
       }
       if (conflicts.length) {
         await client.query("rollback");
@@ -912,9 +921,17 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
 
     if (source.plan_type === "weekly") {
       const conflicts = [];
-      for (const target of targets) {
-        const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart));
-        if (conflict) conflicts.push(conflict);
+      try {
+        for (const target of targets) {
+          const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart));
+          if (conflict) conflicts.push(conflict);
+        }
+      } catch (error) {
+        if (!weeklySlotBusy(error)) throw error;
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return res.status(409).json(WEEKLY_SLOT_BUSY_ANSWER);
       }
       if (conflicts.length) {
         await client.query("rollback");
@@ -3668,14 +3685,14 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
 }
 
 // Whether ensureWeeklySlot may remove the caller's own Builder plan that holds
-// a week: only a DRAFT with NO session at all. A published plan is never free,
-// and a session - even one with no item and no named node - is content (it can
-// carry RPE or an event link; removing it leaves those records naming a
-// logical id no session has).
+// a week: only a DRAFT with NO session at all and no day note. A published plan
+// is never free, and a session - even one with no item and no named node - is
+// content (it can carry RPE or an event link; removing it leaves those records
+// naming a logical id no session has).
 //
 // Three conditions:
 //   1. the status is 'draft';
-//   2. the plan has no session;
+//   2. the plan has no content: no session and no day note;
 //   3. no session of the plan has results or a live event link made for it
 //      (Task 5, docs/ai/builder-batch-edit-plan.md section 12: the plan
 //      delete's own check, blockedPlanSessions, whatever the status). Today 2
@@ -3695,10 +3712,26 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
 //
 // GET /weekly-plans skips exactly this plan (its lateral's `and not (...)`):
 // change the two together.
+//
+// Content is a session OR a day note (the assign-weekly rule: a week the coach
+// wrote a note into is not empty). The day locks cover a note written
+// meanwhile too (it updates the day row).
+//
+// The locks wait at most 2 s (this file's lock_timeout, SET LOCAL: it stays
+// for the rest of the caller's transaction, so the removal is bounded too). A
+// wait that ran out (55P03) or a deadlock (40P01; the submit's empty-draft
+// removal deletes children first) is the caller's `try_again`
+// (weeklySlotBusy), never a 500 and never an unbounded wait.
 async function weeklySlotPlanIsFree(client, existingPlan, userId) {
-  const hasSessionSql = `select exists (select 1 from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1) as has_session`;
+  const hasContentSql = `select exists (
+      select 1 from plans.plan_days pd
+       where pd.plan_id = $1
+         and (nullif(trim(coalesce(pd.day_note, '')), '') is not null
+              or exists (select 1 from plans.plan_sessions ps where ps.plan_day_id = pd.id))
+    ) as has_content`;
   if (existingPlan.status !== "draft") return false;
-  if ((await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false) return false;
+  if ((await client.query(hasContentSql, [existingPlan.id])).rows[0]?.has_content !== false) return false;
+  await client.query("set local lock_timeout = '2s'");
   const locked = (await client.query(
     `select status from plans.plans
       where id = $1 and plan_type = 'weekly' and source_type = 'builder' and created_by_user_id = $2
@@ -3709,10 +3742,18 @@ async function weeklySlotPlanIsFree(client, existingPlan, userId) {
   if (!locked) return false;
   await client.query("select id from plans.plan_days where plan_id = $1 order by id for update", [existingPlan.id]);
   const isDraft = locked.status === "draft";
-  const hasSession = (await client.query(hasSessionSql, [existingPlan.id])).rows[0]?.has_session !== false;
+  const hasContent = (await client.query(hasContentSql, [existingPlan.id])).rows[0]?.has_content !== false;
   const guarded = await blockedPlanSessions(client, await loadWeeklyTree(client, existingPlan.id));
-  return isDraft && !hasSession && guarded.length === 0;
+  return isDraft && !hasContent && guarded.length === 0;
 }
+
+// A lock wait that ran out or a deadlock inside the weekly slot check or its
+// removal: nothing was written (the caller rolls back) and the coach may try
+// again - this file's own answer for it.
+function weeklySlotBusy(error) {
+  return error?.code === "55P03" || error?.code === "40P01";
+}
+const WEEKLY_SLOT_BUSY_ANSWER = { error: "The plan is busy. Nothing was saved. Try again.", code: "try_again" };
 
 // The batch switcher's members: only the plans this viewer may open, by the
 // very predicate getEditablePlan uses (editablePlanAccessSql); the rest only
