@@ -16,6 +16,15 @@ import {
   ccWindowWire,
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
+import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
+import {
+  CC_SWITCHER_ACTIONS,
+  buildCentralCalendarSwitcherModel,
+  centralCalendarChosenAthlete,
+  centralCalendarSwitcherResults,
+  ensureCentralCalendarSwitcherOrg,
+  renderCentralCalendarSearchResultsHtml,
+} from "./central-calendar-switcher.js";
 import { k3SheetAction, k3StartFromPanel } from "./central-calendar-k3-actions.js";
 import { ccAnswersPaths, ccAnswersReadable, ccMergeWeekly } from "./central-calendar-answers.js";
 import { ensureGpsReview, gpsReviewMark } from "./central-calendar-gps-review.js";
@@ -38,6 +47,7 @@ import {
   centralCalendarServerKinds,
   centralCalendarShownData,
   loadCentralCalendar,
+  loadCentralCalendarAthlete,
   loadCentralCalendarDay,
   loadCentralCalendarKinds,
   newCentralCalendarRequestKey,
@@ -273,6 +283,17 @@ async function typesChanged(cal, before, render) {
   const after = centralCalendarServerKinds(cal.filters);
   if (after !== before && cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) cal.panel = closedPanel();
   render?.();
+  // K6: with an athlete chosen the kinds are part of her own read (one read, contract 2.5).
+  if (centralCalendarChosenAthlete(cal)) {
+    if (after !== before) {
+      await loadCentralCalendarAthlete({ render, closeMissing: false });
+      if (cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
+        cal.panel = closedPanel();
+        render?.();
+      }
+    }
+    return;
+  }
   if (after && after !== before) {
     await loadCentralCalendarKinds({ render, closeMissing: false });
     if (cal.panel.open && !cal.form && !findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
@@ -280,6 +301,172 @@ async function typesChanged(cal, before, render) {
       render?.();
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// K6-1, the switcher (docs/ai/central-calendar-k6-contract.md section 2). The choice is `cal.switcher.athleteKey`
+// (a roster UUID, "" = Everyone) and `cal.filters.teamIds[0]` (one team, [] = All groups); both live in this
+// workspace's slice only. An id is chosen only if the roster holds it (never one the roster does not name).
+// ---------------------------------------------------------------------------
+function rosterHasAthlete(key) {
+  return Boolean(key) && (state.athletes || []).some((row) => String(row?.athlete_uuid || "") === String(key));
+}
+
+function athleteInTeam(cal, key, teamId) {
+  const org = cal.switcher.org;
+  // Without the team facts (not read, or failed) the strip is the roster by name, so nothing says she is outside.
+  if (org.status !== "ready") return true;
+  return org.pairs.some((pair) => pair.athleteUuid === key && pair.teamId === teamId);
+}
+
+// What the new choice asks of the server: the athlete's own read, else the chosen kinds' read, else nothing new.
+async function readChosenScope(cal, render) {
+  if (centralCalendarChosenAthlete(cal)) await loadCentralCalendarAthlete({ render, closeMissing: false });
+  else if (centralCalendarServerKinds(cal.filters)) await loadCentralCalendarKinds({ render, closeMissing: false });
+}
+
+// A change of who is shown: the panel of another answer closes (a card of this answer may not be in the next), the
+// reads follow, and the chosen pill is brought into view.
+async function scopeChanged(cal, render, { keepPanel = false } = {}) {
+  if (!keepPanel && !cal.form) {
+    cal.panel = closedPanel();
+    cal.panelQuestions = null;
+  }
+  render?.();
+  await readChosenScope(cal, render);
+  if (state.centralCalendar !== cal) return;
+  if (keepPanel && cal.panel.open && !cal.form) {
+    if (!findItemOnDay(cal, cal.panel.key, cal.panel.date)) {
+      cal.panel = closedPanel();
+      cal.panelQuestions = null;
+      render?.();
+    } else {
+      resetPanelReads(cal);
+      await loadCentralCalendarDay({ render });
+      if (cal.panel.open) await syncPanelEvent(cal, render);
+    }
+  }
+  athleteSwitcherScrollIntoView(globalThis.document);
+}
+
+async function chooseTeam(cal, teamId, render) {
+  const teams = cal.data?.teams || [];
+  if (!teams.some((team) => String(team.teamId) === teamId)) return;
+  // The chosen team tapped again goes back to All groups (the older chips' toggle, kept for one team).
+  const same = cal.filters.teamIds.length === 1 && cal.filters.teamIds[0] === teamId;
+  cal.filters.teamIds = same ? [] : [teamId];
+  cal.switcher.query = "";
+  cal.switcher.activeIndex = 0;
+  const key = cal.switcher.athleteKey;
+  if (same || !key || athleteInTeam(cal, key, teamId)) {
+    // (an athlete chosen under the team just left stays chosen: All groups holds her too)
+    render?.();
+    athleteSwitcherScrollIntoView(globalThis.document);
+    return;
+  }
+  cal.switcher.athleteKey = "";
+  cal.switcher.answer = null;
+  cal.switcher.status = "idle";
+  await scopeChanged(cal, render);
+}
+
+async function chooseAthlete(cal, key, render, { teamId } = {}) {
+  const type = cal.data?.workspace?.type || "";
+  if (key && (type === "platform" || !rosterHasAthlete(key))) return;
+  if (teamId !== undefined) cal.filters.teamIds = teamId ? [teamId] : [];
+  if (key === cal.switcher.athleteKey && teamId === undefined) return;
+  cal.switcher.athleteKey = key;
+  cal.switcher.query = "";
+  cal.switcher.activeIndex = 0;
+  // Choosing an athlete folds a phone's box again.
+  cal.switcher.open = false;
+  if (!key) {
+    cal.switcher.answer = null;
+    cal.switcher.status = "idle";
+  }
+  await scopeChanged(cal, render);
+}
+
+// Search -> an athlete of ANOTHER team sets the Groups choice to that team (the first of her teams in the club's
+// order), re-fills the strip and reads her week.
+async function chooseSearchResult(cal, key, render) {
+  const team = (cal.filters.teamIds || [])[0] || "";
+  const pairs = cal.switcher.org.status === "ready" ? cal.switcher.org.pairs.filter((pair) => pair.athleteUuid === key).map((pair) => pair.teamId) : [];
+  let teamId;
+  if (pairs.length && team && !pairs.includes(team)) {
+    const order = (cal.data?.teams || []).map((entry) => String(entry.teamId));
+    teamId = [...pairs].sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
+  }
+  await chooseAthlete(cal, key, render, teamId === undefined ? {} : { teamId });
+}
+
+async function clearAthlete(cal, render) {
+  cal.switcher.athleteKey = "";
+  cal.switcher.answer = null;
+  cal.switcher.status = "idle";
+  cal.switcher.query = "";
+  await scopeChanged(cal, render);
+}
+
+// *Show everyone*: the athlete goes back to Everyone, the kinds stay; an open panel reads its item again without the
+// athlete (Q5) when it is still in the answer.
+async function showEveryone(cal, render) {
+  if (!cal.switcher.athleteKey) return;
+  cal.switcher.athleteKey = "";
+  cal.switcher.answer = null;
+  cal.switcher.status = "idle";
+  cal.switcher.query = "";
+  await scopeChanged(cal, render, { keepPanel: true });
+}
+
+// The search field (app.js: input): the query changes, only the result list is drawn again.
+function searchResultsHost() {
+  return globalThis.document?.querySelector?.("[data-athlete-switcher-results]") || null;
+}
+
+function drawSearchResults(cal) {
+  const host = searchResultsHost();
+  if (!host) return false;
+  host.innerHTML = renderCentralCalendarSearchResultsHtml(cal, buildCentralCalendarSwitcherModel(cal));
+  return true;
+}
+
+function handleSwitcherSearchInput(target, render) {
+  const cal = state.centralCalendar;
+  cal.switcher.query = String(target.value ?? "");
+  cal.switcher.activeIndex = 0;
+  if (!drawSearchResults(cal)) render?.();
+  return true;
+}
+
+// ↑ ↓ move through the results, Enter chooses, Escape clears (contract 2.6).
+function handleSwitcherSearchKeydown(event, render) {
+  const cal = state.centralCalendar;
+  const model = buildCentralCalendarSwitcherModel(cal);
+  const shown = centralCalendarSwitcherResults(cal, model)?.results || [];
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cal.switcher.query = "";
+    cal.switcher.activeIndex = 0;
+    event.target.value = "";
+    drawSearchResults(cal);
+    return true;
+  }
+  if (!shown.length) return event.key === "Enter" ? (event.preventDefault(), true) : false;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    cal.switcher.activeIndex = (cal.switcher.activeIndex + step + shown.length) % shown.length;
+    drawSearchResults(cal);
+    return true;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    const item = shown[Math.min(cal.switcher.activeIndex, shown.length - 1)];
+    void chooseSearchResult(cal, item.key, render);
+    return true;
+  }
+  return false;
 }
 
 function toggleValue(list, value) {
@@ -679,7 +866,9 @@ function syncPanelEventOnly(cal, render) {
 setCentralCalendarAppliedHook((cal, render) => {
   const marks = ensureGpsReview(cal, render);
   const panel = syncPanelEvent(cal, render);
-  return marks || panel ? Promise.all([marks, panel]) : null;
+  // K6: a club workspace's team memberships, read once (the strip's grouping and dots).
+  const org = ensureCentralCalendarSwitcherOrg(cal, render);
+  return marks || panel || org ? Promise.all([marks, panel, org]) : null;
 });
 
 // K2b-2a-2b (contract 4.1): the open panel of a manager's event reads its
@@ -1881,6 +2070,7 @@ function handleQuestionStepInput(target, render) {
 }
 
 export function handleCentralCalendarInput(target, { render } = {}) {
+  if (target?.dataset?.athleteSwitcherSearch !== undefined) return handleSwitcherSearchInput(target, render);
   if (target?.closest?.("[data-cc-question-step]")) return handleQuestionStepInput(target, render);
   if (!target?.closest?.("[data-cc-event-form]")) return false;
   const cal = state.centralCalendar;
@@ -1962,8 +2152,9 @@ function handleShowOnlyArrows(event) {
 // app.js's keydown on the content: Enter in the athlete search finds, it
 // never submits the event form (HTML's implicit submission would create or
 // save the event before the athletes are chosen).
-export function handleCentralCalendarKeydown(event) {
+export function handleCentralCalendarKeydown(event, { render } = {}) {
   if (handleShowOnlyArrows(event)) return true;
+  if (event?.target?.dataset?.athleteSwitcherSearch !== undefined) return handleSwitcherSearchKeydown(event, render);
   if (event?.key !== "Enter" || !event.target?.matches?.("[data-cc-event-athlete-search]")) return false;
   event.preventDefault();
   // A phone's Search key: the keyboard goes away so the filtered list shows.
@@ -2097,10 +2288,34 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     focusCard(key);
     return true;
   }
-  if (type === "central-calendar-toggle-team") {
+  // K6 (contract 2.2, Q1): a Groups chip is the choice of ONE team (All groups for all). The chosen athlete goes back
+  // to Everyone when she is not in the new team. (central-calendar-toggle-team is the older name of the same act.)
+  if (type === CC_SWITCHER_ACTIONS.group) {
     const teamId = action.dataset.teamId || "";
-    if (teamId) toggleValue(cal.filters.teamIds, teamId);
+    if (teamId) await chooseTeam(cal, teamId, render);
+    return true;
+  }
+  if (type === CC_SWITCHER_ACTIONS.pick) {
+    await chooseAthlete(cal, action.dataset.athleteKey || "", render);
+    return true;
+  }
+  if (type === CC_SWITCHER_ACTIONS.result) {
+    await chooseSearchResult(cal, action.dataset.athleteKey || "", render);
+    return true;
+  }
+  if (type === CC_SWITCHER_ACTIONS.everyone) {
+    await showEveryone(cal, render);
+    return true;
+  }
+  if (type === CC_SWITCHER_ACTIONS.toggle) {
+    cal.switcher.open = !cal.switcher.open;
     render?.();
+    return true;
+  }
+  if (type === CC_SWITCHER_ACTIONS.orgRetry) {
+    if (cal.switcher.org.status === "error") cal.switcher.org.status = "idle";
+    render?.();
+    await ensureCentralCalendarSwitcherOrg(cal, render);
     return true;
   }
   // K5-2 *Show only* (contract 2.5): one kind at a time - a tap on another pill switches straight over, All (or the
@@ -2129,6 +2344,7 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-all-groups") {
     cal.filters.teamIds = [];
+    cal.switcher.query = "";
     render?.();
     return true;
   }
@@ -2145,8 +2361,11 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     return true;
   }
   if (type === "central-calendar-clear-filters") {
+    const hadAthlete = Boolean(cal.switcher.athleteKey);
     cal.filters = { teamIds: [], kinds: [], eventKinds: [] };
-    render?.();
+    // K6: Clear filters clears the athlete too.
+    if (hadAthlete) await clearAthlete(cal, render);
+    else render?.();
     return true;
   }
   // --- Events (K2a-2) ---
