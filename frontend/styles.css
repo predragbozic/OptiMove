@@ -29567,3 +29567,4 @@ body.athlete-questions-prompt-open {
 .weekly-k6-line { color: #344054; font-weight: 700; }
 .cc-see-each { display: grid; gap: 6px; margin: 8px 0; }
 .cc-see-each .cc-panel-button { min-height: 44px; }
+.athlete-switcher .cc-chip { min-height: 44px; }

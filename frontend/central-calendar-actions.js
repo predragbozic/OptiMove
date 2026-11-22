@@ -436,7 +436,11 @@ function drawSearchResults(cal) {
 
 function handleSwitcherSearchInput(target, render) {
   const cal = state.centralCalendar;
-  cal.switcher.query = String(target.value ?? "");
+  const value = String(target.value ?? "");
+  // The browser's "change" (the field loses focus when a result is pressed) must not redraw the list under the
+  // pointer: the press would then land on a node that is gone.
+  if (value === cal.switcher.query) return true;
+  cal.switcher.query = value;
   cal.switcher.activeIndex = 0;
   if (!drawSearchResults(cal)) render?.();
   return true;
