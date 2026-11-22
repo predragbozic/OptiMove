@@ -21,6 +21,7 @@ import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilde
 import { ensureBuilderEvents } from "./builder-events-row.js";
 import { renderBuilderSessionsLockedHtml } from "./builder-sessions-locked.js";
 import { currentTemplateWeek, dayOfBlock, isWeeklyTemplateDraft, renderTemplateWeekStripHtml, templateWeekBlocks } from "./builder-weekly-template-view.js";
+import { renderSaveWeeksModalHtml } from "./builder-weekly-save-view.js";
 import { renderBuilderEventsAskHtml, renderBuilderEventsRowHtml, renderBuilderSessionEventHtml, renderBuilderSessionEventNoteHtml } from "./builder-events-row-view.js";
 import { renderPastelSwatches } from "./taxonomy-view.js";
 import {
@@ -739,6 +740,7 @@ function renderBuilderInner() {
         <div class="builder-program-actions">
           <span class="item-badge builder-status-chip${isEditDraft || (draft.plan.status || "draft") === "draft" ? " is-draft" : ""}">${isEditDraft ? "edit draft" : escapeHtml(draft.plan.status || "draft")}</span>
           <button class="plain-button icon-button builder-exit-button" type="button" data-action="builder-cancel" aria-label="Exit" aria-description="Exit and keep this draft for later.">${ICON_DOOR_EXIT}</button>
+          ${isWeekly && draft.plan.athleteId ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-tw-save-open">Save weeks as template</button>` : ""}
           ${draft.plan.isTemplate && !isWeekly && !isWeeklyTemplate ? `<button class="plain-button builder-assign-button" type="button" data-action="builder-duplicate-plan" data-plan-id="${escapeAttr(draft.plan.id)}" data-plan-type="program" data-intent="assign" data-is-edit-draft="${isEditDraft ? "true" : "false"}">${ICON_CHECK}<span>Assign to athlete</span></button>` : ""}
           ${draft.plan.status === "draft" && !k3 ? `<button class="plain-button icon-button builder-finish-button" type="button" data-action="builder-submit-plan" aria-label="${saveLabel}" aria-description="${isEditDraft ? "Apply changes to the original plan." : "Save and finish — marks this plan as active."}">${ICON_CHECK}</button>` : `<span class="builder-finished-label">Saved</span>`}
           ${draft.plan.status === "draft" ? `<button class="plain-button icon-button danger-action" type="button" data-action="builder-discard-current-draft" aria-label="Discard changes" aria-description="Discard all changes in this draft.">${ICON_X}</button>` : ""}
@@ -782,6 +784,7 @@ function renderBuilderInner() {
       ${selectedNode?.type === "section" ? renderBuilderSectionOverlay(state, selectedNode) : ""}
       ${state.builder.infoOpen ? renderBuilderInfoModal(state.builder.infoOpen) : ""}
       ${renderCopyPlanModal(state)}
+      ${renderSaveWeeksModalHtml(state)}
       ${renderOverwriteDayConfirmHtml(state)}
       ${renderBlockPickerModal(state)}
     </section>

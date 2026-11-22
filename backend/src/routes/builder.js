@@ -1003,6 +1003,81 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
   }
 }));
 
+// Save as template from chosen weekly plans (docs/ai/weekly-program-template-
+// plan.md, section 3.2): any weeks the coach may open, in date order, each one
+// template week (Monday = Day 1). Content only - sessions and their trees with
+// fresh logical ids, day notes; never results, RPE, event links or ids.
+export const weeklySaveTestHooks = { afterRights: null };
+
+router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
+  let client;
+  try {
+    const name = text(req.body?.name);
+    if (!name) return res.status(400).json({ error: "Template name is required." });
+    const planIds = [...new Set((Array.isArray(req.body?.planIds) ? req.body.planIds : []).map(text).filter(Boolean))];
+    if (!planIds.length || planIds.length > MAX_TEMPLATE_WEEKS) return res.status(400).json({ error: `Choose 1 to ${MAX_TEMPLATE_WEEKS} weeks.`, code: "weeks" });
+    if (!planIds.every((id) => UUID_RE.test(id))) return res.status(404).json({ error: "Weekly plan not found." });
+    const sources = [];
+    for (const id of planIds) {
+      const plan = await getEditablePlan(req, id);
+      if (!plan || plan.plan_type !== "weekly" || plan.is_edit_draft) return res.status(404).json({ error: "Weekly plan not found." });
+      sources.push(plan);
+    }
+    sources.sort((a, b) => String(a.week_start).localeCompare(String(b.week_start)) || (String(a.id) < String(b.id) ? -1 : 1));
+    if (weeklySaveTestHooks.afterRights) await weeklySaveTestHooks.afterRights({ planIds: sources.map((p) => p.id) });
+    client = await pool.connect();
+    await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    // The chosen plans stay as they are while they are copied: FOR SHARE,
+    // ascending id (a Save takes them FOR UPDATE in the same order).
+    const stillThere = await client.query(
+      `select id from plans.plans
+       where id = any($1::uuid[]) and plan_type = 'weekly' and coalesce(is_active, true) and not coalesce(is_edit_draft, false)
+       order by id for share`,
+      [sources.map((p) => p.id)],
+    );
+    // A week removed between the rights check and the lock: nothing is saved.
+    if (stillThere.rowCount !== sources.length) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(404).json({ error: "Weekly plan not found." });
+    }
+    const created = (await client.query(
+      `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, visibility, is_template, status, source_type)
+       values ('program', $1, null, $2, 'private', true, 'draft', 'builder') returning id`,
+      [req.user.id, name],
+    )).rows[0];
+    await insertTemplateWeeks(client, created.id, 1, sources.length);
+    const templateDays = new Map((await client.query("select id, block_index from plans.plan_days where plan_id = $1", [created.id])).rows
+      .map((d) => [Number(d.block_index), d.id]));
+    const pairs = [];
+    for (const [position, plan] of sources.entries()) {
+      const days = (await client.query("select id, day_order, day_note from plans.plan_days where plan_id = $1 order by day_order, id", [plan.id])).rows;
+      for (const day of days) {
+        const targetDayId = templateDays.get(blockIndexOf(position + 1, normalizedWeekday(day.day_order)));
+        if (day.day_note) await client.query("update plans.plan_days set day_note = $2 where id = $1", [targetDayId, day.day_note]);
+        pairs.push({ sourceDayId: day.id, targetDayId, orderOffset: 0 });
+      }
+    }
+    await copyTemplateDaySessions(client, pairs, copyLegacySession);
+    await assertExerciseReuseAllowed(client, req.user.id, { planIds: [created.id], guard: req.exerciseReuseGuard });
+    await client.query("commit");
+    client.release();
+    client = null;
+    // Committed: a failed read never reads as "not saved" (db review).
+    try {
+      return res.status(201).json(await buildDraft(await getEditablePlan(req, created.id), req));
+    } catch {
+      return res.status(201).json({ planId: created.id, reload: true });
+    }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    if (error?.code === "40P01" || error?.code === "55P03") return res.status(409).json({ error: "The plans are busy. Nothing was saved. Try again.", code: "try_again" });
+    next(error);
+  }
+}));
+
 router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) => {
   let client;
   const timing = createBuilderTiming(res);
