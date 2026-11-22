@@ -42,7 +42,7 @@ test("a manager is offered See each athlete; one button per linked slot", () => 
   const gym = { amPm: "AM", bta: "B", name: "Gym" };
   world({ panelAthletes: [1, 2, 3, 4, 5].map((n) => A(n, `Athlete ${n}`)), links: [link(1, main), link(2, main), link(3, gym)] });
   const buttons = [...dom().querySelectorAll('[data-action="central-calendar-see-each-athlete"]')];
-  assert.deepEqual(buttons.map((b) => b.textContent), ["See each athlete · Main session · PM · Training", "See each athlete · Gym · AM · Before training"]);
+  assert.deepEqual(buttons.map((b) => b.textContent), ["See each athlete · Main session · Training (PM)", "See each athlete · Gym · Before training (AM)"]);
   world({ panelAthletes: [1, 2].map((n) => A(n, `Athlete ${n}`)), links: [link(1, main)] });
   assert.equal(dom().querySelector('[data-action="central-calendar-see-each-athlete"]').textContent, "See each athlete");
   assert.match(dom().querySelector(".cc-see-each").textContent, /one athlete at a time, only the 2 of this event/);
@@ -54,13 +54,13 @@ test("unnamed slots are told apart by their own facts; the note names the same s
   const doc = dom();
   const buttons = [...doc.querySelectorAll('[data-action="central-calendar-see-each-athlete"]')];
   assert.deepEqual(buttons.map((b) => b.textContent), [
-    "See each athlete · AM · Before training", "See each athlete · AM · Training", "See each athlete · PM",
+    "See each athlete · Before training (AM)", "See each athlete · Training (AM)", "See each athlete · Session (PM)",
     "See each athlete · After training", "See each athlete · Session",
   ]);
   assert.equal(new Set(buttons.map((b) => b.textContent)).size, 5);
   assert.deepEqual(buttons.map((b) => b.classList.contains("cc-primary")), [true, false, false, false, false]);
   const notes = [...doc.querySelectorAll(".cc-see-each .cc-panel-note")].map((n) => n.textContent);
-  assert.match(notes[0], /^Opens AM · Before training, one athlete at a time, only the 5 of this event\.$/);
+  assert.match(notes[0], /^Opens Before training \(AM\), one athlete at a time, only the 5 of this event\.$/);
   assert.equal(notes.length, 5);
 });
 
@@ -71,7 +71,7 @@ test("a link whose Builder session was deleted gets no button; a later link name
   world({ panelAthletes: [1, 2, 3].map((n) => A(n, `Athlete ${n}`)), links: [orphan(5, { amPm: "", bta: "T" }), orphan(6, { amPm: "PM", bta: "T" }), unnamedFirst, { ...link(2, live), state: "linked" }] });
   const buttons = [...dom().querySelectorAll('[data-action="central-calendar-see-each-athlete"]')];
   assert.deepEqual(buttons.map((b) => b.textContent), ["See each athlete"], "one live slot; the deleted ones are not offered");
-  assert.match(dom().querySelector(".cc-see-each .cc-panel-note").textContent, /^Opens Ankle&Endurance · AM · Training,/);
+  assert.match(dom().querySelector(".cc-see-each .cc-panel-note").textContent, /^Opens Ankle&Endurance · Training \(AM\),/);
   world({ panelAthletes: [1, 2].map((n) => A(n, `Athlete ${n}`)), links: [orphan(5, { amPm: "", bta: "T" })] });
   assert.match(dom().querySelector(".cc-see-each").textContent, /Open the week/, "only deleted links: the plain week button");
 });

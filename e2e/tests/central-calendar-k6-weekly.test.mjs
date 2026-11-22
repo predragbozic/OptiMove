@@ -225,8 +225,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await card.click();
       const see = page.locator('[data-action="central-calendar-see-each-athlete"]');
       await see.nth(2).waitFor({ timeout: 20_000 });
-      assert.deepEqual(await see.allInnerTexts(), ["See each athlete · AM · Before training", "See each athlete · AM · Training", "See each athlete · PM"]);
-      assert.match(await page.locator(".cc-see-each .cc-panel-note").nth(1).innerText(), /^Opens AM · Training, one athlete at a time/);
+      assert.deepEqual(await see.allInnerTexts(), ["See each athlete · Before training (AM)", "See each athlete · Training (AM)", "See each athlete · Session (PM)"]);
+      assert.match(await page.locator(".cc-see-each .cc-panel-note").nth(1).innerText(), /^Opens Training \(AM\), one athlete at a time/);
       assert.equal(await see.nth(0).evaluate((el) => el.classList.contains("cc-primary")), true);
       assert.equal(await see.nth(1).evaluate((el) => el.classList.contains("cc-primary")), false);
       for (let i = 0; i < 3; i += 1) {

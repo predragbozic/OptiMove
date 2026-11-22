@@ -17,6 +17,7 @@ import { readAthleteStripHidden, writeAthleteStripHidden } from "./athlete-strip
 import { calendarTeamColorIndexes } from "./calendar-colors.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
+import { slotWords } from "./weekly-k6.js";
 import { buildContextKey } from "./view-cache.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -332,13 +333,12 @@ export function centralCalendarEventSlots(cal, item) {
   return { manager: true, slots };
 }
 
-const SLOT_BTA_WORDS = Object.freeze({ B: "Before training", T: "Training", A: "After training" });
-
-// Plain-English names for the linked slots, in slot order: the session's name (when it has one) and its own facts
-// ("AM · Before training"), never an id. Slots that would still read the same are numbered ("Session 1", "Session 2").
+// Plain-English names for the linked slots, in slot order: the session's name (when it has one) and its own facts,
+// worded exactly as the Weekly plan the click opens words the same slot (`slotWords`: "Before training (AM)",
+// "Session (PM)"), never an id. Slots that would still read the same are numbered ("Session 1", "Session 2").
 export function centralCalendarSlotLabels(slots) {
   const base = slots.map((slot) => {
-    const when = [slot.amPm === "AM" || slot.amPm === "PM" ? slot.amPm : "", SLOT_BTA_WORDS[slot.bta] || ""].filter(Boolean).join(" · ");
+    const when = slot.amPm || slot.bta ? slotWords(slot) : "";
     return [slot.name, when].filter(Boolean).join(" · ") || "Session";
   });
   const seen = new Map();
