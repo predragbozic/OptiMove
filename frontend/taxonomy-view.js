@@ -1,6 +1,7 @@
 import { builderIconGlyph } from "./builder-helpers.js";
 import { renderImage } from "./media.js";
 import { renderFilterableSelect } from "./organization-select.js";
+import { renderPositionsSectionHtml } from "./positions-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -34,6 +35,7 @@ export function renderTaxonomyPanelHtml(data) {
   return `
     <section class="taxonomy-panel">
       ${state.taxonomy.error ? `<p class="builder-error">${escapeHtml(state.taxonomy.error)}</p>` : ""}
+      ${renderPositionsSectionHtml()}
       <section class="panel taxonomy-intro">
         <p class="eyebrow">Builder tree presets</p>
         <h3>Domain, category and section presets</h3>

@@ -211,6 +211,8 @@ import {
   loadTaxonomyData,
   submitTaxonomyForm,
 } from "./taxonomy-actions.js";
+import { loadPositions, resetPositions } from "./positions-data.js";
+import { handlePositionAction, submitPositionForm } from "./positions-actions.js";
 import {
   closeNotificationsIfOutside,
   handleNotificationAction,
@@ -928,6 +930,13 @@ async function handleContentSubmit(event) {
   if (athleteAccountEmailChangeForm) {
     event.preventDefault();
     await submitAthleteAccountEmailChangeForm(athleteAccountEmailChangeForm, { renderOrganizationPanel });
+    return;
+  }
+
+  const positionForm = event.target.closest("[data-position-form]");
+  if (positionForm) {
+    event.preventDefault();
+    await submitPositionForm(positionForm, { renderOrganizationPanel });
     return;
   }
 
@@ -3552,6 +3561,7 @@ async function handleContentClick(event) {
     renderOrganizationPanel,
   })) return;
   if (await handleTaxonomyAction(action, { renderOrganizationPanel })) return;
+  if (await handlePositionAction(action, { renderOrganizationPanel })) return;
   if (await handleIconGalleryAction(action)) return;
   if (handleWeeklyAction(action, { moveWeek, renderWeeklyRoot })) return;
   if (await handleTestsAction(action, { renderTests: renderActiveTestsSurface })) return;
@@ -3699,6 +3709,11 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     if (state.organization.section === "presets" && !state.taxonomy.loaded) {
       await loadTaxonomyData();
     }
+    // v88: positions for Tags & Presets and for an athlete's Edit window; read once, then after every write.
+    if ((state.organization.section === "presets" || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
+        && !state.positions.loaded && !state.positions.loading && !state.positions.error) {
+      void loadPositions().then(() => renderOrganizationPanel({ refresh: false }));
+    }
     // A team is chosen but its data is not loaded yet (the tab was opened
     // again after a workspace or Settings reload): read it once. Every write
     // on the screen reloads the team itself, so this never repeats.
@@ -3797,6 +3812,8 @@ async function onWorkspaceChanged() {
   clearAppHistoryEntries();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
+  // v88: the positions list and the athletes' positions are the workspace's own.
+  resetPositions();
   resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;
   // a create not confirmed stays in the calendar's memory under it.

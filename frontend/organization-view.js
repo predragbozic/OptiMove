@@ -16,6 +16,7 @@ import { COACH_SETTINGS_SECTIONS, isCoachSettings, renderSettingsNavHtml } from 
 import { renderIconGalleryHtml } from "./icon-gallery.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
+import { renderAthletePositionFormHtml } from "./positions-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
 
@@ -1827,7 +1828,7 @@ export function renderOrganizationEditModal(data) {
       <button class="exercise-tag-backdrop" type="button" data-action="organization-edit-close" aria-label="Close editor"></button>
       <section class="panel exercise-tag-modal organization-edit-modal" role="dialog" aria-modal="true" aria-label="${escapeAttr(title)}">
 ${renderDialogHead({ eyebrow: "Organization", title, subtitle: row.name || row.full_name || "", closeAction: "organization-edit-close" })}
-        ${type === "club" ? renderOrganizationClubEditForm(row) : type === "team" ? renderOrganizationTeamEditForm(row, data.clubs || []) : `${renderOrganizationAthleteEditForm(row, data.clubs || [], data.teams || [])}${renderAthleteLibraryAccessForm(row)}`}
+        ${type === "club" ? renderOrganizationClubEditForm(row) : type === "team" ? renderOrganizationTeamEditForm(row, data.clubs || []) : `${renderOrganizationAthleteEditForm(row, data.clubs || [], data.teams || [])}${renderAthletePositionFormHtml(row.id)}${renderAthleteLibraryAccessForm(row)}`}
       </section>
     </div>
   `;
