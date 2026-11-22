@@ -12,7 +12,7 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
 | Status | **Proposed.** Documentation only. No code and no migration file. Internal reviews (2026-11-22): `code-reviewer` NOT READY (2 HIGH), `security-reviewer` NOT READY (1 HIGH, 4 MEDIUM), `db-reviewer` READY WITH NOTES (3 HIGH-class) on `6a20328`; all fixed in `2749a4b`; narrow re-reviews: security READY (one new MEDIUM, the rule 7 race, fixed in `829b89a`), db READY WITH NON-BLOCKING NOTES (N1-N3, written in). Next: the *Nezavisni revizor* and the owner's answers to section 12. |
 | Mark | Risky: external-review triggers 1 (a migration), 2 (auth, roles, workspace, info hiding) and 4 (lock order, idempotency) of `CLAUDE.md`. Every code pull request of section 11 that touches the server needs the *Nezavisni revizor*. |
 | Written against | `origin/main` at `9ff8c3f5` (2026-11-22), which holds R1 (`can()`, #619), R2 (migration v84 and the Roles API, #676), `/me` permissions (#706), the R3 screens (#710), the tabs from permissions (#716) and the club members list (#717). Every `file:line` below is at `9ff8c3f5`. The implementation re-checks each at its own base. |
-| Migration | One foundation migration, **vNN** (the number is given by the *Rukovodilac* of OptiMove when the file is written). The way into a club (section 5) needs no migration. |
+| Migration | One foundation migration, **vNN**: provisionally **v92**, prefix `202611241000` (the *Rukovodilac* of OptiMove, 2026-11-22; final before the freeze). One file, unless the deploy plan shows the old server must not see part of the schema. The way into a club (section 5) needs no migration. |
 | Owner's decisions | O1-O8, 2026-11-22, section 1, relayed by this stream's manager. Nothing in section 1 is the executor's wording of a decision; the wording is the manager's relay, translated. |
 
 ## 0. In short
@@ -32,7 +32,7 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
   VIEW package; each module's pull request moves the word from "not yet" to "checked" in code.
 - **The licence (ceiling) does not act everywhere from vNN on.** Like any word, it acts only in a part that checks the new
   rights; until a part's VIEW step, closing it in the licence changes nothing there, and the licence screen says so per part
-  (section 7.1, Q12). This is a departure from O1's "at once", raised for the owner.
+  (section 7.1). The owner accepted this departure from O1's "at once" (Q12, 2026-11-22).
 - **The way into a club** for an account with only a new-style role is a separate workspace type, `club_view` (and
   `team_view`), O8. Six modules today treat an active club workspace as the permission itself (section 6); they do not know
   the new type, so they stay closed for it by construction. Each module learns it only in its own VIEW pull request.
@@ -164,11 +164,13 @@ a ceiling that opens again brings back exactly what was recorded (O1).
   *Reset*; a holding that ended makes it dead at read time and the next write on that user records the end. An ended or
   dead custom stays as history and is never revived.
 - **Only that role.** A custom overrides the one role it was made from. A word the user also holds through a second role in
-  the club stays held; the screen says "still held through <Role B>" next to it (Q14 asks the owner whether a per-user
-  removal should cut across all of the user's roles).
-- **Frozen means later removals do not reach it either.** A word removed from the default or the club version stays in the
-  customs made earlier. The club's Users screen lists "customs holding words their role no longer has", and the platform
-  admin has one act to remove a word from every custom of a role in a club (Q15).
+  the club stays held; the screen says "still held through <Role B>" next to it (the owner, Q14: a per-user removal does
+  not cut across the user's other roles).
+- **Frozen means later removals do not reach it either** (the owner, Q15: "pod A definitivno"). A custom may be narrower or
+  wider than its role and different for every user - that is what custom is for. When the club's admin (or a platform
+  admin) takes a word away from a role in the club, the app warns at once: "N custom users still hold this", with their
+  names and a button *Take it from them too*. Nothing is taken away automatically; the customs stay frozen unless that
+  button is used. The same list is readable later in the club's Users screen.
 - **One custom per (user, role, scope).** A user who is Team coach in two teams can have a custom in one and not the other.
   **(recommendation, Q4)**
 - **Admins (O5).** No custom of a holder of the Club admin role (old row or assignment) in that club by a club's admin;
@@ -438,7 +440,9 @@ it; the seed still comes after the honoured replacement.
    for a ceiling change **and for every club version write** - rule 7 in a club (7.2) depends on all versions of the club
    together, so two version writers on different roles must not pass their deferred checks on snapshots that miss each
    other (the security re-review's MEDIUM; test: Club admin version narrowed against Team coach version widened at once),
-   in a two-integer namespace of its own (a constant distinct from the club-admin headcount lock, `organization.js:2761`,
+   taken by **every** writer of roles, club versions, custom roles and the ceiling in that club (decided by the
+   *Rukovodilac* of OptiMove, 2026-11-22), keyed as `(namespace, hashtext(clubId))` in the pattern of
+   `CLUB_ADMIN_HEADCOUNT_LOCK_NAMESPACE` - in a namespace of its own (a constant distinct from the club-admin headcount lock, `organization.js:2761`,
    the team import lock and R2's request-key lock); when the headcount lock and this lock meet in one transaction, the
    headcount lock comes first (a recorded-order test: a club-admin grant against a ceiling close); both under
    the transaction's `lock_timeout` (a `55P03` on the advisory lock is `409 try_again`, never a 500). Absent ceiling rows cannot be locked, and locking the `public.clubs` row
@@ -493,7 +497,7 @@ target in that club is proven, so it can never confirm that a foreign club or us
 | `GET /users/:userId/clubs/:clubId` | the club's admin; a platform admin; anyone else 404 | the user's held roles there, effective words, custom state and the difference from the role |
 | `POST /users/:userId/clubs/:clubId/custom` `{requestKey, roleId, scopeType, scopeId, expectedRevision (null = create), add, remove, reason}` | as above, 3.4 and 3.5 | makes or changes a custom role |
 | `GET /clubs/:clubId/custom-drift` | the club's admin; a platform admin | customs that hold words their role (club version or default) no longer has (3.4) |
-| `POST /:roleId/clubs/:clubId/custom-word-removal` `{requestKey, word, reason}` | a platform admin only (Q15) | removes one word from every live custom of that role in that club |
+| `POST /:roleId/clubs/:clubId/custom-word-removal` `{requestKey, word, customIds, reason}` | the club's admin (3.5: never an admin's custom) and a platform admin (Q15) | *Take it from them too*: removes one word from the listed live customs of that role in that club; the answer of the role change that preceded it carries `customsStillHolding: [{customId, userId, name}]` |
 | `POST /users/:userId/custom/:customId/end` `{requestKey, reason}` | as above | back to the club's role |
 | `GET /assignments` (R2) | as R2 | each row carries `custom: true` and "<Role> (custom)" where it applies |
 
@@ -539,9 +543,28 @@ same for a custom role), `question_outdated`.
 - **(d) `permission-nav.js`:** the fallback rule of 5.2; Settings tabs for a view workspace; the "not available yet" state
   is never shown as a hidden tab.
 
-## 12. Open questions for the owner (each with a recommendation; none is decided here)
+## 12. Decided points (2026-11-22)
 
-| # | Question | Recommendation | What it changes |
+All sixteen are decided (relayed by this stream's manager):
+- **The owner** ("po preporuci" unless written otherwise): **Q2** - a part closed by the licence does not exist for anyone
+  in the club for now; the club's admin sees in Settings the list of what the licence covers; the padlock in the menu
+  comes later (**a temporary departure from D6f**). **Q3** - only the platform admin changes the Club admin role in a
+  club. **Q12** - the licence starts to act in each part from its VIEW step: accepted. **Q14** - a per-user removal does
+  not take away what another role gives; the screen says "still held through <other role>". **Q15** - "pod A
+  definitivno": the warning "N custom users still hold this" with names and *Take it from them too*, nothing removed
+  automatically, customs stay frozen; the owner's note: a custom may be narrower or wider than its role and different per
+  user.
+- **The stream manager's decisions, changeable** (as recommended below): Q1, Q4, Q5, Q6, Q7, Q8, Q9, Q10, Q11, Q13, Q16.
+- **The *Rukovodilac* of OptiMove** (technical): `ENFORCED_PERMISSIONS` in code - yes; the per-club advisory lock - yes,
+  provided **every** writer of roles and club versions takes it (namespace + `hashtext(clubId)`, the pattern of
+  `CLUB_ADMIN_HEADCOUNT_LOCK`, `organization.js:2761`), its order against v84's `lock_permission_actor` documented, and a
+  test that records the SQL; **one** migration file, unless the deploy plan shows the old server must not see part of
+  the schema; the number provisionally **v92 / `202611241000`** (final before the freeze); there are no managers for Tests
+  and Messages - their V and M pull requests belong to this stream; a new rule in R4-1 (section 13).
+
+The questions as they were put, with the recommendation that the stream manager's decisions follow:
+
+| # | Question | Recommendation (decided as above) | What it changes |
 |---|---|---|---|
 | Q1 | Does the club licence close whole parts only, or also single things inside a part (for example "Training Load yes, but no named athletes")? | Whole parts only for now. | Single things later need one more column, no rebuild. |
 | Q2 | A part closed by the licence: what does the club's admin see? You decided earlier (D6f) "locked, with a padlock"; the R3 screens decided "no padlock yet" (Q2 of R3). | For now the part is simply not there for everyone in the club; the padlock comes with the screen work after VIEW. The club's admin sees the licence list in Settings. | Only the screens. |
@@ -557,19 +580,18 @@ same for a custom role), `question_outdated`.
 | Q12 | You said a closed part ends "at once". A part that does not check the new rights yet (everything except Settings until its VIEW step) cannot see the licence. Is it enough that each part starts obeying the licence in its VIEW step, with Imports able to get an earlier gate if the licence is needed sooner? | Yes. | Until a part's VIEW step, closing it in the licence has no effect for that part; the screen says so. |
 | Q13 | May a platform admin make a "custom" for a club's admin? | Yes (O5 says only the platform admin narrows an admin). | - |
 | Q14 | A person has two roles in the club, and the admin takes a right away from that person only. The second role still gives it. Should taking a right away from a person take it away whatever role gives it? | For now no: the change applies to the one role it was made on, and the screen says plainly "still held through <other role>". | If yes, a per-person "taken away" list is needed that beats every role; a bigger change. |
-| Q15 | A person's custom rights are frozen. If you or the club's admin later take a right away from the role for safety, the customs made earlier keep it. Is that acceptable if the club sees a list of such people and you have one button to take that right from all of them? | Yes, with the list and the button. | Without them, a right taken from a role could stay with some people unnoticed. |
+| Q15 | A person's custom rights are frozen. If you or the club's admin later take a right away from the role for safety, the customs made earlier keep it. Is that acceptable if the club sees a list of such people and you have one button to take that right from all of them? | Decided by the owner (A): the warning "N custom users still hold this" at once, with names and *Take it from them too*; nothing automatic. | Without them, a right taken from a role could stay with some people unnoticed. |
 | Q16 | "Find new sessions" in Imports also writes and contacts GPEXE, so it is not only viewing. Should viewing imports wait for the Imports step (last, O7)? | Yes: Imports gets no view right in this package. | A view-only person sees no Imports until the Imports step. |
 
-**For the *Rukovodilac* of OptiMove (technical, recommendation of this document):** the "checked" list as a code constant
-with its gates per word, not a database flag (section 4); a transaction-scoped advisory lock per club as the lock of the
-ceiling, not the `clubs` row (7.6 place 5); one file or two for vNN (7.4); the migration number vNN.
+The technical points put to the *Rukovodilac* of OptiMove (the "checked" list in code, the per-club advisory lock, one
+file or two, the number) are decided as written above.
 
 ## 13. Pull requests and order
 
 | PR | What | Level | Reviews | Depends on |
 |---|---|---|---|---|
 | R4-0 | This contract | docs | code, security, db; the *Rukovodilac* | - |
-| R4-1 | Migration vNN (7.1-7.7), the twin, `can()` / `loadAuthorizationContext()` layers, `ENFORCED_PERMISSIONS`, old-vs-new and truth-table tests | **risky** (triggers 1, 2, 4) | db, security, code; *Nezavisni revizor*; the owner's order naming vNN | R4-0 accepted |
+| R4-1 | Migration vNN (7.1-7.7), the twin, `can()` / `loadAuthorizationContext()` layers, `ENFORCED_PERMISSIONS`, old-vs-new and truth-table tests; and the new rule (the *Rukovodilac* of OptiMove, 2026-11-22) in `.claude/rules/backend-security.md`: no pull request may introduce a `club` or `team` workspace for an account that is not that club's `club_admin` / that team's `team_coach`, nor a helper that derives a scope from `{type, scopeId}` without checking a role; proven by a test that enumerates the workspace-type branches of `backend/src` (section 6's grep) and fails on a new one that is not on a reviewed list | **risky** (triggers 1, 2, 4) | db, security, code; *Nezavisni revizor*; the owner's order naming vNN | R4-0 accepted |
 | R4-2 | The way in (section 5.1): `workspace.js`, the organization entry gate, the organization read path, `/me`, the members list with assignments, L3's test | **risky** (trigger 2) | security, code; *Nezavisni revizor* | R4-1 |
 | R4-3 | The API of section 9 (ceiling, club versions, custom roles) | **risky** (triggers 2, 4) | security, code, db (locks); *Nezavisni revizor* | R4-1; parallel with R4-2 |
 | R4-4 | The screens of section 9 and the navigation of 5.2 | ordinary (no server change) | code, ux, mobile; the *Rukovodilac* | R4-2, R4-3 |
@@ -579,7 +601,8 @@ ceiling, not the `clubs` row (7.6 place 5); one file or two for vNN (7.4); the m
 **Stream managers for the VIEW and MANAGE steps:** Calendar - its stream manager (session
 `session_01YZANDuH4vg9fEWkHhNJAos`); Training Load, dashboards, Data configuration and Imports - the *Rukovodilac* of
 OptiMove; Builder, programs and exercises - the Exercise stream; Organization and Athletes - this stream (Settings and
-roles); Tests and Messages - **open**, for this stream's manager to name.
+roles); Tests and Messages - this stream too (they have no manager of their own; the *Rukovodilac* of OptiMove,
+2026-11-22).
 
 **Size (rough, from section 6):** VIEW through every module is about 12-15 helper functions and one route gate per module,
 no migration beyond vNN. MANAGE is two to three times that, plus the migrations of the database guards that name a role
