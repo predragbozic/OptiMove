@@ -427,3 +427,174 @@ test("8. Replace after a kept session with a template day holding two sessions i
   assert.deepEqual(after.map((x) => x.name), ["Rated", "T unordered", "T first"]);
   assert.deepEqual(after.map((x) => Number(x.session_order)), [1, 2, 3]);
 });
+
+// ---- Nezavisni revizor (3) on 0e4de89: HIGH-1, HIGH-2, MEDIUM-1, MEDIUM-2, LOW-1, LOW-2.
+
+test("9. Replace after a kept session ordered 0 (a paste into an empty day) or NULL (an import): the template's sessions follow it, no 500", async () => {
+  const s = await squad("keptzero", 1);
+  const cookie = s.coach.cookie;
+  const athlete = s.athletes[0];
+  // The template's Monday session ordered 0 as well (its source order is copied as it is).
+  let draft = await weeklyTemplate(cookie, 1, "Zero orders");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T zero");
+  await q(`update plans.plan_sessions set session_order = 0 where plan_day_id = $1`, [blockOf(draft, 1, 1).id]);
+  for (const [weekStart, keptOrder] of [["2027-08-02", "route"], ["2027-08-09", null]]) {
+    // A week whose Monday session is made by the real paste route into an empty day (order 0).
+    const created = ok(await api("/api/builder/plans", { method: "POST", cookie, body: { planType: "weekly", weekStart, athleteIds: [athlete.externalId], name: "Own" } }), 201);
+    let own = await addSession(cookie, created.blocks[1].id, "Kept");
+    const tuesday = sessionsOf(own).find((x) => x.name === "Kept");
+    own = ok(await api(`/api/builder/sessions/${tuesday.id}/copy-into/${created.blocks[0].id}`, { method: "POST", cookie, body: {} }));
+    ok(await api(`/api/builder/sessions/${tuesday.id}`, { method: "DELETE", cookie }));
+    ok(await api(`/api/builder/plans/${created.plan.id}/submit`, { method: "POST", cookie, body: {} }));
+    const kept = (await planSessions(created.plan.id))[0];
+    if (keptOrder === "route") assert.equal(Number(kept.session_order), 0, "the paste into an empty day gives order 0");
+    else await q(`update plans.plan_sessions set session_order = null where id = $1`, [kept.id]);
+    await rpeRow(athlete.athleteId, kept.id);
+    const ask = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: weekStart });
+    assert.equal(ask.status, 409, ask.text);
+    const done = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: weekStart, choice: "replace", choiceToken: ask.body.choiceToken });
+    assert.equal(done.status, 201, done.text);
+    const after = await planSessions(created.plan.id);
+    assert.deepEqual(after.map((x) => x.name).sort(), ["Kept", "T zero"]);
+    // The kept session is untouched (its row, its order); the template's comes after it.
+    const keptAfter = after.find((x) => x.name === "Kept");
+    assert.equal(keptAfter.id, kept.id);
+    assert.equal(keptAfter.session_order === null ? null : Number(keptAfter.session_order), keptOrder === "route" ? 0 : null);
+    assert.equal(Number(after.find((x) => x.name === "T zero").session_order), 1);
+  }
+});
+
+test("10. the transaction's recorded SQL: exercise-reuse lock, template, request, athlete slot, plans FOR UPDATE ascending, sessions, and no lock between the first write and COMMIT", async () => {
+  const s = await squad("sqlorder", 2);
+  const cookie = s.coach.cookie;
+  let draft = await weeklyTemplate(cookie, 1, "Recorded");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T Monday");
+  const [one, two] = s.athletes;
+  const weekA = await publishedWeek(s, one, "2027-09-06", [[1, "Rated"]]);
+  await rpeRow(one.athleteId, (await planSessions(weekA))[0].id);
+  const weekB = await publishedWeek(s, two, "2027-09-06", [[1, "Other"]]);
+  const ask = await assign(cookie, draft.plan.id, { athleteIds: [one.externalId, two.externalId], startDate: "2027-09-06" });
+  assert.equal(ask.status, 409, ask.text);
+  // Record every statement of the transactions the app pool runs during the resend.
+  // Every checkout of the app pool (the 'acquire' event) gets its query
+  // recorded while `recording` is on; nothing of the pool itself is replaced.
+  const recorded = [];
+  let recording = true;
+  const onAcquire = (client) => {
+    if (client.__weeklyRecorded) return;
+    client.__weeklyRecorded = true;
+    const realQuery = client.query.bind(client);
+    client.query = (text, ...rest) => {
+      if (recording) recorded.push({ client, sql: String(typeof text === "string" ? text : text?.text || "").replace(/\s+/g, " ").trim() });
+      return realQuery(text, ...rest);
+    };
+  };
+  appPool.on("acquire", onAcquire);
+  let res;
+  try {
+    res = await assign(cookie, draft.plan.id, { athleteIds: [one.externalId, two.externalId], startDate: "2027-09-06", choice: "replace", choiceToken: ask.body.choiceToken });
+  } finally {
+    recording = false;
+    appPool.off("acquire", onAcquire);
+  }
+  assert.equal(res.status, 201, res.text);
+  // The assign's own transaction: the client that ran the request claim.
+  const owner = recorded.find((r) => /insert into public\.builder_assignment_requests/.test(r.sql)).client;
+  const sql = recorded.filter((r) => r.client === owner).map((r) => r.sql);
+  const at = (re, from = 0) => { const i = sql.findIndex((x, k) => k >= from && re.test(x)); assert.ok(i >= 0, `missing ${re}`); return i; };
+  const begin = at(/^begin$/i);
+  const exercise = at(/pg_advisory_xact_lock_shared\(hashtextextended\('exercise_collections'/, begin);
+  const template = at(/from plans\.plans where id=\$1 for no key update/, exercise);
+  const claim = at(/insert into public\.builder_assignment_requests/, template);
+  const slot = at(/pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/, claim);
+  const plans = at(/from plans\.plans where id = any\(\$1::uuid\[\]\) order by id for update/, slot);
+  const sessions = at(/from plans\.plan_sessions where id = any\(\$1::uuid\[\]\) order by id for update/, plans);
+  const firstWrite = at(/^(insert into plans\.|update plans\.|delete from plans\.)/i, begin);
+  const commit = at(/^commit$/i, firstWrite);
+  assert.ok(begin < exercise && exercise < template && template < claim && claim < slot && slot < plans && plans < sessions && sessions < firstWrite && firstWrite < commit,
+    JSON.stringify({ begin, exercise, template, claim, slot, plans, sessions, firstWrite, commit }));
+  // Two athletes: two slot locks, both before the plan rows.
+  assert.equal(sql.slice(slot, plans).filter((x) => /pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/.test(x)).length, 2);
+  // Between the first write and COMMIT: no row lock and no new advisory lock (the
+  // exercise-reuse check takes the same shared lock again, which it already holds).
+  const lateLocks = sql.slice(firstWrite, commit).filter((x) => /for (no key )?update|for (key )?share|pg_advisory_xact_lock\(/i.test(x));
+  assert.deepEqual(lateLocks, []);
+  assert.ok(weekA && weekB);
+});
+
+test("11. the template's flags and the free-week rule: can_copy false and can_assign_to_athlete false refuse another coach (403), and another coach's empty draft week is asked about, never deleted", async () => {
+  const s = await squad("flags", 1);
+  const athlete = s.athletes[0];
+  const owner = s.coach;
+  const other = await coachOf("flags-other", s.teamId);
+  let draft = await weeklyTemplate(owner.cookie, 1, "Flagged");
+  draft = await addSession(owner.cookie, blockOf(draft, 1, 1).id, "T Monday");
+  await q(`update plans.plans set visibility = 'public', status = 'active' where id = $1`, [draft.plan.id]);
+  for (const flag of ["can_copy", "can_assign_to_athlete"]) {
+    await q(`update plans.plans set can_copy = true, can_assign_to_athlete = true where id = $1`, [draft.plan.id]);
+    await q(`update plans.plans set ${flag} = false where id = $1`, [draft.plan.id]);
+    const refused = await assign(other.cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-10-04" });
+    assert.equal(refused.status, 403, `${flag}: ${refused.text}`);
+    assert.equal((await weekPlans(athlete.athleteId)).length, 0);
+  }
+  await q(`update plans.plans set can_copy = true, can_assign_to_athlete = true where id = $1`, [draft.plan.id]);
+  // Another coach's empty draft week of this athlete: an existing week, not a free one.
+  const theirs = ok(await api("/api/builder/plans", { method: "POST", cookie: other.cookie, body: { planType: "weekly", weekStart: "2027-10-04", athleteIds: [athlete.externalId], name: "Their empty draft" } }), 201);
+  const ask = await assign(owner.cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-10-04" });
+  assert.equal(ask.status, 409, ask.text);
+  const skip = ok(await assign(owner.cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-10-04", choice: "skip", choiceToken: ask.body.choiceToken }), 201);
+  assert.equal(skip.skipped.length, 1);
+  assert.equal((await q(`select count(*)::int as n from plans.plans where id = $1`, [theirs.plan.id]))[0].n, 1);
+});
+
+test("12. an exercise the coach may no longer use: the assign is refused after its writes and nothing stays", async () => {
+  const s = await squad("revoked", 1);
+  const cookie = s.coach.cookie;
+  const athlete = s.athletes[0];
+  let draft = await weeklyTemplate(cookie, 1, "Revoked");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T Monday");
+  const exerciseId = sessionsOf(draft)[0].nodes.flatMap((n) => n.items)[0].exerciseId;
+  await q(`update library.exercises set is_active = false where id = $1`, [exerciseId]);
+  const res = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2027-11-01" });
+  assert.equal(res.status, 409, res.text);
+  assert.equal((await weekPlans(athlete.athleteId)).length, 0);
+  assert.equal((await q(`select count(*)::int as n from public.builder_assignment_requests where source_plan_id = $1`, [draft.plan.id]))[0].n, 0);
+});
+
+test("13. one athlete named by both of its ids is one athlete; a start date outside 2000-2099 is a 400", async () => {
+  const s = await squad("dupid", 1);
+  const cookie = s.coach.cookie;
+  const athlete = s.athletes[0];
+  await q(`update public.athletes set source_external_id = $2 where id = $1`, [athlete.athleteId, `src-${uid()}`]);
+  const source = (await q(`select source_external_id from public.athletes where id = $1`, [athlete.athleteId]))[0].source_external_id;
+  let draft = await weeklyTemplate(cookie, 1, "Twice named");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T Monday");
+  const res = ok(await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId, source], startDate: "2027-12-06" }), 201);
+  assert.equal(res.created.length, 1);
+  for (const startDate of ["9999-12-31", "1999-12-31", "2026-02-30"]) {
+    const bad = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate });
+    assert.equal(bad.status, 400, `${startDate}: ${bad.text}`);
+    assert.equal(bad.body.code, "start_date");
+  }
+});
+
+test("14. a database error inside the assign is answered with the route's own sentence (500 assign_failed), never the database's text, and nothing is written", async () => {
+  const s = await squad("rawdb", 1);
+  const cookie = s.coach.cookie;
+  const athlete = s.athletes[0];
+  let draft = await weeklyTemplate(cookie, 1, "Raw");
+  draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T Monday");
+  builderModule.weeklyAssignTestHooks.afterPlanLocks = async () => {
+    throw Object.assign(new Error('duplicate key value violates unique constraint "plan_sessions_day_slot_unique"'), { code: "23505", constraint: "plan_sessions_day_slot_unique" });
+  };
+  let res;
+  try {
+    res = await assign(cookie, draft.plan.id, { athleteIds: [athlete.externalId], startDate: "2028-01-03" });
+  } finally {
+    builderModule.weeklyAssignTestHooks.afterPlanLocks = null;
+  }
+  assert.equal(res.status, 500, res.text);
+  assert.deepEqual(res.body, { error: "The program could not be assigned. Nothing was saved.", code: "assign_failed" });
+  assert.doesNotMatch(res.text, /constraint|duplicate|plan_sessions/);
+  assert.equal((await weekPlans(athlete.athleteId)).length, 0);
+});

@@ -126,7 +126,7 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
   const values = [];
   const params = [];
   let column = 0;
-  // After kept sessions (an offset), each copied session is numbered 1..n in
+  // After kept sessions (pair.afterKept, offset = the highest kept order), each copied session is numbered 1..n in
   // its day and slot (half-day, phase) in its own order, then shifted past the
   // kept ones: never the order of a kept session, and never two copies with
   // one order even from a legacy source ordered NULL and 1. Without an offset
@@ -137,7 +137,7 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
     const slot = `${session.plan_day_id}|${session.am_pm ?? ""}|${session.bta ?? ""}`;
     rank.set(slot, (rank.get(slot) || 0) + 1);
     const row = [pair.targetDayId, session.am_pm, session.bta, session.session_time,
-      Number(pair.orderOffset) > 0 ? rank.get(slot) + Number(pair.orderOffset) : session.session_order,
+      pair.afterKept ? rank.get(slot) + Number(pair.orderOffset || 0) : session.session_order,
       session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);

@@ -1035,15 +1035,20 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     if (source.can_assign_to_athlete === false && !isOwnerOrAll) return res.status(403).json({ error: "This program cannot be assigned." });
     if (!(await weeklyTemplateFacts(query, source.id))) return res.status(400).json({ error: "This plan is not a weekly program template.", code: "not_weekly_template" });
     const startDate = isoDate(req.body?.startDate);
-    if (!startDate) return res.status(400).json({ error: "Choose the date the program starts.", code: "start_date" });
+    // A sane range, so a template's last day is still a real date (revizor LOW-2).
+    if (!startDate || startDate < "2000-01-01" || startDate > "2099-12-31") return res.status(400).json({ error: "Choose the date the program starts.", code: "start_date" });
     const assignmentRequestId = text(req.body?.assignmentRequestId);
     if (!UUID_RE.test(assignmentRequestId)) return res.status(400).json({ error: "assignmentRequestId (a UUID) is required." });
     const rawChoice = text(req.body?.choice);
     if (rawChoice && !["replace", "skip"].includes(rawChoice)) return res.status(400).json({ error: "Choose Replace or Skip.", code: "choice" });
     const choice = rawChoice || null;
-    const { athletes, missing, archived } = await findRequestedAthletes(requestedAthleteIds(req.body));
+    const requested = await findRequestedAthletes(requestedAthleteIds(req.body));
+    const { missing, archived } = requested;
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
     if (archived.length) return res.status(400).json({ error: `Athlete is archived, restore them first: ${archived.join(", ")}` });
+    // One athlete named twice (its athlete id and its source id) is one athlete
+    // (revizor LOW-1): otherwise two plans for one week, then plans_weekly_unique.
+    const athletes = [...new Map(requested.athletes.map((a) => [String(a.id), a])).values()];
     if (!athletes.length) return res.status(400).json({ error: "Choose at least one athlete." });
     // The same active-workspace rule as every weekly plan create / assign.
     const scope = await resolveWeeklyPlanOwnerScope(req, res);
@@ -1238,7 +1243,12 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       )).rows;
       for (const session of sessions) {
         if (keptIds.has(String(session.id))) {
-          keptOrder.set(String(session.plan_day_id), Math.max(keptOrder.get(String(session.plan_day_id)) || 0, Number(session.session_order || 0)));
+          // A day with a kept session renumbers what is copied after it,
+          // whatever the kept order is (0 from a paste into an empty day, NULL
+          // from an import): the offset is the highest kept order, at least 0
+          // (Nezavisni revizor (3), HIGH-1).
+          const day = String(session.plan_day_id);
+          keptOrder.set(day, Math.max(keptOrder.get(day) ?? 0, Number(session.session_order) || 0));
           continue;
         }
         await client.query("delete from plans.plan_items where plan_session_id = $1", [session.id]);
@@ -1271,6 +1281,13 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     if ((error?.code === "23505" && error?.constraint === "plans_weekly_unique") || error?.code === "40P01" || error?.code === "55P03") {
       return res.status(409).json({ error: "The plans are busy. Nothing was saved. Try again.", code: "try_again" });
     }
+    // Never a database's own sentence from this route (it can name a
+    // constraint or a row): logged, and answered with the route's own words.
+    // Everything was rolled back.
+    if (typeof error?.code === "string" && /^[0-9A-Z]{5}$/.test(error.code)) {
+      console.error(error);
+      return res.status(500).json({ error: "The program could not be assigned. Nothing was saved.", code: "assign_failed" });
+    }
     next(error);
   }
 
@@ -1282,7 +1299,8 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       const targetDayId = entry.targetDays.get(day.date);
       if (!targetDayId) continue;
       if (day.dayNote) await client.query("update plans.plan_days set day_note = $2, updated_at = now() where id = $1", [targetDayId, day.dayNote]);
-      pairs.push({ sourceDayId: day.sourceDayId, targetDayId, orderOffset: keptOrder.get(String(targetDayId)) || 0 });
+      const afterKept = keptOrder.has(String(targetDayId));
+      pairs.push({ sourceDayId: day.sourceDayId, targetDayId, afterKept, orderOffset: afterKept ? keptOrder.get(String(targetDayId)) : 0 });
     }
     await copyTemplateDaySessions(client, pairs, copyLegacySession);
   }
