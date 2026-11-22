@@ -71,7 +71,7 @@ const SOURCE_CODE_TO_BLOCKED = new Map([
     .map((c) => [c, BLOCKED_CODES.source_data_inconsistent]),
   ...["ambiguous_source_connection", "source_connection_conflict", "binding_conflict", "binding_event_mismatch", "binding_missing",
     "context_missing", "duplicate_event", "duplicate_segment", "event_changed", "event_conflict", "identity_lock_failed",
-    "identity_target_changed", "manual_values_entered", "metric_definition_mismatch", "participant_timezone_changed", "segment_linked_elsewhere", "segment_missing",
+    "identity_target_changed", "manual_values_conflict", "metric_definition_mismatch", "participant_timezone_changed", "segment_linked_elsewhere", "segment_missing",
     "source_reference_set_changed", "reference_hash_version_outdated"]
     .map((c) => [c, BLOCKED_CODES.conflicts_with_existing_data]),
   // J17 section 6: the eight blocking codes of a mapped import. The two

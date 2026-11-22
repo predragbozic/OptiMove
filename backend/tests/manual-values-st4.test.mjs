@@ -134,9 +134,10 @@ function athleteSpec(id) {
   a.parts = a.parts.map((p) => ({ ...p, time: 1300, distance: 1800 }));
   return a;
 }
-function bundleOf({ sessionId, hour = 10, ids }) {
+function bundleOf({ sessionId, hour = 10, ids, distances = {} }) {
   const athletes = ids.map((id, i) => {
     const a = athleteSpec(id);
+    if (distances[id] !== undefined) a.parts = a.parts.map((p) => ({ ...p, distance: distances[id] }));
     a.tracks = [sessionId * 10 + i];
     for (const part of a.parts) delete part.track;
     return a;
@@ -812,27 +813,31 @@ test("18. v86's 'removal' kind (no writer yet): an empty occasion of the same at
   assert.ok(!(await needsState(s.activityId)).includes(eva));
 });
 
-test("19. fail closed until the re-import question: a check that brings device data for an athlete who holds a roster entry blocks the session (manual_values_entered, the athlete named), the approval imports nothing and both values never stand side by side", async () => {
+test("19. fail closed until the re-import question: a check that brings device data for an athlete who holds a roster entry blocks the session (manual_values_conflict, the athlete named), the approval imports nothing and both values never stand side by side", async () => {
   const team = await setupTeam();
   const s = await importSession(team, bundleOf({ sessionId: 9706, ids: [101, 102] }));
   const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
   const cil = team.athleteIds[CIL];
   const entry = await saveValues(s, { athleteId: cil, values: [{ metricDefinitionId: distance, value: 1111 }] }, team.coach.cookie);
   assert.equal(entry.status, 201, entry.text);
+  // A second athlete with an entry whom GPEXE also sends: every such athlete is named, not only the first.
+  const dan = team.athleteIds[3];
+  assert.equal((await api(`/teams/${team.teamId}/athlete-links`, { method: "POST", cookie: team.coach.cookie, body: { gpexeAthleteId: "105", athleteId: dan } })).status, 201);
+  assert.equal((await saveValues(s, { athleteId: dan, values: [{ metricDefinitionId: distance, value: 999 }] }, team.coach.cookie)).status, 201);
   const occasionsOfCil = async () => (await admin.query(
     `select o.entry_method from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
       where p.event_id = $1 and p.athlete_id = $2 order by o.created_at`, [s.eventId, cil])).rows.map((r) => r.entry_method);
   assert.deepEqual(await occasionsOfCil(), ["manual"]);
 
-  await checkNow(team, [bundleOf({ sessionId: 9706, ids: [101, 102, 104] })]);
+  await checkNow(team, [bundleOf({ sessionId: 9706, ids: [101, 102, 104, 105] })]);
   const list = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.padmin.cookie })).body.candidates;
   const cand = list.find((c) => c.gpexeTeamSessionId === "9706" && c.id !== s.candidateId);
   assert.ok(cand, "the session's candidate");
-  assert.equal(cand.blockedSourceCode, "manual_values_entered", JSON.stringify(cand));
+  assert.equal(cand.blockedSourceCode, "manual_values_conflict", JSON.stringify(cand));
   const one = await api(`/teams/${team.teamId}/candidates/${cand.id}`, { cookie: team.padmin.cookie });
   const blocked = one.body.candidate?.preview?.blocked ?? one.body.preview?.blocked;
-  assert.equal(blocked?.code, "manual_values_entered", one.text.slice(0, 400));
-  assert.deepEqual(blocked.athleteIds, [String(cil)], "the athlete is named");
+  assert.equal(blocked?.code, "manual_values_conflict", one.text.slice(0, 400));
+  assert.deepEqual(blocked.athleteIds, [String(cil), String(dan)].sort(), "every athlete with an entry is named");
   // The approval imports nothing.
   process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
   try {
@@ -844,6 +849,92 @@ test("19. fail closed until the re-import question: a check that brings device d
   assert.deepEqual(await occasionsOfCil(), ["manual"], "no device record beside the entry");
   const f = await form(s, cil, team.coach.cookie);
   assert.equal(f.body.mode, "entry", "the entry can still be changed on the roster");
+  const changed = await saveValues(s, { athleteId: cil, expectedOccasionId: f.body.expectedOccasionId, values: [{ metricDefinitionId: distance, value: 1222 }] }, team.coach.cookie);
+  assert.equal(changed.status, 201, changed.text);
+  const effective = (await admin.query(
+    `select count(*)::int n from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.event_id = $1 and p.athlete_id = $2 and o.superseded_by_occasion_id is null`, [s.eventId, cil])).rows[0].n;
+  assert.equal(effective, 1, "one effective occasion for the athlete");
+});
+
+test("19b. fail closed for a roster correction too: GPEXE sending OTHER values for a corrected athlete blocks the session (the athlete named) and replaces nothing; the SAME measured values are simply unchanged and block nothing", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9707, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const ana = team.athleteIds[ANA];
+  const f = await form(s, ana, team.coach.cookie);
+  const corr = await saveValues(s, { athleteId: ana, expectedOccasionId: f.body.expectedOccasionId, values: [{ metricDefinitionId: distance, value: 4321 }] }, team.coach.cookie);
+  assert.equal(corr.status, 201, corr.text);
+  const candidateOf = async (exclude) => {
+    const list = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.padmin.cookie })).body.candidates;
+    return list.find((c) => c.gpexeTeamSessionId === "9707" && !exclude.includes(c.id));
+  };
+  // Bea's values change, Ana's are GPEXE's measured ones again: nothing to choose for Ana, nothing blocked.
+  await checkNow(team, [bundleOf({ sessionId: 9707, ids: [101, 102], distances: { 102: 2500 } })]);
+  const plain = await candidateOf([s.candidateId]);
+  assert.ok(plain, "a candidate for the changed session");
+  assert.equal(plain.blockedSourceCode, null, JSON.stringify(plain));
+  // Ana's GPEXE values change: her correction would be replaced, so the session waits.
+  await checkNow(team, [bundleOf({ sessionId: 9707, ids: [101, 102], distances: { 101: 2600 } })]);
+  const cand = await candidateOf([s.candidateId, plain.id]);
+  assert.ok(cand, "a candidate for Ana's changed values");
+  assert.equal(cand.blockedSourceCode, "manual_values_conflict", JSON.stringify(cand));
+  const one = await api(`/teams/${team.teamId}/candidates/${cand.id}`, { cookie: team.padmin.cookie });
+  const blocked = one.body.candidate?.preview?.blocked ?? one.body.preview?.blocked;
+  assert.deepEqual(blocked?.athleteIds, [String(ana)], one.text.slice(0, 400));
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  try {
+    const r = await api(`/teams/${team.teamId}/imports`, { method: "POST", cookie: team.padmin.cookie, body: { candidateIds: [cand.id], previewHashes: { [cand.id]: cand.previewHash } } });
+    assert.notEqual(r.body.results?.[0]?.outcome, "imported", r.text);
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  const current = (await admin.query(
+    `select o.id, o.entry_method from training_load.metric_source_identities si join training_load.metric_measurement_occasions o on o.id = si.current_occasion_id
+      where o.id = $1`, [corr.body.occasionId])).rows;
+  assert.equal(current.length, 1, "the correction is still the record's current occasion");
+});
+
+test("19c. a removal ends the block: once the entry is ended by a 'removal', the same check imports that athlete's device data", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9709, hour: 14, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const cil = team.athleteIds[CIL];
+  const entry = await saveValues(s, { athleteId: cil, values: [{ metricDefinitionId: distance, value: 1111 }] }, team.coach.cookie);
+  assert.equal(entry.status, 201, entry.text);
+  const participant = (await admin.query(`select id from training_load.metric_event_participants where event_id = $1 and athlete_id = $2`, [s.eventId, cil])).rows[0].id;
+  const c = new pg.Client({ connectionString: db.url });
+  await c.connect();
+  try {
+    await c.query("begin");
+    await c.query(`select set_config('optimove.manual_value_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
+    await c.query(
+      `with o as (insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id, supersedes_occasion_id)
+                  values ($1, 'manual', $2, $3) returning id),
+            u as (update training_load.metric_measurement_occasions set superseded_by_occasion_id = (select id from o) where id = $3)
+       insert into training_load.metric_manual_values (occasion_id, kind, replaced_occasion_id, entered_by_user_id, entered_by_basis, request_key, request_hash)
+       select id, 'removal', $3, $2, 'team_coach', gen_random_uuid(), repeat('b', 64) from o`,
+      [participant, team.coach.id, entry.body.occasionId]);
+    await c.query("commit");
+  } finally {
+    await c.end();
+  }
+  await checkNow(team, [bundleOf({ sessionId: 9709, hour: 14, ids: [101, 102, 104] })]);
+  const cand = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.padmin.cookie })).body.candidates.find((x) => x.gpexeTeamSessionId === "9709" && x.id !== s.candidateId);
+  assert.ok(cand, "a candidate");
+  assert.equal(cand.blockedSourceCode, null, JSON.stringify(cand));
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  try {
+    const r = await api(`/teams/${team.teamId}/imports`, { method: "POST", cookie: team.padmin.cookie, body: { candidateIds: [cand.id], previewHashes: { [cand.id]: cand.previewHash } } });
+    assert.equal(r.body.results?.[0]?.outcome, "imported", r.text);
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  const methods = (await admin.query(
+    `select o.entry_method from training_load.metric_measurement_occasions o where o.event_participant_id = $1 and o.segment_id is null and o.superseded_by_occasion_id is null`, [participant])).rows.map((r) => r.entry_method).sort();
+  assert.deepEqual(methods, ["api_import", "manual"], "the device record, beside the removal's empty occasion (no value)");
+  assert.equal((await admin.query(`select count(*)::int n from training_load.metric_values v join training_load.metric_measurement_occasions o on o.id = v.occasion_id
+      where o.event_participant_id = $1 and o.entry_method = 'manual' and o.superseded_by_occasion_id is null`, [participant])).rows[0].n, 0, "the removal holds no value");
 });
 
 test("17. a session with manual values and a calendar link: the undo refuses calendar_link_exists before it asks to confirm the manual values", async () => {
@@ -1029,4 +1120,37 @@ test("12. the deletion log's manual shape is closed: a forged list, another conf
   assert.equal(await check({ ...ok, confirmed_by: user, list: [{ ...ok.list[0], name: "x" }] }), false, "an extra key (a name) is refused");
   assert.equal(await check({ ...ok, confirmed_by: user, list: [{ ...ok.list[0], kind: "imported" }] }), false);
   assert.equal(await check({ ...ok, confirmed_by: user, extra: 1 }), false);
+});
+
+test("20. a typed value outside its variable version's limits is refused with value_out_of_range naming the limits (the service's check before any write; v13's trigger stays the backstop); a value inside them passes", async () => {
+  const def = (await admin.query(`select id, current_version_id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0];
+  const unit = (await admin.query(`select unit from training_load.metric_definition_versions where id = $1`, [def.current_version_id])).rows[0].unit;
+  const client = new pg.Client({ connectionString: db.url });
+  await client.connect();
+  try {
+    await client.query("begin");
+    // A bounded version (not made current: an active mapping pins the current one), rolled back afterwards.
+    const bounded = (await client.query(
+      `insert into training_load.metric_definition_versions (metric_definition_id, version_number, unit, value_type, min_value, max_value)
+       select $1, max(version_number) + 1, $2, 'numeric', 0, 50000 from training_load.metric_definition_versions where metric_definition_id = $1 returning id`,
+      [def.id, unit])).rows[0].id;
+    const unbounded = def.current_version_id;
+    const refusal = async (value) => {
+      try {
+        await manual.assertWithinLimits(client, [{ versionId: unbounded, value: 1e8 }, { versionId: bounded, value }]);
+        return null;
+      } catch (error) {
+        return [error.status, error.code, error.message];
+      }
+    };
+    const over = await refusal(60000);
+    assert.equal(over?.[1], "value_out_of_range", JSON.stringify(over));
+    assert.equal(over[0], 409);
+    assert.match(over[2], /between 0 and 50000/);
+    assert.equal((await refusal(-1))?.[1], "value_out_of_range");
+    assert.equal(await refusal(42000), null, "inside the limits; an unbounded version takes any value");
+  } finally {
+    await client.query("rollback").catch(() => {});
+    await client.end();
+  }
 });

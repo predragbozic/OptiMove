@@ -181,6 +181,28 @@ async function valuesOf(client, occasionIds) {
   )).rows;
 }
 
+// A typed value inside its variable version's limits (min_value / max_value, as C110 applies them on import), or 409
+// value_out_of_range naming the variable and its limits; checked before anything is written.
+export async function assertWithinLimits(client, typed) {
+  if (!typed.length) return;
+  const limits = new Map((await client.query(
+    `select dv.id, dv.min_value::text as min_value, dv.max_value::text as max_value, coalesce(d.label, d.key) as label
+       from training_load.metric_definition_versions dv join training_load.metric_definitions d on d.id = dv.metric_definition_id
+      where dv.id = any($1::uuid[])`,
+    [[...new Set(typed.map((t) => String(t.versionId)))]],
+  )).rows.map((r) => [String(r.id), r]));
+  for (const t of typed) {
+    const l = limits.get(String(t.versionId));
+    if (!l) continue;
+    const below = l.min_value !== null && t.value < Number(l.min_value);
+    const above = l.max_value !== null && t.value > Number(l.max_value);
+    if (below || above) {
+      const range = l.min_value !== null && l.max_value !== null ? `between ${l.min_value} and ${l.max_value}` : l.min_value !== null ? `at least ${l.min_value}` : `at most ${l.max_value}`;
+      throw conflict("value_out_of_range", `${l.label} must be ${range}. Nothing was saved.`);
+    }
+  }
+}
+
 // The variables an entry may hold: the numeric variables measured in this session (named for the team's club), each at its
 // current version.
 async function sessionVariables(client, eventId, clubId) {
@@ -573,6 +595,9 @@ export async function saveManualValues(ctx, activityId, body) {
         if (Number(row.value_numeric) !== v.value) changed += 1;
       }
       if (changed === 0) throw conflict("nothing_changed", "These are the values already shown. Nothing was saved.");
+      await assertWithinLimits(client, input.values
+        .filter((v) => Number(byDef.get(v.metricDefinitionId).value_numeric) !== v.value)
+        .map((v) => ({ versionId: byDef.get(v.metricDefinitionId).metric_definition_version_id, value: v.value })));
       const given = new Map(input.values.map((v) => [v.metricDefinitionId, v.value]));
       const occasionId = await insertOccasion(client, { participantId: (await participantOf(client, current.id)), sourceIdentityId: current.source_identity_id, userId: ctx.userId, supersedes: current.id });
       for (const r of old) {
@@ -591,6 +616,7 @@ export async function saveManualValues(ctx, activityId, body) {
     for (const v of input.values) {
       if (!variables.has(v.metricDefinitionId)) throw conflict("variable_not_in_session", "A value names a variable this session does not measure.");
     }
+    await assertWithinLimits(client, input.values.map((v) => ({ versionId: variables.get(v.metricDefinitionId).current_version_id, value: v.value })));
     await client.query(
       `insert into training_load.metric_event_participants (event_id, athlete_id, athlete_timezone_snapshot) values ($1, $2, $3)
        on conflict (event_id, athlete_id) do nothing`,

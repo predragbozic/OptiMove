@@ -538,29 +538,50 @@ async function supersede(client, { common, currentOccasionId, identityId }) {
   return occasionId;
 }
 
-// ST-4 (v86), until the re-import question (ST-4 PR2) asks "Keep my values / Use GPEXE's": a first device record for an
-// athlete who holds a current roster ENTRY (values typed on the roster, no source identity, not replaced by a later entry
-// or ended by a removal) would leave two effective values side by side. The import refuses instead (fail closed); the
-// preview runs this writer, so the candidate shows as blocked and nothing is written. Under the team's import lock, which
-// every manual-value write also takes, so neither can slip between this read and the insert.
-async function refuseOverRosterEntry(client, participantId) {
-  const hasTable = (await client.query(`select to_regclass('training_load.metric_manual_values') is not null as present`)).rows[0].present;
-  if (!hasTable) return;
-  const entry = await client.query(
-    `select p.athlete_id
+// ST-4 (v86), until the re-import question (ST-4 PR2) asks "Keep my values / Use GPEXE's" (the Rukovodilac's decision of
+// 2026-11-22): nothing written on the roster is replaced or doubled without that choice. An import whose session holds
+// such values is refused as a whole with manual_values_conflict and the athletes named (fail closed); the preview runs
+// this writer, so the candidate shows as blocked and nothing is written. Two cases:
+//   * a current roster ENTRY (values typed on the roster, no source record, not replaced by a later entry or ended by a
+//     removal) of an athlete this import writes: any device record beside it would be a second effective value;
+//   * a roster CORRECTION or RESTORE that is its record's current occasion, when GPEXE now sends other values than the
+//     measured ones it rests on (the same values are simply "unchanged").
+// Read under the team's import lock, which every manual-value write also takes.
+async function manualProvenancePresent(client) {
+  return (await client.query(`select to_regclass('training_load.metric_manual_values') is not null as present`)).rows[0].present;
+}
+
+async function athletesWithRosterEntry(client, participantIds) {
+  if (!participantIds.length || !(await manualProvenancePresent(client))) return [];
+  return (await client.query(
+    `select distinct p.athlete_id::text as athlete_id
        from training_load.metric_measurement_occasions o
        join training_load.metric_manual_values m on m.occasion_id = o.id and m.kind = 'entry'
        join training_load.metric_event_participants p on p.id = o.event_participant_id
-      where o.event_participant_id = $1 and o.source_identity_id is null
-        and not exists (select 1 from training_load.metric_measurement_occasions later where later.supersedes_occasion_id = o.id)
-      limit 1`,
-    [participantId],
-  );
-  if (entry.rowCount) {
-    const error = new GpexeImportError("manual_values_entered", "An athlete of this session has values entered on the roster; GPEXE now has data for that athlete.");
-    error.manualAthleteIds = [String(entry.rows[0].athlete_id)];
-    throw error;
-  }
+      where o.event_participant_id = any($1::uuid[]) and o.source_identity_id is null
+        and not exists (select 1 from training_load.metric_measurement_occasions later where later.supersedes_occasion_id = o.id)`,
+    [participantIds],
+  )).rows.map((r) => r.athlete_id);
+}
+
+// The measured occasion a roster correction / restore rests on, or null for any other manual occasion.
+async function rosterCorrectionOf(client, occasionId) {
+  if (!(await manualProvenancePresent(client))) return null;
+  return (await client.query(
+    `select m.kind, measured.content_hash as measured_hash, p.athlete_id::text as athlete_id
+       from training_load.metric_manual_values m
+       join training_load.metric_measurement_occasions measured on measured.id = m.measured_occasion_id
+       join training_load.metric_measurement_occasions o on o.id = m.occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where m.occasion_id = $1 and m.kind in ('correction', 'restore')`,
+    [occasionId],
+  )).rows[0] ?? null;
+}
+
+function manualValuesConflict(athleteIds) {
+  const error = new GpexeImportError("manual_values_conflict", "Values entered or corrected on the roster would be replaced or doubled by this import.");
+  error.manualAthleteIds = [...new Set(athleteIds)].sort();
+  return error;
 }
 
 async function importResult(client, { result, identity, participantId, segmentId, sourceReportedAt, provenance, batch, performedByUserId, ownerTeamId, calculated }) {
@@ -569,7 +590,6 @@ async function importResult(client, { result, identity, participantId, segmentId
 
   const common = { participantId, segmentId, identityId: identity.id, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance, level: result.level, ownerTeamId, calculated };
   if (!identity.current_occasion_id) {
-    await refuseOverRosterEntry(client, participantId);
     const occasionId = await insertOccasionWithValues(client, common);
     await client.query(`update training_load.metric_source_identities set current_occasion_id = $1 where id = $2`, [occasionId, identity.id]);
     return { outcome: "created", occasionId };
@@ -581,6 +601,13 @@ async function importResult(client, { result, identity, participantId, segmentId
   )).rows[0];
   if (String(current.event_participant_id) !== String(participantId) || String(current.segment_id ?? "") !== String(segmentId ?? "")) {
     throw new GpexeImportError("identity_target_changed", `${result.externalId} was imported for a different participant/segment.`);
+  }
+  if (current.entry_method === "manual") {
+    const roster = await rosterCorrectionOf(client, current.id);
+    if (roster) {
+      if (roster.measured_hash === contentHash) return { outcome: "unchanged", occasionId: current.id };
+      return { outcome: "manual_values_conflict", occasionId: null, athleteId: roster.athlete_id };
+    }
   }
   if (current.content_hash === contentHash) return { outcome: "unchanged", occasionId: current.id };
 
@@ -776,6 +803,8 @@ export async function importGpexePlanLocked(client, plan, ctx, { onResultImporte
     if (!event.created) await assertNoIdentitiesMissingFromSource(client, { connectionId: connection.id, eventId: event.id, externalIds });
     const segmentsByDrillIndex = await ensureSegments(client, { eventId: event.id, segments: plan.segments });
     const participantIds = await ensureParticipants(client, { eventId: event.id, participants: plan.participants, athleteIdByGpexeId });
+    const withEntry = await athletesWithRosterEntry(client, [...participantIds.values()].map(String));
+    if (withEntry.length) throw manualValuesConflict(withEntry);
 
     // Existing sanctioned SQL path: creates/reuses the activity, its
     // participants and the confirmed event/participant links, under its own
@@ -819,6 +848,8 @@ export async function importGpexePlanLocked(client, plan, ctx, { onResultImporte
       }
     }
 
+    const corrected = results.filter((r) => r.outcome === "manual_values_conflict");
+    if (corrected.length) throw manualValuesConflict(corrected.map((r) => r.athleteId));
     const counts = {};
     for (const r of results) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
     return {
