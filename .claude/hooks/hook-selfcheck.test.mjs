@@ -65,6 +65,7 @@ test("checkSettings refuses a registration that names the guard but would not ru
     "an extra argument": guardHook({ onFailure: "block", args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs", "--off"] }),
     "shell form": { type: "command", command: "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs", timeout: 30, onFailure: "block" },
     "no timeout": guardHook({ onFailure: "block", timeout: undefined }),
+    "a condition field": guardHook({ onFailure: "block", if: "Bash(ls *)" }),
   };
   for (const [label, hook] of Object.entries(variants)) {
     const problems = checkSettings(settingsWith({ Bash: hook, PowerShell: ok, "mcp__.*": ok }));
@@ -150,6 +151,7 @@ test("behind a symlinked project folder the guard still decides and the self-che
     const guard = spawnSync(process.execPath, [linkedGuard], { input, encoding: "utf8" });
     assert.equal(JSON.parse(guard.stdout).hookSpecificOutput.permissionDecision, "deny");
     assert.equal(registeredGuardPath({ CLAUDE_PROJECT_DIR: link }), linkedGuard);
+    assert.equal(registeredGuardPath({ CLAUDE_PROJECT_DIR: "/p/a$'b$&/" }), "/p/a$'b$&/.claude/hooks/safety-guard.mjs");
     assert.deepEqual(selfCheck({ cwd: dir, guardPath: linkedGuard, env: {} }), []);
     const hook = spawnSync(process.execPath, [path.join(link, ".claude", "hooks", "hook-selfcheck.mjs")], { input: "{}", encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: link } });
     assert.equal(hook.status, 0, hook.stderr);

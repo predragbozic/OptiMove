@@ -26,13 +26,17 @@ const MATCHERS = ["Bash", "PowerShell", "mcp__.*"];
 // argument. Anything else - another program with the same path, an extra flag, async - could
 // run without ever deciding, which no probe of the file itself would notice.
 const GUARD_ARG = "${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs";
+// The only fields a guard registration may carry. Any other one (a condition such as "if", a
+// "once") could limit when the guard runs while the probes, which start it directly, pass.
+const ALLOWED_HOOK_FIELDS = new Set(["type", "command", "args", "timeout", "onFailure", "statusMessage"]);
 
 // The guard path Claude Code runs: the registered argument with ${CLAUDE_PROJECT_DIR} expanded
 // from the environment Claude Code gives its hooks (this file's own copy when it is not set,
 // e.g. in a test). The probe runs exactly that path, symlinks and letter case included.
 export function registeredGuardPath(env = process.env) {
   const dir = env.CLAUDE_PROJECT_DIR;
-  return dir ? GUARD_ARG.replace("${CLAUDE_PROJECT_DIR}", dir.replace(/[\\/]+$/, "")) : GUARD;
+  // concatenated, not String.replace: a "$" in a folder name must not be read as a pattern
+  return dir ? `${dir.replace(/[\\/]+$/, "")}/.claude/hooks/safety-guard.mjs` : GUARD;
 }
 
 // node options that load code into, or change how node resolves, every node process - the
@@ -71,6 +75,8 @@ export function checkSettings(settingsText) {
     for (const h of mentions) {
       const execForm = h.type === "command" && h.command === "node" && Array.isArray(h.args) && h.args.length === 1 && h.args[0] === GUARD_ARG;
       if (!execForm) problems.push(`the ${matcher} guard registration is not the expected exec form (command "node", args ["${GUARD_ARG}"])`);
+      const extra = Object.keys(h ?? {}).filter((k) => !ALLOWED_HOOK_FIELDS.has(k));
+      if (extra.length) problems.push(`the ${matcher} guard registration has unexpected fields (${extra.join(", ")}) that could limit when it runs`);
       if (h.async || h.asyncRewake) problems.push(`the ${matcher} guard hook runs in the background (async), so it cannot decide`);
       if (h.onFailure !== "block") problems.push(`the ${matcher} guard hook lacks "onFailure": "block" (a guard that fails would let the call through)`);
       if (!(Number.isInteger(h.timeout) && h.timeout > 0 && h.timeout <= 60)) problems.push(`the ${matcher} guard hook has no timeout of at most 60 s (a hung guard would stall every call for the 600 s default)`);
@@ -83,7 +89,7 @@ export function checkSettings(settingsText) {
 export function runProbe(probe, { cwd, nodePath = "node", guardPath = GUARD, timeoutMs = 15_000 } = {}) {
   const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: probe.tool, tool_input: { command: probe.command }, cwd, session_id: "hook-selfcheck" });
   const r = spawnSync(nodePath, [guardPath], { input, encoding: "utf8", timeout: timeoutMs, windowsHide: true });
-  if (r.error) return { problem: `the guard could not run for "${probe.command}" (${r.error.code || r.error.message})` };
+  if (r.error) return { problem: `the guard could not run for "${probe.command}" (${r.error.code || "error"})` };
   if (r.status !== 0) return { problem: `the guard exited ${r.status ?? r.signal} for "${probe.command}"` };
   const out = (r.stdout || "").trim();
   let decision = "none";
@@ -137,12 +143,17 @@ export function sessionStartOutput(problems) {
 // but not in argv[1], and a plain comparison made this check silent behind a symlink.
 function isMainModule() {
   if (!process.argv[1]) return false;
+  // native first (it also returns the on-disk letter case), then the JS version (it still
+  // follows symlinks where the native call fails), and only then the plain path
   const real = (p) => {
-    try {
-      return fs.realpathSync.native(p);
-    } catch {
-      return path.resolve(p);
+    for (const resolve of [fs.realpathSync.native, fs.realpathSync]) {
+      try {
+        return resolve(p);
+      } catch {
+        // try the next
+      }
     }
+    return path.resolve(p);
   };
   const invoked = real(path.resolve(process.argv[1]));
   const thisFile = real(fileURLToPath(import.meta.url));

@@ -530,10 +530,17 @@ does not start either (a non-blocking error shown as a hook error), and it is
 on 2.1.329: with the guard file moved away, the session start reported the failure and
 every Bash call was blocked. Tests: `node --test .claude/hooks/hook-selfcheck.test.mjs`.
 
-**What to do when it fires.** While the guard is broken every Bash / PowerShell / MCP
-call in that session is blocked, so Claude cannot repair it there: the user runs the
-steps below in their own terminal, or starts a new session after the fix (a cloud session
-is replaced, not repaired).
+**What to do when it fires.** Two cases:
+- the guard cannot start, crashes or times out: every Bash / PowerShell / MCP call is
+  blocked (`onFailure`), Read / Edit / Write still work;
+- anything else the check reports (a wrong registration form, unexpected fields,
+  `NODE_OPTIONS`, a guard that runs but answers wrongly): nothing is blocked, the session
+  is simply unprotected, and only the `CLAUDE.md` rule ("do not run shell commands")
+  stands between it and the allow list.
+
+Either way Claude does not repair the guard or `settings.json` itself in that session: the
+user runs the steps below in their own terminal, or starts a new session after the fix (a
+cloud session is replaced, not repaired).
 - `node` missing or not on `PATH` → install Node (the project's version) and start a new
   session.
 - The guard file missing or broken → restore `.claude/hooks/safety-guard.mjs` from git
@@ -541,13 +548,19 @@ is replaced, not repaired).
   `node --test .claude/hooks/safety-guard.test.mjs`.
 - A registration missing or without `onFailure` → `settings.json` was changed; compare it
   with `origin/main`. `/hooks` shows what the running session actually loaded.
+- Unexpected fields or another form in a registration → restore the entry exactly as in
+  the snippet at the top of this file.
+- `NODE_OPTIONS` reported → find where it is set (shell profile, a settings `env` block)
+  and remove the option, or confirm it cannot stop the guard.
 - Never work around it by switching the hook off (`disableAllHooks`, removing the
   entries) without the owner's explicit decision: that removes the checks the allow list
   depends on.
 
 **What the self-check cannot see.** It reads `.claude/settings.json`, not what the running
 session loaded, and it checks the guard at session start, not on every call.
-`disableAllHooks: true` in any settings layer
+It probes the `node` found on `PATH` at session start; a different `node` that the real
+hook finds later in the session (a changed `PATH`, or on Windows a `node.exe` in a folder
+the session moves into) is not checked again. `disableAllHooks: true` in any settings layer
 (including the untracked `.claude/settings.local.json` or a user-level settings file)
 switches off the guard *and* the self-check together, so nothing warns. The same holds for
 a settings layer that replaces these hook entries. `/hooks` in the session shows what is

@@ -2750,12 +2750,17 @@ export function runCli(rawStdin) {
 // paths (realpathSync.native also returns the on-disk letter case), the plain comparison kept
 // as a fallback.
 function samePath(a, b) {
+  // native first (it also returns the on-disk letter case), then the JS version (it still
+  // follows symlinks where the native call fails), and only then the plain path
   const real = (p) => {
-    try {
-      return fs.realpathSync.native(p);
-    } catch {
-      return path.resolve(p);
+    for (const resolve of [fs.realpathSync.native, fs.realpathSync]) {
+      try {
+        return resolve(p);
+      } catch {
+        // try the next
+      }
     }
+    return path.resolve(p);
   };
   const x = real(a);
   const y = real(b);
