@@ -239,6 +239,13 @@ for (const field of ["sets", "reps", "load"]) {
   });
 }
 
+test("the 80-character limit counts characters, not UTF-16 units: 80 emoji are stored, 81 refused", async () => {
+  const stored = await addExercise(exercises.own, { sets: "😀".repeat(80) });
+  assert.equal(stored.status, 201, JSON.stringify(stored.body));
+  assert.equal([...(await client.query("select sets from plans.plan_items")).rows[0].sets].length, 80);
+  assert.equal((await addExercise(exercises.own, { sets: "😀".repeat(81) })).status, 400);
+});
+
 test("a dose longer than 80 characters is refused on the item edit and the custom exercise too, nothing changed", async () => {
   assert.equal((await addExercise(exercises.own)).status, 201);
   const itemId = (await client.query("select id from plans.plan_items")).rows[0].id;

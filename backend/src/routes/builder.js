@@ -3476,7 +3476,8 @@ function doseFields(body) {
   const dose = {};
   for (const field of Object.keys(DOSE_FIELD_WORDS)) {
     const value = nullableText(body?.[field]);
-    if (value && value.length > DOSE_MAX_LENGTH) {
+    // Characters as varchar counts them (code points), not UTF-16 units.
+    if (value && [...value].length > DOSE_MAX_LENGTH) {
       throw Object.assign(new Error(`${DOSE_FIELD_WORDS[field]} can be at most ${DOSE_MAX_LENGTH} characters.`), { status: 400 });
     }
     dose[field] = value;
