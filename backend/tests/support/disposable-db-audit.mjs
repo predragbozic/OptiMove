@@ -5,6 +5,7 @@
 //   node tests/support/disposable-db-audit.mjs                 readable list
 //   node tests/support/disposable-db-audit.mjs --json          one JSON document
 //   node tests/support/disposable-db-audit.mjs --drop --yes    drop the droppable ones
+//   ... --drop --yes --only=<name> [--only=<name> ...]         drop only these (still checked)
 //
 // scripts/test-runner.mjs runs the --json form before and after every
 // disposable-kind step and reports what the step left behind. --drop is an
@@ -17,7 +18,10 @@
 import "dotenv/config";
 import { DROPPABLE_DATABASE_NAME_PATTERN, countMaintenanceObjects, dropDisposableDatabase, listDatabases, parseServerUrl } from "./disposable-db.mjs";
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv.filter((a) => !a.startsWith("--only=")));
+// --only=<name>: the runner drops the databases of one file it had to end, never the rest
+const only = argv.filter((a) => a.startsWith("--only=")).map((a) => a.slice("--only=".length));
 const asJson = args.has("--json");
 const drop = args.has("--drop");
 const yes = args.has("--yes");
@@ -32,6 +36,7 @@ try {
   const refused = [];
   if (drop) {
     for (const row of rows) {
+      if (only.length && !only.includes(row.name)) continue;
       if (!row.disposable || !DROPPABLE_DATABASE_NAME_PATTERN.test(row.name)) {
         refused.push({ name: row.name, reason: "not a droppable test database name" });
         continue;
@@ -41,7 +46,9 @@ try {
         continue;
       }
       try {
-        await dropDisposableDatabase({ name: row.name });
+        // without --force the drop is a plain DROP: PostgreSQL refuses it (55006) if a session
+        // opened since the list above, so a session is never ended unless --force was given
+        await dropDisposableDatabase({ name: row.name, force });
         dropped.push(row.name);
       } catch (error) {
         refused.push({ name: row.name, reason: error.message });

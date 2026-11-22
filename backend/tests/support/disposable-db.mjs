@@ -146,9 +146,17 @@ async function withAdminClient(adminUrl, fn) {
   }
 }
 
-export async function dropDisposableDatabase({ name, adminUrl, baseDatabaseUrl } = {}) {
+// force (the default, a test's own teardown): end the sessions still open on the database and
+// drop it. force: false (the audit's --drop without --force, and the runner's cleanup after a
+// file it ended): a plain DROP, which PostgreSQL itself refuses with 55006 while any session is
+// open - the check and the drop are one atomic step, so another run's session is never ended.
+export async function dropDisposableDatabase({ name, adminUrl, baseDatabaseUrl, force = true } = {}) {
   assertDisposableDatabaseName(name);
   await withAdminClient(adminUrl || adminUrlFor(baseDatabaseUrl), async (admin) => {
+    if (!force) {
+      await admin.query(`drop database if exists "${name}"`);
+      return;
+    }
     await admin.query("select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()", [name]);
     await admin.query(`drop database if exists "${name}" with (force)`);
   });
