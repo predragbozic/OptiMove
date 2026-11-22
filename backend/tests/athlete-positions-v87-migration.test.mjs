@@ -21,7 +21,8 @@ let db;
 let c;
 let ids;
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "pos87mig", migrations: calendarMigrations() });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: process.env.DATABASE_URL, label: "pos87mig", migrations: calendarMigrations().filter((f) => f < V87_FILE) });
+  // Only what precedes v87: a later migration in the shared list (v89) is not part of the world v87's preflight reads.
   c = new pg.Client({ connectionString: db.url });
   await c.connect();
   assert.equal((await c.query("select current_database() as d")).rows[0].d, db.name, "SAFETY: unexpected database");
