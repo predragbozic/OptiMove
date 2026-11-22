@@ -499,6 +499,37 @@ test("7. (after 6) the restore: only after a correction; the new manual occasion
   }
 });
 
+test("7b. (after 7) v86's guard: a correction must rest on a measured (imported) occasion of the same record - a raw correction whose measured occasion is a manual one is refused", async () => {
+  const { team } = await sessionWorld();
+  const ana = team.athleteIds[ANA];
+  const rows = (await admin.query(
+    `select m.kind, o.id, o.source_identity_id, o.event_participant_id
+       from training_load.metric_manual_values m
+       join training_load.metric_measurement_occasions o on o.id = m.occasion_id
+       join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.athlete_id = $1 order by m.entered_at`, [ana])).rows;
+  const correction = rows.find((r) => r.kind === "correction");
+  const restored = rows.find((r) => r.kind === "restore");
+  assert.ok(correction && restored, "test 6 corrected and test 7 restored Ana");
+  const client = new pg.Client({ connectionString: db.url });
+  await client.connect();
+  try {
+    await client.query("begin");
+    await client.query(`select set_config('optimove.manual_value_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
+    const occ = (await client.query(
+      `insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, source_identity_id, recorded_by_user_id, supersedes_occasion_id)
+       values ($1, 'manual', $2, $3, $4) returning id`, [restored.event_participant_id, restored.source_identity_id, team.coach.id, restored.id])).rows[0].id;
+    await client.query(`update training_load.metric_source_identities set current_occasion_id = $1 where id = $2`, [occ, restored.source_identity_id]);
+    await assert.rejects(client.query(
+      `insert into training_load.metric_manual_values (occasion_id, kind, replaced_occasion_id, measured_occasion_id, entered_by_user_id, entered_by_basis, request_key, request_hash)
+       values ($1, 'correction', $2, $3, $4, 'team_coach', gen_random_uuid(), repeat('a', 64))`, [occ, restored.id, correction.id, team.coach.id]),
+      /a correction rests on a measured occasion of the same record/);
+  } finally {
+    await client.query("rollback").catch(() => {});
+    await client.end();
+  }
+});
+
 test("8. (after 3) v86's guards: a provenance row without the acting user, a forged author, an UPDATE or DELETE outside the undo, a value added to an occasion that has its provenance, and a roster manual occasion without its provenance row by COMMIT are all refused", async () => {
   const { team, s, distance } = await sessionWorld();
   const row = (await admin.query(`select occasion_id from training_load.metric_manual_values limit 1`)).rows[0];
@@ -527,6 +558,12 @@ test("8. (after 3) v86's guards: a provenance row without the acting user, a for
     await client.query(`select set_config('optimove.manual_value_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.cadmin.id]);
     const occ2 = (await client.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1, 'manual', $2) returning id`, [participant, team.coach.id])).rows[0].id;
     await assert.rejects(client.query(`insert into training_load.metric_manual_values (occasion_id, kind, entered_by_user_id, entered_by_basis, request_key, request_hash) values ($1, 'entry', $2, 'team_coach', gen_random_uuid(), repeat('a', 64))`, [occ2, team.coach.id]), /the author must be the acting user/);
+    await client.query("rollback");
+    // The occasion's author is not the provenance's author (the acting user wrote it as another coach): refused.
+    await client.query("begin");
+    await client.query(`select set_config('optimove.manual_value_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [team.coach.id]);
+    const occ3 = (await client.query(`insert into training_load.metric_measurement_occasions (event_participant_id, entry_method, recorded_by_user_id) values ($1, 'manual', $2) returning id`, [participant, team.cadmin.id])).rows[0].id;
+    await assert.rejects(client.query(`insert into training_load.metric_manual_values (occasion_id, kind, entered_by_user_id, entered_by_basis, request_key, request_hash) values ($1, 'entry', $2, 'team_coach', gen_random_uuid(), repeat('a', 64))`, [occ3, team.coach.id]), /the author must be the acting user/);
     await client.query("rollback");
     // A manual occasion while the acting user is set, without its provenance row: refused at COMMIT.
     await client.query("begin");
@@ -627,7 +664,10 @@ test("11. the undo of a session with manual values: refused without a confirmati
   const s = await importSession(team, bundleOf({ sessionId: 9702, ids: [101, 102, 104] }));
   const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
   const eva = team.athleteIds[EVA];
-  const entry = await saveValues(s, { athleteId: eva, values: [{ metricDefinitionId: distance, value: 1500 }] }, team.coach.cookie);
+  const first = await saveValues(s, { athleteId: eva, values: [{ metricDefinitionId: distance, value: 1400 }] }, team.coach.cookie);
+  assert.equal(first.status, 201, first.text);
+  // A second entry replaces the first: the first stays as history, and history is in the undo's fingerprint.
+  const entry = await saveValues(s, { athleteId: eva, expectedOccasionId: first.body.occasionId, values: [{ metricDefinitionId: distance, value: 1500 }] }, team.coach.cookie);
   assert.equal(entry.status, 201, entry.text);
   const ana = team.athleteIds[ANA];
   const f = await form(s, ana, team.coach.cookie);
@@ -646,9 +686,16 @@ test("11. the undo of a session with manual values: refused without a confirmati
   const rosterFp = preview.body.undoPreview.rosterWork.laterWork.fingerprint;
   assert.match(rosterFp, /^[0-9a-f]{64}$/);
   assert.equal((await admin.query(`select count(*)::int n from training_load.metric_events where id = $1`, [s.eventId])).rows[0].n, 1, "the preview removed nothing");
-  assert.equal(mv.count, 2);
+  // The count is every manual occasion the undo removes (Eva's replaced entry too); the list is the current ones.
+  assert.equal(mv.count, 3);
+  assert.equal(mv.list.length, 2);
   assert.deepEqual(mv.list.map((i) => [i.athleteName, i.kind, i.byName]).sort(), [["Ana", "correction", "coach"], ["Eva", "entry", "coach"]]);
   assert.match(mv.fingerprint, /^[0-9a-f]{64}$/);
+  const everyManual = (await admin.query(
+    `select o.id::text as id from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.event_id = $1 and o.entry_method = 'manual' order by o.id`, [s.eventId])).rows.map((r) => r.id);
+  assert.ok(everyManual.includes(String(first.body.occasionId)), "the replaced entry is kept");
+  assert.equal(mv.fingerprint, crypto.createHash("sha256").update(everyManual.join(",")).digest("hex"), "the fingerprint covers every manual occasion, history included");
   assert.equal((await admin.query(`select count(*)::int n from training_load.metric_manual_values`)).rows[0].n > 0, true, "the preview wrote and removed nothing");
 
   const undo = (extra) => api(`/teams/${team.teamId}/candidates/${s.candidateId}/undo-import`, {
@@ -656,7 +703,7 @@ test("11. the undo of a session with manual values: refused without a confirmati
   });
   const unconfirmed = await undo({});
   assert.deepEqual([unconfirmed.status, unconfirmed.body.error], [409, "manual_values_need_confirmation"]);
-  assert.equal(unconfirmed.body.manualValues.count, 2);
+  assert.equal(unconfirmed.body.manualValues.count, 3);
   assert.equal(unconfirmed.body.manualValues.fingerprint, mv.fingerprint);
   const wrong = await undo({ manualValuesFingerprint: "0".repeat(64) });
   assert.deepEqual([wrong.status, wrong.body.error], [409, "manual_values_changed"]);
@@ -666,11 +713,11 @@ test("11. the undo of a session with manual values: refused without a confirmati
 
   const done = await undo({ manualValuesFingerprint: mv.fingerprint });
   assert.equal(done.status, 200, done.text);
-  assert.equal(done.body.undo.manualValues.count, 2);
-  assert.equal(done.body.undo.removedCounts.metric_manual_values, 2);
+  assert.equal(done.body.undo.manualValues.count, 3);
+  assert.equal(done.body.undo.removedCounts.metric_manual_values, 3);
   assert.equal((await admin.query(`select count(*)::int n from training_load.metric_events where id = $1`, [s.eventId])).rows[0].n, 0);
   const log = (await admin.query(`select manual_values_removed from training_load.import_deletion_log where event_id = $1`, [s.eventId])).rows[0].manual_values_removed;
-  assert.equal(log.count, 2);
+  assert.equal(log.count, 3);
   assert.equal(log.fingerprint, mv.fingerprint);
   assert.equal(log.confirmed_by, String(team.padmin.id));
   assert.equal(log.list.length, 2);
@@ -763,6 +810,40 @@ test("18. v86's 'removal' kind (no writer yet): an empty occasion of the same at
   assert.equal(again.status, 201, again.text);
   assert.deepEqual(again.body.values.map((v) => v.value), [710], "nothing of the removed entry is carried over");
   assert.ok(!(await needsState(s.activityId)).includes(eva));
+});
+
+test("19. fail closed until the re-import question: a check that brings device data for an athlete who holds a roster entry blocks the session (manual_values_entered, the athlete named), the approval imports nothing and both values never stand side by side", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9706, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const cil = team.athleteIds[CIL];
+  const entry = await saveValues(s, { athleteId: cil, values: [{ metricDefinitionId: distance, value: 1111 }] }, team.coach.cookie);
+  assert.equal(entry.status, 201, entry.text);
+  const occasionsOfCil = async () => (await admin.query(
+    `select o.entry_method from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+      where p.event_id = $1 and p.athlete_id = $2 order by o.created_at`, [s.eventId, cil])).rows.map((r) => r.entry_method);
+  assert.deepEqual(await occasionsOfCil(), ["manual"]);
+
+  await checkNow(team, [bundleOf({ sessionId: 9706, ids: [101, 102, 104] })]);
+  const list = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.padmin.cookie })).body.candidates;
+  const cand = list.find((c) => c.gpexeTeamSessionId === "9706" && c.id !== s.candidateId);
+  assert.ok(cand, "the session's candidate");
+  assert.equal(cand.blockedSourceCode, "manual_values_entered", JSON.stringify(cand));
+  const one = await api(`/teams/${team.teamId}/candidates/${cand.id}`, { cookie: team.padmin.cookie });
+  const blocked = one.body.candidate?.preview?.blocked ?? one.body.preview?.blocked;
+  assert.equal(blocked?.code, "manual_values_entered", one.text.slice(0, 400));
+  assert.deepEqual(blocked.athleteIds, [String(cil)], "the athlete is named");
+  // The approval imports nothing.
+  process.env.GPEXE_IMPORT_APPLY_ENABLED = "true";
+  try {
+    const r = await api(`/teams/${team.teamId}/imports`, { method: "POST", cookie: team.padmin.cookie, body: { candidateIds: [cand.id], previewHashes: { [cand.id]: cand.previewHash } } });
+    assert.notEqual(r.body.results?.[0]?.outcome, "imported", r.text);
+  } finally {
+    delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
+  }
+  assert.deepEqual(await occasionsOfCil(), ["manual"], "no device record beside the entry");
+  const f = await form(s, cil, team.coach.cookie);
+  assert.equal(f.body.mode, "entry", "the entry can still be changed on the roster");
 });
 
 test("17. a session with manual values and a calendar link: the undo refuses calendar_link_exists before it asks to confirm the manual values", async () => {

@@ -180,6 +180,8 @@ export const BLOCK_MESSAGES = Object.freeze({
   source_instance_held: "Another team's GPEXE source instance holds this GPEXE team.",
   source_instance_changed: "This team's GPEXE source instance names another GPEXE team.",
   session_imported_under_another_instance: "This session was imported earlier under another GPEXE source instance.",
+  // ST-4 (v86): fail closed until the re-import question exists.
+  manual_values_entered: "Values were entered by hand on the roster for an athlete GPEXE now has data for. Importing would keep both, so this session waits; nothing of it is imported.",
 });
 
 // v80 step C0: the plan's section 5 sentence of a session blocked by team_setting_changed, naming both settings.
@@ -542,6 +544,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
       await client.query("rollback to savepoint gpexe_preview_import");
       if (!(error instanceof GpexeImportError)) throw error;
       blocked = { code: error.code, message: error.code in BLOCK_MESSAGES ? BLOCK_MESSAGES[error.code] : error.message };
+      if (error.manualAthleteIds) blocked.athleteIds = error.manualAthleteIds;
       // Results imported earlier that this import would leave behind (the
       // athlete is now unlinked, out of the team, or needs manual review):
       // the session waits, and the athletes causing it are named.

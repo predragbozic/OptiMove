@@ -556,3 +556,15 @@ reviewers:
   value or a whole entry?"); if yes, *Remove these values* is a route of the re-import pull request, with no migration.
 - **Not in part 1:** the re-import question and the `manual_replaced` writer path (after ST-2's merge), the screens.
 - **Runbook:** `docs/runbooks/manual-values-v86.md`, with its preflight, post-check and rollback.
+- **Fail closed until the re-import question** (the *Nezavisni revizor*'s HIGH on `c146b66`, option (a)): an import that
+  would give a first device record to an athlete who holds a current roster entry (no source record, not replaced, not
+  ended by a removal) is refused with `manual_values_entered` (`backend/src/gpexeImportWriter.js`,
+  `refuseOverRosterEntry`, under the team's import lock that every manual write also takes). The preview runs the writer,
+  so the candidate shows as blocked (category `conflicts_with_existing_data`, the athlete in `blocked.athleteIds`) and
+  nothing is written; the re-import pull request replaces this with the question. Test 19 of `manual-values-st4`.
+- **Known limits recorded at that review (LOW):** the database does not derive `entered_by_basis` (v35 / v38 do); it
+  keeps the service's word after `lock_activity_decider`. After a restore the values stay `manual` without T6 provenance,
+  so a series filtered to imported values only leaves a restored athlete out. An entry takes any finite number up to
+  1e9 (negative too); the variable's limits (C110, applied on import) are not checked yet - a follow-up. v86 adds varchar
+  IN-list constraints of the kind a restore re-prints (see the runbook's rehearsal note); PostgreSQL 17 behaviour of
+  `gpexe-backup-verify` with them is not known yet.
