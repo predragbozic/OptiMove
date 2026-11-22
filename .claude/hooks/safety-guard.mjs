@@ -2660,6 +2660,112 @@ export function classifyMcpToolCall(toolName, toolInput) {
 // Top-level dispatcher
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// File tools (Write, Edit, MultiEdit, NotebookEdit) on the live .claude folder
+// ---------------------------------------------------------------------------
+// The guard, its registration (settings.json, settings.local.json), the rules and the agent
+// briefs live in the project's .claude folder - the one this file runs from. A session in an
+// auto-accepting mode could otherwise edit them with a file tool, without any question, and
+// switch its own protection off mid-session. Any target inside that folder asks. The path is
+// compared by real path (symlinks and ".." resolved, the not-yet-existing tail kept as
+// written), with letter case ignored where the file system usually ignores it. A copy of the
+// project in another work tree is not the live folder and is not covered.
+export const FILE_EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const LIVE_CLAUDE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// The real path of p: every existing part resolved, a not-yet-existing tail kept as written.
+// A part that does not resolve but is a symlink (a dangling link: its target does not exist
+// yet) is followed by hand, so a link to a missing file inside .claude still lands there.
+// null when the path cannot be followed (a link loop, too many links).
+function realPathOfNearestExisting(p, hops = 0) {
+  if (hops > 40) return null;
+  const tail = [];
+  let current = path.resolve(p);
+  for (;;) {
+    for (const resolve of [fs.realpathSync.native, fs.realpathSync]) {
+      try {
+        return path.join(resolve(current), ...[...tail].reverse());
+      } catch {
+        // try the next resolver
+      }
+    }
+    let link = null;
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) link = fs.readlinkSync(current);
+    } catch {
+      // the part does not exist at all: go to the parent
+    }
+    if (link !== null) return realPathOfNearestExisting(path.join(path.resolve(path.dirname(current), link), ...[...tail].reverse()), hops + 1);
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(p);
+    tail.push(path.basename(current));
+    current = parent;
+  }
+}
+
+// Inside dir? First by folder identity: an existing ancestor of the target that is the same
+// directory (device and inode) as dir - this holds whatever the letter case, short name or
+// mount the path was written with. Then by real path, letter case ignored where the file
+// system usually ignores it. A path that cannot be followed counts as inside (fail closed).
+export function isInsideDir(target, dir) {
+  const t = realPathOfNearestExisting(target);
+  const d = realPathOfNearestExisting(dir);
+  if (t === null || d === null) return true;
+  let dirStat = null;
+  try {
+    dirStat = fs.statSync(d);
+  } catch {
+    // dir itself missing: the string comparison below decides
+  }
+  if (dirStat) {
+    for (let a = t; ; a = path.dirname(a)) {
+      try {
+        const st = fs.statSync(a);
+        if (st.dev === dirStat.dev && st.ino === dirStat.ino) return true;
+      } catch {
+        // not existing yet: go up
+      }
+      if (path.dirname(a) === a) break;
+    }
+  }
+  const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+  const norm = (p) => (caseInsensitive ? p.toLowerCase() : p);
+  const tn = norm(t);
+  const dn = norm(d);
+  return tn === dn || tn.startsWith(dn.endsWith(path.sep) ? dn : dn + path.sep);
+}
+
+const FILE_PATH_FIELDS = ["file_path", "notebook_path", "path"];
+
+// A path Claude Code may read differently from this guard is not matched, it asks: Claude Code
+// trims a path and expands a leading "~" (and on Windows reads "/c/..." as "C:\..."), and a
+// "/proc/self/..." or "/dev/fd/..." path means something else in Claude Code's own process.
+// "..", which is collapsed as text before symlinks are followed, asks for the same reason.
+export function filePathIsAmbiguous(raw, resolved, platform = process.platform) {
+  if (raw !== raw.trim()) return true;
+  if (/^~/.test(raw)) return true;
+  if (/(^|[\\/])\.\.([\\/]|$)/.test(raw)) return true;
+  if (/^[\\/]{2}[?.][\\/]/.test(raw)) return true;
+  if (platform === "win32" && /^[\\/](?![\\/])/.test(raw)) return true;
+  const unixLike = resolved.replace(/\\/g, "/");
+  return /^\/(proc|dev)(\/|$)/.test(unixLike);
+}
+
+export function classifyFileEdit(toolInput, cwd, { claudeDir = LIVE_CLAUDE_DIR } = {}) {
+  // every path field present is checked, whatever the tool: one of them inside .claude asks
+  const targets = FILE_PATH_FIELDS.map((k) => toolInput[k]).filter((v) => v !== undefined);
+  if (!targets.length || targets.some((v) => typeof v !== "string" || !v.trim())) {
+    return { decision: "ask", reason: "Could not find a recognizable file path on this file edit; failing to a confirmation prompt rather than allowing it silently." };
+  }
+  if (targets.some((v) => filePathIsAmbiguous(v, path.resolve(cwd, v)))) {
+    return { decision: "ask", reason: "This file path is written in a form the safety guard cannot match reliably (surrounding spaces, ~, .., a device or /proc path); confirm the edit." };
+  }
+  if (targets.some((v) => isInsideDir(path.resolve(cwd, v), claudeDir))) {
+    return { decision: "ask", reason: "This edits the project's .claude folder (the safety guard, its settings, rules or agent briefs); that needs your confirmation." };
+  }
+  return null;
+}
+
 export function classifyToolCall(input) {
   const toolName = input && typeof input.tool_name === "string" ? input.tool_name : null;
   const toolInput = (input && input.tool_input) || {};
@@ -2682,6 +2788,10 @@ export function classifyToolCall(input) {
 
   if (toolName.startsWith("mcp__")) {
     return classifyMcpToolCall(toolName, toolInput);
+  }
+
+  if (FILE_EDIT_TOOLS.has(toolName)) {
+    return classifyFileEdit(toolInput, cwd);
   }
 
   return null;
@@ -2726,7 +2836,7 @@ export function runCli(rawStdin) {
     // internal error while inspecting an unrelated tool (Read, Grep, ...) must never
     // block it.
     const toolName = input && typeof input.tool_name === "string" ? input.tool_name : "";
-    if (toolName === "Bash" || toolName === "PowerShell" || toolName.startsWith("mcp__")) {
+    if (toolName === "Bash" || toolName === "PowerShell" || toolName.startsWith("mcp__") || FILE_EDIT_TOOLS.has(toolName)) {
       emitDecision("ask", "An internal error occurred while safety-checking this command; failing to a confirmation prompt.");
     }
     return;

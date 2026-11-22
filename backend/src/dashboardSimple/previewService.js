@@ -1,3 +1,4 @@
+import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { randomUUID } from 'node:crypto';
 import { validateContract, isUuid } from './schema.js';
 import { compileSimpleDraft } from './compiler.js';
@@ -52,6 +53,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
         if (!isUuid(envelope.editTarget.widgetId)) throw previewError('notFound', 404);
         existing = await loadPreviewExisting(queryRunner, dashboardId, envelope.editTarget);
       }
+      normalizeShellFilter(envelope?.context?.shellFilter);
       const structural = validateContract('envelope', envelope);
       if (!structural.valid) return { status: 'invalid', issues: structural.issues.map(issue => ({ ...issue, severity: 'error' })) };
       if (envelope.context.kind !== 'legacyDashboard') throw previewError('pagesClientRequired', 409);
@@ -64,7 +66,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       if (compiled.status !== 'valid') return { ...compiled, issues: compiled.issues.map(issue => ({ ...issue, severity: 'error' })) };
       if (envelope.expectedCatalogToken && envelope.expectedCatalogToken !== compiled.catalogToken) throw previewError('catalogChanged', 409);
       if (compiled.widget.presentation_config?.tableFormatting?.rules?.length) return issueResult('invalid', 'unsupportedCapability', '$.draft.presentation.tableFormatting');
-      const contextFingerprint = hash({ workspace: target.workspace, defaultFilter: target.dashboard.default_filter, runtimeFilter: envelope.context.runtimeFilter ?? {}, effectiveFilter: compiled.effectiveFilter, resolvedPeriod: compiled.resolvedPeriod });
+      const contextFingerprint = hash({ workspace: target.workspace, defaultFilter: target.dashboard.default_filter, runtimeFilter: envelope.context.runtimeFilter ?? {}, shellFilter: context.shellFilter ?? null, shellCohort: context.shellCohort ?? null, effectiveFilter: compiled.effectiveFilter, resolvedPeriod: compiled.resolvedPeriod });
       const draftHash = hash(envelope.draft);
       const common = {
         contractVersion: 1, status: 'valid', issues: [], draftId: envelope.draft.draftId, draftVersion: envelope.draft.draftVersion,
@@ -78,7 +80,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       if (signal?.aborted) throw previewError('previewAborted', 499);
       const queryWidget = { ...compiled.widget, local_filter_override: compiled.effectiveFilter };
       const results = compiled.effectiveFilter.athleteIds.length
-        ? await queryDashboard(target.workspace, [queryWidget], compiled.resolvedPeriod, { queryRunner })
+        ? await queryDashboard(target.workspace, [queryWidget], compiled.resolvedPeriod, { queryRunner, shellCohort: context.shellCohort })
         : [{ widgetId: queryWidget.id, series: [{ widgetId: queryWidget.id, seriesId: queryWidget.series[0].id, status: 'ok', data: { current: [], comparison: null, comparisonRange: null } }] }];
       const widgetResult = results[0] && { ...results[0], presentation_config: compiled.widget.presentation_config ?? null };
       const contractError = widgetResult?.series?.find(series => ['calculation_changed_in_period', 'aggregation_not_allowed'].includes(series.error));

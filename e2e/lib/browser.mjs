@@ -10,11 +10,12 @@ export async function launch() {
 }
 
 // A page already signed in as one of the world's demo accounts (its session cookie), at a given width.
-export async function openAs(browser, world, role, width = WIDTHS.desktop) {
+// `hasTouch` makes a wide screen a touch screen ((pointer: coarse)), e.g. a tablet in landscape.
+export async function openAs(browser, world, role, width = WIDTHS.desktop, { hasTouch } = {}) {
   const account = world.accounts.find((a) => a.role === role);
   if (!account) throw new Error(`no demo account for role ${role}`);
   const phone = width < 600;
-  const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, isMobile: phone, hasTouch: phone });
+  const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, isMobile: phone, hasTouch: hasTouch ?? phone });
   await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
   const page = await context.newPage();
   const pageErrors = [];

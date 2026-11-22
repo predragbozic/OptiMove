@@ -550,7 +550,7 @@ function bindEvents() {
     if (!action?.dataset.action?.startsWith("builder-")) return;
     void handleBuilderAction(action).catch(renderBuilderError);
   });
-  els.content.addEventListener("submit", handleContentSubmit);
+  els.content.addEventListener("submit", guardHandler(handleContentSubmit));
   els.content.addEventListener("input", handleContentInput);
   els.content.addEventListener("keydown", handleBuilderSearchKeydown);
   els.content.addEventListener("keydown", handleTemplateMetadataKeydown);
@@ -561,7 +561,7 @@ function bindEvents() {
   document.addEventListener("input", (event) => {
     if (event.target.matches?.(AUTOGROW_SELECTOR)) autosizeTextarea(event.target);
   });
-  els.content.addEventListener("change", handleContentChange);
+  els.content.addEventListener("change", guardHandler(handleContentChange));
   // K2c-3: a session's Event: [▾] and the day's Whole day.
   els.content.addEventListener("change", (event) => void handleBuilderEventsChange(event.target));
   // Data configuration -> Variables: a select or a level box also reports its
@@ -694,7 +694,7 @@ function bindEvents() {
   document.addEventListener("touchend", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
   document.addEventListener("touchcancel", () => { if (endTestsCalendarDrag()) renderTests(); }, { passive: true, capture: true });
   document.addEventListener("click", guardHandler(handleGlobalClick));
-  document.addEventListener("submit", handleGlobalSubmit);
+  document.addEventListener("submit", guardHandler(handleGlobalSubmit));
   document.addEventListener("error", handleImageError, true);
   // R2 pictures (FE-1): whatever renders one, its short-lived address is
   // asked for in a batch on the next frame - see media-playback.js.
@@ -3031,7 +3031,9 @@ async function openWeeklyPlanOnDate(date) {
   collapseRailAfterNav();
   renderTabs();
   renderLibraryNav();
-  await loadWeekly();
+  const loaded = await loadWeekly();
+  // A lost answer with nothing to show: the screen's error line (renderError) stays; a blank week must not replace it.
+  if (loaded?.outcome === "error") return;
   const weeks = state.lastWeeklyData?.weeks || [];
   const weekIndex = weekIndexForDate(weeks, date);
   state.selectedWeekIndex = weekIndex >= 0 ? weekIndex : 0;

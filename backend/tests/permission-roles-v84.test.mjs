@@ -802,3 +802,15 @@ test("14b. assignments: an archived role, a role not assignable for the scope ty
       "23514", /role assignment: only a revocation may change the row/);
   }
 });
+
+test("9b. a change record naming a basis other than the one the database derives (a club's admin writing 'platform_admin' for its own club's role change): 42501", async () => {
+  const w = await world();
+  const role = await clubRole(w.admin, w.club);
+  const record = (basis) => asActor(db.url, w.admin, (c) => c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason)
+      select id, revision, 'archive', $2, $3, 'Done' from public.permission_roles where id = $1`, [role, w.admin, basis]), { rollback: true });
+  // Control: with the basis the database derives, the record passes the basis check and stops on the next one,
+  // so the 42501 below comes from the basis check and from no other branch with the same message.
+  await refused(record("club_admin"), "23514", /permission role change: the record must follow its own change in the same transaction/);
+  await refused(record("platform_admin"), "42501", /permission role: the acting user may not write this role/);
+  await refused(record("team_coach"), "42501", /permission role: the acting user may not write this role/);
+});

@@ -97,6 +97,8 @@ export const emptyCentralCalendarState = () => ({
   view: "week",
   // "" until the first load reads the device preference ("list" | "grid").
   weekMode: "",
+  // K7: the time grid's "+N more" opened the Day view as its list, until the next view, day or mode change.
+  dayList: false,
   // The day the views are built around ("" = today at the first open) and
   // the day a phone's strip or the month grid points at.
   anchor: "",
@@ -285,6 +287,9 @@ export const emptyBuilderState = (overrides = {}) => ({
   // docs/ai/builder-batch-edit-plan.md: Save of a reopened weekly batch member
   // asks who gets the changes. null | { stage: "scope" | "ask" | "unconfirmed" | "done", ... }
   batchEditChoice: null,
+  // Task 5 (docs/ai/builder-batch-edit-plan.md 12.3): a Save refused with
+  // 409 edit_sessions_locked. null | { sessions: [...] }
+  sessionsLocked: null,
   drafts: [],
   draftsLoading: false,
   openingDraftId: "",

@@ -9,7 +9,7 @@ export function buildSimplePreviewBinding({ target, envelope, existing, compiled
     target: { dashboardId: target.dashboard.id, widgetId: existing?.id ?? null, widgetRevision: existing?.revision ?? null },
     draftHash: simpleFingerprint(envelope.draft), catalogToken: compiled.catalogToken,
     semanticFingerprint: compiled.semanticBinding.fingerprint,
-    contextFingerprint: simpleFingerprint({ workspace: target.workspace, defaultFilter: target.dashboard.default_filter, runtimeFilter: context.runtimeFilter ?? {}, effectiveFilter: compiled.effectiveFilter, resolvedPeriod: compiled.resolvedPeriod }),
+    contextFingerprint: simpleFingerprint({ workspace: target.workspace, defaultFilter: target.dashboard.default_filter, runtimeFilter: context.runtimeFilter ?? {}, shellFilter: context.shellFilter ?? null, shellCohort: context.shellCohort ?? null, effectiveFilter: compiled.effectiveFilter, resolvedPeriod: compiled.resolvedPeriod }),
     periodIntent: envelope.draft.periodIntent, resolvedPeriod: compiled.resolvedPeriod, evaluatedAt,
   };
 }

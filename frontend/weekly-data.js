@@ -50,7 +50,8 @@ export async function loadWeekly(
   state.openWeekCalendarOnLoad = false;
   let appliedInitialPickerState = false;
 
-  await loadCachedView({
+  // The outcome of the load ("error" when nothing could be shown and renderError ran) goes back to the caller.
+  return await loadCachedView({
     namespace: WEEKLY_CACHE_NAMESPACE,
     contextKey: weeklyContextKey(athleteId),
     forceRefresh,
