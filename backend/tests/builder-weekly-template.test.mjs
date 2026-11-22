@@ -380,12 +380,16 @@ test("5. weeks the coach cannot write: another coach's plan and an open edit dra
   assert.equal((await assign(cookie, crypto.randomUUID(), { athleteIds: [three.externalId], startDate: "2026-12-21" })).status, 404);
 });
 
-test("6. two assigns to one athlete's week at once: one writes, the other asks (no second plan)", async () => {
+test("6. two assigns of two templates to one athlete's week at once: one writes, the other asks (no second plan)", async () => {
   const s = await squad("race", 1);
   const cookie = s.coach.cookie;
+  // Two different templates: they do not meet on a template row lock, only on
+  // the (athlete, week) slot lock.
   let draft = await weeklyTemplate(cookie, 1, "Race");
   draft = await addSession(cookie, blockOf(draft, 1, 1).id, "T Monday");
   const templateId = draft.plan.id;
+  let other = await weeklyTemplate(cookie, 1, "Race two");
+  other = await addSession(cookie, blockOf(other, 1, 2).id, "T Tuesday");
   const athlete = s.athletes[0];
   let release;
   const held = new Promise((r) => { release = r; });
@@ -395,7 +399,7 @@ test("6. two assigns to one athlete's week at once: one writes, the other asks (
     const a = assign(cookie, templateId, { athleteIds: [athlete.externalId], startDate: "2026-12-21" });
     // Wait until the first holds its slot lock.
     for (let i = 0; i < 200 && first; i += 1) await new Promise((r) => setTimeout(r, 10));
-    const b = assign(cookie, templateId, { athleteIds: [athlete.externalId], startDate: "2026-12-21" });
+    const b = assign(cookie, other.plan.id, { athleteIds: [athlete.externalId], startDate: "2026-12-21" });
     await new Promise((r) => setTimeout(r, 150));
     release();
     const [ra, rb] = await Promise.all([a, b]);
