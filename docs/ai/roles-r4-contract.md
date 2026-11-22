@@ -512,7 +512,13 @@ Rewritten after the *Nezavisni revizor*'s H3. The existing rule is **every advis
      text)`), is called as the **first statement of the transaction** by every caller, before any rights check or row lock.
      `lock_permission_actor` does not take it; it **checks** that the transaction holds it in a sufficient mode
      (`pg_locks`, `locktype = 'advisory'`, `pid = pg_backend_pid()`, the namespace and key) and refuses `55000` otherwise -
-     a programming error the tests catch. A recorded-order test for every caller of `lock_permission_actor`.
+     a programming error the tests catch. A recorded-order test for every caller of `lock_permission_actor`. The lock and
+     the check use the same key form, `(int4 namespace, hashtext(clubId))`, so the `pg_locks` row has `classid` = the
+     namespace, `objid` = the hash, `objsubid` = 2, mode `ShareLock` (shared) or `ExclusiveLock` (exclusive), `granted`.
+     The caller reads `teams.club_id` without a lock to know which club to lock (a team never moves club, D43).
+   - **Exempt, because they only shorten a custom:** the trigger-driven `role_ended` writes (7.3) and the old revocation
+     routes of `organization.js` that do not call `lock_permission_actor`. R4-1 lists, by grep, every caller of
+     `lock_permission_actor` that must add the helper; a missed one fails closed with `55000`, never a deadlock.
    - **The mode is a parameter**, never an upgrade inside one transaction: `shared` (a guarded write, a custom role write,
      a club role or assignment write) or `exclusive` (a ceiling change and every club version write - rule 7 of 7.2
      depends on all versions of the club together). A transaction asks once, in the mode it needs; a second request in the
