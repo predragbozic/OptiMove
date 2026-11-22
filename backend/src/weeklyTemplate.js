@@ -73,23 +73,26 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
   if (!pairs.length) return [];
   const bySource = new Map(pairs.map((p) => [String(p.sourceDayId), p]));
   const sessions = (await client.query(
-    `select * from plans.plan_sessions where plan_day_id = any($1::uuid[]) order by plan_day_id, session_order, id`,
+    `select * from plans.plan_sessions where plan_day_id = any($1::uuid[]) order by plan_day_id, session_order nulls first, id`,
     [pairs.map((p) => p.sourceDayId)],
   )).rows;
   if (!sessions.length) return [];
   const values = [];
   const params = [];
   let column = 0;
+  // After kept sessions (an offset), each copied session is numbered 1..n in
+  // its day and slot (half-day, phase) in its own order, then shifted past the
+  // kept ones: never the order of a kept session, and never two copies with
+  // one order even from a legacy source ordered NULL and 1. Without an offset
+  // the source's own order is copied as it is (it is already unique per slot).
+  const rank = new Map();
   for (const session of sessions) {
     const pair = bySource.get(String(session.plan_day_id));
+    const slot = `${session.plan_day_id}|${session.am_pm ?? ""}|${session.bta ?? ""}`;
+    rank.set(slot, (rank.get(slot) || 0) + 1);
     const row = [pair.targetDayId, session.am_pm, session.bta, session.session_time,
-      // After kept sessions (an offset): at least 1 before the offset, so a
-      // template session never takes the order of a kept session it follows.
-      // Without an offset the source's own order is copied as it is, so two
-      // legacy sessions ordered NULL and 1 stay distinct (db review).
-      Number(pair.orderOffset) > 0
-        ? Math.max(Number(session.session_order) || 0, 1) + Number(pair.orderOffset)
-        : session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
+      Number(pair.orderOffset) > 0 ? rank.get(slot) + Number(pair.orderOffset) : session.session_order,
+      session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   }
