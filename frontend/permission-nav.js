@@ -39,17 +39,13 @@ export function permissionTabAllowed(section, user = state.currentUser) {
   return words.some((word) => held.has(word));
 }
 
-// A team coach's or independent coach's Settings ("My team"): today's four tabs, plus the organization tabs the held words
-// give (Clubs and Teams with org.view; Users with staff.assign). Never Roles, Overview or a platform tab. With no list the
-// array is the one the screens always had.
+// A team coach's or independent coach's Settings ("My team"): today's coach tabs intersected with the held words. A
+// permission only decides whether a tab is SEEN; it never adds a tab the coach's Settings does not have (U1 removed
+// Overview, Clubs, Teams and Users on purpose; manager's decision, 2026-11-22), and there is no Roles tab (Q5). None of
+// today's four coach tabs stands on a honoured word (Q1), so the intersection is the same four tabs. The shape stays a
+// function so a later honoured word for one of them has one place to change.
 const BASE_COACH_SECTIONS = Object.freeze(["athletes", "joinLinks", "presets", "icons"]);
 export function coachSettingsSections(user = state.currentUser) {
-  const held = heldPermissions(user);
-  if (!held) return BASE_COACH_SECTIONS;
-  return [
-    ...(held.has("org.view") ? ["clubs", "teams"] : []),
-    "athletes",
-    ...(held.has("staff.assign") ? ["users"] : []),
-    ...BASE_COACH_SECTIONS.slice(1),
-  ];
+  void user;
+  return BASE_COACH_SECTIONS;
 }

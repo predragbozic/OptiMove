@@ -393,7 +393,7 @@ export function renderOrganizationBrowser(data) {
       ["clubs", "club", clubs.length],
       ["teams", "team", teams.length],
       ["athletes", "athlete", activeAthletes.length],
-    ];
+    ].filter(([value]) => permissionTabAllowed(value));
     body = `${head("All accessible organization", `${countLabel(clubs.length, "club")} - ${countLabel(teams.length, "team")} - ${countLabel(activeAthletes.length, "athlete")}`, "", "Organization browser")}
       <nav class="organization-section-summary" aria-label="Organization summary">
         ${tiles.map(([value, noun, count]) => `<button class="organization-section-summary-tile" type="button" data-action="organization-section" data-section="${value}" aria-label="${escapeAttr(countLabel(count, noun))}"><strong>${count}</strong><span>${escapeHtml(countLabel(count, noun).replace(/^\d+ /, "").replace(/^./, (c) => c.toUpperCase()))}</span></button>`).join("")}

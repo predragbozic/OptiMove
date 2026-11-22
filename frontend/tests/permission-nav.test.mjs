@@ -62,19 +62,15 @@ test("1. FALLBACK: without /me permissions (absent, not an array, or unavailable
   }
 });
 
-test("2. a team coach's My team is built from the words held: Clubs, Teams, Athletes and today's tabs, never Roles, Users or Overview", () => {
-  as(TEAM_WS, { permissions: COACH_WORDS, permissionsUnavailable: false });
-  const html = panel();
-  assert.deepEqual(tabs(html), ["clubs", "teams", "athletes", "joinLinks", "presets", "icons"]);
-  assert.match(html, /My team/);
-  assert.doesNotMatch(html, /data-section="(roles|users|overview)"/);
-  assert.equal(rolesContext(data()), null, "a team workspace never offers Roles");
-  as(TEAM_WS, { permissions: ["athletes.manage"] });
-  assert.deepEqual(tabs(panel()), ["athletes", "joinLinks", "presets", "icons"], "no org.view: no Clubs or Teams");
-  // Even with the words that would give them to a club, the coach workspace has no Roles tab and no Overview.
-  as(TEAM_WS, { permissions: ALL_WORDS });
-  assert.deepEqual(tabs(panel()), ["clubs", "teams", "athletes", "users", "joinLinks", "presets", "icons"]);
-  assert.equal(rolesContext(data()), null);
+test("2. a team coach's My team keeps today's four tabs whatever words are held: never Clubs, Teams, Overview, Users or Roles", () => {
+  for (const permissions of [COACH_WORDS, ["athletes.manage"], [], ALL_WORDS]) {
+    as(TEAM_WS, { permissions, permissionsUnavailable: false });
+    const html = panel();
+    assert.deepEqual(tabs(html), ["athletes", "joinLinks", "presets", "icons"], permissions.join());
+    assert.match(html, /My team/);
+    assert.doesNotMatch(html, /data-section="(roles|users|overview|clubs|teams)"/);
+    assert.equal(rolesContext(data()), null, "a team workspace never offers Roles");
+  }
 });
 
 test("3. an independent coach holds no word in /me and keeps today's four tabs", () => {
@@ -82,13 +78,24 @@ test("3. an independent coach holds no word in /me and keeps today's four tabs",
   assert.deepEqual(tabs(panel()), COACH_SETTINGS_SECTIONS);
 });
 
-test("4. a coach on a stale section the words no longer give falls back to Athletes", () => {
-  as(TEAM_WS, { permissions: ["athletes.manage"] }, "clubs");
+test("4. a coach on a section outside My team falls back to Athletes; an allowed one is kept", () => {
+  for (const section of ["clubs", "teams", "users", "roles"]) {
+    as(TEAM_WS, { permissions: ALL_WORDS }, section);
+    panel();
+    assert.equal(state.organization.section, "athletes", section);
+  }
+  as(TEAM_WS, { permissions: COACH_WORDS }, "presets");
   panel();
-  assert.equal(state.organization.section, "athletes");
-  as(TEAM_WS, { permissions: COACH_WORDS }, "clubs");
-  panel();
-  assert.equal(state.organization.section, "clubs");
+  assert.equal(state.organization.section, "presets");
+});
+
+test("4b. the Overview summary offers no Users tile when staff.assign is not held (no dead control)", () => {
+  as(CLUB_WS, { ...ADMIN, permissions: ["org.view", "athletes.manage"] });
+  const html = panel();
+  assert.doesNotMatch(html, /data-section="users"/);
+  assert.match(html, /data-section="clubs"/);
+  as(CLUB_WS, { ...ADMIN, permissions: CLUB_ADMIN_WORDS });
+  assert.match(panel(), /organization-section-summary-tile" type="button" data-action="organization-section" data-section="users"/);
 });
 
 test("5. a club admin's tabs follow org.view, staff.assign and roles.manage; Roles is read-only with org.view alone", () => {
