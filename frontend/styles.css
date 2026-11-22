@@ -29967,3 +29967,60 @@ body.athlete-questions-prompt-open {
   width: 100%;
   box-sizing: border-box;
 }
+/* K6 (docs/ai/central-calendar-k6-contract.md): the team and athlete switcher of the central calendar. The strip
+   itself wears the Builder's batch classes (athlete-switcher.js); this is only what the calendar adds. */
+.athlete-switcher { display: grid; gap: 10px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line, #dce6ea); border-radius: 8px; background: var(--surface, #fff); box-sizing: border-box; max-width: 100%; min-width: 0; }
+.athlete-switcher-body { display: grid; gap: 10px; min-width: 0; }
+.athlete-switcher-body[hidden] { display: none; }
+.athlete-switcher .builder-batch-buttons { width: 100%; box-sizing: border-box; }
+.athlete-switcher .builder-batch-pills { position: relative; flex: 1 1 0; min-width: 0; max-width: none; scroll-snap-type: x proximity; }
+.athlete-switcher .builder-batch-pill { scroll-snap-align: center; min-height: 44px; }
+.athlete-switcher .icon-button { flex: none; min-width: 44px; min-height: 44px; }
+.athlete-switcher .builder-batch-avatar { overflow: visible; }
+.athlete-switcher .builder-batch-photo { border-radius: 50%; }
+.athlete-switcher-dot { position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--surface, #fff); background: var(--cc-team-color, var(--cc-team-none, #98a2b3)); box-sizing: border-box; }
+.athlete-switcher-dot-inline { position: static; display: inline-block; width: 10px; height: 10px; margin-right: 4px; }
+.athlete-switcher-mark { position: absolute; top: 2px; right: 8px; font-weight: 800; color: #667085; }
+.athlete-switcher-group-label { flex: none; align-self: stretch; writing-mode: vertical-rl; transform: rotate(180deg); font-size: 11px; font-weight: 800; color: #667085; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-height: 74px; }
+.athlete-switcher-count, .athlete-switcher-note { margin: 0; color: #667085; font-size: 12px; overflow-wrap: anywhere; }
+.athlete-switcher-fold { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line, #dce6ea); border-radius: 8px; background: transparent; color: inherit; font: inherit; font-weight: 800; text-align: left; }
+.athlete-switcher-search { display: grid; gap: 6px; }
+.athlete-switcher-search-input { width: 100%; min-height: 44px; box-sizing: border-box; padding: 8px 12px; font-size: 16px; border: 1px solid var(--line, #dce6ea); border-radius: 8px; }
+.athlete-switcher-results { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.athlete-switcher-result { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.athlete-switcher-result.is-active, .athlete-switcher-result:hover { background: #eef8f6; border-color: #287e77; }
+.athlete-switcher-result .builder-batch-avatar { flex: none; width: 32px; height: 32px; }
+.athlete-switcher-result-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-weight: 700; }
+.athlete-switcher-result-team { flex: none; font-size: 12px; color: #667085; }
+.athlete-switcher-result mark { background: #fff3bf; color: inherit; }
+.athlete-switcher-empty, .athlete-switcher-more { margin: 0; color: #667085; font-size: 13px; overflow-wrap: anywhere; }
+.cc-athlete-line { margin-top: 0; }
+@media (max-width: 760px) {
+  .athlete-switcher { padding: 8px; }
+  .athlete-switcher .builder-batch-buttons { justify-content: space-between; }
+}
+
+/* K6-2 / K6-3: the Weekly plan's athlete switcher header (weekly-k6.js). */
+.weekly-k6 { display: grid; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line, #dce6ea); border-radius: 8px; background: var(--surface, #fff); box-sizing: border-box; max-width: 100%; min-width: 0; }
+.weekly-k6-back { justify-self: start; min-height: 44px; font-weight: 800; }
+.weekly-k6-controls { display: grid; gap: 8px; min-width: 0; }
+.weekly-k6-controls .builder-batch-buttons { width: 100%; box-sizing: border-box; }
+.weekly-k6-controls .builder-batch-pills { position: relative; flex: 1 1 0; min-width: 0; max-width: none; }
+.weekly-k6-controls .icon-button { flex: none; min-width: 44px; min-height: 44px; }
+.weekly-k6-controls .builder-batch-avatar { overflow: visible; }
+.weekly-k6-summary { margin: 0; overflow-wrap: anywhere; }
+.weekly-k6-line, .weekly-k6-kept, .weekly-k6-hidden { margin: 0; color: #667085; font-size: 13px; overflow-wrap: anywhere; }
+.weekly-k6-line { color: #344054; font-weight: 700; }
+.cc-see-each { display: grid; gap: 6px; margin: 8px 0; }
+.cc-see-each .cc-panel-button { min-height: 44px; }
+.athlete-switcher .cc-chip { min-height: 44px; }
+.weekly-k6 .cc-chip, .weekly-k6 .cc-primary, .weekly-k6 .plain-button { min-height: 44px; }
+
+/* K6 review fixes (mobile-qa): the "not in this session" mark sits on its own pill, long team names wrap, the fold's
+   text breaks, the chevron turns, a busy header says so. */
+.athlete-switcher .builder-batch-pill, .weekly-k6-controls .builder-batch-pill { position: relative; }
+.athlete-switcher-result { flex-wrap: wrap; }
+.athlete-switcher-result-team { max-width: 100%; overflow-wrap: anywhere; }
+.athlete-switcher-fold > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.athlete-switcher.is-open .cc-filters-chevron { transform: translateY(2px) rotate(-135deg); }
+.weekly-k6-controls[aria-busy="true"] { opacity: .6; pointer-events: none; }

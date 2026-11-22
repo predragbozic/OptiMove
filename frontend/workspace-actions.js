@@ -133,11 +133,23 @@ export async function handleWorkspaceAction(action, handlers = {}) {
         method: "PUT",
         body: JSON.stringify({ type: nextType, scopeId: nextScopeId }),
       });
+      // The words of /me belong to the workspace they were read for (roles R3): drop them with the old workspace
+      // (the screens then behave as before), then read the new workspace's words below.
+      const { permissions: _oldPermissions, permissionsUnavailable: _oldUnavailable, ...kept } = state.currentUser || {};
       state.currentUser = {
-        ...state.currentUser,
+        ...kept,
         activeWorkspace: data.activeWorkspace,
         availableWorkspaces: data.availableWorkspaces,
       };
+      try {
+        const me = await api("/api/auth/me");
+        const same = sameWorkspace(state.currentUser?.activeWorkspace, me?.user?.activeWorkspace);
+        if (same && Array.isArray(me.user.permissions)) {
+          state.currentUser = { ...state.currentUser, permissions: me.user.permissions, permissionsUnavailable: me.user.permissionsUnavailable === true };
+        }
+      } catch {
+        // No words: the navigation falls back to what it showed before permissions existed; the server decides anyway.
+      }
       state.workspaceSwitcher.pending = false;
       state.workspaceSwitcher.open = false;
       state.workspaceSwitcher.error = "";

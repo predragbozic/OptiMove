@@ -182,6 +182,15 @@ export const emptyCentralCalendarState = () => ({
   // The event panel package: a manager's panel's values ({ panel, key,
   // loading, error, weekly }), read on every open, never cached.
   panelAnswers: null,
+  // K6 (docs/ai/central-calendar-k6-contract.md): the team and athlete switcher. `athleteKey` is the chosen athlete's
+  // roster UUID ("" = Everyone; the team is `filters.teamIds[0]`), kept in memory for the session of this workspace
+  // (this whole slice is replaced on a workspace change); `org` holds only the reduced { athleteUuid, teamId } pairs
+  // of a club workspace; `answer` is the athlete's own read of the range ({ athleteId, kinds, data }); `status` is
+  // "idle" | "loading" | "error" for that read.
+  switcher: { athleteKey: "", query: "", activeIndex: 0, open: false, org: { status: "idle", pairs: [], contextKey: "" }, answer: null, status: "idle" },
+  // K6-2/K6-3: the Weekly plan's switcher flow ({ keys, teamId, eventKey, slot, ... }), null when the plan was not
+  // opened from the calendar.
+  weeklyFlow: null,
 });
 
 export const emptyExerciseOptions = () => ({

@@ -94,12 +94,20 @@ test("(390 px) an empty later day offers Plan a session, which opens the Calenda
     await page.waitForSelector(".coach-home-day", { timeout: 20_000 });
     // Choose a later day of the shown week with no session (a past day offers no planning).
     const today = await page.evaluate(() => document.querySelector(".coach-home-cal-day.is-today")?.dataset.date);
-    const chosen = await page.evaluate((todayIso) => {
+    const pickLater = (todayIso) => {
       const days = [...document.querySelectorAll(".coach-home-cal-day:not(.has-training)")]
         .filter((button) => button.dataset.date > todayIso && button.getBoundingClientRect().width > 0);
       days[0]?.click();
       return days[0]?.dataset.date || "";
-    }, today);
+    };
+    let chosen = await page.evaluate(pickLater, today);
+    // On a Sunday the shown week has no later day: the test is independent of the weekday, so it steps to next week,
+    // whose days are all later (the product is right on a Sunday: it offers the next week's days).
+    if (!chosen) {
+      await page.locator('[data-action="coach-home-calendar-step"][data-step="week"][data-direction="1"]').click();
+      await page.waitForTimeout(400);
+      chosen = await page.evaluate(pickLater, today);
+    }
     assert.ok(chosen, "the week shows a later day with no session");
     await page.waitForSelector(`[data-action="coach-home-plan-session"][data-date="${chosen}"]`, { timeout: 10_000 });
     const plan = page.locator('[data-action="coach-home-plan-session"]');
