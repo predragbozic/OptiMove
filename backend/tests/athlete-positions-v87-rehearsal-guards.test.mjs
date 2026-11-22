@@ -43,6 +43,7 @@ test("G4. every file the rehearsal reads keeps LF in every checkout (a CRLF roll
     "docs/runbooks/athlete-positions-v87-postcheck.sql",
     "docs/runbooks/athlete-positions-v87-rollback.sql",
     "backend/tests/support/legacy-schema.sql",
+    "backend/scripts/athlete-positions-v87-rehearsal.sh",
   ];
   const out = execFileSync("git", ["-C", REPO, "check-attr", "eol", "--", ...files], { encoding: "utf8" });
   for (const f of files) assert.match(out, new RegExp(`^${f.replace(/[.*]/g, "\\$&")}: eol: lf$`, "m"), f);
