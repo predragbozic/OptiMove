@@ -53,7 +53,34 @@ async function draftWithEmptySession(name) {
   return plan.body.plan.id;
 }
 
-const CASES = [["1280 px", WIDTHS.desktop, "Ana Example"], ["390 px", WIDTHS.phone, "Bojan Example"], ["360 px", 360, "Cara Example"]];
+test("(390 px) when opening the draft fails, the screen is drawn again with the message, its button and the reason", async () => {
+  const name = "Dario Example";
+  const planId = await draftWithEmptySession(name);
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.phone);
+  try {
+    await openNav(page);
+    await page.locator("#calendarToggle").click();
+    await page.waitForSelector(".central-calendar .athlete-switcher", { timeout: 20_000 });
+    if ((await page.locator(".athlete-switcher-fold").getAttribute("aria-expanded")) !== "true") await page.locator(".athlete-switcher-fold").click();
+    await page.locator(`.athlete-switcher .builder-batch-pill[aria-label="${name}"]`).click();
+    await page.waitForSelector(".cc-athlete-line");
+    await page.locator(".cc-athlete-line [data-action='central-calendar-open-athlete']").click();
+    await page.waitForSelector(".weekly-k6");
+    await page.getByRole("button", { name: "Plan it in the Builder" }).click();
+    const open = page.locator('[data-action="weekly-open-existing"]');
+    await open.waitFor({ timeout: 20_000 });
+    await page.route(`**/api/builder/plans/${planId}`, (route) => (route.request().method() === "GET" ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.continue()));
+    await open.click();
+    await page.locator(".builder-error", { hasText: "boom" }).waitFor({ timeout: 20_000 });
+    assert.equal(await page.getByText("Opening weekly plan...").count(), 0, "no loading placeholder is left");
+    assert.equal(await page.locator('[data-action="weekly-open-existing"]').count(), 1, "the button is back for a retry");
+    assert.deepEqual(pageErrors.filter((e) => !/500/.test(String(e))), []);
+  } finally {
+    await context.close();
+  }
+});
+
+const CASES =[["1280 px", WIDTHS.desktop, "Ana Example"], ["390 px", WIDTHS.phone, "Bojan Example"], ["360 px", 360, "Cara Example"]];
 for (const [label, width, name] of CASES) {
   test(`(${label}) a refused weekly create offers Open that draft, and it opens that draft`, async () => {
     const planId = await draftWithEmptySession(name);

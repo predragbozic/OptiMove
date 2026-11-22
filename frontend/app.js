@@ -3532,7 +3532,7 @@ async function handleContentClick(event) {
       // The week already holds a plan: offer to open it when the weekly-plans read returns one the caller may open.
       const existing = error?.status === 409 && athleteId ? await findExistingWeeklyPlan(athleteId, weekStart) : null;
       if (existing && state.activeTab === "builder" && state.builder?.weekStart === weekStart) {
-        weeklyExistingPlan = existing;
+        weeklyExistingPlan = { ...existing, message: error?.message };
         els.content.insertAdjacentHTML("afterbegin", renderWeeklyExistingHtml(error?.message, existing));
       } else {
         renderBuilderError(error);
@@ -3551,7 +3551,10 @@ async function handleContentClick(event) {
       weeklyExistingPlan = null;
       await loadBuilder();
     } catch (error) {
-      action.disabled = false;
+      // setLoading replaced the screen: draw it again, then the original message with its button (a retry), then why.
+      state.builder = emptyBuilderState({ planType: "weekly", entryType: "weekly", weekStart: existing.weekStart });
+      renderBuilder();
+      els.content.insertAdjacentHTML("afterbegin", renderWeeklyExistingHtml(existing.message, existing));
       renderBuilderError(error);
     }
     return;
