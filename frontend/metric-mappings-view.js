@@ -561,7 +561,7 @@ function panelHtml(s, mapping, ctx) {
   const version = (mapping.versions || []).find((v) => v.id === p.versionId) || null;
   const locked = Boolean(s.write?.busy || s.write?.unconfirmed);
   const close = `<button class="plain-button ghost" type="button" data-action="metric-mappings-panel-close" ${locked ? "disabled" : ""}>Cancel</button>`;
-  const refused = p.refusedTeam ? `<p class="metric-variables-field-note" role="alert">${escapeHtml(`“${p.refusedTeam.name}” ${p.refusedTeam.text}, so nothing was saved.`)}</p>` : "";
+  const refused = p.refusedTeam ? `<p class="metric-variables-field-note" role="alert">${escapeHtml(`“${p.refusedTeam.name}” ${p.refusedTeam.text}, so nothing was saved.${p.refusedTeam.detail ? ` ${p.refusedTeam.detail}` : ""}`)}</p>` : "";
   let inner = "";
   if (p.kind === "switchOn") {
     const bindings = chosenBindings(p.chooser);

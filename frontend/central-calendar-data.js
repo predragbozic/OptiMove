@@ -1,5 +1,6 @@
 import { CC_QUESTION_SETTLED_CODES } from "./central-calendar-questions.js";
 import { api } from "./api.js";
+import { clearGpsReview } from "./central-calendar-gps-review.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { emptyCentralCalendarState, state } from "./state.js";
 import { addDaysIso, localDateIso, monthWeeksIso, weekMondayIso } from "./utils.js";
@@ -107,6 +108,8 @@ export function centralCalendarShownData(cal) {
 export function invalidateCentralCalendarCache() {
   invalidateCacheNamespace(CENTRAL_CALENDAR_NAMESPACE);
   invalidateCacheNamespace(CENTRAL_CALENDAR_DAY_NAMESPACE);
+  // K5-4: the GPS marks are read again with the calendar (a realtime or manual refresh).
+  clearGpsReview();
 }
 
 // Settings -> Calendar changed the club's catalog (K2b-1c): the calendar is
@@ -136,6 +139,7 @@ export function setCentralCalendarAppliedHook(hook) {
 
 export function resetCentralCalendarForWorkspaceChange() {
   state.centralCalendar = emptyCentralCalendarState();
+  clearGpsReview();
   rangeGeneration += 1;
   kindsGeneration += 1;
   dayGeneration += 1;

@@ -326,3 +326,16 @@ On an events column's detail, the platform admin sees one block, **GPEXE's event
    Recommended: read-only, so the club knows why.
 2. Should the Imports reason also name the date from which GPEXE's setting changed? The thresholds read gives the set's
    validity. Recommended: no, not now.
+
+Decided by the Rukovodilac (2026-11-20): 1 yes (read-only), 2 no.
+
+### C6. After the merge (#687, #690; 2026-11-20)
+
+- **The owner's decision (2026-11-20, in the Rukovodilac's chat): the confirmation stays as it is.**
+  - `setting_differs` keeps naming the compared session's exact setting, and there is no stricter variant.
+  - The Independent's note stands as recorded. The confirmation is a record that the owner confirmed. It is not proof that the owner looked at GPEXE, since the refusal and the Compare and Create screens (decision #33) show the setting.
+- **The owner's run (2026-11-20):** the five steps done. The comparison, 2.5 m/s² lasting 0.3 s confirmed, and Acceleration and Deceleration events placed for First team.
+- **Follow-ups closed with the estimate panel PR:**
+  - Mappings shows the server's sentence naming both settings for a team refused with `team_setting_mismatch` (code review LOW-3).
+  - The board's drop filter attribute has its own test (the Independent's LOW-1).
+  - A negative duration is refused on the screen with its own test (the Independent's LOW-2).

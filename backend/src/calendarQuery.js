@@ -546,11 +546,15 @@ async function readEventTeamTargets(eventIds) {
 }
 
 // The live session links of the window's events (K2a-1b), each resolved to
-// the published session now in its slot (plan section 2.2): a link whose plan
-// was deleted (plan_id null) or whose slot holds no published session any
-// more is ORPHANED (no session_id) — counted on the event's card, never an
-// error and never silently gone; a session renamed since the link still
-// resolves and is counted as renamed. One statement.
+// the published session now in its slot (plan section 2.2) that is still the
+// session it was made for (its logical_session_id equals the link's
+// logical_session_id_at_link: the link identity guard). A link whose plan was
+// deleted (plan_id null), whose slot holds no published session any more, or
+// whose slot now holds ANOTHER session (the linked one removed or moved and a
+// new one in its place, which reuses the day's order) is ORPHANED (no
+// session_id) — counted on the event's card, never an error, never silently
+// gone, and never read as the other session; a session renamed since the link
+// still resolves and is counted as renamed. One statement.
 // K4a (docs/ai/central-calendar-k4a-contract.md 1.1): for the athlete, only
 // the links of the athlete's OWN plans are read - a teammate's link never
 // enters the athlete's request. Without `athleteId` (a coach) the statement is
@@ -576,6 +580,7 @@ export async function readEventSessionLinks(eventIds, { athleteOnly = false, ath
           where p.id = l.plan_id and ${WEEKLY_PLAN_SESSION_FILTER_SQL}
             and pd.date = l.day and ps.am_pm is not distinct from l.am_pm and ps.bta is not distinct from l.bta
             and ps.session_order = l.session_order
+            and ps.logical_session_id = l.logical_session_id_at_link
           order by ps.id
           limit 1
        ) s on true

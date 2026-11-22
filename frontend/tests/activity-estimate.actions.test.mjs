@@ -402,3 +402,18 @@ test("LOW: a refused first save reads the roster again and keeps the panel with 
   assert.equal(rosterReads(), before + 1, "one roster read after the refusal");
   assert.match(html(), /tl-estimate-error/);
 });
+
+test("Estimate panel polish: a variable's name is never a key, and Own average names the sessions it used and the type it compares with", async () => {
+  const { variableName, ownAverageBasisText } = await import("../activity-estimate.js");
+  assert.equal(variableName({ shortLabel: "Distance", label: "Total distance" }), "Distance");
+  assert.equal(variableName({ shortLabel: "total_distance", label: "Total distance" }), "Total distance");
+  assert.equal(variableName({ shortLabel: "total_distance", label: "total_distance" }), "Total distance");
+  assert.equal(variableName({ shortLabel: null, label: "duration" }), "duration");
+  assert.equal(variableName({}), "Value");
+  assert.equal(ownAverageBasisText({ sessionDays: ["2026-11-17", "2026-11-14", "2026-11-12"], comparesWith: { key: "training_session", label: "Training session" } }),
+    "From 3 sessions: 17.11.2026, 14.11.2026 and 12.11.2026 · Compares with: Training session");
+  assert.equal(ownAverageBasisText({ sessionDays: ["2026-11-17"], comparesWith: null }), "From 1 session: 17.11.2026");
+  assert.equal(ownAverageBasisText({ sessionDays: ["2026-09-14", "2026-09-14", "2026-09-12"] }), "From 3 sessions: 14.09.2026 (2) and 12.09.2026");
+  assert.equal(ownAverageBasisText({ sessionDays: [], comparesWith: { key: "match", label: "Match" } }), "Compares with: Match");
+  assert.equal(ownAverageBasisText(undefined), "");
+});
