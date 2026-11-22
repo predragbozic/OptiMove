@@ -29,6 +29,7 @@ import {
   commitCertainlyRefused, lockAliasSet, requestHash, withinBound,
 } from "./activityRosterCommands.js";
 import { boundedText } from "./metricTextRules.js";
+import { comparableSessionTypes, effectiveTypeOf, readSessionTypeState, sessionTypeLabels } from "./activitySessionTypes.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average", "scale_recording", "position_average"]);
@@ -203,7 +204,16 @@ export async function loadEstimateContext(client, { canonicalId, activity, team,
       where d.owner_scope = 'system' and d.key = $1`,
     [testHooks.durationKey ?? DURATION_KEY],
   )).rows[0] ?? null;
-  return { roster, measured, variables, durationDef, athleteId, event, activity, team, real };
+  // ST-3 (plan section 6): every method works by the athlete's EFFECTIVE session type - the athlete's own exception in
+  // this session, otherwise the session's type, both read here (inside the save's locks), never from the unlocked
+  // resolve. Team average and Copy take only athletes of the target's type.
+  const types = await readSessionTypeState(client, canonicalId);
+  const typeOf = (id) => effectiveTypeOf(types, id);
+  const targetType = typeOf(athleteId);
+  return {
+    roster, measured, variables, durationDef, athleteId, event, activity, team, real,
+    typesInstalled: types.installed, typeOf, targetType, sameType: (id) => typeOf(id) === targetType,
+  };
 }
 
 const sameUnit = (a, b) => (a ?? null) === (b ?? null);
@@ -224,9 +234,14 @@ function defaultMinutes(ctx) {
 
 function teamAverage(ctx) {
   return ctx.variables.filter((v) => v.estimable).map((v) => {
-    const values = ctx.measured.filter((m) => m.def === v.metricDefinitionId && m.athleteId !== ctx.athleteId && sameUnit(m.unit, v.unit));
+    const everyone = ctx.measured.filter((m) => m.def === v.metricDefinitionId && m.athleteId !== ctx.athleteId && sameUnit(m.unit, v.unit));
+    // Only athletes who did the target's type; enough athletes of other types is its own reason.
+    const values = everyone.filter((m) => ctx.sameType(m.athleteId));
     const athletes = new Set(values.map((m) => m.athleteId)).size;
-    if (athletes < TEAM_AVERAGE_MIN_ATHLETES) return { variable: v, value: null, reason: "too_few_athletes", basis: null };
+    if (athletes < TEAM_AVERAGE_MIN_ATHLETES) {
+      const reason = new Set(everyone.map((m) => m.athleteId)).size >= TEAM_AVERAGE_MIN_ATHLETES ? "too_few_same_type" : "too_few_athletes";
+      return { variable: v, value: null, reason, basis: null };
+    }
     const mean = values.reduce((s, m) => s + m.value, 0) / values.length;
     return { variable: v, value: round(mean, 3), reason: null, basis: { athletes } };
   });
@@ -261,18 +276,32 @@ function positionAverage(ctx, positions) {
   const positionId = positions.target.id;
   const peers = new Set(ctx.roster.filter((a) => a.athleteId !== ctx.athleteId && positions.byAthlete.get(a.athleteId) === positionId).map((a) => a.athleteId));
   return estimable.map((v) => {
-    const values = ctx.measured.filter((m) => m.def === v.metricDefinitionId && peers.has(m.athleteId) && sameUnit(m.unit, v.unit));
+    const ofPosition = ctx.measured.filter((m) => m.def === v.metricDefinitionId && peers.has(m.athleteId) && sameUnit(m.unit, v.unit));
+    // As the team average and Copy (plan section 6): only athletes who did the target's type in this session; enough
+    // athletes of the position who did another type is its own reason.
+    const values = ofPosition.filter((m) => ctx.sameType(m.athleteId));
     const athletes = new Set(values.map((m) => m.athleteId)).size;
-    if (athletes < POSITION_AVERAGE_MIN_ATHLETES) return { variable: v, value: null, reason: "too_few_athletes_in_position", basis: null };
+    if (athletes < POSITION_AVERAGE_MIN_ATHLETES) {
+      const reason = new Set(ofPosition.map((m) => m.athleteId)).size >= POSITION_AVERAGE_MIN_ATHLETES ? "too_few_same_type" : "too_few_athletes_in_position";
+      return { variable: v, value: null, reason, basis: null };
+    }
     const mean = values.reduce((s, m) => s + m.value, 0) / values.length;
     return { variable: v, value: round(mean, 3), reason: null, basis: { athletes, positionId } };
   });
 }
 
-function copySources(ctx) {
+// Roster athletes with a measured value of an estimable variable, apart from the target.
+function measuredAthletes(ctx) {
   const estimable = new Set(ctx.variables.filter((v) => v.estimable).map((v) => v.metricDefinitionId));
   const withValue = new Set(ctx.measured.filter((m) => estimable.has(m.def)).map((m) => m.athleteId));
   return ctx.roster.filter((a) => a.athleteId !== ctx.athleteId && withValue.has(a.athleteId));
+}
+// Copy takes only an athlete of the target's effective type; the others are listed apart (the picker greys them out).
+function copySources(ctx) {
+  return measuredAthletes(ctx).filter((a) => ctx.sameType(a.athleteId));
+}
+function otherTypeSources(ctx) {
+  return measuredAthletes(ctx).filter((a) => !ctx.sameType(a.athleteId)).map((a) => ({ ...a, activityTypeKey: ctx.typeOf(a.athleteId) }));
 }
 
 function copyAthlete(ctx, sourceAthleteId) {
@@ -283,8 +312,21 @@ function copyAthlete(ctx, sourceAthleteId) {
   });
 }
 
-// The athlete's own per-minute rate over the last measured sessions of the same category (the activity's type) of the
-// same team, within the window, before this session.
+// The type of a past session as the athlete did it (ST-3, plan section 6): the athlete's effective type there as it
+// stands now - an exception in that session, otherwise that session's type (a correction fixes the record, so a past
+// session corrected to another type leaves this average). A past participant without an activity participant row falls
+// back to the session's type. PAST_SESSION_TYPE alone is the rule of a world without v89.
+const PAST_SESSION_TYPE = `(select a.activity_type_key from training.activity_metric_event_links l join training.activities a on a.id = l.activity_id
+                             where l.metric_event_id = e.id and l.link_status = 'confirmed' order by l.activity_id limit 1)`;
+const PAST_EFFECTIVE_TYPE = `coalesce(
+          (select training.effective_activity_type(mpl.activity_participant_id)
+             from training.activity_participant_metric_participant_links mpl
+            where mpl.metric_event_participant_id = p.id and mpl.link_status = 'confirmed' order by mpl.activity_participant_id limit 1),
+          ${PAST_SESSION_TYPE})`;
+
+// The athlete's own per-minute rate over the last measured sessions the athlete did as a comparable type (the athlete's
+// effective type in this session, with D7: comparableSessionTypes) of the same team, within the window, before this
+// session.
 async function proportional(client, ctx, minutes) {
   const estimable = ctx.variables.filter((v) => v.estimable);
   const d = ctx.durationDef;
@@ -306,10 +348,9 @@ async function proportional(client, ctx, minutes) {
                   else e.occurred_date < $4::date end)
         and o.entry_method in ('api_import', 'csv_import') and ${EFFECTIVE} and v.value_numeric is not null
         and v.metric_definition_id = any($7::uuid[])
-        and exists (select 1 from training.activity_metric_event_links l join training.activities a on a.id = l.activity_id
-                     where l.metric_event_id = e.id and l.link_status = 'confirmed' and a.activity_type_key = $8)`,
+        and ${ctx.typesInstalled ? PAST_EFFECTIVE_TYPE : PAST_SESSION_TYPE} = any($8::text[])`,
     [ctx.athleteId, ctx.team.id, ctx.event.id, ctx.event.occurred_date, PROPORTIONAL_WINDOW_DAYS, ctx.event.occurred_instant,
-      [durationId, ...sums.map((v) => v.metricDefinitionId)], ctx.activity.activity_type_key],
+      [durationId, ...sums.map((v) => v.metricDefinitionId)], comparableSessionTypes(ctx.targetType)],
   )).rows;
   const byEvent = new Map();
   for (const r of rows) {
@@ -433,9 +474,12 @@ export async function getEstimateProposal(ctx, activityId, query) {
     const fallback = defaultMinutes(ectx);
     const minutes = input.minutes ?? fallback;
     const sources = copySources(ectx);
+    const others = otherTypeSources(ectx);
     let copy;
     if (input.sourceAthleteId === null) {
       copy = { available: sources.length > 0, reason: sources.length ? "choose_source" : "no_source", values: [] };
+    } else if (others.some((s) => s.athleteId === input.sourceAthleteId)) {
+      copy = { available: false, reason: "source_type_differs", values: [] };
     } else if (!sources.some((s) => s.athleteId === input.sourceAthleteId)) {
       copy = { available: false, reason: "copy_source_not_usable", values: [] };
     } else {
@@ -443,9 +487,12 @@ export async function getEstimateProposal(ctx, activityId, query) {
     }
     const own = await proportional(client, ectx, minutes);
     const positions = await loadPositions(client, ectx);
-    // The kind of session Own average compares with: this session's type (its key and label), or null without one.
-    const typeKey = target.activity?.activity_type_key ?? null;
-    const typeLabel = typeKey ? (await client.query(`select label from training.activity_types where key = $1`, [typeKey])).rows[0]?.label ?? null : null;
+    // The kind of session Own average compares with: the athlete's effective type here (its key and label) and the set
+    // of types that count toward it (D7), or null without a type.
+    const typeKey = ectx.targetType ?? null;
+    const compared = comparableSessionTypes(typeKey);
+    const typeLabels = await sessionTypeLabels(client, [...compared, ...others.map((o) => o.activityTypeKey)]);
+    const typeLabel = typeKey ? typeLabels.get(typeKey) ?? null : null;
     const answer = {
       activityId: target.canonicalId,
       athleteId: input.athleteId,
@@ -454,8 +501,12 @@ export async function getEstimateProposal(ctx, activityId, query) {
       variables: ectx.variables.map(({ versionId, ...v }) => v),
       methods: {
         // The days of the sessions it used, and the session type it compares with (read only; the saved basis is unchanged).
-        proportional: { ...methodView(own, "nothing_to_estimate"), sessionDays: proportionalDays(own), comparesWith: typeKey ? { key: typeKey, label: typeLabel } : null },
-        copy_athlete: { ...copy, sourceAthleteId: input.sourceAthleteId, sources },
+        proportional: { ...methodView(own, "nothing_to_estimate"), sessionDays: proportionalDays(own), comparesWith: typeKey ? { key: typeKey, label: typeLabel, types: compared.map((key) => ({ key, label: typeLabels.get(key) ?? null })) } : null },
+        // otherTypeSources: athletes with values who did another type here - shown, never copied from.
+        copy_athlete: {
+          ...copy, sourceAthleteId: input.sourceAthleteId, sources,
+          otherTypeSources: others.map((o) => ({ ...o, activityTypeLabel: typeLabels.get(o.activityTypeKey) ?? null })),
+        },
         team_average: methodView(teamAverage(ectx), "nothing_to_estimate"),
         // v87: the athletes of the same position; not available with the reason (no position, too few athletes of it).
         position_average: { ...methodView(positionAverage(ectx, positions), "nothing_to_estimate"), position: positions.target },
@@ -644,6 +695,10 @@ export async function saveEstimate(ctx, activityId, body) {
       if (!positions.target) throw conflict("no_position", "This athlete has no position. Set one in Settings → Athletes.");
       entries = positionAverage(ectx, positions);
     } else if (input.method === "copy_athlete") {
+      // A stale screen naming an athlete who did another type: refused, nothing written (plan section 6).
+      if (otherTypeSources(ectx).some((s) => s.athleteId === input.sourceAthleteId)) {
+        throw conflict("source_type_differs", "That athlete did another session type here. Choose an athlete of the same type.");
+      }
       if (!copySources(ectx).some((s) => s.athleteId === input.sourceAthleteId)) {
         throw conflict("copy_source_not_usable", "Choose an athlete of this session's roster with measured values.");
       }
