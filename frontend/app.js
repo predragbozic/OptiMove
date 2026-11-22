@@ -3664,9 +3664,6 @@ function moveWeek(delta) {
 }
 
 function renderTabs() {
-  // K6: the Weekly plan's athlete switcher belongs to the calendar's flow; any other tab ends it (the flow is set and
-  // the tab becomes weekly in the same tick when a plan is opened from the calendar, before renderTabs runs).
-  if (state.activeTab !== "weekly" && state.centralCalendar) state.centralCalendar.weeklyFlow = null;
   const isLibraryTab = ["organization", "templates", "exercises", "builder", "coaches"].includes(state.activeTab);
   const tabs = document.querySelectorAll(".tab");
   const tabsContainer = tabs[0]?.closest(".tabs");
@@ -3696,6 +3693,9 @@ function renderTabs() {
   // The same choke point puts the Exercise Library's pinned header back in
   // its place once another screen opens.
   exerciseHeaderReveal?.sync();
+  // K6: the Weekly plan's athlete switcher belongs to the calendar's flow; any other tab ends it (the flow is set and
+  // the tab becomes weekly in the same tick when a plan is opened from the calendar, before renderTabs runs).
+  if (state.activeTab !== "weekly" && state.centralCalendar) state.centralCalendar.weeklyFlow = null;
 }
 
 function renderAthleteListState() {
