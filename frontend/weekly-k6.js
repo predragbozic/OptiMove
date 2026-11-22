@@ -189,9 +189,9 @@ export function renderWeeklySwitcherHtml({ flow, items, currentKey, groupsHtml =
   if (!flow || !items || !items.length) return "";
   const index = items.findIndex((item) => item.key === currentKey);
   const current = index >= 0 ? items[index] : null;
-  const back = `<button type="button" class="plain-button weekly-k6-back" data-action="weekly-back-to-calendar">&lsaquo; Back to calendar</button>`;
+  const back = `<button type="button" class="plain-button weekly-k6-back" data-action="weekly-back-to-calendar">&lsaquo; ${flow.origin === "home" ? "Back to Home" : "Back to calendar"}</button>`;
   if (items.length < 2) return `<section class="weekly-k6" aria-label="Athletes">${back}</section>`;
-  const position = index >= 0 ? `${index + 1} / ${items.length}${flow.eventKey ? " in this event" : ""}` : "";
+  const position = index >= 0 ? `${index + 1} / ${items.length}${flow.listLabel ? ` ${flow.listLabel}` : flow.eventKey ? " in this event" : ""}` : "";
   const strip = renderAthleteSwitcherStripHtml({ items, currentKey, action: "weekly-k6-pick", keyAttr: "data-athlete-key", ariaLabel: "Athletes", wrapArrows: false });
   const summary = current ? `<p class="weekly-k6-summary"><strong>${escapeHtml(current.name)}</strong>${teamLabel ? ` · ${escapeHtml(teamLabel)}` : ""}${position ? ` · <span>${escapeHtml(position)}</span>` : ""}</p>` : "";
   const notice = flow.line ? `<p class="weekly-k6-line" role="status">${escapeHtml(flow.line)}</p>` : flow.kept ? `<p class="weekly-k6-kept">${escapeHtml(flow.kept)}</p>` : "";
@@ -203,7 +203,7 @@ export function renderWeeklySwitcherHtml({ flow, items, currentKey, groupsHtml =
       ${back}
       ${stripHidden ? "" : groupsHtml}
       <div class="weekly-k6-controls"${flow.busy ? ` inert aria-busy="true"` : ""}><div class="weekly-k6-head">${summary}${toggle}</div>${stripHidden ? "" : strip}</div>
-      ${hiddenNote ? `<p class="weekly-k6-hidden">${escapeHtml(hiddenNote)}</p>` : ""}${notice}${notIn}${plan}
+      ${hiddenNote ? `<p class="weekly-k6-hidden">${escapeHtml(hiddenNote)}</p>` : ""}${flow.scopeNote ? `<p class="weekly-k6-hidden weekly-k6-scope">${escapeHtml(flow.scopeNote)}</p>` : ""}${notice}${notIn}${plan}
     </section>`;
 }
 
