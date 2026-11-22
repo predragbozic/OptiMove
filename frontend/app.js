@@ -3004,7 +3004,9 @@ async function openWeeklyPlanForAthleteOnDate(athleteId, date, { flow = null, sl
   state.centralCalendar.weeklyFlow = flow;
   state.selectedAthleteId = athleteId;
   state.athletesExpanded = false;
-  await openWeeklyPlanOnDate(date);
+  const opened = await openWeeklyPlanOnDate(date);
+  // A lost load shows the screen's error line: nothing of an earlier athlete's plan is read as this one's.
+  if (opened === false) return;
   // K6-3: an event's slot opens by the same drill-in as a tap (one history entry per level); an athlete without
   // that session keeps the day open and says so (F6).
   if (flow && slot && state.centralCalendar.weeklyFlow === flow) {
@@ -3040,7 +3042,7 @@ async function openWeeklyPlanOnDate(date) {
   renderLibraryNav();
   const loaded = await loadWeekly();
   // A lost answer with nothing to show: the screen's error line (renderError) stays; a blank week must not replace it.
-  if (loaded?.outcome === "error") return;
+  if (loaded?.outcome === "error") return false;
   const weeks = state.lastWeeklyData?.weeks || [];
   const weekIndex = weekIndexForDate(weeks, date);
   state.selectedWeekIndex = weekIndex >= 0 ? weekIndex : 0;
