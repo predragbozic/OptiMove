@@ -354,6 +354,7 @@ test("F-H2. a club: the organization read is reduced on arrival; the archived-on
   assert.ok(pairs.every((pair) => Object.keys(pair).sort().join() === "athleteUuid,teamId"));
   assert.ok(pairs.every((pair) => [U19, FIRST].includes(pair.teamId)));
   assert.equal(pairs.some((pair) => pair.athleteUuid === BEN && pair.teamId === FIRST), false, "an archived membership is not kept");
+  // Xena has an active U19 membership but is not in this roster: never kept.
   assert.deepEqual(data.reduceCentralCalendarOrganization(ORG, { teamIds: new Set([U19]), rosterUuids: new Set([ANA, ARCHIVED]) }), [{ athleteUuid: ANA, teamId: U19 }]);
 });
 
