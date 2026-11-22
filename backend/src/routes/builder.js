@@ -1738,6 +1738,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to a section." });
+    const dose = doseFields(req.body);
     client = await pool.connect();
     const runQuery = (sql, params) => client.query(sql, params);
     await runQuery("begin isolation level read committed");
@@ -1767,7 +1768,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
         $24, $25, $26, $27, $28, $29) returning id`,
       [node.plan_session_id, node.id, exercise.id, exercise.name,
         text(exercise.instruction) || text(exercise.execution_notes) || text(exercise.aim) || null,
-        exercise.image_url, exercise.video_url, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order,
+        exercise.image_url, exercise.video_url, dose.sets, dose.reps, dose.load, order,
         ancestry.domain?.name || null, ancestry.domain?.color || null, ancestry.domain?.icon_url || null, ancestry.domain?.short_note || null, ancestry.domain?.note || null, ancestry.domain?.node_order ?? null,
         ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
@@ -1791,6 +1792,7 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
     if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to an exercise section." });
     const name = text(req.body?.name);
     if (!name) return res.status(400).json({ error: "Custom exercise name is required." });
+    const dose = doseFields(req.body);
     mediaSelections(req.body||{});
     client=await pool.connect();const runQuery=client.query.bind(client);
     await runQuery('begin isolation level read committed');
@@ -1823,7 +1825,7 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
         $18, $19, $20, $21, $22, $23,
         $24, $25, $26, $27, $28, $29) returning id`,
       [node.plan_session_id, node.id, exercise.id, exercise.name, exercise.instruction, exercise.image_url, exercise.video_url,
-        nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), order,
+        dose.sets, dose.reps, dose.load, order,
         ancestry.domain?.name || null, ancestry.domain?.color || null, ancestry.domain?.icon_url || null, ancestry.domain?.short_note || null, ancestry.domain?.note || null, ancestry.domain?.node_order ?? null,
         ancestry.category?.name || null, ancestry.category?.color || null, ancestry.category?.icon_url || null, ancestry.category?.short_note || null, ancestry.category?.note || null, ancestry.category?.node_order ?? null,
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
@@ -1878,11 +1880,12 @@ router.patch("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
     // sends it only once the coach has typed in it, so an instruction shown
     // in English is never written back over the stored text.
     const descriptionSent = Object.hasOwn(req.body || {}, "description");
+    const dose = doseFields(req.body);
     const updated = await query(
       `update plans.plan_items set sets = $2, reps = $3, load = $4,
          description = case when $6::boolean then $5 else description end, updated_at = now() where id = $1
        returning id, exercise_id, title, sets, reps, load, description`,
-      [item.id, nullableText(req.body?.sets), nullableText(req.body?.reps), nullableText(req.body?.load), nullableText(req.body?.description), descriptionSent],
+      [item.id, dose.sets, dose.reps, dose.load, nullableText(req.body?.description), descriptionSent],
     );
     if (req.body?.responseMode === "item" && !wantsBatchSync(req, item.plan)) {
       const row = updated.rows[0];
@@ -3464,6 +3467,23 @@ function normalizedWeekStart(value) {
 
 function text(value) { return String(value || "").trim(); }
 function nullableText(value) { return text(value) || null; }
+
+// plans.plan_items.sets / reps / load are varchar(80). A longer value used to reach the INSERT / UPDATE and end in
+// Postgres 22001 (a sanitized 500); it is now a 400 that names the field, before anything is written.
+const DOSE_MAX_LENGTH = 80;
+const DOSE_FIELD_WORDS = { sets: "Sets", reps: "Reps", load: "Load" };
+function doseFields(body) {
+  const dose = {};
+  for (const field of Object.keys(DOSE_FIELD_WORDS)) {
+    const value = nullableText(body?.[field]);
+    // Characters as varchar counts them (code points), not UTF-16 units.
+    if (value && [...value].length > DOSE_MAX_LENGTH) {
+      throw Object.assign(new Error(`${DOSE_FIELD_WORDS[field]} can be at most ${DOSE_MAX_LENGTH} characters.`), { status: 400 });
+    }
+    dose[field] = value;
+  }
+  return dose;
+}
 function phaseValue(value, allowed) { const clean = text(value).toUpperCase(); return allowed.includes(clean) ? clean : null; }
 function sessionTimeValue(value) { return /^\d{2}:\d{2}$/.test(text(value)) ? text(value) : null; }
 
