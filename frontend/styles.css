@@ -30044,3 +30044,9 @@ body.athlete-questions-prompt-open {
   .builder-week-actions .compact-button { flex: 1 1 auto; }
 }
 /* end WT-A */
+/* Weekly program templates, part WT-C: the Save weeks as template dialog. */
+.builder-tw-save-modal input { font-size: 16px; }
+.builder-tw-save-modal .builder-copy-plan-footer .plain-button,
+.builder-tw-save-modal .builder-modal-head .icon-button { min-height: 44px; min-width: 44px; }
+.builder-tw-week-options .builder-athlete-option { grid-template-columns: minmax(0, 1fr) auto; }
+/* end WT-C */

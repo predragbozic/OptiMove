@@ -97,6 +97,7 @@ import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn,
 import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { handleWeeklyTemplateAction } from "./builder-weekly-template-actions.js";
+import { handleSaveWeeksAction, updateSaveWeeksName } from "./builder-weekly-save-actions.js";
 import { invalidateCoachHomeCache, loadCoachHome as loadCoachHomeData, loadCoachHomeExtras, loadMoreCoachHomeExercises, resetCoachHomeForWorkspaceChange } from "./coach-home-data.js";
 import { renderAthleteHomeHtml } from "./athlete-home.js";
 import { enterMyTraining, handleMyTrainingAction, handleMyTrainingBack, refreshMyTrainingEntry } from "./my-training-actions.js";
@@ -1372,6 +1373,11 @@ function handleContentInput(event) {
   }
 
   // Weekly program templates (builder-weekly-template-actions.js).
+  const twSaveName = event.target.closest("[data-tw-save-name]");
+  if (twSaveName) {
+    updateSaveWeeksName(twSaveName);
+    return;
+  }
   const templateKindInput = event.target.closest("[data-builder-template-kind]");
   if (templateKindInput) {
     state.builder.createTemplateKind = templateKindInput.value;
@@ -4632,6 +4638,7 @@ async function handleBuilderAction(action) {
     // K2c-3: the events row, Event: [▾], Create event → (builder-events-row.js).
     if (await handleBuilderEventsAction(action)) return;
     if (await handleWeeklyTemplateAction(action, { renderBuilder, flushBuilderAutosaves })) return;
+    if (await handleSaveWeeksAction(action, { renderBuilder, flushBuilderAutosaves })) return;
     if (await handleBuilderPlanAction(action, { renderBuilder, renderBuilderBatchSwitchProgress, renderBuilderDraftOpenProgress, flushBuilderAutosaves, renderCopyPlanSource, renderTabs, renderLibraryNav, loadBuilderExercises, loadBuilderDrafts })) return;
     if (await handleBuilderWorkspaceAction(action, { renderBuilder, renderBuilderExerciseViewChange, renderBuilderFiltersChange, renderBuilderSectionItems, renderBuilderError, loadBuilderExercises, ensureBuilderExercises: ensureBuilderExercisesQuietly })) return;
     if (await handleBuilderDraftAction(action, { renderBuilder, renderBuilderDiscardProgress, renderBuilderError, renderTabs, renderLibraryNav, loadWeekly, loadPrograms, loadTemplates, refreshBuilderDraft, flushBuilderAutosaves, cancelBuilderAutosaves })) return;
