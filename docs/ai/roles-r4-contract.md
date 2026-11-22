@@ -415,7 +415,9 @@ its coaches hold). **Recommendation:** in the same transaction, the role change 
 live version. Serialization: a default-role writer locks the edited role row `FOR UPDATE` (R2); every club version writer
 locks all non-archived system role rows `FOR SHARE` in id order (place 4 of 7.6), so the two cannot pass their checks on
 snapshots that miss each other. The example "a club's Club admin version lacks W, the default Team coach gets W" ends with
-W added to that club's Club admin version and the club listed in the answer.
+W added to that club's Club admin version and the club listed in the answer. The `default_follow` items pass the version
+item guard only with a platform admin as the acting user, and keep its scope-type and not-platform-only checks; they are
+written in the default writer's lock order (7.6 place 4, after the users rows), never before.
 
 An archived system role: its club versions stay as history and give nothing (the role gives nothing, v84 `:138`).
 
@@ -424,7 +426,7 @@ An archived system role: its club versions stay as history and give nothing (the
 | Table | Columns | Rules |
 |---|---|---|
 | `permission_custom_roles` | `id`, `user_id`, `base_role_id`, `scope_type` (`club` / `team`), `scope_id`, `club_id` (filled and checked by the guard from `scope_id`: a generated column cannot read `teams`), `holding_assignment_id` FK `user_role_assignments` **or** `holding_row_table` (`user_club_roles` / `user_team_roles`) + `holding_row_id` + `holding_row_version` (the row's `updated_at`), exactly one of the two, `frozen_from` (`default` / `club_version` / `club_role`), `frozen_from_revision`, `frozen_from_version_id` FK `permission_club_role_versions`, `revision`, `created_by_user_id`, `created_at`, `ended_at`, `ended_by_user_id`, `end_kind` (`reassigned` / `role_ended` / `reset`) | partial unique (`user_id`, `base_role_id`, `scope_type`, `scope_id`) where `ended_at is null`, and a dead custom (3.4) is ended by the next write before a new one is made; `scope_id` is polymorphic, so the guard checks it exists and lies in `club_id`; indexes on every key; the user must hold `base_role_id` in that scope through the named holding when it is made; Club admin's custom only by a platform admin |
-| `permission_custom_role_items` | `custom_role_id`, `permission_word` | its own guard, the same checks as the version items |
+| `permission_custom_role_items` | `custom_role_id`, `permission_word` | its own guard, the same checks as the version items; a custom whose base role is Club admin must hold `staff.assign` and `roles.manage` (7.2, H1) |
 | `permission_custom_role_changes` | append-only, as 7.2; kinds `create`, `change`, `end`, `role_ended`, `word_removal` (*Take it from them too*), `migration` | |
 
 **Liveness, written in SQL only (the *Nezavisni revizor*'s M3).** `holding_row_version` is written only inside SQL
@@ -714,6 +716,8 @@ no migration beyond vNN. MANAGE is two to three times that, plus the migrations 
     custom of an admin without `staff.assign` accepted (H1); a later seed migration that skips live versions and customs
     (H2); the ceiling lock taken after a row lock, or upgraded in one transaction (H3); a default change without the
     all-clubs rule-7 check (H4); a VIEW module's write route without the view word (M2).
+10b. **No fallback on a failed role read (5.1, L1):** with the role read forced to fail, `/me` leaves
+    `user_workspace_preferences` unchanged.
 10a. **Info hiding of the new routes:** `POST /users/:userId/custom/:customId/end` with a custom of another club answers
     the identical 404; the same for every route of section 9 with an id of another club.
 11. **e2e:** a platform admin closes Imports for a club and makes a club version of Team coach; a role holder signs in,
