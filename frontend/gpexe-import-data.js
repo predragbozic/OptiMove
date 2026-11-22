@@ -128,6 +128,7 @@ function resetGpexeTeamState(teamId) {
   gx.tz = null;
   gx.notice = "";
   gx.uncertain = {};
+  gx.sessionTypes = null;
   gx.linkConfirm = null;
   gx.lastLink = null;
   gx.linkOpen = "";
@@ -521,7 +522,9 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
   // J20-B: an unconfirmed subset approval keeps the set it was sent with; a reopened review restores it, so the whole session can never be
   // offered (and sent) in its place. The reviewed hash is not kept: the review is made again.
   const keptSet = Array.isArray(uncertain?.chosenExcluded) ? uncertain.chosenExcluded.map(String) : [];
-  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
+  // ST-5: so does the session type it was sent with.
+  const keptType = typeof uncertain?.chosenType === "string" ? uncertain.chosenType : null;
+  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, typeChoice: keptType, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
   gx.linkConfirm = null;
   gx.linkOpen = "";
   gx.linkPicks = {};
@@ -534,6 +537,8 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
     // J20-C: the reasons "Did not participate" takes, for the states chosen before the import.
     gx.detail.participationReasons = Array.isArray(participationReasons) ? participationReasons : [];
     statesOf(gx.detail, gx);
+    // ST-5: the session types the reviewer may choose from (read once per Imports visit).
+    if (candidate?.status === "pending") void loadSessionTypes(render);
     // 6b-C2: an imported session's review links the athletes who took part without device data to their estimate.
     if (candidate?.status === "imported") void loadEstimateTargets(gx.detail, render);
     // J20-A2 follow-up (J20 section 4): U3's suggested pair comes first in a row's chooser.
@@ -601,29 +606,66 @@ export function setGpexeLeaveOut(gpexeAthleteId, checked) {
   return true;
 }
 
-// The deliberate Review step: ONE request that asks the server for the preview without the ticked athletes. It stores nothing
-// on the server; the answer is only used by the Import button that follows it.
+// ST-5: the session types offered in this workspace (GET /api/training-activity/session-types), read once per Imports visit.
+// A failed read leaves the review usable for a session that already has a type; the chooser says it could not be read.
+export async function loadSessionTypes(render, { again = false } = {}) {
+  const gx = g();
+  if (gx.sessionTypes && !(again && gx.sessionTypes.status === "error")) return;
+  const generation = gx.generation;
+  const mine = { status: "loading", types: [] };
+  gx.sessionTypes = mine;
+  try {
+    const answer = await api("/api/training-activity/session-types");
+    if (generation !== gx.generation || gx.sessionTypes !== mine) return;
+    gx.sessionTypes = { status: "ready", types: (Array.isArray(answer?.types) ? answer.types : []).filter((t) => t && typeof t.key === "string").map((t) => ({ key: t.key, label: String(t.label ?? t.key), active: t.active !== false })) };
+  } catch (error) {
+    if (generation !== gx.generation || gx.sessionTypes !== mine) return;
+    gx.sessionTypes = { status: "error", types: [], error: errorInfo(error) };
+  } finally {
+    if (generation === gx.generation) render();
+  }
+}
+
+// ST-5: the session type the reviewer chose for this import (in memory only). The type the review already shows (the
+// team's suggestion) is no choice. A change makes the choice review stale, so it is dropped and made again.
+export function setGpexeSessionType(typeKey) {
+  const gx = g();
+  const detail = gx.detail;
+  if (!detail?.candidate || detail.approving || detail.subset?.status === "loading") return false;
+  const shown = detail.candidate.preview?.session?.activityTypeKey ?? null;
+  const next = typeof typeKey === "string" && typeKey && typeKey !== shown ? typeKey : null;
+  if ((detail.typeChoice ?? null) === next) return false;
+  detail.typeChoice = next;
+  detail.subset = null;
+  return true;
+}
+
+// The deliberate Review step: ONE request that asks the server for the preview of the reviewer's choice - without the ticked
+// athletes, with the chosen session type, or both. It stores nothing on the server; the answer is only used by the Import
+// button that follows it.
 export async function reviewGpexeSubset(ids, render) {
   const gx = g();
   const detail = gx.detail;
   const candidate = detail?.candidate;
-  if (!candidate || detail.approving || detail.subset?.status === "loading" || !ids.length) return;
+  const typeKey = detail?.typeChoice ?? null;
+  if (!candidate || detail.approving || detail.subset?.status === "loading" || (!ids.length && !typeKey)) return;
   const generation = gx.generation;
-  const sub = { status: "loading", ids: [...ids] };
+  const sub = { status: "loading", ids: [...ids], typeKey };
   detail.subset = sub;
   render();
   try {
-    const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/preview`), { method: "POST", body: JSON.stringify({ excludedAthleteIds: ids }) });
+    const body = { ...(ids.length ? { excludedAthleteIds: ids } : {}), ...(typeKey ? { activityTypeKey: typeKey } : {}) };
+    const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/preview`), { method: "POST", body: JSON.stringify(body) });
     if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
     const s = answer?.subset;
     if (!s || typeof s.subsetHash !== "string" || !s.preview) {
-      detail.subset = { status: "error", ids: [...ids], error: { code: "bad_answer" } };
+      detail.subset = { status: "error", ids: [...ids], typeKey, error: { code: "bad_answer" } };
     } else {
-      detail.subset = { status: "ready", ids: [...(s.excludedAthleteIds || ids)], subsetHash: s.subsetHash, previewHash: s.previewHash, preview: s.preview };
+      detail.subset = { status: "ready", ids: [...(s.excludedAthleteIds || ids)], typeKey, subsetHash: s.subsetHash, previewHash: s.previewHash, preview: s.preview };
     }
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
-    detail.subset = { status: "error", ids: [...ids], error: errorInfo(error) };
+    detail.subset = { status: "error", ids: [...ids], typeKey, error: errorInfo(error) };
   } finally {
     if (generation === gx.generation && gx.detail === detail) render();
   }
@@ -647,7 +689,9 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     if (acceptChanges) body.acceptChanges = true;
     if (subset) {
       body.previewHash = subset.previewHash;
-      body.excludedAthleteIds = subset.ids;
+      if (subset.ids.length) body.excludedAthleteIds = subset.ids;
+      // ST-5: the chosen session type travels with the same reviewed hash.
+      if (subset.typeKey) body.activityTypeKey = subset.typeKey;
       body.subsetHash = subset.subsetHash;
     }
     const result = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/approve`), { method: "POST", body: JSON.stringify(body) });
@@ -674,7 +718,7 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     } else {
       // A lost answer, a gateway error, a 503: the import may or may not be
       // in the database. Never "nothing was imported".
-      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks, chosenExcluded: subset ? [...subset.ids] : [] };
+      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks, chosenExcluded: subset ? [...subset.ids] : [], chosenType: subset?.typeKey ?? null };
     }
     rememberOutcome(detail.id, detail.outcome);
   } finally {

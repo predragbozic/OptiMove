@@ -19,6 +19,7 @@ import { coachSettingsSections, holdsPermission, permissionTabAllowed } from "./
 import { renderIconGalleryHtml } from "./icon-gallery.js";
 import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
+import { renderSessionTypesPanelHtml } from "./session-types-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
 
@@ -157,7 +158,7 @@ export function renderOrganizationPanelHtml({ currentUser, data, error, role, sc
       ${hero}
       ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
       ${renderSettingsNavHtml(data)}
-      ${state.organization.section === "appHealth" ? renderAppHealthPanelHtml() : state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "roles" ? renderRolesPanelHtml() : state.organization.section === "calendar" ? renderCalendarSettingsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? renderTaxonomyPanelHtml(data) : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
+      ${state.organization.section === "appHealth" ? renderAppHealthPanelHtml() : state.organization.section === "dataSources" ? renderDataSourcesPanelHtml() : state.organization.section === "sourceConnections" ? renderSourceConnectionsPanelHtml() : state.organization.section === "roles" ? renderRolesPanelHtml() : state.organization.section === "calendar" ? renderCalendarSettingsPanelHtml() : state.organization.section === "storage" ? renderStorageAdminPanelHtml(data) : state.organization.section === "presets" ? `${renderTaxonomyPanelHtml(data)}${renderSessionTypesPanelHtml()}` : state.organization.section === "icons" ? renderIconGalleryHtml() : state.organization.section === "joinLinks" ? `
         ${renderJoinLinksSection(data)}
       ` : `
         ${renderOrganizationBrowser(data)}

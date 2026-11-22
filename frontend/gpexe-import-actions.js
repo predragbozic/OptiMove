@@ -3,7 +3,7 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
-import { importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
+import { choiceReviewOf, importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sessionTypeChoice, stateAthleteIds } from "./gpexe-import-view.js";
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
@@ -17,6 +17,8 @@ import { ensurePeriodData,
   approveGpexeCandidate,
   reviewGpexeSubset,
   setGpexeLeaveOut,
+  loadSessionTypes,
+  setGpexeSessionType,
   backFromTeamMappingConfirm,
   batchSelectableList,
   checkBatchAgain,
@@ -406,11 +408,27 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-subset-review") {
     const candidate = gx.detail?.candidate;
     // Offered like the boxes, or (after an unconfirmed answer) for the set that was sent: the review is how a retry is made.
-    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && (gx.detail.leaveOut || []).length > 0;
+    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && ((gx.detail.leaveOut || []).length > 0 || Boolean(gx.detail.typeChoice));
     if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
     const ids = leaveOutIds(candidate, gx.detail);
-    if (!ids.length) return true;
+    // ST-5: a chosen session type is a choice to review too, with or without athletes left out.
+    if (!ids.length && !sessionTypeChoice(candidate, gx.detail)) return true;
     await reviewGpexeSubset(ids, renderTrainingLoad);
+    return true;
+  }
+  // ST-5: the session type chosen in the review. The choice is reviewed at once (one request, nothing stored) unless athletes
+  // are ticked as left out - then the one Review step covers both.
+  if (type === "training-load-gpexe-session-type") {
+    const candidate = gx.detail?.candidate;
+    if (!candidate || !leaveOutOffered(candidate, gx.detail, gx.status)) return true;
+    if (!setGpexeSessionType(action.value)) return true;
+    renderTrainingLoad();
+    globalThis.document?.querySelector?.("[data-gpexe-session-type]")?.focus?.();
+    if (sessionTypeChoice(candidate, gx.detail) && !leaveOutIds(candidate, gx.detail).length) await reviewGpexeSubset([], renderTrainingLoad);
+    return true;
+  }
+  if (type === "training-load-gpexe-session-types-again") {
+    await loadSessionTypes(renderTrainingLoad, { again: true });
     return true;
   }
   if (type === "training-load-gpexe-approve") {
@@ -418,7 +436,12 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (!candidate) return true;
     // J20-B: with athletes left out only the reviewed subset is approved - never the whole session behind their backs.
     const leave = leaveOutIds(candidate, gx.detail);
-    if (leave.length && !(gx.detail.subset?.status === "ready" && sameIds(gx.detail.subset.ids, leave))) return true;
+    // ST-5: so it is with a chosen session type - only the reviewed choice is approved; and a session without a type is
+    // never sent without one.
+    const typeKey = sessionTypeChoice(candidate, gx.detail);
+    const reviewed = choiceReviewOf(candidate, gx.detail, leave);
+    if ((leave.length || typeKey) && reviewed?.status !== "ready") return true;
+    if (!typeKey && (candidate.approvalBlockers || []).includes("session_type_required")) return true;
     const changes = candidate.changesToImported || 0;
     if (changes && !gx.detail.acceptChanges) {
       gx.detail.outcome = { kind: "refused", error: { code: "changes_need_acceptance", status: 0, data: null } };
@@ -430,7 +453,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // not confirm or no longer found (v33) - the server would refuse it too.
     if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
     if (notConfirmedForImport(candidate) || withdrawnByCheck(candidate)) return true;
-    const athletes = leave.length ? importableAthleteCount(gx.detail.subset.preview) : importableAthleteCount(candidate.preview);
+    const athletes = reviewed ? importableAthleteCount(reviewed.preview) : importableAthleteCount(candidate.preview);
     // J20-C: the attendance states chosen on the rows are saved after the import (their keys are made now, before anything is sent).
     const stateIds = stateAthleteIds(candidate, gx.detail);
     const states = chosenStateCount(gx.detail, stateIds);

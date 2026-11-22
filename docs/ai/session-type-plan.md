@@ -669,3 +669,36 @@ The number and the prefix are provisional until the *Rukovodilac* confirms them 
     v57's marker, so v89's delete guards refuse it for a session with a type change or an exception.
   - New foreign-key columns to users, types and athletes carry no index: those rows are never deleted.
 - **Runbook:** `docs/runbooks/participant-session-types-v89.md`, with its preflight, post-check and rollback.
+
+## 17. ST-5 as built (frontend only; no migration, no backend change)
+
+Stacked on ST-3 (it calls ST-3's two routes). Three screens over the routes of ST-1, ST-2 and ST-3.
+
+- **The session review of an import** (`frontend/gpexe-import-{data,view,actions}.js`):
+  - A *Session type* chooser for whoever may import the session: the active types, the review's type selected, and one
+    line that says where it comes from (the team's suggestion for the GPEXE category, or none yet).
+  - **A changed type is reviewed at once**: one `POST …/preview { activityTypeKey }`, nothing stored. The button is then
+    *Import N athletes*, and the approval sends `activityTypeKey` with the reviewed `subsetHash`.
+  - **With athletes ticked as *Leave out*** the one *Review without them* step covers both; a review made for another
+    type or another set is never approved.
+  - **A session of an unknown category** (`session_type_required`) is listed under *Needs you* with its step. Its
+    review says *Choose the session type above*, and no Import is offered or sent before a type is chosen.
+  - A viewer who may not import reads the type as text. An unconfirmed approval keeps the type it was sent with.
+- **The Roster tab** (`frontend/activity-session-type.js`, wired into the roster's view and actions):
+  - The header shows the session's type; a viewer who decides changes it in a chooser. It is saved at once, with *Undo*.
+  - A row's Details hold *Type in this session*: "As the session" or another type. The row itself says
+    "Did RTP in this session", or that a merge or a move removed the athlete's own type.
+  - The three outcomes of the roster's writes: saved, refused (a sentence, nothing saved), not confirmed (*Check
+    result* repeats the same request with the same key). One command at a time, with the roster's own lock.
+  - An estimate saved under another type reads "… · calculated when this was Full training".
+  - The estimate panel: *Compares with* names the set ("Friendly game and Game"); athletes of another type are listed in
+    *Copy from* as not selectable, with their type.
+- **Settings → Tags & Presets → Session types** (`frontend/session-types-{data,view,actions}.js`): the list with whose
+  each type is, add and rename for the owner the server names (`canAdd`, `editable`), archive and restore saved at once
+  with *Undo*, archived types folded away. No key is shown.
+- **Not built:** a mandatory reason field (the routes take none from these screens); the calendar's labels (the
+  calendar stream); a type chooser in the batch import dialog (a session without a type is imported from its own
+  review); *Change the estimate…* as a button on the mark (the existing row button opens the panel).
+- **Checked in a browser** (Chromium, the real modules' markup with the real `styles.css`, at 360, 375, 390 and 1280
+  px): no horizontal overflow, every select and input at 16 px and 44 px high, buttons 44 px high on phones. The flows
+  themselves are proven by the JSDOM-free action suites with fake servers, not by a browser run against the real backend.

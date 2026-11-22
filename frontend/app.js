@@ -30,6 +30,9 @@ import {
 import { renderCheckInContent, renderCheckInPage as renderCheckInPageAction, submitCheckInLogin as submitCheckInLoginAction } from "./check-in-actions.js";
 import { handleDataSourcesAction, submitDataSourcesForm } from "./data-sources-actions.js";
 import { handleAppHealthAction } from "./app-health-actions.js";
+import { handleSessionTypesAction, submitSessionTypesForm } from "./session-types-actions.js";
+import { loadSessionTypesSettings, resetSessionTypesForWorkspaceChange } from "./session-types-data.js";
+import { renderSessionTypesPanelHtml } from "./session-types-view.js";
 import { detached, guardHandler, installAppErrorCapture } from "./app-errors-capture.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
 import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
@@ -909,6 +912,12 @@ async function handleContentSubmit(event) {
   if (rolesForm) {
     event.preventDefault();
     await submitRolesForm(rolesForm, { render: renderRolesSurface, renderUsers: renderRolesUsersSurface, refreshOrganization: () => renderOrganizationPanel() });
+    return;
+  }
+  const sessionTypesForm = event.target.closest("[data-session-types-form]");
+  if (sessionTypesForm) {
+    event.preventDefault();
+    await submitSessionTypesForm(sessionTypesForm, { render: renderSessionTypesSurface });
     return;
   }
   const calendarSettingsForm = event.target.closest("[data-calendar-settings-form]");
@@ -3627,6 +3636,7 @@ async function handleContentClick(event) {
   if (handleTemplateLibraryAction(action, { loadTemplates, renderCoachContext, renderTemplateLibrary })) return;
   if (await handleDataSourcesAction(action, { render: renderDataSourcesSurface })) return;
   if (await handleAppHealthAction(action, { render: renderDataSourcesSurface })) return;
+  if (await handleSessionTypesAction(action, { render: renderSessionTypesSurface })) return;
   // The team <select> of "Approve pair" acts on its change event only: a click that opens the native list
   // must not repaint the control it is opening.
   if (action.dataset.action === "source-connections-pair-team") return;
@@ -3754,6 +3764,19 @@ function renderDataSourcesSurface() {
   void renderOrganizationPanel({ refresh: false });
 }
 
+// Settings -> Tags & Presets -> Session types (ST-5) repaints only its own panel (the presets above it may hold typed
+// values); before its panel is on screen it is the Settings repaint.
+function renderSessionTypesSurface() {
+  if (state.activeTab !== "organization" || state.organization.section !== "presets") return;
+  const panel = els.content.querySelector(".session-types-settings");
+  const html = renderSessionTypesPanelHtml();
+  if (!panel || !html) {
+    void renderOrganizationPanel({ refresh: false });
+    return;
+  }
+  panel.outerHTML = html;
+}
+
 // Settings -> Calendar (K2b-1c) repaints only its own panel, at once: the
 // focus it moves lands on the new markup, and no change of a form reads
 // /api/organization again (a stale Settings cache would repaint the whole
@@ -3817,6 +3840,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
   const paintOrganizationPanel = async () => {
     if (state.organization.section === "presets" && !state.taxonomy.loaded) {
       await loadTaxonomyData();
+    }
+    // ST-5: the session types under the presets, read once per workspace.
+    if (state.organization.section === "presets" && !state.sessionTypes.loaded && !state.sessionTypes.loading && !state.sessionTypes.error) {
+      void loadSessionTypesSettings(renderSessionTypesSurface);
     }
     // A team is chosen but its data is not loaded yet (the tab was opened
     // again after a workspace or Settings reload): read it once. Every write
@@ -3926,6 +3953,7 @@ async function onWorkspaceChanged() {
   clearAppHistoryEntries();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
+  resetSessionTypesForWorkspaceChange();
   resetRolesForWorkspaceChange();
   resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;

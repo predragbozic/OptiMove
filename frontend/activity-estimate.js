@@ -29,6 +29,8 @@ const METHOD_HINTS = {
 // Why a method cannot run, in the coach's words.
 const REASONS = {
   too_few_athletes: "Fewer than 3 athletes have a measured value in this session.",
+  too_few_same_type: "Fewer than 3 athletes with a measured value did the same session type as this athlete.",
+  source_type_differs: "That athlete did another session type here. Choose an athlete of the same type.",
   too_few_sessions: "Fewer than 3 of this athlete's sessions in the last 90 days have measured values.",
   minutes_required: "Enter the minutes the athlete trained, then Update.",
   duration_not_available: "This session's duration is not known.",
@@ -50,6 +52,7 @@ const REFUSALS = {
   athlete_not_on_roster: "This athlete is no longer on this session's roster.",
   estimate_not_available: "Estimates are not available for this session.",
   copy_source_not_usable: "That athlete cannot be copied from any more.",
+  source_type_differs: "That athlete did another session type here. Choose an athlete of the same type.",
   minutes_required: "Enter the minutes first.",
   nothing_to_estimate: "Nothing can be estimated this way.",
   measured_exists: "A measured value arrived meanwhile, so no estimate is needed.",
@@ -89,7 +92,9 @@ export function estimateLabelText(e) {
   else if (e.method === "scale_recording") how = Number.isFinite(e.recordedMinutes) && Number.isFinite(e.targetMinutes) ? `recorded ${num(e.recordedMinutes, 2)} of ${num(e.targetMinutes, 2)} min, scaled` : "scaled from a shorter recording";
   else how = "estimate";
   const who = [e.estimatedBy, e.estimatedAt ? localDay(e.estimatedAt) : ""].filter(Boolean).join(", ");
-  return `Estimate · ${how}${who ? ` · ${who}` : ""}`;
+  // ST-5: saved while the athlete's session type was another one; the value is kept, never recalculated silently.
+  const then = e.calculatedWhenType ? ` · calculated when this was ${e.calculatedWhenType.label || "another session type"}` : "";
+  return `Estimate · ${how}${who ? ` · ${who}` : ""}${then}`;
 }
 
 export function isEstimateValue(v) {
@@ -367,7 +372,9 @@ export function ownAverageBasisText(view) {
     const list = shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}`;
     parts.push(`From ${days.length} session${days.length === 1 ? "" : "s"}: ${list}`);
   }
-  const type = view?.comparesWith?.label || view?.comparesWith?.key || "";
+  // ST-5: the set of session types that count (a friendly counts friendlies and games), not one name.
+  const set = (view?.comparesWith?.types || []).map((t) => t.label || t.key).filter(Boolean);
+  const type = set.length ? (set.length === 1 ? set[0] : `${set.slice(0, -1).join(", ")} and ${set.at(-1)}`) : view?.comparesWith?.label || view?.comparesWith?.key || "";
   if (type) parts.push(`Compares with: ${type}`);
   return parts.join(" · ");
 }
@@ -399,8 +406,9 @@ function methodHtml(e, method) {
         <select id="tl-estimate-source" data-action="training-load-roster-estimate-source" ${e.sending ? "disabled" : ""}>
           <option value="" ${e.sourceAthleteId ? "" : "selected"}>Choose an athlete</option>
           ${sources.map((s) => `<option value="${escapeAttr(s.athleteId)}" ${e.sourceAthleteId === s.athleteId ? "selected" : ""}>${escapeHtml(s.name || "Athlete")}</option>`).join("")}
+          ${(view.otherTypeSources || []).map((s) => `<option value="" disabled>${escapeHtml(`${s.name || "Athlete"} - did ${s.activityTypeLabel || "another session type"}`)}</option>`).join("")}
         </select>
-      </div>` : "";
+      </div>` : (view.otherTypeSources || []).length ? `<p class="muted">Every athlete with measured values did another session type here, so none can be copied from.</p>` : "";
   }
   return `
     <li class="tl-estimate-method ${chosen ? "is-chosen" : ""} ${view.available ? "" : "is-unavailable"}">
