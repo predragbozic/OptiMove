@@ -71,3 +71,6 @@ docs/runbooks/calculated-variables-v78*.sql text eol=lf
 docs/runbooks/calendar-questions-v81*.sql text eol=lf
 # ST-1 (v85): the rehearsal and the migration test read the runbook SQL by blocks and run the rollback as one script.
 docs/runbooks/session-types-v85*.sql text eol=lf
+# ST-4 (v88): the rollback restores three bodies and compares them by md5; the rehearsal runs the runbook SQL as written.
+docs/runbooks/manual-values-v88*.sql text eol=lf
+backend/scripts/manual-values-v88-rehearsal.sh text eol=lf

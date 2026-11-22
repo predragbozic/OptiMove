@@ -1044,6 +1044,14 @@ async function catalogOf(client) {
   return { constraints, columns, triggers, functions, tables, migrations };
 }
 
+test("13a. the v88 runbook SQL is checked out with LF on every platform (.gitattributes): a CRLF rollback would restore bodies whose md5 never matches", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const files = ["manual-values-v88-preflight.sql", "manual-values-v88-postcheck.sql", "manual-values-v88-rollback.sql"].map((f) => `docs/runbooks/${f}`);
+  const out = execFileSync("git", ["check-attr", "eol", "--", ...files], { cwd: new URL("../../", import.meta.url), encoding: "utf8" });
+  for (const f of files) assert.match(out, new RegExp(`${f.replace(/\./g, "\\.")}: eol: lf`), f);
+  for (const f of files) assert.ok(!readRunbook(f.split("/").pop()).includes("\r"), `${f} has no CR in the working tree`);
+});
+
 test("13. migration v88: the preflight passes before it, the post-check after it, the rollback restores the catalog before v88 exactly, and v88 applies again", async () => {
   const rb = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v88rb", migrations: BEFORE_V88 });
   const client = new pg.Client({ connectionString: rb.url });
