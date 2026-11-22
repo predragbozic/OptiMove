@@ -430,7 +430,11 @@ it; the seed still comes after the honoured replacement.
 3. **New:** `permission_custom_roles` rows of the user(s) in the scope, by id.
 4. Role rows by id (R2 place 4), then **new:** `permission_club_role_versions` rows of club C, by id.
 5. **New:** the club's ceiling, as a transaction-scoped advisory lock on the club id in a namespace of its own:
-   `pg_advisory_xact_lock_shared` for a reader (a guarded write), `pg_advisory_xact_lock` for a ceiling change, both under
+   `pg_advisory_xact_lock_shared` for a reader (a guarded write, a custom role write), `pg_advisory_xact_lock` (exclusive)
+   for a ceiling change **and for every club version write** - rule 7 in a club (7.2) depends on all versions of the club
+   together, so two version writers on different roles must not pass their deferred checks on snapshots that miss each
+   other (the security re-review's MEDIUM; test: Club admin version narrowed against Team coach version widened at once),
+   both under
    the transaction's `lock_timeout` (`try_again`). Absent ceiling rows cannot be locked, and locking the `public.clubs` row
    instead would tie every guarded write to the club's own edit, archive and team writes (`organization.js:1086`, `:1103`
    and the teams' `club_id` key) - the db review found that interaction unverified, so the advisory lock is the
