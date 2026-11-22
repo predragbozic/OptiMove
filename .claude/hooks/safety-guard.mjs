@@ -2743,16 +2743,36 @@ export function runCli(rawStdin) {
 // here would make this whole file a silent no-op (never reads stdin, never emits a
 // decision) with zero signal that anything is wrong - the worst possible failure mode
 // for a safety hook. Compare case-insensitively on win32.
-function isMainModule() {
-  if (!process.argv[1]) return false;
+// node resolves symlinks in the entry module's import.meta.url but keeps argv[1] as given, so a
+// project reached through a symlink (macOS /tmp -> /private/tmp, a linked code folder, a
+// worktree under a linked temp folder) or with another letter case on a case-insensitive disk
+// made the plain comparison fail and the guard a silent no-op. Both sides are compared as real
+// paths (realpathSync.native also returns the on-disk letter case), the plain comparison kept
+// as a fallback.
+function samePath(a, b) {
+  const real = (p) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const x = real(a);
+  const y = real(b);
+  return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+
+export function isMainModuleFor(argv1, moduleUrl) {
+  if (!argv1) return false;
   try {
-    const invoked = path.resolve(process.argv[1]);
-    const thisFile = path.resolve(fileURLToPath(import.meta.url));
-    if (process.platform === "win32") return invoked.toLowerCase() === thisFile.toLowerCase();
-    return invoked === thisFile;
+    return samePath(path.resolve(argv1), fileURLToPath(moduleUrl));
   } catch {
     return false;
   }
+}
+
+function isMainModule() {
+  return isMainModuleFor(process.argv[1], import.meta.url);
 }
 
 if (isMainModule()) {

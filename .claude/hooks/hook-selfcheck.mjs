@@ -22,6 +22,27 @@ const HOOK_DIR = path.dirname(fileURLToPath(import.meta.url));
 const GUARD = path.join(HOOK_DIR, "safety-guard.mjs");
 const SETTINGS = path.join(HOOK_DIR, "..", "settings.json");
 const MATCHERS = ["Bash", "PowerShell", "mcp__.*"];
+// The one registration form that is accepted: exec form, `node` with the guard as its only
+// argument. Anything else - another program with the same path, an extra flag, async - could
+// run without ever deciding, which no probe of the file itself would notice.
+const GUARD_ARG = "${CLAUDE_PROJECT_DIR}/.claude/hooks/safety-guard.mjs";
+
+// The guard path Claude Code runs: the registered argument with ${CLAUDE_PROJECT_DIR} expanded
+// from the environment Claude Code gives its hooks (this file's own copy when it is not set,
+// e.g. in a test). The probe runs exactly that path, symlinks and letter case included.
+export function registeredGuardPath(env = process.env) {
+  const dir = env.CLAUDE_PROJECT_DIR;
+  return dir ? GUARD_ARG.replace("${CLAUDE_PROJECT_DIR}", dir.replace(/[\\/]+$/, "")) : GUARD;
+}
+
+// node options that load code into, or change how node resolves, every node process - the
+// guard's too. Only the option names are reported, never their values.
+const RISKY_NODE_OPTIONS = /(^|\s)(--require|-r|--import|--loader|--experimental-loader|--preserve-symlinks|--preserve-symlinks-main)(\s|=|$)/;
+export function nodeOptionsProblem(env = process.env) {
+  const value = env.NODE_OPTIONS || "";
+  const found = [...value.matchAll(new RegExp(RISKY_NODE_OPTIONS.source, "g"))].map((m) => m[2]);
+  return found.length ? `NODE_OPTIONS sets ${[...new Set(found)].join(", ")}, which also runs in the guard's node process; check that it cannot stop the guard` : null;
+}
 
 // Each probe: the tool call, and the decision the guard must return ("none" = no output).
 export const PROBES = [
@@ -36,22 +57,32 @@ export function checkSettings(settingsText) {
   try {
     settings = JSON.parse(settingsText);
   } catch (error) {
-    return [`.claude/settings.json is not valid JSON (${error.message})`];
+    return [".claude/settings.json is not valid JSON"];
   }
   const groups = settings?.hooks?.PreToolUse;
   if (!Array.isArray(groups)) return ["no PreToolUse hooks are registered in .claude/settings.json"];
   for (const matcher of MATCHERS) {
     const hooks = groups.filter((g) => g?.matcher === matcher).flatMap((g) => (Array.isArray(g.hooks) ? g.hooks : []));
-    const guard = hooks.filter((h) => h?.type === "command" && [h.command, ...(h.args || [])].some((part) => typeof part === "string" && part.replace(/\\/g, "/").endsWith(".claude/hooks/safety-guard.mjs")));
-    if (!guard.length) problems.push(`safety-guard.mjs is not registered for the ${matcher} matcher`);
-    else if (!guard.every((h) => h.onFailure === "block")) problems.push(`the ${matcher} guard hook lacks "onFailure": "block" (a guard that fails would let the call through)`);
+    const mentions = hooks.filter((h) => JSON.stringify(h ?? null).includes("safety-guard.mjs"));
+    if (!mentions.length) {
+      problems.push(`safety-guard.mjs is not registered for the ${matcher} matcher`);
+      continue;
+    }
+    for (const h of mentions) {
+      const execForm = h.type === "command" && h.command === "node" && Array.isArray(h.args) && h.args.length === 1 && h.args[0] === GUARD_ARG;
+      if (!execForm) problems.push(`the ${matcher} guard registration is not the expected exec form (command "node", args ["${GUARD_ARG}"])`);
+      if (h.async || h.asyncRewake) problems.push(`the ${matcher} guard hook runs in the background (async), so it cannot decide`);
+      if (h.onFailure !== "block") problems.push(`the ${matcher} guard hook lacks "onFailure": "block" (a guard that fails would let the call through)`);
+      if (!(Number.isInteger(h.timeout) && h.timeout > 0 && h.timeout <= 60)) problems.push(`the ${matcher} guard hook has no timeout of at most 60 s (a hung guard would stall every call for the 600 s default)`);
+    }
   }
   return problems;
 }
 
-export function runProbe(probe, { cwd, nodePath = process.execPath, guardPath = GUARD } = {}) {
+// nodePath "node": the program the registration names, found on PATH as Claude Code finds it.
+export function runProbe(probe, { cwd, nodePath = "node", guardPath = GUARD, timeoutMs = 15_000 } = {}) {
   const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: probe.tool, tool_input: { command: probe.command }, cwd, session_id: "hook-selfcheck" });
-  const r = spawnSync(nodePath, [guardPath], { input, encoding: "utf8", timeout: 15_000, windowsHide: true });
+  const r = spawnSync(nodePath, [guardPath], { input, encoding: "utf8", timeout: timeoutMs, windowsHide: true });
   if (r.error) return { problem: `the guard could not run for "${probe.command}" (${r.error.code || r.error.message})` };
   if (r.status !== 0) return { problem: `the guard exited ${r.status ?? r.signal} for "${probe.command}"` };
   const out = (r.stdout || "").trim();
@@ -67,14 +98,16 @@ export function runProbe(probe, { cwd, nodePath = process.execPath, guardPath = 
   return { problem: null };
 }
 
-export function selfCheck({ cwd = process.cwd(), settingsPath = SETTINGS, guardPath = GUARD, nodePath = process.execPath } = {}) {
+export function selfCheck({ cwd = process.cwd(), settingsPath = SETTINGS, guardPath = registeredGuardPath(), nodePath = "node", env = process.env } = {}) {
   const problems = [];
-  if (!fs.existsSync(guardPath)) problems.push(`${guardPath} is missing`);
+  if (!fs.existsSync(guardPath)) problems.push(".claude/hooks/safety-guard.mjs is missing at the registered path");
   try {
     problems.push(...checkSettings(fs.readFileSync(settingsPath, "utf8")));
   } catch (error) {
-    problems.push(`.claude/settings.json could not be read (${error.message})`);
+    problems.push(`.claude/settings.json could not be read (${error.code || "error"})`);
   }
+  const nodeOptions = nodeOptionsProblem(env);
+  if (nodeOptions) problems.push(nodeOptions);
   if (fs.existsSync(guardPath)) {
     for (const probe of PROBES) {
       const { problem } = runProbe(probe, { cwd, nodePath, guardPath });
@@ -89,7 +122,7 @@ export function sessionStartOutput(problems) {
     return {
       hookSpecificOutput: {
         hookEventName: "SessionStart",
-        additionalContext: `Safety hook self-check passed: safety-guard.mjs is registered for Bash, PowerShell and mcp__.* with "onFailure": "block", and it denied and allowed its ${PROBES.length} probe calls as expected.`,
+        additionalContext: `Safety hook self-check passed: safety-guard.mjs is registered for Bash, PowerShell and mcp__.* with "onFailure": "block", and, run at its registered path, it denied and allowed its ${PROBES.length} probe calls as expected. (A session start without this line or a SAFETY HOOK SELF-CHECK FAILED warning means the check did not run: treat it as failed.)`,
       },
     };
   }
@@ -100,10 +133,19 @@ export function sessionStartOutput(problems) {
   };
 }
 
+// Real paths on both sides, as in safety-guard.mjs: node resolves symlinks in import.meta.url
+// but not in argv[1], and a plain comparison made this check silent behind a symlink.
 function isMainModule() {
   if (!process.argv[1]) return false;
-  const invoked = path.resolve(process.argv[1]);
-  const thisFile = path.resolve(fileURLToPath(import.meta.url));
+  const real = (p) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const invoked = real(path.resolve(process.argv[1]));
+  const thisFile = real(fileURLToPath(import.meta.url));
   return process.platform === "win32" ? invoked.toLowerCase() === thisFile.toLowerCase() : invoked === thisFile;
 }
 
@@ -119,7 +161,7 @@ if (isMainModule()) {
   try {
     problems = selfCheck({ cwd });
   } catch (error) {
-    problems = [`the self-check itself failed (${error.message})`];
+    problems = [`the self-check itself failed (${error?.code || error?.name || "error"})`];
   }
   process.stdout.write(`${JSON.stringify(sessionStartOutput(problems))}\n`);
   process.exit(0);

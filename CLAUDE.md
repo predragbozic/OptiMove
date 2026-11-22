@@ -41,6 +41,11 @@ ili je trenutni branch neočekivan. Pun ugovor (uključujući baseline worktree 
 zabrane — `git add .`, `stash`/`reset`/`clean`, merge/rebase/force-push, commit/push bez
 eksplicitne potvrde): `.claude/rules/git-safety.md`.
 
+Bezbednosni hook: na početku sesije u kontekstu mora biti red „Safety hook self-check
+passed“. Ako umesto njega stoji „SAFETY HOOK SELF-CHECK FAILED“, ili nema ni jednog ni
+drugog, smatraj da `safety-guard.mjs` ne štiti sesiju: ne pokreći shell komande, javi
+korisniku. Detalji: `.claude/hooks/README.md`, „If the hook does not run“.
+
 ## Granice dozvoljenih operacija
 
 - Bez merge-a, deploy-a (Render ili drugde), ili migracije/izmene podataka na
