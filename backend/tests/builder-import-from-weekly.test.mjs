@@ -118,11 +118,11 @@ async function weeklyPlan(s) {
 
 // A program or block template of the coach with one empty block (or a block
 // holding one session with a section and `items` exercises).
-async function program(s, { template = false, status = "draft", items = null, name = "Target program" } = {}) {
+async function program(s, { template = false, status = "draft", items = null, name = "Target program", visibility = "private" } = {}) {
   const planId = (await q(
     // plans_type_shape_check: a block template has no athlete, any other program has one.
     `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, status, source_type, visibility, is_template)
-     values ('program', $1, $5, $2, $3, 'builder', 'private', $4) returning id`, [s.coach.id, name, status, template, template ? null : s.athletes[1].athleteId]))[0].id;
+     values ('program', $1, $5, $2, $3, 'builder', $6, $4) returning id`, [s.coach.id, name, status, template, template ? null : s.athletes[1].athleteId, visibility]))[0].id;
   const blockId = (await q(`insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type) values ($1, 1, 1, 'Block A', 'session') returning id`, [planId]))[0].id;
   let sessionId = null;
   let sectionId = null;
@@ -319,6 +319,37 @@ test("6. rights first: an unreadable source and a missing one are the same 404, 
   assert.deepEqual(await blockTree(target.blockId), []);
   // An unreadable source never gets a kind answer: a missing source into a program is 404, not 400.
   assert.equal((await paste(s.coach.cookie, missing, target.blockId)).status, 404);
+});
+
+test("6b. a target the caller can READ but may not EDIT (another coach's public, active template) is the plain 404 on all three routes, with and without confirmOverwrite, and its tree is unchanged", async () => {
+  const s = await squad("reader");
+  const owner = await squad("owner");
+  const source = await weeklyPlan(s);
+  // Another coach's public, active template holding one session: readable by everyone, editable by its owner only.
+  const theirs = await program(owner, { template: true, status: "active", visibility: "public", items: 2, name: "Public template" });
+  // The caller really can read it (the copy-source read the import dialog uses) - so only the edit check stands in the way.
+  const readable = await api(`/api/builder/blocks/${theirs.blockId}/sessions`, { cookie: s.coach.cookie });
+  assert.equal(readable.status, 200, readable.text);
+  const treeBefore = JSON.stringify(await blockTree(theirs.blockId));
+  const missing = crypto.randomUUID();
+  const expected = (await paste(s.coach.cookie, source.dayId, missing)).body;
+  assert.equal(expected.error, "Target day not found.");
+
+  const daysRoute = (cookie, targetId, extra = {}) => api(`/api/builder/days/${source.dayId}/copy-into/${targetId}`, { method: "POST", cookie, body: extra });
+  for (const extra of [{}, { confirmOverwrite: true }]) {
+    const label = JSON.stringify(extra);
+    const viaBlocks = await paste(s.coach.cookie, source.dayId, theirs.blockId, extra);
+    const viaDays = await daysRoute(s.coach.cookie, theirs.blockId, extra);
+    for (const [route, res] of [["blocks", viaBlocks], ["days", viaDays]]) {
+      assert.equal(res.status, 404, `${route} ${label}: ${res.text}`);
+      assert.deepEqual(res.body, (route === "blocks" ? await paste(s.coach.cookie, source.dayId, missing, extra) : await daysRoute(s.coach.cookie, missing, extra)).body, `${route} ${label}: same body as a missing target`);
+    }
+  }
+  const viaSession = await pasteSession(s.coach.cookie, source.sessionId, theirs.blockId);
+  const sessionMissing = await pasteSession(s.coach.cookie, source.sessionId, missing);
+  assert.equal(viaSession.status, 404, viaSession.text);
+  assert.deepEqual(viaSession.body, sessionMissing.body, "session route: same body as a missing target");
+  assert.equal(JSON.stringify(await blockTree(theirs.blockId)), treeBefore, "the template's tree is unchanged");
 });
 
 test("7. only a weekly plan may feed a program or template: a program or template source into a program target is refused, nothing written", async () => {
