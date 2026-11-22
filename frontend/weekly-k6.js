@@ -185,23 +185,25 @@ export function slotPathFor(dayItems, slot) {
 // --- The header ----------------------------------------------------------------
 
 // `flow` is `state.centralCalendar.weeklyFlow`; `items` are the strip's ({ key, name, imageUrl, notInSession }).
-export function renderWeeklySwitcherHtml({ flow, items, currentKey, groupsHtml = "", teamLabel = "", hiddenNote = "", noPlan = false }) {
+export function renderWeeklySwitcherHtml({ flow, items, currentKey, groupsHtml = "", teamLabel = "", hiddenNote = "", noPlan = false, stripHidden = false }) {
   if (!flow || !items || !items.length) return "";
   const index = items.findIndex((item) => item.key === currentKey);
   const current = index >= 0 ? items[index] : null;
-  const back = `<button type="button" class="plain-button weekly-k6-back" data-action="weekly-back-to-calendar">&lsaquo; Back to calendar</button>`;
+  const back = `<button type="button" class="plain-button weekly-k6-back" data-action="weekly-back-to-calendar">&lsaquo; ${flow.origin === "home" ? "Back to Home" : "Back to calendar"}</button>`;
   if (items.length < 2) return `<section class="weekly-k6" aria-label="Athletes">${back}</section>`;
-  const position = index >= 0 ? `${index + 1} / ${items.length}${flow.eventKey ? " in this event" : ""}` : "";
+  const position = index >= 0 ? `${index + 1} / ${items.length}${flow.listLabel ? ` ${flow.listLabel}` : flow.eventKey ? " in this event" : ""}` : "";
   const strip = renderAthleteSwitcherStripHtml({ items, currentKey, action: "weekly-k6-pick", keyAttr: "data-athlete-key", ariaLabel: "Athletes", wrapArrows: false });
   const summary = current ? `<p class="weekly-k6-summary"><strong>${escapeHtml(current.name)}</strong>${teamLabel ? ` · ${escapeHtml(teamLabel)}` : ""}${position ? ` · <span>${escapeHtml(position)}</span>` : ""}</p>` : "";
   const notice = flow.line ? `<p class="weekly-k6-line" role="status">${escapeHtml(flow.line)}</p>` : flow.kept ? `<p class="weekly-k6-kept">${escapeHtml(flow.kept)}</p>` : "";
   const notIn = flow.notInKeys?.includes(currentKey) && flow.eventKey ? `<p class="weekly-k6-line" role="status"><strong>Not in this session</strong> · ${escapeHtml(flow.notInLine || "")}</p>` : "";
   const plan = noPlan ? `<p class="weekly-k6-line" role="status">No plan this week</p><button type="button" class="plain-button cc-primary" data-action="weekly-create-plan" aria-label="Plan it in the Builder">Plan it in the Builder</button>` : "";
-  return `<section class="weekly-k6" aria-label="Athletes">
+  // K6 follow-up: the strip can be hidden (remembered per user); who is chosen and the one control to show it stay.
+  const toggle = `<button type="button" class="plain-button weekly-k6-strip-toggle" data-action="weekly-k6-strip-toggle" aria-expanded="${stripHidden ? "false" : "true"}">${stripHidden ? "Show athletes" : "Hide athletes"}</button>`;
+  return `<section class="weekly-k6${stripHidden ? " is-collapsed" : ""}" aria-label="Athletes">
       ${back}
-      ${groupsHtml}
-      <div class="weekly-k6-controls"${flow.busy ? ` inert aria-busy="true"` : ""}>${summary}${strip}</div>
-      ${hiddenNote ? `<p class="weekly-k6-hidden">${escapeHtml(hiddenNote)}</p>` : ""}${notice}${notIn}${plan}
+      ${stripHidden ? "" : groupsHtml}
+      <div class="weekly-k6-controls"${flow.busy ? ` inert aria-busy="true"` : ""}><div class="weekly-k6-head">${summary}${toggle}</div>${stripHidden ? "" : strip}</div>
+      ${hiddenNote ? `<p class="weekly-k6-hidden">${escapeHtml(hiddenNote)}</p>` : ""}${flow.scopeNote ? `<p class="weekly-k6-hidden weekly-k6-scope">${escapeHtml(flow.scopeNote)}</p>` : ""}${notice}${notIn}${plan}
     </section>`;
 }
 

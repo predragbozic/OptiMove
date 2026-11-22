@@ -38,6 +38,14 @@ change with them.
    - Block 3 shows the correction log's size: the migration rebuilds its foreign key, which reads every row once
      under an exclusive lock on that table. Before ST-3 nothing wrote that table, so it is expected to be empty.
 2. **Block 5 of the preflight, in git:** the 12-digit prefix is unique on the merge tree.
+3. **PostgreSQL 17 rehearsal** (production runs 17). A PostgreSQL 17 server on loopback, `node`, and
+   `npm --prefix backend ci`. The tool is `backend/scripts/participant-session-types-v89-rehearsal.mjs`, with bash
+   (`.sh`) and PowerShell (`.ps1`) wrappers that ask for the password themselves:
+   - Linux / macOS: `backend/scripts/participant-session-types-v89-rehearsal.sh --host 127.0.0.1 --port 5432 --user postgres --pg-bin /usr/lib/postgresql/17/bin`
+   - Windows: `powershell -ExecutionPolicy Bypass -File backend\scripts\participant-session-types-v89-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres -PgBin "C:\Program Files\PostgreSQL\17\bin"`
+
+   It builds and drops only its own `optimove_tests_st3rehearsal_*` databases and runs preflight, apply, post-check,
+   rollback to the same catalog, apply again and a dump / restore read-back. It must end with `RESULT: PASS`.
 
 ## After the deploy
 

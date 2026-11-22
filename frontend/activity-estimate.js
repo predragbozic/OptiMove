@@ -10,18 +10,21 @@ import { currentRosterResetGeneration, newRosterRequestKey, refreshActivityRoste
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
-export const ESTIMATE_METHODS = ["proportional", "team_average", "copy_athlete", "scale_recording"];
+// The owner's quality order (J20, rule 2): own average, position average, team average, another athlete's values.
+export const ESTIMATE_METHODS = ["proportional", "position_average", "team_average", "copy_athlete", "scale_recording"];
 const MAX_NOTE = 500;
 const MAX_MINUTES = 600;
 
 const METHOD_TITLES = {
   proportional: "Own average, scaled to minutes",
+  position_average: "Position average",
   team_average: "Team average",
   copy_athlete: "Copy from an athlete",
   scale_recording: "Scale the recorded part",
 };
 const METHOD_HINTS = {
   proportional: "This athlete's own rate per minute in their recent sessions, times the minutes you enter.",
+  position_average: "The average of the athletes of the same position measured in this session.",
   team_average: "The average of the athletes measured in this session.",
   copy_athlete: "Another athlete's values from this session. The weakest estimate: use it only if they trained the same way.",
   scale_recording: "The recorded part of this athlete's session, scaled to the minutes chosen before the import.",
@@ -31,6 +34,9 @@ const REASONS = {
   too_few_athletes: "Fewer than 3 athletes have a measured value in this session.",
   too_few_same_type: "Fewer than 3 athletes with a measured value did the same session type as this athlete.",
   source_type_differs: "That athlete did another session type here. Choose an athlete of the same type.",
+  too_few_athletes_in_position: "Fewer than 3 athletes of this position have a measured value in this session.",
+  no_position: "This athlete has no position. Set one in Settings → Athletes.",
+  positions_not_available: "Positions are not available yet.",
   too_few_sessions: "Fewer than 3 of this athlete's sessions in the last 90 days have measured values.",
   minutes_required: "Enter the minutes the athlete trained, then Update.",
   duration_not_available: "This session's duration is not known.",
@@ -61,6 +67,8 @@ const REFUSALS = {
   request_key_reused: "Something changed while saving. Open the estimate again.",
   try_again: "The server was busy and saved nothing. Try again.",
   not_a_team_coach: "You can no longer decide on this roster.",
+  no_position: REASONS.no_position,
+  positions_not_available: REASONS.positions_not_available,
   scale_not_chosen: REASONS.scale_not_chosen,
   scale_not_possible: REASONS.scale_not_possible,
   scale_basis_expired: REASONS.scale_basis_expired,
@@ -88,6 +96,10 @@ export function estimateLabelText(e) {
   // A label without its numbers (an athlete reading their own results) reads as plain words, never "?".
   if (e.method === "proportional") how = Number.isFinite(e.minutes) ? `own average × ${num(e.minutes, 2)} min${Number.isFinite(e.sessionCount) ? ` (${e.sessionCount} sessions)` : ""}` : "own average";
   else if (e.method === "team_average") how = `team average${Number.isFinite(e.athleteCount) ? ` (${e.athleteCount} athletes)` : ""}`;
+  else if (e.method === "position_average") {
+    const parts = [e.positionName, Number.isFinite(e.athleteCount) ? `${e.athleteCount} athletes` : ""].filter(Boolean);
+    how = `position average${parts.length ? ` (${parts.join(", ")})` : ""}`;
+  }
   else if (e.method === "copy_athlete") how = e.sourceAthleteName ? `copied from ${e.sourceAthleteName}` : "copied from another athlete";
   else if (e.method === "scale_recording") how = Number.isFinite(e.recordedMinutes) && Number.isFinite(e.targetMinutes) ? `recorded ${num(e.recordedMinutes, 2)} of ${num(e.targetMinutes, 2)} min, scaled` : "scaled from a shorter recording";
   else how = "estimate";
@@ -388,7 +400,7 @@ function methodHtml(e, method) {
   const reason = !view.available ? (REASONS[view.reason] ?? REASONS.nothing_to_estimate) : chosen && method === "copy_athlete" && !e.sourceAthleteId ? REASONS.choose_source : "";
   const values = view.available ? methodValuesText(e.proposal, view) : "";
   // Own average says which sessions it used and what kind of session it compares with (also when not available).
-  const ownBasis = method === "proportional" ? ownAverageBasisText(view) : "";
+  const ownBasis = method === "proportional" ? ownAverageBasisText(view) : method === "position_average" && view.position?.name ? `Position: ${view.position.name}` : "";
   let extra = "";
   if (method === "proportional" && chosen) {
     extra = `

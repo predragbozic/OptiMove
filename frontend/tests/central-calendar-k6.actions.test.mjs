@@ -371,3 +371,76 @@ test("K6-1o. the phone's fold line: a team alone reads 'U19 · all athletes', ne
   render();
   assert.equal(dom().querySelector(".athlete-switcher-fold span").textContent, "U19 · all athletes");
 });
+
+// --- K6 follow-up (2026-11-22): hide / show the strip, and the phone's box kept open by the arrows ------------------
+
+function memoryStorage() {
+  const store = new Map();
+  return { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: (k) => { store.delete(k); }, store };
+}
+
+test("K6-F1. a computer's box hides and shows again; who is chosen stays; the choice is per user and survives a new slice", async () => {
+  const storage = memoryStorage();
+  globalThis.localStorage = storage;
+  try {
+    await open();
+    await act({ action: "central-calendar-pick-athlete", athleteKey: uuid(2) });
+    render();
+    assert.equal(dom().querySelector(".athlete-switcher-hide").textContent, "Hide athletes");
+    assert.ok(dom().querySelector(".athlete-switcher .builder-batch-pills"));
+    await act({ action: "central-calendar-switcher-hide" });
+    render();
+    const box = dom().querySelector(".athlete-switcher");
+    assert.ok(box.classList.contains("is-collapsed"));
+    assert.equal(box.querySelector(".athlete-switcher-body").hasAttribute("hidden"), true, "the strip takes no room");
+    assert.match(box.querySelector(".athlete-switcher-head-text").textContent, /Ben Marsh/, "who is chosen stays on one line");
+    assert.equal(box.querySelector(".athlete-switcher-hide").textContent, "Show athletes");
+    assert.equal(box.querySelector(".athlete-switcher-hide").getAttribute("aria-expanded"), "false");
+    assert.equal(storage.store.get("optimove.athleteStrip.hidden.calendar.coach-1"), "1", "remembered for this user and this surface");
+    // A new slice (a workspace change) reads the preference again.
+    data.resetCentralCalendarForWorkspaceChange();
+    await open();
+    assert.ok(dom().querySelector(".athlete-switcher.is-collapsed"));
+    // Another user does not inherit it.
+    data.resetCentralCalendarForWorkspaceChange();
+    state.currentUser = { ...state.currentUser, id: "coach-2" };
+    await open();
+    assert.equal(dom().querySelector(".athlete-switcher.is-collapsed"), null);
+    state.currentUser = { ...state.currentUser, id: "coach-1" };
+    data.resetCentralCalendarForWorkspaceChange();
+    await open();
+    await act({ action: "central-calendar-switcher-hide" });
+    render();
+    assert.equal(dom().querySelector(".athlete-switcher.is-collapsed"), null, "shown again");
+    assert.equal(storage.store.has("optimove.athleteStrip.hidden.calendar.coach-1"), false);
+  } finally {
+    delete globalThis.localStorage;
+  }
+});
+
+test("K6-F2. blocked storage: hiding still works for the screen and nothing throws; a phone has no hide control", async () => {
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, get() { throw new Error("blocked"); } });
+  try {
+    await open();
+    await act({ action: "central-calendar-switcher-hide" });
+    render();
+    assert.ok(dom().querySelector(".athlete-switcher.is-collapsed"));
+    layout = "phone";
+    render();
+    assert.equal(dom().querySelector(".athlete-switcher-hide"), null, "a phone keeps its own fold");
+    assert.equal(dom().querySelector(".athlete-switcher.is-collapsed"), null);
+  } finally {
+    delete globalThis.localStorage;
+  }
+});
+
+test("K6-F3. an arrow keeps a phone's box open; a pill folds it", async () => {
+  layout = "phone";
+  await open();
+  await act({ action: "central-calendar-switcher-toggle" });
+  assert.equal(state.centralCalendar.switcher.open, true);
+  await handleCentralCalendarAction(fakeAction({ action: "central-calendar-pick-athlete", athleteKey: uuid(1) }, { classList: { contains: (name) => name === "icon-button" } }), { render });
+  assert.equal(state.centralCalendar.switcher.open, true, "› keeps the box open");
+  await act({ action: "central-calendar-pick-athlete", athleteKey: uuid(2) });
+  assert.equal(state.centralCalendar.switcher.open, false, "a pill folds it");
+});
