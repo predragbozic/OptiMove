@@ -9150,6 +9150,14 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     font-size: 10px;
   }
 
+  /* The chip's own label already ellipsises; without a zero minimum the chip, its menu and the actions row kept their
+     full width and pushed the bell and sign-out past a 360 px window (an athlete who also holds another workspace). */
+  .athlete-mode .topbar-actions,
+  .athlete-mode .workspace-menu,
+  .athlete-mode .workspace-toggle[data-action="workspace-toggle"] {
+    min-width: 0;
+  }
+
   /* hotfix/athlete-mobile-navigation: stacks directly under the sticky
      .athlete-topbar (--athlete-topbar-height: 61px with its 44 px controls,
      border included; 57px before them) instead

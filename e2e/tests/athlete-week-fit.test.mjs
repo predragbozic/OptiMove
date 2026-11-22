@@ -5,6 +5,7 @@
 // state to toggle), so the menu check is the rail's own width in the measurement.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { launch } from "../lib/browser.mjs";
 
@@ -59,6 +60,7 @@ async function measure(width) {
         days: days.length,
         pageSideways: document.documentElement.scrollWidth - innerWidth,
         gridSideways: grid.scrollWidth - grid.clientWidth,
+        actionsRight: Math.round(document.querySelector(".topbar-actions").getBoundingClientRect().right),
         padRight: getComputedStyle(grid).paddingRight,
         lastDayRight: Math.round(lastDay.right),
         navRight: Math.round(nav.right),
@@ -88,4 +90,21 @@ test("Weekly plan (800 px): the page does not grow wider than the window", async
   const { look } = await measure(800);
   assert.ok(look.pageSideways <= 0, `the page scrolls sideways by ${look.pageSideways}px`);
   assert.ok(look.navRight <= look.innerWidth, `the week header ends at ${look.navRight} of ${look.innerWidth}`);
+});
+
+// An athlete who also holds another workspace gets the workspace chip in the header. On a 360 px phone the chip, its menu
+// and the actions row kept their full width, so the bell and sign-out ran past the window (the layout viewport grew to 368 px).
+test("Weekly plan (360, 390, 490 px) of an athlete who also coaches: the header and the week stay inside the window", async () => {
+  const client = new pg.Client({ connectionString: world.databaseUrl });
+  await client.connect();
+  try {
+    const athlete = world.accounts.find((a) => a.role === "athlete");
+    await client.query("insert into public.user_global_roles (user_id, role, is_active) values ($1, 'independent_coach', true)", [athlete.id]);
+  } finally { await client.end(); }
+  for (const width of [490, 390, 360]) {
+    const { look } = await measure(width);
+    assert.equal(look.innerWidth, width, `the window grew to ${look.innerWidth} px at ${width}`);
+    assert.ok(look.actionsRight <= width, `the header buttons end at ${look.actionsRight} of ${width}`);
+    assert.ok(look.pageSideways <= 0 && look.gridSideways <= 1 && look.navRight <= width, JSON.stringify(look));
+  }
 });
