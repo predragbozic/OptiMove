@@ -25,6 +25,7 @@ import {
 import { athleteHasRecordedSessions, getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
 import { getActivityRoster, RosterError } from "../activityRoster.js";
 import { getEstimateProposal, saveEstimate } from "../metricEstimateService.js";
+import { getManualValueForm, restoreMeasuredValues, saveManualValues } from "../manualValueService.js";
 import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
 import { SourceMetricMappingError } from "../sourceMetricAccess.js";
 import {
@@ -333,6 +334,16 @@ router.get("/:activityId/estimates/proposal", async (req, res) => {
 });
 router.post("/:activityId/estimates", rosterCommandRoute((ctx, activityId, req) =>
   saveEstimate(ctx, activityId, req.body)));
+
+// Manual values on the roster (ST-4; manualValueService.js): the form of one athlete, an entry or a correction, and the
+// restore of the measured values. Behind MANUAL_VALUES_ENABLED (on unless "false"): off, the identical 404. The writes are
+// the roster command's shape (stable codes, a bounded COMMIT, 503 outcome_unknown with the same requestKey safe to repeat).
+router.get("/:activityId/manual-values", rosterCommandRoute((ctx, activityId, req) =>
+  getManualValueForm(ctx, activityId, req.query)));
+router.post("/:activityId/manual-values", rosterCommandRoute((ctx, activityId, req) =>
+  saveManualValues(ctx, activityId, req.body)));
+router.post("/:activityId/manual-values/restore", rosterCommandRoute((ctx, activityId, req) =>
+  restoreMeasuredValues(ctx, activityId, req.body)));
 
 // ------------------------------------------------------------
 // Match suggestions

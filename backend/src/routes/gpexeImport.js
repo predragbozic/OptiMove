@@ -78,7 +78,7 @@ function handle(fn) {
       if (error instanceof service.GpexeImportServiceError) {
         if (error.status === 404) return notFound(res);
         // Only the known detail fields, so a detail can never replace error/message.
-        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest, subsetPreview, subsetHash, excludedAthleteIds, currentChoice } = error.details || {};
+        const { reviewAgain, changesToImported, verify, reason, rosterWork, calendarLinks, retrySameRequest, subsetPreview, subsetHash, excludedAthleteIds, currentChoice, manualValues } = error.details || {};
         // The precise reason of a source-connection refusal names connection
         // and server configuration facts: an administrator of the team's club
         // or of the platform gets it; a coach gets the stable code and the
@@ -109,6 +109,8 @@ function handle(fn) {
           // U5 / v60: the roster work an undo would remove (counts, and the bounded list of later changes for a platform
           // admin, the only audience of the undo routes), or that the same request may be repeated.
           ...(rosterWork && typeof rosterWork === "object" ? { rosterWork } : {}),
+          // v87 (ST-4): the manual values an undo would remove (count, the bounded list, the fingerprint that confirms it).
+          ...(manualValues && typeof manualValues === "object" ? { manualValues } : {}),
           ...(Number.isInteger(calendarLinks) ? { calendarLinks } : {}),
           ...(retrySameRequest === true ? { retrySameRequest: true } : {}),
           // MT-A: a stale expectedChoiceId answers with the current choice (ids and the choice only).
@@ -644,6 +646,8 @@ router.post("/teams/:teamId/candidates/:candidateId/undo-import", handle(async (
     userId: String(req.user.id), requestKey: body.requestKey, reason: body.reason, expectedEventId: expected.eventId ?? null,
     // v60 (O1): later roster changes are removed only with their fingerprint, the confirmation of exactly the listed ones.
     laterRosterFingerprint: body.laterRosterFingerprint,
+    // v87 (ST-4): manual values are removed only with their fingerprint, the confirmation of exactly the listed ones.
+    manualValuesFingerprint: body.manualValuesFingerprint,
   }) });
 }));
 

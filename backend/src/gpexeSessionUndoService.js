@@ -54,6 +54,9 @@ const SENTENCES = {
   event_session_mismatch: [409, "The stored import does not match this session; contact a platform administrator."],
   two_events_for_session: [409, "Two imports exist for this session. They have to be resolved by a platform administrator first."],
   manual_occasion: [409, "Some results of this session were entered by hand, so its imported data cannot be deleted here. Ask a platform administrator to delete it."],
+  // v87 (ST-4): manual values are removed only after a confirmation that lists them.
+  manual_values_need_confirmation: [409, "Coaches entered or corrected values in this session. Confirm that these values are removed too, then undo again."],
+  manual_values_changed: [409, "The session's manual values changed since you reviewed them. Nothing was removed. Review the undo again."],
   shared_activity: [409, "This session's activity also holds data from another source, so it cannot be removed here."],
   other_event_link: [409, "This session's activity is also linked to another event, so it cannot be removed here."],
   entangled_activity: [409, "This session was merged with another session, so its imported data cannot be deleted here. Ask a platform administrator to delete it."],
@@ -82,6 +85,9 @@ export function mapDatabaseError(error) {
     if (code === "roster_work_needs_confirmation" || code === "roster_work_changed") {
       const work = parseDetail(error.detail);
       if (work) details.rosterWork = rosterFromScope(work);
+    }
+    if (code === "manual_values_need_confirmation" || code === "manual_values_changed") {
+      details.manualValues = manualFromScope(parseDetail(error.detail));
     }
     // The constraint that stopped the removal is for the server log only (an administrator's support trail), never the answer.
     if (code === "referenced_elsewhere") console.error(`[gpexe] undo refused: referenced elsewhere (${String(error.detail || "unknown").slice(0, 120)})`);
@@ -179,6 +185,46 @@ function rosterFromLog(removed) {
 
 // Names for the listed later changes (at most 60 athletes and users) and the reasons' labels: the administrator sees who,
 // whom and why, never only ids or codes.
+// v87 added an eighth argument with a default: a call without a manual confirmation keeps v76's seven arguments (the same
+// function on a v87 database, and still callable on a database before v87); only a confirmation sends the eighth.
+function undoCall(middle, manual) {
+  const head = "select * from training_load.undo_imported_session($1, $2, $3, ";
+  return { seven: `${head}${middle})`, eight: `${head}${middle}, ${manual})` };
+}
+
+// v87 (ST-4): the session's manual values in the scope's (or the log's) closed shape: { count, list, fingerprint }.
+const MANUAL_KINDS = new Set(["entry", "correction", "restore", "other"]);
+function manualFromScope(scope) {
+  const count = Number.isInteger(scope?.count) && scope.count >= 0 ? scope.count : 0;
+  const list = (Array.isArray(scope?.list) ? scope.list : []).slice(0, 60).map((i) => ({
+    athleteId: typeof i?.athlete === "string" && UUID.test(i.athlete) ? i.athlete : null,
+    kind: MANUAL_KINDS.has(i?.kind) ? i.kind : "other",
+    byUserId: typeof i?.by === "string" && UUID.test(i.by) ? i.by : null,
+    at: typeof i?.at === "string" ? i.at : null,
+    values: Number.isInteger(i?.values) && i.values >= 0 ? i.values : 0,
+  }));
+  return { count, list, fingerprint: count > 0 && typeof scope?.fingerprint === "string" && /^[0-9a-f]{64}$/.test(scope.fingerprint) ? scope.fingerprint : null };
+}
+
+async function withManualNames(manual) {
+  const list = manual?.list ?? [];
+  if (!list.length) return manual;
+  const athleteIds = [...new Set(list.map((i) => i.athleteId).filter(Boolean))];
+  const userIds = [...new Set(list.map((i) => i.byUserId).filter(Boolean))];
+  try {
+    const [athletes, users] = await Promise.all([
+      athleteIds.length ? pool.query(`select id, coalesce(nullif(display_name, ''), full_name) as name from public.athletes where id = any($1::uuid[])`, [athleteIds]) : { rows: [] },
+      userIds.length ? pool.query(`select id, coalesce(nullif(display_name, ''), full_name) as name from public.users where id = any($1::uuid[])`, [userIds]) : { rows: [] },
+    ]);
+    const an = new Map(athletes.rows.map((r) => [String(r.id), r.name]));
+    const un = new Map(users.rows.map((r) => [String(r.id), r.name]));
+    manual.list = list.map((i) => ({ ...i, athleteName: i.athleteId ? an.get(i.athleteId) ?? null : null, byName: i.byUserId ? un.get(i.byUserId) ?? null : null }));
+  } catch {
+    // Names are a display help only; the list without them is still the confirmed one.
+  }
+  return manual;
+}
+
 async function withNames(roster) {
   const list = roster?.laterWork?.list ?? [];
   if (!list.length) return roster;
@@ -216,6 +262,8 @@ function shapeResult(row) {
     // Every candidate the undo marked undone: the requested one and any other approved version of the session (one event).
     undoneCandidateIds: row.undone_candidate_ids ?? [],
     rosterWork: rosterFromLog(row.roster_work_removed),
+    // v87: the manual values this undo removed (count 0 when there were none).
+    manualValues: manualFromScope(row.manual_values_removed),
   };
 }
 
@@ -254,39 +302,63 @@ export async function undoPreview(teamId, candidateId, { userId }) {
   try {
     preview = await inTransaction(async (client) => {
       if (previewFault) await previewFault(client);
-      const sql = `select * from training_load.undo_imported_session($1, $2, $3, gen_random_uuid(), 'preview', null, $4)`;
+      const sql = undoCall("gen_random_uuid(), 'preview', null, $4", "$5");
       let row;
       let scopeWork = null;
-      await client.query("savepoint undo_preview");
-      try {
-        row = (await client.query(sql, [userId, teamId, candidateId, null])).rows[0];
-      } catch (error) {
-        // Later roster work asks for a confirmation: run the same undo once more, confirmed with the fingerprint the
-        // function itself reported, so the preview shows everything it would remove (still rolled back).
-        if (!(error?.code === "55000" && String(error.message) === "session_undo:roster_work_needs_confirmation")) throw error;
-        scopeWork = parseDetail(error.detail);
-        const fingerprint = scopeWork?.laterWork?.fingerprint;
-        await client.query("rollback to savepoint undo_preview");
-        if (typeof fingerprint !== "string") throw error;
-        row = (await client.query(sql, [userId, teamId, candidateId, fingerprint])).rows[0];
+      let scopeManual = null;
+      let rosterFp = null;
+      let manualFp = null;
+      // A confirmation the function asks for (v60's later roster work, v87's manual values) is answered with the
+      // fingerprint the function itself reported, so the preview shows everything it would remove (still rolled back).
+      // Each is answered once; any other refusal, or a second ask for the same one, ends the preview. Rolling back to the
+      // savepoint releases the team lock, so the rerun takes it again and checks the same fingerprints under it: a change in
+      // between is roster_work_changed / manual_values_changed.
+      for (;;) {
+        await client.query("savepoint undo_preview");
+        try {
+          row = (await client.query(manualFp === null ? sql.seven : sql.eight, [userId, teamId, candidateId, rosterFp, ...(manualFp === null ? [] : [manualFp])])).rows[0];
+          break;
+        } catch (error) {
+          const message = error?.code === "55000" ? String(error.message) : "";
+          await client.query("rollback to savepoint undo_preview");
+          if (message === "session_undo:roster_work_needs_confirmation" && rosterFp === null) {
+            scopeWork = parseDetail(error.detail);
+            rosterFp = scopeWork?.laterWork?.fingerprint;
+            if (typeof rosterFp !== "string") throw error;
+          } else if (message === "session_undo:manual_values_need_confirmation" && manualFp === null) {
+            scopeManual = parseDetail(error.detail);
+            manualFp = scopeManual?.fingerprint;
+            if (typeof manualFp !== "string") throw error;
+          } else {
+            throw error;
+          }
+        }
       }
       const shaped = shapeResult(row);
-      // The scope's own counts (with the server's count of later changes). Rolling back to the savepoint releases the team
-      // lock, so the rerun takes it again and checks this same fingerprint under it: a change in between is roster_work_changed.
       if (scopeWork) shaped.rosterWork = rosterFromScope(scopeWork);
-      return { ...shaped, wouldOfferAgain: Boolean(row.new_candidate_id), needsRosterConfirmation: shaped.rosterWork.laterWork.total > 0 };
+      if (scopeManual) shaped.manualValues = manualFromScope(scopeManual);
+      return {
+        ...shaped, wouldOfferAgain: Boolean(row.new_candidate_id), needsRosterConfirmation: shaped.rosterWork.laterWork.total > 0,
+        needsManualConfirmation: shaped.manualValues.count > 0,
+      };
     }, { keep: false });
   } catch (error) {
     const mapped = mapDatabaseError(error);
     if (mapped?.details?.rosterWork) await withNames(mapped.details.rosterWork);
+    if (mapped?.details?.manualValues) await withManualNames(mapped.details.manualValues);
     if (mapped) throw mapped;
     throw error;
   }
   await withNames(preview.rosterWork);
+  await withManualNames(preview.manualValues);
   return preview;
 }
 
-function checkBody({ requestKey, reason, expectedEventId, laterRosterFingerprint }) {
+function checkBody({ requestKey, reason, expectedEventId, laterRosterFingerprint, manualValuesFingerprint }) {
+  if (manualValuesFingerprint !== undefined && manualValuesFingerprint !== null
+      && (typeof manualValuesFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(manualValuesFingerprint))) {
+    throw refusal(400, "invalid_request", "manualValuesFingerprint is the 64-character fingerprint of the manual values it confirms.");
+  }
   if (typeof requestKey !== "string" || !UUID.test(requestKey)) throw refusal(400, "invalid_request", "requestKey must be a UUID chosen for this one undo.");
   if (typeof reason !== "string" || !reason.trim() || reason.trim().length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) {
     throw refusal(400, "invalid_request", "A reason of 1 to 500 characters without control characters is required.");
@@ -340,22 +412,26 @@ async function refreshOfferedPreview(teamId, candidateId, userId) {
   }
 }
 
-export async function undoImport(teamId, candidateId, { userId, requestKey, reason, expectedEventId = null, laterRosterFingerprint = null }) {
-  checkBody({ requestKey, reason, expectedEventId, laterRosterFingerprint });
+export async function undoImport(teamId, candidateId, { userId, requestKey, reason, expectedEventId = null, laterRosterFingerprint = null, manualValuesFingerprint = null }) {
+  checkBody({ requestKey, reason, expectedEventId, laterRosterFingerprint, manualValuesFingerprint });
   let row;
   try {
+    const sql = undoCall("$4, $5, $6, $7", "$8");
+    const confirmManual = manualValuesFingerprint !== undefined && manualValuesFingerprint !== null;
     row = await inTransaction(async (client) => (await client.query(
-      `select * from training_load.undo_imported_session($1, $2, $3, $4, $5, $6, $7)`,
-      [userId, teamId, candidateId, requestKey, reason, expectedEventId, laterRosterFingerprint ?? null],
+      confirmManual ? sql.eight : sql.seven,
+      [userId, teamId, candidateId, requestKey, reason, expectedEventId, laterRosterFingerprint ?? null, ...(confirmManual ? [manualValuesFingerprint] : [])],
     )).rows[0], { keep: true });
   } catch (error) {
     const mapped = mapDatabaseError(error);
     if (mapped?.details?.rosterWork) await withNames(mapped.details.rosterWork);
+    if (mapped?.details?.manualValues) await withManualNames(mapped.details.manualValues);
     if (mapped) throw mapped;
     throw error;
   }
   const result = { ...shapeResult(row), replayed: row.replayed === true, offeredAgain: Boolean(row.new_candidate_id), previewReady: false };
   await withNames(result.rosterWork);
+  await withManualNames(result.manualValues);
   if (row.new_candidate_id) {
     // Also on a replay: a first call whose recomputation failed gets another try, and the answer says whether the
     // offered candidate has its preview now (without one it cannot be approved; the next search recomputes it).

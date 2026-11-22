@@ -103,6 +103,8 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611201300_roles_v84_permission_roles.sql",
   // ST-1 (docs/ai/session-type-plan.md): session types and their owner guard.
   "202611201500_training_load_v85_session_types.sql",
+  // ST-4 (docs/ai/session-type-plan.md section 7): manual values on the roster and the undo that confirms them.
+  "202611221100_training_load_v87_manual_values.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
