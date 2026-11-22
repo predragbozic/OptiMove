@@ -8,12 +8,11 @@ const src = readFileSync(new URL("../training-load-view.js", import.meta.url), "
 const start = src.indexOf('${space === "dataConfig" || section === "imports" ? ""');
 const block = src.slice(start, src.indexOf("renderDataAnalysisSubNavHtml(section)", start));
 
-test("the Filter: none on Imports or Data configuration, disabled with its note on Dashboards, working everywhere else", () => {
+test("the Filter: none on Imports or Data configuration, working on Dashboards, working everywhere else", () => {
   assert.ok(start > 0, "the shell's filter control is chosen in one place");
   assert.match(block, /^\$\{space === "dataConfig" \|\| section === "imports" \? ""/, "Imports and Data configuration get nothing");
-  assert.match(block, /: section === "analysis"\s*\n[\s\S]*?\? `<button[^`]*training-load-filter-button[^`]*disabled aria-disabled="true"/, "Dashboards: disabled");
   assert.match(block, /: `<button type="button" class="plain-button compact-button training-load-filter-button \$\{count \? "is-active" : ""\}" data-action="training-load-filter-open">Filter/, "every other section: the working Filter");
-  assert.match(block, /section === "analysis" \? `<p id="training-load-filter-note"[^`]*not available for Dashboards yet/, "Dashboards keeps its note");
+  assert.doesNotMatch(block, /disabled aria-disabled="true"|not available for Dashboards/);
   assert.doesNotMatch(src, /filters do not apply to Imports/, "no line about Imports");
 });
 

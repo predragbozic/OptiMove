@@ -1,3 +1,4 @@
+import { normalizeShellFilter, resolveShellCohort } from '../dashboardShellFilter.js';
 import { createHash } from 'node:crypto';
 import { loadAuthorizationContext } from '../authz.js';
 import { resolveActiveWorkspaceReadOnly } from '../workspace.js';
@@ -50,6 +51,8 @@ export async function loadPreviewContext(queryRunner, target, envelope, existing
     athleteSql = 'exists(select 1 from public.user_athletes membership where membership.athlete_id=athlete.id and membership.user_id=$1 and membership.is_active=true)';
   } else if (workspace.dataWorkspaceType === 'athlete') { params.push(workspace.athleteWorkspaceAthleteId); athleteSql = 'athlete.id=$1'; }
   const authorizedAthleteIds = (await queryRunner(`select athlete.id from public.athletes athlete where ${athleteSql} order by athlete.id`, params)).rows.map(row => row.id);
+  const shellFilter = normalizeShellFilter(envelope.context.shellFilter);
+  const shellCohort = await resolveShellCohort(workspace, shellFilter, queryRunner);
   const layers = [target.dashboard.default_filter, envelope.context.runtimeFilter, existing?.local_filter_override].filter(Boolean);
   const activityIds = [...new Set([...layers.map(layer => layer.activityId), envelope.draft.advancedFilter?.activity?.id].filter(isUuid))];
   const componentIds = [...new Set([...layers.map(layer => layer.componentId), envelope.draft.advancedFilter?.component?.id].filter(isUuid))];
@@ -76,7 +79,7 @@ export async function loadPreviewContext(queryRunner, target, envelope, existing
   else if (selection?.mode === 'selected') componentLocal.componentId = selection.id.toLowerCase();
   const effectiveComponent = { ...target.dashboard.default_filter, ...envelope.context.runtimeFilter, ...componentLocal }.componentId;
   return {
-    authorizedAthleteIds, authorizedFilterIds: { activityId: visibleActivityIds, componentId: components.filter(component => visibleActivityIds.includes(component.activity_id)).map(component => component.id) },
+    shellFilter, shellCohort, authorizedAthleteIds, authorizedFilterIds: { activityId: visibleActivityIds, componentId: components.filter(component => visibleActivityIds.includes(component.activity_id)).map(component => component.id) },
     componentActivityId: components.find(component => component.id === effectiveComponent)?.activity_id,
     athleteWorkspaceAthleteId: workspace.athleteWorkspaceAthleteId,
     defaultFilter: target.dashboard.default_filter, runtimeFilter: envelope.context.runtimeFilter,

@@ -1677,19 +1677,9 @@ export function renderTrainingLoadCoachHtml() {
         </div>
         ${space === "dataConfig" || section === "imports" ? ""
           // Imports (manager, 2026-11-15): the filter does nothing there, so there is no control and no line about it.
-          : section === "analysis"
-          // Phase F (confirmed decision): the shell's Club/Team/Athletes
-          // filter never reaches the Dashboards query (it only ever sends
-          // the runtime activity/component filter - see
-          // analysisRuntimeFilterPayload), so on Dashboards the control is
-          // shown as unavailable, with NO active count, rather than
-          // pretending a selection applies. The selection itself is left
-          // untouched in state.trainingLoad.filter - it still applies the
-          // moment the coach returns to Overview/Activities/Athletes.
-          ? `<button type="button" class="plain-button compact-button training-load-filter-button" data-action="training-load-filter-open" disabled aria-disabled="true" aria-describedby="training-load-filter-note">Filter</button>`
           : `<button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>`}
       </div>
-      ${section === "analysis" ? `<p id="training-load-filter-note" class="muted training-load-filter-note">Club, team and athlete filters are not available for Dashboards yet.</p>` : ""}
+
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}

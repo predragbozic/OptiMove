@@ -572,7 +572,7 @@ test("classification is unaffected by conflicting-case environment variables (no
 // invocations. This test proves the actual on-disk contract, not just the intent.
 // ------------------------------------------------------------------
 
-test("settings.json uses the exact exec-form contract: 3 matchers, command:'node', identical single-arg args, no shell-form, no bare $CLAUDE_PROJECT_DIR", () => {
+test("settings.json uses the exact exec-form contract: 4 matchers, command:'node', identical single-arg args, no shell-form, no bare $CLAUDE_PROJECT_DIR", () => {
   const settingsPath = fileURLToPath(new URL("./settings.json", new URL("../", import.meta.url)));
   const raw = readFileSync(settingsPath, "utf8");
   const settings = JSON.parse(raw);
@@ -584,7 +584,7 @@ test("settings.json uses the exact exec-form contract: 3 matchers, command:'node
   assert.ok(!/\$CLAUDE_PROJECT_DIR(?!\})/.test(raw), `no bare (unbraced) $CLAUDE_PROJECT_DIR may remain in settings.json, found in: ${raw}`);
   assert.ok(!/"command"\s*:\s*"node /.test(raw), "no old shell-form 'command': 'node ...' single-string entry may remain");
 
-  const expectedMatchers = ["Bash", "PowerShell", "mcp__.*"];
+  const expectedMatchers = ["Bash", "PowerShell", "Write|Edit|MultiEdit|NotebookEdit", "mcp__.*"];
   assert.equal(
     settings.hooks.PreToolUse.length,
     expectedMatchers.length,
@@ -2147,4 +2147,85 @@ test("#698: a file operation the hook cannot place asks (fail-closed backstop); 
   } finally {
     for (const d of [base, repo]) rmSync(d, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// File tools (Write, Edit, MultiEdit, NotebookEdit) on the live .claude folder
+// ---------------------------------------------------------------------------
+test("file tools: any edit inside the live .claude folder asks, however the path is written", async () => {
+  const { classifyToolCall, classifyFileEdit, FILE_EDIT_TOOLS } = await import("./safety-guard.mjs");
+  const { mkdtempSync, symlinkSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const claudeDir = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, "");
+  const projectDir = path.dirname(claudeDir);
+  const ask = (toolName, toolInput, cwd = projectDir) => classifyToolCall({ tool_name: toolName, tool_input: toolInput, cwd, session_id: "file-tools-test" });
+  for (const tool of ["Write", "Edit", "MultiEdit"]) {
+    for (const p of [path.join(claudeDir, "settings.json"), ".claude/settings.local.json", ".claude/hooks/safety-guard.mjs", "./.claude/rules/git-safety.md", "backend/../.claude/agents/new-brief.md", ".claude"]) {
+      assert.equal(ask(tool, { file_path: p })?.decision, "ask", `${tool} ${p}`);
+    }
+  }
+  assert.equal(ask("NotebookEdit", { notebook_path: ".claude/x.ipynb" })?.decision, "ask");
+  assert.equal(ask("Edit", { file_path: "settings.json" }, claudeDir)?.decision, "ask", "relative to a cwd inside .claude");
+  for (const p of ["README.md", "backend/src/app.js", ".claudefoo/x", "docs/.claude-notes.md", path.join(tmpdir(), "x.txt")]) {
+    assert.equal(ask("Write", { file_path: p }), null, p);
+  }
+  for (const bad of [{}, { file_path: "" }, { file_path: "   " }, { file_path: 42 }]) {
+    assert.equal(ask("Edit", bad)?.decision, "ask", JSON.stringify(bad));
+  }
+  assert.deepEqual([...FILE_EDIT_TOOLS].sort(), ["Edit", "MultiEdit", "NotebookEdit", "Write"]);
+  // a symlink elsewhere that points into .claude is the same folder
+  const dir = mkdtempSync(path.join(tmpdir(), "guard-file-tools-"));
+  try {
+    symlinkSync(claudeDir, path.join(dir, "linked-claude"), "dir");
+    assert.equal(ask("Write", { file_path: path.join(dir, "linked-claude", "settings.json") }, dir)?.decision, "ask");
+    // the same layout in another folder is not the live .claude
+    assert.equal(classifyFileEdit({ file_path: path.join(dir, ".claude", "settings.json") }, dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // the reason never echoes the path
+  assert.ok(!ask("Edit", { file_path: ".claude/settings.json" }).reason.includes("settings.json"));
+});
+
+test("file tools: a dangling symlink to a missing file in .claude asks, elsewhere it does not; a link loop asks; every path field counts", async () => {
+  const { classifyToolCall } = await import("./safety-guard.mjs");
+  const { mkdtempSync, symlinkSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const claudeDir = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, "");
+  const ask = (toolName, toolInput, cwd) => classifyToolCall({ tool_name: toolName, tool_input: toolInput, cwd, session_id: "file-tools-test" });
+  const dir = mkdtempSync(path.join(tmpdir(), "guard-file-links-"));
+  try {
+    // settings.local.json is usually absent: a link to it is dangling until the write creates it
+    symlinkSync(path.join(claudeDir, "zz-missing-probe.json"), path.join(dir, "into-claude"));
+    assert.equal(ask("Write", { file_path: path.join(dir, "into-claude") }, dir)?.decision, "ask");
+    // relative link target, through a dangling parent link
+    symlinkSync(path.relative(dir, path.join(claudeDir, "zz-missing-dir")), path.join(dir, "rel-into-claude"));
+    assert.equal(ask("Write", { file_path: path.join(dir, "rel-into-claude", "x.json") }, dir)?.decision, "ask");
+    symlinkSync(path.join(dir, "missing-elsewhere.txt"), path.join(dir, "elsewhere"));
+    assert.equal(ask("Write", { file_path: path.join(dir, "elsewhere") }, dir), null);
+    symlinkSync(path.join(dir, "loop-b"), path.join(dir, "loop-a"));
+    symlinkSync(path.join(dir, "loop-a"), path.join(dir, "loop-b"));
+    assert.equal(ask("Write", { file_path: path.join(dir, "loop-a") }, dir)?.decision, "ask", "a link loop cannot be followed: ask");
+    // any path field inside .claude asks, whatever the tool
+    assert.equal(ask("NotebookEdit", { file_path: path.join(dir, "x"), notebook_path: path.join(claudeDir, "x.ipynb") }, dir)?.decision, "ask");
+    assert.equal(ask("Edit", { file_path: path.join(dir, "x"), notebook_path: 7 }, dir)?.decision, "ask", "a path field that is not a string asks");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("file tools: a path Claude Code may read differently from the guard asks (spaces, ~, .., device and /proc paths, a drive-less Windows path)", async () => {
+  const { classifyToolCall, filePathIsAmbiguous } = await import("./safety-guard.mjs");
+  const claudeDir = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, "");
+  const projectDir = path.dirname(claudeDir);
+  const ask = (p) => classifyToolCall({ tool_name: "Write", tool_input: { file_path: p }, cwd: projectDir, session_id: "file-tools-test" });
+  for (const p of [` ${path.join(claudeDir, "settings.json")}`, `${path.join(claudeDir, "settings.json")} `, "~/OptiMove/.claude/settings.json", "~", "docs/../README.md", "/proc/self/cwd/.claude/settings.json", "/dev/fd/3"]) {
+    assert.equal(ask(p)?.decision, "ask", JSON.stringify(p));
+  }
+  assert.equal(filePathIsAmbiguous("\\\\?\\C:\\proj\\.claude\\settings.json", "C:\\proj\\.claude\\settings.json", "win32"), true);
+  assert.equal(filePathIsAmbiguous("\\\\.\\C:\\x", "C:\\x", "win32"), true);
+  assert.equal(filePathIsAmbiguous("/c/Users/x/.claude/settings.json", "C:\\c\\Users", "win32"), true);
+  assert.equal(filePathIsAmbiguous("C:\\Users\\x\\file.txt", "C:\\Users\\x\\file.txt", "win32"), false);
+  assert.equal(filePathIsAmbiguous("/home/x/file.txt", "/home/x/file.txt", "linux"), false);
+  for (const p of ["README.md", "docs/a..b.md", "backend/src/app.js"]) assert.equal(ask(p), null, p);
 });

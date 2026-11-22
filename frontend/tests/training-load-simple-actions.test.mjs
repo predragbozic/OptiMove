@@ -140,7 +140,7 @@ test('status recovery keeps a newer dashboard period and filter and queries them
   assert.deepEqual(analysis().period, newer);
   assert.deepEqual(analysis().runtimeFilter, newerFilter);
   assert.equal(analysis().notice, 'Widget saved.');
-  assert.deepEqual(calls.filter(call => call.url === `${base}/query`).map(call => call.body), [{ dateFrom: newer.dateFrom, dateTo: newer.dateTo, ...newerFilter }]);
+  assert.deepEqual(calls.filter(call => call.url === `${base}/query`).map(call => call.body), [{ dateFrom: newer.dateFrom, dateTo: newer.dateTo, ...newerFilter, shellFilter: null }]);
   assert.deepEqual(calls.filter(call => call.url === `${base}/simple/requests/status`).map(call => call.body), [{ requestId: first.body.requestId }]);
   assert.equal(calls.filter(call => call.url === `${base}/simple/widgets`).length, 1);
   assert.equal(calls.filter(call => call.url === base && call.method === 'GET').length, 1);
@@ -156,7 +156,7 @@ test('a successful save closes the editor without changing the dashboard period'
   assert.deepEqual(analysis().period, period);
   assert.deepEqual(analysis().runtimeFilter, initialFilter);
   assert.equal(analysis().notice, 'Widget saved.');
-  assert.deepEqual(calls.filter(call => call.url === `${base}/query`).map(call => call.body), [{ dateFrom: period.dateFrom, dateTo: period.dateTo, activityId: null, componentId: null }]);
+  assert.deepEqual(calls.filter(call => call.url === `${base}/query`).map(call => call.body), [{ dateFrom: period.dateFrom, dateTo: period.dateTo, activityId: null, componentId: null, shellFilter: null }]);
   assert.equal(calls.filter(call => call.url === `${base}/simple/widgets`).length, 1);
   assert.equal(calls.filter(call => call.url === `${base}/simple/requests/status`).length, 0);
   assert.equal(calls.filter(call => call.url === base && call.method === 'GET').length, 1);
