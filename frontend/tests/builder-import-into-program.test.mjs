@@ -61,8 +61,13 @@ const programBlock = { id: "b1", index: 1, name: "Block A", note: "", sessions: 
 const ctx = (clipboard) => ({ clipboard, sessionLabel: () => "", blockAddOpen: false });
 
 test("3. a program block shows paste buttons for imported content only (a day or a session from another plan), never for a same-plan day", () => {
-  assert.match(renderBuilderBlock(programBlock, "", "", false, ctx({ type: "cross-plan-block", name: "Mon" })), /data-action="builder-paste-day" data-day-id="b1"/);
-  assert.match(renderBuilderBlock(programBlock, "", "", false, ctx({ type: "cross-plan-session", name: "Main" })), /data-action="builder-paste-session" data-day-id="b1"/);
+  assert.match(renderBuilderBlock(programBlock, "", "", false, ctx({ type: "cross-plan-block", sourcePlanType: "weekly", name: "Mon" })), /data-action="builder-paste-day" data-day-id="b1"/);
+  assert.match(renderBuilderBlock(programBlock, "", "", false, ctx({ type: "cross-plan-session", sourcePlanType: "weekly", name: "Main" })), /data-action="builder-paste-session" data-day-id="b1"/);
+  // a clipboard copied from a template or a program is never offered here (the server answers 400)
+  for (const sourcePlanType of ["template", "program"]) {
+    assert.doesNotMatch(renderBuilderBlock(programBlock, "", "", false, ctx({ type: "cross-plan-block", sourcePlanType, name: "x" })), /builder-paste-day/, sourcePlanType);
+    assert.doesNotMatch(renderBuilderBlock(programBlock, "", "", false, ctx({ type: "cross-plan-session", sourcePlanType, name: "x" })), /builder-paste-session/, sourcePlanType);
+  }
   for (const clipboard of [null, { type: "day", dayId: "other", name: "x" }]) {
     const html = renderBuilderBlock(programBlock, "", "", false, ctx(clipboard));
     assert.doesNotMatch(html, /builder-paste-day|builder-paste-session/);

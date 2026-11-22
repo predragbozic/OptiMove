@@ -76,6 +76,8 @@ function renderPasteDayIconButton(dayId, context, { crossPlanOnly = false } = {}
   } else if (clipboard?.type !== "cross-plan-block") {
     return "";
   }
+  // The server refuses a program or template source for a program or template block.
+  if (crossPlanOnly && clipboard.sourcePlanType !== "weekly") return "";
   const title = `Paste "${clipboard.name || "day"}"`;
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-day" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
@@ -85,9 +87,10 @@ function renderPasteDayIconButton(dayId, context, { crossPlanOnly = false } = {}
 // piggyback on (a session has only ever been created one at a time), so
 // this is its own button appending a new session to the target day rather
 // than overwriting anything, unlike Paste day.
-function renderPasteSessionIconButton(dayId, context) {
+function renderPasteSessionIconButton(dayId, context, { weeklySourceOnly = false } = {}) {
   const clipboard = context.clipboard;
   if (clipboard?.type !== "cross-plan-session") return "";
+  if (weeklySourceOnly && clipboard.sourcePlanType !== "weekly") return "";
   const title = `Paste session "${clipboard.name || "Session"}"`;
   return `<button class="plain-button builder-icon-action builder-paste-icon" type="button" data-action="builder-paste-session" data-day-id="${escapeAttr(dayId)}" aria-label="${escapeAttr(title)}" title="${escapeAttr(title)}">${ICON_PASTE}</button>`;
 }
@@ -386,7 +389,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
         </div>
         ${isWeekly
           ? `<div class="builder-block-head-actions">${renderCopyDayIconButton(block.id)}${renderPasteDayIconButton(block.id, context)}${renderPasteSessionIconButton(block.id, context)}</div>`
-          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderPasteDayIconButton(block.id, context, { crossPlanOnly: true })}${renderPasteSessionIconButton(block.id, context)}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
+          : `<div class="builder-block-head-actions">${renderCopyBlockIconButton(block.id)}${renderPasteDayIconButton(block.id, context, { crossPlanOnly: true })}${renderPasteSessionIconButton(block.id, context, { weeklySourceOnly: true })}${renderDeleteIconButton("builder-delete-block", `data-block-id="${escapeAttr(block.id)}"`, "Delete block")}</div>`}
       </div>
       ${isWeekly ? context.eventsRow?.(block) || "" : ""}
       <div class="builder-sessions">

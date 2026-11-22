@@ -187,7 +187,7 @@ test("7b. 'Copy this whole day' sets the clipboard to a cross-plan-block entry a
 
   await handleBuilderWorkspaceAction(action, noopHandlers());
 
-  assert.deepEqual(state.builder.clipboard, { type: "cross-plan-block", sourcePlanId: "t1", blockId: "b1", name: "Phase 1" });
+  assert.deepEqual(state.builder.clipboard, { type: "cross-plan-block", sourcePlanId: "t1", sourcePlanType: "template", blockId: "b1", name: "Phase 1" });
   assert.equal(state.builder.blockPicker.open, false, "the picker must close once a block is chosen - the coach is done with it");
 });
 
@@ -212,7 +212,7 @@ test("7d. 'Copy this whole session' sets the clipboard to a cross-plan-session e
 
   await handleBuilderWorkspaceAction(action, noopHandlers());
 
-  assert.deepEqual(state.builder.clipboard, { type: "cross-plan-session", sessionId: "s1", name: "AM / Training" });
+  assert.deepEqual(state.builder.clipboard, { type: "cross-plan-session", sourcePlanType: "template", sessionId: "s1", name: "AM / Training" });
   assert.equal(state.builder.blockPicker.open, false);
 });
 

@@ -53,6 +53,8 @@ async function setUp(world, template) {
   draft = ok(await call(world, "POST", `/api/builder/sessions/${session.id}/nodes`, { nodeType: "section", name: "Lower body", parentId: domain.id }), 200, 201);
   const section = (sessionsOf(draft).find((s) => s.id === session.id).nodes || []).find((n) => n.type === "section");
   ok(await call(world, "POST", `/api/builder/nodes/${section.id}/custom-exercise`, { name: "Squat import test" }), 200, 201);
+  // A second section with a long unbroken name: it must wrap inside the dialog on a phone, never widen it.
+  ok(await call(world, "POST", `/api/builder/sessions/${session.id}/nodes`, { nodeType: "section", name: "Supercalifragilisticexpialidocious_Strength_Block", parentId: domain.id }), 200, 201);
   ok(await call(world, "POST", `/api/builder/plans/${weeklyId}/submit`, { responseMode: "summary" }));
   const program = ok(await call(world, "POST", "/api/builder/plans", { planType: "program", ...(template ? {} : { athleteIds: [ext] }), name: template ? "Import template" : "Import program" }), 201);
   // A program or a template starts with no block: one empty "Block 1" to paste into.
@@ -86,7 +88,7 @@ async function walkToDay(page, ext) {
   await page.locator('[data-action="builder-block-picker-drill-block"]', { hasText: "1 session" }).first().click();
 }
 
-for (const width of [1280, 390]) {
+for (const width of [1280, 390, 375, 360]) {
   for (const template of [false, true]) {
     test(`(${width} px) ${template ? "a block template" : "a specific program"} imports a weekly plan's session and day, with the pictures button and the block wording`, async () => {
       const world = await startWorld();
@@ -115,11 +117,15 @@ for (const width of [1280, 390]) {
           await thumbsButton.waitFor({ timeout: 20_000 });
           const box = await thumbsButton.boundingBox();
           assert.ok(box && box.width >= 44 && box.height >= 44, `the pictures button is a 44 px target (${box?.width}x${box?.height})`);
+          // Every row of the tree, the long unbroken name's included, stays inside the screen.
+          const rowsInside = await page.evaluate((w) => [...document.querySelectorAll(".builder-block-picker-node-line")].map((line) => line.getBoundingClientRect().right <= w + 0.5), width);
+          assert.ok(rowsInside.length >= 2 && rowsInside.every(Boolean), `every section row fits the screen: ${JSON.stringify(rowsInside)}`);
           assert.equal(await thumbsButton.getAttribute("aria-expanded"), "false");
           assert.match(await thumbsButton.getAttribute("aria-label"), /Show pictures of the exercises in Lower body/);
           await thumbsButton.click();
           const thumbs = page.locator(".builder-block-picker-thumbs");
           await thumbs.waitFor();
+          assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-action")), "builder-block-picker-toggle-thumbs", "the keyboard stays on the pictures button after the dialog is drawn again");
           assert.match(await visibleText(thumbs), /Squat import test/);
           assert.equal(await thumbsButton.getAttribute("aria-expanded"), "true");
           assert.equal(await overflow(page, width), 0, "no horizontal page scroll with the pictures open");
@@ -132,6 +138,23 @@ for (const width of [1280, 390]) {
           // 2. Paste session: appended to the (empty) target block.
           const pasteSession = page.locator(`[data-action="builder-paste-session"][data-day-id="${targetBlockId}"]`);
           await pasteSession.waitFor({ timeout: 20_000 });
+          // The block's head with its action buttons (copy, paste, delete): 44 px targets on a phone, the name keeps room.
+          const head = await page.evaluate((id) => {
+            const paste = document.querySelector(`[data-action="builder-paste-session"][data-day-id="${id}"]`);
+            const actions = paste.closest(".builder-block-head-actions");
+            const text = actions.parentElement.querySelector(".builder-block-head-text") || actions.previousElementSibling;
+            return {
+              buttons: [...actions.querySelectorAll("button")].map((b) => { const r = b.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right) }; }),
+              nameWidth: Math.round(text.getBoundingClientRect().width),
+            };
+          }, targetBlockId);
+          assert.ok(head.buttons.length >= 3, `copy, paste and delete: ${JSON.stringify(head)}`);
+          assert.ok(head.buttons.every((b) => b.right <= width), `the buttons stay on the screen: ${JSON.stringify(head)}`);
+          if (width < 600) {
+            assert.ok(head.buttons.every((b) => b.w >= 44 && b.h >= 44), `44 px targets on a phone: ${JSON.stringify(head)}`);
+            assert.ok(head.nameWidth >= 90, `the block's name keeps room: ${JSON.stringify(head)}`);
+          }
+          await shot(page, `import-head-${template ? "template" : "program"}-${width}`);
           await pasteSession.click();
           await page.locator(".builder-sessions", { hasText: "Main" }).first().waitFor({ timeout: 20_000 });
           let target = ok(await call(world, "GET", `/api/builder/plans/${programId}`));
