@@ -1,5 +1,5 @@
-// v88 (docs/ai/athlete-positions-plan.md): the list of positions, an athlete's position, and their database guards.
-// The real app over HTTP on a disposable database migrated by the calendar fixture plus v88; invented people only.
+// v87 (docs/ai/athlete-positions-plan.md): the list of positions, an athlete's position, and their database guards.
+// The real app over HTTP on a disposable database migrated by the calendar fixture plus v87; invented people only.
 // Nothing touches OPTIMOVE or any persistent database.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import pg from "pg";
 import { calendarMigrations, calendarRoleMatrix, newKey, startCalendarApp } from "./support/calendar-fixture.mjs";
 
-export const V88 = "202611221000_athletes_v88_positions.sql";
+export const V87 = "202611221200_athletes_v87_positions.sql";
 let env;
 let q;
 let api;
@@ -17,9 +17,9 @@ const R = "/api/positions";
 const NOT_FOUND = { error: "notFound", message: "Not found." };
 
 before(async () => {
-  env = await startCalendarApp({ label: "pos88", migrations: [...calendarMigrations(), V88] });
+  env = await startCalendarApp({ label: "pos87", migrations: [...calendarMigrations(), V87] });
   ({ q, api, fx } = env);
-  m = await calendarRoleMatrix(env, "pos88");
+  m = await calendarRoleMatrix(env, "pos87");
 });
 after(async () => {
   if (env) await env.stop();
@@ -142,7 +142,7 @@ test("6. an athlete's position: the club's admin and the team's coach set it; th
   const rows = await q(`select position_id, basis, via_team_id from public.athlete_positions where athlete_id = $1 order by seq`, [athleteId]);
   assert.deepEqual(rows.map((r) => [r.position_id, r.basis, r.via_team_id]), [[mid, "club_admin", null], [fw, "team_coach", m.teams.t1]]);
   // Another club's admin, a coach of another team of the club, an athlete, the platform workspace: the identical 404.
-  const otherTeamCoach = await fx.coachOf(m.teams.t2, "pos88 coach T2");
+  const otherTeamCoach = await fx.coachOf(m.teams.t2, "pos87 coach T2");
   for (const who of [role("stranger"), otherTeamCoach, m.athletes.athlete, role("platformAdmin"), role("revokedAdmin")]) {
     const r = await put(who, athleteId, { requestKey: newKey(), positionId: mid, expectedPositionId: fw });
     assert.deepEqual([r.status, r.body], [404, NOT_FOUND], JSON.stringify(r.body));

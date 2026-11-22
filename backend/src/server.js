@@ -167,7 +167,7 @@ app.use("/api/training-load/metrics", requireAuth, trainingLoadMetricsRouter);
 // Session types (ST-1, v85): mounted before the training-activity router, whose /:activityId would take the path.
 app.use("/api/training-activity/session-types", requireAuth, sessionTypesRouter);
 app.use("/api/training-activity", requireAuth, trainingActivityRouter);
-// Athlete positions (v88): the list (Tags & Presets) and an athlete's position (Settings -> Athletes).
+// Athlete positions (v87): the list (Tags & Presets) and an athlete's position (Settings -> Athletes).
 app.use("/api/positions", requireAuth, positionsRouter);
 // requireAuth only (no requireCoach) — the central calendar's events (K2a):
 // the active workspace decides inside the router (calendarEventAccess.js) —

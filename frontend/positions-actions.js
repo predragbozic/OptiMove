@@ -1,4 +1,4 @@
-// v88: the positions' clicks and forms (see positions-view.js). One write at a time; every write reads the list again.
+// v87: the positions' clicks and forms (see positions-view.js). One write at a time; every write reads the list again.
 import { loadPositions, sendPositionWrite } from "./positions-data.js";
 import { state } from "./state.js";
 

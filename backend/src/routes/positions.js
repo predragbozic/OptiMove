@@ -1,4 +1,4 @@
-// Athlete positions (migration v88): the list for Settings -> Tags & Presets and an athlete's position for Settings ->
+// Athlete positions (migration v87): the list for Settings -> Tags & Presets and an athlete's position for Settings ->
 // Athletes. Mounted at /api/positions. See backend/src/positionService.js for who reads and writes.
 import { Router } from "express";
 import { isPoolCheckoutTimeout } from "../db.js";

@@ -1,4 +1,4 @@
-// v88: the list of positions (Settings -> Tags & Presets) and the athletes' positions of the workspace (Settings ->
+// v87: the list of positions (Settings -> Tags & Presets) and the athletes' positions of the workspace (Settings ->
 // Athletes). Routes: GET/POST /api/positions, POST /api/positions/:id/{rename,archive,restore},
 // GET /api/positions/athletes, PUT /api/positions/athletes/:athleteId. The server decides who may read and write; a
 // 404 means "not in this workspace".

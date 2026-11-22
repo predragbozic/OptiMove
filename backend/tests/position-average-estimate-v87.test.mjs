@@ -1,7 +1,7 @@
-// v88: the estimate method position_average (docs/ai/athlete-positions-plan.md). The mean of the measured values of the
+// v87: the estimate method position_average (docs/ai/athlete-positions-plan.md). The mean of the measured values of the
 // athletes of the same position in this session - the team average's rule (at least 3 athletes, no minutes). Without a
 // position, or with too few athletes of it, the method is not available and says why; it is never replaced by another.
-// Disposable database (the calendar fixture's migrations plus v88); the imports are real approvals through the routes;
+// Disposable database (the calendar fixture's migrations plus v87); the imports are real approvals through the routes;
 // invented people only.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +15,7 @@ import { enableTeamImportSwitch } from "./support/team-import-switch.mjs";
 import { activateBinding } from "./support/mapped-world.mjs";
 import { calendarMigrations } from "./support/calendar-fixture.mjs";
 
-const V88 = "202611221000_athletes_v88_positions.sql";
+const V87 = "202611221200_athletes_v87_positions.sql";
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const ORIGINAL_SWITCH = process.env.GPEXE_IMPORT_APPLY_ENABLED;
@@ -36,7 +36,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "pos88est", migrations: [...calendarMigrations(), V88] });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "pos87est", migrations: [...calendarMigrations(), V87] });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -185,7 +185,7 @@ async function importSession(team, bundle) {
 const key = () => crypto.randomUUID();
 const proposal = (team, s, athleteId) => tapi(`/${s.activityId}/estimates/proposal?athleteId=${athleteId}`, { cookie: team.coach.cookie });
 const save = (team, s, body) => tapi(`/${s.activityId}/estimates`, { method: "POST", cookie: team.coach.cookie, body: { requestKey: key(), ...body } });
-// The coach sets a position through the v88 route (team workspace, team_coach basis).
+// The coach sets a position through the v87 route (team workspace, team_coach basis).
 async function setPosition(team, athleteIdx, name) {
   const athleteId = team.athleteIds[athleteIdx];
   const positionId = name ? (await admin.query(`select id from public.sport_positions where owner_scope = 'system' and name = $1`, [name])).rows[0].id : null;

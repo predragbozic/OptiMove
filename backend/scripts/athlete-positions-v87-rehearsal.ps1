@@ -1,10 +1,10 @@
-# The v88 rehearsal (athlete positions) on a local PostgreSQL - PowerShell (Windows). Runs
-# backend/scripts/athlete-positions-v88-rehearsal.mjs unchanged; see that file and docs/runbooks/athlete-positions-v88.md for
-# what it does. Loopback only; it creates and drops its own optimove_tests_pos88rehearsal_* databases. Needs only node,
+# The v87 rehearsal (athlete positions) on a local PostgreSQL - PowerShell (Windows). Runs
+# backend/scripts/athlete-positions-v87-rehearsal.mjs unchanged; see that file and docs/runbooks/athlete-positions-v87.md for
+# what it does. Loopback only; it creates and drops its own optimove_tests_pos87rehearsal_* databases. Needs only node,
 # pg_dump and pg_restore (of the server's major version) and the backend's dependencies (npm --prefix backend ci); no
 # admin rights.
 #
-#   powershell -ExecutionPolicy Bypass -File backend\scripts\athlete-positions-v88-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres [-PgBin "C:\Program Files\PostgreSQL\17\bin"]
+#   powershell -ExecutionPolicy Bypass -File backend\scripts\athlete-positions-v87-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres [-PgBin "C:\Program Files\PostgreSQL\17\bin"]
 #
 # The password: from $env:PGPASSWORD if set, otherwise asked once (hidden, never printed).
 param(
@@ -32,7 +32,7 @@ if ($env:PGPASSWORD) {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
   }
 }
-$nodeArgs = @((Join-Path $here "athlete-positions-v88-rehearsal.mjs"), "--host", $DbHost, "--port", $Port, "--user", $User)
+$nodeArgs = @((Join-Path $here "athlete-positions-v87-rehearsal.mjs"), "--host", $DbHost, "--port", $Port, "--user", $User)
 if ($PgBin) { $nodeArgs += @("--pg-bin", $PgBin) }
 $savedPg = $env:PGPASSWORD
 try {

@@ -1,4 +1,4 @@
-// Athlete positions (migration v88; docs/ai/athlete-positions-plan.md). The owner's decision of 2026-11-22: „Jedna
+// Athlete positions (migration v87; docs/ai/athlete-positions-plan.md). The owner's decision of 2026-11-22: „Jedna
 // pozicija po sportisti".
 //
 // The list: one registry, public.sport_positions (sport 'Football'). A system position is written by an active platform
@@ -6,7 +6,7 @@
 // identity; a rename changes only the name; an archive takes the position out of the pickers and leaves it on the
 // athletes who hold it. Every write is one transaction: the acting user (optimove.position_actor), the rights (users
 // first, PR #346, through public.sport_position_basis), the requestKey replay, the position row FOR UPDATE, the write,
-// its log row (the request record), COMMIT. The database guards of v88 check the same right again.
+// its log row (the request record), COMMIT. The database guards of v87 check the same right again.
 //
 // An athlete's position: one per athlete and club, set in the club's workspace (the club's admin, a platform admin) or
 // in a team's workspace (the team's coach, for an athlete of that team). The append-only row of public.athlete_positions
@@ -93,7 +93,7 @@ function settingBasis(ctx, scope) {
 
 async function footballId(client) {
   const row = (await client.query(`select id from public.sports where name = $1`, [SPORT_NAME])).rows[0];
-  if (!row) throw new Error("v88's sport is missing");
+  if (!row) throw new Error("v87's sport is missing");
   return String(row.id);
 }
 

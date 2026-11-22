@@ -1,12 +1,12 @@
-# v88: athlete positions and the Position average estimate
+# v87: athlete positions and the Position average estimate
 
-Migration `migrations_v2/202611221000_athletes_v88_positions.sql` (the prefix and number are provisional until the
+Migration `migrations_v2/202611221200_athletes_v87_positions.sql` (the prefix and number are provisional until the
 *Rukovodilac* confirms them). The plan is `docs/ai/athlete-positions-plan.md`. The files beside this one are:
-- `athlete-positions-v88-preflight.sql`;
-- `athlete-positions-v88-postcheck.sql`;
-- `athlete-positions-v88-rollback.sql`.
+- `athlete-positions-v87-preflight.sql`;
+- `athlete-positions-v87-postcheck.sql`;
+- `athlete-positions-v87-rollback.sql`.
 
-The rehearsal tool is `backend/scripts/athlete-positions-v88-rehearsal.mjs`, with bash (`.sh`) and PowerShell (`.ps1`)
+The rehearsal tool is `backend/scripts/athlete-positions-v87-rehearsal.mjs`, with bash (`.sh`) and PowerShell (`.ps1`)
 wrappers.
 
 ## What it does
@@ -14,7 +14,7 @@ wrappers.
 - **The registry.** `public.sport_positions` (Tests v42, empty on production) stays the one registry of positions. It
   gains the owner (`system`, or `club` with its club), the creator, the archive (who and when), a sort order and
   `updated_at`. v42's `unique (sport_id, name)` is replaced by one live name per owner (case-insensitive; an archived
-  position frees its name). Clubs carry no sport, so v88 adds the sport `Football` and its six system positions:
+  position frees its name). Clubs carry no sport, so v87 adds the sport `Football` and its six system positions:
   Goalkeeper, Centre back, Full back, Midfielder, Winger, Forward.
 - **The log.** `public.sport_position_changes` is append-only and is the request record of the list's routes.
 - **An athlete's position.** `public.athlete_positions` is the append-only history of an athlete's position in a club;
@@ -35,11 +35,11 @@ wrappers.
 
 1. **PostgreSQL 17 rehearsal** (production runs 17). A PostgreSQL 17 server on loopback, `node`, and
    `npm --prefix backend ci` run once.
-   - Linux / macOS: `backend/scripts/athlete-positions-v88-rehearsal.sh --host 127.0.0.1 --port 5432 --user postgres --pg-bin /usr/lib/postgresql/17/bin`
-   - Windows: `powershell -ExecutionPolicy Bypass -File backend\scripts\athlete-positions-v88-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres -PgBin "C:\Program Files\PostgreSQL\17\bin"`
+   - Linux / macOS: `backend/scripts/athlete-positions-v87-rehearsal.sh --host 127.0.0.1 --port 5432 --user postgres --pg-bin /usr/lib/postgresql/17/bin`
+   - Windows: `powershell -ExecutionPolicy Bypass -File backend\scripts\athlete-positions-v87-rehearsal.ps1 -DbHost 127.0.0.1 -Port 5432 -User postgres -PgBin "C:\Program Files\PostgreSQL\17\bin"`
 
    It prints PASS or FAIL per step and `RESULT: PASS` at the end, and creates and drops only its own
-   `optimove_tests_pos88rehearsal_*` databases. Step 8 compares the restored constraints with casts and parentheses
+   `optimove_tests_pos87rehearsal_*` databases. Step 8 compares the restored constraints with casts and parentheses
    removed: pg_restore prints a CHECK over a varchar column back in another form (v63's note check as well).
 2. **Preflight**, read-only, each block as `begin transaction read only; <block>; rollback;`. Every ok column must be
    true. Keep block 4 for post-check block 6.
@@ -48,20 +48,20 @@ wrappers.
 ## After the deploy
 
 - **Post-check**, read-only. Every ok column must be true. Block 6, the estimates per method, must equal preflight
-  block 4: v88 writes no estimate.
+  block 4: v87 writes no estimate.
 - The routes answer 401 without a login: `GET /api/positions`, `GET /api/positions/athletes`,
   `PUT /api/positions/athletes/<zero uuid>` with `{}`.
 
 ## Rollback
 
-`athlete-positions-v88-rollback.sql`, one transaction, at a quiet moment, and only on its own approval.
-- **Before running it:** the deployed commit no longer contains the v88 file, otherwise the next start applies v88
+`athlete-positions-v87-rollback.sql`, one transaction, at a quiet moment, and only on its own approval.
+- **Before running it:** the deployed commit no longer contains the v87 file, otherwise the next start applies v87
   again.
 - **When it refuses**, changing nothing: a position was added, renamed, archived or restored in the app; a club position
-  exists; an athlete's position was ever set; a `position_average` estimate exists. From then on v88 is forward-only.
+  exists; an athlete's position was ever set; a `position_average` estimate exists. From then on v87 is forward-only.
 - **What it restores:** v69's method CHECK and `estimate_basis_ok`, v64's `validate_metric_value_estimate` (verbatim,
   md5 as before), v42's shape and unique of `public.sport_positions`, and no sport `Football`. The rehearsal's step 6 and
-  `backend/tests/athlete-positions-v88-migration.test.mjs` test 2 check the catalog is identical.
+  `backend/tests/athlete-positions-v87-migration.test.mjs` test 2 check the catalog is identical.
 
 ## Known limits
 

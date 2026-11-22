@@ -29808,7 +29808,7 @@ body.athlete-questions-prompt-open {
 }
 .cc-go-meta { color: var(--muted); font-weight: 600; }
 
-/* v88: positions (Settings -> Tags & Presets, and the athlete's Edit window). */
+/* v87: positions (Settings -> Tags & Presets, and the athlete's Edit window). */
 .positions-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .positions-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 4px 0; border-bottom: 1px solid var(--line, #dfe4e8); }
 .positions-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }

@@ -1,4 +1,4 @@
-// v88: positions. The list in Settings -> Tags & Presets, and an athlete's position in the athlete's Edit window
+// v87: positions. The list in Settings -> Tags & Presets, and an athlete's position in the athlete's Edit window
 // (Settings -> Athletes). One position per athlete (the owner, 2026-11-22). Used by the Position average estimate.
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";

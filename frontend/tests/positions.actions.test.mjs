@@ -1,4 +1,4 @@
-// v88: positions - the Tags & Presets section and the athlete's Position form, through the real handlers with a fake
+// v87: positions - the Tags & Presets section and the athlete's Position form, through the real handlers with a fake
 // fetch: what is offered to whom, the bodies sent, the request key kept after a lost answer and reused once, a refusal
 // in plain words, and the estimate panel's Position average texts. Invented names only.
 import { test } from "node:test";

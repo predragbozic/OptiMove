@@ -1,8 +1,8 @@
--- Athletes v88 - an athlete's position and the estimate method position_average.
+-- Athletes v87 - an athlete's position and the estimate method position_average.
 --
 -- The owner's decision (2026-11-22, relayed by the OptiMove manager): „Jedna pozicija po sportisti". The list of positions
 -- is edited in Settings -> Tags & Presets; the position is chosen on the athlete. Plan: docs/ai/athlete-positions-plan.md.
--- Runbook: docs/runbooks/athlete-positions-v88.md.
+-- Runbook: docs/runbooks/athlete-positions-v87.md.
 --
 -- What this migration does:
 --   * public.sport_positions (v42 of the Tests module, empty) stays the one registry of positions (no parallel table). It
@@ -30,7 +30,7 @@
 -- athlete row (FOR UPDATE: two changes of one athlete are decided one after the other, so seq follows their order).
 -- The guards prove that the row, the actor and the right agree; they do not stop whoever holds the database
 -- credentials (stated as v35 states it).
--- Rollback: docs/runbooks/athlete-positions-v88-rollback.sql.
+-- Rollback: docs/runbooks/athlete-positions-v87-rollback.sql.
 
 -- ---------------------------------------------------------------------------
 -- 0. Preconditions
@@ -38,41 +38,41 @@
 do $$
 begin
   if to_regclass('public.sport_positions') is null or to_regclass('public.sports') is null then
-    raise exception 'v88 refused: public.sports / public.sport_positions (Tests v42) do not exist' using errcode = '23514';
+    raise exception 'v87 refused: public.sports / public.sport_positions (Tests v42) do not exist' using errcode = '23514';
   end if;
   if (select string_agg(column_name, ',' order by ordinal_position) from information_schema.columns
        where table_schema = 'public' and table_name = 'sport_positions') is distinct from 'id,sport_id,name,created_at' then
-    raise exception 'v88 refused: public.sport_positions is not the v42 shape (id, sport_id, name, created_at)' using errcode = '23514';
+    raise exception 'v87 refused: public.sport_positions is not the v42 shape (id, sport_id, name, created_at)' using errcode = '23514';
   end if;
   if exists (select 1 from public.sport_positions) then
-    raise exception 'v88 refused: public.sport_positions already holds a row' using errcode = '23514';
+    raise exception 'v87 refused: public.sport_positions already holds a row' using errcode = '23514';
   end if;
-  -- The rollback removes the sport v88 adds; so v88 refuses if one of that name already exists.
+  -- The rollback removes the sport v87 adds; so v87 refuses if one of that name already exists.
   if exists (select 1 from public.sports where name = 'Football') then
-    raise exception 'v88 refused: a sport named Football already exists' using errcode = '23514';
+    raise exception 'v87 refused: a sport named Football already exists' using errcode = '23514';
   end if;
   if not exists (select 1 from pg_constraint where conrelid = 'public.sport_positions'::regclass
                   and conname = 'sport_positions_sport_id_name_key') then
-    raise exception 'v88 refused: the unique (sport_id, name) of v42 is missing' using errcode = '23514';
+    raise exception 'v87 refused: the unique (sport_id, name) of v42 is missing' using errcode = '23514';
   end if;
   if to_regclass('public.athlete_positions') is not null or to_regclass('public.sport_position_changes') is not null then
-    raise exception 'v88 refused: a v88 table already exists' using errcode = '23514';
+    raise exception 'v87 refused: a v87 table already exists' using errcode = '23514';
   end if;
   if to_regclass('training_load.metric_value_estimates') is null then
-    raise exception 'v88 refused: v63 (the estimates) is not applied' using errcode = '23514';
+    raise exception 'v87 refused: v63 (the estimates) is not applied' using errcode = '23514';
   end if;
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'estimate_basis_ok') is distinct from '1ee471360a969f6895e1e697fa1facc6' then
-    raise exception 'v88 refused: the body in force of training_load.estimate_basis_ok is not v69''s' using errcode = '23514';
+    raise exception 'v87 refused: the body in force of training_load.estimate_basis_ok is not v69''s' using errcode = '23514';
   end if;
   if (select md5(p.prosrc) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'training_load' and p.proname = 'validate_metric_value_estimate') is distinct from 'd4fdb1a813a4560651493af644632ea3' then
-    raise exception 'v88 refused: the body in force of training_load.validate_metric_value_estimate is not v64''s' using errcode = '23514';
+    raise exception 'v87 refused: the body in force of training_load.validate_metric_value_estimate is not v64''s' using errcode = '23514';
   end if;
   if (select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'training_load.metric_value_estimates'::regclass
        and conname = 'metric_value_estimates_method_check')
      is distinct from 'CHECK (((method)::text = ANY ((ARRAY[''proportional''::character varying, ''copy_athlete''::character varying, ''team_average''::character varying, ''scale_recording''::character varying])::text[])))' then
-    raise exception 'v88 refused: the method CHECK of metric_value_estimates is not v69''s' using errcode = '23514';
+    raise exception 'v87 refused: the method CHECK of metric_value_estimates is not v69''s' using errcode = '23514';
   end if;
 end $$;
 

@@ -1,34 +1,34 @@
 #!/usr/bin/env node
-// The rehearsal of migration v88 (athlete positions, docs/ai/athlete-positions-plan.md) on ANY PostgreSQL server you point
+// The rehearsal of migration v87 (athlete positions, docs/ai/athlete-positions-plan.md) on ANY PostgreSQL server you point
 // it at - written so that it runs unchanged on PostgreSQL 17 (production) as on 16. The v85 rehearsal's shape
 // (backend/scripts/session-types-v85-rehearsal.mjs):
 //
-//   1. a disposable database built from the legacy snapshot and the real runner, every migration before v88; a club, a
+//   1. a disposable database built from the legacy snapshot and the real runner, every migration before v87; a club, a
 //      second club, a team and an athlete of the team planted;
 //   2. the read-only preflight (every ok column true);
-//   3. v88 applied by the real runner, recorded once with the file's sha256;
+//   3. v87 applied by the real runner, recorded once with the file's sha256;
 //  3b. a guarded write as the service writes it (the acting user, a club position, its log row, the athlete's position on
 //      the club_admin basis, every deferred guard fired), rolled back; the same position write without the acting user
 //      refused (42501); another club's position on the athlete refused (23514);
 //   4. the read-only post-check (every ok column true; block 6 equal to preflight 4);
-//   5. the runner again: v88 skipped by its checksum;
-//   6. the rollback (docs/runbooks/athlete-positions-v88-rollback.sql): the catalog and the rows of public.sports and
-//      public.sport_positions equal to the ones before v88, the planted rows untouched;
-//   7. v88 applied again, the post-check again;
+//   5. the runner again: v87 skipped by its checksum;
+//   6. the rollback (docs/runbooks/athlete-positions-v87-rollback.sql): the catalog and the rows of public.sports and
+//      public.sport_positions equal to the ones before v87, the planted rows untouched;
+//   7. v87 applied again, the post-check again;
 //  7b. the guarded write of 3b again, committed this time;
-//   8. pg_dump -Fc of that database, pg_restore into a second disposable database, and the catalog of v88's objects
+//   8. pg_dump -Fc of that database, pg_restore into a second disposable database, and the catalog of v87's objects
 //      compared (constraints read back by pg_get_constraintdef, triggers, indexes, function bodies);
 //   9. both disposable databases dropped, whatever happened.
 //
 // Safety: a loopback server only (localhost, 127.0.0.1, ::1); the two databases it creates are named
-// optimove_tests_pos88rehearsal_* and are the only ones it writes or drops; it takes no database name. The password is
+// optimove_tests_pos87rehearsal_* and are the only ones it writes or drops; it takes no database name. The password is
 // read from OPTIMOVE_REHEARSAL_PASSWORD (or PGPASSWORD) and never printed; pg_dump and pg_restore get host, port, user
 // and database as arguments and inherit no other PG* variable. It needs Node with this repository's backend dependencies
 // (`npm --prefix backend ci`), and pg_dump / pg_restore of the SAME major version as the server (on PATH, or
 // --pg-bin <dir>). The user needs CREATEDB (a superuser for the legacy seed replay: session_replication_role).
 //
 // Usage:
-//   node backend/scripts/athlete-positions-v88-rehearsal.mjs --host 127.0.0.1 --port 5432 --user postgres [--pg-bin <dir>]
+//   node backend/scripts/athlete-positions-v87-rehearsal.mjs --host 127.0.0.1 --port 5432 --user postgres [--pg-bin <dir>]
 // Exit code 0 when every step passed, 1 otherwise. Prints PASS / FAIL per step.
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
@@ -44,10 +44,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const MIGRATIONS = path.join(REPO, "migrations_v2");
 const RUNBOOKS = path.join(REPO, "docs", "runbooks");
-export const V88_FILE = "202611221000_athletes_v88_positions.sql";
-const V88_NAME = `migrations_v2/${V88_FILE}`;
+export const V87_FILE = "202611221200_athletes_v87_positions.sql";
+const V87_NAME = `migrations_v2/${V87_FILE}`;
 export const LOOPBACK = ["localhost", "127.0.0.1", "::1", "[::1]"];
-export const NAME_PREFIX = "optimove_tests_pos88rehearsal_";
+export const NAME_PREFIX = "optimove_tests_pos87rehearsal_";
 
 export function parseArgs(argv) {
   const out = { host: null, port: "5432", user: null, pgBin: null };
@@ -93,8 +93,8 @@ function report(step, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${step}${detail ? ` - ${detail}` : ""}`);
 }
 
-// What v88 touches: the public relations, the registry's columns, the functions of public and training_load, the
-// constraints and triggers of the two tables v88 alters, and the rows of the registry and the sports.
+// What v87 touches: the public relations, the registry's columns, the functions of public and training_load, the
+// constraints and triggers of the two tables v87 alters, and the rows of the registry and the sports.
 export const CATALOG_SQL = `select
   (select string_agg(c.relname || ':' || c.relkind::text, ',' order by c.relname || ':' || c.relkind::text) from pg_class c where c.relnamespace = 'public'::regnamespace) as rels,
   (select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text, ',' order by a.attnum)
@@ -106,8 +106,8 @@ export const CATALOG_SQL = `select
      where not t.tgisinternal and t.tgrelid in ('public.sport_positions'::regclass, 'public.sports'::regclass, 'training_load.metric_value_estimates'::regclass)) as trigs,
   (select string_agg(name, ',' order by name) from public.sports) as sport_rows,
   (select string_agg(name, ',' order by name) from public.sport_positions) as position_rows`;
-// v88's objects only, for the dump read-back.
-const V88_CATALOG_SQL = `with t as (select oid from pg_class where oid in ('public.sport_positions'::regclass, 'public.sport_position_changes'::regclass,
+// v87's objects only, for the dump read-back.
+const V87_CATALOG_SQL = `with t as (select oid from pg_class where oid in ('public.sport_positions'::regclass, 'public.sport_position_changes'::regclass,
     'public.athlete_positions'::regclass, 'training_load.metric_value_estimates'::regclass))
   select
   (select string_agg(k.conrelid::regclass::text || '.' || k.conname || '=' || pg_get_constraintdef(k.oid), E'\\n' order by k.conrelid::regclass::text || '.' || k.conname || '=' || pg_get_constraintdef(k.oid)) from pg_constraint k where k.conrelid in (select oid from t)) as constraints,
@@ -156,25 +156,25 @@ export async function rehearse(args, password) {
     const restoreMajor = Number(((await run(tool(args.pgBin, "pg_restore"), ["--version"], { env: toolEnv(password), windowsHide: true })).stdout.match(/(\d+)(\.\d+)?/) || [])[1]);
     report("tools: pg_dump and pg_restore of the server's major version", dumpMajor === Math.floor(version.n / 10000) && restoreMajor === dumpMajor, `server ${Math.floor(version.n / 10000)}, pg_dump ${dumpMajor}, pg_restore ${restoreMajor}`);
 
-    // 1. Build to the migration before v88.
+    // 1. Build to the migration before v87.
     const name = await created();
     const url = urlFor(args, name, password);
     const snapshotSql = fs.readFileSync(path.join(REPO, "backend", "tests", "support", "legacy-schema.sql"), "utf8");
     const last = snapshotSql.match(/^-- Last migration contained in the dump: (\S+)\.$/m)[1];
     await bootstrapLegacySnapshot({ databaseUrl: url, snapshotSql, migrationsRoot: MIGRATIONS, lastMigration: last });
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-pos88-rehearsal-"));
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-pos87-rehearsal-"));
     const before = path.join(tmp, "migrations_v2");
     fs.mkdirSync(before);
-    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V88_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
+    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V87_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
     await runMigrations({ databaseUrl: url, migrationsRoot: before });
     const c = new pg.Client({ connectionString: url });
     await c.connect();
     try {
-      const u = (await c.query(`insert into public.users (email, first_name, last_name, full_name) values ('pos88-rehearsal@test.local','P','88','P 88') returning id`)).rows[0].id;
+      const u = (await c.query(`insert into public.users (email, first_name, last_name, full_name) values ('pos87-rehearsal@test.local','P','88','P 88') returning id`)).rows[0].id;
       const club = (await c.query(`insert into public.clubs (name) values ('Rehearsal club') returning id`)).rows[0].id;
       const club2 = (await c.query(`insert into public.clubs (name) values ('Rehearsal club two') returning id`)).rows[0].id;
       const team = (await c.query(`insert into public.teams (club_id, name) values ($1, 'Rehearsal team') returning id`, [club])).rows[0].id;
-      const athlete = (await c.query(`insert into public.athletes (athlete_id, first_name, last_name, full_name) values ('pos88-a', 'R', 'A', 'R A') returning id`)).rows[0].id;
+      const athlete = (await c.query(`insert into public.athletes (athlete_id, first_name, last_name, full_name) values ('pos87-a', 'R', 'A', 'R A') returning id`)).rows[0].id;
       await c.query(`insert into public.athlete_memberships (athlete_id, club_id, team_id, membership_type, status) values ($1, $2, $3, 'team', 'active')`, [athlete, club, team]);
       await c.query(`insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'club_admin')`, [u, club]);
       await c.query(`insert into public.user_club_roles (user_id, club_id, role) values ($1, $2, 'club_admin')`, [u, club2]);
@@ -182,10 +182,10 @@ export async function rehearse(args, password) {
         `select md5(coalesce((select string_agg(a::text, ';') from public.athletes a where a.id = $1), '') ||
                     coalesce((select string_agg(m::text, ';') from public.athlete_memberships m where m.athlete_id = $1), '')) as d`, [athlete])).rows[0].d;
       const digest0 = await plantedDigest();
-      report("1. a disposable database through the migration before v88; two clubs, a team and an athlete planted", true, name);
+      report("1. a disposable database through the migration before v87; two clubs, a team and an athlete planted", true, name);
 
       // 2. Preflight.
-      const pre = blocks(fs.readFileSync(path.join(RUNBOOKS, "athlete-positions-v88-preflight.sql"), "utf8"));
+      const pre = blocks(fs.readFileSync(path.join(RUNBOOKS, "athlete-positions-v87-preflight.sql"), "utf8"));
       const preFalse = [];
       for (const [b, sql] of Object.entries(pre)) preFalse.push(...falseColumns(await readOnly(c, sql)).map((k) => `${b}.${k}`));
       const pre4 = await readOnly(c, pre["4"]);
@@ -194,9 +194,9 @@ export async function rehearse(args, password) {
 
       // 3. Apply.
       await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
-      const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V88_NAME])).rows;
-      const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V88_FILE))).digest("hex");
-      report("3. v88 applied by the runner, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha);
+      const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V87_NAME])).rows;
+      const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V87_FILE))).digest("hex");
+      report("3. v87 applied by the runner, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha);
 
       // 3b. A guarded write as the service writes it; refusals without the acting user and for another club's position.
       const actor = () => c.query(`select set_config('optimove.position_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [u]);
@@ -248,7 +248,7 @@ export async function rehearse(args, password) {
       report("3b. a guarded write as the service writes it passes (rolled back); without the acting user 42501; another club's position 23514", gw1.ok, gw1.detail);
 
       // 4. Post-check.
-      const post = blocks(fs.readFileSync(path.join(RUNBOOKS, "athlete-positions-v88-postcheck.sql"), "utf8"));
+      const post = blocks(fs.readFileSync(path.join(RUNBOOKS, "athlete-positions-v87-postcheck.sql"), "utf8"));
       const postCheck = async () => {
         const bad = [];
         for (const [b, sql] of Object.entries(post)) bad.push(...falseColumns(await readOnly(c, sql)).map((k) => `${b}.${k}`));
@@ -261,32 +261,32 @@ export async function rehearse(args, password) {
       // 5. The runner again.
       const count = Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count);
       await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
-      report("5. the runner again: v88 skipped by its checksum", Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count) === count);
+      report("5. the runner again: v87 skipped by its checksum", Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count) === count);
 
       // 6. Rollback.
-      await c.query(fs.readFileSync(path.join(RUNBOOKS, "athlete-positions-v88-rollback.sql"), "utf8"));
+      await c.query(fs.readFileSync(path.join(RUNBOOKS, "athlete-positions-v87-rollback.sql"), "utf8"));
       const catalogAfter = (await c.query(CATALOG_SQL)).rows[0];
       const sameCatalog = JSON.stringify(catalogAfter) === JSON.stringify(catalogBefore);
-      report("6. rollback: the catalog, the sports and the positions equal to the ones before v88, the planted rows untouched", sameCatalog && (await plantedDigest()) === digest0,
+      report("6. rollback: the catalog, the sports and the positions equal to the ones before v87, the planted rows untouched", sameCatalog && (await plantedDigest()) === digest0,
         sameCatalog ? "" : Object.keys(catalogBefore).filter((k) => catalogBefore[k] !== catalogAfter[k]).join(", "));
 
       // 7. Apply again.
       await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
       const bad2 = await postCheck();
-      report("7. v88 applied again; the post-check again", bad2.length === 0, bad2.join(", "));
+      report("7. v87 applied again; the post-check again", bad2.length === 0, bad2.join(", "));
       const gw2 = await guardedWrite("after re-apply", { commit: true });
       report("7b. the guarded write again, COMMITTED; the refusals again", gw2.ok, gw2.detail);
 
-      // 8. pg_dump -Fc and pg_restore into a second database, v88's catalog compared.
-      const source = (await c.query(V88_CATALOG_SQL)).rows[0];
-      const dumpFile = path.join(tmp, "v88.dump");
+      // 8. pg_dump -Fc and pg_restore into a second database, v87's catalog compared.
+      const source = (await c.query(V87_CATALOG_SQL)).rows[0];
+      const dumpFile = path.join(tmp, "v87.dump");
       await run(tool(args.pgBin, "pg_dump"), ["--format", "custom", "--file", dumpFile, ...conn(args, name)], { env: toolEnv(password), windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
       const copy = await created();
       await run(tool(args.pgBin, "pg_restore"), ["--exit-on-error", "--no-owner", ...conn(args, copy), dumpFile], { env: toolEnv(password), windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
       const r = new pg.Client({ connectionString: urlFor(args, copy, password) });
       await r.connect();
       try {
-        const restored = (await r.query(V88_CATALOG_SQL)).rows[0];
+        const restored = (await r.query(V87_CATALOG_SQL)).rows[0];
         // A restored CHECK over a varchar column (v63's note check, the method check) is printed back with its casts and
         // parentheses placed differently (`(ARRAY[...])::text[]` against `ARRAY[(...)::text, ...]`); the constraints are
         // compared with the casts and parentheses removed, every other column byte for byte.
@@ -298,7 +298,7 @@ export async function rehearse(args, password) {
           for (const line of a.filter((x) => !b.includes(x)).slice(0, 5)) console.log(`      source only:   ${line}`);
           for (const line of b.filter((x) => !a.includes(x)).slice(0, 5)) console.log(`      restored only: ${line}`);
         }
-        report("8. pg_dump / pg_restore read-back: v88's constraints, triggers, indexes, functions and position rows identical", differs.length === 0, differs.join(", "));
+        report("8. pg_dump / pg_restore read-back: v87's constraints, triggers, indexes, functions and position rows identical", differs.length === 0, differs.join(", "));
       } finally {
         await r.end().catch(() => {});
       }

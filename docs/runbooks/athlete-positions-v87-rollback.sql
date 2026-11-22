@@ -1,51 +1,51 @@
--- Rollback of migration v88 (athlete positions; migrations_v2/202611221000_athletes_v88_positions.sql).
+-- Rollback of migration v87 (athlete positions; migrations_v2/202611221200_athletes_v87_positions.sql).
 --
--- Not a migration and never run automatically. Rehearsed on disposable databases (backend/tests/athlete-positions-v88-migration.test.mjs
--- and backend/scripts/athlete-positions-v88-rehearsal.mjs: apply -> rollback -> the catalog identical to before -> apply again).
--- Before it is run anywhere real: the deployed commit no longer contains the v88 file (otherwise the migrator applies v88 again at
+-- Not a migration and never run automatically. Rehearsed on disposable databases (backend/tests/athlete-positions-v87-migration.test.mjs
+-- and backend/scripts/athlete-positions-v87-rehearsal.mjs: apply -> rollback -> the catalog identical to before -> apply again).
+-- Before it is run anywhere real: the deployed commit no longer contains the v87 file (otherwise the migrator applies v87 again at
 -- the next start), and the database is named in its own approval (.claude/rules/database-safety.md).
 --
--- It drops the two v88 tables, every v88 trigger and function, the v88 constraints, indexes and columns of
+-- It drops the two v87 tables, every v87 trigger and function, the v87 constraints, indexes and columns of
 -- public.sport_positions, deletes the six seeded positions and the sport 'Football', puts back v42's unique (sport_id, name),
--- v69's method CHECK and estimate_basis_ok and v64's validate_metric_value_estimate (bodies verbatim), and deletes the v88
+-- v69's method CHECK and estimate_basis_ok and v64's validate_metric_value_estimate (bodies verbatim), and deletes the v87
 -- record. It changes no other row. It refuses (23514, fixed message), changing nothing, once any of these holds - from then on
--- v88 is forward-only:
+-- v87 is forward-only:
 --   * the migrator is running (advisory lock 822026, taken without waiting);
---   * v88 is not recorded, or any migration was applied after it (by applied_at, not by prefix);
+--   * v87 is not recorded, or any migration was applied after it (by applied_at, not by prefix);
 --   * a position was changed in the app (a change row exists, or a club position exists), or a seeded position differs;
 --   * an athlete's position was ever set (a row of public.athlete_positions exists);
 --   * an estimate with the method position_average exists;
 --   * anything else references the sport 'Football' (the delete then fails and the transaction ends with nothing changed).
 -- One transaction. Run it at a quiet moment as
---   psql -v ON_ERROR_STOP=1 -f athlete-positions-v88-rollback.sql
+--   psql -v ON_ERROR_STOP=1 -f athlete-positions-v87-rollback.sql
 begin;
 set local lock_timeout = '5s';
 
 do $$
 begin
   if not pg_try_advisory_xact_lock(822026) then
-    raise exception 'v88 rollback refused: the migrator is running' using errcode = '23514';
+    raise exception 'v87 rollback refused: the migrator is running' using errcode = '23514';
   end if;
-  if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611221000_athletes_v88_positions.sql') then
-    raise exception 'v88 rollback refused: v88 is not recorded on this database' using errcode = '23514';
+  if not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611221200_athletes_v87_positions.sql') then
+    raise exception 'v87 rollback refused: v87 is not recorded on this database' using errcode = '23514';
   end if;
-  if exists (select 1 from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611221000_athletes_v88_positions.sql'
-              and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611221000_athletes_v88_positions.sql')) then
-    raise exception 'v88 rollback refused: later migrations are applied' using errcode = '23514';
+  if exists (select 1 from public.schema_migrations m where m.migration_name <> 'migrations_v2/202611221200_athletes_v87_positions.sql'
+              and m.applied_at >= (select applied_at from public.schema_migrations where migration_name = 'migrations_v2/202611221200_athletes_v87_positions.sql')) then
+    raise exception 'v87 rollback refused: later migrations are applied' using errcode = '23514';
   end if;
   if exists (select 1 from public.sport_position_changes) or exists (select 1 from public.sport_positions where owner_scope <> 'system') then
-    raise exception 'v88 rollback refused: positions were changed in the app' using errcode = '23514';
+    raise exception 'v87 rollback refused: positions were changed in the app' using errcode = '23514';
   end if;
   if (select string_agg(p.name || ':' || p.sort_order || ':' || (p.archived_at is null)::text, ',' order by p.sort_order)
         from public.sport_positions p)
      is distinct from 'Goalkeeper:10:true,Centre back:20:true,Full back:30:true,Midfielder:40:true,Winger:50:true,Forward:60:true' then
-    raise exception 'v88 rollback refused: the positions differ from the v88 seed' using errcode = '23514';
+    raise exception 'v87 rollback refused: the positions differ from the v87 seed' using errcode = '23514';
   end if;
   if exists (select 1 from public.athlete_positions) then
-    raise exception 'v88 rollback refused: an athlete''s position was set' using errcode = '23514';
+    raise exception 'v87 rollback refused: an athlete''s position was set' using errcode = '23514';
   end if;
   if exists (select 1 from training_load.metric_value_estimates where method = 'position_average') then
-    raise exception 'v88 rollback refused: a position average estimate exists' using errcode = '23514';
+    raise exception 'v87 rollback refused: a position average estimate exists' using errcode = '23514';
   end if;
 end $$;
 
@@ -166,5 +166,5 @@ alter table public.sport_positions
   drop column owner_scope;
 alter table public.sport_positions add constraint sport_positions_sport_id_name_key unique (sport_id, name);
 
-delete from public.schema_migrations where migration_name = 'migrations_v2/202611221000_athletes_v88_positions.sql';
+delete from public.schema_migrations where migration_name = 'migrations_v2/202611221200_athletes_v87_positions.sql';
 commit;

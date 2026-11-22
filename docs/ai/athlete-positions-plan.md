@@ -21,7 +21,7 @@ Last verified against commit: `be5f62b` (`origin/main`, merge of PR #709).
 
 ## 2. As built
 
-- **One registry, one position per athlete and club** — `docs/runbooks/athlete-positions-v88.md` holds the schema,
+- **One registry, one position per athlete and club** — `docs/runbooks/athlete-positions-v87.md` holds the schema,
   guards and rollback.
 - **Routes** (`backend/src/routes/positions.js`, `backend/src/positionService.js`), every write with a `requestKey`:
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# The v88 rehearsal (athlete positions) on a local PostgreSQL - bash. Runs
-# backend/scripts/athlete-positions-v88-rehearsal.mjs unchanged; see that file and
-# docs/runbooks/athlete-positions-v88.md for what it does. Loopback only; it creates
-# and drops its own optimove_tests_pos88rehearsal_* databases.
+# The v87 rehearsal (athlete positions) on a local PostgreSQL - bash. Runs
+# backend/scripts/athlete-positions-v87-rehearsal.mjs unchanged; see that file and
+# docs/runbooks/athlete-positions-v87.md for what it does. Loopback only; it creates
+# and drops its own optimove_tests_pos87rehearsal_* databases.
 #
-#   backend/scripts/athlete-positions-v88-rehearsal.sh [--host 127.0.0.1] [--port 5432] [--user postgres] [--pg-bin /usr/lib/postgresql/17/bin]
+#   backend/scripts/athlete-positions-v87-rehearsal.sh [--host 127.0.0.1] [--port 5432] [--user postgres] [--pg-bin /usr/lib/postgresql/17/bin]
 #
 # The password: from PGPASSWORD if set, otherwise asked once (not echoed, never printed).
 set -euo pipefail
@@ -31,4 +31,4 @@ else
 fi
 args=(--host "$host" --port "$port" --user "$user")
 [ -n "$pgbin" ] && args+=(--pg-bin "$pgbin")
-OPTIMOVE_REHEARSAL_PASSWORD="$pw" PGPASSWORD="" node "$here/athlete-positions-v88-rehearsal.mjs" "${args[@]}"
+OPTIMOVE_REHEARSAL_PASSWORD="$pw" PGPASSWORD="" node "$here/athlete-positions-v87-rehearsal.mjs" "${args[@]}"

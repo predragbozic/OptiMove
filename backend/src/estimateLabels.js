@@ -28,8 +28,8 @@ export async function readEstimateLabels(executor, occasionIds) {
       where e.occasion_id = any($1::uuid[])`,
     [ids],
   )).rows;
-  // v88: the position a position average used, by its name now (a rename shows the new name). Read only when such a row
-  // exists, so a reader on a database without v88 never touches the table.
+  // v87: the position a position average used, by its name now (a rename shows the new name). Read only when such a row
+  // exists, so a reader on a database without v87 never touches the table.
   const positionIds = [...new Set(rows.filter((r) => r.method === "position_average").map((r) => r.basis?.positionId).filter((id) => typeof id === "string" && UUID.test(id)))];
   const positionNames = new Map(positionIds.length
     ? (await executor.query(`select id, name from public.sport_positions where id = any($1::uuid[])`, [positionIds])).rows.map((p) => [String(p.id), p.name])

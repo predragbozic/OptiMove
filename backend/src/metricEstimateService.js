@@ -32,7 +32,7 @@ import { boundedText } from "./metricTextRules.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const ESTIMATE_METHODS = Object.freeze(["proportional", "copy_athlete", "team_average", "scale_recording", "position_average"]);
-// v88: the position average - the mean of the measured values of the athletes of the same position in this session (the
+// v87: the position average - the mean of the measured values of the athletes of the same position in this session (the
 // team average's rule: at least 3 athletes, no minutes).
 export const POSITION_AVERAGE_MIN_ATHLETES = 3;
 // The proportional method's history (owner's answer 3): the last 5 measured sessions of the same category, within 90 days,
@@ -232,8 +232,8 @@ function teamAverage(ctx) {
   });
 }
 
-// v88: the positions in force, in the team's club, of the target athlete and of the session's roster. Read in the
-// caller's transaction (the proposal's snapshot, or the save's). Without v88 (a database built before it) the method is
+// v87: the positions in force, in the team's club, of the target athlete and of the session's roster. Read in the
+// caller's transaction (the proposal's snapshot, or the save's). Without v87 (a database built before it) the method is
 // not available, never replaced by another.
 export async function loadPositions(client, ctx) {
   const installed = (await client.query(`select to_regclass('public.athlete_positions') is not null as ok`)).rows[0].ok;
@@ -455,7 +455,7 @@ export async function getEstimateProposal(ctx, activityId, query) {
         proportional: { ...methodView(own, "nothing_to_estimate"), sessionDays: proportionalDays(own), comparesWith: typeKey ? { key: typeKey, label: typeLabel } : null },
         copy_athlete: { ...copy, sourceAthleteId: input.sourceAthleteId, sources },
         team_average: methodView(teamAverage(ectx), "nothing_to_estimate"),
-        // v88: the athletes of the same position; not available with the reason (no position, too few athletes of it).
+        // v87: the athletes of the same position; not available with the reason (no position, too few athletes of it).
         position_average: { ...methodView(positionAverage(ectx, positions), "nothing_to_estimate"), position: positions.target },
         // MT-D: only where a scale was chosen before the import; otherwise not available with the reason.
         scale_recording: await scaleRecording(client, ectx).then(

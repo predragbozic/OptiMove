@@ -33,7 +33,7 @@ export const emptyExerciseFilters = () => ({
 // day and visible month, that day's athletes, the month's dots, and the
 // exercise and program strips. `selected` and `cursor` are ISO dates, ""
 // meaning today, so a Home left open overnight moves to the new today.
-// v88 positions (positions-data.js). keys: the request key of a write whose answer was lost, by its operation, so a
+// v87 positions (positions-data.js). keys: the request key of a write whose answer was lost, by its operation, so a
 // resend can never write twice.
 export const emptyPositionsState = () => ({
   loaded: false,
@@ -1257,7 +1257,7 @@ export const createInitialState = () => ({
     libraryRows: { domain: [], category: [], section: [], tag: [], attractor: [] },
     addOpenKind: "",
   },
-  // v88: the list of positions (Tags & Presets) and the athletes' positions of the workspace (Settings -> Athletes).
+  // v87: the list of positions (Tags & Presets) and the athletes' positions of the workspace (Settings -> Athletes).
   positions: emptyPositionsState(),
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
   coachHome: emptyCoachHomeState(),

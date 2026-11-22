@@ -3709,7 +3709,7 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     if (state.organization.section === "presets" && !state.taxonomy.loaded) {
       await loadTaxonomyData();
     }
-    // v88: positions for Tags & Presets and for an athlete's Edit window; read once, then after every write.
+    // v87: positions for Tags & Presets and for an athlete's Edit window; read once, then after every write.
     if ((state.organization.section === "presets" || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
         && !state.positions.loaded && !state.positions.loading && !state.positions.error) {
       void loadPositions().then(() => renderOrganizationPanel({ refresh: false }));
@@ -3812,7 +3812,7 @@ async function onWorkspaceChanged() {
   clearAppHistoryEntries();
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
-  // v88: the positions list and the athletes' positions are the workspace's own.
+  // v87: the positions list and the athletes' positions are the workspace's own.
   resetPositions();
   resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;
