@@ -524,6 +524,84 @@ imported again):
   The Training Load calendar still shows the raw key words ("training session") until ST-5 reads the labels.
 - **Runbook:** `docs/runbooks/session-types-v85.md`, with its preflight, post-check, rollback and the rehearsal tool.
 
+## 15. ST-2 as built (no migration; backend only)
+
+Verified against `be5f62b9` (`origin/main`, merge of PR #709).
+
+- **The mapper refuses no category.** `buildGpexeImportPlan` takes `activityTypeKey` and carries it (or `null`) with the
+  source's `categoryName`; `unsupported_category` is no longer thrown. A preview stored before ST-2 keeps that code
+  (and reads "stays out") until its session is found or reviewed again.
+- **Where the type comes from** (`backend/src/gpexeSessionType.js`, `resolveSessionType`, on the caller's client under
+  the team's import lock). The order, first match wins:
+  1. `imported_session`: the session is already imported, and its activity keeps its type;
+  2. `choice`: the approver's `activityTypeKey`;
+  3. `team_suggestion`: the team's row in `training_load.source_session_types`;
+  4. `none`.
+
+  A team without a row for `FULL TRAINING` takes the pair v85 seeded (`training_session`): a team bound after v85 has no
+  seeded row, and behaves like the teams that have one. Every type is checked through
+  `training.session_type_offered(key, club, true)`, which locks the type row `FOR SHARE`; an archived suggestion is no
+  suggestion.
+- **The preview** (`previewLocked`) carries `session.activityTypeKey` and `session.activityTypeSource`, so both are in
+  the hash. Every stored preview hash changes once; a candidate reviewed before the deploy answers `preview_changed` at
+  its first approval, which stores the recomputed preview (section 4, "Hash effect of the deploy").
+- **`session_type_required`.** A candidate whose source is `none` stays `pending`. The list carries it as an approval
+  blocker and as the first of `reasons` (so its state is "needs", in the list and in the Imports calendar), and
+  `suggestedActivityTypeKey` is null. The approval answers `409 session_type_required` without a choice.
+- **The choice.** `POST …/candidates/:id/preview` takes `{ activityTypeKey?, excludedAthleteIds? }` (either or both), stores
+  nothing and answers `subsetHash`, the hash of the preview with the choice. The approval takes the same fields with
+  `subsetHash` and compares the recomputed choice preview with it, never with the stored hash.
+  - `400 invalid_activity_type_key` for a malformed key, before any lock.
+  - `409 session_type_not_offered` for a type that is unknown, another club's or archived: one answer for the three
+    (ADR-006), decided under the lock, also when the type was archived after the choice preview. Nothing is written or
+    stored.
+  - `409 session_type_fixed` for another type on a session that is already imported.
+  - A chosen type is a choice whatever the team's suggestion is at that moment, so the hash of a choice preview does not
+    depend on the suggestion row. Two sessions of one category, previewed with the same type, import in one batch although
+    the first approval rewrites the suggestion. Only an imported session's own type chosen again is no choice.
+  - Another club's type is refused by a plain read without a lock: its row is never locked or waited on, so the answer
+    for it is the answer for an unknown key, in time as well.
+- **Deviation from section 11, test 3** ("a type not offered → 400, before any lock"): a well-formed key that is not
+  offered is `409 session_type_not_offered` under the lock, as section 4 says. A `400` there would tell an unknown key
+  from another club's.
+- **The batch.** `choices: { <candidateId>: { activityTypeKey, subsetHash } }`, optional. An item that waits for a type
+  and has no choice is refused alone (`session_type_required`); a stale choice is refused alone
+  (`session_type_not_offered`); neither stops the batch. Athletes are still left out only in a single approval.
+- **The suggestion's write** (`backend/src/gpexeSessionTypeSuggestion.js`). After a confirmed approval whose type was a
+  choice (also one verified after a lost COMMIT answer), the team's row for that category is set to the chosen type, by
+  the approver, in its own short bounded transaction, after the approval's connection is back in the pool. It never
+  takes the team's import lock. A failure, or a refusal of v85's guard, leaves the suggestion as it was and the import
+  committed. It can add up to about 12 seconds to an approval's answer in the worst case (5 s for a connection, 5 s for
+  the write, 2 s for its rollback); the batch's 45-second budget does not count it. Two approvers' writes for one
+  category are not ordered by the team lock: the later COMMIT wins.
+- **A database without v85** (a test world built to an older migration): `resolveSessionType` asks once whether v85 is
+  installed, as v72's and v80's code does. Without it the built-in pair is the only suggestion and a type is any active
+  row of `training.activity_types`.
+- **For ST-3 (a precondition):** the read of an imported session's type takes no lock on the activity row. Nothing
+  changes a confirmed activity's type today; when ST-3 adds that route, this read locks the activity row `FOR SHARE`
+  (activity, then type, as v85's guard does).
+- **An ended source instance (7g):** the session's event is looked for on the team's active instance only. After an
+  end, a re-import is a new import with a type of its own, as the writer starts a new instance.
+- **The approval row (a limit, no migration).** v59's CHECK stores `subset_hash` only together with athletes left out.
+  A type chosen without leaving anybody out is bound by `subsetHash` at the approval all the same, but the row stores no
+  hash for it. What it wrote is on the activity (its type and creator); a later change of the type is in the correction
+  log. ST-4's `replaceManual` meets the same CHECK; storing those choices on the approval row needs a migration.
+- **For ST-5 (not changed here):** the choice preview keeps J20-B's throttle, one per user and team every 3 seconds
+  and one in flight per team. A batch dialog that fetches a choice preview per item has to space them, or the throttle
+  is changed with its own review.
+- **The direct import path** (`importGpexeBundleLocked`, the CLI's and the tests') decides the type the same way and
+  refuses `session_type_required` rather than write a session without one.
+- **Widened by removing the category gate:** the 7e mapping preview and the J18 board now read a session of any
+  category.
+- **Not in ST-2:**
+  - every screen (ST-5). Until then a session that waits for its type is listed under *Needs you* with the generic
+    step, and the review offers no way to choose a type: it cannot be imported from the app. Before ST-2 such a
+    session read "stays out";
+  - the calendar event's suggestion (section 4 (a)): an import has no link at approval time;
+  - `replaceManual` (ST-4).
+- **Tests:** `backend/tests/gpexe-session-type-st2.test.mjs` (disposable; 19 tests), with the mutations of section 11,
+  item 9.
+
 ## 16. ST-3 as built (migration v88, `migrations_v2/202611221300_training_load_v88_participant_session_types.sql`)
 
 The number and the prefix are provisional until the *Rukovodilac* confirms them before the merge.

@@ -70,6 +70,14 @@ before(async () => {
   service.setGpexeClientFactory(() => { throw new Error("TRAP: the legacy client factory was called for a bound team"); });
   const check = await checkNow(team);
   assert.equal(check.status, "succeeded", JSON.stringify(check));
+  // ST-2: no check blocks a session for its category any more (it waits for its session type: "needs"). A preview
+  // stored before ST-2 still says "a type that stays out"; the third session is made such a stored preview, so the
+  // world keeps all three states this pin reads.
+  await admin.query(
+    `update training_load.gpexe_import_candidates
+        set status = 'blocked', preview = jsonb_build_object('status', 'blocked', 'blocked', jsonb_build_object('code', 'unsupported_category', 'message', 'x'),
+              'session', jsonb_build_object('categoryName', 'OFFICIAL MATCH'), 'athletes', '[]'::jsonb, 'changesToImported', '[]'::jsonb)
+      where owner_team_id = $1 and gpexe_team_session_id = $2`, [team.teamId, String(PLANTED_SESSIONS[2])]);
 });
 
 after(async () => {

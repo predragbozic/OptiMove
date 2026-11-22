@@ -431,9 +431,9 @@ test("5. the order of the 409s: snapshot_expired (purged, expired) before candid
     try { return await version(unsupported, { unit: "s" }); } finally { setExtractorFallbackForTests(null); }
   })();
   refused(await preview(vUnsupported, W.cL, W.pa), 409, "candidate_source_mismatch");
-  // The registry before the mapper: a session the import refuses (MATCH), with
-  // a field the registry does not read, then with parameters its entry refuses.
-  const match = await candidate(W.tA, { bundle: previewBundle({ gpexeTeamId: Number(W.tA.sourceTeamId), category: "MATCH" }) });
+  // The registry before the mapper: a session the import refuses (GPEXE marks its statistics not valid; since ST-2 no
+  // category is refused), with a field the registry does not read, then with parameters its entry refuses.
+  const match = await candidate(W.tA, { bundle: previewBundle({ gpexeTeamId: Number(W.tA.sourceTeamId), statsValid: false }) });
   refused(await preview(vUnsupported, match, W.pa), 409, "source_metric_unsupported");
   refused(await preview(vUnsupported, W.cA.ok, W.pa), 409, "source_metric_unsupported");
   // An api-family field over an e03 candidate: the same family, so no mismatch; no entry.
@@ -460,10 +460,9 @@ test("5. the order of the 409s: snapshot_expired (purged, expired) before candid
   // The mapper's refusal last, with its stable code only.
   const notImportable = refused(await preview(V.time, match, W.pa), 409, "candidate_not_importable");
   assert.deepEqual(Object.keys(notImportable).sort(), ["current", "error", "message"]);
-  assert.deepEqual(notImportable.current, { reason: "unsupported_category" });
-  const invalid = previewBundle({ gpexeTeamId: Number(W.tA.sourceTeamId) });
-  invalid.teamSession.is_stats_valid = false;
-  assert.deepEqual(refused(await preview(V.time, await candidate(W.tA, { bundle: invalid }), W.caA), 409, "candidate_not_importable").current, { reason: "session_stats_invalid" });
+  assert.deepEqual(notImportable.current, { reason: "session_stats_invalid" });
+  // The same for the club's admin.
+  assert.deepEqual(refused(await preview(V.time, match, W.caA), 409, "candidate_not_importable").current, { reason: "session_stats_invalid" });
   const allLeftOut = await candidate(W.tA, { bundle: previewBundle({ gpexeTeamId: Number(W.tA.sourceTeamId), athletes: previewAthletes().slice(3) }) });
   assert.deepEqual(refused(await preview(V.time, allLeftOut, W.pa), 409, "candidate_not_importable").current, { reason: "no_importable_participants" });
 });

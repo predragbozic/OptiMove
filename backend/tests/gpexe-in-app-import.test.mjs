@@ -393,17 +393,34 @@ test("preview: against data already imported, only the difference is shown, old 
 
 test("check: a session the importer cannot take is saved as blocked, with the reason", async () => {
   const team = await setupTeam();
-  serve(team, [sessionBundle({ sessionId: 7005, category: "OFFICIAL MATCH" })]);
+  // GPEXE marks the session's statistics as not valid (since ST-2 no category is refused: see the next test).
+  const invalid = sessionBundle({ sessionId: 7005, category: "OFFICIAL MATCH" });
+  invalid.teamSession.is_stats_valid = false;
+  serve(team, [invalid]);
   await checkNow(team);
   const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
   assert.equal(summary.status, "blocked");
   // The list row already says why, in neutral terms; the adapter's code and
   // the session type come with it, the server's sentence does not.
-  assert.deepEqual([summary.blockedCode, summary.blockedSourceCode, summary.sessionType, summary.reasons], ["unsupported_session_type", "unsupported_category", "OFFICIAL MATCH", []]);
+  assert.deepEqual([summary.blockedCode, summary.blockedSourceCode, summary.sessionType, summary.reasons], ["source_marks_session_invalid", "session_stats_invalid", "OFFICIAL MATCH", []]);
   assert.equal(summary.preview, undefined, "the list carries no preview");
   const candidate = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate;
-  assert.equal(candidate.preview.blocked.code, "unsupported_category");
-  assert.deepEqual([candidate.blockedCode, candidate.sessionType], ["unsupported_session_type", "OFFICIAL MATCH"], "the detail carries the same fields");
+  assert.equal(candidate.preview.blocked.code, "session_stats_invalid");
+  assert.deepEqual([candidate.blockedCode, candidate.sessionType], ["source_marks_session_invalid", "OFFICIAL MATCH"], "the detail carries the same fields");
+});
+
+test("check (ST-2): a session of a category the team has no session type for is not blocked - it is pending and waits for the approver's choice of the type", async () => {
+  const team = await setupTeam();
+  serve(team, [sessionBundle({ sessionId: 7006, category: "OFFICIAL MATCH" })]);
+  await checkNow(team);
+  const [summary] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
+  assert.deepEqual([summary.status, summary.blockedCode, summary.blockedSourceCode, summary.sessionType, summary.suggestedActivityTypeKey],
+    ["pending", null, null, "OFFICIAL MATCH", null]);
+  assert.equal(summary.reasons[0].code, "session_type_required");
+  assert.ok(summary.approvalBlockers.includes("session_type_required"));
+  assert.equal(summary.state, "needs");
+  const candidate = (await api(`/teams/${team.teamId}/candidates/${summary.id}`, { cookie: team.coach.cookie })).body.candidate;
+  assert.deepEqual([candidate.preview.blocked, candidate.preview.session.activityTypeKey, candidate.preview.session.activityTypeSource], [null, null, "none"]);
 });
 
 test("check: GPEXE refusing the token fails the check with a stable code, and the token appears nowhere", async () => {
@@ -1362,9 +1379,11 @@ test("approve: a blocked, superseded, expired or empty candidate is refused with
     assert.deepEqual([e.status, e.body.error], [409, "snapshot_expired_check_again"]);
     assert.deepEqual(await allRowCounts(), before);
 
-    // Blocked: an official match the importer does not take.
+    // Blocked: a session the importer does not take (GPEXE marks it not valid).
     const blockedTeam = await setupTeam();
-    serve(blockedTeam, [sessionBundle({ sessionId: 7109, category: "OFFICIAL MATCH" })]);
+    const notValid = sessionBundle({ sessionId: 7109 });
+    notValid.teamSession.is_stats_valid = false;
+    serve(blockedTeam, [notValid]);
     await checkNow(blockedTeam);
     const blockedSummary = (await api(`/teams/${blockedTeam.teamId}/candidates`, { cookie: blockedTeam.coach.cookie })).body.candidates[0];
     // D10 (9-B): a blocked candidate's preview hash goes to a platform admin only.
@@ -1558,7 +1577,7 @@ test("approve: stored GPEXE data the importer can no longer take blocks the cand
   await checkNow(team);
   const candidate = await pendingCandidate(team);
   // As if the mapper's rules changed between the check and the approval.
-  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{teamSession,category_name}', '"OFFICIAL MATCH"') where id = $1`, [candidate.id]);
+  await admin.query(`update training_load.gpexe_import_candidates set raw_bundle = jsonb_set(raw_bundle, '{teamSession,is_stats_valid}', 'false') where id = $1`, [candidate.id]);
   const before = await allRowCounts();
   await withSwitchOn(async () => {
     const r = await approve(team, candidate, team.padmin.cookie);
@@ -2008,8 +2027,8 @@ test("candidates list: blocked code and reasons come with the list, and the list
     assert.equal(r.body.candidates.length, 1);
   });
 
-  // Then a match (blocked, stays out), a session in which nobody is linked
-  // (only athlete 104 recorded) and a session GPEXE marks invalid.
+  // Then a match (ST-2: pending, it waits for its session type), a session in which
+  // nobody is linked (only athlete 104 recorded) and a session GPEXE marks invalid.
   const [, a102] = standardAthletes();
   const only104 = makeBundle({ sessionId: 7202, gpexeTeamId: 77, athletes: [{ ...structuredClone(a102), id: 104, tracks: [9105] }] });
   const invalid = sessionBundle({ sessionId: 7204 });
@@ -2031,8 +2050,10 @@ test("candidates list: blocked code and reasons come with the list, and the list
   const by = Object.fromEntries(list.map((c) => [c.gpexeTeamSessionId, c]));
   assert.deepEqual([by["7201"].status, by["7201"].blockedCode, by["7201"].reasons.map((r) => r.code)],
     ["pending", null, ["athletes_not_linked", "athletes_need_manual_review", "athletes_marked_invalid_by_source"]]);
-  assert.deepEqual([by["7203"].status, by["7203"].blockedCode, by["7203"].blockedSourceCode, by["7203"].sessionType, by["7203"].reasons],
-    ["blocked", "unsupported_session_type", "unsupported_category", "OFFICIAL MATCH", []]);
+  assert.deepEqual([by["7203"].status, by["7203"].blockedCode, by["7203"].blockedSourceCode, by["7203"].sessionType, by["7203"].reasons.map((r) => r.code)],
+    ["pending", null, null, "OFFICIAL MATCH",
+      ["session_type_required", "athletes_not_linked", "athletes_need_manual_review", "athletes_marked_invalid_by_source"]]);
+  assert.deepEqual(by["7203"].reasons[0], { code: "session_type_required", count: 1 });
   assert.deepEqual([by["7202"].status, by["7202"].previewStatus, by["7202"].blockedCode, by["7202"].reasons],
     ["pending", "no_changes", null, [{ code: "no_linked_athlete", count: 1 }]]);
   assert.deepEqual([by["7204"].status, by["7204"].blockedCode, by["7204"].blockedSourceCode],
@@ -2047,7 +2068,7 @@ test("candidates list: blocked code and reasons come with the list, and the list
   assert.deepEqual([by["7201"].athleteCount, by["7201"].drillsCount], [5, 2], "every recorded athlete, linked or not; the session's drills");
   assert.deepEqual([by["7202"].athleteCount, by["7202"].drillsCount], [1, 2], "one unlinked athlete still counts");
   // A session the mapper's gates refused lists no athlete: unknown, never "0 athletes" (code review MEDIUM).
-  assert.deepEqual([by["7203"].athleteCount, by["7203"].drillsCount], [null, 2], "an unsupported category: athletes unknown");
+  assert.deepEqual([by["7203"].athleteCount, by["7203"].drillsCount], [5, 2], "ST-2: a session that waits for its type lists its athletes like any other");
   assert.deepEqual([by["7204"].athleteCount, by["7204"].drillsCount], [null, 2], "a session GPEXE marks invalid: athletes unknown");
   // No server sentence rides on the list: the coach's words are the app's.
   for (const c of list) {
@@ -2225,7 +2246,7 @@ test("source athletes: the team's coach reads them; another team's coach, a user
   const [, a102] = standardAthletes();
   const otherBundle = makeBundle({ sessionId: 7306, gpexeTeamId: 78, athletes: [{ ...structuredClone(a102), id: 201, tracks: [9201] }] });
   // ... and a refused session (a match) whose only athlete, 205, is raw-only.
-  const otherMatch = makeBundle({ sessionId: 7316, gpexeTeamId: 78, category: "OFFICIAL MATCH", athletes: [{ ...structuredClone(a102), id: 205, tracks: [9205] }] });
+  const otherMatch = makeBundle({ sessionId: 7316, gpexeTeamId: 78, category: "OFFICIAL MATCH", statsValid: false, athletes: [{ ...structuredClone(a102), id: 205, tracks: [9205] }] });
   serve(other, [otherBundle, otherMatch]);
   await checkNow(other);
 
@@ -2303,7 +2324,7 @@ test("source athletes: the number of SQL statements does not grow with the numbe
   // Five more sessions, three new GPEXE athletes, two more links.
   const [, a102] = standardAthletes();
   const extra = (sessionId, ids) => makeBundle({ sessionId, gpexeTeamId: 77, start: `2026-09-0${(sessionId % 5) + 1}T18:00:00`, athletes: [...sessionAthletes(), ...ids.map((id) => ({ ...structuredClone(a102), id, tracks: [9300 + id] }))] });
-  const refused = makeBundle({ sessionId: 7317, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-07T18:00:00", athletes: [...sessionAthletes(), { ...structuredClone(a102), id: 304, tracks: [9604] }] });
+  const refused = makeBundle({ sessionId: 7317, gpexeTeamId: 77, category: "OFFICIAL MATCH", statsValid: false, start: "2026-09-07T18:00:00", athletes: [...sessionAthletes(), { ...structuredClone(a102), id: 304, tracks: [9604] }] });
   // The first session is served again: a complete check through the binding withdraws a session of its window it no longer sees (v33).
   serve(team, [sessionBundle({ sessionId: 7307 }), extra(7308, [301]), extra(7309, [301, 302]), extra(7310, [303]), extra(7311, []), extra(7312, [301, 302, 303]), refused]);
   await checkNow(team);
@@ -2336,12 +2357,12 @@ test("source athletes: an athlete named only by a refused session's raw snapshot
   const [, a102] = standardAthletes();
   // A match: the mapper refuses it, the stored preview names no athlete; only
   // athlete 204 is recorded in it. A second raw row carries an invalid id.
-  const match = makeBundle({ sessionId: 7320, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-13T18:00:00", athletes: [{ ...structuredClone(a102), id: 204, tracks: [9204] }] });
+  const match = makeBundle({ sessionId: 7320, gpexeTeamId: 77, category: "OFFICIAL MATCH", statsValid: false, start: "2026-09-13T18:00:00", athletes: [{ ...structuredClone(a102), id: 204, tracks: [9204] }] });
   match.athleteSessions.push({ ...structuredClone(match.athleteSessions[0]), id: 999001, athlete: "not-an-id" });
   service.setGpexeClientFactory(fakeGpexe({ bundles: [match] }));
   await checkNow(team);
   const [candidate] = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates;
-  assert.deepEqual([candidate.status, candidate.blockedCode], ["blocked", "unsupported_session_type"]);
+  assert.deepEqual([candidate.status, candidate.blockedCode], ["blocked", "source_marks_session_invalid"]);
 
   let body = await sourceAthletes(team);
   assert.deepEqual(body.athletes.map((a) => a.gpexeAthleteId), ["101", "102", "103", "105", "204"], "the links, plus the raw-only athlete; no invalid id");
@@ -2375,7 +2396,7 @@ test("source athletes: the raw fallback never replaces a preview sighting or its
   const [, a102] = standardAthletes();
   const training = makeBundle({ sessionId: 7321, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
   // A newer match recorded 101 (seen in the training's preview) and 206 (seen nowhere else).
-  const match = makeBundle({ sessionId: 7322, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [...sessionAthletes({ distance101: 5000 }), { ...structuredClone(a102), id: 206, tracks: [9206] }] });
+  const match = makeBundle({ sessionId: 7322, gpexeTeamId: 77, category: "OFFICIAL MATCH", statsValid: false, start: "2026-09-12T18:00:00", athletes: [...sessionAthletes({ distance101: 5000 }), { ...structuredClone(a102), id: 206, tracks: [9206] }] });
   serve(team, [match, training]);
   await checkNow(team);
   const list = (await sourceAthletes(team)).athletes;
@@ -2396,7 +2417,7 @@ test("source athletes: a refused candidate whose raw athleteSessions is not an a
   const team = await setupTeam();
   const [, a102] = standardAthletes();
   const training = makeBundle({ sessionId: 7323, gpexeTeamId: 77, start: "2026-09-10T18:00:00", athletes: sessionAthletes() });
-  const match = makeBundle({ sessionId: 7324, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 207, tracks: [9207] }] });
+  const match = makeBundle({ sessionId: 7324, gpexeTeamId: 77, category: "OFFICIAL MATCH", statsValid: false, start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 207, tracks: [9207] }] });
   serve(team, [training, match]);
   await checkNow(team);
   const refused = (await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie })).body.candidates.find((c) => c.gpexeTeamSessionId === "7324");
@@ -2469,7 +2490,7 @@ test("athlete id: the source-athletes raw fallback ignores a non-canonical id an
   const team = await setupTeam({ path: "legacy" });
   const [, a102] = standardAthletes();
   // A refused match whose raw rows name 208 (canonical) and "0208" (not).
-  const match = makeBundle({ sessionId: 7330, gpexeTeamId: 77, category: "OFFICIAL MATCH", start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 208, tracks: [9208] }] });
+  const match = makeBundle({ sessionId: 7330, gpexeTeamId: 77, category: "OFFICIAL MATCH", statsValid: false, start: "2026-09-12T18:00:00", athletes: [{ ...structuredClone(a102), id: 208, tracks: [9208] }] });
   match.athleteSessions.push({ ...structuredClone(match.athleteSessions[0]), id: 999002, athlete: "0208" });
   service.setGpexeClientFactory(fakeGpexe({ bundles: [match] }));
   await checkNow(team);
@@ -2922,12 +2943,21 @@ test("calendar: per UTC day the first three sessions' states in start order and 
     calendarBundle(7405, "2026-09-06T10:00:00", { distance101: 4444 }), bundles[5],
   ]);
   assert.equal((await checkNow(team)).status, "succeeded");
+  // ST-2: no check blocks a session for its category any more. A preview stored before ST-2 still can say so (it stays
+  // "out" until its session is found or reviewed again): 7404 is made such a stored preview.
+  await admin.query(
+    `update training_load.gpexe_import_candidates
+        set status = 'blocked', preview = jsonb_build_object('status', 'blocked', 'blocked', jsonb_build_object('code', 'unsupported_category', 'message', 'x'),
+              'session', jsonb_build_object('categoryName', 'OFFICIAL MATCH'), 'athletes', '[]'::jsonb, 'changesToImported', '[]'::jsonb)
+      where owner_team_id = $1 and gpexe_team_session_id = '7404'`, [team.teamId]);
 
   const listed = await api(`/teams/${team.teamId}/candidates`, { cookie: team.coach.cookie });
   assert.equal(listed.status, 200);
   assert.equal(listed.body.truncated, false);
   const bySession = Object.fromEntries(listed.body.candidates.map((c) => [String(c.gpexeTeamSessionId), c]));
-  assert.equal(bySession["7403"].state, "out", "a session type that stays out");
+  assert.equal(bySession["7404"].state, "out", "a preview stored before ST-2: a session type that stays out");
+  assert.deepEqual([bySession["7403"].state, bySession["7403"].reasons.map((r) => r.code)], ["needs", ["session_type_required"]],
+    "ST-2: a session of a category without a suggestion waits for its type (the session-type branch of the trimmed preview)");
   assert.equal(bySession["7402"].state, "needs", "an unlinked athlete is a step for the coach");
   assert.equal(bySession["7401"].state, "ready", "nothing to decide");
   assert.equal(bySession["7406"].state, "needs", "a record that needs a manual review");

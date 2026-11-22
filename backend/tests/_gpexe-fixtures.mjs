@@ -37,6 +37,9 @@ function moreFor(row, { powerZoneDistances, speedZoneDistances, acc, dec, powerB
 export function makeBundle({
   sessionId = 5001, gpexeTeamId = 77, start = "2026-09-14T18:08:12", updatedOn = "2026-09-14T20:18:09.337", category = "FULL TRAINING",
   drillsCount = 2, athletes, trackTimestampOffsetMs = 0, powerBounds, accThreshold, thresholds, detailsDrills = [0],
+  // false: a session the importer's own gates refuse (GPEXE marks its statistics not valid). Since ST-2 no category is
+  // refused, so this is the fixture's "refused session".
+  statsValid = true,
 }) {
   const athleteSessions = [];
   const more = {};
@@ -63,7 +66,7 @@ export function makeBundle({
   }
   return {
     teamSession: {
-      id: sessionId, team: gpexeTeamId, category_name: category, is_stats_valid: true, drills_count: drillsCount,
+      id: sessionId, team: gpexeTeamId, category_name: category, is_stats_valid: statsValid, drills_count: drillsCount,
       start_timestamp: start, end_timestamp: "2026-09-14T19:19:35", updated_on: updatedOn,
     },
     athleteSessions, more, tracks, details,

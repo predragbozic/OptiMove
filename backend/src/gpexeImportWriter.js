@@ -68,6 +68,7 @@
 // A flagged result with the same hash and status is written only once.
 import crypto from "crypto";
 import { buildGpexeImportPlan, classifyMappedPlan, mappedMetricSpecs } from "./gpexeImportMapper.js";
+import { isSessionTypeKey, resolveSessionType } from "./gpexeSessionType.js";
 import { teamSessionTimezone } from "./gpexeTeamTimezoneRead.js";
 import { prepareImportMapping } from "./gpexeImportMapping.js";
 import { canonicalDecimal } from "./sourceMetricExtractors.js";
@@ -716,7 +717,15 @@ export async function importGpexeBundleLocked(client, bundle, ctx, hooks = {}) {
   if (mapping.block) throw new GpexeImportError(mapping.block, "The session cannot be imported through the team's mapping activations.");
   const specs = mappedMetricSpecs(mapping.rows, { unitWords: mapping.unitWords });
   if (specs.block) throw new GpexeImportError(specs.block, "The session cannot be imported through the team's mapping activations.");
-  const full = buildGpexeImportPlan(bundle, { metricSpecs: specs.specs, teamTimezone });
+  // ST-2: the session type, as the in-app preview decides it (the imported session's own, ctx.activityTypeKey as the
+  // choice, or the team's suggestion). This path never writes a session without a type.
+  const sessionType = await resolveSessionType(client, {
+    ownerTeamId: ctx.ownerTeamId, categoryName: gates.event.categoryName, sourceExternalId: gates.event.sourceExternalId,
+    chosenKey: isSessionTypeKey(ctx.activityTypeKey) ? ctx.activityTypeKey : undefined,
+  });
+  if (sessionType.refusal) throw new GpexeImportError(sessionType.refusal, "The chosen session type cannot be used for this session.");
+  if (sessionType.source === "none") throw new GpexeImportError("session_type_required", "Choose the session type before importing this session.");
+  const full = buildGpexeImportPlan(bundle, { metricSpecs: specs.specs, teamTimezone, activityTypeKey: sessionType.activityTypeKey });
   const athleteIdByGpexeId = ctx.athleteIdByGpexeId instanceof Map ? ctx.athleteIdByGpexeId : new Map(Object.entries(ctx.athleteIdByGpexeId || {}));
   const plan = ctx.onlyMapped ? { ...full, participants: full.participants.filter((p) => athleteIdByGpexeId.has(p.gpexeAthleteId)) } : full;
   const classified = classifyMappedPlan(plan, { importableIds: plan.participants.map((p) => p.gpexeAthleteId), activationCount: mapping.rows.length });

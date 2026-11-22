@@ -337,16 +337,28 @@ async function loadJoinApplicationsForWorkspace(req, activeWorkspace, links) {
 
 router.get("/", async (req, res, next) => {
   try {
+    const workspacePromise = resolveActiveWorkspace(req.user.id, req.authz);
     const [clubs, teams, athletes, users, accessRequests, { workspace: activeWorkspace }, archivedTeams] = await Promise.all([
       loadClubs(req),
       loadTeams(req),
       loadManagedAthletes(req),
-      loadUsers(req),
+      loadUsers(req, workspacePromise),
       loadProgramAccessRequests(req),
-      resolveActiveWorkspace(req.user.id, req.authz),
+      workspacePromise,
       loadArchivedTeams(req),
     ]);
     const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
+    // After the workspace filter, which decides on the full rows (an account whose only active role is in another club
+    // must never become "unassigned" here and pass as the viewer's own creation).
+    // The older visibility rules (own creations, shared clubs and teams) can return a former member whose tie to this club
+    // is only an inactive role, and the workspace filter matches a club by id alone: the member rule is applied again here
+    // on the full rows, then the rows are narrowed.
+    const memberClubId = clubMembersViewClubId(req, activeWorkspace);
+    if (memberClubId) {
+      scoped.users = scoped.users
+        .filter((row) => clubMemberRowVisible(row, memberClubId, req.user.id))
+        .map((row) => narrowUserRowToClub(row, memberClubId));
+    }
     const scopedArchivedTeams = archivedTeamsForWorkspace(activeWorkspace, archivedTeams);
     // Independent of each other - neither reads the other's result - so they
     // run concurrently instead of back-to-back. loadJoinApplicationsForWorkspace
@@ -3346,8 +3358,46 @@ function canManageLoginFor({ actorIsPlatformAdmin, ownsTarget, targetIsPlatformA
   return actorIsPlatformAdmin || (ownsTarget && !targetIsPlatformAdmin);
 }
 
-async function loadUsers(req) {
+// The owner's decision of 2026-11-22: in its own club's workspace a club's admin sees every account that holds a role in
+// that club or in one of its teams. While this is true only an ACTIVE role counts (a former member may belong to another
+// club now); setting it to false also shows former members - the one switch, pinned by the club-members test.
+const CLUB_MEMBERS_ACTIVE_ROLES_ONLY = true;
+
+// The club whose members this viewer sees as a club's admin: the active club workspace's club, when the viewer is not a
+// platform admin (whose branch sees everything already) and holds staff.assign there (the club's admin, a system-role
+// word). Anyone else: null, and loadUsers behaves exactly as before.
+function clubMembersViewClubId(req, workspace) {
+  if (isPlatformAdministrator(req.authz)) return null;
+  if (workspace?.type !== "club" || !workspace.scopeId) return null;
+  return can(req.authz, "staff.assign", clubScope(workspace.scopeId)) ? String(workspace.scopeId) : null;
+}
+
+// Whether a club's admin sees this full row in its club's workspace: its own account, an own creation that holds no active
+// club or team role anywhere (today's rule, unchanged), or a member of the club - a club role in it or a team role on one of
+// its teams, active only while CLUB_MEMBERS_ACTIVE_ROLES_ONLY is true.
+function clubMemberRowVisible(row, clubId, actorUserId) {
+  if (String(row.id) === String(actorUserId)) return true;
+  const counts = (r) => String(r.clubId) === clubId && (r.isActive || !CLUB_MEMBERS_ACTIVE_ROLES_ONLY);
+  if ((row.clubRoles || []).some(counts) || (row.teamRoles || []).some(counts)) return true;
+  const hasAnyActiveScopedRole = (row.clubRoles || []).some((r) => r.isActive) || (row.teamRoles || []).some((r) => r.isActive);
+  return Boolean(row.canManageLogin) && !hasAnyActiveScopedRole;
+}
+
+// What a club's admin is shown of an account in its club's workspace: its roles in this club and this club's teams only
+// (nothing of another club, active or not), and of its global roles only the word and whether it is active.
+function narrowUserRowToClub(row, clubId) {
+  return {
+    ...row,
+    globalRoles: (row.globalRoles || []).map((r) => ({ role: r.role, isActive: r.isActive })),
+    clubRoles: (row.clubRoles || []).filter((r) => String(r.clubId) === clubId),
+    teamRoles: (row.teamRoles || []).filter((r) => String(r.clubId) === clubId),
+  };
+}
+
+async function loadUsers(req, workspacePromise) {
   const actorIsPlatformAdmin = isPlatformAdministrator(req.authz);
+  const { workspace } = await workspacePromise;
+  const memberClubId = clubMembersViewClubId(req, workspace);
   const result = await query(
     `select distinct
        u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name,
@@ -3422,9 +3472,29 @@ async function loadUsers(req) {
              and visible_role.is_active = true
              and visible_role.team_id in (select team_id from public.user_team_roles where user_id = $1 and is_active = true)
          )
+         or (
+           $3::uuid is not null
+           and (
+             exists (
+               select 1
+               from public.user_club_roles member_role
+               where member_role.user_id = u.id
+                 and member_role.club_id = $3::uuid
+                 and (member_role.is_active = true or not $4::boolean)
+             )
+             or exists (
+               select 1
+               from public.user_team_roles member_role
+               join public.teams member_team on member_team.id = member_role.team_id
+               where member_role.user_id = u.id
+                 and member_team.club_id = $3::uuid
+                 and (member_role.is_active = true or not $4::boolean)
+             )
+           )
+         )
        )
      order by name`,
-    [req.user.id, actorIsPlatformAdmin],
+    [req.user.id, actorIsPlatformAdmin, memberClubId, CLUB_MEMBERS_ACTIVE_ROLES_ONLY],
   );
   return result.rows.map((row) => {
     const activeGlobalRoles = new Set(row.global_roles.filter((r) => r.isActive).map((r) => r.role));
