@@ -9,7 +9,7 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
 
 | | |
 |---|---|
-| Status | **Proposed.** Documentation only. No code and no migration file. Internal reviews (2026-11-22): `code-reviewer` NOT READY (2 HIGH), `security-reviewer` NOT READY (1 HIGH, 4 MEDIUM), `db-reviewer` READY WITH NOTES (3 HIGH-class) on `6a20328`; all fixed in `2749a4b`; narrow re-reviews: security READY (one new MEDIUM, the rule 7 race, fixed in `829b89a`), db READY WITH NON-BLOCKING NOTES (N1-N3, written in). Next: the *Nezavisni revizor* and the owner's answers to section 12. |
+| Status | **Proposed.** Documentation only. No code and no migration file. Internal reviews (2026-11-22): `code-reviewer` NOT READY (2 HIGH), `security-reviewer` NOT READY (1 HIGH, 4 MEDIUM), `db-reviewer` READY WITH NOTES (3 HIGH-class) on `6a20328`; all fixed in `2749a4b`; narrow re-reviews: security READY (one new MEDIUM, the rule 7 race, fixed in `829b89a`), db READY WITH NON-BLOCKING NOTES (N1-N3, written in). The owner's, the stream manager's and the *Rukovodilac*'s decisions on Q1-Q16 (section 12) are in `dfa8658`. The *Nezavisni revizor* (4): PLAN REVIEW NO-GO on `c5e7229` (4 HIGH, 5 MEDIUM, 3 LOW), every finding written in with the stream manager's decisions where it offered a choice (H1 and M3 in 7.2-7.3, H2 and M4 in 7.4, H3 in 7.6, H4 in 7.2, M1 and M2 in 6, M5 in 7.7, L1 in 5.1, L2 in 7.4, L3 in 6 and 14). |
 | Mark | Risky: external-review triggers 1 (a migration), 2 (auth, roles, workspace, info hiding) and 4 (lock order, idempotency) of `CLAUDE.md`. Every code pull request of section 11 that touches the server needs the *Nezavisni revizor*. |
 | Written against | `origin/main` at `9ff8c3f5` (2026-11-22), which holds R1 (`can()`, #619), R2 (migration v84 and the Roles API, #676), `/me` permissions (#706), the R3 screens (#710), the tabs from permissions (#716) and the club members list (#717). Every `file:line` below is at `9ff8c3f5`. The implementation re-checks each at its own base. |
 | Migration | One foundation migration, **vNN**: provisionally **v92**, prefix `202611241000` (the *Rukovodilac* of OptiMove, 2026-11-22; final before the freeze). One file, unless the deploy plan shows the old server must not see part of the schema. The way into a club (section 5) needs no migration. |
@@ -271,6 +271,9 @@ system-role-only.
   admin row for C and has a live assignment there. A later admin row for C makes the same preference resolve to `club`.
   `PUT /api/auth/workspace` accepts `club_view` and stores `club`. A stored `club` + C for an account with neither an
   admin row nor a live assignment in C resolves to the fallback, as any unavailable preference does today.
+- **No fallback written when the roles could not be read** (the *Nezavisni revizor*'s L1): when
+  `authz.rolePermissions` is unavailable (`authz.js:165`), `resolveActiveWorkspace` does not persist a fallback
+  (`workspace.js:131-137`), so a passing database error cannot overwrite a role holder's saved club.
 - **The fallback.** `FALLBACK_ORDER` (`workspace.js:23`) gains `club_view` and `team_view` after `team`, so an account
   whose only workspace is a view one lands in it; `saveWorkspacePreference` (`:94-104`) maps `club_view` -> `club` and
   `team_view` -> `team` on **every** write path (the PUT and the fallback persist, `:136`), so the five-value CHECK is
@@ -323,8 +326,19 @@ the intended fail-closed state; each module's VIEW pull request opens its own.
 Today the active workspace **is** the permission in six modules, contrary to `workspace.js:6-12` ("a workspace never grants
 a permission"). It is safe only because a club workspace exists solely for a `club_admin` row (`workspace.js:46`). Had R4
 offered a `club` workspace to an account without that row, it would have read - and in four modules written - the club's
-data. `club_view` closes this by construction: none of the helpers below recognizes it. Each module's VIEW pull request
-then replaces the workspace basis with `can()`.
+data. `club_view` closes this by construction: none of the helpers below recognizes it.
+
+**What each module's VIEW pull request does (the *Nezavisni revizor*'s M1 and M2):**
+- It **adds** `can()` **next to** the active-workspace match, extended to `club_view` / `team_view`; it never replaces the
+  match. The workspace stays the data context (ADR-002: `owner_scope` and `data_workspace` are two checks), and the new
+  `can()` is the right.
+- **Decided (stream manager):** every route of the module, writes included, also requires the module's view word. Taking
+  the view word away closes the whole module, so a screen never says "no access" while the server still lets the person
+  write. Old-vs-new: nobody who has the view word today loses a write.
+- Unknown types: `ownerContextFromWorkspace` and its copies give the owner `user` for any type they do not know
+  (`trainingActivityAccess.js:29-33`, `trainingLoadMetricsAccess.js:37-41`, `trainingLoadAccess.js:49`,
+  `testsAccess.js:40`); for `club_view` the scope helpers answer `{type: null}` first, so no route reaches it, and a
+  mutation that lets `club_view` reach it must fail a test (14.10).
 
 | Module | Helper (`file:line`) | What it trusts | Would have given a role holder in a `club` workspace | View helpers to move | Manage helpers |
 |---|---|---|---|---|---|
@@ -377,13 +391,31 @@ not follow the licence yet" next to it (Q12). The answer of `can()` is never aff
 |---|---|---|
 | `permission_club_role_versions` | `id`, `club_id`, `system_role_id` FK `permission_roles`, `revision` (starts at 1, +1 per change), `based_on_revision`, `answered_revision`, `created_by_user_id`, `created_at`, `ended_at`, `ended_by_user_id`, `end_kind` (`accepted_default` / `reset`) | partial unique (`club_id`, `system_role_id`) where `ended_at is null`; indexes on `club_id`, `system_role_id` and every user key; the system role must be `owner_scope = 'system'`, not Platform admin, not archived; Club admin only by a platform admin (3.3) |
 | `permission_club_role_version_items` | `version_id`, `permission_word` | primary key; INSERT and DELETE only through its own guard (it is not a `permission_roles` row, so v84's item guard does not cover it): the acting user and the same-transaction change row; storable (`permission_word_honoured`); not platform-only; system-role-only words only in a version of Club admin; covers the system role's scope types; UPDATE and TRUNCATE refused |
-| `permission_club_role_version_changes` | append-only: `version_id`, `revision_after`, `kind` (`create`, `change`, `answer_keep`, `accept_default`, `reset`), words added / removed, reason, actor, basis | the v84 change-record pattern |
+| `permission_club_role_version_changes` | append-only: `version_id`, `revision_after`, `kind` (`create`, `change`, `answer_keep`, `accept_default`, `reset`, `default_follow`, `migration`), words added / removed, reason, actor, basis, `migration_name` | the v84 change-record pattern (a `migration` row: null actor and basis, a `migration_name`) |
+
+**The last holder of `staff.assign` (the *Nezavisni revizor*'s H1).** The old headcount
+(`loadQualifyingClubAdminUserIds`, `organization.js:2771-2782`) counts active `club_admin` rows, not effective words, so a
+Club admin version or a Club admin holder's custom without `staff.assign` would pass it and leave the club without one.
+**Decided (stream manager):** the guards of 7.2 and 7.3 refuse (`23514`) a club version of Club admin and a custom whose base
+role is Club admin unless they hold `staff.assign` and `roles.manage` - the same thing v84 requires of the default
+(`permission_rule7_check`, v84 `:860-869`). With that, no R4 write can remove `staff.assign` from a `club_admin` holder, so
+**R4's writes do not take the club-admin headcount lock**.
 
 **Rule 7 inside a club (deferred check at COMMIT).** After any change of a club version or of the ceiling, the effective
 Club admin set in that club (3.2 step 8) still holds every word of the effective set of every other system role in that
 club, minus the closed modules - so a club's admin always holds what it may give (the ceiling rule). Concurrency token:
 the version's `revision` (`expectedRevision` in the API); a race on the first create hits the partial unique index and
 answers `version_changed`.
+
+**Rule 7 when a default role changes (the *Nezavisni revizor*'s H4).** A platform admin adds W to a default role (say Team
+coach). Every club with a live version of Club admin that lacks W would then break rule 7 (its admin could not give what
+its coaches hold). **Recommendation:** in the same transaction, the role change adds W to every live Club admin version
+(the platform admin's own change, the only person who changes those versions, Q3), each with a change row of kind
+`default_follow`; the change's answer lists the clubs touched. The deferred check then runs over **every** club with a
+live version. Serialization: a default-role writer locks the edited role row `FOR UPDATE` (R2); every club version writer
+locks all non-archived system role rows `FOR SHARE` in id order (place 4 of 7.6), so the two cannot pass their checks on
+snapshots that miss each other. The example "a club's Club admin version lacks W, the default Team coach gets W" ends with
+W added to that club's Club admin version and the club listed in the answer.
 
 An archived system role: its club versions stay as history and give nothing (the role gives nothing, v84 `:138`).
 
@@ -393,7 +425,15 @@ An archived system role: its club versions stay as history and give nothing (the
 |---|---|---|
 | `permission_custom_roles` | `id`, `user_id`, `base_role_id`, `scope_type` (`club` / `team`), `scope_id`, `club_id` (filled and checked by the guard from `scope_id`: a generated column cannot read `teams`), `holding_assignment_id` FK `user_role_assignments` **or** `holding_row_table` (`user_club_roles` / `user_team_roles`) + `holding_row_id` + `holding_row_version` (the row's `updated_at`), exactly one of the two, `frozen_from` (`default` / `club_version` / `club_role`), `frozen_from_revision`, `frozen_from_version_id` FK `permission_club_role_versions`, `revision`, `created_by_user_id`, `created_at`, `ended_at`, `ended_by_user_id`, `end_kind` (`reassigned` / `role_ended` / `reset`) | partial unique (`user_id`, `base_role_id`, `scope_type`, `scope_id`) where `ended_at is null`, and a dead custom (3.4) is ended by the next write before a new one is made; `scope_id` is polymorphic, so the guard checks it exists and lies in `club_id`; indexes on every key; the user must hold `base_role_id` in that scope through the named holding when it is made; Club admin's custom only by a platform admin |
 | `permission_custom_role_items` | `custom_role_id`, `permission_word` | its own guard, the same checks as the version items |
-| `permission_custom_role_changes` | append-only, as 7.2 | |
+| `permission_custom_role_changes` | append-only, as 7.2; kinds `create`, `change`, `end`, `role_ended`, `word_removal` (*Take it from them too*), `migration` | |
+
+**Liveness, written in SQL only (the *Nezavisni revizor*'s M3).** `holding_row_version` is written only inside SQL
+(`insert ... select r.updated_at from public.user_team_roles r where r.id = $n`), never passed through Node, so it is
+exactly the stored value. The `BEFORE UPDATE` trigger on `user_club_roles` / `user_team_roles` (3.4) also writes
+`ended_at` and `end_kind = 'role_ended'` on the live customs of that row whenever `is_active` or `revoked_at` changes (the
+revocation and the re-grant of `organization.js:3025-3033`, `:3062`), so the history shows the end; the read-time check of
+3.4 stays as the guarantee. Tests: a custom is live right after it is made; a word taken away in it really does not act;
+a revoke and a re-grant end it and write `role_ended`.
 
 A custom role is **not** a `permission_roles` row: it can never be listed or assigned (O4) and needs no name. A team or
 club archived: the custom stays and gives nothing where the scope is no longer a resource (convention 3 and the routes'
@@ -409,11 +449,24 @@ The order inside vNN matters, because v84's item guard checks `permission_word_h
 3. `CREATE OR REPLACE permission_word_honoured()`: v84's seven words plus the view words of 4.1.
 4. Replace `user_has_permission()`, `lock_permission_actor()`, `user_holds_role_items()` and `permission_actor_holds()`
    (the last two compare against the effective set, 3.2).
-5. The seed, last: one `permission_role_changes` row of kind `migration` per basic role (null actor, null basis, the
-   `migration_name` of vNN; v84's M15 path `:171-182`, `:677-680`, completed at COMMIT against the runner's
-   `schema_migrations` row, `:960-975`), then the items. Club admin's set is a superset of Team coach's (rule 7).
-A split into two files ("tables and guards" / "function replacements and seed") is possible if the *Rukovodilac* prefers
-it; the seed still comes after the honoured replacement.
+5. The seed, last: per basic role, first the `UPDATE` of its `permission_roles` row (`revision + 1`), then one
+   `permission_role_changes` row of kind `migration` (null actor, null basis, the `migration_name` of vNN; v84's M15 path
+   `:171-182`, `:677-680`, completed at COMMIT against the runner's `schema_migrations` row, `:960-975`), then the items.
+   Club admin's set is a superset of Team coach's (rule 7). Plain statements only: no `DO ... EXCEPTION` block, so a
+   refusal stops the whole file.
+One file (the *Rukovodilac* of OptiMove), unless the deploy plan shows the old server must not see part of the schema.
+
+**A later seed reaches club versions and customs (the *Nezavisni revizor*'s H2; decided by the stream manager).** A later
+migration that seeds a word into a basic role (a MANAGE step) also writes it into every **live** club version and every
+**live** custom of that basic role: until then the word was not checked, so nobody can have deliberately taken it away
+(O6). vNN therefore already gives the version and custom item guards a migration path (no acting user, a change row of
+kind `migration` with the `migration_name`, as v84's M15). This **clarifies** the owner's "custom is frozen": frozen against
+changes made by people, not against a migration opening a new word. Test: old-vs-new with a club version and a custom made
+**before** a seed migration - both holders keep today's behaviour after it.
+
+**The old-vs-new proof per row of 4.1 is a condition of R4-1** (the *Nezavisni revizor*'s M4; decided by the stream
+manager): before vNN is frozen, each row of 4.1 has a test that the seeded holders pass exactly the gates of that module
+they pass today. A row that cannot be proven is not seeded in vNN; it waits for its module's step.
 - **Entry gates of the ceiling for unmoved modules (Q12).** O1 says a closed part ends "at once"; a module whose words are
   not checked yet is not reached by step 6 of 3.2. **Recommendation:** each module's entry check gets one cheap ceiling test
   in its VIEW pull request; until then a closed module still works for coaches and admins of that club. For Imports (O7:
@@ -430,31 +483,42 @@ it; the seed still comes after the honoured replacement.
 
 ### 7.6 One lock order (extends R2's section 4.3; users first)
 
+Rewritten after the *Nezavisni revizor*'s H3. The existing rule is **every advisory lock before the first row lock**
+(`organization.js:610-613`, R2 4.3.1); R4 follows it.
+
+0. **The club's ceiling lock, first** - a transaction-scoped advisory lock keyed `(namespace, hashtext(clubId))` in the
+   pattern of `CLUB_ADMIN_HEADCOUNT_LOCK_NAMESPACE` (`organization.js:2761`), with a namespace constant of its own (distinct
+   from the headcount lock, the team import lock and R2's request-key lock). Decided by the *Rukovodilac* of OptiMove: it is
+   taken by **every** writer of roles, club versions, custom roles and the ceiling in that club, and by every guarded write
+   that calls `lock_permission_actor` for a club or team scope.
+   - **The mode is a parameter**, never an upgrade inside one transaction: `lock_permission_actor(..., p_ceiling_mode)`
+     with `shared` (a guarded write, a custom role write, a club role or assignment write) or `exclusive` (a ceiling change
+     and every club version write - rule 7 of 7.2 depends on all versions of the club together). A transaction asks once,
+     in the mode it needs; a second call in the same transaction with another mode is refused (`55000`, a programming
+     error, caught by tests).
+   - Several clubs in one transaction: in club id order.
+   - The headcount lock: R4's writes do not take it (7.2, H1). An old route that takes it (a club-admin grant or
+     revocation, the login switch-off) and also calls `lock_permission_actor` takes the headcount lock first, then this
+     one, both before any row (a recorded-order test).
+   - Under the transaction's `lock_timeout`: a `55P03` on the advisory lock is `409 try_again`, never a 500.
+   - Why not the `public.clubs` row: no route locks it `FOR UPDATE` today (checked by `grep`: nine routes take it
+     `FOR SHARE` - `sourceMetricAccess.js:75`, `:156`, `:189`, `gpexeTeamTimezone.js:46`, `gpexeImportService.js:241`,
+     `sourceRevisionLifecycleService.js:223`, `gpexeImportAccess.js:102`, `sourceConnectionService.js:226`, `:366`),
+     but its own edit and archive (`organization.js:1086`, `:1103`) and the teams' `club_id` key would wait on a ceiling
+     change; the advisory lock has no such tie.
 1. The acting user's `users` row (a statement of its own); for a write that names another user (a custom role, an
    assignment): both `users` rows in one statement, id order (R2 4.3 place 2).
 2. The old tables' rows of the user(s), then `user_role_assignments` by id (R2 place 3).
 3. **New:** `permission_custom_roles` rows of the user(s) in the scope, by id.
-4. Role rows by id (R2 place 4), then **new:** `permission_club_role_versions` rows of club C, by id.
-5. **New:** the club's ceiling, as a transaction-scoped advisory lock on the club id in a namespace of its own:
-   `pg_advisory_xact_lock_shared` for a reader (a guarded write, a custom role write), `pg_advisory_xact_lock` (exclusive)
-   for a ceiling change **and for every club version write** - rule 7 in a club (7.2) depends on all versions of the club
-   together, so two version writers on different roles must not pass their deferred checks on snapshots that miss each
-   other (the security re-review's MEDIUM; test: Club admin version narrowed against Team coach version widened at once),
-   taken by **every** writer of roles, club versions, custom roles and the ceiling in that club (decided by the
-   *Rukovodilac* of OptiMove, 2026-11-22), keyed as `(namespace, hashtext(clubId))` in the pattern of
-   `CLUB_ADMIN_HEADCOUNT_LOCK_NAMESPACE` - in a namespace of its own (a constant distinct from the club-admin headcount lock, `organization.js:2761`,
-   the team import lock and R2's request-key lock); when the headcount lock and this lock meet in one transaction, the
-   headcount lock comes first (a recorded-order test: a club-admin grant against a ceiling close); both under
-   the transaction's `lock_timeout` (a `55P03` on the advisory lock is `409 try_again`, never a 500). Absent ceiling rows cannot be locked, and locking the `public.clubs` row
-   instead would tie every guarded write to the club's own edit, archive and team writes (`organization.js:1086`, `:1103`
-   and the teams' `club_id` key) - the db review found that interaction unverified, so the advisory lock is the
-   **recommendation** (for the *Rukovodilac*); the alternative is a per-club lock row created with the club.
-6. The request record (`permission_requests`).
+4. Role rows by id (R2 place 4) - a club version writer: **all** non-archived system role rows `FOR SHARE` (7.2, H4), the
+   edited one included - then **new:** `permission_club_role_versions` rows of club C, by id.
+5. The request record (`permission_requests`).
 
-A club version writer takes version rows (place 4) and the ceiling (place 5) and never custom rows after them; a custom
-writer takes custom rows (place 3) first. Recorded-SQL-order tests (the rule of `.claude/rules/migrations.md`) for every
-new write, and route-against-route tests: a ceiling close against a holder's guarded write; a club version change against
-a custom made from it; a custom made against the target's revocation; a ceiling close against a club archive.
+A club version writer never takes custom rows after version rows; a custom writer takes custom rows (place 3) first.
+Recorded-SQL-order tests (the rule of `.claude/rules/migrations.md`) for every new write, and route-against-route tests:
+**two writers of club versions of different roles in the same club - no `40P01`, one waits**; a ceiling close against a
+holder's guarded write; a club version change against a custom made from it; a custom made against the target's
+revocation; a default-role change against a club version change (H4); a ceiling close against a club archive.
 
 ### 7.7 Request records, rollback, preflight, post-check
 
@@ -465,13 +529,16 @@ a custom made from it; a custom made against the target's revocation; a ceiling 
   changed since; otherwise it restores the v84 bodies by md5, removes the seeded items through the guarded path with a
   `migration` change row (v84's items are guarded; the change rows stay as history), and drops the new objects.
   Forward-only after first use.
+- **Runbook (the *Nezavisni revizor*'s M5):** once a ceiling row, a club version or a custom role exists, the server code
+  may not go back below R4-1: an older `can()` does not know the layers and would answer by the default roles alone.
 - **Preflight** (read-only): v84 recorded with its checksum; the v84 bodies' md5; no row of a new table; the basic roles'
   items equal v84's seed. **Post-check**: vNN recorded; the new bodies' md5; the seeded words; zero new rows.
 
 ## 8. `can()`, `loadAuthorizationContext()` and `/me`
 
 - `ROLE_PERMISSIONS_SQL` (`authz.js:114-138`) returns per held entry the **effective** words of 3.2 step 8 (custom ->
-  club version -> role), and once per club the closed modules. One statement, as today.
+  club version -> role), and once per club the closed modules. **One statement, as today**: the ceiling is read in the
+  same statement as the roles (a condition, so the two can never come from different moments).
 - `can()` (`permissions.js:272-292`) adds step 6 (the closed modules of the resource's club, from the loaded context).
   No query in `can()`. The comment's three conventions stay.
 - `permissionsForWorkspace` (`:312-330`) returns checked words held in the workspace's scope, and the closed modules.
@@ -595,7 +662,7 @@ file or two, the number) are decided as written above.
 | R4-2 | The way in (section 5.1): `workspace.js`, the organization entry gate, the organization read path, `/me`, the members list with assignments, L3's test | **risky** (trigger 2) | security, code; *Nezavisni revizor* | R4-1 |
 | R4-3 | The API of section 9 (ceiling, club versions, custom roles) | **risky** (triggers 2, 4) | security, code, db (locks); *Nezavisni revizor* | R4-1; parallel with R4-2 |
 | R4-4 | The screens of section 9 and the navigation of 5.2 | ordinary (no server change) | code, ux, mobile; the *Rukovodilac* | R4-2, R4-3 |
-| V-1 ... V-n | VIEW per module: one pull request per module of 4.1 / 6, each adding its word to `ENFORCED_PERMISSIONS` and `permission-nav.js`, its ceiling gate (Q12) and its row of the mandatory test of 6 | **risky** (trigger 2) | security, code; *Nezavisni revizor*; with the module's stream manager | R4-2; parallel with each other where the files do not overlap |
+| V-1 ... V-n | VIEW per module: one pull request per module of 4.1 / 6, each adding `can()` next to the workspace match on **every** route of the module (writes included, section 6), its word to `ENFORCED_PERMISSIONS` and `permission-nav.js`, its ceiling gate (Q12) and its row of the mandatory test of 6 | **risky** (trigger 2) | security, code; *Nezavisni revizor*; with the module's stream manager | R4-2; parallel with each other where the files do not overlap |
 | M-1 ... | MANAGE in the order of O7 | risky; with migrations for the database guards (R6, R6a) | as each step's contract | V of that module |
 
 **Stream managers for the VIEW and MANAGE steps:** Calendar - its stream manager (session
@@ -641,7 +708,14 @@ no migration beyond vNN. MANAGE is two to three times that, plus the migrations 
     `club_view` as `club` in any helper of section 6; remove the organization entry gate's method check; remove the
     `staff.assign` gate of the members list; let a club's admin narrow Club admin; drop the holding check of a custom
     (3.4); compare dominance against `permission_role_items` instead of the effective set; let the fallthrough of
-    `filterOrganizationDataForWorkspace` return everything.
+    `filterOrganizationDataForWorkspace` return everything. The mutation "`club_view` treated as `club`" is applied to
+    **every** helper of section 6 and to the gates `requireCoach` and `requireCoachWorkspace` (which a mixed account
+    passes); `ownerContextFromWorkspace` and its three copies reached with `club_view`; a club version of Club admin or a
+    custom of an admin without `staff.assign` accepted (H1); a later seed migration that skips live versions and customs
+    (H2); the ceiling lock taken after a row lock, or upgraded in one transaction (H3); a default change without the
+    all-clubs rule-7 check (H4); a VIEW module's write route without the view word (M2).
+10a. **Info hiding of the new routes:** `POST /users/:userId/custom/:customId/end` with a custom of another club answers
+    the identical 404; the same for every route of section 9 with an id of another club.
 11. **e2e:** a platform admin closes Imports for a club and makes a club version of Team coach; a role holder signs in,
     lands in `club_view`, sees Settings > Overview, Clubs, Teams and nothing else; at 1280 and 390 px.
 
