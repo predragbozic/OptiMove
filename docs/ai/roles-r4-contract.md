@@ -9,7 +9,7 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
 
 | | |
 |---|---|
-| Status | **Proposed.** Documentation only. No code and no migration file. |
+| Status | **Proposed.** Documentation only. No code and no migration file. Internal reviews (2026-11-22): `code-reviewer` NOT READY (2 HIGH), `security-reviewer` NOT READY (1 HIGH, 4 MEDIUM), `db-reviewer` READY WITH NOTES (3 HIGH-class) on `6a20328`; all fixed in `2749a4b`; narrow re-reviews: security READY (one new MEDIUM, the rule 7 race, fixed in `829b89a`), db READY WITH NON-BLOCKING NOTES (N1-N3, written in). Next: the *Nezavisni revizor* and the owner's answers to section 12. |
 | Mark | Risky: external-review triggers 1 (a migration), 2 (auth, roles, workspace, info hiding) and 4 (lock order, idempotency) of `CLAUDE.md`. Every code pull request of section 11 that touches the server needs the *Nezavisni revizor*. |
 | Written against | `origin/main` at `9ff8c3f5` (2026-11-22), which holds R1 (`can()`, #619), R2 (migration v84 and the Roles API, #676), `/me` permissions (#706), the R3 screens (#710), the tabs from permissions (#716) and the club members list (#717). Every `file:line` below is at `9ff8c3f5`. The implementation re-checks each at its own base. |
 | Migration | One foundation migration, **vNN** (the number is given by the *Rukovodilac* of OptiMove when the file is written). The way into a club (section 5) needs no migration. |
@@ -155,7 +155,11 @@ a ceiling that opens again brings back exactly what was recorded (O1).
   revoke and re-grant by updating the same row (`organization.js:3025-3030` sets `revoked_at = null, updated_at = now()`
   on a re-grant; `:3062` on a revocation), so any revoke or re-grant changes `updated_at` and kills the custom without any
   writer having to know about it; a re-grant through R2 is a new assignment row. Nothing relies on `ended_at` being
-  written for a holding that ended. The same predicate is in `ROLE_PERMISSIONS_SQL`, the twin and `lock_permission_actor`.
+  written for a holding that ended. The comparison is equality (`updated_at = holding_row_version`), never "later than"
+  (`now()` is the transaction's start, so a long transaction can write an older time). Because a raw SQL writer could flip
+  `is_active` without touching `updated_at`, vNN also adds a small `BEFORE UPDATE` trigger on `user_club_roles` and
+  `user_team_roles` that bumps `updated_at` whenever `is_active` or `revoked_at` changes (the db re-review's N1; tested with
+  a raw `is_active` flip). The same predicate is in `ROLE_PERMISSIONS_SQL`, the twin and `lock_permission_actor`.
 - **Ends** (with `ended_at` written) when the club admin assigns the basic role again ("back to the club's role") or uses
   *Reset*; a holding that ended makes it dead at read time and the next write on that user records the end. An ended or
   dead custom stays as history and is never revived.
@@ -434,8 +438,10 @@ it; the seed still comes after the honoured replacement.
    for a ceiling change **and for every club version write** - rule 7 in a club (7.2) depends on all versions of the club
    together, so two version writers on different roles must not pass their deferred checks on snapshots that miss each
    other (the security re-review's MEDIUM; test: Club admin version narrowed against Team coach version widened at once),
-   both under
-   the transaction's `lock_timeout` (`try_again`). Absent ceiling rows cannot be locked, and locking the `public.clubs` row
+   in a two-integer namespace of its own (a constant distinct from the club-admin headcount lock, `organization.js:2761`,
+   the team import lock and R2's request-key lock); when the headcount lock and this lock meet in one transaction, the
+   headcount lock comes first (a recorded-order test: a club-admin grant against a ceiling close); both under
+   the transaction's `lock_timeout` (a `55P03` on the advisory lock is `409 try_again`, never a 500). Absent ceiling rows cannot be locked, and locking the `public.clubs` row
    instead would tie every guarded write to the club's own edit, archive and team writes (`organization.js:1086`, `:1103`
    and the teams' `club_id` key) - the db review found that interaction unverified, so the advisory lock is the
    **recommendation** (for the *Rukovodilac*); the alternative is a per-club lock row created with the club.
