@@ -136,19 +136,24 @@ Delivery (the stream manager's ruling): three pull requests, named **WT-A**, **W
 (ordinary); WT-B (risky, *Nezavisni revizor*) and WT-C (risky, trigger 3) each stacked on WT-A, each gated on its head
 merged with current `main`. **Migration: none.**
 
-## 5. Owner questions (each with the default this build uses)
+## 5. Owner decisions (2026-11-22, relayed by the Calendar/Builder stream manager)
 
-- **Q1 Replace scope.** *Replace* replaces only the days the template covers in that week; other days of the week stay.
-  Recommended (a partial first / last week never wipes days outside the program).
-- **Q2 An existing week that is a draft** (the coach's own unfinished plan): written in place and stays a draft (not
-  visible to the athlete until published); the question says so. Recommended over publishing someone's unfinished
-  week.
-- **Q3 Old "Assign" paths.** Builder *Assign to athlete* on a weekly template goes to the new dated assign; for block
-  templates nothing changes. Library *Assign* (access grant) stays for block templates; on a weekly template the
-  library offers *Assign to athletes* (the dated assign) instead. Recommended: a weekly template is never granted as
-  library access.
-- **Q4 Kept sessions.** A kept session stays in its slot; the template's sessions of that day follow it in order. The
-  question names each kept session ("Main · Tue 24.11 — has results, it stays"). Recommended.
+Decided by the owner; they replace the open questions of the first draft.
+
+- **Replace and Skip, and kept sessions (Q4): confirmed.** One question offers *Replace* and *Skip weeks that already
+  have a plan*; a session with results or a live event link stays in its slot, the template's sessions of that day are
+  written after it, and the question names each kept session.
+- **Old "Assign" paths (Q3): as recommended.** Block templates keep their *Assign to athlete* (specific program) and the
+  library's *Assign* (access grant) exactly as they are; a weekly template is assigned only as weekly plans (the dated
+  assign), never as a specific program or a library grant.
+- **The owner's answer to Q1, Q2 and the week made by another coach: „po preporuci sva 3" (all three as recommended):**
+  - **Q1 Replace scope:** *Replace* replaces only the days the template covers in that week; the other days of the
+    week stay.
+  - **Q2 An existing draft week:** written in place and stays a draft (not visible to the athlete until published); the
+    question says so.
+  - **A published week another coach or workspace made** (the Nezavisni revizor (3)'s MEDIUM-3): *Replace* may write it
+    (whenever the coach may open it), and the question marks that week as not the caller's ("made by another coach";
+    the 409's `madeByOther`). No name or workspace is shown that the coach cannot already see.
 
 ## 6. Tests
 
