@@ -26,10 +26,13 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
   records, opens the **VIEW package** in the database (the "view" word of every module becomes storable in a role) and
   gives the basic Club admin and Team coach roles exactly the view words they already have in practice, so nobody gains or
   loses anything on the first day. The SQL twin `public.user_has_permission()` and `can()` learn the layers.
-- **"Storable" is not "checked".** The database may store a view word from vNN on; a word **acts** only where a route calls
-  `can()` with it. The service refuses to let anyone tick a word no route checks yet (O6: shown locked, "not available
-  yet"). So the database does not need a migration per module; each module's pull request moves the word from "not yet"
-  to "checked" in code (section 4).
+- **"Storable" is not "checked".** The database may store a view word from vNN on; a word **acts** only once **every**
+  route that gives what the word means calls `can()` with it (section 4). The service refuses to let anyone tick a word that
+  is not checked yet (O6: shown locked, "not available yet"). So the database does not need a migration per module for the
+  VIEW package; each module's pull request moves the word from "not yet" to "checked" in code.
+- **The licence (ceiling) does not act everywhere from vNN on.** Like any word, it acts only in a part that checks the new
+  rights; until a part's VIEW step, closing it in the licence changes nothing there, and the licence screen says so per part
+  (section 7.1, Q12). This is a departure from O1's "at once", raised for the owner.
 - **The way into a club** for an account with only a new-style role is a separate workspace type, `club_view` (and
   `team_view`), O8. Six modules today treat an active club workspace as the permission itself (section 6); they do not know
   the new type, so they stay closed for it by construction. Each module learns it only in its own VIEW pull request.
@@ -86,7 +89,8 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
   the system role.
 - **Custom role** - one user's own item set for one held role in one scope, frozen at the moment it was made (O4).
 - **Club ceiling** - the modules (section 12, Q1: and possibly single words) closed for a club (O1).
-- **Checked word** - a word some route calls `can()` with (code constant `ENFORCED_PERMISSIONS`, section 4).
+- **Checked word** - a word for which **every** route that gives what the word means calls `can()` with it (code constant
+  `ENFORCED_PERMISSIONS`, which lists, per word, those gates; section 4). One `can()` call is not enough.
 - **Storable word** - a word the database lets a role, a club version or a custom role hold (`permission_word_honoured()`).
 
 ### 3.2 The effective permission (the order of evaluation)
@@ -103,10 +107,17 @@ For an account U, a word W and a resource scope S (a club C, or a team T of club
 7. **Held roles.** The roles U holds for S: the old tables mapped to the basic roles, and active `user_role_assignments`
    (a club's role reaches its teams, convention 2) - exactly as in R2.
 8. **Item set of each held role** (the first that applies):
-   1. a live custom role of U for that role in that held scope (section 3.4) -> its frozen items;
+   1. a **live** custom role of U for that role in that held scope (section 3.4: live is computed at read time from the
+      holding, never from a stored end alone) -> its frozen items;
    2. the role is a system role and club C has a live club version of it -> the club version's items;
    3. otherwise the role's own items.
+   For a role held through the old tables, "that role" is the basic role its word maps to (`club_admin` -> Club admin,
+   `team_coach` -> Team coach, v84 `:452-461`); club versions and custom roles apply to it exactly as to an assignment (O6).
 9. **yes** if any item set of step 8 holds W; else **no**.
+
+The same order is used wherever a role's set is compared, not only in `can()`: R2's dominance (`user_holds_role_items`,
+v84 `:478`; `permission_actor_holds`, `:794-802`) compares the acting user against the **effective** set of the role in that
+club (step 8), never against `permission_role_items` alone.
 
 The ceiling is step 6, before the roles, so a club's version or a custom role can never open what the ceiling closed, and
 a ceiling that opens again brings back exactly what was recorded (O1).
@@ -137,9 +148,23 @@ a ceiling that opens again brings back exactly what was recorded (O1).
   minus the words taken away. From then on it is frozen.
 - Shown "<Role> (custom)"; it remembers the role it came from and the revision it was frozen at; never listed as
   assignable to anyone else.
-- **Ends** when: the club admin assigns the basic role again ("back to the club's role"); the underlying assignment or
-  old-table row ends (revoked, expired); the user is narrowed back to exactly the club's set by the screen's *Reset*.
-  An ended custom stays as history.
+- **Bound to one holding, checked at read time.** A custom role records the holding it was made on:
+  for an assignment, its id (`holding_assignment_id`); for an old-table row, its id and its `updated_at` at that moment
+  (`holding_row_id`, `holding_row_version`). It is **live** only while `ended_at is null` **and** that holding is live now:
+  the assignment not revoked and not expired; the old-table row active and its `updated_at` unchanged. The old routes
+  revoke and re-grant by updating the same row (`organization.js:3025-3030` sets `revoked_at = null, updated_at = now()`
+  on a re-grant; `:3062` on a revocation), so any revoke or re-grant changes `updated_at` and kills the custom without any
+  writer having to know about it; a re-grant through R2 is a new assignment row. Nothing relies on `ended_at` being
+  written for a holding that ended. The same predicate is in `ROLE_PERMISSIONS_SQL`, the twin and `lock_permission_actor`.
+- **Ends** (with `ended_at` written) when the club admin assigns the basic role again ("back to the club's role") or uses
+  *Reset*; a holding that ended makes it dead at read time and the next write on that user records the end. An ended or
+  dead custom stays as history and is never revived.
+- **Only that role.** A custom overrides the one role it was made from. A word the user also holds through a second role in
+  the club stays held; the screen says "still held through <Role B>" next to it (Q14 asks the owner whether a per-user
+  removal should cut across all of the user's roles).
+- **Frozen means later removals do not reach it either.** A word removed from the default or the club version stays in the
+  customs made earlier. The club's Users screen lists "customs holding words their role no longer has", and the platform
+  admin has one act to remove a word from every custom of a role in a club (Q15).
 - **One custom per (user, role, scope).** A user who is Team coach in two teams can have a custom in one and not the other.
   **(recommendation, Q4)**
 - **Admins (O5).** No custom of a holder of the Club admin role (old row or assignment) in that club by a club's admin;
@@ -168,6 +193,8 @@ a ceiling that opens again brings back exactly what was recorded (O1).
 | 9 | no | no | none (club version of role A lacks W) | - | role B (second role) holds W | yes (roles add up, plan 2.3) |
 | 10 | no | closed, then reopened | holds W | - | - | yes again, nothing rewritten (O1) |
 | 11 | no | no | holds W, but W not checked yet | - | - | the word acts nowhere (no route asks) |
+| 12 | no | no | holds W, but its holding was revoked and granted again | holds W? | - | the custom is dead; the club version or the default decides |
+| 13 | no | no | custom of role A lacks W | - | role B (second role) holds W | yes; the screen says "still held through role B" (Q14) |
 
 ## 4. "Storable" and "checked": the VIEW package without a migration per module
 
@@ -179,10 +206,13 @@ a ceiling that opens again brings back exactly what was recorded (O1).
 - vNN opens the whole **VIEW package** in the database at once: `permission_word_honoured()` is replaced so every view word
   of section 4.1 is storable, and the basic roles get the view words their holders already have in practice (4.1). The
   MANAGE words come with their own later migration, one per O7 module step or one for several **(recommendation, Q11)**.
-- A new code constant, `ENFORCED_PERMISSIONS` (`backend/src/permissions.js`), lists the checked words. It starts as today's
-  7 honoured words. Each module's VIEW pull request adds its word in the same pull request that adds the `can()` call
-  (a test asserts each listed word has a call site, and each call site's word is listed; the R2 equality test of
-  `HONOURED_PERMISSIONS` becomes this test).
+- A new code constant, `ENFORCED_PERMISSIONS` (`backend/src/permissions.js`), lists the checked words and, for each, the
+  gates that give what the word means (route and helper names). It starts as today's 7 honoured words with the
+  `organization.js` call sites of R1. A word enters it only in the pull request that moves **every** gate of that word to
+  `can()`: for `athletes.view` that is `/api/athletes` (`athleteRosterScope.js`, `access.js:213-243`), the athlete pages
+  and the organization athlete read together, never one of them. Two tests: each listed gate calls `can()` with its word
+  (and each `can()` call site's word is listed; the R2 equality test of `HONOURED_PERMISSIONS` becomes this test); and
+  `enforced_word_covers_all_gates` - take W away from a holder's club version, and every listed gate answers no.
 - **The service refuses every write that adds or takes away an unchecked word** (`permission_not_available_yet`) in a club
   version, a custom role, a club role and a non-basic system role; the editor shows it locked, "not available yet" (O6).
   The only items of unchecked words are the ones vNN seeds into the basic roles, which mirror today's behaviour.
@@ -207,7 +237,7 @@ a ceiling that opens again brings back exactly what was recorded (O1).
 | Calendar | `calendar.view` | yes | yes | `backend/src/calendarAccess.js:41-51` (workspace) |
 | Training Load | `load.view.team`, `load.view.athlete` | yes | yes | `trainingActivityAccess.js:20-26`, `trainingLoadAccess.js:25-86`, `trainingLoadMetricsAccess.js:28-56` (workspace) |
 | Dashboards | `dashboards.view` | yes | yes | `trainingLoadDashboardAccess.js:46-64`, `:252-257` (workspace) |
-| Imports | `import.check` | yes | yes | `gpexeImportAccess.js:31-37` (`canManageTeamById`) |
+| Imports | none in this package **(recommendation, Q16)**: `import.check` is "Find new sessions, read candidates" (plan section 3), which writes and calls GPEXE, so it is not a view word | - | - | `gpexeImportAccess.js:31-37` (`canManageTeamById`) |
 | Tests | `tests.view`, `tests.results.view` | yes | yes | `testsAccess.js` `canManageSchedule`; `routes/tests.js:146` |
 | Data configuration | `variables.view` | yes | yes (C99) | `sourceMetricAccess.js:100-106` |
 | Messages | none (`messages.send` is MANAGE) | - | - | per user |
@@ -216,7 +246,9 @@ a ceiling that opens again brings back exactly what was recorded (O1).
 module by old-vs-new tests and corrects this table where the code says otherwise (plan 4.1). A word the code shows a
 coach does not have today is not seeded for Team coach. The Independent coach role gets no view word in vNN: the private
 workspace keeps its workspace-based checks in R4 **(recommendation, Q10)**. Rule 7 (Club admin holds every club-scope word
-any system role holds) holds after the seed.
+any system role holds) holds after the seed: Club admin's seeded set is a superset of Team coach's. All these words and
+their `club` and `team` scope-type rows already exist in v84's catalog (`:281`, `:300`, `:332-340`), and none is
+system-role-only.
 
 ## 5. The way into a club (O8)
 
@@ -231,7 +263,12 @@ any system role holds) holds after the seed.
   `club_view` choice is stored as `club` + C; `resolveActiveWorkspace` / `resolveActiveWorkspaceReadOnly` /
   `validateWorkspaceSelection` (`workspace.js:73-150`) map a stored `club` + C to `club_view` + C when the account has no
   admin row for C and has a live assignment there. A later admin row for C makes the same preference resolve to `club`.
-  `PUT /api/auth/workspace` accepts `club_view` and stores `club`.
+  `PUT /api/auth/workspace` accepts `club_view` and stores `club`. A stored `club` + C for an account with neither an
+  admin row nor a live assignment in C resolves to the fallback, as any unavailable preference does today.
+- **The fallback.** `FALLBACK_ORDER` (`workspace.js:23`) gains `club_view` and `team_view` after `team`, so an account
+  whose only workspace is a view one lands in it; `saveWorkspacePreference` (`:94-104`) maps `club_view` -> `club` and
+  `team_view` -> `team` on **every** write path (the PUT and the fallback persist, `:136`), so the five-value CHECK is
+  never hit.
 - **`computeCapabilities`, `requireCoach`, `managedTeamIds`, `holdsClubAdminRole`, `canManageClub`, `canManageTeamById`
   are not changed** (plan 2.1 rules 1 and 12). A `club_view` holder does not pass `requireCoach`.
 - **The organization router** (`server.js:144`) gets one entry gate in front of `requireCoach`: an account that passes
@@ -240,14 +277,24 @@ any system role holds) holds after the seed.
   answers today (403 `Forbidden`). This keeps every write - `POST /athletes`, whose only gate is `requireCoach` and the
   athlete's club or team (`organization.js:1357`) - closed by construction.
 - **`GET /api/organization` for `club_view`.** `loadClubs` / `loadTeams` (`organization.js:3225`, `:3303`) learn a branch for
-  `can(org.view)` on the workspace's club (the club and its active teams); `loadManagedAthletes` a branch for
-  `can(athletes.view)` (the club's athletes, read-only); `loadUsers` returns the account itself only, as today for an
-  account without a role (the members list stays gated on `staff.assign`, #717); join links, invites and applications
-  stay empty (`loadJoinLinksForWorkspace` `:229-246` does not match `club_view`). `filterOrganizationDataForWorkspace`
-  (`:51-114`) treats `club_view` as `club`. `canCreateTeam` / `canCreateUser` stay `false` (`:380-382`).
+  `can(org.view)` on the workspace's club (the club and its active teams; for `team_view`, the team); athletes stay
+  **empty** in R4-2 - they open in the Athletes VIEW pull request, which moves every gate of `athletes.view` at once
+  (section 4); `loadUsers` returns the account itself only, as today for an account without a role (the members list stays
+  gated on `staff.assign`, #717); access requests, invite statuses, join links and applications are empty for a view
+  workspace (`loadJoinLinksForWorkspace` `:229-246` does not match it; the others are emptied explicitly).
+  `canCreateTeam` / `canCreateUser` stay `false` (`:380-382`). The response's keys for a view workspace are a fixed list,
+  pinned by a test.
+- **`filterOrganizationDataForWorkspace` (`:51-114`) is made fail-closed.** Today its last line and its "no workspace" branch
+  return everything unfiltered (`:52-53`, `:113`). R4-2 adds explicit `club_view` and `team_view` branches (as `club` and
+  `team`) and turns the final fallthrough into empty lists, so an unknown type shows nothing. `archivedTeamsForWorkspace`
+  (`:3264-3267`) returns nothing for a view type.
+- **A mixed account** (club admin of club A, role holder of club B, active workspace `club_view` B) passes `requireCoach`
+  and its loaders return club A's rows; the `club_view` B branch keeps only B's rows, so nothing of A reaches the answer.
+  Every write it sends goes through the routes' own `can()` checks on the resource's club, as today.
 - **`/me`** (`routes/auth.js:66-115`): `permissionsForWorkspace` maps `club_view` -> club scope, `team_view` -> team scope
   (`permissions.js:312`), and returns the checked words held there (no longer `HONOURED_PERMISSIONS`: `ENFORCED_PERMISSIONS`),
-  plus `closedModules` of the club's ceiling (module words only, never data), so navigation can hide a closed module.
+  plus `closedModules` of the **active workspace's** club only (module words only, never data, and only to an account
+  holding a role in that club), so navigation can hide a closed module.
 
 ### 5.2 Frontend
 
@@ -287,7 +334,10 @@ rest); each VIEW pull request re-derives its rows. Modules behind `requireCoach`
 organization) or `requireCoachWorkspace` (Tests, `routes/tests.js:146`; Training Load weekly, `routes/trainingLoad.js:67`)
 answer 403 to a view workspace today; modules that check a role (imports `gpexeImportAccess.js:31-37`, source metrics
 `sourceMetricAccess.js:100-106`, source connections `sourceConnectionService.js:192-202`, roster, event writes, calendar
-settings) answer 404.
+settings) answer 404. Further helpers that branch on the workspace type and already fail closed for an unknown type (the
+security review): `testsAccess.js:34-37`, `athleteRosterScope.js:13` (`and false`), `calendarSettingsService.js:54-55`,
+`activityRoster.js:79-81`, `gpexeImportAccess.js:35-37`, `sourceConnectionService.js:201-204`. The mandatory test below
+enumerates helpers by a grep of `workspace\??\.type` in `backend/src`, so a helper added later is caught.
 
 **Mandatory test (O8):** an account with only a club-scope assignment holding every view word, in a `club_view` workspace,
 against every helper of this table and every route behind it: no club row in any answer, no write; after its module's VIEW
@@ -305,18 +355,29 @@ from `PUBLIC` / `anon` / `authenticated`, every foreign key `ON DELETE RESTRICT`
 
 | Table | Columns | Rules |
 |---|---|---|
-| `club_permission_ceiling` (current state) | `club_id` FK clubs, `module_word` FK `permission_modules`, `closed_by_user_id`, `closed_at`, `reason` | primary key (`club_id`, `module_word`); a row means "closed"; no row means open (no backfill). INSERT and DELETE only, by a platform admin (actor guard), each with a change row in the same transaction; UPDATE refused. Q1: a `permission_word` column if single words are wanted. |
+| `club_permission_ceiling` (current state) | `club_id` FK clubs, `module_word` FK `permission_modules`, `closed_by_user_id`, `closed_at`, `reason` | primary key (`club_id`, `module_word`); a row means "closed"; no row means open (no backfill). INSERT and DELETE only, by a platform admin (actor guard), each with a change row in the same transaction; UPDATE and TRUNCATE refused (a row-guarded table also gets a `BEFORE TRUNCATE` guard). Q1: a `permission_word` column if single words are wanted. |
 | `club_permission_ceiling_changes` | `id`, `club_id`, `module_word`, `action` (`close` / `open`), `performed_by_user_id`, `reason` (required), `created_at` | append-only (UPDATE, DELETE, TRUNCATE refused) |
 
-The `organization` module cannot be closed (a club must stay reachable by its admin; `23514`) **(recommendation)**.
+The `organization` module cannot be closed (a club must stay reachable by its admin): refused by the table's guard
+(`23514`), not only by the service **(recommendation)**. Clubs are archived, never deleted, so the `RESTRICT` key is safe.
+
+**"No effect yet" per module.** The service answers, per module, `ceilingEffective` = whether that module has a word in
+`ENFORCED_PERMISSIONS`; closing a module that is not yet effective is allowed, and the licence screen shows "This part does
+not follow the licence yet" next to it (Q12). The answer of `can()` is never affected by this flag.
 
 ### 7.2 `permission_club_role_versions` and their items and changes (O3)
 
 | Table | Columns | Rules |
 |---|---|---|
-| `permission_club_role_versions` | `id`, `club_id`, `system_role_id` FK `permission_roles`, `based_on_revision`, `answered_revision`, `created_by_user_id`, `created_at`, `ended_at`, `ended_by_user_id`, `end_kind` (`accepted_default` / `reset`) | unique (`club_id`, `system_role_id`) where `ended_at is null`; the system role must be `owner_scope = 'system'`, not Platform admin, not archived; Club admin only by a platform admin (3.3) |
-| `permission_club_role_version_items` | `version_id`, `permission_word` | primary key; insert and delete only by the guard's rules (storable, not platform-only, system-role-only words never; covers the role's scope types) |
-| `permission_club_role_version_changes` | append-only: `version_id`, `kind` (`create`, `change`, `answer_keep`, `accept_default`, `reset`), words added / removed, reason, actor, basis | the v84 change-record pattern |
+| `permission_club_role_versions` | `id`, `club_id`, `system_role_id` FK `permission_roles`, `revision` (starts at 1, +1 per change), `based_on_revision`, `answered_revision`, `created_by_user_id`, `created_at`, `ended_at`, `ended_by_user_id`, `end_kind` (`accepted_default` / `reset`) | partial unique (`club_id`, `system_role_id`) where `ended_at is null`; indexes on `club_id`, `system_role_id` and every user key; the system role must be `owner_scope = 'system'`, not Platform admin, not archived; Club admin only by a platform admin (3.3) |
+| `permission_club_role_version_items` | `version_id`, `permission_word` | primary key; INSERT and DELETE only through its own guard (it is not a `permission_roles` row, so v84's item guard does not cover it): the acting user and the same-transaction change row; storable (`permission_word_honoured`); not platform-only; system-role-only words only in a version of Club admin; covers the system role's scope types; UPDATE and TRUNCATE refused |
+| `permission_club_role_version_changes` | append-only: `version_id`, `revision_after`, `kind` (`create`, `change`, `answer_keep`, `accept_default`, `reset`), words added / removed, reason, actor, basis | the v84 change-record pattern |
+
+**Rule 7 inside a club (deferred check at COMMIT).** After any change of a club version or of the ceiling, the effective
+Club admin set in that club (3.2 step 8) still holds every word of the effective set of every other system role in that
+club, minus the closed modules - so a club's admin always holds what it may give (the ceiling rule). Concurrency token:
+the version's `revision` (`expectedRevision` in the API); a race on the first create hits the partial unique index and
+answers `version_changed`.
 
 An archived system role: its club versions stay as history and give nothing (the role gives nothing, v84 `:138`).
 
@@ -324,18 +385,29 @@ An archived system role: its club versions stay as history and give nothing (the
 
 | Table | Columns | Rules |
 |---|---|---|
-| `permission_custom_roles` | `id`, `user_id`, `base_role_id`, `scope_type` (`club` / `team`), `scope_id`, `club_id` (generated or checked: the scope's club), `frozen_from` (`default` / `club_version` / `club_role`), `frozen_from_revision`, `frozen_from_version_id`, `created_by_user_id`, `created_at`, `ended_at`, `ended_by_user_id`, `end_kind` (`reassigned` / `role_ended` / `reset`) | unique (`user_id`, `base_role_id`, `scope_type`, `scope_id`) where `ended_at is null`; the user must hold `base_role_id` in that scope when it is made; Club admin's custom only by a platform admin |
-| `permission_custom_role_items` | `custom_role_id`, `permission_word` | as 7.2 |
+| `permission_custom_roles` | `id`, `user_id`, `base_role_id`, `scope_type` (`club` / `team`), `scope_id`, `club_id` (filled and checked by the guard from `scope_id`: a generated column cannot read `teams`), `holding_assignment_id` FK `user_role_assignments` **or** `holding_row_table` (`user_club_roles` / `user_team_roles`) + `holding_row_id` + `holding_row_version` (the row's `updated_at`), exactly one of the two, `frozen_from` (`default` / `club_version` / `club_role`), `frozen_from_revision`, `frozen_from_version_id` FK `permission_club_role_versions`, `revision`, `created_by_user_id`, `created_at`, `ended_at`, `ended_by_user_id`, `end_kind` (`reassigned` / `role_ended` / `reset`) | partial unique (`user_id`, `base_role_id`, `scope_type`, `scope_id`) where `ended_at is null`, and a dead custom (3.4) is ended by the next write before a new one is made; `scope_id` is polymorphic, so the guard checks it exists and lies in `club_id`; indexes on every key; the user must hold `base_role_id` in that scope through the named holding when it is made; Club admin's custom only by a platform admin |
+| `permission_custom_role_items` | `custom_role_id`, `permission_word` | its own guard, the same checks as the version items |
 | `permission_custom_role_changes` | append-only, as 7.2 | |
 
-A custom role is **not** a `permission_roles` row: it can never be listed or assigned (O4) and needs no name.
+A custom role is **not** a `permission_roles` row: it can never be listed or assigned (O4) and needs no name. A team or
+club archived: the custom stays and gives nothing where the scope is no longer a resource (convention 3 and the routes'
+archive checks, as for assignments).
 
 ### 7.4 The VIEW package and the ceiling entry gates
 
-- `permission_word_honoured()` replaced (`CREATE OR REPLACE`, md5 precondition on the v84 body): v84's seven words plus
-  the view words of 4.1.
-- The seed: the view words of 4.1 into Club admin and Team coach (`permission_role_items`, one `permission_role_changes`
-  row of kind `migration` per role, v84's M15 path `:677-680`).
+The order inside vNN matters, because v84's item guard checks `permission_word_honoured()` (`:819`) and the scope types
+(`:822-826`) on every insert, and the deferred rule-7 check (`:860-888`) runs at COMMIT:
+1. Assert (or the file stops) that every view word of 4.1 is in `permissions` and has `club` and `team` rows in
+   `permission_scope_types` (true at v84, `:281-340`), and that the md5 of every body vNN replaces is v84's.
+2. Tables, functions, guards of 7.1-7.3.
+3. `CREATE OR REPLACE permission_word_honoured()`: v84's seven words plus the view words of 4.1.
+4. Replace `user_has_permission()`, `lock_permission_actor()`, `user_holds_role_items()` and `permission_actor_holds()`
+   (the last two compare against the effective set, 3.2).
+5. The seed, last: one `permission_role_changes` row of kind `migration` per basic role (null actor, null basis, the
+   `migration_name` of vNN; v84's M15 path `:171-182`, `:677-680`, completed at COMMIT against the runner's
+   `schema_migrations` row, `:960-975`), then the items. Club admin's set is a superset of Team coach's (rule 7).
+A split into two files ("tables and guards" / "function replacements and seed") is possible if the *Rukovodilac* prefers
+it; the seed still comes after the honoured replacement.
 - **Entry gates of the ceiling for unmoved modules (Q12).** O1 says a closed part ends "at once"; a module whose words are
   not checked yet is not reached by step 6 of 3.2. **Recommendation:** each module's entry check gets one cheap ceiling test
   in its VIEW pull request; until then a closed module still works for coaches and admins of that club. For Imports (O7:
@@ -343,8 +415,11 @@ A custom role is **not** a `permission_roles` row: it can never be listed or ass
 
 ### 7.5 The twin and the lock function
 
-- `public.user_has_permission()` replaced (md5 precondition) with steps 6 and 8 of 3.2; `user_holds_role_items()` unchanged
-  in shape. Tests prove the twin and `can()` agree over the whole truth table and a random matrix.
+- `public.user_has_permission()` replaced (md5 precondition) with steps 6 and 8 of 3.2; still `STABLE`, read-only, no
+  `SECURITY DEFINER`, the same `search_path`. A team whose club is null has no ceiling (returns "not closed", never an
+  error). The custom match is on (user, base role, scope) **and** the live holding of 3.4, for assignments and for
+  old-table rows alike. `user_holds_role_items()` and `permission_actor_holds()` keep their shape and compare against the
+  effective set. Tests prove the twin and `can()` agree over the whole truth table and a random matrix.
 - `public.lock_permission_actor()` replaced: the lock order below.
 
 ### 7.6 One lock order (extends R2's section 4.3; users first)
@@ -354,22 +429,28 @@ A custom role is **not** a `permission_roles` row: it can never be listed or ass
 2. The old tables' rows of the user(s), then `user_role_assignments` by id (R2 place 3).
 3. **New:** `permission_custom_roles` rows of the user(s) in the scope, by id.
 4. Role rows by id (R2 place 4), then **new:** `permission_club_role_versions` rows of club C, by id.
-5. **New:** the club's row in `public.clubs`, `FOR SHARE` for a reader of the ceiling, `FOR NO KEY UPDATE` for a ceiling
-   change (absent ceiling rows cannot be locked, so the club row stands for "the ceiling of C").
+5. **New:** the club's ceiling, as a transaction-scoped advisory lock on the club id in a namespace of its own:
+   `pg_advisory_xact_lock_shared` for a reader (a guarded write), `pg_advisory_xact_lock` for a ceiling change, both under
+   the transaction's `lock_timeout` (`try_again`). Absent ceiling rows cannot be locked, and locking the `public.clubs` row
+   instead would tie every guarded write to the club's own edit, archive and team writes (`organization.js:1086`, `:1103`
+   and the teams' `club_id` key) - the db review found that interaction unverified, so the advisory lock is the
+   **recommendation** (for the *Rukovodilac*); the alternative is a per-club lock row created with the club.
 6. The request record (`permission_requests`).
 
-Recorded-SQL-order tests (the rule of `.claude/rules/migrations.md`) for every new write, and route-against-route tests:
-a ceiling close against a holder's guarded write; a club version change against a custom made from it; a custom made
-against the target's revocation. **Known cost:** a guarded write share-locks its club row, so a club rename waits for it
-(milliseconds). The db review checks this against the existing club writes of `organization.js` (archive, edit) before the
-implementation.
+A club version writer takes version rows (place 4) and the ceiling (place 5) and never custom rows after them; a custom
+writer takes custom rows (place 3) first. Recorded-SQL-order tests (the rule of `.claude/rules/migrations.md`) for every
+new write, and route-against-route tests: a ceiling close against a holder's guarded write; a club version change against
+a custom made from it; a custom made against the target's revocation; a ceiling close against a club archive.
 
 ### 7.7 Request records, rollback, preflight, post-check
 
 - `permission_requests.operation` widened: `ceiling_close`, `ceiling_open`, `club_version_change`, `club_version_answer`,
-  `custom_change`, `custom_end`, with their result columns (the v36 pattern; a lost COMMIT is never a second write).
-- **Rollback** (rehearsed): refuses once any ceiling row, club version, custom role or a new request row exists, or a later
-  migration is recorded; otherwise restores the v84 bodies by md5 and drops the new objects. Forward-only after first use.
+  `custom_change`, `custom_end`, `custom_word_removal`, with their result columns (the v36 pattern; a lost COMMIT is never a second write).
+- **Rollback** (rehearsed): refuses once any ceiling row, club version, custom role or a new request row exists, a later
+  migration is recorded, a replaced body's md5 is no longer vNN's, or the seeded items of Club admin or Team coach were
+  changed since; otherwise it restores the v84 bodies by md5, removes the seeded items through the guarded path with a
+  `migration` change row (v84's items are guarded; the change rows stay as history), and drops the new objects.
+  Forward-only after first use.
 - **Preflight** (read-only): v84 recorded with its checksum; the v84 bodies' md5; no row of a new table; the basic roles'
   items equal v84's seed. **Post-check**: vNN recorded; the new bodies' md5; the seeded words; zero new rows.
 
@@ -386,22 +467,29 @@ implementation.
 ## 9. API and screens
 
 All under `/api/organization/roles` (the R2 router, mounted behind `requireAuth` only, `server.js:140-143`), the R2
-conventions: 404 before 403 (rule 11), a `requestKey` on every write, the bounded COMMIT, stable codes.
+conventions: 404 before 403 (rule 11), a `requestKey` on every write, the bounded COMMIT, stable codes. **Info hiding:**
+on every route below, a club, user, role or custom that does not exist, belongs to another club, is archived, or that the
+caller has no right to see answers the identical `404 {"error":"notFound"}` (the R2 router's body). A stable refusal code
+(`admin_not_narrowable`, `custom_exists`, `closed_by_club_ceiling`, ...) is answered only after the caller's right to that
+target in that club is proven, so it can never confirm that a foreign club or user exists.
 
 | Route | Who | What |
 |---|---|---|
-| `GET /clubs/:clubId/ceiling` | a platform admin; the club's admin reads it (Q2) | the closed modules |
+| `GET /clubs/:clubId/ceiling` | a platform admin; the club's admin (holder of `staff.assign` there) reads it (Q2); everyone else the identical 404 | the closed modules and `ceilingEffective` per module |
 | `POST /clubs/:clubId/ceiling` `{requestKey, close: [...], open: [...], reason}` | a platform admin only; everyone else the identical 404 | closes / opens modules |
 | `GET /clubs/:clubId/roles` | holders of `org.view` in the club | the system roles with the club's state (follows default / own version / question pending), and the club's own roles |
 | `POST /:roleId/clubs/:clubId/version` `{requestKey, expectedRevision, add, remove, reason}` | the club's admin (3.5); a platform admin | makes or changes the club version |
 | `POST /:roleId/clubs/:clubId/version/answer` `{requestKey, systemRevision, choice: "accept_default" \| "keep_mine"}` | the club's admin; a platform admin | the O3 question |
 | `GET /users/:userId/clubs/:clubId` | the club's admin; a platform admin; anyone else 404 | the user's held roles there, effective words, custom state and the difference from the role |
-| `POST /users/:userId/clubs/:clubId/custom` `{requestKey, roleId, scopeType, scopeId, add, remove, reason}` | as above, 3.4 and 3.5 | makes or changes a custom role |
+| `POST /users/:userId/clubs/:clubId/custom` `{requestKey, roleId, scopeType, scopeId, expectedRevision (null = create), add, remove, reason}` | as above, 3.4 and 3.5 | makes or changes a custom role |
+| `GET /clubs/:clubId/custom-drift` | the club's admin; a platform admin | customs that hold words their role (club version or default) no longer has (3.4) |
+| `POST /:roleId/clubs/:clubId/custom-word-removal` `{requestKey, word, reason}` | a platform admin only (Q15) | removes one word from every live custom of that role in that club |
 | `POST /users/:userId/custom/:customId/end` `{requestKey, reason}` | as above | back to the club's role |
 | `GET /assignments` (R2) | as R2 | each row carries `custom: true` and "<Role> (custom)" where it applies |
 
 Codes added: `permission_not_available_yet`, `closed_by_club_ceiling`, `admin_not_narrowable`, `custom_exists`,
-`version_changed` (stale `expectedRevision`), `question_outdated`.
+`version_changed` (stale `expectedRevision`, or a lost race on the first create of a club version), `custom_changed` (the
+same for a custom role), `question_outdated`.
 
 **Screens (frontend PR, section 11):**
 - Settings > Clubs (platform admin): *Club licence* - each module on / off, with a reason.
@@ -458,9 +546,13 @@ Codes added: `permission_not_available_yet`, `closed_by_club_ceiling`, `admin_no
 | Q11 | The MANAGE words: one migration per part (Calendar, Training Load, ...) or one for several? | One per step of O7 (it ships with the part that starts checking them). | Five small migrations instead of one large one. |
 | Q12 | You said a closed part ends "at once". A part that does not check the new rights yet (everything except Settings until its VIEW step) cannot see the licence. Is it enough that each part starts obeying the licence in its VIEW step, with Imports able to get an earlier gate if the licence is needed sooner? | Yes. | Until a part's VIEW step, closing it in the licence has no effect for that part; the screen says so. |
 | Q13 | May a platform admin make a "custom" for a club's admin? | Yes (O5 says only the platform admin narrows an admin). | - |
+| Q14 | A person has two roles in the club, and the admin takes a right away from that person only. The second role still gives it. Should taking a right away from a person take it away whatever role gives it? | For now no: the change applies to the one role it was made on, and the screen says plainly "still held through <other role>". | If yes, a per-person "taken away" list is needed that beats every role; a bigger change. |
+| Q15 | A person's custom rights are frozen. If you or the club's admin later take a right away from the role for safety, the customs made earlier keep it. Is that acceptable if the club sees a list of such people and you have one button to take that right from all of them? | Yes, with the list and the button. | Without them, a right taken from a role could stay with some people unnoticed. |
+| Q16 | "Find new sessions" in Imports also writes and contacts GPEXE, so it is not only viewing. Should viewing imports wait for the Imports step (last, O7)? | Yes: Imports gets no view right in this package. | A view-only person sees no Imports until the Imports step. |
 
 **For the *Rukovodilac* of OptiMove (technical, recommendation of this document):** the "checked" list as a code constant
-and not a database flag (section 4); the club row as the lock of the ceiling (7.6 place 5); the migration number vNN.
+with its gates per word, not a database flag (section 4); a transaction-scoped advisory lock per club as the lock of the
+ceiling, not the `clubs` row (7.6 place 5); one file or two for vNN (7.4); the migration number vNN.
 
 ## 13. Pull requests and order
 
@@ -476,7 +568,8 @@ and not a database flag (section 4); the club row as the lock of the ceiling (7.
 
 **Stream managers for the VIEW and MANAGE steps:** Calendar - its stream manager (session
 `session_01YZANDuH4vg9fEWkHhNJAos`); Training Load, dashboards, Data configuration and Imports - the *Rukovodilac* of
-OptiMove; Builder, programs and exercises - the Exercise stream; Tests - to be confirmed.
+OptiMove; Builder, programs and exercises - the Exercise stream; Organization and Athletes - this stream (Settings and
+roles); Tests and Messages - **open**, for this stream's manager to name.
 
 **Size (rough, from section 6):** VIEW through every module is about 12-15 helper functions and one route gate per module,
 no migration beyond vNN. MANAGE is two to three times that, plus the migrations of the database guards that name a role
@@ -498,13 +591,24 @@ no migration beyond vNN. MANAGE is two to three times that, plus the migrations 
    carries such words.
 7. **The way in (O8):** the mandatory test of section 6; the forged preference; `club_view` reaches only `GET
    /api/organization`; every write behind the organization router answers today's 403; the members list (L3, with the
-   mutation); cross-club: a role holder of club A in `club_view` A asking for club B -> the identical 404.
+   mutation); cross-club: a role holder of club A in `club_view` A asking for club B -> the identical 404; an account with
+   only an assignment and no preference lands in `club_view` and the stored row is `club` (`view_only_account_fallback`);
+   a forged `club` row with neither an admin row nor an assignment resolves to the fallback; a mixed account in `club_view`
+   B sees nothing of club A; the fixed response keys of `GET /api/organization` for a view workspace; an unknown workspace
+   type in `filterOrganizationDataForWorkspace` returns empty lists.
+7a. **Custom liveness:** `custom_role_dies_with_holding` - make a custom with an added word on an old-table coach, revoke
+   the `team_coach` row through the real route, grant it again: `can(word)` is false and the twin agrees; the same with an
+   R2 assignment revoked and re-granted, and with an expired one. Two concurrent custom changes with the same
+   `expectedRevision`: exactly one commits, the other `custom_changed`; the same for a club version's first create.
+7b. **Checked means every gate:** `enforced_word_covers_all_gates` for each word of `ENFORCED_PERMISSIONS`.
 8. **Locks:** recorded SQL order for every new write; the route-against-route races of 7.6 and 10.
 9. **Migration:** apply, rollback, re-apply; md5 preconditions refuse a changed body; the preflight and post-check on a
    disposable database.
 10. **Mutations** (each must fail a test): drop step 6; swap steps 8.1 and 8.2; accept an unchecked word; treat
     `club_view` as `club` in any helper of section 6; remove the organization entry gate's method check; remove the
-    `staff.assign` gate of the members list; let a club's admin narrow Club admin.
+    `staff.assign` gate of the members list; let a club's admin narrow Club admin; drop the holding check of a custom
+    (3.4); compare dominance against `permission_role_items` instead of the effective set; let the fallthrough of
+    `filterOrganizationDataForWorkspace` return everything.
 11. **e2e:** a platform admin closes Imports for a club and makes a club version of Team coach; a role holder signs in,
     lands in `club_view`, sees Settings > Overview, Clubs, Teams and nothing else; at 1280 and 390 px.
 
