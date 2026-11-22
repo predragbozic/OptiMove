@@ -30,6 +30,7 @@ import testsCheckInRouter from "./routes/testsCheckIn.js";
 import trainingLoadRouter from "./routes/trainingLoad.js";
 import trainingLoadMetricsRouter from "./routes/trainingLoadMetrics.js";
 import trainingActivityRouter from "./routes/trainingActivity.js";
+import sessionTypesRouter from "./routes/sessionTypes.js";
 import calendarRouter from "./routes/calendar.js";
 import calendarEventsRouter from "./routes/calendarEvents.js";
 import calendarSettingsRouter from "./routes/calendarSettings.js";
@@ -162,6 +163,8 @@ app.use("/api/training-load/metrics", requireAuth, trainingLoadMetricsRouter);
 // /api/training-load/metrics above: an athlete reads their own canonical
 // activity results the same way; coach-only routes check via
 // requireActivityWorkspace inside the router.
+// Session types (ST-1, v85): mounted before the training-activity router, whose /:activityId would take the path.
+app.use("/api/training-activity/session-types", requireAuth, sessionTypesRouter);
 app.use("/api/training-activity", requireAuth, trainingActivityRouter);
 // requireAuth only (no requireCoach) — the central calendar's events (K2a):
 // the active workspace decides inside the router (calendarEventAccess.js) —

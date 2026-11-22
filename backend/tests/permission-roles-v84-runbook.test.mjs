@@ -11,7 +11,11 @@ import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { runMigrations } from "../src/migrate.js";
-import { buildDatabase, MIGRATIONS, ROLE_IDS, RUNBOOKS } from "./support/permission-roles-world.mjs";
+import { buildDatabase, migrationsWithout, MIGRATIONS, ROLE_IDS, RUNBOOKS } from "./support/permission-roles-world.mjs";
+
+// The repository's migrations up to v84 (v85 on left out; see migrationsWithout).
+const UP_TO_V84 = migrationsWithout([]);
+process.on("exit", () => UP_TO_V84.cleanup());
 
 const PREFLIGHT = fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-preflight.sql"), "utf8");
 const POSTCHECK = fs.readFileSync(path.join(RUNBOOKS, "permission-roles-v84-postcheck.sql"), "utf8");
@@ -92,7 +96,7 @@ test("7a. the preflight before v84: every block's ok columns true, block 3a's fi
 });
 
 test("7b. the post-check after v84: every block's ok columns true and block 6a equal to preflight block 3a; flips: a tampered v84 checksum (1, and preflight 1b), a migration applied after v84 (1 stays true, counted), a privilege granted to PUBLIC (2), a disabled trigger (3), a changed seed (4), an assignment (5), a dropped CHECK (6)", async () => {
-  await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
+  await runMigrations({ databaseUrl: db.url, migrationsRoot: UP_TO_V84.dir });
   assert.deepEqual(Object.keys(POST).sort(), ["1", "2", "3", "4", "5", "6", "6a", "7"]);
   for (const [name, sql] of Object.entries(POST)) allTrue(name, await run(sql));
   assert.deepEqual(await run(POST["6a"]), fingerprintBefore, "v84 rewrote no row of the old role tables");

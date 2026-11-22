@@ -101,6 +101,8 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611191200_training_load_v79_calculated_ratio_difference.sql",
   "202611201100_training_load_v80_condition_match.sql",
   "202611201300_roles_v84_permission_roles.sql",
+  // ST-1 (docs/ai/session-type-plan.md): session types and their owner guard.
+  "202611201500_training_load_v85_session_types.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
