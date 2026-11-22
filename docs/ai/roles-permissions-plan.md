@@ -666,3 +666,15 @@ access there (fail closed).
 **The R2 contract's own points** live in `docs/ai/roles-r2-contract.md`, section 10. Its O7 (role
 names), O9 (no words in a private workspace in R2) and O10 (what "basic" means) were decided by the
 owner on 2026-11-19, as recommended, the same day as D4 (relayed by the stream's manager).
+
+**The R3 screens' decisions (2026-11-20, "po preporuci", relayed by the stream's manager):**
+
+| # | Decision |
+|---|---|
+| Q1 | Sections whose routes do not check a permission yet (Calendar, Builder, Tests) keep today's visibility. Permission-driven visibility in R3 applies to Settings tabs, Roles and Users only. |
+| Q2 | A section closed for a role is invisible only: no padlock UI in R3 (module switches come later). |
+| Q3 | Settings > Users has ONE role assignment form (role chooser with the basic roles as ordinary choices, display title, optional end date, reason) instead of the two fixed forms (club admin, team coach). |
+| Q4 | Settings > Roles: a platform admin and holders of `roles.manage` edit; other club members with `org.view` read the list and "who holds what" read-only. |
+| Q5 | "My team" for a team coach: the same tabs, built from permissions, no Roles view (R3 part D). |
+| Q6 | The role preview "what this role sees" is a simple read-only list of sections in the role editor. |
+| Q7 | Display titles are shown only in the Users and Roles screens, not on Home. |

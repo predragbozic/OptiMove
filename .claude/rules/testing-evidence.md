@@ -52,4 +52,4 @@ count, and not a number carried over from a previous session without re-running.
 
 ## Frontend PR gate
 
-Before asking for a GO, run the whole `--preset frontend-fast` on the head and on a clean `origin/main` and compare: every file that fails on the head but not on main is a NO-GO, even if it is far from the diff (PR #432 broke two such files that a narrow filter missed).
+Before asking for a GO, run the whole `--preset frontend-fast` on the head and on a clean `origin/main` and compare: every file that fails on the head but not on main is a NO-GO, even if it is far from the diff (PR #432 broke two such files that a narrow filter missed). A stacked PR's regression gate runs on its head merged with current `main`.

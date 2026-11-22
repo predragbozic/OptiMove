@@ -66,7 +66,7 @@ test("Users: one panel with New account, Give access and Athlete login; a tab sh
     return out;
   };
   let p = shown(html);
-  assert.deepEqual(Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.forms])), { account: ["user"], access: ["clubRole", "teamRole"], athleteLogin: ["athleteLogin"] });
+  assert.deepEqual(Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.forms])), { account: ["user"], access: [], athleteLogin: ["athleteLogin"] });
   assert.deepEqual(Object.entries(p).filter(([, v]) => !v.hidden).map(([k]) => k), ["account"]);
   const render = async () => {};
   for (const tab of ["access", "athleteLogin", "account"]) {
@@ -76,12 +76,14 @@ test("Users: one panel with New account, Give access and Athlete login; a tab sh
     assert.deepEqual(Object.entries(p).filter(([, v]) => !v.hidden).map(([k]) => k), [tab], `${tab} is the only panel shown`);
     assert.match(html, new RegExp(`id="organization-user-form-tab-${tab}" aria-controls="organization-user-form-panel-${tab}" aria-selected="true"`));
   }
-  // Give access holds two forms and one Cancel (one Cancel per tab panel: three in all).
-  assert.equal(html.match(/>Cancel<\/button>/g).length, 3);
+  // Give access is ONE role assignment form (roles R3, owner decision Q3: the club admin and team coach forms are gone)
+  // and has no Cancel of its own: two Cancel buttons in all.
+  assert.match(html, /data-roles-form="assign"/);
+  assert.equal(html.match(/>Cancel<\/button>/g).length, 2);
   // Without a new-account right, the panel starts on Give access.
   reset("users", { addFormOpen: true });
   html = renderOrganizationPanelHtml({ currentUser: state.currentUser, data: { ...data, canCreateUser: false }, error: "", role: "ADMIN", scope: "" });
-  assert.ok(!html.includes('data-user-form-tab="account"') && html.includes('data-organization-form="clubRole"'));
+  assert.ok(!html.includes('data-user-form-tab="account"') && html.includes('data-roles-form="assign"'));
   assert.ok(!html.includes('data-organization-form="user"'), "no New account form without that right");
 });
 
