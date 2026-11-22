@@ -222,3 +222,16 @@ test("a failed switch restores the exercise detail's navigation too", async () =
   assert.equal(await switchWeeklyAthlete("ub", { loadWeekly: async () => {}, renderCurrent() {} }), false);
   assert.equal(state.exerciseDetail, keep);
 });
+
+test("K6-F4. the Weekly strip hides: no pills and no Groups, who is chosen and one control to show it stay", () => {
+  const flow = { keys: ["a", "b", "c"], currentKey: "b", eventKey: "", line: "", kept: "", busy: false, notInKeys: [] };
+  const items = [{ key: "a", name: "Ana Kovač" }, { key: "b", name: "Ben Marsh" }, { key: "c", name: "Cara Both" }];
+  const shown = K.renderWeeklySwitcherHtml({ flow, items, currentKey: "b", groupsHtml: "<div class=\"g\"></div>" });
+  assert.match(shown, /builder-batch-pills/);
+  assert.match(shown, />Hide athletes</);
+  const hidden = K.renderWeeklySwitcherHtml({ flow, items, currentKey: "b", groupsHtml: "<div class=\"g\"></div>", stripHidden: true });
+  assert.equal(/builder-batch-pills|class="g"/.test(hidden), false);
+  assert.match(hidden, /<strong>Ben Marsh<\/strong>/);
+  assert.match(hidden, /2 \/ 3/);
+  assert.match(hidden, /data-action="weekly-k6-strip-toggle" aria-expanded="false">Show athletes</);
+});

@@ -30013,3 +30013,8 @@ body.athlete-questions-prompt-open {
 .athlete-switcher-fold > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .athlete-switcher.is-open .cc-filters-chevron { transform: translateY(2px) rotate(-135deg); }
 .weekly-k6-controls[aria-busy="true"] { opacity: .6; pointer-events: none; }
+/* K6 follow-up: hide / show the athlete strip (a computer's calendar box, the Weekly plan's strip). */
+.athlete-switcher-head, .weekly-k6-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.athlete-switcher-head-text { min-width: 0; overflow-wrap: anywhere; font-weight: 800; }
+.athlete-switcher-hide, .weekly-k6-strip-toggle { flex: none; min-height: 44px; min-width: 44px; font-weight: 700; }
+.athlete-switcher.is-collapsed { gap: 0; }

@@ -4,6 +4,7 @@
 // another athlete pushes NO history entry (Q6): it replaces the athlete, the week and day are kept, and the open
 // node path is rebuilt in the other athlete's own plan (weekly-k6.js).
 import { buildCentralCalendarSwitcherModel } from "./central-calendar-switcher.js";
+import { readAthleteStripHidden, writeAthleteStripHidden } from "./athlete-strip-pref.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { captureWeeklyPlace, matchWeeklyPlace, renderWeeklySwitcherHtml, slotPathFor, slotWords, weeklyDayItems } from "./weekly-k6.js";
@@ -85,6 +86,20 @@ function groupsHtml(flow, cal, model) {
   return `<div class="cc-chip-row" role="group" aria-label="Groups"><span class="cc-chip-row-label">Groups</span>${chip("", "All groups", !chosen)}${cal.data.teams.map((team) => chip(String(team.teamId), team.name, chosen === String(team.teamId))).join("")}</div>`;
 }
 
+// K6 follow-up: hide / show the strip, remembered per user. Read once per flow from the preference.
+function weeklyStripHidden(flow) {
+  if (typeof flow.stripHidden !== "boolean") flow.stripHidden = readAthleteStripHidden("weekly", state.currentUser?.id);
+  return flow.stripHidden;
+}
+
+export function toggleWeeklyStrip() {
+  const flow = activeWeeklyFlow();
+  if (!flow) return false;
+  flow.stripHidden = !weeklyStripHidden(flow);
+  writeAthleteStripHidden("weekly", state.currentUser?.id, flow.stripHidden);
+  return true;
+}
+
 // The header drawn above the week and above every node view; "" when there is no flow.
 export function renderWeeklyK6Html({ noPlan = false } = {}) {
   const flow = activeWeeklyFlow();
@@ -93,7 +108,7 @@ export function renderWeeklyK6Html({ noPlan = false } = {}) {
   const { items, model } = stripItems(flow, cal);
   const hidden = flow.hiddenCount > 0 ? `${flow.hiddenCount} athlete${flow.hiddenCount === 1 ? "" : "s"} of this event ${flow.hiddenCount === 1 ? "is" : "are"} not in your roster.` : "";
   return renderWeeklySwitcherHtml({
-    flow, items, currentKey: flow.currentKey, groupsHtml: groupsHtml(flow, cal, model), teamLabel: teamLabelFor(flow, cal, model), hiddenNote: hidden, noPlan,
+    flow, items, currentKey: flow.currentKey, groupsHtml: groupsHtml(flow, cal, model), teamLabel: teamLabelFor(flow, cal, model), hiddenNote: hidden, noPlan, stripHidden: weeklyStripHidden(flow),
   });
 }
 

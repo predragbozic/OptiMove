@@ -13,6 +13,7 @@ import {
   searchAthletes,
 } from "./athlete-switcher.js";
 import { api } from "./api.js";
+import { readAthleteStripHidden, writeAthleteStripHidden } from "./athlete-strip-pref.js";
 import { calendarTeamColorIndexes } from "./calendar-colors.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
@@ -32,6 +33,8 @@ export const CC_SWITCHER_ACTIONS = Object.freeze({
   // The Groups chips keep their action name (the chips only moved, contract 2.2); it is now the choice of one team.
   group: "central-calendar-toggle-team",
   toggle: "central-calendar-switcher-toggle",
+  // K6 follow-up: on a computer the whole box can be hidden (remembered per user); a phone has its fold.
+  hide: "central-calendar-switcher-hide",
   everyone: "central-calendar-show-everyone",
   orgRetry: "central-calendar-switcher-org-retry",
 });
@@ -168,6 +171,18 @@ export function buildCentralCalendarSwitcherModel(cal, athletes = state.athletes
   return base;
 }
 
+// K6 follow-up: the computer's hide / show choice, read once per workspace slice from the per-user preference.
+export function centralCalendarStripHidden(cal) {
+  if (typeof cal.switcher.hidden !== "boolean") cal.switcher.hidden = readAthleteStripHidden("calendar", state.currentUser?.id);
+  return cal.switcher.hidden;
+}
+
+export function toggleCentralCalendarStripHidden(cal) {
+  cal.switcher.hidden = !centralCalendarStripHidden(cal);
+  writeAthleteStripHidden("calendar", state.currentUser?.id, cal.switcher.hidden);
+  return cal.switcher.hidden;
+}
+
 export function centralCalendarSwitcherSearchShown(model) {
   if (!model || model.type === "platform") return false;
   return (model.strip?.length || 0) > ATHLETE_SEARCH_MIN_STRIP || model.tooMany > 0;
@@ -261,7 +276,10 @@ export function renderCentralCalendarSwitcherHtml(cal, model, { layout = "wide",
   const fold = phone
     ? `<button type="button" class="athlete-switcher-fold" data-action="${CC_SWITCHER_ACTIONS.toggle}" aria-expanded="${open ? "true" : "false"}"><span>${escapeHtml(summary.text)}</span><span class="cc-filters-chevron" aria-hidden="true"></span></button>`
     : "";
-  return `<section class="athlete-switcher${open ? " is-open" : ""}" aria-label="Team and athlete">${fold}<div class="athlete-switcher-body"${open ? "" : " hidden"}>${body}</div></section>`;
+  // A computer's box can be hidden; it then keeps one line (who is chosen) and the one control to show it again.
+  const hidden = !phone && centralCalendarStripHidden(cal);
+  const head = phone ? "" : `<div class="athlete-switcher-head"><span class="athlete-switcher-head-text">${escapeHtml(summary.text)}</span><button type="button" class="plain-button athlete-switcher-hide" data-action="${CC_SWITCHER_ACTIONS.hide}" aria-expanded="${hidden ? "false" : "true"}">${hidden ? "Show athletes" : "Hide athletes"}</button></div>`;
+  return `<section class="athlete-switcher${open ? " is-open" : ""}${hidden ? " is-collapsed" : ""}" aria-label="Team and athlete">${fold}${head}<div class="athlete-switcher-body"${open && !hidden ? "" : " hidden"}>${body}</div></section>`;
 }
 
 // F2: the green line above the grid whenever the choice is not Everyone.

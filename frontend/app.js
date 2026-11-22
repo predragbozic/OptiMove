@@ -89,7 +89,7 @@ import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, re
 import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsResetForWorkspaceChange, checkBuilderEventsResult, chooseSessionEvent, chooseWholeDay, loadBuilderEvents, setBuilderEventsRender } from "./builder-events-row.js";
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
-import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, weeklyBackToCalendar } from "./weekly-k6-actions.js";
+import { chooseWeeklyGroup, noteNotInSession, renderWeeklyK6Html, switchWeeklyAthlete, toggleWeeklyStrip, weeklyBackToCalendar } from "./weekly-k6-actions.js";
 import { slotPathFor, weeklyDayItems } from "./weekly-k6.js";
 import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCalendarEventRoster, centralCalendarLayout, centralCalendarMayBeLeft, centralCalendarRosterIndex, centralCalendarUncertainWrites, closeCentralCalendarPanel, handleCentralCalendarAction, handleCentralCalendarBeforeUnload, handleCentralCalendarInput, handleCentralCalendarKeydown, openCentralCalendarAt, openCentralCalendarCreateForBuilder, restoreCentralCalendarPlace, restoreCentralCalendarView, setCentralCalendarBuilderReturn, submitCentralCalendarEventForm } from "./central-calendar-actions.js";
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
@@ -3306,6 +3306,10 @@ async function handleContentClick(event) {
     await switchWeeklyAthlete(action.dataset.athleteKey || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
     return;
   }
+  if (type === "weekly-k6-strip-toggle") {
+    if (toggleWeeklyStrip()) renderCurrentNode();
+    return;
+  }
   if (type === "weekly-k6-group") {
     await chooseWeeklyGroup(action.dataset.teamId || "", { loadWeekly: loadWeeklyForSwitcher, renderCurrent: renderCurrentNode });
     return;
@@ -4184,6 +4188,9 @@ function renderWeeklyRoot(data) {
     renderPlanMoreMenu,
     weekSelectorMarkup,
   });
+  // K6 follow-up: a repaint redraws the pills at scroll 0, so the chosen pill is brought into view again.
+  // K6 follow-up: a repaint redraws the pills at scroll 0, so the chosen pill is brought into view again.
+  athleteSwitcherScrollIntoView(els.content);
   if (state.pendingScrollDate) {
     const date = state.pendingScrollDate;
     state.pendingScrollDate = "";
@@ -4395,6 +4402,7 @@ function renderNode(node) {
     return;
   }
   els.content.innerHTML = detailHtml;
+  athleteSwitcherScrollIntoView(els.content);
 }
 function renderTerminalNode(node) {
   if (!(node.items || []).some(isExerciseItem)) return renderOrganizationSummary(node);
