@@ -53,7 +53,7 @@ export function renderPositionsSectionHtml() {
       ? `<p class="builder-error" role="alert">${escapeHtml(p.error)}</p><button class="plain-button compact-button" type="button" data-action="positions-reload">Try again</button>`
       : `<ul class="positions-list">${p.list.length ? p.list.map(positionRowHtml).join("") : `<li class="muted">Nothing yet.</li>`}</ul>`;
   const add = p.canAdd ? (p.addOpen ? `
-      <form class="tag-chip-add-form" data-position-form="add">
+      <form class="positions-add-form" data-position-form="add">
         <div class="tag-chip-add-row">
           <label class="search-field"><span>Position name</span><input name="name" required maxlength="60" placeholder="e.g. Defensive midfielder"></label>
           <button class="plain-button compact-button" type="submit" ${p.busy ? "disabled" : ""}>Add</button>

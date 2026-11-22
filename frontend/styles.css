@@ -29816,6 +29816,7 @@ body.athlete-questions-prompt-open {
 .positions-actions { display: flex; gap: 12px; }
 .positions-actions .text-action, .positions-rename-form .text-action { min-height: 44px; min-width: 44px; }
 .positions-rename-form { flex: 1 1 100%; }
+.positions-add-form { display: flex; flex-direction: column; gap: 8px; }
 /* 16 px at every width (iOS zoom); an older dialog rule sets 14 px on desktop, so this one is marked important. */
 .positions-section input, .positions-section select, [data-position-form] input, [data-position-form] select { font-size: 16px !important; }
 

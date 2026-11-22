@@ -35,7 +35,6 @@ export function renderTaxonomyPanelHtml(data) {
   return `
     <section class="taxonomy-panel">
       ${state.taxonomy.error ? `<p class="builder-error">${escapeHtml(state.taxonomy.error)}</p>` : ""}
-      ${renderPositionsSectionHtml()}
       <section class="panel taxonomy-intro">
         <p class="eyebrow">Builder tree presets</p>
         <h3>Domain, category and section presets</h3>
@@ -68,6 +67,7 @@ export function renderTaxonomyPanelHtml(data) {
         addPlaceholder: `e.g. ${LIBRARY_KIND_META[kind].label}`,
         data,
       })).join("")}
+      ${renderPositionsSectionHtml()}
     </section>
   `;
 }
