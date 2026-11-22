@@ -622,7 +622,9 @@ test("4. D29, C110 and R17: a club variable with a maximum, activated alone - an
       for (const sv of a101.skippedValues) assert.deepEqual(keys(sv), ["drillIndex", "label", "level", "message", "sourceMetricKey", "unit", "variableKey", "variableScope"], `${name}: a Left-out entry's keys`);
       // The nested containers a coach reads, pinned the same way (code re-review of the 9-B fixes). A change to an
       // already imported result carries values projected by the same projectValue as a result's (asserted above).
-      assert.deepEqual(keys(c.preview.session), ["categoryName", "drillsCount", "gpexeTeamSessionId", "name", "occurredLocalDate", "startTimestamp"], `${name}: the session's keys`);
+      // ST-2: the session type the import writes and where it comes from - a type key of the system or the team's own club and
+      // a fixed word, the same for every audience.
+      assert.deepEqual(keys(c.preview.session), ["activityTypeKey", "activityTypeSource", "categoryName", "drillsCount", "gpexeTeamSessionId", "name", "occurredLocalDate", "startTimestamp"], `${name}: the session's keys`);
       assert.deepEqual(keys(c.preview.thresholdsUsed), ["id"], `${name}: thresholdsUsed's keys`);
       assert.deepEqual(keys(c.preview.counts), ["already_recorded", "athletesManualReview", "athletesNotImported", "changesToImported", "corrected", "created", "needs_review", "skippedValues", "stale_resend_ignored", "supplemented", "unchanged"], `${name}: the counts' keys`);
       assert.deepEqual(keys(a101.gps), ["reason", "status"], `${name}: gps's keys`);

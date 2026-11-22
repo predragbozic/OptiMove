@@ -11,6 +11,7 @@ import { batchEditTestHooks, blockedPlanSessions, blockedSessionsOf, blockedSour
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
+import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
 
 const router = Router();
 let activeBatchGuards = 0;
@@ -561,6 +562,15 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     if (planType === "program" && !requestedName) return res.status(400).json({ error: "Program name is required." });
     if (planType === "weekly" && !athleteExternalIds.length) return res.status(400).json({ error: "Choose at least one athlete for a weekly plan." });
     if (planType === "weekly" && !weekStart) return res.status(400).json({ error: "Choose a valid date for the weekly plan." });
+    // A weekly program template (docs/ai/weekly-program-template-plan.md):
+    // a reusable program template made of whole template weeks.
+    const weeklyTemplateWeeks = planType === "program" && text(req.body?.templateKind) === "weekly"
+      ? Number.parseInt(req.body?.weeks ?? 1, 10)
+      : 0;
+    if (weeklyTemplateWeeks && athleteExternalIds.length) return res.status(400).json({ error: "A weekly program template is not assigned to an athlete when it is created.", code: "weekly_template_no_athlete" });
+    if (planType === "program" && text(req.body?.templateKind) === "weekly" && !(weeklyTemplateWeeks >= 1 && weeklyTemplateWeeks <= MAX_TEMPLATE_WEEKS)) {
+      return res.status(400).json({ error: `A weekly program template has 1 to ${MAX_TEMPLATE_WEEKS} weeks.`, code: "weekly_template_weeks" });
+    }
     const name = requestedName || `Weekly plan ${weekStart}`;
     const { athletes, missing, archived } = await findRequestedAthletes(athleteExternalIds);
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
@@ -616,6 +626,7 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
         await createWeeklyDays(client, created.rows[0].id, weekStart);
         await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
       }
+      if (weeklyTemplateWeeks) await insertTemplateWeeks(client, created.rows[0].id, 1, weeklyTemplateWeeks);
     }
     await client.query("commit");
     client.release();
@@ -1124,6 +1135,7 @@ router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) 
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
     if (plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
+    if (await weeklyTemplateFacts(query, plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
     const next = await nextOrder("plans.plan_days", "plan_id", plan.id, "block_order");
     await query(
       `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
@@ -1134,12 +1146,117 @@ router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) 
   } catch (error) { next(error); }
 }));
 
+// Weekly program templates (docs/ai/weekly-program-template-plan.md): the
+// template changes by whole weeks. One transaction each: the exercise-reuse
+// lock, then the plan row FOR NO KEY UPDATE (the copy routes' order), the
+// facts read under it.
+async function changeWeeklyTemplate(req, res, next, change) {
+  let client;
+  try {
+    const plan = await requirePlan(req, req.params.planId, res);
+    if (!plan) return;
+    client = await pool.connect();
+    await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    await lockCopyTargetPlan(client, plan.id);
+    const facts = await weeklyTemplateFacts(client.query.bind(client), plan.id);
+    const outcome = facts
+      ? await change(client, plan, facts)
+      : { status: 400, body: { error: "This plan is not a weekly program template.", code: "not_weekly_template" } };
+    if (outcome?.body) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(outcome.status).json(outcome.body);
+    }
+    await client.query("commit");
+    client.release();
+    client = null;
+    // Committed: a failed read of the new draft never reads as "not saved"
+    // (a retry would add the week twice); the screen reloads it (db review).
+    try {
+      return await respondWithDraft(req, res, req.user, plan, { status: outcome?.status || 200 });
+    } catch {
+      return res.status(outcome?.status || 200).json({ planId: plan.id, reload: true });
+    }
+  } catch (error) {
+    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
+    if (error?.code === "40P01" || error?.code === "55P03") return res.status(409).json({ error: "The plan is busy. Nothing was saved. Try again.", code: "try_again" });
+    next(error);
+  }
+}
+
+function weekNumber(value, facts) {
+  const week = Number.parseInt(value, 10);
+  return Number.isInteger(week) && week >= 1 && week <= facts.weekCount ? week : null;
+}
+const badWeek = { status: 400, body: { error: "Choose a week of this template.", code: "week_not_found" } };
+
+// Adds a week at the end: empty, or a copy of week `copyFrom` (Duplicate week).
+router.post("/plans/:planId/weeks", withBatchReuseGuard((req, res, next) => changeWeeklyTemplate(req, res, next, async (client, plan, facts) => {
+  if (facts.weekCount >= MAX_TEMPLATE_WEEKS) return { status: 400, body: { error: `A weekly program template has at most ${MAX_TEMPLATE_WEEKS} weeks.`, code: "weekly_template_weeks" } };
+  const copyFrom = req.body?.copyFrom === undefined || req.body?.copyFrom === null || req.body?.copyFrom === "" ? null : weekNumber(req.body.copyFrom, facts);
+  if (req.body?.copyFrom !== undefined && req.body?.copyFrom !== null && req.body?.copyFrom !== "" && !copyFrom) return badWeek;
+  const week = facts.weekCount + 1;
+  await insertTemplateWeeks(client, plan.id, week, week);
+  if (copyFrom) {
+    const days = (await client.query(
+      `select id, block_index, day_note from plans.plan_days where plan_id = $1 and block_index between $2 and $3 order by block_index`,
+      [plan.id, blockIndexOf(copyFrom, 1), blockIndexOf(week, 7)],
+    )).rows;
+    const source = days.filter((d) => weekOfIndex(d.block_index) === copyFrom);
+    const target = new Map(days.filter((d) => weekOfIndex(d.block_index) === week).map((d) => [Number(d.block_index) - (week - copyFrom) * 7, d]));
+    const pairs = source.map((d) => ({ sourceDayId: d.id, targetDayId: target.get(Number(d.block_index)).id, orderOffset: 0, dayNote: d.day_note }));
+    for (const pair of pairs) {
+      if (pair.dayNote) await client.query("update plans.plan_days set day_note = $2 where id = $1", [pair.targetDayId, pair.dayNote]);
+    }
+    await copyTemplateDaySessions(client, pairs, copyLegacySession);
+    await assertExerciseReuseAllowed(client, req.user.id, { dayIds: pairs.map((p) => p.targetDayId), guard: req.exerciseReuseGuard });
+  }
+  return { status: 201 };
+})));
+
+// Moves week `week` to position `to` (the others shift).
+router.post("/plans/:planId/weeks/:week/move", withBatchReuseGuard((req, res, next) => changeWeeklyTemplate(req, res, next, async (client, plan, facts) => {
+  const week = weekNumber(req.params.week, facts);
+  const to = weekNumber(req.body?.to, facts);
+  if (!week || !to) return badWeek;
+  if (week === to) return null;
+  const order = Array.from({ length: facts.weekCount }, (_, i) => i + 1).filter((w) => w !== week);
+  order.splice(to - 1, 0, week);
+  await renumberTemplateWeeks(client, plan.id, order);
+  return null;
+})));
+
+// Removes a week (never the last one); the later weeks move up.
+router.delete("/plans/:planId/weeks/:week", withBatchReuseGuard((req, res, next) => changeWeeklyTemplate(req, res, next, async (client, plan, facts) => {
+  const week = weekNumber(req.params.week, facts);
+  if (!week) return badWeek;
+  if (facts.weekCount === 1) return { status: 400, body: { error: "A weekly program template keeps at least one week.", code: "weekly_template_last_week" } };
+  const days = (await client.query(
+    "select id from plans.plan_days where plan_id = $1 and block_index between $2 and $3 order by id",
+    [plan.id, blockIndexOf(week, 1), blockIndexOf(week, 7)],
+  )).rows;
+  if (!isDraftPlanRow(plan)) {
+    // A published template's sessions: the same guard as every other removal
+    // (program sessions carry no results or links today, so it passes).
+    const dayIds = new Set(days.map((d) => String(d.id)));
+    const locked = await directSessionsLocked(client, plan.id, (s) => dayIds.has(String(s.plan_day_id)), "removed");
+    if (locked) return { status: 409, body: { error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked } };
+  }
+  for (const day of days) await deleteBlockTreeWithClient(client, day.id);
+  const order = Array.from({ length: facts.weekCount }, (_, i) => i + 1).filter((w) => w !== week);
+  await renumberTemplateWeeks(client, plan.id, order);
+  return null;
+})));
+
 router.delete("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
+    if (await weeklyTemplateFacts(query, block.plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
     if (isDraftPlanRow(block.plan)) {
       await deleteBlockTree(block.id);
       return await respondWithDraft(req, res, req.user, block.plan);
@@ -1172,6 +1289,7 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
+    if (await weeklyTemplateFacts(query, block.plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
     const source = await query("select * from plans.plan_days where id = $1", [block.id]);
     const sourceDay = source.rows[0];
     if (!sourceDay) return res.status(404).json({ error: "Program block not found" });
@@ -2086,10 +2204,16 @@ async function buildDraft(plan, req) {
     }
     if (row.item_id) node.items.push({ ...(row.media?{media:row.media}:{}),id: row.item_id, exerciseId: row.exercise_id, title: row.title, description: row.description || "", titleEn: row.title_en, descriptionEn: row.description_en, imageUrl: row.image_url || "", videoUrl: row.video_url || "", sets: row.sets || "", reps: row.reps || "", load: row.load || "", itemOrder: Number(row.item_order || 0) });
   });
+  const blockList = [...blocks.values()];
+  const isWeeklyTemplate = plan.plan_type === "program" && blockList.length > 0 && blockList.every((block) => block.type === WEEKLY_BLOCK_TYPE);
   return {
     plan: {
       id: plan.id,
       planType: plan.plan_type,
+      // A weekly program template (docs/ai/weekly-program-template-plan.md):
+      // its blocks are whole template weeks.
+      templateKind: plan.plan_type !== "program" ? "" : (isWeeklyTemplate ? "weekly" : "blocks"),
+      weekCount: isWeeklyTemplate ? Math.ceil(Math.max(...blockList.map((block) => Number(block.index) || 0)) / 7) : 0,
       weekStart: plan.week_start || "",
       name: plan.name,
       note: plan.note || "",
@@ -2112,7 +2236,7 @@ async function buildDraft(plan, req) {
       trackTrainingLoadDefault: Boolean(plan.track_training_load_default),
       requestRpeDefault: Boolean(plan.request_rpe_default),
     },
-    blocks: [...blocks.values()],
+    blocks: blockList,
     batch: await loadBuilderBatch(plan, req),
   };
 }

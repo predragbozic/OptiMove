@@ -89,7 +89,8 @@ bound, an event's threshold) matches what GPEXE computes for that team; otherwis
   (`migrations_v2/202610041200_training_load_v31_gpexe_import_checks_source_path.sql:65-78`; candidate →
   `last_seen_check_id`, v22 `:267-268`): `legacy_env` is `e03` / `api`, which has no seeded field.
 - **The mapper's gates** (`backend/src/gpexeImportMapper.js`): the whole plan is refused for `is_stats_valid`, a
-  category other than `FULL TRAINING`, thresholds, track or timezone errors (`:280-289, 318-321, 385-386`); an athlete
+  category other than `FULL TRAINING` (until ST-2: since then no category is refused, so the preview reads a session of
+  any category - `docs/ai/session-type-plan.md` section 15), thresholds, track or timezone errors (`:280-289, 318-321, 385-386`); an athlete
   is left out for multiple tracks (`:313-316`), invalid row statistics (`:324-328`) or a whole-row count ≠ 1
   (`:329-333`); then every spec runs on the whole-session row and on each drill row (`:344-361`).
 - **The version's conversion** (v34 `:716, 842, 925-945, 153-161`): canonical = source × `scale` ÷ `scale_divisor` +

@@ -270,6 +270,84 @@ test("7. another coach's empty draft, and the caller's own plan that is not a Bu
   await assertBothRefused(s, own, { source });
 });
 
+// The locked half of weeklySlotPlanIsFree: a change that commits after the
+// unlocked reads and before the removal. `change` runs in a second client's
+// open transaction; the request is sent while it is open; the transaction
+// commits once the request waits on one of its locks (or after 1.5 s if it
+// never waits). No timing decides the outcome: the request cannot finish its
+// removal before the commit, in either order of its own statements.
+async function raceAgainstOpenChange(change, send) {
+  const other = new pg.Client({ connectionString: db.url });
+  await other.connect();
+  try {
+    await other.query("begin");
+    await change(other);
+    const pending = send();
+    for (let i = 0; i < 60; i += 1) {
+      const waiting = await q(`select 1 from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid() and wait_event_type = 'Lock'`);
+      if (waiting.length) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await other.query("commit");
+    return await pending;
+  } finally {
+    await other.query("rollback").catch(() => {});
+    await other.end().catch(() => {});
+  }
+}
+// The copy's source is made before the race, so only the slot check runs in it.
+const slotRoutes = [
+  ["POST /plans", async (s) => () => createWeekly(s.coach.cookie, s.athlete)],
+  ["POST /plans/:id/duplicate", async (s) => { const source = await copySource(s); return () => copyInto(s.coach.cookie, source, s.athlete); }],
+];
+
+test("R1. a session inserted into the caller's empty draft, committed while the create is in flight: 409, the plan and the session stay (both routes)", async () => {
+  for (const [route, prepare] of slotRoutes) {
+    const s = await squad("racesession");
+    const planId = await weeklyDraft(s);
+    const dayId = (await q(`select id from plans.plan_days where plan_id = $1 order by day_order limit 1`, [planId]))[0].id;
+    const request = await prepare(s);
+    const res = await raceAgainstOpenChange(
+      (other) => other.query(`insert into plans.plan_sessions (plan_day_id, name, am_pm, bta, session_order) values ($1,'Late','AM','T',1)`, [dayId]),
+      request,
+    );
+    assert.equal(res.status, 409, `${route}: ${res.text}`);
+    assert.match(res.body.error, REFUSAL);
+    assert.deepEqual(await weeklyPlansOf(s), [String(planId)], `${route}: the draft is still the week's only plan`);
+    const sessions = await q(`select ps.name from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where pd.plan_id = $1`, [planId]);
+    assert.deepEqual(sessions.map((r) => r.name), ["Late"], `${route}: the session is still there`);
+  }
+});
+
+test("R2. the caller's empty draft published, committed while the create is in flight: 409, the plan stays and is active (both routes)", async () => {
+  for (const [route, prepare] of slotRoutes) {
+    const s = await squad("racepublish");
+    const planId = await weeklyDraft(s);
+    const request = await prepare(s);
+    const res = await raceAgainstOpenChange(
+      (other) => other.query(`update plans.plans set status = 'active' where id = $1`, [planId]),
+      request,
+    );
+    assert.equal(res.status, 409, `${route}: ${res.text}`);
+    assert.match(res.body.error, REFUSAL);
+    assert.deepEqual(await weeklyPlansOf(s), [String(planId)], `${route}: the plan is still the week's only plan`);
+    assert.equal((await q(`select status from plans.plans where id = $1`, [planId]))[0].status, "active");
+    assert.equal((await q(`select count(*)::int as n from plans.plan_days where plan_id = $1`, [planId]))[0].n, 7, `${route}: its days are still there`);
+  }
+});
+
+test("R3. the caller's empty draft stops being a Builder plan, committed while the create is in flight: 409, the plan stays", async () => {
+  const s = await squad("raceowner");
+  const planId = await weeklyDraft(s);
+  const res = await raceAgainstOpenChange(
+    (other) => other.query(`update plans.plans set source_type = 'import' where id = $1`, [planId]),
+    () => createWeekly(s.coach.cookie, s.athlete),
+  );
+  assert.equal(res.status, 409, res.text);
+  assert.match(res.body.error, REFUSAL);
+  assert.deepEqual(await weeklyPlansOf(s), [String(planId)], "the plan is still the week's only plan");
+});
+
 const batchCreate = (cookie, athletes) => api("/api/builder/plans", {
   method: "POST", cookie, body: { planType: "weekly", weekStart: WEEK, athleteIds: athletes.map((a) => a.externalId), name: "Week" },
 });

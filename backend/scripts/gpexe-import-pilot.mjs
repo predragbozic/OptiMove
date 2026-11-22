@@ -108,7 +108,9 @@ export function loadGpexeBundle(rawDir, teamSessionId) {
 export function formatPlan(plan) {
   const lines = [];
   lines.push(`Session ${plan.teamSessionId}: ${plan.event.name} (${plan.event.occurredInstant} UTC, ${plan.event.timezone}, local date ${plan.event.occurredLocalDate})`);
-  lines.push(`Activity type: ${plan.event.activityTypeKey}; source updated_on: ${plan.event.sourceReportedAt}`);
+  // ST-2: a plan built without a database carries no session type; the import decides it (the imported session's own
+  // type, or the team's suggestion for the category) and refuses a session that has none.
+  lines.push(`Activity type: ${plan.event.activityTypeKey ?? `decided at the import (GPEXE category: ${plan.event.categoryName ?? "none"})`}; source updated_on: ${plan.event.sourceReportedAt}`);
   lines.push(`Drill segments: ${plan.segments.map((s) => s.label).join(", ") || "none"}`);
   lines.push(`GPEXE team thresholds used: id ${plan.thresholdsUsed.id}, valid ${plan.thresholdsUsed.validityStart} – ${plan.thresholdsUsed.validityEnd ?? "open"}`);
   lines.push(`Athletes the import keeps: ${plan.participants.map((p) => p.gpexeAthleteId).join(", ") || "none"}`);
