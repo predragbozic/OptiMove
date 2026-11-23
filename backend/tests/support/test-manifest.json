@@ -13,7 +13,8 @@
     "session-types-v85-rehearsal-guards.test.mjs": "unit",
     "participant-session-types-v89-rehearsal-guards.test.mjs": "unit",
     "source-metric-access-7a-context.test.mjs": "unit",
-    "dashboard-shell-filter-disposable.test.mjs": "disposable"
+    "dashboard-shell-filter-disposable.test.mjs": "disposable",
+    "dashboard-pages-rehearsal-guards.test.mjs": "unit"
   },
   "kindOverrideNotes": {
     "dashboard-simple-s3a-integration.test.mjs": "db.js is replaced by node:test module mocking before service/runtime imports; all database clients are in-memory fixtures and HTTP requests use a temporary loopback server",
@@ -28,7 +29,8 @@
     "participant-session-types-v89-rehearsal-guards.test.mjs": "imports backend/scripts/participant-session-types-v89-rehearsal.mjs only for its pure guards (parseArgs, assertOwnName, urlFor); the script connects only when invoked as a command, and the bash wrapper is run with a non-loopback host it refuses before node starts, so no database connection is opened",
     "production-static-serving.test.mjs": "spawns the real src/server.js in production mode, whose /api/health runs select now(); it needs a reachable local server and nothing else, so it runs with the maintenance database as its target and creates nothing",
     "source-metric-access-7a-context.test.mjs": "imports sourceMetricAccess.js (its authz.js and workspace.js import db.js) with an unreachable loopback URL solely to construct the lazy pool; pool.query and pool.connect are replaced before the import with fail-fast counters and asserted unused; the resolver is called with an explicit workspace and a fake read, so no database connection",
-    "dashboard-shell-filter-disposable.test.mjs": "Real HTTP server and uniquely named disposable PostgreSQL database via backend/tests/support/dashboard-shell-fixture.mjs; no E2E dependency and never a shared/unit DB test."
+    "dashboard-shell-filter-disposable.test.mjs": "Real HTTP server and uniquely named disposable PostgreSQL database via backend/tests/support/dashboard-shell-fixture.mjs; no E2E dependency and never a shared/unit DB test.",
+    "dashboard-pages-rehearsal-guards.test.mjs": "Imports only pure CLI argument/URL guards. The rehearsal connects only from runRehearsal(), never on import; the tests create no database or socket."
   },
   "fileOptions": {},
   "knownFailures": [

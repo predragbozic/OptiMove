@@ -1,3 +1,4 @@
+import {handleDashboardPageAction} from './training-load-pages-data.js';
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { closeImportsOverlays } from "./gpexe-period-data.js";
 import { applyRpeChangeAnswer, rpeChangeFormFields, rpeChangeIsUnchanged, rpeChangeRequestBody } from "./rpe-answer-change.js";
@@ -321,7 +322,7 @@ export function discardTrainingLoadLeaveDrafts() {
 // them while a draft exists, and the handlers refuse them the same way.
 function analysisWidgetActionsBlocked() {
   const a = state.trainingLoad.analysis;
-  return Boolean(a.editMode && a.layoutDraft);
+  return Boolean((a.editMode && a.layoutDraft) || (a.pagesAvailable && (a.pageLoading || a.pageSaving || a.pagePending)));
 }
 
 // Escape (app.js's global keydown): closes the topmost Dashboards overlay -
@@ -691,6 +692,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (simpleEditor.model) return true;
+  if (type.startsWith('training-load-pages-')) {
+    if (!['training-load-pages-name','training-load-pages-preset','training-load-pages-cancel'].includes(type) && !releaseAnalysisLayoutDraft()) { renderTrainingLoad(); return true; }
+    return handleDashboardPageAction(action, renderTrainingLoad);
+  }
   if (type.startsWith("training-load-gpexe-")) return handleGpexeImportAction(action, { renderTrainingLoad });
   if (type.startsWith("training-load-roster-")) return handleActivityRosterAction(action, { render: renderTrainingLoad });
 

@@ -1,0 +1,26 @@
+{
+  "a": {
+    "training_load.assert_dashboard_writable(uuid)": "f87c11a22a39517c37fbf1e4f117a69b",
+    "training_load.current_dashboard_page(uuid)": "5deeaf70aefbc0655f262cc94f3c9dc8",
+    "training_load.dashboard_home_required()": "a0f385cf24691b3389e2397d23ae4c07",
+    "training_load.dashboard_home_sync_defaults()": "70f38353a470245079231daf2ee93478",
+    "training_load.dashboard_page_context_matches(uuid)": "79ae2ff5f31f2cd8dffff2c40402147e",
+    "training_load.dashboard_page_period_valid(jsonb)": "de37086fc382ec8b50173412cd8b1924",
+    "training_load.dashboard_widget_assign_home()": "673f26f5b9949bb1241b0d5d884b2458",
+    "training_load.dashboard_widget_bump_page_revision()": "b3ab8b1d33176e95fa5f9352ea0ddea7",
+    "training_load.dashboard_widgets_check_no_overlap()": "96b0f3fed42ce4eca49a13468d44b838",
+    "training_load.delete_dashboard(uuid,integer,uuid,character varying)": "19453ff4134447c03da1a2db1147dd27",
+    "training_load.ensure_dashboard_home()": "f5666f32e7fd0a2dfcf2fc8e1faf4c25",
+    "training_load.guard_dashboard_page_identity()": "60599a027271957e8aa6d1c23a74c030",
+    "training_load.guard_dashboard_widget_page_protocol()": "4915decb92f583bf2b75d8dd30d478d0",
+    "training_load.save_simple_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb)": "33c8f87b3104a723f4c4d140d8922b43"
+  },
+  "b": {
+    "training_load.cleanup_dashboard_page_requests(integer)": "6e53ea86ca99784b9e6e503be7f48a67",
+    "training_load.copy_dashboard_page_widget(uuid,uuid,jsonb,uuid,text,uuid,uuid,integer,uuid,integer,timestamp with time zone)": "75953d6b01271f1707c1f28c1a7c0632",
+    "training_load.guard_dashboard_page_requests()": "cf603f632f6bb7ebb30e7fe932097e63",
+    "training_load.mutate_dashboard_page(uuid,uuid,jsonb,uuid,text,integer,text,uuid,jsonb,timestamp with time zone)": "e5df8b526678889d07fb1082addbfa43",
+    "training_load.save_simple_page_widget(uuid,integer,uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,jsonb)": "d0491909df03cb5f614f65d89438d014",
+    "training_load.write_dashboard_page_widget(uuid,uuid,integer,text,uuid,uuid,uuid,jsonb)": "7c5843d26519f22947a421441452e691"
+  }
+}

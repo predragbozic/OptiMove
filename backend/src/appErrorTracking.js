@@ -1,3 +1,4 @@
+import { purgeDashboardPageRequests } from './dashboardPages/retention.js';
 import { purgeDashboardSimpleRequests } from './dashboardSimple/retention.js';
 // Option A, A1: a sanitized record of the errors the app hit (migration v58, public.app_error_events).
 //
@@ -574,6 +575,7 @@ export function startAppErrorRetentionSchedule({ intervalHours = PURGE_INTERVAL_
     ["app-errors", "event purge", purgeAppErrorEvents],
     ["app-errors", "person lookup purge", purgePersonLookups],
     ["dashboard-simple", "receipt purge", () => purgeDashboardSimpleRequests(pool)],
+    ["dashboard-pages", "receipt purge", () => purgeDashboardPageRequests(pool)],
   ];
   const tick = async () => {
     const results = await Promise.allSettled(purges.map(([, , purge]) => purge()));

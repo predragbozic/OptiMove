@@ -30090,6 +30090,24 @@ body.athlete-questions-prompt-open {
 .athlete-switcher-fold > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .athlete-switcher.is-open .cc-filters-chevron { transform: translateY(2px) rotate(-135deg); }
 .weekly-k6-controls[aria-busy="true"] { opacity: .6; pointer-events: none; }
+
+/* Dashboard Pages (P1): navigation, explicit Page actions and mobile forms. */
+.tl-dashboard-pages { margin: 12px 0; padding: 12px; border: 1px solid var(--border, #dce2e7); border-radius: 10px; }
+.tl-dashboard-pages nav, .tl-page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tl-dashboard-pages button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border, #dce2e7); background: var(--surface, #fff); color: inherit; font: inherit; border-radius: 8px; cursor: pointer; }
+.tl-dashboard-pages button:disabled { opacity: .55; cursor: default; }
+.tl-dashboard-pages button:focus-visible { outline: 2px solid #087d72; outline-offset: 2px; }
+.tl-dashboard-pages [aria-current="page"] { background: #e1f3ef; border: 2px solid #087d72; font-weight: 700; }
+.tl-page-actions { margin-top: 8px; }
+.tl-page-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 12px; }
+.tl-page-form label { display: grid; gap: 4px; min-width: 0; }
+.tl-page-form input, .tl-page-form select { font-size: 16px; min-height: 44px; max-width: 100%; }
+@media (max-width: 760px) {
+  .tl-dashboard-pages { max-width: 100%; }
+  .tl-dashboard-pages nav { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px; }
+  .tl-dashboard-pages nav button { flex: 0 0 auto; white-space: nowrap; }
+  .tl-page-form label { width: 100%; }
+}
 /* K6 follow-up: hide / show the athlete strip (a computer's calendar box, the Weekly plan's strip). */
 .athlete-switcher-head, .weekly-k6-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .athlete-switcher-head-text { min-width: 0; overflow-wrap: anywhere; font-weight: 800; }

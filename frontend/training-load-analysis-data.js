@@ -1,3 +1,4 @@
+import {loadDashboardPages,pageApiPath} from './training-load-pages-data.js';
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { api } from "./api.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
@@ -153,6 +154,9 @@ function queryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
   return buildContextKey([
     ...currentUserWorkspaceContextParts(),
     a.selectedDashboardId,
+    a.pagesAvailable ? a.selectedPageId || "" : "",
+    a.page?.revision || "",
+    a.page?.defaults_revision || "",
     a.dashboard?.revision || "",
     widgetRevisions,
     a.period.dateFrom,
@@ -191,6 +195,8 @@ function applyDashboardDetail(detail) {
   }
   analysis.dashboard = detail.dashboard;
   analysis.simplePreview = detail.simplePreview === true;
+  analysis.pagesAvailable = detail.pagesAvailable === true;
+  if (!analysis.pagesAvailable) { analysis.selectedPageId = null; analysis.page = null; analysis.pages = []; }
   analysis.simpleWorkspaceRequired = detail.simpleWorkspaceRequired === true;
   analysis.widgets = detail.widgets || [];
   analysis.selectedDashboardId = detail.dashboard?.id || "";
@@ -295,6 +301,7 @@ export async function loadDashboardDetail(dashboardId, onPainted, { force = fals
     },
     getCurrentContextKey: () => (state.trainingLoad.analysis.selectedDashboardId === dashboardId ? detailContextKey(dashboardId) : "__superseded__"),
   });
+  if (generation === detailGeneration && analysis.selectedDashboardId === dashboardId && analysis.pagesAvailable) await loadDashboardPages(onPainted);
 }
 
 export async function queryAnalysisDashboard(onPainted, { force = false } = {}) {
@@ -310,7 +317,7 @@ export async function queryAnalysisDashboard(onPainted, { force = false } = {}) 
     namespace: DASHBOARD_QUERY_NAMESPACE,
     contextKey,
     forceRefresh: force,
-    fetcher: () => api(`/api/training-load/dashboards/${encodeURIComponent(a.selectedDashboardId)}/query`, {
+    fetcher: () => api(a.pagesAvailable && a.selectedPageId ? `${pageApiPath(a.selectedDashboardId,a.selectedPageId)}/query` : `/api/training-load/dashboards/${encodeURIComponent(a.selectedDashboardId)}/query`, {
       method: "POST",
       body: requestBody,
     }),
@@ -482,12 +489,18 @@ export async function updateAnalysisDashboardMetadata(body, onPainted) {
   }), onPainted);
 }
 
+
+export function analysisPageWriteBase() {
+  const a = state.trainingLoad.analysis;
+  return a.pagesAvailable && a.selectedPageId ? pageApiPath(a.dashboard.id, a.selectedPageId) : `/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}`;
+}
+
 export async function saveAnalysisLayout(onPainted) {
   const a = state.trainingLoad.analysis;
   if (!a.dashboard || !a.layoutDraft) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}/layout`, {
+  return mutateDashboard(() => api(`${analysisPageWriteBase()}/layout`, {
     method: "PUT",
-    body: JSON.stringify({ expectedRevision: a.dashboard.revision, layout: a.layoutDraft }),
+    body: JSON.stringify({ expectedRevision: a.dashboard.revision, ...(a.pagesAvailable ? { expectedPageRevision: a.page.revision } : {}), layout: a.layoutDraft }),
   }), onPainted);
 }
 
@@ -617,6 +630,7 @@ function newAnalysisWidgetBody(panel) {
   const order = widgets.length ? Math.max(...widgets.map((w) => Number(w.widget_order ?? w.widgetOrder ?? 0))) + 1 : 1;
   return {
     expectedDashboardRevision: a.dashboard.revision,
+    ...(a.pagesAvailable ? { expectedPageRevision: a.page.revision } : {}),
     widgetType: panel.widgetType,
     title: panel.title.trim(),
     widgetOrder: order,
@@ -655,7 +669,7 @@ export async function saveAnalysisMetricPanel(onPainted) {
   const a = state.trainingLoad.analysis;
   const panel = a.metricPanel;
   if (!panel || !a.dashboard || !metricPanelCanSave(panel)) return false;
-  const base = `/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}`;
+  const base = analysisPageWriteBase();
   const post = (url, body) => api(url, { method: "POST", body: JSON.stringify(body) });
   const patch = (url, body) => api(url, { method: "PATCH", body: JSON.stringify(body) });
   const del = (url, body) => api(url, { method: "DELETE", body: JSON.stringify(body) });
@@ -1289,7 +1303,7 @@ export async function saveAnalysisWidgetEditor(onPainted) {
     onPainted?.();
     return true;
   }
-  const widgetUrl = `/api/training-load/dashboards/${encodeURIComponent(a.dashboard.id)}/widgets/${encodeURIComponent(widget.id)}`;
+  const widgetUrl = `${analysisPageWriteBase()}/widgets/${encodeURIComponent(widget.id)}`;
   const seriesUrl = `${widgetUrl}/series`;
   const send = (method, url, body) => api(url, { method, body: JSON.stringify(body) });
   const failure = (message, cause) => { const err = new Error(message); err.status = cause?.status; err.cause = cause; err.userFacing = true; return err; };
@@ -1442,7 +1456,7 @@ export async function saveAnalysisWidgetEditor(onPainted) {
 export async function deleteAnalysisWidget(widgetId, onPainted) {
   const w = state.trainingLoad.analysis.widgets.find((item) => item.id === widgetId);
   if (!w) return null;
-  return mutateDashboard(() => api(`/api/training-load/dashboards/${encodeURIComponent(state.trainingLoad.analysis.dashboard.id)}/widgets/${encodeURIComponent(widgetId)}`, {
+  return mutateDashboard(() => api(`${analysisPageWriteBase()}/widgets/${encodeURIComponent(widgetId)}`, {
     method: "DELETE",
     body: JSON.stringify({ expectedWidgetRevision: w.revision }),
   }), onPainted);

@@ -1,0 +1,34 @@
+{
+  "required": [
+    {
+      "file": "migrations_v2/202611151000_training_load_v71_dashboard_simple_atomic_save.sql",
+      "sha256": "eee3ebad9d414e2c6f614de3003dc8241e3fcbc3bacf5a751bbc0376800f8b5b"
+    },
+    {
+      "file": "migrations_v2/202611191200_training_load_v79_calculated_ratio_difference.sql",
+      "sha256": "b5eb2967e68218eadaf7ec2a27355320534f8466a37c50e83d3fc7fbe0b289a8"
+    },
+    {
+      "file": "migrations_v2/202611201300_roles_v84_permission_roles.sql",
+      "sha256": "dfafb581c762d724d63a8356f93d9422ec96e27dfab75a344746e83b23df2e9c"
+    },
+    {
+      "file": "migrations_v2/202611201500_training_load_v85_session_types.sql",
+      "sha256": "11b31dcf34c557a3b9b292850384642570c074a39759d556f0111179e5ed41df"
+    }
+  ],
+  "optional": [
+    {
+      "file": "migrations_v2/202611221200_athletes_v87_positions.sql",
+      "sha256": "f0422b12dd159e8be27e39357f03bc252e8b16045570a61285d9e17ce19cca54"
+    },
+    {
+      "file": "migrations_v2/202611221300_training_load_v88_manual_values.sql",
+      "sha256": "20002940bf6243e4a5d0519600e7cb0941e21d6b56990333bc9b245808ddd8e8"
+    },
+    {
+      "file": "migrations_v2/202611221400_training_load_v89_participant_session_types.sql",
+      "sha256": "2a74ca824cb774d98546ece898c6eb359f5b1b023a750a142433bb0044f62540"
+    }
+  ]
+}

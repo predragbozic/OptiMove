@@ -407,3 +407,33 @@ test("the app retention tick calls the Simple receipt purge", async () => {
     pool.query = originalQuery;
   }
 });
+
+test("the app retention tick calls the Page receipt purge", async () => {
+  const { pool } = await import("../src/db.js");
+  const originalQuery = pool.query;
+  let stop;
+  try {
+    const purged = new Promise(resolve => {
+      pool.query = function (sql, ...args) {
+        if (String(sql).includes("to_regprocedure('training_load.cleanup_dashboard_page_requests")) {
+          return Promise.resolve({ rows: [{ installed: true }] });
+        }
+        if (String(sql).includes("cleanup_dashboard_page_requests(100)")) {
+          resolve();
+          return Promise.resolve({ rows: [{ deleted: 0 }] });
+        }
+        return originalQuery.call(this, sql, ...args);
+      };
+    });
+    stop = M.startAppErrorRetentionSchedule({ startupDelayMs: 0 });
+    let timeout;
+    try {
+      await Promise.race([purged, new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Receipt purge did not run")), 2000);
+      })]);
+    } finally { clearTimeout(timeout); }
+  } finally {
+    stop?.();
+    pool.query = originalQuery;
+  }
+});

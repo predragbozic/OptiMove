@@ -20,7 +20,7 @@ if (needsModuleMocksRelaunch()) {
   let batchQueryHandler;
 
   mock.module("../src/db.js", { namedExports: {
-    query: async (sql, parameters) => { queryCalls.push({ sql, parameters }); return queryHandler(sql, parameters); },
+    query: async (sql, parameters) => { queryCalls.push({ sql, parameters }); if (sql.includes("to_regclass('training_load.dashboard_pages')")) return { rows: [{ installed: false }] }; return queryHandler(sql, parameters); },
     pool: { connect: async () => connectHandler() },
   } });
   mock.module("../src/trainingLoadDashboardAccess.js", { namedExports: {
@@ -261,6 +261,7 @@ if (needsModuleMocksRelaunch()) {
       query: async (sql, parameters) => {
         statements.push({ sql, parameters });
         if (["begin", "commit", "rollback"].includes(sql)) return { rows: [] };
+        if (sql.includes("to_regclass('training_load.dashboard_pages')")) return { rows: [{ installed: false }] };
         if (sql.includes("from training_load.dashboards")) return { rows: [{ ...dashboard, is_template: true }] };
         if (sql.startsWith("insert into training_load.dashboards")) return { rows: [{ ...dashboard, id: "cloned-dashboard" }] };
         if (sql.startsWith("select * from training_load.dashboard_widgets")) return { rows: sourceWidgets };

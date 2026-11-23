@@ -102,3 +102,11 @@ training_load.create_widget_with_presentation, and
 training_load.update_widget_content_with_presentation. The existing cloneDashboard
 transaction also copies presentation_config with a raw UPDATE so an opaque sidecar
 survives cloning unchanged.
+
+## P1 Pages sanctioned writes
+
+P1 extends the dashboard domain lock order to dashboard → Pages (UUID order) → widget → series. The live actor/session/workspace rights rows are locked before the domain rows. Existing sanctioned writers enter assert_dashboard_writable, which locks the parent and its Pages before touching widgets. The Page revision trigger is not a substitute for these locks; dashboard-pages-concurrency.test.mjs records SQL order and exercises competing writers.
+
+New sanctioned entry points are mutate_dashboard_page, copy_dashboard_page_widget, write_dashboard_page_widget and save_simple_page_widget. The two wrappers reuse existing widget/series and v71 atomic-save functions under a transaction-bound Page context. New retention entry point cleanup_dashboard_page_requests permits bounded expired-receipt deletion only. Receipt UPDATE, young DELETE and TRUNCATE are refused by guard_dashboard_page_requests. Reads and queries never create Pages.
+
+cloneDashboard remains the documented raw-write exception. It locks the source dashboard, Pages, widgets and series before copying; a dashboard INSERT creates Home in ensure_dashboard_home with the exact default_filter. The new clone maps each source Page to a new Page identity and copies widget/series contents and presentation unchanged. The database activation barrier prevents a second Page while the previous binary can serve. Whole-dashboard deletion uses the sanctioned v19 function, Page cascade and exactly one existing deletion-log entry. Direct Home deletion is refused.
