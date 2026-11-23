@@ -3,7 +3,7 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
-import { choiceReviewOf, importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sessionTypeChoice, stateAthleteIds } from "./gpexe-import-view.js";
+import { choiceReviewOf, importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sessionTypeChoice, stateAthleteIds, useGpexeIds } from "./gpexe-import-view.js";
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
@@ -17,6 +17,7 @@ import { ensurePeriodData,
   approveGpexeCandidate,
   reviewGpexeSubset,
   setGpexeLeaveOut,
+  setGpexeUseGpexe,
   loadSessionTypes,
   setGpexeSessionType,
   backFromTeamMappingConfirm,
@@ -70,7 +71,7 @@ const LATER_REPEAT_MS = 400;
 let laterTappedAt = 0;
 export function resetLaterTapForTests() { laterTappedAt = 0; }
 import { changeTimezone, checkTimezone, closeTimezone, leaveTimezoneReview, openTimezone, saveTimezone, timezoneBusy, timezoneHeld } from "./gpexe-timezone-data.js";
-import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
+import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, manualToRemove, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoManualProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -405,15 +406,29 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     }
     return true;
   }
+  // ST-4: "Use GPEXE's values" for an athlete with values entered or corrected on the roster (unticked: keep them).
+  if (type === "training-load-gpexe-use-gpexe") {
+    const id = action.dataset.athleteId;
+    const listed = (gx.detail?.candidate?.preview?.manualValues?.athletes || []).some((a) => String(a.athleteId) === String(id) && a.replaceAvailable === true);
+    if (!id || !listed || gx.status?.viewer?.canApprove !== true) return true;
+    if (setGpexeUseGpexe(id, Boolean(action.checked))) {
+      renderTrainingLoad();
+      globalThis.document?.querySelector?.(`[data-action="training-load-gpexe-use-gpexe"][data-athlete-id="${id}"]`)?.focus?.();
+    }
+    return true;
+  }
   if (type === "training-load-gpexe-subset-review") {
     const candidate = gx.detail?.candidate;
     // Offered like the boxes, or (after an unconfirmed answer) for the set that was sent: the review is how a retry is made.
-    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && ((gx.detail.leaveOut || []).length > 0 || Boolean(gx.detail.typeChoice));
-    if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
+    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && ((gx.detail.leaveOut || []).length > 0 || Boolean(gx.detail.typeChoice) || (gx.detail.useGpexe || []).length > 0);
+    const choosing = useGpexeIds(candidate, gx.detail).length > 0 && gx.status?.viewer?.canApprove === true;
+    if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || choosing || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
     const ids = leaveOutIds(candidate, gx.detail);
+    // ST-4: GPEXE's values over roster values are part of the same reviewed choice.
+    const replace = useGpexeIds(candidate, gx.detail);
     // ST-5: a chosen session type is a choice to review too, with or without athletes left out.
-    if (!ids.length && !sessionTypeChoice(candidate, gx.detail)) return true;
-    await reviewGpexeSubset(ids, renderTrainingLoad);
+    if (!ids.length && !replace.length && !sessionTypeChoice(candidate, gx.detail)) return true;
+    await reviewGpexeSubset(ids, renderTrainingLoad, replace);
     return true;
   }
   // ST-5: the session type chosen in the review. The choice is reviewed at once (one request, nothing stored) unless athletes
@@ -424,7 +439,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (!setGpexeSessionType(action.value)) return true;
     renderTrainingLoad();
     globalThis.document?.querySelector?.("[data-gpexe-session-type]")?.focus?.();
-    if (sessionTypeChoice(candidate, gx.detail) && !leaveOutIds(candidate, gx.detail).length) await reviewGpexeSubset([], renderTrainingLoad);
+    if (sessionTypeChoice(candidate, gx.detail) && !leaveOutIds(candidate, gx.detail).length && !useGpexeIds(candidate, gx.detail).length) await reviewGpexeSubset([], renderTrainingLoad);
     return true;
   }
   if (type === "training-load-gpexe-session-types-again") {
@@ -436,11 +451,12 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (!candidate) return true;
     // J20-B: with athletes left out only the reviewed subset is approved - never the whole session behind their backs.
     const leave = leaveOutIds(candidate, gx.detail);
+    const replace = useGpexeIds(candidate, gx.detail);
     // ST-5: so it is with a chosen session type - only the reviewed choice is approved; and a session without a type is
-    // never sent without one.
+    // never sent without one. ST-4: with GPEXE's values chosen over roster values, too.
     const typeKey = sessionTypeChoice(candidate, gx.detail);
     const reviewed = choiceReviewOf(candidate, gx.detail, leave);
-    if ((leave.length || typeKey) && reviewed?.status !== "ready") return true;
+    if ((leave.length || typeKey || replace.length) && reviewed?.status !== "ready") return true;
     if (!typeKey && (candidate.approvalBlockers || []).includes("session_type_required")) return true;
     const changes = candidate.changesToImported || 0;
     if (changes && !gx.detail.acceptChanges) {
@@ -457,7 +473,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // J20-C: the attendance states chosen on the rows are saved after the import (their keys are made now, before anything is sent).
     const stateIds = stateAthleteIds(candidate, gx.detail);
     const states = chosenStateCount(gx.detail, stateIds);
-    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown${leave.length ? `, leaving out ${leave.length} ${leave.length === 1 ? "athlete" : "athletes"}` : ""}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}${states ? ` Then it saves ${states} ${states === 1 ? "attendance state" : "attendance states"}.` : ""}`;
+    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown${leave.length ? `, leaving out ${leave.length} ${leave.length === 1 ? "athlete" : "athletes"}` : ""}${replace.length ? `, with GPEXE's values for ${replace.length} ${replace.length === 1 ? "athlete" : "athletes"} instead of the values entered on the roster` : ""}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}${states ? ` Then it saves ${states} ${states === 1 ? "attendance state" : "attendance states"}.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
     if (states) prepareStateKeys(gx.detail, stateIds);
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);
@@ -517,21 +533,32 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // The whole reason is checked BEFORE the question: a destructive question is never asked for an input that is refused anyway.
     const laterBox = globalThis.document?.querySelector?.("[data-gpexe-undo-later-confirm]");
     if (laterBox) u.laterConfirmed = laterBox.checked === true;
+    const manualBox = globalThis.document?.querySelector?.("[data-gpexe-undo-manual-confirm]");
+    if (manualBox) u.manualConfirmed = manualBox.checked === true;
     const reasonProblem = undoReasonProblem(reason);
     const laterProblem = reasonProblem ? "" : undoLaterProblem(u, u.laterConfirmed);
-    if (reasonProblem || laterProblem) {
+    const manualProblem = reasonProblem ? "" : undoManualProblem(u, u.manualConfirmed);
+    if (reasonProblem || laterProblem || manualProblem) {
       u.reasonProblem = reasonProblem;
       u.laterProblem = laterProblem;
+      u.manualProblem = manualProblem;
       renderTrainingLoad();
       return true;
     }
     u.laterProblem = "";
+    u.manualProblem = "";
     const label = u.label || gx.detail?.candidate?.label || "this session";
     const later = laterRosterWork(u);
+    const manual = manualToRemove(u);
     const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
     const changes = laterChangeCount(later);
     const laterText = later ? ` This also removes ${changes === 1 ? "1 later attendance change" : `${changes} later attendance changes`} made in the Roster tab.` : "";
-    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText} Deleted data can't be restored; to get it back, import the session again from Imports.`;
+    const manualList = manual && Array.isArray(manual.list) ? manual.list : [];
+    const manualAthletes = new Set(manualList.map((i) => i.athleteId).filter(Boolean)).size || manualList.length;
+    const manualText = manual
+      ? ` This also removes the values coaches entered or corrected${manualAthletes ? ` for ${manualAthletes === 1 ? "1 athlete" : `${manualAthletes} athletes`}` : ""}; importing the session again does not bring them back.`
+      : "";
+    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText}${manualText} Deleted data can't be restored; to get ${manual ? "the imported data" : "it"} back, import the session again from Imports.`;
     u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
     await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);

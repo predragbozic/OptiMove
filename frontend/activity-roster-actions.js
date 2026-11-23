@@ -19,6 +19,7 @@ import {
   viewerCanDecide,
 } from "./activity-roster-view.js";
 import { estimateBusy, handleEstimateAction } from "./activity-estimate.js";
+import { handleManualAction, manualBusy } from "./activity-manual-values.js";
 import { handleSessionTypeAction, loadRosterSessionTypes, typeChangeBusy } from "./activity-session-type.js";
 import { state } from "./state.js";
 
@@ -63,7 +64,7 @@ export async function loadRosterForOpenActivity(activityId, render) {
 // session changes, by confirmLeaveTrainingLoad and by beforeunload.
 // ---------------------------------------------------------------------------
 export function rosterHasPendingOutcome(roster = rosterState()) {
-  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0 || estimateBusy(roster) || typeChangeBusy(roster);
+  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0 || estimateBusy(roster) || manualBusy(roster) || typeChangeBusy(roster);
 }
 
 export function rosterMayBeLeft(roster = rosterState()) {
@@ -72,6 +73,8 @@ export function rosterMayBeLeft(roster = rosterState()) {
     ? "A roster change is not confirmed yet. If you leave now, you cannot check its result here. Leave anyway?"
     : roster.estimate?.unconfirmed
     ? "An estimate is not confirmed yet. If you leave now, you cannot check its result here. Leave anyway?"
+    : roster.manual?.unconfirmed
+    ? "Values you entered are not confirmed yet. If you leave now, you cannot check their result here. Leave anyway?"
     : "A roster change is still being saved. If you leave now, its result is lost. Leave anyway?";
   return Boolean(globalThis.window?.confirm?.(question));
 }
@@ -88,6 +91,7 @@ export function closeActivityRosterOverlay() {
   if (roster.picker && !roster.picker.sending) { roster.picker = null; return true; }
   if (roster.confirm) { roster.confirm = null; return true; }
   if (roster.estimate && !estimateBusy(roster)) { roster.estimate = null; return true; }
+  if (roster.manual && !manualBusy(roster)) { roster.manual = null; return true; }
   return false;
 }
 
@@ -172,6 +176,10 @@ function refusalNotice(roster, result, ctx) {
   if (code === "measured_record_exists") {
     return { tone: "refused", text: `${sourceName()} values for ${name} just arrived; ${name} is now Measured. ${NOTHING_SAVED}`, action: null, code };
   }
+  // ST-4: values were entered for the athlete on the roster meanwhile; a state comes only after they are removed.
+  if (code === "manual_values_present") {
+    return { tone: "refused", text: `${name} has values entered on the roster, so no state was saved. Remove the values first to set a state.`, action: { label: "Change values…", action: "training-load-roster-manual-open", athleteId: ctx.athleteId }, code };
+  }
   if (code === "not_on_roster") return { tone: "refused", text: `${name} is no longer on this session's roster. ${NOTHING_SAVED}`, action: null, code };
   if (code === "nothing_to_clear") {
     return { tone: "refused", text: `${name} has no state to remove any more (now: ${currentText(roster, data.current)}). ${NOTHING_SAVED}`, action: null, code };
@@ -186,6 +194,7 @@ function refusalNotice(roster, result, ctx) {
       const who = nameOf(roster, f.athleteId);
       if (f.error === "not_on_roster") return `${who} (no longer on the roster)`;
       if (f.error === "measured_record_exists") return `${who} (now Measured)`;
+      if (f.error === "manual_values_present") return `${who} (values were entered on the roster)`;
       return `${who} (now ${currentText(roster, f.current)})`;
     });
     const remaining = (ctx.athleteIds || []).filter((id) => !failedIds.has(id));
@@ -228,7 +237,7 @@ async function runWrite(command, ctx, render) {
   // settle after the first became unconfirmed and replace or clear its
   // slot. The only live control then is Check result, which never comes
   // through here.
-  if (!activityId || roster.writeLock || roster.unconfirmed || Object.keys(roster.busy || {}).length || estimateBusy(roster)) return;
+  if (!activityId || roster.writeLock || roster.unconfirmed || Object.keys(roster.busy || {}).length || estimateBusy(roster) || manualBusy(roster)) return;
   if (bulk ? bulkLocked(roster) : ctx.athleteIds.some((id) => rowLocked(roster, id))) return;
   lockRows(roster, ctx.athleteIds, bulk);
   roster.confirm = null;
@@ -447,7 +456,14 @@ export async function handleActivityRosterAction(action, { render }) {
   if (!roster.data || !viewerCanDecide(roster.data)) return true;
 
   // 6b-C1: estimates on a Participated · no device data row.
-  if (type.startsWith("training-load-roster-estimate-")) return handleEstimateAction(action, { render });
+  if (type.startsWith("training-load-roster-estimate-")) {
+    // ST-4: one panel at a time - opening an estimate closes an idle manual-values panel.
+    if (type === "training-load-roster-estimate-open" && roster.manual && !manualBusy(roster)) roster.manual = null;
+    if (type === "training-load-roster-estimate-open" && manualBusy(roster)) return true;
+    return handleEstimateAction(action, { render });
+  }
+  // ST-4: manual values (an entry, a correction, the restore of the measured values).
+  if (type.startsWith("training-load-roster-manual-")) return handleManualAction(action, { render });
 
   // ST-5: the session's type and an athlete's own type (activity-session-type.js). One command at a time, as every write here.
   if (type === "training-load-roster-session-type" || type === "training-load-roster-athlete-type" || type.startsWith("training-load-roster-type-")) {

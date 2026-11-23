@@ -132,6 +132,9 @@ const OUTCOME_TEXT = {
   corrected: "Values replaced",
   needs_review: "Kept aside for review (differs from the current values)",
   stale_resend_ignored: "Older GPEXE version - current values kept",
+  // ST-4: values entered or corrected on the roster.
+  manual_kept: "Your values kept",
+  manual_replaced: "GPEXE's values used",
   not_imported: "Not imported",
 };
 
@@ -145,6 +148,9 @@ const COUNT_TEXT = {
   stale_resend_ignored: ["older GPEXE version ignored", "older GPEXE versions ignored"],
   needs_review_already_recorded: ["result already kept aside earlier", "results already kept aside earlier"],
   stale_resend_ignored_already_recorded: ["older GPEXE version already ignored earlier", "older GPEXE versions already ignored earlier"],
+  manual_kept: ["result kept as entered on the roster", "results kept as entered on the roster"],
+  manual_replaced: ["result with GPEXE's values over the roster's", "results with GPEXE's values over the roster's"],
+  manual_kept_already_recorded: ["result already kept as entered earlier", "results already kept as entered earlier"],
 };
 
 // Metric names for the coach, by metric key. GPEXE's own names (TotDist,
@@ -220,6 +226,8 @@ const REFUSAL_TEXT = {
   no_importable_athlete: "Not imported: leaving these athletes out would leave nobody to import.",
   invalid_exclusion: "Not imported: one of the athletes you left out can't be left out any more. Update the review and choose again.",
   invalid_excluded_athlete: "Not imported: one of the athletes you left out can't be left out any more. Update the review and choose again.",
+  invalid_manual_choice: "Not imported: the values entered on the roster changed. Update the review and choose again.",
+  manual_replace_unavailable: "Not imported: GPEXE sent only drill results for an athlete you chose, so their entered values are kept. Update the review and choose again.",
   internal_error: "Not imported: the server failed before writing anything. Try again later.",
   // Switch condition 2: a bounded wait before the COMMIT (another check,
   // import or change of the team, or a busy server); nothing was written.
@@ -1101,6 +1109,8 @@ function renderFixHtml(gx, status) {
         needs_review: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's different values are saved for review`,
         // "Older or manual" (the writer flags a manual correction this way even when GPEXE's report is newer): never "older".
         stale_resend_ignored: (one) => `${one ? "stays as it is" : "stay as they are"}; GPEXE's values are saved aside`,
+        manual_kept: (one) => `${one ? "keeps" : "keep"} the values entered on the roster`,
+        manual_replaced: (one) => `${one ? "gets" : "get"} GPEXE's values instead of the ones entered on the roster`,
       };
       const m = new Map();
       for (const ch of c?.preview?.changesToImported || []) {
@@ -2857,6 +2867,7 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
     <section class="gpexe-review-table" aria-label="Session review">
       <h4>Session review (${plural(rows.length, "athlete", "athletes")})</h4>
       <p class="muted">${n ? `${plural(n - Math.min(n, leaveOutIds(c, detail).length), "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}${leaveOutIds(c, detail).length ? `, ${leaveOutIds(c, detail).length} left out` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete needs", "athletes need")} a link first.` : ""}</p>
+      ${manualValueAthletes(c).length && c?.status === "pending" && renderApproveHtml(c, detail, state.trainingLoad.gpexe.status).includes('id="gpexe-manual-choice"') ? manualSummaryHtml(c) : ""}
       ${updating}${updateError}
       ${lo.offered && rows.some((r) => r.status === "importable" || r.status === "participation") ? `<p class="muted">To import without someone, tick Leave out on their row${fine.length && shown.length && filter !== "all" ? ` (open "${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}" below)` : ""}.</p>` : ""}
       ${lo.states && stateAthleteIds(c, detail).length ? `<p class="muted">Attendance you choose on a row is optional. It is saved right after the import, and you can change it later in the Roster tab.</p>` : ""}
@@ -2897,6 +2908,7 @@ function renderOutcomeHtml(detail) {
       const differs = Array.isArray(recorded) && Array.isArray(chosen) && !sameIds(recorded, chosen);
       return `<div class="gpexe-success" role="status"><p><strong>Imported.</strong> Checked: the import is in OptiMove.</p>
         ${Array.isArray(recorded) && recorded.length ? `<p>${escapeHtml(`${plural(recorded.length, "athlete was", "athletes were")} left out of this import.`)}</p>` : ""}
+        ${(o.chosenReplace || []).length ? `<p>${escapeHtml(`You chose GPEXE's values for ${plural(o.chosenReplace.length, "athlete", "athletes")}. The session's Roster tab shows which values are in use.`)}</p>` : ""}
         ${differs ? `<p class="gpexe-warning" role="alert">${escapeHtml(recorded.length
     ? `Imported. Left out: ${leftOutNames(detail.candidate, recorded.map(String)).join(", ")}. This differs from your current ticks; what is shown is what was imported.`
     : `Imported with nobody left out, although you had ticked ${leftOutNames(detail.candidate, (chosen || []).map(String)).join(", ")}.`)}</p>` : ""}
@@ -2967,8 +2979,65 @@ function leftOutNames(c, ids) {
   return ids.map((id) => { const a = byId.get(id); return a ? athleteName(c, a.athleteId, a.gpexeAthleteId) : "an athlete"; });
 }
 
+// ST-4 (section 8): the athletes whose values were entered or corrected on the roster, as the server listed them, and the ones
+// ticked "Use GPEXE's values" (still listed). Unticked is "Keep my values", the default.
+export function manualValueAthletes(c) {
+  return Array.isArray(c?.preview?.manualValues?.athletes) ? c.preview.manualValues.athletes : [];
+}
+// Offered only where the server says GPEXE's values can replace them (replaceAvailable: a whole-session result), and never
+// for an athlete who is left out of the import.
+function leftOutAthleteIds(c, detail) {
+  const byGpexe = new Map((c?.preview?.athletes || []).map((a) => [String(a.gpexeAthleteId), a.athleteId == null ? null : String(a.athleteId)]));
+  return new Set((detail?.leaveOut || []).map((id) => byGpexe.get(String(id))).filter(Boolean));
+}
+export function useGpexeIds(c, detail) {
+  const leftOut = leftOutAthleteIds(c, detail);
+  const offered = new Set(manualValueAthletes(c).filter((a) => a.replaceAvailable === true).map((a) => String(a.athleteId)));
+  return [...new Set(detail?.useGpexe || [])].filter((id) => offered.has(id) && !leftOut.has(id)).sort();
+}
+function manualHeading(n) {
+  return `${plural(n, "athlete has", "athletes have")} values entered or corrected on the roster.`;
+}
+// The same question named at the top of the review, so a phone shows it before the import bar (the choice is below).
+export function manualSummaryHtml(c) {
+  const n = manualValueAthletes(c).length;
+  return n ? `<div class="gpexe-manual-summary"><p><strong>${escapeHtml(manualHeading(n))}</strong> <span class="muted">They are kept unless you choose GPEXE's values below.</span></p>
+      <a href="#gpexe-manual-choice" class="gpexe-manual-jump">Go to the choice</a></div>` : "";
+}
+function manualChoiceHtml(c, detail) {
+  const list = manualValueAthletes(c);
+  if (!list.length) return "";
+  const chosen = new Set(useGpexeIds(c, detail));
+  const leftOut = leftOutAthleteIds(c, detail);
+  const busy = detail.approving || detail.subset?.status === "loading";
+  const rows = list.map((a) => {
+    const id = String(a.athleteId);
+    const name = c?.athletes?.[a.athleteId]?.name || "An athlete";
+    const what = a.kind === "entry" ? "values entered on the roster" : "values corrected on the roster";
+    const control = a.replaceAvailable !== true
+      ? `<span class="muted gpexe-manual-kept">Kept: GPEXE sent only drill results.</span>`
+      : leftOut.has(id)
+        ? `<span class="muted gpexe-manual-kept">Left out of this import.</span>`
+        : `<label class="gpexe-manual-use">
+          <input type="checkbox" data-action="training-load-gpexe-use-gpexe" data-athlete-id="${escapeAttr(a.athleteId)}" ${chosen.has(id) ? "checked" : ""} ${busy ? "disabled" : ""}>
+          <span>Use GPEXE's values</span>
+        </label>`;
+    return `
+      <li class="gpexe-manual-row">
+        <span>${escapeHtml(name)} <span class="muted">· ${escapeHtml(what)}</span></span>
+        ${control}
+      </li>`;
+  }).join("");
+  return `
+    <div class="gpexe-manual-choice" id="gpexe-manual-choice" role="group" aria-label="Values entered on the roster">
+      <p><strong>${escapeHtml(manualHeading(list.length))}</strong>
+        <span class="muted">These are kept. Tick Use GPEXE's values to replace them; the replaced values stay in the history.</span></p>
+      <ul class="gpexe-manual-list">${rows}</ul>
+    </div>`;
+}
+
 // The set no longer fits the session: another review of the session is needed, not the same request again.
-const STALE_SET_CODES = new Set(["invalid_exclusion", "invalid_excluded_athlete"]);
+const STALE_SET_CODES = new Set(["invalid_exclusion", "invalid_excluded_athlete", "invalid_manual_choice", "manual_replace_unavailable", "subset_blocked"]);
 const SUBSET_ERROR_TEXT = {
   try_again: "The review without them could not be made right now. Try again in a moment.",
   no_importable_athlete: "Leaving these athletes out would leave nobody to import.",
@@ -2976,11 +3045,14 @@ const SUBSET_ERROR_TEXT = {
   invalid_excluded_athlete: "The session changed, and one of the athletes you left out is no longer part of it. Update the review, then choose again.",
   nothing_to_import: "The athletes that remain have nothing new to import.",
   subset_blocked: "This session can't be imported right now. Update the review, then choose again.",
+  invalid_manual_choice: "The values entered on the roster changed. Update the review, then choose again.",
+  manual_replace_unavailable: "GPEXE sent only drill results for an athlete you chose, so their entered values are kept. Update the review, then choose again.",
   get not_an_approver() { return platformViewer() ? "You may not approve imports for this team." : "You can't import this session."; },
 };
 
-function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
+function renderSubsetApproveHtml(c, detail, leave, importN, changes, replace = []) {
   const names = leftOutNames(c, leave);
+  const replacedNames = replace.map((id) => c?.athletes?.[id]?.name || "an athlete");
   const sub = choiceReviewOf(c, detail, leave);
   const ready = sub?.status === "ready";
   const after = ready ? importableAthleteCount(sub.preview) : importN - leave.length;
@@ -2988,12 +3060,15 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
   const failed = sub?.status === "error";
   return `
     <div class="gpexe-approve gpexe-approve-subset">
-      <p><strong>${escapeHtml(`Leaving out ${plural(leave.length, "athlete", "athletes")}: ${names.join(", ")}.`)}</strong>
-        <span class="muted">${leave.length === 1 ? `Nothing of ${escapeHtml(names[0])} is imported from this session.` : "Nothing of them is imported from this session."} If GPEXE later sends different data for it, you will review it again. You can set their attendance on their rows now, or later in the session's Roster tab.</span></p>
-      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml((sub.error?.code === "session_type_not_offered" ? TYPE_CHOICE_ERROR_TEXT.session_type_not_offered : null) || SUBSET_ERROR_TEXT[sub.error?.code] || "The review without them could not be made. Nothing was imported.")}</p>` : ""}
-      ${ready ? `<p class="muted" role="status">${escapeHtml(`Reviewed without them: ${plural(after, "athlete", "athletes")} will be imported.`)}</p>` : ""}
+      ${manualChoiceHtml(c, detail)}
+      ${leave.length ? `<p><strong>${escapeHtml(`Leaving out ${plural(leave.length, "athlete", "athletes")}: ${names.join(", ")}.`)}</strong>
+        <span class="muted">${leave.length === 1 ? `Nothing of ${escapeHtml(names[0])} is imported from this session.` : "Nothing of them is imported from this session."} If GPEXE later sends different data for it, you will review it again. You can set their attendance on their rows now, or later in the session's Roster tab.</span></p>` : ""}
+      ${replace.length ? `<p><strong>${escapeHtml(`Using GPEXE's values for ${plural(replace.length, "athlete", "athletes")}: ${replacedNames.join(", ")}.`)}</strong>
+        <span class="muted">The values entered on the roster stay in the history.</span></p>` : ""}
+      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml((sub.error?.code === "session_type_not_offered" ? TYPE_CHOICE_ERROR_TEXT.session_type_not_offered : null) || SUBSET_ERROR_TEXT[sub.error?.code] || (leave.length ? "The review without them could not be made. Nothing was imported." : "The review of your choice could not be made. Nothing was imported."))}</p>` : ""}
+      ${ready ? `<p class="muted" role="status">${escapeHtml(`${leave.length ? "Reviewed without them" : "Reviewed with your choice"}: ${plural(after, "athlete", "athletes")} will be imported.`)}</p>` : ""}
       ${statesLineHtml(c, detail)}
-      ${!ready && !loading && !failed ? `<p class="muted">First we check the import without them. Nothing is saved yet.</p>` : ""}
+      ${!ready && !loading && !failed ? `<p class="muted">First we check the import ${leave.length ? "without them" : "with your choice"}. Nothing is saved yet.</p>` : ""}
       ${after <= 0 && !loading ? `<p class="muted gpexe-approve-note">Nobody would be left to import. Untick an athlete to continue.</p>` : ""}
       <div class="gpexe-approve-bar${after <= 0 ? " is-idle" : ""}">
       ${changes ? `
@@ -3006,7 +3081,7 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes) {
     ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || after <= 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(after, "athlete", "athletes")}`}</button>`
     : failed && STALE_SET_CODES.has(sub.error?.code)
       ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-review-update" ${detail.updating ? "disabled" : ""}>${detail.updating ? "Updating..." : "Update the review"}</button>`
-      : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-subset-review" ${loading || after <= 0 ? "disabled" : ""}>${loading ? "Checking..." : failed ? "Try again" : "Review without them"}</button>`}
+      : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-subset-review" ${loading || after <= 0 ? "disabled" : ""}>${loading ? "Checking..." : failed ? "Try again" : leave.length ? "Review without them" : "Review your choice"}</button>`}
       </div>
     </div>
   `;
@@ -3022,11 +3097,12 @@ export function sessionTypeChoice(c, detail) {
   return chosen && chosen !== shown ? chosen : null;
 }
 
-// The review of the reviewer's current choice (the athletes left out and the chosen type), or null when none was made
+// The review of the reviewer's current choice (the athletes left out, the chosen type and, ST-4, the athletes given GPEXE's
+// values), or null when none was made
 // for exactly this choice.
 export function choiceReviewOf(c, detail, leave = leaveOutIds(c, detail)) {
   const sub = detail?.subset;
-  if (!sub || !sameIds(sub.ids, leave) || (sub.typeKey ?? null) !== sessionTypeChoice(c, detail)) return null;
+  if (!sub || !sameIds(sub.ids, leave) || (sub.typeKey ?? null) !== sessionTypeChoice(c, detail) || !sameIds(sub.replace || [], useGpexeIds(c, detail))) return null;
   return sub;
 }
 
@@ -3093,6 +3169,7 @@ function renderTypeChoiceApproveHtml(c, detail, importN, changes, typeKey) {
   const n = ready ? importableAthleteCount(sub.preview) : importN;
   return `
     <div class="gpexe-approve gpexe-approve-type">
+      ${manualChoiceHtml(c, detail)}
       <p class="muted">${escapeHtml(`Will be imported as ${sessionTypeLabel(typeKey)}. ${approveLeftOutText(c)}`)}</p>
       ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(TYPE_CHOICE_ERROR_TEXT[sub.error?.code] || SUBSET_ERROR_TEXT[sub.error?.code] || "The review with this session type could not be made. Nothing was imported.")}</p>` : ""}
       ${n === 0 && !loading ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
@@ -3205,12 +3282,15 @@ function renderApproveHtml(c, detail, status) {
   // J20-B: with athletes ticked as "Leave out" the approval is the SUBSET's: it is reviewed first (one deliberate step that
   // asks the server for the preview without them) and the button imports exactly that review.
   const leave = leaveOutIds(c, detail);
-  if (leave.length) return renderSubsetApproveHtml(c, detail, leave, importN, changes);
+  // ST-4: "Use GPEXE's values" is a choice too: reviewed first, and the button imports exactly that review.
+  const replace = useGpexeIds(c, detail);
+  if (leave.length || replace.length) return renderSubsetApproveHtml(c, detail, leave, importN, changes, replace);
   // ST-5: a chosen session type alone - the same approval of a reviewed choice, without the "leaving out" words. The review
   // of the choice is asked for as soon as the type is picked, so the button is Import.
   if (typeKey) return renderTypeChoiceApproveHtml(c, detail, importN, changes, typeKey);
   return `
     <div class="gpexe-approve">
+      ${manualChoiceHtml(c, detail)}
       <p class="muted">${escapeHtml(approveLeftOutText(c))}</p>
       ${importsLinkedAthletes(c) ? `<p class="muted gpexe-approve-names">${platformViewer() ? "Check that each athlete is the right person. Results imported under the wrong athlete can't be changed here — contact a platform administrator." : `Check that each athlete is the right person. If one is wrong after the import, ${askWho()}.`}</p>` : ""}
       ${importN === 0 ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
