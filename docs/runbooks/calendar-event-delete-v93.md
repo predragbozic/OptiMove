@@ -111,6 +111,10 @@ tables that name an event are append-only or refuse deletes.
 - **When it refuses**, changing nothing: v93 is not recorded, a later migration is recorded, a deletion-log row exists,
   or the bodies in force are not v93's. Once one event has been deleted, v93 is forward-only: the log is the only
   trace of the deleted event.
+- **After a manual rollback, restart the server** (each instance). Two in-memory caches remember that v93's tables
+  exist once seen: `deletionInstalledCache` in `backend/src/calendarEventService.js` and `spentKeysSeen` in
+  `backend/src/calendarCommandRunner.js`. A server still running with them would read the dropped tables on the next
+  event command. The deploy of a commit without v93 restarts it anyway; a rollback run on its own does not.
 - **What it restores:** the v49 / v51 triggers and the two v49 bodies verbatim (checked by md5 at its end).
   `backend/tests/calendar-event-delete-v93.test.mjs` test 9 and the rehearsal's step 6 check that the calendar catalog
   then equals the one before v93.
