@@ -123,7 +123,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.equal(await page.locator('[data-act="unlink-sessions"], [data-act="unlink-activity"]').count(), 0);
       assert.equal(await page.locator(".cc-athletes").count(), 0);
       assert.equal(await page.locator(".cc-see-each button").count(), 1, "one See each athlete");
-      assert.match(await page.locator(".cc-see-each-choose").innerText(), /See each athlete\s*· 8 forms/);
+      // Eight trainings, six forms: three of them share the PM Training slot, which is one form of the Weekly plan.
+      assert.match(await page.locator(".cc-see-each-choose").innerText(), /See each athlete\s*· 6 forms/);
       const acts = await page.locator(".cc-panel-bottom button").allInnerTexts();
       assert.deepEqual(acts.slice(0, 2), ["Edit", "Cancel event"], `the event's acts together at the bottom: ${acts}`);
       assert.ok(acts.length <= 3 && (acts.length === 2 || acts[2] === "Delete event"), String(acts));
@@ -158,9 +159,9 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.equal(await page.locator('.cc-psec[data-section="activities"] .cc-link-row').count(), 4);
       await page.locator('.cc-psec-toggle[data-key="athletes"]').click();
       await page.locator(".cc-athletes .cc-athlete").first().waitFor({ timeout: 20_000 });
-      // See each athlete: the chooser of the eight forms, the same target per form.
+      // See each athlete: the chooser of the six forms, the same target per form.
       await page.locator(".cc-see-each-choose").click();
-      assert.equal(await page.locator('.cc-see-each-forms [data-action="central-calendar-see-each-athlete"]').count(), 8);
+      assert.equal(await page.locator('.cc-see-each-forms [data-action="central-calendar-see-each-athlete"]').count(), 6);
       assert.deepEqual(await small(page), []);
       assert.equal(await overflow(page, width), 0);
       await shot(page, `event-panel-layout-03-opened-${width}`);
