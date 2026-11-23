@@ -175,7 +175,7 @@ function refusalNotice(roster, result, ctx) {
   }
   // ST-4: values were entered for the athlete on the roster meanwhile; a state comes only after they are removed.
   if (code === "manual_values_present") {
-    return { tone: "refused", text: `Values were entered for ${name} on the roster. To set a state, remove them first (Change values… → Remove these values). ${NOTHING_SAVED}`, action: null, code };
+    return { tone: "refused", text: `${name} has values entered on the roster, so no state was saved. Remove the values first to set a state.`, action: { label: "Change values…", action: "training-load-roster-manual-open", athleteId: ctx.athleteId }, code };
   }
   if (code === "not_on_roster") return { tone: "refused", text: `${name} is no longer on this session's roster. ${NOTHING_SAVED}`, action: null, code };
   if (code === "nothing_to_clear") {

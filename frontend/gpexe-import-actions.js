@@ -407,7 +407,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   // ST-4: "Use GPEXE's values" for an athlete with values entered or corrected on the roster (unticked: keep them).
   if (type === "training-load-gpexe-use-gpexe") {
     const id = action.dataset.athleteId;
-    const listed = (gx.detail?.candidate?.preview?.manualValues?.athletes || []).some((a) => String(a.athleteId) === String(id));
+    const listed = (gx.detail?.candidate?.preview?.manualValues?.athletes || []).some((a) => String(a.athleteId) === String(id) && a.replaceAvailable === true);
     if (!id || !listed || gx.status?.viewer?.canApprove !== true) return true;
     if (setGpexeUseGpexe(id, Boolean(action.checked))) {
       renderTrainingLoad();
@@ -418,7 +418,7 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
   if (type === "training-load-gpexe-subset-review") {
     const candidate = gx.detail?.candidate;
     // Offered like the boxes, or (after an unconfirmed answer) for the set that was sent: the review is how a retry is made.
-    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && (gx.detail.leaveOut || []).length > 0;
+    const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && ((gx.detail.leaveOut || []).length > 0 || (gx.detail.useGpexe || []).length > 0);
     const choosing = useGpexeIds(candidate, gx.detail).length > 0 && gx.status?.viewer?.canApprove === true;
     if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || choosing || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
     const ids = leaveOutIds(candidate, gx.detail);

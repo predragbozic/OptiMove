@@ -404,13 +404,28 @@ test("14. Remove these values (ST-4 PR2): offered only for values entered on the
   assert.match(writes()[0].url, /\/manual-values\/remove$/);
   assert.deepEqual(Object.keys(writes()[0].body).sort(), ["athleteId", "expectedOccasionId", "requestKey"]);
   assert.equal(writes()[0].body.expectedOccasionId, ENTRY);
-  assert.match(rowHtml("ath-1"), /Values removed for Ivan Marković\. They stay in the history; set a state for Ivan Marković in the roster\./);
+  assert.match(rowHtml("ath-1"), /Values removed for Ivan Marković\. They stay in the history\. Choose a state for Ivan Marković now\./);
   // A refusal names it.
   await openRoster({ form, onWrite: () => ({ status: 409, body: { error: "nothing_to_remove", message: "x" } }) });
   await act("training-load-roster-manual-open", { athleteId: "ath-1" });
   await act("training-load-roster-manual-remove-ask");
+  let gone = false;
+  await openRoster({ form: () => (gone ? { status: 200, body: { ...formEntry(), expectedOccasionId: null, manual: null } } : form()), onWrite: () => { gone = true; return { status: 409, body: { error: "nothing_to_remove", message: "x" } }; } });
+  await act("training-load-roster-manual-open", { athleteId: "ath-1" });
+  await act("training-load-roster-manual-remove-ask");
   await act("training-load-roster-manual-remove");
   assert.match(rowHtml("ath-1"), /There are no entered values to remove\./);
+  assert.doesNotMatch(rowHtml("ath-1"), /manual-remove-ask/, "the form is read again: nothing left to remove is not offered again");
+  // A lost answer: Check result repeats the removal with the same key.
+  let n = 0;
+  await openRoster({ form, onWrite: () => { n += 1; return n === 1 ? new TypeError("Failed to fetch") : { status: 201, body: {} }; } });
+  await act("training-load-roster-manual-open", { athleteId: "ath-1" });
+  await act("training-load-roster-manual-remove-ask");
+  await act("training-load-roster-manual-remove");
+  await act("training-load-roster-manual-check");
+  assert.equal(writes().length, 2);
+  assert.match(writes()[1].url, /\/manual-values\/remove$/);
+  assert.equal(writes()[1].body.requestKey, writes()[0].body.requestKey, "the same key");
   // Not offered for a correction, nor before an entry exists.
   await openRoster({ form: () => ({ status: 200, body: formCorr() }) });
   await act("training-load-roster-manual-open", { athleteId: "ath-3" });

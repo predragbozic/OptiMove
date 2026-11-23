@@ -38,7 +38,7 @@ const REFUSALS = {
   invalid_note: "Keep the note to one line of at most 500 characters.",
 };
 // After these refusals the form is read again at once (the next step is already on screen).
-const REREAD = new Set(["values_changed", "variable_not_in_record", "variable_not_in_session", "request_key_reused"]);
+const REREAD = new Set(["values_changed", "variable_not_in_record", "variable_not_in_session", "request_key_reused", "nothing_to_remove", "nothing_to_restore"]);
 
 function roster() {
   return state.trainingLoad.calendar.roster;
@@ -327,7 +327,7 @@ async function send(r, m, command, render) {
     const corrected = m.form?.mode === "correction";
     r.notices.rows[m.athleteId] = {
       tone: "saved",
-      text: removed ? `Values removed for ${name}. They stay in the history; set a state for ${name} in the roster.`
+      text: removed ? `Values removed for ${name}. They stay in the history. Choose a state for ${name} now.`
         : restored ? `Measured values restored for ${name}.`
         : corrected ? `Corrected values saved for ${name}. The measured values are kept.`
         : `Values saved for ${name}. They are shown as entered by hand, never as measured.`,

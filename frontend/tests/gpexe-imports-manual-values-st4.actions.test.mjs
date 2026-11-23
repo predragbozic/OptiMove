@@ -85,7 +85,7 @@ function previewOf(leftOut = []) {
   };
 }
 let approval = null;
-let manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep" }, { athleteId: "ath-2", kind: "correction", choice: "keep" }] };
+let manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }, { athleteId: "ath-2", kind: "correction", choice: "keep", replaceAvailable: true }] };
 function detailOf(c) {
   return { ...c, athletes: Object.fromEntries(ATHLETES.map(([, aid, name]) => [aid, { name }])), approval, preview: { ...previewOf(approval?.excludedAthleteIds || []), ...(manualValues ? { manualValues } : {}) }, helperValues: {} };
 }
@@ -143,11 +143,12 @@ const useGpexe = (athleteId, checked = true) => act("training-load-gpexe-use-gpe
 const useBoxes = (page = html()) => [...page.matchAll(/data-action="training-load-gpexe-use-gpexe" data-athlete-id="([^"]+)"( checked)?/g)].map((m) => [m[1], Boolean(m[2])]);
 
 test("1. the review lists the athletes with values entered or corrected on the roster, kept by default (every box unticked); a plain import sends no choice", async () => {
-  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep" }, { athleteId: "ath-2", kind: "correction", choice: "keep" }] };
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }, { athleteId: "ath-2", kind: "correction", choice: "keep", replaceAvailable: true }] };
   await openReview();
   const page = html();
-  assert.match(page, /2 athletes have values you entered\./);
-  assert.match(page, /Your values are kept unless you tick Use GPEXE(?:'|&#0?39;)s values\. Replaced values stay in the history\./);
+  assert.match(page, /2 athletes have values entered or corrected on the roster\./);
+  assert.match(page, /These are kept\. Tick Use GPEXE(?:'|&#0?39;)s values to replace them; the replaced values stay in the history\./);
+  assert.match(page, /class="gpexe-manual-summary"><p><strong>2 athletes have values entered or corrected on the roster\.<\/strong>[^]*href="#gpexe-manual-choice"/, "named at the top of the review too");
   assert.match(page, /Ana Example <span class="muted">· values entered on the roster/);
   assert.match(page, /Bea Example <span class="muted">· values corrected on the roster/);
   assert.deepEqual(useBoxes(page), [["ath-1", false], ["ath-2", false]]);
@@ -158,7 +159,7 @@ test("1. the review lists the athletes with values entered or corrected on the r
 });
 
 test("2. Use GPEXE's values is a reviewed choice: ticked, the import waits for Review your choice; the review sends the athletes; the import sends exactly the reviewed choice and its hash", async () => {
-  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep" }, { athleteId: "ath-2", kind: "correction", choice: "keep" }] };
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }, { athleteId: "ath-2", kind: "correction", choice: "keep", replaceAvailable: true }] };
   await openReview();
   await useGpexe("ath-1");
   let page = html();
@@ -173,17 +174,18 @@ test("2. Use GPEXE's values is a reviewed choice: ticked, the import waits for R
   assert.deepEqual(subsets()[0].body, { excludedAthleteIds: [], replaceManualAthleteIds: ["ath-1"] });
   page = html();
   assert.match(page, /Reviewed with your choice: 3 athletes will be imported\./);
+  const reviewedHash = gx().detail.subset.subsetHash;
+  assert.ok(reviewedHash);
   await act("training-load-gpexe-approve");
   assert.equal(approvals().length, 1);
   const body = approvals()[0].body;
   assert.deepEqual(body.replaceManualAthleteIds, ["ath-1"]);
   assert.deepEqual(body.excludedAthleteIds, []);
-  assert.equal(body.subsetHash, gx().detail?.subset?.subsetHash ?? body.subsetHash);
-  assert.match(body.subsetHash, /^b{60}/);
+  assert.equal(body.subsetHash, reviewedHash, "exactly the reviewed hash");
 });
 
 test("3. a change of the choice drops the review (it is made again, never reused); unticking every box goes back to the plain import", async () => {
-  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep" }, { athleteId: "ath-2", kind: "correction", choice: "keep" }] };
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }, { athleteId: "ath-2", kind: "correction", choice: "keep", replaceAvailable: true }] };
   await openReview();
   await useGpexe("ath-1");
   await act("training-load-gpexe-subset-review");
@@ -199,16 +201,89 @@ test("3. a change of the choice drops the review (it is made again, never reused
 });
 
 test("4. an athlete the server does not list cannot be chosen; a viewer who may not approve gets no choice; a session without roster values shows no block", async () => {
-  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep" }] };
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }] };
   await openReview();
   await useGpexe("ath-3");
   assert.deepEqual(gx().detail.useGpexe || [], [], "not listed: ignored");
-  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep" }] };
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }] };
   await openReview({ teamStatus: { enabled: true, canApprove: false } });
   assert.equal(useBoxes().length, 0);
   await useGpexe("ath-1");
   assert.deepEqual(gx().detail.useGpexe || [], []);
   manualValues = null;
   await openReview();
-  assert.doesNotMatch(html(), /values you entered/);
+  assert.doesNotMatch(html(), /values entered or corrected on the roster/);
+});
+
+test("5. an unconfirmed approval with GPEXE's values keeps that choice across a closed and reopened review: the plain import (roster values kept) is never offered in its place, and the retry sends the same choice after a new review", async () => {
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }] };
+  await openReview({ onApprove: async () => ({ status: 503, body: { error: "import_outcome_unknown", message: "unknown", verify: { candidateId: "cand-1", approvalId: "ap-9" } } }) });
+  await useGpexe("ath-1");
+  await act("training-load-gpexe-subset-review");
+  await act("training-load-gpexe-approve");
+  assert.equal(gx().detail.outcome.kind, "unknown");
+  await act("training-load-gpexe-close");
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  assert.deepEqual(gx().detail.useGpexe, ["ath-1"], "the choice that was sent is restored");
+  const base = responder;
+  responder = async (call) => (call.url.endsWith("/approvals/ap-9") ? { status: 404, body: { error: "notFound" } } : base(call));
+  await act("training-load-gpexe-verify");
+  assert.equal(gx().detail.outcome.verified, "not_visible_yet");
+  const page = html();
+  assert.deepEqual(useBoxes(page), [["ath-1", true]]);
+  assert.doesNotMatch(page, /data-action="training-load-gpexe-approve"/, "no plain Import while the choice waits for a new review");
+  assert.match(page, />Review your choice</);
+  await act("training-load-gpexe-subset-review");
+  await act("training-load-gpexe-approve");
+  assert.deepEqual(approvals().at(-1).body.replaceManualAthleteIds, ["ath-1"], "the retry carries the same choice");
+});
+
+test("6. a refusal that means the choice no longer fits offers Update the review, never the same request again: subset_blocked and manual_replace_unavailable at the review, invalid_manual_choice at the import", async () => {
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }] };
+  for (const code of ["subset_blocked", "manual_replace_unavailable", "invalid_manual_choice"]) {
+    await openReview({ onSubset: async () => ({ status: code === "subset_blocked" ? 409 : 400, body: { error: code, message: "x" } }) });
+    await useGpexe("ath-1");
+    await act("training-load-gpexe-subset-review");
+    const page = html();
+    assert.match(page, /data-action="training-load-gpexe-review-update"[^>]*>Update the review</, code);
+    assert.doesNotMatch(page, />Try again</, code);
+  }
+  await openReview({ onApprove: async () => ({ status: 400, body: { error: "invalid_manual_choice", message: "x" } }) });
+  await useGpexe("ath-1");
+  await act("training-load-gpexe-subset-review");
+  await act("training-load-gpexe-approve");
+  assert.match(html(), /the values entered on the roster changed\. Update the review and choose again\./);
+});
+
+test("7. an athlete for whom GPEXE sent only drill results is Keep only (replaceAvailable false): no box, a plain sentence, and a forced tick is ignored; a left-out athlete gets no box either", async () => {
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: false }, { athleteId: "ath-2", kind: "entry", choice: "keep", replaceAvailable: true }] };
+  await openReview();
+  let page = html();
+  assert.deepEqual(useBoxes(page), [["ath-2", false]]);
+  assert.match(page, /Kept: GPEXE sent only drill results\./);
+  await useGpexe("ath-1");
+  assert.deepEqual(gx().detail.useGpexe || [], [], "not offered: ignored");
+  gx().detail.useGpexe = ["ath-1"];
+  assert.doesNotMatch(html(), /Using GPEXE(?:'|&#0?39;)s values/, "a Keep-only athlete is never part of the choice");
+  gx().detail.useGpexe = [];
+  await useGpexe("ath-2");
+  await tick("102");
+  page = html();
+  assert.deepEqual(useBoxes(page), [], "left out: no box");
+  assert.match(page, /Left out of this import\./);
+  assert.doesNotMatch(page, /Using GPEXE(?:'|&#0?39;)s values/, "never both left out and given GPEXE's values");
+  await act("training-load-gpexe-subset-review");
+  assert.equal(subsets().at(-1).body.replaceManualAthleteIds, undefined, "the left-out athlete is not sent as replaced");
+});
+
+test("8. the outcome labels: Your values kept / GPEXE's values used", async () => {
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }] };
+  await openReview();
+  const c = gx().detail.candidate;
+  c.preview.athletes[0].results[0].outcome = "manual_kept";
+  c.preview.athletes[1].results[0].outcome = "manual_replaced";
+  const page = html();
+  assert.match(page, /Your values kept/);
+  assert.match(page, /GPEXE(?:'|&#0?39;)s values used/);
+  assert.doesNotMatch(page, /saved aside/);
 });

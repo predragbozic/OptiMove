@@ -521,7 +521,9 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
   // J20-B: an unconfirmed subset approval keeps the set it was sent with; a reopened review restores it, so the whole session can never be
   // offered (and sent) in its place. The reviewed hash is not kept: the review is made again.
   const keptSet = Array.isArray(uncertain?.chosenExcluded) ? uncertain.chosenExcluded.map(String) : [];
-  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
+  // ST-4: and the athletes given GPEXE's values, so the import is never offered again with their roster values kept.
+  const keptReplace = Array.isArray(uncertain?.chosenReplace) ? uncertain.chosenReplace.map(String) : [];
+  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, useGpexe: keptReplace, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
   gx.linkConfirm = null;
   gx.linkOpen = "";
   gx.linkPicks = {};
@@ -694,7 +696,7 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     } else {
       // A lost answer, a gateway error, a 503: the import may or may not be
       // in the database. Never "nothing was imported".
-      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks, chosenExcluded: subset ? [...subset.ids] : [] };
+      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks, chosenExcluded: subset ? [...subset.ids] : [], chosenReplace: subset ? [...(subset.replace || [])] : [] };
     }
     rememberOutcome(detail.id, detail.outcome);
   } finally {

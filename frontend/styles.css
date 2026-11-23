@@ -17539,9 +17539,28 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-undo .gpexe-button.gpexe-danger 
   cursor: pointer;
 }
 .gpexe-manual-use input {
-  width: 22px;
-  height: 22px;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
   margin: 0;
+  accent-color: var(--accent);
+  /* The pinned import bar of a phone must not cover a box focused after a tick (the J20-C select's margin). */
+  scroll-margin-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
+}
+.gpexe-manual-kept {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.gpexe-manual-summary p {
+  margin: 0;
+}
+.gpexe-manual-summary .gpexe-manual-jump {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .gpexe-accept {
