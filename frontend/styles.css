@@ -27308,6 +27308,49 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
 .data-sources-timezone textarea { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
 .data-sources-timezone .data-sources-facts dd { min-width: 0; }
 .gpexe-zone-note { overflow-wrap: anywhere; }
+
+/* ST-5: the session type of an import, in the session review. The select keeps 16 px (no iOS zoom) and a 44 px target. */
+.gpexe-session-type { margin: 8px 0; overflow-wrap: anywhere; }
+.gpexe-session-type.is-required { padding: 8px 10px; border-left: 3px solid var(--om-warning, #b7791f); background: var(--om-surface-2, #f4f6f8); }
+.gpexe-session-type-field { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gpexe-session-type-label { font-weight: 600; }
+.gpexe-session-type-field { max-width: 100%; min-width: 0; }
+.gpexe-session-type-field select { font-size: 16px; min-height: 44px; min-width: 0; width: min(320px, 100%); max-width: 100%; }
+.gpexe-session-type-origin { margin: 4px 0 0; }
+.gpexe-approve-type > p { overflow-wrap: anywhere; }
+
+/* ST-5: the session's type and an athlete's own type on the Roster tab. Selects keep 16 px and a 44 px target. */
+.tl-roster-session-type { margin: 6px 0 0; overflow-wrap: anywhere; }
+.tl-roster-type-field { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tl-roster-type-label { font-weight: 600; }
+.tl-roster-type-field { max-width: 100%; min-width: 0; }
+.tl-roster-type-field select { font-size: 16px; min-height: 44px; min-width: 0; width: min(320px, 100%); max-width: 100%; }
+.tl-roster-header > div { min-width: 0; }
+.tl-roster-athlete-type { margin: 10px 0; }
+.tl-roster-athlete-type > p { margin: 4px 0 0; }
+.tl-roster-type-notice { margin-top: 8px; }
+.tl-roster-type-notice.is-row { margin: 8px 12px 10px; }
+.tl-roster-row-notes p { overflow-wrap: anywhere; min-width: 0; }
+.tl-roster-type-notice .tl-roster-button { min-height: 44px; }
+
+/* ST-5: Settings -> Tags & Presets -> Session types. Fields keep 16 px; buttons a 44 px target on phones. */
+.session-types-settings { overflow-wrap: anywhere; }
+.session-types-settings .primary-button { border: 1px solid var(--accent); border-radius: var(--radius, 8px); background: var(--accent); color: #ffffff; font-weight: 600; padding: 0 16px; min-height: 44px; }
+.session-types-settings .primary-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.tl-roster-type-hint { margin: 4px 0 0; flex-basis: 100%; }
+.session-types-list { list-style: none; margin: 8px 0; padding: 0; }
+.session-types-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--om-border, #e3e7eb); }
+.session-types-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.session-types-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 8px 0; width: 100%; }
+.session-types-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 0; }
+.session-types-field input { font-size: 16px; min-height: 44px; width: 100%; max-width: 100%; box-sizing: border-box; }
+.session-types-notice { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--om-accent, #1f6f68); background: var(--om-surface-2, #f4f6f8); }
+.session-types-notice.is-refused, .session-types-notice.is-unconfirmed { border-left-color: var(--om-warning, #b7791f); }
+.session-types-notice p { margin: 0 0 6px; }
+.session-types-archived { margin-top: 8px; }
+@media (max-width: 760px) {
+  .session-types-settings .plain-button, .session-types-settings .primary-button { min-height: 44px; }
+}
 /* ==========================================================================
    Design IMP1: the Imports screen as the "GPS Import Flow" sketch. One
    column of about 860 px, light cards (1 px line, radius 10, padding 20),

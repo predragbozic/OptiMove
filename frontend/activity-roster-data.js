@@ -61,6 +61,8 @@ export function resetActivityRoster(activityId) {
   r.retryBulk = null;
   r.retry = null;
   r.estimate = null;
+  // ST-5: the session type slice of this session (activity-session-type.js).
+  r.types = null;
 }
 
 // How the roster answer failed, in terms the view can show. A session
