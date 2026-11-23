@@ -162,10 +162,13 @@ async function intoLinkedSlot(w, sessionId, { newIdentity }) {
             where id = $1`, [sessionId, day, w.main.am_pm, w.main.bta, w.main.session_order, newIdentity]);
 }
 
+// The route refuses a `today` more than 2 days from the server's date: the run's own date, never a fixed one.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 // Everything the four guarded reads say about the event's link and the session `name`.
 async function readsOf(w, name) {
   const view = ok(await api(`/api/calendar/events/${w.ev.id}`, { cookie: w.cookie })).event;
-  const cal = ok(await api(`/api/calendar?from=${WEEK}&to=${SUNDAY}&today=2026-11-20`, { cookie: w.cookie }));
+  const cal = ok(await api(`/api/calendar?from=${WEEK}&to=${SUNDAY}&today=${TODAY}`, { cookie: w.cookie }));
   const items = cal.days.flatMap((d) => d.items);
   const card = items.find((i) => i.kind === "event" && i.links?.eventId === w.ev.id);
   const planned = items.filter((i) => i.kind === "planned").map((i) => i.title);
