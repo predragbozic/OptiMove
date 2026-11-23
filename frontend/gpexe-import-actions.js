@@ -68,7 +68,7 @@ const LATER_REPEAT_MS = 400;
 let laterTappedAt = 0;
 export function resetLaterTapForTests() { laterTappedAt = 0; }
 import { changeTimezone, checkTimezone, closeTimezone, leaveTimezoneReview, openTimezone, saveTimezone, timezoneBusy, timezoneHeld } from "./gpexe-timezone-data.js";
-import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
+import { cancelUndo, checkUndo, laterChangeCount, laterRosterWork, manualToRemove, normalizeUndoReason, openUndo, sendUndo, undoBusy, undoLaterProblem, undoManualProblem, undoOffered, undoReasonProblem } from "./gpexe-undo-data.js";
 import { cancelVariablesConfirm, loadGuide, openVariablesConfirm, sendVariables, setGuideOpen } from "./gpexe-guide-data.js";
 
 // Names the link being removed (from the loaded link list, or the link just
@@ -494,21 +494,32 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // The whole reason is checked BEFORE the question: a destructive question is never asked for an input that is refused anyway.
     const laterBox = globalThis.document?.querySelector?.("[data-gpexe-undo-later-confirm]");
     if (laterBox) u.laterConfirmed = laterBox.checked === true;
+    const manualBox = globalThis.document?.querySelector?.("[data-gpexe-undo-manual-confirm]");
+    if (manualBox) u.manualConfirmed = manualBox.checked === true;
     const reasonProblem = undoReasonProblem(reason);
     const laterProblem = reasonProblem ? "" : undoLaterProblem(u, u.laterConfirmed);
-    if (reasonProblem || laterProblem) {
+    const manualProblem = reasonProblem ? "" : undoManualProblem(u, u.manualConfirmed);
+    if (reasonProblem || laterProblem || manualProblem) {
       u.reasonProblem = reasonProblem;
       u.laterProblem = laterProblem;
+      u.manualProblem = manualProblem;
       renderTrainingLoad();
       return true;
     }
     u.laterProblem = "";
+    u.manualProblem = "";
     const label = u.label || gx.detail?.candidate?.label || "this session";
     const later = laterRosterWork(u);
+    const manual = manualToRemove(u);
     const versions = Array.isArray(u.preview?.undoneCandidateIds) ? u.preview.undoneCandidateIds.length : 1;
     const changes = laterChangeCount(later);
     const laterText = later ? ` This also removes ${changes === 1 ? "1 later attendance change" : `${changes} later attendance changes`} made in the Roster tab.` : "";
-    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText} Deleted data can't be restored; to get it back, import the session again from Imports.`;
+    const manualList = manual && Array.isArray(manual.list) ? manual.list : [];
+    const manualAthletes = new Set(manualList.map((i) => i.athleteId).filter(Boolean)).size || manualList.length;
+    const manualText = manual
+      ? ` This also removes the values coaches entered or corrected${manualAthletes ? ` for ${manualAthletes === 1 ? "1 athlete" : `${manualAthletes} athletes`}` : ""}; importing the session again does not bring them back.`
+      : "";
+    const question = `Delete the imported data of ${label}${versions > 1 ? `, all ${versions} imports of this session` : ""}? The session leaves the calendar.${laterText}${manualText} Deleted data can't be restored; to get ${manual ? "the imported data" : "it"} back, import the session again from Imports.`;
     u.reasonProblem = "";
     if (!globalThis.window?.confirm?.(question)) return true;
     await sendUndo(normalizeUndoReason(reason), renderTrainingLoad);

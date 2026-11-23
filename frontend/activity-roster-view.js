@@ -15,6 +15,7 @@
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { estimateBusy, estimateLabelText, estimateOffered, isEstimateValue, renderEstimatePanelHtml } from "./activity-estimate.js";
+import { isManualValue, manualBusy, manualLineText, manualMark, manualOffered, renderManualPanelHtml } from "./activity-manual-values.js";
 
 export const ROSTER_GROUPS = Object.freeze([
   { id: "needs_state", label: "Needs a state" },
@@ -38,6 +39,7 @@ const STATE_GLYPHS = Object.freeze({
   participated_no_values: "▢",
   measured: "●",
   measured_change_waiting: "●",
+  manual_values: "✎",
 });
 
 const STATE_LABELS = Object.freeze({
@@ -47,6 +49,7 @@ const STATE_LABELS = Object.freeze({
   participated_no_values: "Participated · no device data",
   measured: "Measured",
   measured_change_waiting: "Measured · change waiting",
+  manual_values: "Manual values",
 });
 
 // Next step for a source reason the coach can act on outside OptiMove.
@@ -117,9 +120,25 @@ function isMeasuredValue(v) {
   return v?.entryMethod === "api_import" || v?.entryMethod === "csv_import";
 }
 
-// Measured values, and (6b-C1) estimated values with their label; never another kind.
+// Measured values, (6b-C1) estimated values with their label and (ST-4) values written on the roster by hand, marked as
+// such; never another kind (a manual value of another path is not this roster's).
 function displayValues(athlete) {
-  return (athlete?.values || []).filter((v) => isMeasuredValue(v) || isEstimateValue(v));
+  return (athlete?.values || []).filter((v) => isMeasuredValue(v) || isEstimateValue(v) || (isManualValue(v) && athlete?.manual));
+}
+
+// The mark after a value: "est." for an estimate, "corr." / "man." for a value written by hand.
+function valueMarkHtml(athlete, value, { withLabel = false } = {}) {
+  if (isEstimateValue(value)) {
+    return ` <small class="tl-roster-est">est.</small>${withLabel ? `<span class="tl-roster-est-label">${escapeHtml(estimateLabelText(value.estimate))}</span>` : ""}`;
+  }
+  const mark = manualMark(value, athlete?.manual);
+  if (!mark) return "";
+  return `${mark.short ? ` <small class="tl-roster-est">${escapeHtml(mark.short)}</small>` : ""}${withLabel ? `<span class="tl-roster-est-label">${escapeHtml(mark.title)}</span>` : ""}`;
+}
+
+function valueTitle(athlete, value) {
+  if (isEstimateValue(value)) return estimateLabelText(value.estimate);
+  return manualMark(value, athlete?.manual)?.title ?? "";
 }
 
 function hasValue(v) {
@@ -315,6 +334,11 @@ function rowNotes(athlete, reasons) {
     notes.push(next ? `${said} ${next}` : said);
   }
   if (athlete.state === "measured_change_waiting") notes.push("A newer version of these values is waiting for review in Imports.");
+  // ST-4: who entered or corrected the values on the roster, and when.
+  if (athlete.manual) {
+    notes.push(manualLineText(athlete.manual));
+    if (athlete.manual.note) notes.push(`Note: ${athlete.manual.note}`);
+  }
   if (measuredAfterDecision(athlete)) {
     notes.push(`Measured values arrived after ${athlete.decision.decidedBy?.name ?? "a coach"} set "${athlete.decision.label ?? ""}" (${shortDate(athlete.decision.decidedAt)}).`);
   }
@@ -327,9 +351,9 @@ function allValuesHtml(athlete) {
   return `
     <dl class="tl-roster-all-values">
       ${values.map((value) => `
-        <div${isEstimateValue(value) ? ` class="is-estimate"` : ""}>
+        <div${isEstimateValue(value) || isManualValue(value) ? ` class="is-estimate"` : ""}>
           <dt>${escapeHtml(metricLabel(value))}</dt>
-          <dd>${escapeHtml(formatRosterValue(value))}${isEstimateValue(value) ? ` <small class="tl-roster-est">est.</small><span class="tl-roster-est-label">${escapeHtml(estimateLabelText(value.estimate))}</span>` : ""}</dd>
+          <dd>${escapeHtml(formatRosterValue(value))}${valueMarkHtml(athlete, value, { withLabel: true })}</dd>
         </div>
       `).join("")}
     </dl>
@@ -353,7 +377,9 @@ function outsideAthletes(data) {
 }
 
 function stateLabel(athlete) {
-  return athlete.stateLabel || STATE_LABELS[athlete.state] || "Unknown";
+  const label = athlete.stateLabel || STATE_LABELS[athlete.state] || "Unknown";
+  // ST-4: a corrected record is never shown as the device's values alone.
+  return athlete.state === "measured" && athlete.flags?.includes("corrected") ? `${label} · corrected` : label;
 }
 
 // Whether this viewer may decide (the read always comes with a basis; a
@@ -393,12 +419,12 @@ export function anyWriteInFlight(roster) {
 }
 
 export function rowLocked(roster, athleteId) {
-  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster)) return true;
+  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster) || manualBusy(roster)) return true;
   return Boolean(roster.busy?.[athleteId]);
 }
 
 export function bulkLocked(roster) {
-  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster));
+  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster) || manualBusy(roster));
 }
 
 function button(label, action, attrs = "", cls = "plain-button tl-roster-button") {
@@ -602,7 +628,7 @@ function rowActionsHtml(roster, athlete) {
   let buttons = "";
   if (measuredAfterDecision(athlete)) {
     buttons = button("Use measured values", "training-load-roster-use-measured", attrs(), "primary-button tl-roster-button");
-  } else if (athlete.state === "measured" || athlete.state === "measured_change_waiting") {
+  } else if (athlete.state === "measured" || athlete.state === "measured_change_waiting" || athlete.state === "manual_values") {
     buttons = "";
   } else if (athlete.decision && !isTwoStates(athlete)) {
     if (roster.changing === id) {
@@ -629,6 +655,15 @@ function rowActionsHtml(roster, athlete) {
       button(DECISION_LABELS.participated_no_values, "training-load-roster-set", attrs("participated_no_values"), "primary-button tl-roster-button"),
       button(DECISION_LABELS.did_not_participate, "training-load-roster-absent", attrs()),
     ].join("");
+  }
+  // ST-4: enter values for an athlete without a device record, or correct a measured athlete's values. Not while the row is
+  // being changed or another panel is open for it.
+  const offered = !measuredAfterDecision(athlete) && roster.changing !== id && !isTwoStates(athlete) ? manualOffered(roster.data, athlete) : null;
+  if (offered && roster.manual?.athleteId !== id) {
+    const label = offered === "correct"
+      ? (athlete.manual?.kind === "correction" ? "Change the correction…" : "Correct values…")
+      : (athlete.state === "manual_values" ? "Change values…" : "Enter values…");
+    buttons += button(label, "training-load-roster-manual-open", `data-athlete-id="${escapeAttr(id)}" ${locked || manualBusy(roster) ? "disabled" : ""}`);
   }
   if (!buttons && !busyLine && !unconfirmedTag && !savedTag) return "";
   return `<div class="tl-roster-actions tl-roster-row-actions">${buttons}${busyLine}${unconfirmedTag}${savedTag}</div>`;
@@ -667,8 +702,9 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
         <span class="tl-roster-state"><span aria-hidden="true">${view.glyph}</span> ${escapeHtml(view.label)}</span>
         ${columns.map((column) => {
           const value = displayValues(athlete).find((item) => metricKey(item) === column.metricKey);
-          const estimated = isEstimateValue(value);
-          return `<span class="tl-roster-cell${estimated ? " is-estimate" : ""}" data-label="${escapeAttr(column.label)}"${estimated ? ` title="${escapeAttr(estimateLabelText(value.estimate))}"` : ""}>${escapeHtml(formatRosterValue(value))}${estimated ? ` <small class="tl-roster-est">est.</small>` : ""}</span>`;
+          const marked = isEstimateValue(value) || isManualValue(value);
+          const title = marked ? valueTitle(athlete, value) : "";
+          return `<span class="tl-roster-cell${marked ? " is-estimate" : ""}" data-label="${escapeAttr(column.label)}"${title ? ` title="${escapeAttr(title)}"` : ""}>${escapeHtml(formatRosterValue(value))}${valueMarkHtml(athlete, value)}</span>`;
         }).join("")}
       </div>
       ${notes.length ? `<div class="tl-roster-row-notes">${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join("")}</div>` : ""}
@@ -677,6 +713,7 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
       ${outside || !canDecide ? "" : confirmHtml(roster, athlete)}
       ${outside || !canDecide ? "" : rowPickerHtml(roster, athlete, reasons)}
       ${outside || !canDecide ? "" : renderEstimatePanelHtml(roster, athlete)}
+      ${outside || !canDecide ? "" : renderManualPanelHtml(roster, athlete)}
       <details class="tl-roster-row-more" ${disclosureAttrs(roster, rowKey)}>
         <summary>Details</summary>
         <div class="tl-roster-row-body">
@@ -847,7 +884,11 @@ function rosterTableHtml(roster, data, canDecide) {
   // confirmed, a save in flight) stays where the coach's thumb is, whatever
   // the filter, until the filter changes (section 1); it is shown under its
   // own group name.
-  const pinned = (athlete) => Boolean(roster.notices?.rows?.[athlete.athleteId]) || Boolean(roster.unconfirmed?.athleteIds?.includes(athlete.athleteId)) || Boolean(roster.busy?.[athlete.athleteId]);
+  // A row whose panel (an estimate or manual values) is saving or not confirmed stays under every filter: its Check result is
+  // the only live control then.
+  const panelBusy = (athlete) => (roster.manual?.athleteId === athlete.athleteId && manualBusy(roster))
+    || (roster.estimate?.athleteId === athlete.athleteId && estimateBusy(roster));
+  const pinned = (athlete) => Boolean(roster.notices?.rows?.[athlete.athleteId]) || Boolean(roster.unconfirmed?.athleteIds?.includes(athlete.athleteId)) || Boolean(roster.busy?.[athlete.athleteId]) || panelBusy(athlete);
   const visibleGroups = filter === "all"
     ? groups
     : groups.map((group) => ({ ...group, athletes: group.id === filter ? group.athletes : group.athletes.filter(pinned) }));

@@ -19,6 +19,7 @@ import {
   viewerCanDecide,
 } from "./activity-roster-view.js";
 import { estimateBusy, handleEstimateAction } from "./activity-estimate.js";
+import { handleManualAction, manualBusy } from "./activity-manual-values.js";
 import { state } from "./state.js";
 
 const NOTHING_SAVED = "Nothing was saved.";
@@ -60,7 +61,7 @@ export async function loadRosterForOpenActivity(activityId, render) {
 // session changes, by confirmLeaveTrainingLoad and by beforeunload.
 // ---------------------------------------------------------------------------
 export function rosterHasPendingOutcome(roster = rosterState()) {
-  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0 || estimateBusy(roster);
+  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0 || estimateBusy(roster) || manualBusy(roster);
 }
 
 export function rosterMayBeLeft(roster = rosterState()) {
@@ -69,6 +70,8 @@ export function rosterMayBeLeft(roster = rosterState()) {
     ? "A roster change is not confirmed yet. If you leave now, you cannot check its result here. Leave anyway?"
     : roster.estimate?.unconfirmed
     ? "An estimate is not confirmed yet. If you leave now, you cannot check its result here. Leave anyway?"
+    : roster.manual?.unconfirmed
+    ? "Values you entered are not confirmed yet. If you leave now, you cannot check their result here. Leave anyway?"
     : "A roster change is still being saved. If you leave now, its result is lost. Leave anyway?";
   return Boolean(globalThis.window?.confirm?.(question));
 }
@@ -85,6 +88,7 @@ export function closeActivityRosterOverlay() {
   if (roster.picker && !roster.picker.sending) { roster.picker = null; return true; }
   if (roster.confirm) { roster.confirm = null; return true; }
   if (roster.estimate && !estimateBusy(roster)) { roster.estimate = null; return true; }
+  if (roster.manual && !manualBusy(roster)) { roster.manual = null; return true; }
   return false;
 }
 
@@ -225,7 +229,7 @@ async function runWrite(command, ctx, render) {
   // settle after the first became unconfirmed and replace or clear its
   // slot. The only live control then is Check result, which never comes
   // through here.
-  if (!activityId || roster.writeLock || roster.unconfirmed || Object.keys(roster.busy || {}).length || estimateBusy(roster)) return;
+  if (!activityId || roster.writeLock || roster.unconfirmed || Object.keys(roster.busy || {}).length || estimateBusy(roster) || manualBusy(roster)) return;
   if (bulk ? bulkLocked(roster) : ctx.athleteIds.some((id) => rowLocked(roster, id))) return;
   lockRows(roster, ctx.athleteIds, bulk);
   roster.confirm = null;
@@ -444,7 +448,14 @@ export async function handleActivityRosterAction(action, { render }) {
   if (!roster.data || !viewerCanDecide(roster.data)) return true;
 
   // 6b-C1: estimates on a Participated · no device data row.
-  if (type.startsWith("training-load-roster-estimate-")) return handleEstimateAction(action, { render });
+  if (type.startsWith("training-load-roster-estimate-")) {
+    // ST-4: one panel at a time - opening an estimate closes an idle manual-values panel.
+    if (type === "training-load-roster-estimate-open" && roster.manual && !manualBusy(roster)) roster.manual = null;
+    if (type === "training-load-roster-estimate-open" && manualBusy(roster)) return true;
+    return handleEstimateAction(action, { render });
+  }
+  // ST-4: manual values (an entry, a correction, the restore of the measured values).
+  if (type.startsWith("training-load-roster-manual-")) return handleManualAction(action, { render });
 
   // --- selection ---
   if (type === "training-load-roster-pick") {

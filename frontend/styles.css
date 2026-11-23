@@ -14636,6 +14636,43 @@ button.tests-assignment-card {
   width: 7em;
 }
 
+/* ST-4: manual values on the roster - one labelled field per variable. */
+.tl-manual-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 11em), 1fr));
+  gap: 10px 12px;
+  margin: 8px 0;
+}
+
+.tl-manual-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tl-manual-field label {
+  overflow-wrap: anywhere;
+}
+
+.tl-manual-field input {
+  min-height: 44px;
+  font-size: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tl-manual-field.is-fixed {
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The restore question inside the panel: the panel's own padding, no second margin. */
+.tl-estimate-panel .tl-roster-confirm {
+  margin: 0;
+}
+
 .tl-estimate-inline select {
   min-width: 0;
   flex: 1 1 12em;
