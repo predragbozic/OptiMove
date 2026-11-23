@@ -1,8 +1,8 @@
 # P2 — chart gallery, interactions and browser PDF
 
-Status: WORK IN PROGRESS, not frozen, not implementation approval.
+Status: implementation in progress; Draft and NOT frozen.
 Level: RISKY (stored presentation validation and server-side derived chart data).
-Stack base: #741, bec894b8a1cc40f455073330fdc29057d075f686.
+Stack base: #741, 04459f12291a19b903c764a1e689f005d85c5303 (independent re-review GO).
 Date: 2026-11-23. This branch does not modify or push the reviewed P1 branch.
 
 ## Delivery boundary
@@ -11,7 +11,7 @@ P1 already includes Page navigation, management, selected-page Simple/Advanced e
 copy-to-page and legacy Home compatibility. Do not build a second Pages UI. Continue
 with the accepted P2 gallery/output topic from #715: all seven chart forms together,
 with one validation design and one focused RISKY implementation PR. This document is
-its proposed contract; implementation of the stored contract waits for review.
+its shared contract; the owner authorized continued work while P1 finishes its gate.
 
 Keep this PR Draft and unfrozen until #741 merges. Findings on #741 take priority;
 incorporate the corrected P1 head before continuing dependent P2 work. After merge,
@@ -45,11 +45,11 @@ SQL dependency inventory, not assumed to be CREATE-only.
 
 ## One presentation contract
 
-Proposal: extend validated schemaVersion=1 with explicit chartVariant and composition
-fields, preserving every previously valid payload byte-for-byte. Reject unknown keys,
+Implementation shape: extend validated presentation schemaVersion=1 with a nested
+chartShape object, preserving every previously valid payload byte-for-byte. Reject unknown keys,
 invalid combinations, nonfinite numbers, dangling series references and oversized
-arrays in JS and SQL. Existing opaque future payloads remain preserve-only. Final
-field schemas and limits must be approved before SQL/implementation.
+arrays in JS and SQL. Existing opaque future payloads remain preserve-only. The
+JS contract and the v94 SQL contract must accept and reject the same payloads.
 
 Use underlying line_chart/bar_chart types where semantics fit; composition identifies
 the new shape. Gallery choices are server capabilities, never inferred from roles in
@@ -238,3 +238,41 @@ registry before freeze; do not invent them while their tracks are still in progr
 
 This confirms the slot and packet requirements, not a frozen implementation.
 #742 stays Draft and unfrozen until #741 merges. #741 review findings come first.
+## WIP implementation checkpoint, 2026-11-23
+
+Independent modules are now on this branch; existing routes, saves, capabilities and
+UI entry points are deliberately not widened before the v94-backed integration.
+
+The proposed nested chartShape is {schemaVersion:1,kind,seriesIds}, with explicit
+case-insensitively unique UUID seriesIds (1–20). Scatter needs exactly two; heatmap
+and boxplot exactly one. Combined needs at least two, plus bindings covering every
+selected series exactly once: {seriesId,mark:bar|line,axis:0|1}, using both marks.
+Stacked needs at least two and additive:true. Other fields/unknown keys are refused;
+bindings and additive are allowed only on their respective shapes. Unit/scoping and
+non-additivity checks are repeated against actual server results, never client claims.
+
+backend/src/dashboardGallery/data.js projects seven forms from authorized results.
+It counts duplicate/conflicting/missing cells as omitted, pairs exact identities,
+keeps independent line/bar gaps, rejects incompatible single-axis units, refuses ratio
+stacks, and computes the declared quartile/whisker convention without rawCount weighting.
+Frontend training-load-gallery-options.js serializes only safe resolved labels and
+numeric chart values; no internal UUID is put into the ECharts option/DOM payload.
+Legend visibility and same-name disambiguation apply across shapes.
+
+The future v94 wrapper will use assertGalleryRehearsalNode: Node >=20, not major===22.
+Its acceptance logic is tested for 20/22/24/26 and refusals for older/invalid versions.
+The actual wrapper and full migration rehearsal remain to be built after P1 merges.
+
+Commands run with Node22.22.0, no database:
+
+- node scripts/test-runner.mjs --project backend --kind unit --file dashboard-gallery-data.test.mjs: 14/14.
+- node scripts/test-runner.mjs --project backend --kind unit --file dashboard-gallery-contract.test.mjs: 3/3.
+- node scripts/test-runner.mjs --project backend --kind unit --file dashboard-gallery-rehearsal-config.test.mjs: 1/1.
+- node scripts/test-runner.mjs --project frontend --file training-load-gallery-options.test.mjs: 7/7.
+
+These 25 tests are a WIP foundation, not end-to-end gallery acceptance. No migration
+file exists yet. Real DB validation, routes/preview/save/copy integration, gallery UI,
+interactive controls, browser/PDF verification, mutation suite and whole gates remain.
+After #741 merges: merge current main, build v94/its runbooks and rehearsal, complete
+integration, then run the full packet and freeze. No SQL migration was run and no
+production setting changed. The #741 branch was not modified by this P2 work.
