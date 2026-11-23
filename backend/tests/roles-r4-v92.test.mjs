@@ -209,9 +209,6 @@ test("3. old-vs-new of the twin: before and after v92 every account answers iden
 test("4. the truth table of contract 3.6 in can() and in the twin (rows 1-13)", async () => {
   const w = await world();
   const W = "athletes.manage"; // a checked word of the athletes module, held by Team coach by default
-  const second = (await one(`insert into public.permission_roles (owner_scope, owner_club_id, name, assignable_club, assignable_team, created_by_user_id)
-     values ('club', $1, 'Second', true, true, null) returning id`, [w.club]).catch(() => null));
-  void second; // a club role written without the guard path is refused; row 9/13 use a second team coach row instead
   const T = perms.teamScope(w.team);
   const check = async (u, expected, label) => {
     assert.equal(await twin(u, W, "team", w.team), expected, `twin ${label}`);
@@ -462,18 +459,6 @@ test("11. rule 7 across clubs when a default changes (H4): adding a word to Team
     await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'join_links.manage', $2)`, [ROLE_IDS.team_coach, w.pa]);
     await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_added) values ($1, $2, 'change', $3, 'platform_admin', 'x', '{join_links.manage}')`, [ROLE_IDS.team_coach, rev, w.pa]);
   }), "23514");
-  // The cross-club rule: remove athletes.remove from the default Club admin is refused (v84: Team coach holds it), and
-  // a platform admin's default change that would leave club w's Club admin version short is refused at COMMIT.
-  await refused(asActor(db.url, w.pa, async (c) => {
-    await c.query(`update public.permission_roles set revision = revision + 1 where id = $1`, [ROLE_IDS.team_coach]);
-    const rev = (await c.query(`select revision from public.permission_roles where id = $1`, [ROLE_IDS.team_coach])).rows[0].revision;
-    await c.query(`delete from public.permission_role_items where role_id = $1 and permission_word = 'athletes.remove'`, [ROLE_IDS.team_coach]);
-    await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_removed) values ($1, $2, 'change', $3, 'platform_admin', 'x', '{athletes.remove}')`, [ROLE_IDS.team_coach, rev, w.pa]);
-    // ... then the Club admin default gives up athletes.remove too, while club w's Team coach version... still lacks it: fine.
-    // Plant the problem: end club w's own Team coach version so the club follows the default again - with athletes.remove
-    // gone from the default nothing breaks; so add it back to the default Team coach instead (below, its own case).
-    throw Object.assign(new Error("planted rollback"), { code: "PLANT" });
-  }), "PLANT");
   // The planted cross-club case: club w follows the DEFAULT Team coach (end its own version), whose athletes.remove its
   // Club admin version lacks -> refused at COMMIT.
   await refused(asLocked(w.admin, [w.club], "exclusive", async (c) => {
@@ -539,6 +524,7 @@ test("13. the request record: the new operations need their own result row of th
 test("14. the rollback: refused after real writes; clean, it restores v84's bodies by md5, the catalog, the seed, and v92 applies again", async () => {
   const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-layers-v92-rollback.sql"), "utf8");
   await refused(k.query(rollback), "23514", /v92 rollback refused/);
+  await k.query("rollback"); // the file's own BEGIN left the refused transaction open on this connection
   const pre = await buildDatabase({ label: "r4v92_rb", upTo: "all", skip: [V92_FILE] });
   const c = new pg.Client({ connectionString: pre.url }); await c.connect();
   try {
@@ -568,4 +554,53 @@ test("14. the rollback: refused after real writes; clean, it restores v84's bodi
     await c.query(`create or replace function public.permission_word_honoured(p_word text) returns boolean language sql immutable as $$ select false $$`);
     await refused(c.query(rollback), "23514", /v92 rollback refused/);
   } finally { await c.end(); await pre.drop(); }
+});
+
+test("15. races without 40P01: two club-version writers of different roles in one club (one waits on the exclusive lock); a custom write against the real revocation of its holding (the revocation waits, then ends the custom)", async () => {
+  const w = await world();
+  // (a) Two version writers: the first holds the club's exclusive lock until released; the second waits, then commits.
+  const first = new pg.Client({ connectionString: db.url }); await first.connect();
+  try {
+    await first.query("begin");
+    await first.query(`select set_config('optimove.permission_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [w.pa]);
+    await first.query(`select public.lock_club_ceiling($1::uuid[], 'exclusive')`, [[w.club]]);
+    const second = makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] });
+    const start = Date.now();
+    while (Date.now() - start < 5000 && !(await one(`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`)).n) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal((await one(`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`)).n, 1, "the second writer waits on the advisory lock");
+    const rev = (await first.query(`select revision from public.permission_roles where id = $1`, [ROLE_IDS.club_admin])).rows[0].revision;
+    const v = (await first.query(`insert into public.permission_club_role_versions (club_id, system_role_id, based_on_revision, answered_revision, created_by_user_id) values ($1, $2, $3, $3, $4) returning id`, [w.club, ROLE_IDS.club_admin, rev, w.pa])).rows[0].id;
+    const words = (await first.query(`select permission_word from public.permission_role_items where role_id = $1`, [ROLE_IDS.club_admin])).rows.map((x) => x.permission_word);
+    for (const x of words) await first.query(`insert into public.permission_club_role_version_items (version_id, permission_word) values ($1, $2)`, [v, x]);
+    await first.query(`insert into public.permission_club_role_version_changes (version_id, revision_after, kind, performed_by_user_id, basis, reason, items_added) values ($1, 1, 'create', $2, 'platform_admin', 'same as default', $3)`, [v, w.pa, words]);
+    await first.query("commit");
+    await second;
+  } finally { await first.end(); }
+  assert.equal((await one(`select count(*)::int as n from public.permission_club_role_versions where club_id = $1 and ended_at is null`, [w.club])).n, 2);
+  // (b) A custom writer holds the target's team row FOR SHARE (lock order place 2); the real revocation waits on it, then ends the custom.
+  const row = await teamRow(w.coach, w.team);
+  const writer = new pg.Client({ connectionString: db.url }); await writer.connect();
+  let custom;
+  try {
+    await writer.query("begin");
+    await writer.query(`select set_config('optimove.permission_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [w.admin]);
+    await writer.query(`select public.lock_club_ceiling($1::uuid[], 'shared')`, [[w.club]]);
+    await writer.query(`select u.id from public.users u where u.id in ($1, $2) order by u.id for share`, [w.admin, w.coach]);
+    await writer.query(`select 1 from public.user_team_roles where id = $1 for share`, [row]);
+    const cookie = await srv.cookieFor(w.admin);
+    const revocation = srv.api(cookie, `/api/organization/users/${w.coach}/team-roles/${w.team}/team_coach`, { method: "DELETE" });
+    const start = Date.now();
+    while (Date.now() - start < 5000 && !(await one(`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and wait_event in ('transactionid', 'tuple')`)).n) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    custom = (await writer.query(`insert into public.permission_custom_roles (user_id, base_role_id, scope_type, scope_id, club_id, holding_row_table, holding_row_id, holding_row_version, frozen_from, frozen_from_revision, created_by_user_id)
+        select $1, $2, 'team', $3, $4, 'user_team_roles', r.id, r.updated_at, 'default', 1, $5 from public.user_team_roles r where r.id = $6 returning id`, [w.coach, ROLE_IDS.team_coach, w.team, w.club, w.admin, row])).rows[0].id;
+    await writer.query(`insert into public.permission_custom_role_items (custom_role_id, permission_word) values ($1, 'org.view')`, [custom]);
+    await writer.query(`insert into public.permission_custom_role_changes (custom_role_id, revision_after, kind, performed_by_user_id, basis, reason, items_added) values ($1, 1, 'create', $2, 'club_admin', 'x', '{org.view}')`, [custom, w.admin]);
+    await writer.query("commit");
+    assert.equal((await revocation).status, 200);
+  } finally { await writer.end(); }
+  assert.equal((await one(`select end_kind from public.permission_custom_roles where id = $1`, [custom])).end_kind, "role_ended");
 });
