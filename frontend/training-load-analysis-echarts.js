@@ -66,8 +66,8 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
       if(plot.option.legend?.show&&settings.legend?.toggle!==false)addButton('Show all series',()=>chart.dispatchAction?.({type:'legendAllSelect'}));
       if(plot.zoomDates?.length){
         addButton('Reset zoom',()=>chart.dispatchAction?.({type:'dataZoom',start:0,end:100}));
-        if(widgetId&&settings.zoom?.applyPeriodAction){
-          const apply=addButton('Apply selected period',()=>{});apply.disabled=true;apply.dataset.action='training-load-analysis-chart-period';apply.dataset.widgetId=widgetId;apply.dataset.boundPeriod=JSON.stringify(plot.period);
+        if(widgetId&&settings.zoom?.applyPeriodAction&&Number.isInteger(plot.interactionGeneration)){
+          const apply=addButton('Apply selected period',()=>{});apply.disabled=true;apply.dataset.action='training-load-analysis-chart-period';apply.dataset.widgetId=widgetId;apply.dataset.boundPeriod=JSON.stringify(plot.period);apply.dataset.boundGeneration=String(plot.interactionGeneration);
           chart.on?.('datazoom',event=>{
             const change=event.batch?.[0]??event,n=plot.zoomDates.length;
             const first=Number.isFinite(change.startValue)?change.startValue:Math.floor((change.start??0)*(n-1)/100);

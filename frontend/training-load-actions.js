@@ -45,6 +45,7 @@ import {
   updateExternalSchedule,
 } from "./training-load-data.js";
 import {
+  analysisChartInteractionGeneration,
   BUILT_IN_FIXED_SCOPE,
   BUILT_IN_SERIES,
   addEditorSeries,
@@ -1529,7 +1530,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if(type==='training-load-analysis-chart-period'){
-    const a=state.trainingLoad.analysis;if(a.queryLoading||!a.widgets.some(w=>w.id===action.dataset.widgetId)||JSON.stringify(a.period)!==action.dataset.boundPeriod)return true;
+    const a=state.trainingLoad.analysis;if(a.queryLoading||!a.widgets.some(w=>w.id===action.dataset.widgetId)||JSON.stringify(a.period)!==action.dataset.boundPeriod||Number(action.dataset.boundGeneration)!==analysisChartInteractionGeneration())return true;
     const from=action.dataset.dateFrom,to=action.dataset.dateTo;
     if(!/^\d{4}-\d{2}-\d{2}$/.test(from??'')||!/^\d{4}-\d{2}-\d{2}$/.test(to??'')||to<from)return true;
     a.period={...a.period,dateFrom:from,dateTo:to};await queryAnalysisDashboard(renderTrainingLoad,{force:true});return true;

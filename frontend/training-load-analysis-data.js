@@ -1,4 +1,4 @@
-import {galleryEditorProblem,gallerySettingsChanged,galleryEditorPresentation} from './training-load-gallery-editor.js';
+import {galleryDraftSettings,galleryEditorProblem,gallerySettingsChanged,galleryEditorPresentation} from './training-load-gallery-editor.js';
 import {loadDashboardPages,pageApiPath} from './training-load-pages-data.js';
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { api } from "./api.js";
@@ -149,6 +149,12 @@ export function analysisRuntimeFilterPayload(filter = state.trainingLoad.analysi
   return payload;
 }
 
+let chartInteractionContext='', chartInteractionGeneration=0;
+// A local counter binds actions to workspace/page/filter without putting IDs in chart DOM.
+export function analysisChartInteractionGeneration(){
+ const current=queryContextKey();if(current!==chartInteractionContext){chartInteractionContext=current;chartInteractionGeneration++;}
+ return chartInteractionGeneration;
+}
 function queryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
   const a = state.trainingLoad.analysis;
   const widgetRevisions = (a.widgets || []).map((w) => `${w.id}:${w.revision}`).join(",");
@@ -988,10 +994,7 @@ function normalizedFilterOverride(override) {
 
 export function analysisEditorDraftFromWidget(widget) {
   return {
-    galleryKind: widget.presentation_config?.chartShape?.kind??'standard',
-    galleryKeys: widget.presentation_config?.chartShape?.seriesIds??null,
-    galleryMarks: Object.fromEntries((widget.presentation_config?.chartShape?.bindings??[]).map(b=>[b.seriesId,b.mark])),
-    galleryAdditive: widget.presentation_config?.chartShape?.additive===true,
+    ...galleryDraftSettings(widget),
     title: widget.title || "",
     widgetType: widget.widget_type,
     groupBy: widget.group_by || "day",

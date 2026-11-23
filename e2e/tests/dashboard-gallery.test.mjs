@@ -24,6 +24,7 @@ after(async()=>{await browser?.close();await world?.stop()});
 test('1280px: seven real charts, distinct names, controls, local zoom and remembered disclosure state',async()=>{
  const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',1280);try{
   await openDashboard(page,gallery.dashboard.id);await page.waitForFunction(()=>document.querySelectorAll('.tl-analysis-grid optimove-dashboard-chart svg').length===7);
+  if(process.env.DASHBOARD_GALLERY_EVIDENCE){await mkdir(process.env.DASHBOARD_GALLERY_EVIDENCE,{recursive:true});await page.screenshot({path:path.join(process.env.DASHBOARD_GALLERY_EVIDENCE,'gallery-1280.png'),fullPage:false});}
   const first=page.locator(`[data-analysis-widget-id="${gallery.widgets[0]}"]`),host=first.locator('optimove-dashboard-chart');
   const names=await host.evaluate(el=>el.chart.getOption().series.map(s=>s.name));assert.equal(new Set(names).size,3);assert.ok(names.every(n=>!/[0-9a-f]{8}-/.test(n)));
   await host.evaluate(el=>el.chart.dispatchAction({type:'legendToggleSelect',name:el.chart.getOption().series[0].name}));await host.getByRole('button',{name:'Show all series'}).click();assert.equal(await host.evaluate(el=>Object.values(el.chart.getOption().legend[0].selected).every(Boolean)),true);
@@ -35,7 +36,7 @@ test('1280px: seven real charts, distinct names, controls, local zoom and rememb
   assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
-for(const width of [360,390])test(width+'px: visual gallery editor saves a multi-series shape without clipping',async()=>{
+for(const width of [360,375,390])test(width+'px: visual gallery editor saves a multi-series shape without clipping',async()=>{
  const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',width);try{
   await openDashboard(page,gallery.dashboard.id);await page.getByRole('button',{name:'Widget actions: combined',exact:true}).click();await action(page,'analysis-edit-widget').click();
   await action(page,'simple-advanced').click();const dialog=page.getByRole('dialog',{name:'Widget settings'});await dialog.waitFor();assert.equal(await dialog.locator('.tl-gallery-pick').count(),8);

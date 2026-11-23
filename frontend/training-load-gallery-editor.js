@@ -1,3 +1,7 @@
+export function galleryDraftSettings(widget){
+ const shape=widget.presentation_config?.schemaVersion===1&&widget.presentation_config.chartShape?.schemaVersion===1?widget.presentation_config.chartShape:null;
+ return {galleryKind:shape?.kind??'standard',galleryKeys:shape?.seriesIds??null,galleryMarks:Object.fromEntries((shape?.bindings??[]).map(b=>[b.seriesId,b.mark])),galleryAdditive:shape?.additive===true};
+}
 export const GALLERY_CHOICES=[['standard','Standard'],['area','Area'],['horizontal_bar','Horizontal bar'],['combined','Bar + line'],['heatmap','Heatmap'],['scatter','Scatter'],['stacked','Stacked bar'],['boxplot','Box plot']];
 export function galleryEntries(draft){return draft.galleryKeys?draft.galleryKeys.map(key=>draft.series.find(e=>e.key===key)).filter(Boolean):draft.series;}
 export function galleryEditorProblem(draft){

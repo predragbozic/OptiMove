@@ -116,7 +116,7 @@ export function galleryUnavailableMessage(reason){return ({
  }[reason]??'No values can be shown for this selection. Review the values or choose another period.');}
 
 export function configureDashboardPlot(plot,model){
- const settings=model.chartInteractions??{};plot.interactions=structuredClone(settings);plot.period=model.period??null;
+ const settings=model.chartInteractions??{};plot.interactions=structuredClone(settings);plot.period=model.period??null;plot.interactionGeneration=model.interactionGeneration??null;
  if(settings.legend?.toggle===false&&plot.option.legend)plot.option.legend.selectedMode=false;
  const axes=Array.isArray(plot.option.yAxis)?plot.option.yAxis:[plot.option.yAxis];
  if(settings.yAxis?.mode==='fixed'&&axes[0]?.type==='value'){axes[0].min=settings.yAxis.min;axes[0].max=settings.yAxis.max;}

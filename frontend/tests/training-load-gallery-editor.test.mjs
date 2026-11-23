@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {galleryEditorProblem,gallerySettingsChanged,galleryEditorPresentation} from '../training-load-gallery-editor.js';
+import {galleryDraftSettings,galleryEditorProblem,gallerySettingsChanged,galleryEditorPresentation} from '../training-load-gallery-editor.js';
 const draft=()=>({widgetType:'bar_chart',groupBy:'day',galleryKind:'combined',galleryMarks:{a:'bar',b:'line'},series:[{key:'a',id:'a',fields:{axis:'primary',analyticalAggregation:'sum'}},{key:'b',id:'b',fields:{axis:'secondary',analyticalAggregation:'sum'}}]});
 test('gallery selection becomes explicit series ids and mark/axis bindings without changing the draft',()=>{
  const d=draft(),before=structuredClone(d),w={presentation_config:{schemaVersion:1,chartInteractions:{legend:{toggle:false}}}},p=galleryEditorPresentation(w,d);
@@ -19,4 +19,11 @@ test('an explicit X/Y order survives reopening even when it differs from series_
  const d=draft();d.galleryKind='scatter';d.galleryKeys=['b','a'];
  const widget={presentation_config:{schemaVersion:1,chartShape:{schemaVersion:1,kind:'scatter',seriesIds:['b','a']}}};
  assert.equal(gallerySettingsChanged(widget,d),false);assert.deepEqual(galleryEditorPresentation(widget,d).chartShape.seriesIds,['b','a']);
+});
+
+test('opaque future presentation is never interpreted as a gallery on opening or title edits',()=>{
+ const widget={presentation_config:{schemaVersion:2,chartShape:{schemaVersion:1,kind:'scatter',seriesIds:['b','a']},futureSetting:'preserve'}};
+ const d={...draft(),...galleryDraftSettings(widget)};
+ assert.deepEqual(galleryDraftSettings(widget),{galleryKind:'standard',galleryKeys:null,galleryMarks:{},galleryAdditive:false});
+ assert.equal(gallerySettingsChanged(widget,d),false);assert.equal(galleryEditorProblem(d),'');
 });

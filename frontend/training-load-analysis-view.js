@@ -3,7 +3,7 @@ import {dashboardDisclosureOpen} from './training-load-dashboard-disclosures.js'
 import {GALLERY_CHOICES} from './training-load-gallery-editor.js';
 import {renderDashboardPages} from './training-load-pages-view.js';
 import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
-import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { analysisChartInteractionGeneration, ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { formatDashboardValue as formatValue, renderDashboardMetricTable } from "./training-load-dashboard-table.js";
@@ -527,6 +527,7 @@ function renderWidgetBodyHtml(widget, results) {
   const catalog = state.trainingLoad.analysis.metricPicker.definitions ?? [];
   const displayWidget = { ...widget, series: widget.series.map(series => { const definition = catalog.find(d => d.id === series.metric_definition_id); return { ...series, ...(definition ? { calculation: definition.calculation } : {}) }; }) };
   const model = buildDashboardWidgetDisplayModel(displayWidget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
+  model.interactionGeneration=analysisChartInteractionGeneration();
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;

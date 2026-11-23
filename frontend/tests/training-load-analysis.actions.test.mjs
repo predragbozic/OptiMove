@@ -1414,3 +1414,10 @@ test('a shell selection over the shared limit gives a plain next step, never an 
 test('Page reload/save/unknown outcome blocks programmatic widget creation before any request',async()=>{
  for(const field of ['pageLoading','pageSaving','pagePending']){resetState();const a=state.trainingLoad.analysis;a.dashboard=dashboard();a.pagesAvailable=true;a[field]=true;installFetchMock(()=>{throw Error('A widget must not open against a changing Page')});await handleTrainingLoadAction(fakeAction({action:'training-load-analysis-add-widget'}),{renderTrainingLoad(){}});assert.equal(fetchCalls.length,0,field);assert.equal(a.metricPanel,null)}
 });
+
+test('a chart period action from a previous workspace/page/filter context never changes the current period',async()=>{
+ resetState();const a=state.trainingLoad.analysis;a.widgets=[{id:widgetId,revision:1}];a.selectedDashboardId=dashboardId;
+ a.period={dateFrom:'2026-11-01',dateTo:'2026-11-10'};const before=structuredClone(a.period);installFetchMock(()=>({status:200,body:{widgets:[]}}));
+ await handleTrainingLoadAction(fakeAction({action:'training-load-analysis-chart-period',widgetId,boundPeriod:JSON.stringify(a.period),boundGeneration:'0',dateFrom:'2026-11-02',dateTo:'2026-11-03'}),{renderTrainingLoad:()=>{}});
+ assert.deepEqual(a.period,before);assert.equal(fetchCalls.length,0);
+});
