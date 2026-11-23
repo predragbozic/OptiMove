@@ -588,7 +588,9 @@ async function importResult(client, { result, identity, participantId, segmentId
   const contentHash = importedOccasionContentHash({ level: result.level, drillIndex: result.drillIndex, values });
 
   const common = { participantId, segmentId, identityId: identity.id, contentHash, sourceReportedAt, batch, performedByUserId, values, provenance, level: result.level, ownerTeamId, calculated };
-  if (manual?.entryOccasionId && !manual.replace) {
+  // (Only a result without a current occasion: one already current - a drill imported before - takes the usual path under
+  // either choice, so both choices list the same results.)
+  if (manual?.entryOccasionId && !manual.replace && !identity.current_occasion_id) {
     // Keep my values: the athlete's roster entry stays the only effective values; GPEXE's are stored flagged, once.
     const alreadyFlagged = await client.query(
       `select id from training_load.metric_measurement_occasions where source_identity_id = $1 and content_hash = $2 and import_conflict_status = 'stale_resend_ignored'`,

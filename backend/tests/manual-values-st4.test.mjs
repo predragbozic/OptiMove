@@ -854,6 +854,9 @@ test("19. the re-import question, Keep my values (the default): a check that bri
   const kept = preview.changesToImported.filter((c) => c.outcome === "manual_kept");
   assert.deepEqual([...new Set(kept.map((c) => c.athleteId))].sort(), [String(cil), String(dan)].sort(), "both athletes are listed as changes");
   assert.ok(kept.every((c) => c.newVersionBecomesCurrent === false));
+  // An athlete kept beside a roster entry can be left out (nothing of his would be written anyway).
+  const leftOut = await choicePreview(team, cand, { excludedAthleteIds: ["104"] });
+  assert.equal(leftOut.status, 200, leftOut.text);
   // Without the acceptance nothing is imported.
   const refused = await approveWith(team, cand, {});
   assert.deepEqual([refused.status, refused.body.error], [409, "changes_need_acceptance"], refused.text);
@@ -881,6 +884,13 @@ test("19d. the re-import question, Use GPEXE's values for an entry: the choice p
   assert.equal(entry.status, 201, entry.text);
   await checkNow(team, [bundleOf({ sessionId: 9711, ids: [101, 102, 104] })]);
   const cand = await candidateFor(team, 9711, [s.candidateId]);
+  // A null choice is no choice (the full recompute, as activityTypeKey: null); an empty list alone names what to send.
+  const asNull = await choicePreview(team, cand, { replaceManualAthleteIds: null });
+  assert.equal(asNull.status, 200, asNull.text);
+  assert.equal(asNull.body.subset, undefined);
+  const empty = await choicePreview(team, cand, { replaceManualAthleteIds: [] });
+  assert.equal(empty.status, 400);
+  assert.match(empty.body.message, /replaceManualAthleteIds/);
   // Refusals first: an athlete without roster values; a choice approved without its hash.
   const notMet = await choicePreview(team, cand, { replaceManualAthleteIds: [team.athleteIds[ANA]] });
   assert.deepEqual([notMet.status, notMet.body.error], [400, "invalid_manual_choice"], notMet.text);
@@ -936,6 +946,8 @@ test("19b. the re-import question for a roster correction: GPEXE's SAME measured
   // Use GPEXE's values.
   const p = await choicePreview(team, cand, { replaceManualAthleteIds: [ana] });
   assert.equal(p.status, 200, p.text);
+  const anaRow = p.body.subset.preview.athletes.find((a) => a.athleteId === String(ana));
+  assert.ok(!anaRow.results.some((r) => r.outcome === "manual_replaced" && r.manualCorrectionKept), "a replaced correction is not marked as kept");
   const ok = await approveWith(team, cand, { acceptChanges: true, replaceManualAthleteIds: [ana], subsetHash: p.body.subset.subsetHash });
   assert.equal(ok.status, 200, ok.text);
   const current = (await admin.query(

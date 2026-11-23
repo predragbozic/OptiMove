@@ -660,7 +660,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
           level: result.level,
           drillIndex: result.drillIndex,
           outcome: outcome ?? "not_imported",
-          ...(previous?.entryMethod === "manual" ? { manualCorrectionKept: true } : {}),
+          ...(previous?.entryMethod === "manual" && outcome !== "manual_replaced" ? { manualCorrectionKept: true } : {}),
           values,
           // J21: present only when a calculated variable applies, so every other preview (and its hash) is unchanged.
           ...(calculatedByResult.has(result.externalId) ? { calculated: calculatedByResult.get(result.externalId) } : {}),

@@ -2591,7 +2591,8 @@ function checkExclusionAgainstPreview(preview, excluded) {
   // An athlete whose results were imported earlier cannot be left out: the earlier results would be left behind (the writer refuses
   // that) and a change to them could not be accepted without them. Only an athlete whose every result is new (`created`) can go.
   for (const id of excluded) {
-    if ((byId.get(id).results ?? []).some((r) => r.outcome && r.outcome !== "created" && r.outcome !== "not_imported")) {
+    // ST-4: a result kept beside a roster entry (manual_kept) is new too - leaving its athlete out writes nothing and leaves nothing behind.
+    if ((byId.get(id).results ?? []).some((r) => r.outcome && r.outcome !== "created" && r.outcome !== "manual_kept" && r.outcome !== "not_imported")) {
       throw refusal(400, "invalid_exclusion", "A GPEXE athlete you chose to leave out was imported before; it can't be left out of a later version of this session.");
     }
   }
@@ -3195,7 +3196,9 @@ export async function previewCandidateSubset(teamId, candidateId, { userId, excl
   const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
   const chosenType = canonicalChosenSessionType(activityTypeKey);
   const replaced = canonicalReplaceManual(replaceManualAthleteIds);
-  if (!excluded.length && chosenType === undefined && !replaced.length) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must name at least one athlete to leave out.");
+  if (!excluded.length && chosenType === undefined && !replaced.length) {
+    throw refusal(400, "invalid_excluded_athlete", "Name a choice: athletes to leave out (excludedAthleteIds), a session type (activityTypeKey) or athletes given GPEXE's values (replaceManualAthleteIds).");
+  }
   // Its own in-flight set (a member without the approver right must not hold the slot of A1's recompute), and the interval slot is
   // taken only once the approver right is confirmed (a refused request does not use it up).
   if (recomputeInFlight.has(String(teamId)) || subsetInFlight.has(String(teamId))) {

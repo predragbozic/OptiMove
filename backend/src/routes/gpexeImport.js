@@ -424,7 +424,8 @@ router.post("/teams/:teamId/candidates/:candidateId/preview", handle(async (req,
   // ST-2: so it is with activityTypeKey (the approver's choice of the session type), alone or with athletes left out.
   // (A null activityTypeKey is no choice, as in the approval's body.)
   // ST-4: and with replaceManualAthleteIds (GPEXE's values over the ones entered or corrected on the roster).
-  if (req.body && (req.body.excludedAthleteIds !== undefined || (req.body.activityTypeKey !== undefined && req.body.activityTypeKey !== null) || req.body.replaceManualAthleteIds !== undefined)) {
+  if (req.body && (req.body.excludedAthleteIds !== undefined || (req.body.activityTypeKey !== undefined && req.body.activityTypeKey !== null)
+    || (req.body.replaceManualAthleteIds !== undefined && req.body.replaceManualAthleteIds !== null))) {
     const unknown = Object.keys(req.body).filter((key) => key !== "excludedAthleteIds" && key !== "activityTypeKey" && key !== "replaceManualAthleteIds");
     if (unknown.length) return res.status(400).json({ error: "invalid_body", message: "The body must be { excludedAthleteIds: [...], activityTypeKey, replaceManualAthleteIds: [...] } (any of them) or empty." });
     const subset = await service.previewCandidateSubset(access.teamId, req.params.candidateId, {

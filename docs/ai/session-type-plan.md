@@ -693,6 +693,13 @@ reviewers:
   athlete with a current roster entry is `409 manual_values_present`. It is checked under the team's import lock, which
   every manual write takes. The database's own decision trigger still counts only imported values (part 1's known
   limit).
+- **Known limit (code review, MEDIUM; an owner decision):** after *Keep my values* and then *Remove these values*,
+  GPEXE's version stays stored flagged. A later check of the SAME GPEXE data is `unchanged` and makes no candidate, so
+  the athlete needs a state while a device record exists in the database. The only way back today is an undo and a
+  fresh import. Options: (a) leave it as a known limit; (b) the removal offers to make the flagged GPEXE version
+  current; (c) a check surfaces such a session again.
+- **Follow-up (LOW):** the approval's read-back (`APPROVAL_COLUMNS` / `approvalView`) does not show
+  `replaced_manual_athlete_ids` (guarded for a database before v88).
 - **Tests:** `manual-values-st4` 19, 19b, 19c, 19d, 19e, 21, 22, and 23 (an undo of a session with manual values and a
   per-athlete type exception, the reviewer's LOW).
 
