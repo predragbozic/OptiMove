@@ -212,6 +212,8 @@ create function training_load.save_simple_page_widget(
 ) returns jsonb language plpgsql as $$
 declare page training_load.dashboard_pages%rowtype;receipt jsonb;replay boolean;
 begin
+ -- Match legacy Simple's request lock before any dashboard/Page row lock.
+ perform pg_advisory_xact_lock(hashtextextended('dashboard-simple:'||p_initiator_user_id::text||':'||p_request_id::text,0));
  perform 1 from training_load.dashboards where id=p_dashboard_id for update;
  if not found then raise exception 'notFound' using errcode='S2C07';end if;
  perform training_load.assert_dashboard_writable(p_dashboard_id);

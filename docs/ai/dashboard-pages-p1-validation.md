@@ -8,14 +8,14 @@ Environment: Windows; Node 22.22.0; local PostgreSQL 17.11; Chrome 158.0.8127.36
 
 | Repository runner file | Passed |
 | --- | ---: |
-| dashboard-pages-migration.test.mjs | 17 |
+| dashboard-pages-migration.test.mjs | 18 |
 | dashboard-pages-writers.test.mjs | 6 |
 | dashboard-pages-v91-rollback.test.mjs | 1 |
 | dashboard-pages-legacy-server.test.mjs | 16 |
 | dashboard-pages-disposable.test.mjs | 12 |
 | dashboard-pages-access.test.mjs | 9 |
-| dashboard-pages-concurrency.test.mjs | 6 |
-| Total real-database P1 tests | 67 |
+| dashboard-pages-concurrency.test.mjs | 8 |
+| Total real-database P1 tests | 70 |
 | e2e/tests/dashboard-pages.test.mjs | 7 |
 
 The migration cases execute the actual SQL and runbooks, including application, guarded rollback, catalog equality and reapplication. Catalog equality includes ownership, ACLs, RLS, policies, constraints, indexes, triggers and function definitions. Optional v88/v89 are exercised absent, individually present, and present in both application orders. The A-only owner command applies no optional migration and refuses an unrecorded prerequisite.
@@ -96,3 +96,64 @@ Not performed: production preflight/application/postcheck/activation/deploy; own
 1280 px:
 
 ![Pages at 1280 px](dashboard-pages-p1-evidence/pages-1280.png)
+
+## Independent-review delta from bec894b8 (2026-11-23)
+
+M-1: save_simple_page_widget's first executable statement now takes the exact same
+dashboard-simple:<initiator>:<request> advisory transaction lock as the legacy save.
+Only then may it acquire the dashboard and Page locks. Nested acquisition is reentrant.
+The new real-DB concurrency test holds that key on another connection, waits until the
+Page save is blocked on advisory, and obtains the dashboard FOR UPDATE NOWAIT on a
+third connection. Removing the first advisory acquisition makes that test fail: the
+legacy nested acquisition is too late and the dashboard is already locked.
+
+L-1: hold a Page row lock on a separate connection, then call assert_dashboard_writable
+with a bounded lock_timeout; it must wait/refuse with 55P03. Removing only the Page
+FOR UPDATE from the installed assertion body makes the test fail. The tests mutate
+fresh disposable installed bodies after migration, so an md5 gate is not the reason
+for either killed mutation. Both mutation runs: 7 passed / 1 failed of 8, the intended
+new test only. All mutated bodies/test injections were restored.
+
+L-2: the additional A-only test executes the exact Page-state guard extracted from
+the real v90 rollback SQL, with a test-only non-Home row whose other legacy fields
+look unchanged. The valid Home still exists and no widget references that extra row.
+The duplicate-name index is removed only inside this disposable fixture transaction;
+position uniqueness is deferred. This isolates not-is_home from other guard branches
+and from later DDL. Removing that predicate produces Missing expected rejection.
+Full rollback execution/catalog equality remains covered by the other A/B tests.
+
+L-3: ADR-003 explicitly lists cloneDashboard and the sanctioned SQL copy function as
+the two composite raw-INSERT implementations. No raw Page route/service writer is
+authorized by that exception.
+
+Existing training-load-dashboard.test.mjs now applies v84 + v90 + v91, retains the
+production migrations_v2 identity in every fixture directory, compares the exact
+dashboard migration list, and isolates v71 rollback at its actual predecessor set.
+Its atomic-save table snapshot now expects the Page revision trigger's table change.
+Final run: 154/154; no test is disabled or marked known-fail.
+
+Review commands (Node22.22.0, local PG17.11, loopback55442):
+
+- node backend/scripts/dashboard-pages-rehearsal.mjs --port 55442 --pg-bin
+  "C:/Program Files/PostgreSQL/17/bin": RESULT: PASS, 70/70 across all seven P1 files.
+  Includes 16/16 unchanged aa6e765c old-server flows and A/B rollback/catalog/reapply.
+- node scripts/test-runner.mjs --project backend --file training-load-dashboard.test.mjs:
+  154/154 after the fixture corrections.
+- node scripts/test-runner.mjs --project backend --file dashboard-pages-concurrency.test.mjs:
+  8/8; the rehearsal repeats it unmutated.
+- L-2 mutation: node --test --test-name-pattern="v90 rollback independently"
+  backend/tests/dashboard-pages-migration.test.mjs: 0/1 (expected assertion failure).
+
+The owner's production-matching PG17 rehearsal must use this NEW v91 artifact:
+SHA256 1da5706c418c0f3262d6a88689e8d1355247a97d7d31bad4a82a59d396c52247.
+The updated save wrapper prosrc md5 is 545aa60b5d53f0df2d6a9f4c39d5150b.
+Both runbooks and the owned-function fixture are updated; v90 is unchanged.
+
+No frontend code changed in this delta. Frontend/build/E2E and the whole disposable
+family were not rerun for this backend/test/doc delta; their previous evidence and
+limitations above remain historical. Reviewer full gate and owner rehearsal are still
+required. No production access, migration, activation, merge or deploy was performed.
+
+After isolating the L-2 guard from fixture DDL events, the complete migration file
+was rerun unmutated with the repo runner: 18/18, cleanup audit clean. The L-2 mutant
+then fails only its named guard test with Missing expected rejection (0/1).

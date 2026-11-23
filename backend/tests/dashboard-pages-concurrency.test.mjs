@@ -74,3 +74,31 @@ test('deactivation that holds the actor lock wins before a waiting Page write',a
   assert.equal((await q.query('select revision from training_load.dashboard_widgets where id=$1',[target.widgetId])).rows[0].revision,1);
  }finally{await locker.query('rollback');locker.release();await writing;await q.query('update public.users set is_active=true where id=$1',[user])}
 });
+
+test('Simple Page save waits for the legacy request advisory lock before locking the dashboard',async()=>{
+ const target=await setup(),holder=await pool.connect(),writer=await pool.connect(),probe=await pool.connect();
+ const requestId=crypto.randomUUID();let saving;
+ try{
+  await holder.query('begin');
+  await holder.query("select pg_advisory_xact_lock(hashtextextended('dashboard-simple:'||$1::text||':'||$2::text,0))",[user,requestId]);
+  await writer.query('begin');await writer.query("set local statement_timeout='5s'");
+  const pid=(await writer.query('select pg_backend_pid() pid')).rows[0].pid;
+  saving=writer.query("select training_load.save_simple_page_widget($1,1,$2,$3,$4,clock_timestamp(),$5,null,null,'{}','{}','{}')",[target.pageId,user,requestId,'a'.repeat(64),target.dashboardId]).then(value=>({value}),error=>({error}));
+  let waiting=false;const deadline=Date.now()+2500;
+  while(Date.now()<deadline){waiting=(await q.query("select wait_event='advisory' waiting from pg_stat_activity where pid=$1",[pid])).rows[0]?.waiting;if(waiting)break;await new Promise(r=>setTimeout(r,10))}
+  assert.equal(waiting,true,'Page save reaches the shared legacy advisory lock');
+  await probe.query('begin');
+  await probe.query('select id from training_load.dashboards where id=$1 for update nowait',[target.dashboardId]);
+  await probe.query('rollback');
+  await holder.query('rollback');await saving;
+ }finally{await probe.query('rollback');await holder.query('rollback');await saving;await writer.query('rollback');holder.release();writer.release();probe.release()}
+});
+
+test('assert_dashboard_writable waits for a separately held Page row lock',async()=>{
+ const target=await setup(),holder=await pool.connect(),writer=await pool.connect();
+ try{
+  await holder.query('begin');await holder.query('select id from training_load.dashboard_pages where id=$1 for update',[target.pageId]);
+  await writer.query('begin');await writer.query("set local lock_timeout='200ms'");
+  await assert.rejects(writer.query('select training_load.assert_dashboard_writable($1)',[target.dashboardId]),{code:'55P03'});
+ }finally{await writer.query('rollback');await holder.query('rollback');holder.release();writer.release()}
+});
