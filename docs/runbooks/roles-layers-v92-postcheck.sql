@@ -33,10 +33,12 @@ select count(*) filter (where t.tgenabled = 'O') = count(*) as triggers_enabled_
  where not t.tgisinternal
    and t.tgrelid in (select c.oid from pg_class c where c.relnamespace = 'public'::regnamespace and c.relname in ('club_permission_ceiling', 'club_permission_ceiling_changes', 'permission_club_role_versions', 'permission_club_role_version_items', 'permission_club_role_version_changes', 'permission_custom_roles', 'permission_custom_role_items', 'permission_custom_role_changes', 'user_club_roles', 'user_team_roles'));
 
--- Block 5: the seed - the eleven view words in Club admin and Team coach, each through one 'migration' change row of v92
+-- Block 5: the seed - the eleven view words in Club admin and Team coach; the last change of each is v92's 'migration' row
 select (select count(*) from public.permission_role_items where role_id = '00000000-0000-4000-8000-000000000842' and permission_word in ('athletes.view', 'programs.view', 'exercises.use', 'presets.use', 'calendar.view', 'load.view.team', 'load.view.athlete', 'dashboards.view', 'tests.view', 'tests.results.view', 'variables.view')) = 11 as club_admin_view_ok,
        (select count(*) from public.permission_role_items where role_id = '00000000-0000-4000-8000-000000000843' and permission_word in ('athletes.view', 'programs.view', 'exercises.use', 'presets.use', 'calendar.view', 'load.view.team', 'load.view.athlete', 'dashboards.view', 'tests.view', 'tests.results.view', 'variables.view')) = 11 as team_coach_view_ok,
-       (select count(*) from public.permission_role_changes where migration_name = 'migrations_v2/202611241000_roles_v92_layers_foundation.sql' and kind = 'migration') = 2 as seed_changes_ok,
+       (select count(*) from public.permission_roles r where r.basic_key in ('club_admin', 'team_coach')
+         and r.revision = (select max(c.revision_after) from public.permission_role_changes c
+                            where c.role_id = r.id and c.kind = 'migration' and c.migration_name = 'migrations_v2/202611241000_roles_v92_layers_foundation.sql')) = 2 as seed_changes_ok,
        (select count(*) from public.permission_role_items where role_id = '00000000-0000-4000-8000-000000000842') = 18 as club_admin_count_ok,
        (select count(*) from public.permission_role_items where role_id = '00000000-0000-4000-8000-000000000843') = 14 as team_coach_count_ok;
 
