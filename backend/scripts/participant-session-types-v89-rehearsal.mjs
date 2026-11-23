@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The rehearsal of migration v89 (ST-3: a session type per athlete, docs/ai/session-type-plan.md section 16) on ANY
+// The rehearsal of migration v89 (ST-3: a session type per athlete, docs/ai/session-type-plan.md section 17) on ANY
 // PostgreSQL server you point it at - written so that it runs unchanged on PostgreSQL 17 (production) as on 16. The
 // shape of the earlier rehearsals (session types v85, athlete positions):
 //

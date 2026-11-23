@@ -1,7 +1,7 @@
 # v89: a session type per athlete, and a type changed after the import (ST-3)
 
 Migration `migrations_v2/202611221400_training_load_v89_participant_session_types.sql`. The plan is
-`docs/ai/session-type-plan.md`; its section 16 records what was built. The files beside this one are:
+`docs/ai/session-type-plan.md`; its section 17 records what was built. The files beside this one are:
 - `participant-session-types-v89-preflight.sql`;
 - `participant-session-types-v89-postcheck.sql`;
 - `participant-session-types-v89-rollback.sql`.

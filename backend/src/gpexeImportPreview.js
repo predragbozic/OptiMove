@@ -558,6 +558,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
       await client.query("rollback to savepoint gpexe_preview_import");
       if (!(error instanceof GpexeImportError)) throw error;
       blocked = { code: error.code, message: error.code in BLOCK_MESSAGES ? BLOCK_MESSAGES[error.code] : error.message };
+      if (error.manualAthleteIds) blocked.athleteIds = error.manualAthleteIds;
       // Results imported earlier that this import would leave behind (the
       // athlete is now unlinked, out of the team, or needs manual review):
       // the session waits, and the athletes causing it are named.

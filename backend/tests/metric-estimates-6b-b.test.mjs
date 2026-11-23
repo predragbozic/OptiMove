@@ -986,10 +986,11 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   assert.equal(filTime.length, 1, "a replaced estimate is not shown (rule 7)");
   for (const v of rowOf(ana).values) assert.ok(!("estimate" in v), "a measured value has no estimate field");
   assert.deepEqual(Object.keys(rowOf(ana).values[0]).sort(), ["entryMethod", "label", "metricKey", "shortLabel", "unit", "value", "valueText"], "a measured value keeps exactly its fields");
-  assert.deepEqual(roster.body.viewer, { basis: "team_coach", estimates: true }, "the action is offered while the flag is on");
+  // ST-4: manualValues is offered unless MANUAL_VALUES_ENABLED is "false" (on by default).
+  assert.deepEqual(roster.body.viewer, { basis: "team_coach", estimates: true, manualValues: true }, "the action is offered while the flag is on");
   process.env.ESTIMATES_ENABLED = "false";
   try {
-    assert.deepEqual((await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie })).body.viewer, { basis: "team_coach" }, "flag off: the viewer is as before");
+    assert.deepEqual((await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie })).body.viewer, { basis: "team_coach", manualValues: true }, "flag off: the viewer is as before");
   } finally {
     process.env.ESTIMATES_ENABLED = "true";
   }

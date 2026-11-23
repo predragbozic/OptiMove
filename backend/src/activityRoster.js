@@ -120,8 +120,11 @@ export function decisionView(row) {
 // wins), with its group, flags and what it rests on.
 export function deriveAthleteState({ decisions, facts, needsReview, observations }) {
   const flags = [];
-  const measured = facts.filter((f) => MEASURED_METHODS.has(f.entryMethod));
-  const manual = facts.filter((f) => f.entryMethod === "manual");
+  // ST-4 (v88): a device record corrected on the roster is still the athlete's record (measured, marked corrected); a
+  // value entered on the roster gives the athlete the state Manual values. A manual value of another path is as before.
+  const measured = facts.filter((f) => MEASURED_METHODS.has(f.entryMethod) || (f.manualKind && f.sourceIdentityId));
+  const rosterEntry = facts.filter((f) => f.entryMethod === "manual" && f.manualKind && !f.sourceIdentityId);
+  const manual = facts.filter((f) => f.entryMethod === "manual" && !f.manualKind);
   const effective = decisions.filter((d) => d.decision_kind !== "cleared");
   const unusable = observations.find((o) => o.kind === "record_unusable") ?? null;
   const changePending = observations.some((o) => o.kind === "change_pending");
@@ -151,6 +154,9 @@ export function deriveAthleteState({ decisions, facts, needsReview, observations
       state = "measured";
       group = "done";
     }
+  } else if (rosterEntry.length) {
+    state = "manual_values";
+    group = "done";
   } else if (unusable) {
     state = "no_usable_device_record";
     group = "needs_state";
@@ -165,7 +171,8 @@ export function deriveAthleteState({ decisions, facts, needsReview, observations
       label: SOURCE_REASON_LABELS[unusable.reason_code] ?? null,
     };
   }
-  if (manual.length && !measured.length && !effective.length) flags.push("manual_values_recorded");
+  if (manual.length && !measured.length && !effective.length && !rosterEntry.length) flags.push("manual_values_recorded");
+  if (facts.some((f) => f.manualKind === "correction")) flags.push("corrected");
   return { state, group, flags, sourceReason };
 }
 
@@ -177,6 +184,8 @@ function valuesView(facts, estimateLabels = new Map(), nameInAnswer = () => null
         metricKey: f.metricKey, label: f.metricLabel, shortLabel: f.metricShortLabel,
         value: f.valueNumeric, valueText: f.valueText, unit: f.unit, entryMethod: f.entryMethod,
       };
+      // ST-4: a corrected value carries the measured value it replaced (null when the record held none).
+      if (f.manualKind === "correction") view.measuredValue = f.measuredValue;
       // 6b-C1: only an estimated value carries its label (rule 10); every other value is as before.
       if (f.entryMethod === "estimate") {
         const estimate = estimateLabelFor(estimateLabels.get(String(f.occasionId)), nameInAnswer);
@@ -190,6 +199,47 @@ function valuesView(facts, estimateLabels = new Map(), nameInAnswer = () => null
       return view;
     })
     .sort((a, b) => String(a.metricKey).localeCompare(String(b.metricKey)));
+}
+
+// ST-4 (v88): Map(occasionId -> { kind, by, basis, at, note, measured: Map(definitionId -> number|null) }) for the manual
+// occasions a roster answer shows. The author is named (the roster's audience decides on this team; the name is a
+// display fact like a decision's decidedBy).
+async function readManualProvenance(client, occasionIds) {
+  const ids = [...new Set(occasionIds.filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+  // A database before v88 (some suites pin one) has no provenance table: no manual value was written on its roster.
+  if (!(await client.query(`select to_regclass('training_load.metric_manual_values') is not null as present`)).rows[0].present) return new Map();
+  const rows = (await client.query(
+    `select m.occasion_id, m.kind, m.entered_by_user_id, m.entered_by_basis, m.entered_at, m.note, m.measured_occasion_id,
+            coalesce(nullif(u.display_name, ''), u.full_name) as author
+       from training_load.metric_manual_values m
+       left join public.users u on u.id = m.entered_by_user_id
+      where m.occasion_id = any($1::uuid[])`,
+    [ids],
+  )).rows;
+  const measuredIds = rows.map((r) => r.measured_occasion_id).filter(Boolean);
+  const measuredValues = measuredIds.length ? (await client.query(
+    `select occasion_id, metric_definition_id, value_numeric::text as value from training_load.metric_values
+      where occasion_id = any($1::uuid[]) and not is_derived`,
+    [measuredIds],
+  )).rows : [];
+  const out = new Map();
+  for (const r of rows) {
+    const measured = new Map(measuredValues.filter((v) => String(v.occasion_id) === String(r.measured_occasion_id))
+      .map((v) => [String(v.metric_definition_id), numberOrNull(v.value)]));
+    out.set(String(r.occasion_id), {
+      kind: r.kind, by: { userId: String(r.entered_by_user_id), name: r.author ?? null, basis: r.entered_by_basis },
+      at: iso(r.entered_at), note: r.note ?? null, measured,
+    });
+  }
+  return out;
+}
+
+function manualViewOf(athleteFacts, manualRows) {
+  const fact = athleteFacts.find((f) => f.manualKind && f.segmentId === null);
+  if (!fact) return null;
+  const row = manualRows.get(String(fact.occasionId));
+  return { kind: row.kind, enteredBy: row.by, enteredAt: row.at, note: row.note };
 }
 
 function groupBy(rows, key) {
@@ -300,6 +350,7 @@ export async function loadRosterSnapshot(client, canonicalId) {
             r.detail ->> 'segmentId' as segment_id, r.detail ->> 'valueNumeric' as value_numeric,
             r.detail ->> 'valueText' as value_text, r.detail ->> 'unitAtCapture' as unit,
             r.detail ->> 'metricDefinitionId' as metric_definition_id, d.id is not null as metric_named,
+            r.detail ->> 'sourceIdentityId' as source_identity_id,
             d.key as metric_key, d.label as metric_label, d.short_label as metric_short_label
        from training.canonical_activity_results($1) r
        left join training_load.metric_definitions d on d.id = (r.detail ->> 'metricDefinitionId')::uuid
@@ -319,8 +370,12 @@ export async function loadRosterSnapshot(client, canonicalId) {
   // leave here.
   const unnamedKeys = unnamedMetricKeys(factRows.filter((r) => !r.metric_named).map((r) => r.metric_definition_id));
   const unnamedKeyOf = (definitionId) => unnamedKeys.get(String(definitionId ?? ""));
+  // ST-4 (v88): the provenance of every manual value written on the roster, and the measured values a correction rests on.
+  const manualRows = await readManualProvenance(client, factRows.filter((r) => r.entry_method === "manual" && r.segment_id === null).map((r) => r.occasion_id));
   const facts = factRows.map((r) => ({
     athleteId: String(r.athlete_id), entryMethod: r.entry_method, occasionId: r.occasion_id,
+    sourceIdentityId: r.source_identity_id ?? null, manualKind: manualRows.get(String(r.occasion_id))?.kind ?? null,
+    measuredValue: manualRows.get(String(r.occasion_id))?.measured.get(String(r.metric_definition_id)) ?? null,
     segmentId: r.segment_id ?? null, valueNumeric: numberOrNull(r.value_numeric), valueText: r.value_text ?? null,
     unit: r.unit ?? null, metricKey: r.metric_named ? (r.metric_key ?? null) : unnamedKeyOf(r.metric_definition_id),
     metricLabel: r.metric_label ?? null, metricShortLabel: r.metric_short_label ?? null,
@@ -426,13 +481,15 @@ export async function loadRosterSnapshot(client, canonicalId) {
       flags,
       sourceReason: derived.sourceReason,
       values: values(athleteFacts),
+      // ST-4: who entered or corrected this athlete's values on the roster, and when (null when nobody did).
+      manual: manualViewOf(athleteFacts, manualRows),
       ...(types.installed ? { sessionType: athleteSessionTypeView(types, athleteId) } : {}),
       // Internal (removed by publicAthlete): what the fingerprint and the
       // 5a2 commands rest on.
       decisionIds: athleteDecisions.map((d) => String(d.id)),
       currentDecisions: athleteDecisions,
       occasionIds: [...new Set(athleteFacts.map((f) => f.occasionId).filter(Boolean))],
-      measured: athleteFacts.some((f) => MEASURED_METHODS.has(f.entryMethod)),
+      measured: athleteFacts.some((f) => MEASURED_METHODS.has(f.entryMethod) || (f.manualKind && f.sourceIdentityId)),
     };
   }).sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")) || a.athleteId.localeCompare(b.athleteId));
 
@@ -497,7 +554,12 @@ export async function getActivityRoster(ctx, activityId) {
       canonicalActivityId: canonicalId,
       // 6b-C1: the estimate action is offered only while the save is on (ESTIMATES_ENABLED, metricEstimateService's own
       // check, read here without importing it: that module imports this one). Off, the answer is as before.
-      viewer: { basis, ...(process.env.ESTIMATES_ENABLED === "true" ? { estimates: true } : {}) },
+      // ST-4: manual values are offered while their routes are on (MANUAL_VALUES_ENABLED, on unless "false").
+      viewer: {
+        basis,
+        ...(process.env.ESTIMATES_ENABLED === "true" ? { estimates: true } : {}),
+        ...(process.env.MANUAL_VALUES_ENABLED !== "false" ? { manualValues: true } : {}),
+      },
       completion: snap.completion,
       // Phase 5a2: the token a Complete sends back as expectedFingerprint —
       // the roster the coach looked at.

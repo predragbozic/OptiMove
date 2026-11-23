@@ -989,9 +989,9 @@ test("c1. every write of user_club_roles / user_team_roles in the code writes on
   // Nothing else in the application writes them: a new writer is added to this list on purpose.
   // The v84 rehearsal plants one row of each table in its own disposable database (the literals checked above); the v85
   // rehearsal (session types, ST-1) plants one club_admin row the same way, and so does the v87 rehearsal (positions); the v89 rehearsal
-  // (a session type per athlete, ST-3) plants one team_coach row.
+  // (a session type per athlete, ST-3) plants one team_coach row, and so does the v88 rehearsal (manual values, ST-4).
   assert.deepEqual([...new Set(found.filter((f) => f.startsWith("backend/")).map((f) => f.split(":")[0]))].sort(),
-    ["backend/scripts/athlete-positions-v87-rehearsal.mjs", "backend/scripts/participant-session-types-v89-rehearsal.mjs", "backend/scripts/permission-roles-v84-rehearsal.mjs", "backend/scripts/session-types-v85-rehearsal.mjs", "backend/src/routes/organization.js"]);
+    ["backend/scripts/athlete-positions-v87-rehearsal.mjs", "backend/scripts/manual-values-v88-rehearsal.mjs", "backend/scripts/participant-session-types-v89-rehearsal.mjs", "backend/scripts/permission-roles-v84-rehearsal.mjs", "backend/scripts/session-types-v85-rehearsal.mjs", "backend/src/routes/organization.js"]);
 });
 
 test("c1m. the migrations: only the allowlisted historical file writes these tables, and only the right literal", () => {
