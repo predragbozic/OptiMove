@@ -888,6 +888,8 @@ export const emptyGpexeImportState = () => ({
   // Approvals whose result is not confirmed yet, by candidate id: the last
   // unknown outcome, shown again when the session is reopened.
   uncertain: {},
+  // ST-5: the session types offered in this workspace, for the review's chooser ({ status, types } once read).
+  sessionTypes: null,
   // Athlete links: the one waiting for confirmation ({ gpexeAthleteId,
   // athleteId, athleteName }), the one just made ({ linkId, ... }), and which
   // athlete's row stays open while linking.
@@ -1123,6 +1125,8 @@ export const emptyTrainingLoadState = (overrides = {}) => ({
       filter: null, openDisclosures: [], closedDisclosures: [], autoTabFor: null, userPickedTab: false,
       selected: [], picker: null, confirm: null, changing: null, busy: {}, unconfirmed: null,
       notices: { top: null, rows: {}, selection: [] }, writeLock: null, refreshFailed: false, previousStates: {}, changedRows: [], retryBulk: null, retry: null,
+      // ST-5: the session type slice ({ list, busy, unconfirmed, notice }); made by activity-session-type.js.
+      types: null,
     },
     // Metric picker (item 8) — pure frontend view-state for THIS visit,
     // never persisted server-side (no dashboard-preferences table in this
@@ -1221,6 +1225,9 @@ export const createInitialState = () => ({
   // confirmation is answered - nothing here is sent while it is being typed.
   // Settings -> App health (A2): the recorded errors, read only.
   appHealth: { days: 7, role: "all", where: "all", loading: false, error: "", groups: null, selected: "", generation: 0 },
+  // ST-5: Settings -> Tags & Presets -> Session types (session-types-data.js). `editing` = the row being renamed;
+  // `sending` / `unconfirmed` = the one write in flight / whose answer was lost; `unavailable` = the account may not read it.
+  sessionTypes: { loaded: false, loading: false, error: "", unavailable: false, types: [], canAdd: null, newLabel: "", editing: null, sending: null, unconfirmed: null, notice: null, generation: 0 },
   dataSources: {
     teamId: "", loading: false, error: null, status: null, history: null, approvers: null, generation: 0, notice: "", noticeFor: "",
     connectOpen: false, connectDraft: { gpexeTeamId: "", reason: "" }, connectConfirm: null, connectBusy: false, connectError: null,

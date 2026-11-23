@@ -82,6 +82,7 @@ function previewOf(leftOut = []) {
       ? { ...athleteEntry(a), notImported: { code: "left_out_by_coach", message: "You chose to leave this athlete out of this import." }, results: [] }
       : athleteEntry(a))),
     teamAthletesWithoutGpexeRecord: [], anomalies: [],
+    session: { activityTypeKey: "training_session", activityTypeSource: "team_suggestion", categoryName: "FULL TRAINING" },
   };
 }
 let approval = null;
@@ -94,6 +95,7 @@ const subsetHashOf = (ids) => `${"b".repeat(60)}${ids.join("").slice(-4).padStar
 function server({ teamStatus = {}, candidates = [], onApprove, onSubset } = {}) {
   return async (call) => {
     if (call.url === "/api/organization") return { status: 200, body: ORG };
+    if (call.url === "/api/training-activity/session-types") return { status: 200, body: { types: [{ key: "training_session", label: "Training session" }, { key: "match", label: "Match" }], canAdd: null } };
     const m = call.url.match(/^\/api\/training-load\/gpexe\/teams\/([^/]+)(\/.*)$/);
     if (!m) return { status: 404, body: { error: "notFound" } };
     const [, team, rest] = m;
@@ -122,9 +124,12 @@ const gx = () => state.trainingLoad.gpexe;
 const tick = (gid, checked = true) => act("training-load-gpexe-leave-out", { gpexeAthleteId: gid }, { checked });
 const boxes = (page = html()) => [...page.matchAll(/data-action="training-load-gpexe-leave-out" data-gpexe-athlete-id="(\d+)"( checked)?/g)].map((m) => [m[1], Boolean(m[2])]);
 const subsetOk = (call) => {
-  const ids = call.body.excludedAthleteIds;
+  const ids = call.body.excludedAthleteIds || [];
   const replace = call.body.replaceManualAthleteIds || [];
-  return { status: 200, body: { subset: { excludedAthleteIds: ids, ...(replace.length ? { replaceManualAthleteIds: replace } : {}), previewHash: HASH, subsetHash: subsetHashOf([...ids, ...replace.map((x) => x.slice(-1))]), preview: previewOf(ids) }, importSwitch: { enabled: true } } };
+  const typeKey = call.body.activityTypeKey;
+  const preview = previewOf(ids);
+  if (typeKey !== undefined) preview.session = { ...preview.session, activityTypeKey: typeKey, activityTypeSource: "choice" };
+  return { status: 200, body: { subset: { excludedAthleteIds: ids, ...(replace.length ? { replaceManualAthleteIds: replace } : {}), ...(typeKey !== undefined ? { activityTypeKey: typeKey } : {}), previewHash: HASH, subsetHash: subsetHashOf([...ids, ...replace.map((x) => x.slice(-1)), typeKey ?? ""]), preview }, importSwitch: { enabled: true } } };
 };
 const approvals = () => fetchCalls.filter((c) => c.url.endsWith("/approve"));
 const subsets = () => fetchCalls.filter((c) => c.url.endsWith("/preview"));
@@ -171,7 +176,7 @@ test("2. Use GPEXE's values is a reviewed choice: ticked, the import waits for R
   assert.equal(approvals().length, 0);
   await act("training-load-gpexe-subset-review");
   assert.equal(subsets().length, 1);
-  assert.deepEqual(subsets()[0].body, { excludedAthleteIds: [], replaceManualAthleteIds: ["ath-1"] });
+  assert.deepEqual(subsets()[0].body, { replaceManualAthleteIds: ["ath-1"] }, "an empty left-out set is not sent (ST-5's body)");
   page = html();
   assert.match(page, /Reviewed with your choice: 3 athletes will be imported\./);
   const reviewedHash = gx().detail.subset.subsetHash;
@@ -180,7 +185,7 @@ test("2. Use GPEXE's values is a reviewed choice: ticked, the import waits for R
   assert.equal(approvals().length, 1);
   const body = approvals()[0].body;
   assert.deepEqual(body.replaceManualAthleteIds, ["ath-1"]);
-  assert.deepEqual(body.excludedAthleteIds, []);
+  assert.equal(body.excludedAthleteIds, undefined);
   assert.equal(body.subsetHash, reviewedHash, "exactly the reviewed hash");
 });
 
@@ -301,4 +306,31 @@ test("9. the summary at the top of the review links to the choice only when the 
   await openReview();
   assert.match(html(), /href="#gpexe-manual-choice"/);
   assert.match(html(), /id="gpexe-manual-choice"/);
+});
+
+test("10. with ST-5's session type: a chosen type and GPEXE's values are one reviewed choice - the review and the import send both with one hash; with a type alone the roster-values choice stays on the page; a change of either drops the review", async () => {
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }] };
+  await openReview();
+  await act("training-load-gpexe-session-type", {}, { value: "match" });
+  // A type alone is reviewed at once (ST-5), and the roster-values question is still offered beside it.
+  assert.equal(subsets().length, 1);
+  assert.deepEqual(subsets()[0].body, { activityTypeKey: "match" });
+  assert.deepEqual(useBoxes(), [["ath-1", false]]);
+  assert.match(html(), /id="gpexe-manual-choice"/);
+  await useGpexe("ath-1");
+  assert.equal(gx().detail.subset, null, "the type-only review is dropped");
+  await act("training-load-gpexe-approve");
+  assert.equal(approvals().length, 0, "nothing sent before the review of the whole choice");
+  await act("training-load-gpexe-subset-review");
+  assert.deepEqual(subsets().at(-1).body, { activityTypeKey: "match", replaceManualAthleteIds: ["ath-1"] });
+  const reviewedHash = gx().detail.subset.subsetHash;
+  await act("training-load-gpexe-session-type", {}, { value: "training_session" });
+  assert.equal(gx().detail.subset, null, "a changed type drops the review");
+  await act("training-load-gpexe-session-type", {}, { value: "match" });
+  await act("training-load-gpexe-subset-review");
+  await act("training-load-gpexe-approve");
+  const body = approvals().at(-1).body;
+  assert.equal(body.activityTypeKey, "match");
+  assert.deepEqual(body.replaceManualAthleteIds, ["ath-1"]);
+  assert.equal(body.subsetHash, reviewedHash);
 });

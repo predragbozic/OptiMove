@@ -16,6 +16,7 @@ import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 import { estimateBusy, estimateLabelText, estimateOffered, isEstimateValue, renderEstimatePanelHtml } from "./activity-estimate.js";
 import { isManualValue, manualBusy, manualLineText, manualMark, manualOffered, renderManualPanelHtml } from "./activity-manual-values.js";
+import { athleteTypeControlHtml, athleteTypeNoticeHtml, athleteTypeNotes, sessionTypeHeaderHtml, typeChangeBusy } from "./activity-session-type.js";
 
 export const ROSTER_GROUPS = Object.freeze([
   { id: "needs_state", label: "Needs a state" },
@@ -339,6 +340,8 @@ function rowNotes(athlete, reasons) {
     notes.push(manualLineText(athlete.manual));
     if (athlete.manual.note) notes.push(`Note: ${athlete.manual.note}`);
   }
+  // ST-5: the athlete's own session type, or one a merge / a move removed.
+  notes.push(...athleteTypeNotes(athlete));
   if (measuredAfterDecision(athlete)) {
     notes.push(`Measured values arrived after ${athlete.decision.decidedBy?.name ?? "a coach"} set "${athlete.decision.label ?? ""}" (${shortDate(athlete.decision.decidedAt)}).`);
   }
@@ -419,12 +422,12 @@ export function anyWriteInFlight(roster) {
 }
 
 export function rowLocked(roster, athleteId) {
-  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster) || manualBusy(roster)) return true;
+  if (roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster) || manualBusy(roster) || typeChangeBusy(roster)) return true;
   return Boolean(roster.busy?.[athleteId]);
 }
 
 export function bulkLocked(roster) {
-  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster) || manualBusy(roster));
+  return Boolean(roster.writeLock || roster.unconfirmed || anyWriteInFlight(roster) || estimateBusy(roster) || manualBusy(roster) || typeChangeBusy(roster));
 }
 
 function button(label, action, attrs = "", cls = "plain-button tl-roster-button") {
@@ -710,6 +713,7 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
       ${notes.length ? `<div class="tl-roster-row-notes">${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join("")}</div>` : ""}
       ${outside || !canDecide ? "" : rowActionsHtml(roster, athlete)}
       ${outside ? "" : noticeHtml(notice, { cls: "tl-roster-row-notice", roster })}
+      ${outside ? "" : athleteTypeNoticeHtml(roster, athlete.athleteId)}
       ${outside || !canDecide ? "" : confirmHtml(roster, athlete)}
       ${outside || !canDecide ? "" : rowPickerHtml(roster, athlete, reasons)}
       ${outside || !canDecide ? "" : renderEstimatePanelHtml(roster, athlete)}
@@ -718,6 +722,7 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
         <summary>Details</summary>
         <div class="tl-roster-row-body">
           ${allValuesHtml(athlete)}
+          ${outside ? "" : athleteTypeControlHtml(roster, roster.data, athlete, canDecide, bulkLocked(roster))}
           ${technicalDetailsHtml(roster, athlete, outside)}
         </div>
       </details>
@@ -750,6 +755,7 @@ function rosterHeaderHtml(roster, data, activitySummary, canDecide) {
         <h4>${escapeHtml(activity.name || "Team session")}${sessionWhenLabel(activity) ? ` <span class="muted">· ${escapeHtml(sessionWhenLabel(activity))}</span>` : ""}</h4>
         <p>${escapeHtml(summary)}</p>
         <p class="muted">${canDecide ? "Each state is saved as soon as you choose it." : "Review the roster and the data recorded for this session."}</p>
+        ${sessionTypeHeaderHtml(roster, data, canDecide, bulkLocked(roster))}
       </div>
       ${status ? `<span class="tl-roster-status is-${completion}">${escapeHtml(status)}</span>` : ""}
     </header>

@@ -82,6 +82,8 @@ const BLOCKER_TEXT = {
   import_undone: "The import of this session was undone. It can't be approved again; find new sessions to review it.",
   snapshot_expired_check_again: "The GPEXE data is too old. Find new sessions, then review it again.",
   nothing_to_import: "Nothing new to import - no action needed.",
+  // ST-5: said only where the chooser is not offered (the chooser itself is the step).
+  session_type_required: "This session has no session type yet. Whoever imports it chooses one.",
 };
 
 // One badge per group, the same in the list and in the review.
@@ -863,6 +865,7 @@ export function renderCheckSummaryHtml(check, source = IMPORT_SOURCES[0]) {
 function reasonStep(r) {
   const n = r.count || 0;
   switch (r.code) {
+    case "session_type_required": return "Choose the session type - open it and pick one, then import.";
     case "no_linked_athlete": return "No linked athlete in this session yet - open it and link the athletes from their rows.";
     case "athletes_not_linked": return `${plural(n, "recorded athlete is", "recorded athletes are")} not linked yet - open it and link them from their rows.`;
     case "athletes_not_in_team": return `${plural(n, "linked athlete is", "linked athletes are")} no longer in the team - open it to see who.`;
@@ -877,6 +880,7 @@ function reasonStep(r) {
 function reasonFact(r) {
   const n = r.count || 0;
   switch (r.code) {
+    case "session_type_required": return "session type to choose";
     case "no_linked_athlete": return "no linked athlete";
     case "athletes_not_linked": return `${plural(n, "athlete", "athletes")} not linked`;
     case "athletes_not_in_team": return `${plural(n, "athlete", "athletes")} not in the team`;
@@ -2044,6 +2048,7 @@ function renderCandidateBodyHtml(c, detail, status) {
       ${c.snapshot?.available && platformViewer() ? `<span class="muted">GPEXE data kept until ${escapeHtml(formatDate(c.snapshot.expiresAt))}</span>` : ""}
     </p>
     ${renderTeamZoneNoteHtml(preview)}
+    ${renderSessionTypeHtml(c, detail, status)}
     ${adminTechHtml([["GPEXE session name", c.label]])}
     ${renderApprovalRecordHtml(c)}
     ${renderUndoneNoteHtml(c, state.trainingLoad.gpexe)}
@@ -2706,7 +2711,8 @@ export function leaveOutOffered(c, detail = state.trainingLoad.gpexe.detail, sta
   const gx = state.trainingLoad.gpexe;
   if (!c || c.status !== "pending" || c.preview?.status !== "ready") return false;
   if (status?.viewer?.canApprove !== true) return false;
-  if ((c.approvalBlockers || []).filter((b) => b !== "blocked").length) return false;
+  // ST-5: a session that only waits for its type is approvable once the reviewer chooses one in this review.
+  if ((c.approvalBlockers || []).filter((b) => b !== "blocked" && b !== "session_type_required").length) return false;
   if (notConfirmedForImport(c) || withdrawnByCheck(c) || reviewMadeBeforeLinkChange(c, gx)) return false;
   if (detail?.approving || detail?.updating || detail?.outcome?.kind === "imported" || detail?.outcome?.kind === "unknown") return false;
   return true;
@@ -3047,7 +3053,7 @@ const SUBSET_ERROR_TEXT = {
 function renderSubsetApproveHtml(c, detail, leave, importN, changes, replace = []) {
   const names = leftOutNames(c, leave);
   const replacedNames = replace.map((id) => c?.athletes?.[id]?.name || "an athlete");
-  const sub = detail.subset && sameIds(detail.subset.ids, leave) && sameIds(detail.subset.replace || [], replace) ? detail.subset : null;
+  const sub = choiceReviewOf(c, detail, leave);
   const ready = sub?.status === "ready";
   const after = ready ? importableAthleteCount(sub.preview) : importN - leave.length;
   const loading = sub?.status === "loading";
@@ -3059,7 +3065,7 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes, replace = [
         <span class="muted">${leave.length === 1 ? `Nothing of ${escapeHtml(names[0])} is imported from this session.` : "Nothing of them is imported from this session."} If GPEXE later sends different data for it, you will review it again. You can set their attendance on their rows now, or later in the session's Roster tab.</span></p>` : ""}
       ${replace.length ? `<p><strong>${escapeHtml(`Using GPEXE's values for ${plural(replace.length, "athlete", "athletes")}: ${replacedNames.join(", ")}.`)}</strong>
         <span class="muted">The values entered on the roster stay in the history.</span></p>` : ""}
-      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(SUBSET_ERROR_TEXT[sub.error?.code] || "The review of your choice could not be made. Nothing was imported.")}</p>` : ""}
+      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml((sub.error?.code === "session_type_not_offered" ? TYPE_CHOICE_ERROR_TEXT.session_type_not_offered : null) || SUBSET_ERROR_TEXT[sub.error?.code] || (leave.length ? "The review without them could not be made. Nothing was imported." : "The review of your choice could not be made. Nothing was imported."))}</p>` : ""}
       ${ready ? `<p class="muted" role="status">${escapeHtml(`${leave.length ? "Reviewed without them" : "Reviewed with your choice"}: ${plural(after, "athlete", "athletes")} will be imported.`)}</p>` : ""}
       ${statesLineHtml(c, detail)}
       ${!ready && !loading && !failed ? `<p class="muted">First we check the import ${leave.length ? "without them" : "with your choice"}. Nothing is saved yet.</p>` : ""}
@@ -3076,6 +3082,108 @@ function renderSubsetApproveHtml(c, detail, leave, importN, changes, replace = [
     : failed && STALE_SET_CODES.has(sub.error?.code)
       ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-review-update" ${detail.updating ? "disabled" : ""}>${detail.updating ? "Updating..." : "Update the review"}</button>`
       : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-subset-review" ${loading || after <= 0 ? "disabled" : ""}>${loading ? "Checking..." : failed ? "Try again" : leave.length ? "Review without them" : "Review your choice"}</button>`}
+      </div>
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// ST-5: the session type of an import (docs/ai/session-type-plan.md section 4)
+// ---------------------------------------------------------------------------
+// The type the reviewer chose in this review, or null: the type the review already shows is no choice.
+export function sessionTypeChoice(c, detail) {
+  const shown = c?.preview?.session?.activityTypeKey ?? null;
+  const chosen = detail?.typeChoice ?? null;
+  return chosen && chosen !== shown ? chosen : null;
+}
+
+// The review of the reviewer's current choice (the athletes left out, the chosen type and, ST-4, the athletes given GPEXE's
+// values), or null when none was made
+// for exactly this choice.
+export function choiceReviewOf(c, detail, leave = leaveOutIds(c, detail)) {
+  const sub = detail?.subset;
+  if (!sub || !sameIds(sub.ids, leave) || (sub.typeKey ?? null) !== sessionTypeChoice(c, detail) || !sameIds(sub.replace || [], useGpexeIds(c, detail))) return null;
+  return sub;
+}
+
+function sessionTypeLabel(key, gx = state.trainingLoad.gpexe) {
+  if (!key) return "";
+  const found = (gx.sessionTypes?.types || []).find((t) => t.key === key);
+  // Until the list is read, the key's own words ("training_session" -> "Training session").
+  return found ? found.label : key.replace(/^c_[0-9a-f]{8}_/, "").replace(/_/g, " ").replace(/^./, (ch) => ch.toUpperCase());
+}
+
+// Where the shown type comes from, in the coach's words.
+function sessionTypeOriginText(c) {
+  const s = c.preview?.session || {};
+  if (s.activityTypeSource === "imported_session") return "This session is already imported; its type is changed in the session itself.";
+  if (s.activityTypeSource === "team_suggestion" && s.categoryName) return `Suggested for GPEXE "${s.categoryName}". Change it if this session was something else.`;
+  if (s.activityTypeSource === "none") return s.categoryName ? `OptiMove has no session type for GPEXE "${s.categoryName}" yet. After the import, OptiMove suggests your choice for the next session of that kind.` : "This session has no session type yet.";
+  return "";
+}
+
+function renderSessionTypeHtml(c, detail, status) {
+  const s = c.preview?.session;
+  if (!s || !("activityTypeSource" in s)) return "";
+  const gx = state.trainingLoad.gpexe;
+  const shown = s.activityTypeKey ?? null;
+  const chosen = sessionTypeChoice(c, detail);
+  const current = chosen ?? shown;
+  // Chosen where the approval is: a pending session, by someone who may import it, not for a session already imported.
+  const canChoose = s.activityTypeSource !== "imported_session" && leaveOutOffered(c, detail, status);
+  if (!canChoose) {
+    return `<p class="gpexe-session-type"><span class="gpexe-session-type-label">Session type</span> <strong>${escapeHtml(current ? sessionTypeLabel(current) : "Not chosen yet")}</strong>${s.activityTypeSource === "imported_session" ? ` <span class="muted">${escapeHtml(sessionTypeOriginText(c))}</span>` : ""}</p>`;
+  }
+  const types = gx.sessionTypes;
+  const options = (types?.types || []).filter((t) => t.active || t.key === current);
+  const busy = detail.subset?.status === "loading" || detail.approving;
+  const failed = types?.status === "error";
+  return `
+    <div class="gpexe-session-type${current ? "" : " is-required"}">
+      <label class="gpexe-session-type-field">
+        <span class="gpexe-session-type-label">Session type</span>
+        <select data-action="training-load-gpexe-session-type" data-gpexe-session-type ${busy || !options.length ? "disabled" : ""}>
+          ${current ? "" : `<option value="" selected>Choose...</option>`}
+          ${current && !options.some((t) => t.key === current) ? `<option value="${escapeAttr(current)}" selected>${escapeHtml(sessionTypeLabel(current))}</option>` : ""}
+          ${options.map((t) => `<option value="${escapeAttr(t.key)}" ${t.key === current ? "selected" : ""}>${escapeHtml(t.label)}</option>`).join("")}
+        </select>
+      </label>
+      ${failed ? `<p class="gpexe-warning" role="alert">The session types could not be read. <button type="button" class="plain-button gpexe-button" data-action="training-load-gpexe-session-types-again">Try again</button></p>` : ""}
+      ${!failed && types?.status !== "ready" ? `<p class="muted" role="status">Loading session types...</p>` : ""}
+      ${sessionTypeOriginText(c) ? `<p class="muted gpexe-session-type-origin">${escapeHtml(sessionTypeOriginText(c))}</p>` : ""}
+    </div>
+  `;
+}
+
+const TYPE_CHOICE_ERROR_TEXT = {
+  session_type_not_offered: "That session type is no longer offered. Choose another.",
+  session_type_fixed: "This session is already imported, so its type is changed in the session itself.",
+  try_again: "The review with this session type could not be made right now. Try again in a moment.",
+};
+
+function renderTypeChoiceApproveHtml(c, detail, importN, changes, typeKey) {
+  const sub = choiceReviewOf(c, detail, []);
+  const ready = sub?.status === "ready";
+  const loading = sub?.status === "loading";
+  const failed = sub?.status === "error";
+  const n = ready ? importableAthleteCount(sub.preview) : importN;
+  return `
+    <div class="gpexe-approve gpexe-approve-type">
+      ${manualChoiceHtml(c, detail)}
+      <p class="muted">${escapeHtml(`Will be imported as ${sessionTypeLabel(typeKey)}. ${approveLeftOutText(c)}`)}</p>
+      ${failed ? `<p class="gpexe-warning" role="alert">${escapeHtml(TYPE_CHOICE_ERROR_TEXT[sub.error?.code] || SUBSET_ERROR_TEXT[sub.error?.code] || "The review with this session type could not be made. Nothing was imported.")}</p>` : ""}
+      ${n === 0 && !loading ? `<p class="muted gpexe-approve-note">No athlete can be imported: every athlete needs a link, is blocked or has nothing to import.</p>` : ""}
+      ${statesLineHtml(c, detail)}
+      <div class="gpexe-approve-bar${n === 0 ? " is-idle" : ""}">
+      ${changes ? `
+        <label class="gpexe-accept">
+          <input type="checkbox" data-gpexe-accept data-action="training-load-gpexe-accept" ${detail.acceptChanges ? "checked" : ""}>
+          <span>I accept the ${escapeHtml(plural(changes, "change", "changes"))} to results that were already imported.</span>
+        </label>
+      ` : ""}
+        ${ready
+    ? `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-approve" ${detail.approving || n === 0 ? "disabled" : ""}>${detail.approving ? "Importing..." : `Import ${plural(n, "athlete", "athletes")}`}</button>`
+    : `<button type="button" class="primary-button gpexe-button" data-action="training-load-gpexe-subset-review" ${loading ? "disabled" : ""}>${loading ? "Checking..." : failed ? "Try again" : "Check and continue"}</button>`}
       </div>
     </div>
   `;
@@ -3164,7 +3272,11 @@ function renderApproveHtml(c, detail, status) {
   // U2: the person may hold the right while the team's switch is off - say that, not "needs an approver".
   if (!viewer.canApprove && viewer.hasApprovalRight === true && status?.teamImportSwitch?.enabled !== true) return `<p class="muted gpexe-approve-note">${escapeHtml(BLOCKER_TEXT.team_import_switch_off)}</p>`;
   if (!viewer.canApprove) return `<p class="muted gpexe-approve-note">${platformViewer() ? "Approving needs a platform admin or an explicit approver grant for this team." : viewer.identityAdmin === true ? "You can't import this session. Contact OptiMove support." : "You can't import this session. Ask your club administrator."}</p>`;
-  if (blockers.length) return `<p class="muted gpexe-approve-note">${escapeHtml(blockers.map((b) => BLOCKER_TEXT[b] || "It can't be imported right now.").join(" "))}</p>`;
+  // ST-5: the session type is the reviewer's to choose here; with a choice made, "no type yet" is no longer in the way.
+  const typeKey = sessionTypeChoice(c, detail);
+  const open = blockers.filter((b) => !(b === "session_type_required"));
+  if (open.length) return `<p class="muted gpexe-approve-note">${escapeHtml(open.map((b) => BLOCKER_TEXT[b] || "It can't be imported right now.").join(" "))}</p>`;
+  if (blockers.includes("session_type_required") && !typeKey) return `<p class="gpexe-warning gpexe-approve-note" role="note">Choose the session type above. Then you can import it.</p>`;
   const changes = c.changesToImported || 0;
   const importN = importableAthleteCount(c.preview);
   // J20-B: with athletes ticked as "Leave out" the approval is the SUBSET's: it is reviewed first (one deliberate step that
@@ -3173,6 +3285,9 @@ function renderApproveHtml(c, detail, status) {
   // ST-4: "Use GPEXE's values" is a choice too: reviewed first, and the button imports exactly that review.
   const replace = useGpexeIds(c, detail);
   if (leave.length || replace.length) return renderSubsetApproveHtml(c, detail, leave, importN, changes, replace);
+  // ST-5: a chosen session type alone - the same approval of a reviewed choice, without the "leaving out" words. The review
+  // of the choice is asked for as soon as the type is picked, so the button is Import.
+  if (typeKey) return renderTypeChoiceApproveHtml(c, detail, importN, changes, typeKey);
   return `
     <div class="gpexe-approve">
       ${manualChoiceHtml(c, detail)}

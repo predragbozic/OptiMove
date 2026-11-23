@@ -20,6 +20,7 @@ import {
 } from "./activity-roster-view.js";
 import { estimateBusy, handleEstimateAction } from "./activity-estimate.js";
 import { handleManualAction, manualBusy } from "./activity-manual-values.js";
+import { handleSessionTypeAction, loadRosterSessionTypes, typeChangeBusy } from "./activity-session-type.js";
 import { state } from "./state.js";
 
 const NOTHING_SAVED = "Nothing was saved.";
@@ -53,6 +54,8 @@ export async function loadRosterForOpenActivity(activityId, render) {
   await loadActivityRoster(activityId, render);
   maybeOpenRoster(activityId);
   render?.();
+  // ST-5: the session types, for the header's chooser and the rows' (read beside the roster; a failure only loses labels).
+  if (rosterState().data && rosterState().activityId === activityId) void loadRosterSessionTypes(render ?? (() => {}));
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +64,7 @@ export async function loadRosterForOpenActivity(activityId, render) {
 // session changes, by confirmLeaveTrainingLoad and by beforeunload.
 // ---------------------------------------------------------------------------
 export function rosterHasPendingOutcome(roster = rosterState()) {
-  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0 || estimateBusy(roster) || manualBusy(roster);
+  return Boolean(roster?.unconfirmed) || Object.keys(roster?.busy || {}).length > 0 || estimateBusy(roster) || manualBusy(roster) || typeChangeBusy(roster);
 }
 
 export function rosterMayBeLeft(roster = rosterState()) {
@@ -461,6 +464,11 @@ export async function handleActivityRosterAction(action, { render }) {
   }
   // ST-4: manual values (an entry, a correction, the restore of the measured values).
   if (type.startsWith("training-load-roster-manual-")) return handleManualAction(action, { render });
+
+  // ST-5: the session's type and an athlete's own type (activity-session-type.js). One command at a time, as every write here.
+  if (type === "training-load-roster-session-type" || type === "training-load-roster-athlete-type" || type.startsWith("training-load-roster-type-")) {
+    return handleSessionTypeAction(action, { render, locked: bulkLocked(roster) });
+  }
 
   // --- selection ---
   if (type === "training-load-roster-pick") {
