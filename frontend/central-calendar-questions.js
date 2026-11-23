@@ -341,13 +341,15 @@ function namesHtml(label, people, open) {
 export function ccPanelQuestionsWaiting(pq, item) {
   return Boolean(pq && pq.key === item?.key && !pq.hidden && ccPanelQuestionList(pq.read).some((q) => q.status === "live"));
 }
-export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions for athletes.";
+export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions and RPE.";
 
 // `feedbackAt` ({ kind, questionId }): the command the line belongs to - drawn
 // in that question's row, else in the row of its kind's live question, else
 // beside that kind's Ask; only a line with no such place stays at the top.
-export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", feedbackAt = null, rpeFromSessions = false, rpeFromRequest = false, today = "" } = {}) {
-  const head = `<h4 class="cc-panel-subtitle" id="ccQuestionsTitle" tabindex="-1">Questions for athletes</h4>`;
+// `inSection`: drawn inside the event panel's collapsible Questions section, whose header names it - this heading
+// stays only for screen readers and as the focus target after a write.
+export function renderCentralCalendarQuestionsHtml(item, pq, { step = null, busy = false, off = false, feedback = "", feedbackAt = null, rpeFromSessions = false, rpeFromRequest = false, today = "", inSection = false } = {}) {
+  const head = `<h4 class="${inSection ? "visually-hidden" : "cc-panel-subtitle"}" id="ccQuestionsTitle" tabindex="-1">Questions for athletes</h4>`;
   // A command left not confirmed keeps its Check result here, whatever the read says.
   if (!pq || pq.key !== item.key || pq.hidden) return feedback ? `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}</section>` : "";
   if (pq.loading) return `<section class="cc-panel-questions" aria-labelledby="ccQuestionsTitle">${head}${feedback}<p class="cc-panel-note" role="status">Loading the questions…</p></section>`;

@@ -125,8 +125,15 @@ for (const width of [1280, 390, 375, 360]) {
 
         // Open the event: the calendar on that day with the event's panel, where the session's Unlink is.
         await open.click();
+        // The redesign (2026-11-23): the linked training's Unlink is in its row's "⋯" menu, in the Trainings section.
+        const trainings = page.locator('.cc-psec-toggle[data-key="trainings"]');
+        await trainings.waitFor({ timeout: 20_000 });
+        if (await trainings.getAttribute("aria-expanded") !== "true") await trainings.click();
+        await page.locator(".cc-psec[data-section='trainings'] .cc-row-more").first().click({ timeout: 20_000 });
         const unlink = page.locator('[data-action="central-calendar-link"][data-act="unlink-sessions"]').first();
         await unlink.waitFor({ timeout: 20_000 });
+        const unlinkBox = await unlink.boundingBox();
+        assert.ok(unlinkBox && unlinkBox.height >= 43.5, `Unlink is a 44 px target (${unlinkBox?.height})`);
         assert.equal(await page.locator(".builder-workspace").count(), 0, "the calendar is open");
         assert.equal(await overflow(page, width), 0, "no horizontal page scroll on the calendar");
         await shot(page, `t5-02-event-${width}`);

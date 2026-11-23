@@ -65,6 +65,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       const card = page.locator(`.cc-card[data-key^="event:${eventId}"]`).first();
       await card.waitFor({ timeout: 20_000 });
       await card.click();
+      // The redesign (2026-11-23): the event's athletes are in its folded Athletes section.
+      await page.locator('.cc-psec-toggle[data-key="athletes"]').click({ timeout: 20_000 });
       const row = page.locator(".cc-athletes .cc-athlete", { hasText: "Bojan Example" });
       await row.waitFor({ timeout: 20_000 });
       assert.equal(await page.locator(".cc-athletes .cc-athlete").count(), 3, "the event names three athletes");

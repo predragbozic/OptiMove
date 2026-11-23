@@ -223,12 +223,18 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       const card = page.locator(`.cc-card[data-key^="event:${eventId}"]`).first();
       await card.waitFor({ timeout: 20_000 });
       await card.click();
+      // The redesign (2026-11-23): ONE See each athlete (primary) opens a chooser of the three forms; one note.
+      const choose = page.locator(".cc-see-each-choose");
+      await choose.waitFor({ timeout: 20_000 });
+      assert.equal((await choose.boundingBox()).height >= 43.5, true, "the button is a 44 px target");
+      assert.equal(await choose.evaluate((el) => el.classList.contains("cc-primary")), true);
+      assert.equal(await page.locator(".cc-see-each .cc-panel-note").count(), 1, "one explanation, not one per form");
+      await choose.click();
+      assert.equal(await choose.getAttribute("aria-expanded"), "true");
       const see = page.locator('[data-action="central-calendar-see-each-athlete"]');
       await see.nth(2).waitFor({ timeout: 20_000 });
-      assert.deepEqual(await see.allInnerTexts(), ["See each athlete · Before training (AM)", "See each athlete · Training (AM)", "See each athlete · Session (PM)"]);
-      assert.match(await page.locator(".cc-see-each .cc-panel-note").nth(1).innerText(), /^Opens Training \(AM\), one athlete at a time/);
-      assert.equal(await see.nth(0).evaluate((el) => el.classList.contains("cc-primary")), true);
-      assert.equal(await see.nth(1).evaluate((el) => el.classList.contains("cc-primary")), false);
+      assert.deepEqual(await see.allInnerTexts(), ["Before training (AM)", "Training (AM)", "Session (PM)"]);
+      assert.equal(await see.nth(0).evaluate((el) => el.classList.contains("cc-primary")), false);
       for (let i = 0; i < 3; i += 1) {
         const box = await see.nth(i).boundingBox();
         assert.ok(box.height >= 43.5, `button ${i} is 44 px tall (${box.height})`);

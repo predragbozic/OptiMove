@@ -7,6 +7,7 @@
 // day read), GET /api/training-load/weekly (planned rows with
 // logicalSessionId / sessionOrder, RPE-request rows with scheduleId), and the
 // manager's questions read with `lastChangedAt` (v83).
+import { openEveryPanelSection } from "./support/central-calendar-panel-sections.mjs";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -121,6 +122,7 @@ function server({ items, weekly = weeklyOf({}), questions = null } = {}) {
 
 let rendered = "";
 function render() {
+  openEveryPanelSection(state.centralCalendar);
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, {
     today: TODAY, layout: "wide", roster: centralCalendarRosterIndex(), canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
     uncertainWrites: centralCalendarUncertainWrites(),

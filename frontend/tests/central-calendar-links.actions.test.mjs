@@ -7,6 +7,7 @@
 // replay and expectedRevision): a linked planned group folds under its event
 // on the next calendar read, a detach brings it back, a refusal changes
 // nothing.
+import { openEveryPanelSection } from "./support/central-calendar-panel-sections.mjs";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -27,6 +28,7 @@ const {
   centralCalendarRosterIndex,
   centralCalendarUncertainWrites,
   clearCentralCalendarUncertainWrites,
+  closeCentralCalendarPanel,
   handleCentralCalendarAction,
   handleCentralCalendarBeforeUnload,
 } = await import("../central-calendar-actions.js");
@@ -219,7 +221,10 @@ function server({ items = defaultItems(), refuse = null, lose = 0, eventStatus =
 }
 
 let rendered = "";
+// The suites written before the redesign see every section open; the layout tests below (section 20) set it false.
+let unfold = true;
 function render() {
+  if (unfold) openEveryPanelSection(state.centralCalendar);
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, {
     today: TODAY, layout: "wide", roster: centralCalendarRosterIndex(), canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
     uncertainWrites: centralCalendarUncertainWrites(),
@@ -235,6 +240,16 @@ const openPlanned = (key = "planned:p1") => act({ action: "central-calendar-open
 const section = () => dom().querySelector(".cc-panel-links");
 const linkButton = (selector) => dom().querySelector(`.cc-panel-links [data-action="central-calendar-link"]${selector}`);
 const press = (button) => act({ ...button.dataset });
+// The redesign (2026-11-23): a linked row's Unlink sits in its "⋯" menu; open the row's menu first (the real action),
+// then the same Unlink button as before is there.
+async function unlinkButton(selector) {
+  for (const more of [...dom().querySelectorAll(".cc-panel-links .cc-row-more")]) {
+    if (more.getAttribute("aria-expanded") !== "true") await act({ ...more.dataset });
+    const button = linkButton(selector);
+    if (button) return button;
+  }
+  return null;
+}
 // The words of a link command's result in the open panel (review M4).
 const said = () => state.centralCalendar.linkMessage?.text ?? null;
 
@@ -255,6 +270,7 @@ beforeEach(() => {
   state.activeTab = "central-calendar";
   state.athletes = [];
   rendered = "";
+  unfold = true;
   confirmAnswer = true;
   questions.length = 0;
 });
@@ -297,7 +313,8 @@ test("1b. the section: the event's panel lists the day's training and activity, 
   await openEvent();
   const s = section();
   assert.ok(s, "the section");
-  assert.equal(s.querySelector(".cc-panel-subtitle").textContent, "Trainings and activities");
+  assert.equal(s.querySelector("#ccLinksTitle").textContent, "Trainings and activities", "the status line's focus target");
+  assert.deepEqual([...s.querySelectorAll(".cc-psec")].map((sec) => sec.dataset.section), ["trainings", "activities"], "two sections");
   assert.ok(linkButton('[data-planned-key="planned:p1"]'), "the covered training is offered");
   assert.equal(linkButton('[data-planned-key="planned:p2"]'), null, "the partial one is not");
   assert.match(s.textContent, /1 more training that day has athletes this event does not include\./);
@@ -333,14 +350,14 @@ test("2. Link from the event: one POST with the exact body; the calendar read ag
   assert.ok(calls.filter((c) => c.url.startsWith("/api/calendar?")).length > reads, "the calendar was read again");
   assert.equal(linkButton('[data-planned-key="planned:p1"]'), null, "no longer offered");
   const s = section();
-  assert.match(s.textContent, /Linked trainings/);
+  assert.match(s.querySelector('.cc-psec[data-section="trainings"] .cc-link-heading').textContent, /^Linked$/);
   assert.match(s.querySelector(".cc-link-row").textContent, /Morning session/);
   assert.match(s.querySelector(".cc-link-row").textContent, /AM · Training · 2 athletes/);
   assert.equal(said(), "Linked “Morning session”. These trainings do not ask for RPE yet: use Ask for RPE in the linked trainings.");
   assert.equal(dom().querySelector('.cc-panel-links .cc-link-message[role="status"]').textContent, said(), "in the panel's own line (review M4)");
   assert.equal(state.centralCalendar.notice, "", "not behind the sheet");
   assert.equal(dom().querySelector('[data-act="align"]').textContent, "Ask for RPE in the linked trainings");
-  assert.match(section().textContent, /A linked training shows inside this event on the calendar\. Unlink undoes it\./);
+  assert.match(section().textContent, /A linked training shows inside this event on the calendar\. To unlink one, use ⋯ on its row\./);
 });
 
 // --- 3. Link from a planned card --------------------------------------------------------------
@@ -384,7 +401,7 @@ test("4. Unlink a group sends all its link ids; an orphaned row; an activity lin
   await press(linkButton('[data-planned-key="planned:p1"]'));
   await tick();
   const linkIds = fake.linked.get(E1).sessions[0].links.map((l) => l.id).sort();
-  await press(linkButton('[data-act="unlink-sessions"]'));
+  await press(await unlinkButton('[data-act="unlink-sessions"]'));
   await tick();
   const detach = writesOf(calls).at(-1);
   assert.equal(detach.url, `/api/calendar/events/${E1}/sessions/detach`);
@@ -403,7 +420,7 @@ test("4. Unlink a group sends all its link ids; an orphaned row; an activity lin
   await tick();
   assert.match(section().textContent, /1 linked training was deleted in the Builder\./, "one training (two athletes' sessions)");
   assert.match(section().textContent, /Unlink to clear it; nothing else changes\./);
-  await press(linkButton('[data-group="orphaned"]'));
+  await press(await unlinkButton('[data-group="orphaned"]'));
   await tick();
   assert.deepEqual(writesOf(calls).at(-1).body.linkIds.length, 2);
   // An activity.
@@ -411,8 +428,8 @@ test("4. Unlink a group sends all its link ids; an orphaned row; an activity lin
   await tick();
   assert.deepEqual(writesOf(calls).at(-1).body, { ...writesOf(calls).at(-1).body, activityId: ACT1 });
   assert.equal(said(), "Linked “GPS session”.");
-  assert.match(section().textContent, /Linked activities/);
-  await press(linkButton(`[data-act="unlink-activity"][data-activity-id="${ACT1}"]`));
+  assert.match(section().querySelector('.cc-psec[data-section="activities"] .cc-link-heading').textContent, /^Linked$/);
+  await press(await unlinkButton(`[data-act="unlink-activity"][data-activity-id="${ACT1}"]`));
   await tick();
   assert.equal(writesOf(calls).at(-1).url, `/api/calendar/events/${E1}/activities/detach`);
   assert.equal(said(), "Unlinked the activity.");
@@ -863,8 +880,8 @@ test("MC/MD/ME. the D panel lists and unlinks only D's links; the manager view's
   const { calls } = await start({ items, refuse, eventStatus: () => ({ status: 200, body: { event: managerView } }) });
   await openEvent();
   await tick();
-  const rows = [...section().querySelectorAll('[data-act="unlink-sessions"]')];
-  assert.equal(rows.length, 1, "one row: D's");
+  assert.equal(section().querySelectorAll(".cc-row-more").length, 1, "one row: D's");
+  const rows = [await unlinkButton('[data-act="unlink-sessions"]')];
   assert.match(section().textContent, /2 athletes/, "D's two links only");
   await press(rows[0]);
   await tick();
@@ -982,4 +999,188 @@ test("8c. while a link is being saved: New event and the line's checks are off; 
   assert.equal(cal.form, null);
   assert.equal(questions.length, 0, "no link question on a form close");
   cal.linkWrite = null;
+});
+
+// --- 20. The event panel's layout (the owner's redesign of 2026-11-23) --------------------------------------------
+// The sections fold; their headers and the "In this event" chips open them; a linked row's Unlink is in its "⋯" menu;
+// Edit · Cancel event · Delete sit together at the bottom. None of it sends anything.
+
+const sectionEl = (id, doc = dom()) => doc.querySelector(`.cc-psec[data-section="${id}"]`);
+const toggleOf = (id, doc = dom()) => doc.querySelector(`.cc-psec-toggle[data-key="${id}"]`);
+// The real action with the header's own aria-expanded (what a click on it carries).
+const pressToggle = (id) => {
+  const button = toggleOf(id);
+  return handleCentralCalendarAction(fakeAction({ ...button.dataset }, { getAttribute: (name) => button.getAttribute(name) }), { render });
+};
+
+test("20a. a manager's event: the summary row counts each kind; linked lists, athletes and details are folded; the day's offer opens Trainings", async () => {
+  unfold = false;
+  const { calls, fake } = await start();
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  let doc = dom();
+  const chips = [...doc.querySelectorAll(".cc-panel-summary .cc-sum-chip")];
+  assert.deepEqual(chips.map((chip) => [chip.dataset.key, chip.querySelector(".cc-sum-count").textContent]), [["trainings", "1"], ["activities", "0"]]);
+  assert.equal(chips[0].getAttribute("aria-label"), "Trainings: 1. Show");
+  // Align asks a decision about the linked training: Trainings is open by default; the activity's offer opens its own.
+  assert.equal(toggleOf("trainings", doc).getAttribute("aria-expanded"), "true");
+  assert.ok(doc.querySelector('#ccSec-trainings [data-act="align"]'));
+  assert.equal(toggleOf("trainings", doc).getAttribute("aria-controls"), "ccSec-trainings");
+  // Folded once the coach closes it: the body holds no controls.
+  await pressToggle("trainings");
+  doc = dom();
+  assert.equal(toggleOf("trainings", doc).getAttribute("aria-expanded"), "false");
+  assert.equal(doc.querySelector("#ccSec-trainings").hasAttribute("hidden"), true);
+  assert.equal(doc.querySelector("#ccSec-trainings").children.length, 0, "a folded body holds no controls");
+  assert.equal(toggleOf("activities", doc).getAttribute("aria-expanded"), "true", "an offer to link: open by default");
+  assert.ok(linkButton(`[data-activity-key="activity:${ACT1}"]`));
+  assert.equal(toggleOf("athletes", doc).getAttribute("aria-expanded"), "false", "Athletes folded with its count");
+  assert.match(toggleOf("athletes", doc).textContent, /Athletes\s*3/, "the event's three athletes");
+  assert.equal(doc.querySelector(".cc-athletes"), null);
+  // The result line of the link stays in view while Trainings is folded.
+  assert.equal(doc.querySelector('.cc-panel-links > .cc-link-message[role="status"]').textContent, said());
+  assert.equal(writesOf(calls).length, 1, "only the Link sent anything");
+  assert.ok(fake);
+});
+
+test("20b. a header opens and closes its section; a summary chip opens it; nothing is sent; another panel starts folded again", async () => {
+  unfold = false;
+  const { calls } = await start();
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  const before = calls.length;
+  await pressToggle("trainings");
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "false", "open by default (Align): the header closes it");
+  await pressToggle("trainings");
+  let doc = dom();
+  assert.equal(toggleOf("trainings", doc).getAttribute("aria-expanded"), "true");
+  assert.equal(doc.querySelector("#ccSec-trainings").hasAttribute("hidden"), false);
+  assert.match(sectionEl("trainings", doc).textContent, /Morning session/);
+  assert.equal(doc.querySelectorAll('.cc-psec[data-section="trainings"] .cc-link-hint').length, 1, "one explanation for the section");
+  await pressToggle("trainings");
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "false");
+  // The chip only opens (a second press keeps it open).
+  await act({ action: "central-calendar-panel-reveal", key: "athletes" });
+  await act({ action: "central-calendar-panel-reveal", key: "trainings" });
+  await act({ action: "central-calendar-panel-reveal", key: "trainings" });
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "true");
+  assert.equal(calls.length, before, "opening and closing sends nothing");
+  // A repaint (the calendar read again) keeps what the coach opened.
+  await act({ action: "central-calendar-retry" });
+  await tick();
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "true");
+  await pressToggle("athletes");
+  assert.equal(toggleOf("athletes").getAttribute("aria-expanded"), "false");
+  // Another item: its sections start from their defaults (Athletes folded again after the coach opened it).
+  await act({ action: "central-calendar-panel-reveal", key: "athletes" });
+  await openPlanned();
+  await openEvent();
+  assert.equal(toggleOf("athletes").getAttribute("aria-expanded"), "false");
+});
+
+test("20c. a linked row's '⋯' opens a menu with the same Unlink; one menu at a time; Escape closes it first and the panel stays", async () => {
+  unfold = false;
+  const { calls, fake } = await start();
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  await press(linkButton(`[data-activity-key="activity:${ACT1}"]`));
+  await tick();
+  await act({ action: "central-calendar-panel-reveal", key: "trainings" });
+  await act({ action: "central-calendar-panel-reveal", key: "activities" });
+  let doc = dom();
+  assert.equal(doc.querySelectorAll('[data-act^="unlink"]').length, 0, "no Unlink until its menu opens");
+  const mores = [...doc.querySelectorAll(".cc-row-more")];
+  assert.equal(mores.length, 2);
+  assert.deepEqual(mores.map((b) => b.getAttribute("aria-label")), ["More for Morning session", "More for GPS session"]);
+  assert.ok(mores.every((b) => b.getAttribute("aria-expanded") === "false"));
+  await act({ ...mores[0].dataset });
+  doc = dom();
+  assert.equal(doc.querySelectorAll(".cc-row-menu").length, 1);
+  const unlink = doc.querySelector('.cc-row-menu [data-act="unlink-sessions"]');
+  assert.equal(unlink.getAttribute("aria-label"), "Unlink Morning session");
+  assert.equal(doc.querySelector(".cc-row-more").getAttribute("aria-expanded"), "true");
+  assert.equal(doc.querySelectorAll(".cc-row-more")[1].hasAttribute("aria-controls"), false, "a closed menu names no element");
+  assert.equal(doc.querySelector(".cc-row-menu").id, doc.querySelector(".cc-row-more").getAttribute("aria-controls"));
+  // The other row's menu replaces it.
+  await act({ ...dom().querySelectorAll(".cc-row-more")[1].dataset });
+  doc = dom();
+  assert.equal(doc.querySelectorAll(".cc-row-menu").length, 1);
+  assert.ok(doc.querySelector(`.cc-row-menu [data-act="unlink-activity"][data-activity-id="${ACT1}"]`));
+  // Escape closes the menu, not the panel (the real page holds the drawn menu).
+  const fakeDocument = globalThis.document;
+  globalThis.document = dom();
+  try {
+    assert.equal(closeCentralCalendarPanel(render), true);
+  } finally {
+    globalThis.document = fakeDocument;
+  }
+  assert.equal(state.centralCalendar.panel.open, true);
+  assert.equal(dom().querySelectorAll(".cc-row-menu").length, 0);
+  // The Unlink in the menu sends what it sent before.
+  await act({ ...dom().querySelectorAll(".cc-row-more")[0].dataset });
+  const linkIds = fake.linked.get(E1).sessions[0].links.map((l) => l.id).sort();
+  await press(dom().querySelector('.cc-row-menu [data-act="unlink-sessions"]'));
+  await tick();
+  const detach = writesOf(calls).at(-1);
+  assert.equal(detach.url, `/api/calendar/events/${E1}/sessions/detach`);
+  assert.deepEqual(detach.body.linkIds, linkIds);
+});
+
+test("20d. Edit · Cancel event · Delete sit together at the bottom, after every section", async () => {
+  unfold = false;
+  await start();
+  await openEvent();
+  const panel = dom().querySelector(".cc-panel");
+  const bottom = panel.querySelector(".cc-panel-bottom");
+  assert.ok(bottom);
+  assert.deepEqual([...bottom.querySelectorAll("button")].map((b) => b.dataset.action).slice(0, 2), ["central-calendar-edit-event", "central-calendar-cancel-event"]);
+  const sections = [...panel.querySelectorAll(".cc-psec")];
+  assert.ok(sections.length >= 3);
+  assert.ok(sections.every((sec) => sec.compareDocumentPosition(bottom) & 4), "the actions come after the sections");
+  assert.equal(panel.querySelectorAll(".cc-panel-actions").length, 1, "one place for the event's acts");
+});
+
+test("20e. a menu whose row left the screen (its section folded) does not take Escape: the panel closes at once", async () => {
+  unfold = false;
+  await start();
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  await act({ ...dom().querySelector(".cc-psec[data-section='trainings'] .cc-row-more").dataset });
+  assert.equal(dom().querySelectorAll(".cc-row-menu").length, 1);
+  await pressToggle("trainings");
+  assert.equal(state.centralCalendar.panelView.menu, "", "folding the section forgets its menu");
+  // Even a menu remembered but not drawn: Escape goes on to close the panel.
+  state.centralCalendar.panelView = { ...state.centralCalendar.panelView, menu: "session:gone" };
+  const fake = globalThis.document;
+  globalThis.document = dom();
+  try {
+    assert.equal(closeCentralCalendarPanel(render), true);
+  } finally {
+    globalThis.document = fake;
+  }
+  assert.equal(state.centralCalendar.panel.open, false);
+});
+
+test("20f. the section the coach acts in stays open after the answer: linking the last offer does not fold Trainings", async () => {
+  unfold = false;
+  await start();
+  await openEvent();
+  // Open by default for its offer; the coach links it - no offer is left and Align is answered "Not now".
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "true");
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  assert.equal(linkButton('[data-planned-key="planned:p1"]'), null, "no offer left");
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "true", "the new linked row stays in view");
+  assert.match(sectionEl("trainings").textContent, /Morning session/);
+  // The activity: its offer opened GPS and activities; once linked nothing else keeps it open - the act does.
+  assert.equal(toggleOf("activities").getAttribute("aria-expanded"), "true");
+  await press(linkButton(`[data-activity-key="activity:${ACT1}"]`));
+  await tick();
+  assert.equal(linkButton(`[data-activity-key="activity:${ACT1}"]`), null, "no activity offer left");
+  assert.equal(toggleOf("activities").getAttribute("aria-expanded"), "true", "the linked activity stays in view");
+  assert.match(sectionEl("activities").textContent, /GPS session/);
 });
