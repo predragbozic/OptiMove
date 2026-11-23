@@ -40,7 +40,27 @@ try{
 }finally{await db.drop()}
 }
 
-const results=[...await dataMutations(),...await printMutations(),...await sqlMutations()];
+
+async function interactionMutations(){
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'optimove-gallery-interaction-mutations-')),results=[];
+ const imports=(source,base)=>source.replace(/(['"])(\.\.?\/[^'"]+)\1/g,(_all,quote,name)=>quote+pathToFileURL(path.resolve(base,name)).href+quote);
+ try{for(const [name,moduleName,testName,from,to]of [
+  ['stale-context-accepted','training-load-actions.js','training-load-analysis.actions.test.mjs','||Number(action.dataset.boundGeneration)!==analysisChartInteractionGeneration()',''],
+  ['legend-toggle-ignored','training-load-analysis-echarts-options.js','training-load-gallery-options.test.mjs',"plot.option.legend.selectedMode=false","plot.option.legend.selectedMode=true"]
+ ]){
+  const modulePath=path.join(root,'frontend',moduleName),testPath=path.join(root,'frontend/tests',testName),original=fs.readFileSync(modulePath,'utf8');
+  if(!original.includes(from))throw Error('Missing mutation target '+name);
+  for(const control of [true,false]){
+   const filename=path.join(dir,'subject.mjs');fs.writeFileSync(filename,imports(control?original:original.replace(from,to),path.dirname(modulePath)));
+   const test=imports(fs.readFileSync(testPath,'utf8'),path.dirname(testPath)).replaceAll(pathToFileURL(modulePath).href,pathToFileURL(filename).href);fs.writeFileSync(path.join(dir,'subject.test.mjs'),test);
+   const run=spawnSync(process.execPath,['--test',path.join(dir,'subject.test.mjs')],{encoding:'utf8',timeout:30000});
+   fs.writeFileSync(path.join(outputRoot,name+(control?'-control':'')+'.log'),run.stdout+run.stderr);
+   results.push({name:name+(control?'-control':''),status:control?(run.status===0?'PASS':'FAIL'):(run.status!==0?'KILLED':'SURVIVED')});
+  }
+ }return results;}finally{fs.rmSync(dir,{recursive:true,force:true})}
+}
+
+const results=[...await interactionMutations(),...await dataMutations(),...await printMutations(),...await sqlMutations()];
 fs.writeFileSync(path.join(outputRoot,'results.json'),JSON.stringify(results,null,2));
 console.log(JSON.stringify({results,logs:outputRoot},null,2));
 if(results.some(r=>!['PASS','KILLED'].includes(r.status)))process.exitCode=1;

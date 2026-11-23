@@ -37,7 +37,7 @@ export function buildDashboardReport(source,target,{title='Dashboard',subtitle='
    if(node.parentElement?.closest('.tl-analysis-plot,.tl-analysis-kpi'))continue;
    section.append(scrub(node));
   }
-  target.body.append(section);
+  if(section.children.length>1)target.body.append(section);
   for(const table of tables){const values=target.createElement('section');values.className='report-values';const label=target.createElement('h2');label.textContent=heading.textContent+' — values';values.append(label,scrub(table));target.body.append(values);}
  }
  return target;

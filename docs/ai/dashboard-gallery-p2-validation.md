@@ -15,6 +15,7 @@ SHA256: 2c018c784ace8edc1cb0c9b729d5e0143166d813477899f678060d6c6ac304cb.
 
 Both RESULT: PASS: 8 suites, 47 tests (15 + 3 + 2 + 1 + 2 + 6 + 10 + 8).
 Actual runtimes: Node 22.22.0 and Node 20.20.2, PostgreSQL 17.11.
+The Windows .ps1 wrapper also returns RESULT: PASS with Node 20.20.2 (47/47).
 The final eight tests run the previous production build
 3cf0f7f92ec82ee75ed470149c9ab688c1fd384b against the migrated schema.
 The migration suite executes the actual owner staging CLI, rollback SQL, catalog
@@ -63,7 +64,7 @@ every page repeats Series / Bucket headers (checked with pypdf).
 DATABASE_URL=loopback-maintenance-url node backend/scripts/dashboard-gallery-mutations.mjs
 (The same environment variable uses normal PowerShell syntax on Windows.)
 
-11 mutations killed; controls pass; none survived:
+13 mutations killed; controls pass; none survived:
 
 - duplicate candidate chosen as a winner;
 - conflict flag ignored;
@@ -74,6 +75,8 @@ DATABASE_URL=loopback-maintenance-url node backend/scripts/dashboard-gallery-mut
 - athlete bound removed;
 - collapsed tables printed;
 - static legend omitted;
+- stale workspace/page/filter period action accepted;
+- stored legend toggle ignored;
 - installed SQL shape validator always returns true;
 - installed SQL combined-axis guard disabled.
 

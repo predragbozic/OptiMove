@@ -1,3 +1,4 @@
+import {configureDashboardPlot} from '../training-load-analysis-echarts-options.js';
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {galleryChartPlot} from '../training-load-gallery-options.js';
 const id='11111111-1111-4111-8111-111111111111';
@@ -39,4 +40,9 @@ test('empty or unavailable projections never create an invented chart',()=>{
 test('gallery legend uses the roster comparator and the scatter labels fit inside their axes',()=>{
  const data={...base,kind:'scatter',series:[...base.series,{seriesId:'b',unit:'min'}],groups:[{athleteId:'z',bucketKey:id,values:[1,2]},{athleteId:'a',bucketKey:id,values:[3,4]}]};
  const plot=galleryChartPlot(data,{...labels,athleteLabel:key=>key==='z'?'Zora':'Ana'});assert.deepEqual(plot.option.series.map(s=>s.name),['Ana','Zora']);assert.equal(plot.option.xAxis.nameLocation,'middle');assert.equal(plot.option.yAxis.nameLocation,'middle');
+});
+
+test('legend interaction follows the stored setting and carries only a local generation counter',()=>{
+ const plot=configureDashboardPlot(galleryChartPlot(base,labels),{chartInteractions:{legend:{toggle:false}},groupBy:'day',interactionGeneration:7,period:{dateFrom:'2026-11-01',dateTo:'2026-11-02'}});
+ assert.equal(plot.option.legend.selectedMode,false);assert.equal(plot.interactionGeneration,7);assert.doesNotMatch(JSON.stringify(plot),/boundContext|fingerprint/);
 });
