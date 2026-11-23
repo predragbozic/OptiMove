@@ -1,3 +1,4 @@
+import { pageSchemaInstalled } from '../dashboardPages/config.js';
 import { normalizeShellFilter, resolveShellCohort } from '../dashboardShellFilter.js';
 import { createHash } from 'node:crypto';
 import { loadAuthorizationContext } from '../authz.js';
@@ -30,9 +31,11 @@ export async function authorizePreviewTarget(queryRunner, req, dashboardId, { re
   return { req: serverReq, dashboard, workspace };
 }
 
-export async function loadPreviewExisting(queryRunner, dashboardId, editTarget) {
+export async function loadPreviewExisting(queryRunner, dashboardId, editTarget, pageId = null) {
   if (!editTarget) return null;
-  const widget = (await queryRunner('select * from training_load.dashboard_widgets where id=$1 and dashboard_id=$2', [editTarget.widgetId, dashboardId])).rows[0];
+  const pagesInstalled = await pageSchemaInstalled(queryRunner);
+  if (pageId && !pagesInstalled) throw previewError('notFound', 404);
+  const widget = (await queryRunner(`select * from training_load.dashboard_widgets where id=$1 and dashboard_id=$2 ${pagesInstalled ? 'and page_id=coalesce($3::uuid,(select id from training_load.dashboard_pages where dashboard_id=$2 and is_home))' : ''}`, [editTarget.widgetId, dashboardId, ...(pagesInstalled ? [pageId] : [])])).rows[0];
   if (!widget) throw previewError('notFound', 404);
   const series = (await queryRunner('select * from training_load.dashboard_widget_series where widget_id=$1 order by series_order, id', [widget.id])).rows;
   return { ...widget, series };

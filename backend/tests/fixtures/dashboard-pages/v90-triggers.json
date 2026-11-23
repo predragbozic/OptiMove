@@ -1,0 +1,178 @@
+[
+  {
+    "md5": "60599a027271957e8aa6d1c23a74c030",
+    "name": "dashboard_pages_guard_identity",
+    "table": "dashboard_pages",
+    "enabled": "O",
+    "function": "training_load.guard_dashboard_page_identity()",
+    "definition": "CREATE TRIGGER dashboard_pages_guard_identity BEFORE INSERT OR DELETE OR UPDATE ON training_load.dashboard_pages FOR EACH ROW EXECUTE FUNCTION training_load.guard_dashboard_page_identity()"
+  },
+  {
+    "md5": "a0f385cf24691b3389e2397d23ae4c07",
+    "name": "dashboard_pages_require_home",
+    "table": "dashboard_pages",
+    "enabled": "O",
+    "function": "training_load.dashboard_home_required()",
+    "definition": "CREATE CONSTRAINT TRIGGER dashboard_pages_require_home AFTER INSERT OR DELETE OR UPDATE ON training_load.dashboard_pages DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_home_required()"
+  },
+  {
+    "md5": "673f26f5b9949bb1241b0d5d884b2458",
+    "name": "dashboard_widgets_assign_home",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widget_assign_home()",
+    "definition": "CREATE TRIGGER dashboard_widgets_assign_home BEFORE INSERT OR UPDATE OF page_id ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widget_assign_home()"
+  },
+  {
+    "md5": "b3ab8b1d33176e95fa5f9352ea0ddea7",
+    "name": "dashboard_widgets_bump_page",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widget_bump_page_revision()",
+    "definition": "CREATE TRIGGER dashboard_widgets_bump_page AFTER INSERT OR DELETE OR UPDATE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widget_bump_page_revision()"
+  },
+  {
+    "md5": "4d2495c0884475299f69811f7e3b0831",
+    "name": "dashboard_widgets_bump_parent_on_delete",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_bump_parent_dashboard_revision()",
+    "definition": "CREATE TRIGGER dashboard_widgets_bump_parent_on_delete AFTER DELETE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_bump_parent_dashboard_revision()"
+  },
+  {
+    "md5": "4d2495c0884475299f69811f7e3b0831",
+    "name": "dashboard_widgets_bump_parent_on_insert",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_bump_parent_dashboard_revision()",
+    "definition": "CREATE TRIGGER dashboard_widgets_bump_parent_on_insert AFTER INSERT ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_bump_parent_dashboard_revision()"
+  },
+  {
+    "md5": "a845d879d38d8a6dccf443736a34fe8f",
+    "name": "dashboard_widgets_bump_revision",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_bump_revision()",
+    "definition": "CREATE TRIGGER dashboard_widgets_bump_revision BEFORE UPDATE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_bump_revision()"
+  },
+  {
+    "md5": "96b0f3fed42ce4eca49a13468d44b838",
+    "name": "dashboard_widgets_check_no_overlap",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_check_no_overlap()",
+    "definition": "CREATE CONSTRAINT TRIGGER dashboard_widgets_check_no_overlap AFTER INSERT OR UPDATE OF x, y, width, height ON training_load.dashboard_widgets DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_check_no_overlap()"
+  },
+  {
+    "md5": "4915decb92f583bf2b75d8dd30d478d0",
+    "name": "dashboard_widgets_guard_page_protocol",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.guard_dashboard_widget_page_protocol()",
+    "definition": "CREATE TRIGGER dashboard_widgets_guard_page_protocol BEFORE INSERT OR DELETE OR UPDATE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.guard_dashboard_widget_page_protocol()"
+  },
+  {
+    "md5": "f66d2b259464e844e9f73df286761b6f",
+    "name": "dashboard_widgets_guard_presentation",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_guard_presentation()",
+    "definition": "CREATE TRIGGER dashboard_widgets_guard_presentation BEFORE INSERT OR UPDATE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_guard_presentation()"
+  },
+  {
+    "md5": "587a5c613a2e69d578cd9af8e23150f9",
+    "name": "dashboard_widgets_lock_dashboard_before_layout_write",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_lock_dashboard_before_layout_write()",
+    "definition": "CREATE TRIGGER dashboard_widgets_lock_dashboard_before_layout_write BEFORE INSERT OR UPDATE OF x, y, width, height ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_lock_dashboard_before_layout_write()"
+  },
+  {
+    "md5": "dc61219b2601d30c239e507a10262a69",
+    "name": "dashboard_widgets_protect_dashboard_id",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.protect_dashboard_widgets_dashboard_id()",
+    "definition": "CREATE TRIGGER dashboard_widgets_protect_dashboard_id BEFORE UPDATE OF dashboard_id ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.protect_dashboard_widgets_dashboard_id()"
+  },
+  {
+    "md5": "cc37fcbb542c99405a6801d0b50e9ea3",
+    "name": "dashboard_widgets_revalidate_series_on_type_change",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_revalidate_series_on_type_change()",
+    "definition": "CREATE TRIGGER dashboard_widgets_revalidate_series_on_type_change AFTER UPDATE OF widget_type ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_revalidate_series_on_type_change()"
+  },
+  {
+    "md5": "b43588b955a6aece5cac50db425312c0",
+    "name": "dashboard_widgets_validate_layout",
+    "table": "dashboard_widgets",
+    "enabled": "O",
+    "function": "training_load.dashboard_widgets_validate_layout()",
+    "definition": "CREATE TRIGGER dashboard_widgets_validate_layout BEFORE INSERT OR UPDATE OF widget_type, width, height ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_validate_layout()"
+  },
+  {
+    "md5": "45f1eab2ef4bdd65dca585eae4ef4c03",
+    "name": "dashboards_archive_clears_active_selection",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.dashboards_archive_clears_active_selection()",
+    "definition": "CREATE TRIGGER dashboards_archive_clears_active_selection AFTER UPDATE OF status ON training_load.dashboards FOR EACH ROW EXECUTE FUNCTION training_load.dashboards_archive_clears_active_selection()"
+  },
+  {
+    "md5": "a58fce2b4dedb21176bfcf0f4fabb704",
+    "name": "dashboards_bump_revision",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.dashboards_bump_revision()",
+    "definition": "CREATE TRIGGER dashboards_bump_revision BEFORE UPDATE ON training_load.dashboards FOR EACH ROW EXECUTE FUNCTION training_load.dashboards_bump_revision()"
+  },
+  {
+    "md5": "f5666f32e7fd0a2dfcf2fc8e1faf4c25",
+    "name": "dashboards_ensure_home",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.ensure_dashboard_home()",
+    "definition": "CREATE TRIGGER dashboards_ensure_home AFTER INSERT ON training_load.dashboards FOR EACH ROW EXECUTE FUNCTION training_load.ensure_dashboard_home()"
+  },
+  {
+    "md5": "cb0bcd8f32c846cde7504ce739227857",
+    "name": "dashboards_protect_identity_once_created",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.dashboards_protect_identity_once_created()",
+    "definition": "CREATE TRIGGER dashboards_protect_identity_once_created BEFORE UPDATE ON training_load.dashboards FOR EACH ROW EXECUTE FUNCTION training_load.dashboards_protect_identity_once_created()"
+  },
+  {
+    "md5": "dfecdefe6375d0e4d2c28e91483d671a",
+    "name": "dashboards_protect_ownership",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.protect_dashboard_ownership_once_used()",
+    "definition": "CREATE TRIGGER dashboards_protect_ownership BEFORE UPDATE ON training_load.dashboards FOR EACH ROW EXECUTE FUNCTION training_load.protect_dashboard_ownership_once_used()"
+  },
+  {
+    "md5": "a0f385cf24691b3389e2397d23ae4c07",
+    "name": "dashboards_require_home",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.dashboard_home_required()",
+    "definition": "CREATE CONSTRAINT TRIGGER dashboards_require_home AFTER INSERT OR UPDATE ON training_load.dashboards DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_home_required()"
+  },
+  {
+    "md5": "70f38353a470245079231daf2ee93478",
+    "name": "dashboards_sync_home_defaults",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.dashboard_home_sync_defaults()",
+    "definition": "CREATE TRIGGER dashboards_sync_home_defaults AFTER UPDATE OF default_filter ON training_load.dashboards FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_home_sync_defaults()"
+  },
+  {
+    "md5": "eaadb2a4d6adefef8e1d7b46101fbddd",
+    "name": "dashboards_validate_clone_provenance",
+    "table": "dashboards",
+    "enabled": "O",
+    "function": "training_load.dashboards_validate_clone_provenance()",
+    "definition": "CREATE TRIGGER dashboards_validate_clone_provenance BEFORE INSERT ON training_load.dashboards FOR EACH ROW EXECUTE FUNCTION training_load.dashboards_validate_clone_provenance()"
+  }
+]

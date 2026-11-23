@@ -1,3 +1,4 @@
+import { pageDatabaseEnabled } from '../dashboardPages/config.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // Training Load Analysis Dashboard — HTTP routes. Mounted at
 // /api/training-load/dashboards (see server.js), alongside the existing
@@ -176,6 +177,7 @@ function respondToServiceError(res, next, error) {
   // above handles it in practice) — this is defense-in-depth for any raw
   // 40002 that reaches the route layer unwrapped.
   if (error?.code === "40002") return res.status(409).json({ error: "dashboardArchived" });
+  if (error?.code === "P0002") return res.status(404).json({ error: "notFound" });
   if (error?.code === "23505") return res.status(409).json({ error: "conflict" });
   if (SAFE_CLIENT_INPUT_SQLSTATES.has(error?.code)) return res.status(400).json({ error: "invalidRequest" });
   // A P0001 (plain RAISE EXCEPTION) is always a business-rule violation
@@ -315,6 +317,7 @@ router.get("/:dashboardId", async (req, res, next) => {
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
     const detail = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    if (req.app?.locals?.dashboardPagesEnabled && await pageDatabaseEnabled(query)) detail.pagesAvailable = true;
     const simplePreview = ['preview', 'enabled'].includes(req.app?.locals?.dashboardSimpleMode)
       && canUseSimplePlatformPilot(req, dataWorkspace);
     if (simplePreview && detail.dashboard.data_workspace_type === "club") {
@@ -834,3 +837,11 @@ router.post("/:dashboardId/query", async (req, res, next) => {
 });
 
 export default router;
+// Shared with explicit-Page adapters; these remain the legacy route's validators.
+export const dashboardWriteContract = Object.freeze({
+ validRevision, validNonNegInt, validPositiveInt, validX, validWidth,
+ validNonEmptyTrimmedString, validNullableLabelString, validDisplayConfig,
+ validPresentationMode, validTemplateHints, validLayoutEntry, validReorderEntry,
+ CREATE_WIDGET_KEYS, UPDATE_WIDGET_CONTENT_KEYS, ADD_SERIES_KEYS, UPDATE_SERIES_KEYS,
+ enums: {groupBy:GROUP_BY_VALUES,state:WIDGET_STATE_VALUES,axis:AXIS_VALUES,sourcePolicy:SOURCE_POLICY_VALUES,dataScopeLevel:DATA_SCOPE_LEVEL_VALUES,analyticalAggregation:ANALYTICAL_AGGREGATION_VALUES,aggregationRolePolicy:AGGREGATION_ROLE_POLICY_VALUES,coveragePolicy:COVERAGE_POLICY_VALUES,comparisonPeriod:COMPARISON_PERIOD_VALUES}
+});

@@ -44,6 +44,9 @@ const MIGRATIONS = [
   "202609101200_training_load_v18_dashboard_catalog_seed.sql",
   "202609170900_training_load_v19_dashboard_delete.sql",
   "202611151000_training_load_v71_dashboard_simple_atomic_save.sql",
+  "202611201300_roles_v84_permission_roles.sql",
+  "202611231000_training_load_v90_dashboard_pages_home.sql",
+  "202611231100_training_load_v91_dashboard_page_writers.sql",
 ];
 const BASE_MIGRATIONS = MIGRATIONS.slice(0, 14); // everything BEFORE the dashboard migrations — used by the upgrade-safety test
 const DASHBOARD_MIGRATIONS = MIGRATIONS.slice(14);
@@ -217,7 +220,7 @@ async function dropTempDb({ name }) {
 }
 async function writeMigrationsDir(runId, files) {
   const root = path.resolve(__dirname, `tests_tldash_migrations_${runId}`);
-  const dir = runId === "primary" ? path.join(root, "migrations_v2") : root;
+  const dir = path.join(root, "migrations_v2");
   await fsp.rm(dir, { recursive: true, force: true });
   await fsp.mkdir(dir, { recursive: true });
   for (const [name, content] of Object.entries(files)) {
@@ -500,18 +503,18 @@ async function makeComponentFixture({ clubId, coachId, athleteId, connectionId, 
 // rollback-on-error, run against a real, unmodified migrate.js.
 // ============================================================
 
-test("§1.1 all 20 migrations including Simple atomic save apply cleanly and record exactly this run's dashboard files", async () => {
+test("§1.1 all dashboard migrations through v91 apply cleanly and record exactly this run's dashboard files", async () => {
   const applied = await query(`select migration_name from public.schema_migrations where migration_name like '%dashboard%' order by migration_name`);
-  assert.equal(applied.rowCount, 6, "all six dashboard migrations including Simple atomic save must be recorded");
+  assert.deepEqual(applied.rows.map(row => row.migration_name), DASHBOARD_MIGRATIONS.filter(name => name.includes("dashboard")).map(name => "migrations_v2/" + name));
 });
 
 test("§1.2 re-applying the SAME migrations_v2 directory a second time is a genuine no-op (checksum-safe idempotent re-run)", async () => {
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   const applied = await query(`select count(*)::int as n from public.schema_migrations where migration_name like '%dashboard%'`);
-  assert.equal(applied.rows[0].n, 6, "re-running must not duplicate or re-apply anything");
+  assert.equal(applied.rows[0].n, DASHBOARD_MIGRATIONS.filter(name => name.includes("dashboard")).length, "re-running must not duplicate or re-apply anything");
 });
 
-test("§1.3 upgrade path: a database at exactly v1-v14 can apply all six dashboard migrations in one runner call", async () => {
+test("§1.3 upgrade path: a database at exactly v1-v14 can apply dashboard prerequisites through v91 in one runner call", async () => {
   const upgradeDb = await makeTempDb("upgrade");
   const upgradeClient = new pg.Client({ connectionString: upgradeDb.url });
   await upgradeClient.connect();
@@ -521,12 +524,8 @@ test("§1.3 upgrade path: a database at exactly v1-v14 can apply all six dashboa
     await runner.runMigrations({ databaseUrl: upgradeDb.url, migrationsRoot: baseDir });
     const beforeUpgrade = await upgradeClient.query(`select 1 from information_schema.tables where table_schema='training_load' and table_name='dashboards'`);
     assert.equal(beforeUpgrade.rowCount, 0, "sanity: dashboards must not exist yet on the base-only database");
-    // Only the 4 NEW dashboard files — migrate.js's own migration
-    // identity includes the migrationsRoot's own basename
-    // (migrationIdentity()), so passing the FULL 18-file set again here
-    // (under a DIFFERENT directory name than "upgrade_base") would make
-    // the runner treat v1-v14 as "not yet applied under THIS identity"
-    // and try to re-run them against tables that already exist.
+    // Apply only new dashboard files and their v84 prerequisite. All fixture
+    // roots use migrations_v2, matching the exact identity pinned by v91.
     const fullDir = await writeMigrationsDir("upgrade_full", await readMigrationFiles(DASHBOARD_MIGRATIONS));
     await runner.runMigrations({ databaseUrl: upgradeDb.url, migrationsRoot: fullDir });
     const afterUpgrade = await upgradeClient.query(`select 1 from information_schema.tables where table_schema='training_load' and table_name='dashboards'`);
@@ -4726,7 +4725,7 @@ test("S2c S01/S02 one real HTTP save atomically stores widget, exactly one serie
   assert.deepEqual(Object.keys(ledger[0]).sort(), ["initiator_user_id", "request_id", "dashboard_id", "widget_id", "workspace", "payload_hash", "request_issued_at", "resolved_period", "receipt", "created_at", "retain_until"].sort());
   assert.deepEqual(Object.keys(receipt).sort(), ["requestId", "operation", "widgetId", "seriesId", "idMapping", "widgetRevision", "dashboardRevision", "resolvedPeriod", "requestIssuedAt"].sort());
   const after = await s2bDatabaseState();
-  const changedTables = new Set(['"training_load"."dashboards"', '"training_load"."dashboard_widgets"', '"training_load"."dashboard_widget_series"', '"training_load"."dashboard_simple_requests"']);
+  const changedTables = new Set(['"training_load"."dashboard_pages"', '"training_load"."dashboards"', '"training_load"."dashboard_widgets"', '"training_load"."dashboard_widget_series"', '"training_load"."dashboard_simple_requests"']);
   for (const [table, original] of Object.entries(before)) if (!changedTables.has(table)) assert.deepEqual(after[table], original, table);
   const queried = await api(`/api/training-load/dashboards/${fixture.dashboard.id}/query`, { method: "POST", cookie: fixture.coachCookie, body: { dateFrom: prepared.body.resolvedPeriod.dateFrom, dateTo: prepared.body.resolvedPeriod.dateTo } });
   assert.equal(queried.status, 200, JSON.stringify(queried.body));
@@ -5665,7 +5664,7 @@ test("v71 rollback SQL restores the catalog, reapplies, and refuses receipts and
   const client = new pg.Client({ connectionString: rollbackDb.url });
   const outer = await fsp.mkdtemp(path.join(__dirname, "tests_tldash_rollback_"));
   const root = path.join(outer, "migrations_v2");
-  const name = MIGRATIONS.at(-1);
+  const name = "202611151000_training_load_v71_dashboard_simple_atomic_save.sql";
   const migrationFile = path.join(root, name);
   const rollback = await fsp.readFile(path.resolve(__dirname, "../../docs/runbooks/dashboard-simple-v71-rollback.sql"), "utf8");
   const dump = () => execFileSync("pg_dump", ["--schema-only", "--no-owner", "--no-privileges", rollbackDb.url], {
@@ -5680,7 +5679,7 @@ test("v71 rollback SQL restores the catalog, reapplies, and refuses receipts and
     await client.connect();
     await client.query(LEGACY_FIXTURE_SQL);
     await fsp.mkdir(root);
-    for (const [file, sql] of Object.entries(await readMigrationFiles(MIGRATIONS.slice(0, -1)))) {
+    for (const [file, sql] of Object.entries(await readMigrationFiles(MIGRATIONS.slice(0, MIGRATIONS.indexOf(name))))) {
       await fsp.writeFile(path.join(root, file), sql);
     }
     await migrate();

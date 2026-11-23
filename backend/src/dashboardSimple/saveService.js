@@ -1,3 +1,5 @@
+import { pageSchemaInstalled } from '../dashboardPages/config.js';
+import { applySimplePage } from '../dashboardPages/simple.js';
 import { createHash } from 'node:crypto';
 import { isUuid } from './schema.js';
 import { canonicalKey, compileSimpleDraft } from './compiler.js';
@@ -85,6 +87,8 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
         await lockActor(queryRunner, req);
         await authorizeSaveTarget(queryRunner, req, dashboardId);
         await queryRunner('select id from training_load.dashboards where id=$1 for update', [dashboardId]);
+        // Pages are locked before the first widget lock, without changing Home hashes/tokens.
+        if (await pageSchemaInstalled(queryRunner)) await queryRunner('select id from training_load.dashboard_pages where dashboard_id=$1 order by id for update', [dashboardId]);
         const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
         const editTarget = body.input?.editTarget;
         for (const candidate of [...new Set([widgetId, editTarget?.widgetId].filter(value => value != null))]) {
@@ -106,21 +110,26 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
         const signed = tokenService.verifyEnvelope(body.previewToken);
         if (body.requestIssuedAt !== signed.requestIssuedAt) throw previewError('previewRequired', 409, 'requestTimeChanged');
         if (canonicalKey(body.resolvedPeriod) !== canonicalKey(signed.binding.resolvedPeriod)) throw previewError('previewRequired', 409, 'effectivePeriodChanged');
-        if (body.input.context.kind !== 'legacyDashboard') throw previewError('pagesClientRequired', 409);
+        await applySimplePage(queryRunner, target, body.input, null, new Date(currentTime()).toISOString());
         if (widgetId) await queryRunner('select id from training_load.dashboard_widget_series where widget_id=$1 order by id for update', [widgetId]);
-        const existing = await loadPreviewExisting(queryRunner, dashboardId, editTarget);
+        const existing = await loadPreviewExisting(queryRunner, dashboardId, editTarget, target.page?.id ?? null);
+        if (target.page && existing?.page_id !== undefined && existing?.page_id !== target.page.id) throw previewError('notFound', 404);
         if (existing && existing.revision !== editTarget.expectedWidgetRevision) throw previewError('staleRevision', 409);
         await lockCatalog(queryRunner, body.input, existing);
         const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
         const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: body.input.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null, existingWidgetId: existing?.id ?? null });
         const context = await loadPreviewContext(queryRunner, target, body.input, existing, new Date(currentTime()).toISOString());
+        if (target.page) snapshot.capabilities.pages = true;
         const compiled = compileSimpleDraft(body.input.draft, snapshot, context, existing);
         if (compiled.status !== 'valid') throw Object.assign(previewError(compiled.status === 'advancedRequired' ? 'advancedRequired' : 'invalidDraft', compiled.status === 'advancedRequired' ? 409 : 400), { issues: compiled.issues });
         if (compiled.widget.presentation_config?.tableFormatting?.rules?.length) throw previewError('invalidDraft', 400);
         if (body.input.expectedCatalogToken && body.input.expectedCatalogToken !== compiled.catalogToken) throw previewError('catalogChanged', 409);
         const binding = buildSimplePreviewBinding({ target, envelope: body.input, existing, compiled, context, evaluatedAt: signed.binding.evaluatedAt });
         tokenService.verify(body.previewToken, binding);
-        const result = await queryRunner('select training_load.save_simple_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb) as receipt', [req.user.id, body.requestId, payloadHash, body.requestIssuedAt, dashboardId, widgetId, editTarget?.expectedWidgetRevision ?? null, JSON.stringify(compiled.widget), JSON.stringify(compiled.resolvedPeriod), JSON.stringify(target.workspace)]);
+        const args = [req.user.id, body.requestId, payloadHash, body.requestIssuedAt, dashboardId, widgetId, editTarget?.expectedWidgetRevision ?? null, JSON.stringify(compiled.widget), JSON.stringify(compiled.resolvedPeriod), JSON.stringify(target.workspace)];
+        const result = target.page
+          ? await queryRunner('select training_load.save_simple_page_widget($1::uuid,$2::integer,$3::uuid,$4::uuid,$5::text,$6::timestamptz,$7::uuid,$8::uuid,$9::integer,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb) as receipt', [target.page.id, target.page.defaults_revision, ...args, body.input.draft.periodIntent.savePageDefaults ? JSON.stringify(body.input.draft.periodIntent.periodConfig) : null])
+          : await queryRunner('select training_load.save_simple_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb) as receipt', args);
         if (!result.rows[0]?.receipt) throw previewError('saveFailed');
         return { receipt: result.rows[0].receipt, replayed: false };
       } });

@@ -1,3 +1,4 @@
+import { applySimplePage, simplePageBinding } from '../dashboardPages/simple.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { randomUUID } from 'node:crypto';
 import { validateContract, isUuid } from './schema.js';
@@ -51,25 +52,26 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       let existing = null;
       if (envelope?.editTarget != null) {
         if (!isUuid(envelope.editTarget.widgetId)) throw previewError('notFound', 404);
-        existing = await loadPreviewExisting(queryRunner, dashboardId, envelope.editTarget);
+        existing = await loadPreviewExisting(queryRunner, dashboardId, envelope.editTarget, envelope.context?.kind === 'page' ? envelope.context.pageId : null);
       }
       normalizeShellFilter(envelope?.context?.shellFilter);
       const structural = validateContract('envelope', envelope);
       if (!structural.valid) return { status: 'invalid', issues: structural.issues.map(issue => ({ ...issue, severity: 'error' })) };
-      if (envelope.context.kind !== 'legacyDashboard') throw previewError('pagesClientRequired', 409);
+      await applySimplePage(queryRunner, target, envelope, existing, new Date(now()).toISOString());
       if (existing && existing.revision !== envelope.editTarget.expectedWidgetRevision) throw previewError('staleRevision', 409);
       const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
       const snapshot = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: envelope.draft.metricRef, sourceConnectionId: existing?.series[0]?.source_connection_id ?? null, existingWidgetId: existing?.id ?? null });
       const evaluatedAt = new Date(now()).toISOString();
       const context = await loadPreviewContext(queryRunner, target, envelope, existing, evaluatedAt);
+      if (target.page) snapshot.capabilities.pages = true;
       const compiled = compileSimpleDraft(envelope.draft, snapshot, context, existing);
       if (compiled.status !== 'valid') return { ...compiled, issues: compiled.issues.map(issue => ({ ...issue, severity: 'error' })) };
       if (envelope.expectedCatalogToken && envelope.expectedCatalogToken !== compiled.catalogToken) throw previewError('catalogChanged', 409);
       if (compiled.widget.presentation_config?.tableFormatting?.rules?.length) return issueResult('invalid', 'unsupportedCapability', '$.draft.presentation.tableFormatting');
-      const contextFingerprint = hash({ workspace: target.workspace, defaultFilter: target.dashboard.default_filter, runtimeFilter: envelope.context.runtimeFilter ?? {}, shellFilter: context.shellFilter ?? null, shellCohort: context.shellCohort ?? null, effectiveFilter: compiled.effectiveFilter, resolvedPeriod: compiled.resolvedPeriod });
+      const contextFingerprint = hash({ ...simplePageBinding(target), workspace: target.workspace, defaultFilter: target.dashboard.default_filter, runtimeFilter: envelope.context.runtimeFilter ?? {}, shellFilter: context.shellFilter ?? null, shellCohort: context.shellCohort ?? null, effectiveFilter: compiled.effectiveFilter, resolvedPeriod: compiled.resolvedPeriod });
       const draftHash = hash(envelope.draft);
       const common = {
-        contractVersion: 1, status: 'valid', issues: [], draftId: envelope.draft.draftId, draftVersion: envelope.draft.draftVersion,
+        ...simplePageBinding(target), contractVersion: 1, status: 'valid', issues: [], draftId: envelope.draft.draftId, draftVersion: envelope.draft.draftVersion,
         draftHash, contextFingerprint, catalogToken: compiled.catalogToken, evaluatedAt, resolvedPeriod: compiled.resolvedPeriod,
         effectiveFilterSummary: compiled.effectiveFilter, dashboardRevision: target.dashboard.revision,
         ...(existing ? { widgetRevision: existing.revision } : {}), normalizedWidget: compiled.widget,

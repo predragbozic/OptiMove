@@ -1,3 +1,4 @@
+import { pageSchemaInstalled } from './dashboardPages/config.js';
 // Training Load Analysis Dashboard — dashboard lifecycle: list, detail,
 // create, update metadata, clone, archive, and active-selection
 // get/set/clear. Every WRITE below calls exactly one of the 15 sanctioned
@@ -60,10 +61,11 @@ export async function listDashboards(req, dataWorkspace, { includeTemplates = tr
 
 export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
   const dashboard = await fetchVisibleDashboard(req, dataWorkspace, dashboardId);
+  const pagesInstalled = await pageSchemaInstalled(query);
   const widgets = await query(
     // Row JSON lets legacy reads run while the Simple sidecar migration is pending.
     `select id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, to_jsonb(dashboard_widgets)->'presentation_config' as presentation_config, local_filter_override, revision
-     from training_load.dashboard_widgets where dashboard_id = $1 order by widget_order`,
+     from training_load.dashboard_widgets where dashboard_id = $1 ${pagesInstalled ? "and page_id=(select id from training_load.dashboard_pages where dashboard_id=$1 and is_home)" : ""} order by widget_order`,
     [dashboardId],
   );
   const widgetIds = widgets.rows.map((w) => w.id);
@@ -295,6 +297,12 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     if (!canViewDashboardRow(req, templateRow, dataWorkspace)) throw httpError(404, "Template not found.");
     if (templateRow.status === "archived") throw httpError(409, "That template is archived and cannot be cloned.", "dashboardArchived");
 
+    // P1: freeze the full source hierarchy before the first target write.
+    const pagesInstalled = await pageSchemaInstalled(c.query.bind(c));
+    const sourcePages = pagesInstalled ? (await c.query('select * from training_load.dashboard_pages where dashboard_id=$1 order by id for share', [templateId])).rows : [];
+    const widgets = await c.query('select * from training_load.dashboard_widgets where dashboard_id=$1 order by id for share', [templateId]);
+    const series = await c.query('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by id for share', [widgets.rows.map(w => w.id)]);
+
     // Pass the ALREADY-RESOLVED dataWorkspace (the route resolved it once)
     // through to resolveDashboardCreateContext, instead of letting its own
     // 'user' branch resolve it AGAIN — resolveActiveWorkspace() must be
@@ -328,18 +336,30 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     );
     const newDashboard = dash.rows[0];
 
-    const widgets = await c.query(`select * from training_load.dashboard_widgets where dashboard_id = $1 order by widget_order`, [templateId]);
+    const targetHome = pagesInstalled ? (await c.query('select * from training_load.dashboard_pages where dashboard_id=$1 and is_home', [newDashboard.id])).rows[0] : null;
+    const pageIdMap = new Map();
+    for (const page of [...sourcePages].sort((a, b) => a.position - b.position)) {
+      if (page.is_home) {
+        await c.query('update training_load.dashboard_pages set name=$2,period_config=$3 where id=$1', [targetHome.id, page.name, page.period_config]);
+        pageIdMap.set(page.id, targetHome.id);
+      } else {
+        const created = (await c.query('insert into training_load.dashboard_pages(dashboard_id,name,position,default_filter,period_config) values($1,$2,$3,$4,$5) returning id', [newDashboard.id, page.name, page.position, page.default_filter, page.period_config])).rows[0];
+        pageIdMap.set(page.id, created.id);
+      }
+    }
+    const widgetPageMap = new Map(widgets.rows.map(w => [w.id, pageIdMap.get(w.page_id)]));
     const widgetIdMap = new Map();
     for (const w of widgets.rows) {
+      if (pagesInstalled) await c.query("select set_config('optimove.dashboard_page',pg_current_xact_id()::text||':'||$1,true)", [widgetPageMap.get(w.id)]);
       const nw = await c.query(
-        `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, local_filter_override, presentation_config)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,null) returning id`,
-        [newDashboard.id, w.widget_type, w.title, w.widget_order, w.x, w.y, w.width, w.height, w.mobile_order, w.group_by, w.state, w.display_config, w.local_filter_override],
+        `insert into training_load.dashboard_widgets (dashboard_id, widget_type, title, widget_order, x, y, width, height, mobile_order, group_by, state, display_config, local_filter_override, presentation_config${pagesInstalled ? ", page_id" : ""})
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,null${pagesInstalled ? ",$14" : ""}) returning id`,
+        [newDashboard.id, w.widget_type, w.title, w.widget_order, w.x, w.y, w.width, w.height, w.mobile_order, w.group_by, w.state, w.display_config, w.local_filter_override, ...(pagesInstalled ? [widgetPageMap.get(w.id)] : [])],
       );
       widgetIdMap.set(w.id, nw.rows[0].id);
     }
 
-    const series = await c.query(`select * from training_load.dashboard_widget_series where widget_id = any($1::uuid[]) order by series_order`, [widgets.rows.map((w) => w.id)]);
+
 
     // ONE batch resolution call for EVERY hint-bearing series in this
     // clone — not one call (and its own 1-2 internal SQL statements) PER
@@ -353,6 +373,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
 
     const cloneReport = [];
     for (const s of series.rows) {
+      if (pagesInstalled) await c.query("select set_config('optimove.dashboard_page',pg_current_xact_id()::text||':'||$1,true)", [widgetPageMap.get(s.widget_id)]);
       const newWidgetId = widgetIdMap.get(s.widget_id);
 
       // Portable source-connection contract (finding #6) — applies to
@@ -429,6 +450,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       cloneReport.push({ sourceSeriesId: s.id, resolution: "copied" });
     }
     for (const sourceWidget of widgets.rows) {
+      if (pagesInstalled) await c.query("select set_config('optimove.dashboard_page',pg_current_xact_id()::text||':'||$1,true)", [widgetPageMap.get(sourceWidget.id)]);
       await c.query(
         `update training_load.dashboard_widgets as cloned_widget
          set presentation_config = source_widget.presentation_config

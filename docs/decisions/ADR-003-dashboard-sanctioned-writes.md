@@ -61,7 +61,7 @@ into).
   migration comments at
   `migrations_v2/202609101000_training_load_v16_dashboard_widgets_series_selection.sql:178`
   and `:443-447`.
-- **The one exception**: `cloneDashboard()` —
+- **The original exception (2026-09-14)**: `cloneDashboard()` —
   `backend/src/trainingLoadDashboardCatalog.js:230-375` — raw
   `insert into training_load.dashboards` (267-269), `dashboard_widgets` (278),
   `dashboard_widget_series` (317-320, 335-338, 360-363), inside `c.query("begin")` /
@@ -80,7 +80,7 @@ into).
   case like clone, which then needs the same explicit "documented exception" treatment: a
   comment at both the migration and the call site.
 - A `db-reviewer` finding of a raw write against `dashboards`, `dashboard_widgets`,
-  `dashboard_widget_series`, or `dashboard_active_selection`, outside `cloneDashboard()`,
+  `dashboard_widget_series`, or `dashboard_active_selection`, outside `cloneDashboard()` or the sanctioned P1 SQL copy function documented below,
   is a real contract violation, not a false positive. A raw write against
   `dashboard_widget_types`/`dashboard_builtin_series` would be a different, new thing —
   those tables having no current write path doesn't mean one should be added casually.
@@ -102,3 +102,15 @@ training_load.create_widget_with_presentation, and
 training_load.update_widget_content_with_presentation. The existing cloneDashboard
 transaction also copies presentation_config with a raw UPDATE so an opaque sidecar
 survives cloning unchanged.
+
+## P1 Pages sanctioned writes
+
+P1 extends the dashboard domain lock order to dashboard → Pages (UUID order) → widget → series. The live actor/session/workspace rights rows are locked before the domain rows. Existing sanctioned writers enter assert_dashboard_writable, which locks the parent and its Pages before touching widgets. The Page revision trigger is not a substitute for these locks; dashboard-pages-concurrency.test.mjs records SQL order and exercises competing writers.
+
+New sanctioned entry points are mutate_dashboard_page, copy_dashboard_page_widget, write_dashboard_page_widget and save_simple_page_widget. The two wrappers reuse existing widget/series and v71 atomic-save functions under a transaction-bound Page context. New retention entry point cleanup_dashboard_page_requests permits bounded expired-receipt deletion only. Receipt UPDATE, young DELETE and TRUNCATE are refused by guard_dashboard_page_requests. Reads and queries never create Pages.
+
+cloneDashboard remains the documented JS raw-write exception; the sanctioned SQL copy function is the second composite INSERT implementation (see below). It locks the source dashboard, Pages, widgets and series before copying; a dashboard INSERT creates Home in ensure_dashboard_home with the exact default_filter. The new clone maps each source Page to a new Page identity and copies widget/series contents and presentation unchanged. The database activation barrier prevents a second Page while the previous binary can serve. Whole-dashboard deletion uses the sanctioned v19 function, Page cascade and exactly one existing deletion-log entry. Direct Home deletion is refused.
+
+P1 copy is the second explicit composite raw-INSERT implementation, alongside cloneDashboard: sanctioned SQL function training_load.copy_dashboard_page_widget inserts dashboard_widgets and dashboard_widget_series inside its atomic transaction, under dashboard -> Pages -> widget -> series locks and all v16/v17/v71 validation triggers. This does not authorize raw INSERTs in Page routes/services. The copy receipt and the inserts commit together.
+
+Simple request locking precedes the domain hierarchy: save_simple_page_widget takes the same dashboard-simple:<actor>:<request> advisory lock as save_simple_widget before dashboard/Page locks; the nested acquisition is reentrant in the transaction.

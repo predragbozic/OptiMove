@@ -1,10 +1,44 @@
+<!-- Implementation evidence, 2026-11-23: v90/v91 registry confirmed; main aa6e765c includes independent v88/v89. Owner confirmed production aa6e765c at 08:13:01 UTC (116 migration rows). Historical 4301851 evidence below remains a dated snapshot. Rehearsal default now uses the confirmed aa6e765c build; an operator can supply a newer owner-confirmed full SHA. -->
 # P1 Pages — refreshed contract and delivery plan
 
-Status: PLAN ONLY, 2026-11-22; owner confirmation required before code.
+Status: ACCEPTED contract (#720); implementation authorized 2026-11-22, with the
+owner-approved reviewer amendments below. These amendments override the original
+single-slot and trigger-disable proposals wherever quoted later in this document.
 Level: **RISKY** (Page model, backfill, access, transactions).
 Inspected main: `a5647dce2867a4a890f1c782dbe7d86b0906a2d7` (#715).
-One focused implementation PR is proposed, on a fresh main branch. This docs PR adds no
-SQL file, table, route, application code or production setting.
+Implementation: ONE RISKY PR from main 83429f28, TWO independently deployable files.
+A: provisional v90 / 202611231000 (Home-compatible schema and legacy bodies).
+B: provisional v91 / 202611231100 (CREATE-only Page writers, ledger and copy).
+Owner confirms both slots by merge order before freeze; v86 is UNUSED, v87/v88/v89
+are other tracks, with exact filename/checksum manifests requested before freeze.
+
+### Owner-approved review amendments (override conflicting mechanics below)
+
+M1: NO trigger disable/enable or session_replication_role. Gate the exact user-trigger
+set/definitions/function-body md5s, including bump_revision and guard_presentation.
+Backfill only page_id; leave all triggers on; compare all old row fields, revision and
+updated_at byte-for-byte. Invalid historic presentation fails closed for a decision.
+
+M2: ON DELETE CASCADE from dashboards to pages, with a Home deletion guard that checks
+whether its parent survives. A direct Home delete is refused; a parent cascade passes.
+Deferred Home-required checks exempt a deleted dashboard. Test unchanged v19 deletion
+with exactly one log row and direct-Home-delete refusal.
+
+M3: ensure_dashboard_home copies NEW.default_filter at creation, including old raw
+clone/template inserts. A persistent DATABASE activation switch starts closed. The
+DB Page writer and Page insert guard refuse a second Page until it is enabled, even
+if routes are accidentally mounted. Enable DB and server only after old binaries stop.
+
+M4: A deploys/postchecks/rolls back alone, with Home-only compatibility bodies. B
+creates new Page writers/ledger/copy and never replaces A bodies. Separate runbooks
+and single-file production orders; B rolls back before A, only if each guard allows.
+
+The LOW needs a recorded-SQL-order test: dashboard -> Page -> widget -> series before
+write, including content/series revision bumps. Home hash/token compatibility is
+proved by the old-build pre-migration request and replay, not source inspection.
+
+The original proposals below are historical where contradicted by these accepted
+amendments; all access, identity, recovery and byte-preservation requirements remain.
 
 ## 1. Confirmed scope and baseline
 
@@ -231,26 +265,7 @@ Cross-dashboard/workspace copy and moves are outside P1.
 
 ## 7. Migration slot and backfill
 
-Request **ONE fresh migration slot** for this coherent schema, compatibility functions,
-Page writers/ledger/copy and constraints. Candidate label is the next free AFTER v87
-(v88 only if the owner confirms it free); nothing is reserved by this plan. The unique
-12-digit prefix comes from the owner. v86/v87 are taken; no v75 or old draft number/prefix
-reuse. If a separate second migration proves necessary, return with its reason/order before
-writing it; do not silently add a slot.
-
-Before SQL: obtain the assigned filename and exact v86/v87 filenames/checksums. Use an
-explicit baseline/allowed-file manifest, not max(version) or wildcards. Require actual
-committed prerequisites including v71/v79/v84/v85. Independent v86/v87 may be recorded or
-absent and in either pre-P1 order only after their contracts confirm no dependency;
-function/trigger drift still aborts. Position data is not a P1 dependency.
-
-Use the runner's transaction; no outer BEGIN/COMMIT in the SQL. lock_timeout=5s, initially
-statement_timeout=30s (prove adequate in rehearsal; larger budget needs review). Acquire
-parent table locks: dashboards then dashboard_widgets, then needed series DDL locks.
-ACCESS EXCLUSIVE on dashboards/widgets lasts until COMMIT: acknowledge the brief read/write
-pause. Widget table first could deadlock an existing dashboard-first writer. Preflight
-quiet-moment block rejects long transactions/lock waits; timeout aborts rather than leaving
-partial work. Measure duration and row counts, do not extrapolate the historic six widgets.
+Use two provisional owner-assigned slots, confirmed again before freeze: A v90 / 202611231000, B v91 / 202611231100. One RISKY PR contains both files, with separate owner deployment orders. A is schema/Home/backfill and compatible bodies; B only creates Page writers, ledger and copy. v86 is unused; v87/v88/v89 belong to other tracks. Their exact recorded filenames/checksums are required for the final manifest; absent is allowed, arbitrary aliases are not. No prior migration is edited.
 
 ### Explicit trigger/body gate, then zero-revision backfill
 
@@ -272,16 +287,9 @@ Also gate EVERY replaced existing function by exact signature and prior body MD5
 old/new body manifests and order. Another track's update stops migration, never gets
 silently overwritten. This is an SQL gate, not only a runbook preflight.
 
-Under the locks, snapshot counts and sorted per-dashboard row digests. Create exactly one
-Home per existing dashboard, exact legacy filter JSON, NULL period. Temporarily disable
-ONLY those explicitly listed user triggers on dashboard_widgets in the same transaction;
-backfill ONLY page_id; re-enable ALL listed triggers before installing reviewed Page-aware
-bodies/new triggers. No session_replication_role, superuser assumption, DISABLE TRIGGER ALL/
-USER or disabled internal/FK trigger. Prove the needed DDL with a non-superuser table-owner
-role equivalent to Supabase postgres, not only a local superuser.
+Under the locks, snapshot counts and sorted per-dashboard row digests. Create one Home per dashboard with exact default_filter and NULL period. Backfill ONLY page_id with every trigger enabled. The existing revision trigger ignores that change and presentation guard revalidates; any rejection aborts. No trigger disable, session_replication_role or superuser assumption. Prove DDL using a non-superuser table owner.
 
-Final SQL assertion: complete expected old+new trigger set enabled 'O', definitions/function
-MD5s equal new manifest, or abort the transaction. A failure also rolls back disable states.
+Final SQL assertion: old+new triggers enabled O and owned function md5s match, or abort.
 Postcheck repeats enabled/hash checks independently. Install Page revision bump paths after
 backfill. Existing widget bytes change ONLY page_id; series and old dashboard/widget
 revisions, timestamps, content, display/presentation and layout remain identical. New Page/
@@ -405,10 +413,7 @@ calculatedValues.js, GPS/position stream file, P2/P3 implementation or multi-var
 ## 11. Confirmation before code
 
 Confirm this complete contract, especially the explicit Home/default legacy projection
-and single-slot deploy/activation boundary. Then assign one free number/prefix and supply
-exact v86/v87 filenames. Actual deployed old build, current production counts and live
-function/trigger hashes remain UNKNOWN pending owner-provided/read-only preflight and
-disposable proof; they are prerequisites, not already established facts.
+and two-step deploy/activation boundary. Final v90/v91 slots and exact optional v87/v88/v89 registry remain pending owner confirmation. Owner evidence received 22 November identifies previous build 4301851f4af750295d12a7f084e646e9881b8890, PostgreSQL 17.6, 4 dashboards / 7 widgets / 7 series. The final quiet-moment preflight must refresh them.
 
 No application tests, database access, migration execution, production change or deploy
 for this docs PR. Only repository source inspection, document checks and git diff --check.
