@@ -81,7 +81,7 @@ export function importTransactionBounds() {
 // One round trip; set_config(..., true) is SET LOCAL.
 // The import outcomes that write a new occasion (gpexeImportWriter.js importResult); "unchanged" and the "*_already_recorded"
 // outcomes point to an occasion that was there before.
-const WRITES_AN_OCCASION = new Set(["created", "corrected", "supplemented", "needs_review", "stale_resend_ignored"]);
+const WRITES_AN_OCCASION = new Set(["created", "corrected", "supplemented", "needs_review", "stale_resend_ignored", "manual_kept", "manual_replaced"]);
 
 export async function setImportTransactionBounds(client) {
   const b = importBounds;
@@ -115,6 +115,9 @@ export const CHANGE_TO_IMPORTED = {
   supplemented: { effect: "adds_values_to_imported_result", newVersionBecomesCurrent: true, message: "GPEXE now has more values for this result; they are added, the existing values stay the same." },
   needs_review: { effect: "conflicting_version_flagged", newVersionBecomesCurrent: false, message: "GPEXE reports different values without a newer report time; they are stored as a conflicting version for review, the current values stay." },
   stale_resend_ignored: { effect: "older_or_manual_version_flagged", newVersionBecomesCurrent: false, message: "The current values are older-dated GPEXE data or a manual correction; the GPEXE version is stored flagged, the current values stay." },
+  // ST-4 (section 8): values entered or corrected on the roster, kept (the default) or replaced by the approver's choice.
+  manual_kept: { effect: "manual_values_kept", newVersionBecomesCurrent: false, message: "Values were entered on the roster for this athlete; they stay, and GPEXE's values are stored flagged." },
+  manual_replaced: { effect: "replaces_manual_values", newVersionBecomesCurrent: true, message: "GPEXE's values replace the values entered or corrected on the roster (those stay in the history)." },
 };
 
 // The acceptance rule for what the importer did to a result that was
@@ -429,7 +432,7 @@ export async function buildCandidatePreview(client, { bundle, ownerTeamId, perfo
 // import itself runs (resolveSessionType; the type row FOR SHARE is the last lock taken before the import's own). It is
 // part of the preview's session summary and so of the hash. `sessionType.refusal` says the choice cannot be used; the
 // caller then writes nothing (the preview returned is the one WITHOUT the choice).
-export async function previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId, excludedAthleteIds = [], activityTypeKey = undefined }) {
+export async function previewLocked(client, { bundle, mapping, ownerTeamId, performedByUserId, excludedAthleteIds = [], activityTypeKey = undefined, replaceManualAthleteIds = [] }) {
   const excluded = new Set(excludedAthleteIds);
   const invalidExclusions = [];
   const activationSet = mapping?.activationSet ?? [];
@@ -534,6 +537,7 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
           ownerTeamId, performedByUserId, mapping,
           athleteIdByGpexeId: new Map(importable.map((p) => [p.gpexeAthleteId, links.get(p.gpexeAthleteId)])),
           batchFilename: `gpexe import team_session:${sessionId}`,
+          replaceManualAthleteIds,
         },
       );
       outcomes = new Map(summary.results.map((r) => [r.externalId, r]));
@@ -597,6 +601,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   const participantById = new Map(plan.participants.map((p) => [p.gpexeAthleteId, p]));
   const specByActivation = new Map(specs.map((spec) => [spec.activationId, spec]));
   const counts = { created: 0, unchanged: 0, supplemented: 0, corrected: 0, needs_review: 0, stale_resend_ignored: 0, already_recorded: 0, skippedValues: 0, athletesNotImported: 0, athletesManualReview: 0, changesToImported: 0 };
+  // ST-4: the two manual outcomes are counted only when they occur, so every other preview (and its hash) is unchanged.
+  const countManual = (outcome) => { counts[outcome] = (counts[outcome] || 0) + 1; };
   const changesToImported = [];
 
   const athletes = [];
@@ -640,7 +646,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
         const previous = before.get(result.externalId) ?? null;
         if (outcome) {
           const bucket = outcome.endsWith("_already_recorded") ? "already_recorded" : outcome;
-          counts[bucket] = (counts[bucket] || 0) + 1;
+          if (bucket === "manual_kept" || bucket === "manual_replaced") countManual(bucket);
+          else counts[bucket] = (counts[bucket] || 0) + 1;
         }
         const atLevel = specs.filter((spec) => spec.levels[result.level]);
         const leftOutHere = plan.leftOut.filter((r) => r.gpexeAthleteId === gpexeAthleteId && r.athleteSessionId === result.athleteSessionId && r.level === result.level);
@@ -660,12 +667,14 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
         });
         // A result imported before that this import would write to: listed
         // on its own, with the values that differ, for acceptChanges.
-        const change = outcome && previous?.currentOccasionId ? changeToImportedRule(outcome) : null;
+        // ST-4: a result that meets roster values is listed even when it was never imported before (a roster entry).
+        const meetsManual = outcome === "manual_kept" || outcome === "manual_replaced";
+        const change = outcome && (previous?.currentOccasionId || meetsManual) ? changeToImportedRule(outcome) : null;
         if (change) {
           changesToImported.push({
             gpexeAthleteId, athleteId, externalId: result.externalId, level: result.level, drillIndex: result.drillIndex,
             outcome, ...change,
-            ...(previous.entryMethod === "manual" ? { manualCorrectionKept: true } : {}),
+            ...(previous?.entryMethod === "manual" && outcome !== "manual_replaced" ? { manualCorrectionKept: true } : {}),
             values: values.filter((v) => v.change !== "same"),
           });
         }
@@ -755,7 +764,8 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
   }
 
   counts.changesToImported = changesToImported.length;
-  const writes = counts.created + counts.supplemented + counts.corrected + counts.needs_review + counts.stale_resend_ignored;
+  const writes = counts.created + counts.supplemented + counts.corrected + counts.needs_review + counts.stale_resend_ignored
+    + (counts.manual_kept || 0) + (counts.manual_replaced || 0);
   const status = blocked ? "blocked" : writes > 0 ? "ready" : "no_changes";
   const preview = {
     version: PREVIEW_VERSION,
@@ -780,6 +790,9 @@ export async function previewLocked(client, { bundle, mapping, ownerTeamId, perf
     unactivatedSourceMetricCount: unactivated.length,
     // 6b-B: an estimate is replaced by a measured value (never blocks, never acceptChanges).
     ...(supersededEstimates.length ? { supersededEstimates } : {}),
+    // ST-4 (section 8): the athletes whose roster values this import meets - entered (entry) or corrected (correction,
+    // restore) - and the choice the preview was computed with (keep, the default, or replace). Present only then.
+    ...(summary?.manualConflicts?.length ? { manualValues: { athletes: summary.manualConflicts } } : {}),
   };
   // Bound to the state the preview was computed against and to the activation
   // set (J17 step 11): the approval recomputes it under the same locks and

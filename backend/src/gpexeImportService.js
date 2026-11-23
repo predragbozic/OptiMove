@@ -2602,6 +2602,27 @@ function checkExclusionAgainstPreview(preview, excluded) {
 // ST-2: the approver's choice of the session type, in its one canonical form: undefined (no choice) or a key in the
 // shape of a session type key, else a 400. Whether the key is a type offered to the team is decided under the locks
 // (409 session_type_not_offered - one answer for an unknown, another club's and an archived type).
+// ST-4 (section 8): the athletes whose roster values the approver replaces with GPEXE's ("Use GPEXE's values"); every
+// other athlete the import meets keeps them (the default). OptiMove athlete ids, sorted, at most 60.
+const MAX_REPLACED_MANUAL = 60;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function canonicalReplaceManual(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MAX_REPLACED_MANUAL || value.some((id) => typeof id !== "string" || !UUID_RE.test(id))) {
+    throw refusal(400, "invalid_manual_choice", `replaceManualAthleteIds must be a list of at most ${MAX_REPLACED_MANUAL} athlete ids.`);
+  }
+  return [...new Set(value.map((id) => id.toLowerCase()))].sort();
+}
+
+// The choice checked against the candidate's own stored preview: only an athlete the preview names under manualValues.
+function checkManualChoiceAgainstPreview(preview, replaced) {
+  if (!replaced.length) return;
+  const named = new Set((preview?.manualValues?.athletes || []).map((a) => String(a.athleteId)));
+  if (replaced.some((id) => !named.has(id))) {
+    throw refusal(400, "invalid_manual_choice", "Only an athlete whose values entered or corrected on the roster this import meets can be given GPEXE's values.");
+  }
+}
+
 export function canonicalChosenSessionType(value) {
   if (value === undefined || value === null) return undefined;
   if (!isSessionTypeKey(value)) throw refusal(400, "invalid_activity_type_key", "activityTypeKey must be the key of a session type.");
@@ -2615,7 +2636,7 @@ function sessionTypeRefusal(code) {
 }
 const SESSION_TYPE_REQUIRED = "Choose the session type before importing this session.";
 
-export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges, expectedClubId = undefined, excludedAthleteIds = undefined, subsetHash = undefined, activityTypeKey = undefined }) {
+export async function approveCandidate(teamId, candidateId, { userId, previewHash, acceptChanges, expectedClubId = undefined, excludedAthleteIds = undefined, subsetHash = undefined, activityTypeKey = undefined, replaceManualAthleteIds = undefined }) {
   if (typeof previewHash !== "string" || !HASH.test(previewHash)) {
     throw refusal(400, "invalid_preview_hash", "previewHash must be the hash of the preview you reviewed.");
   }
@@ -2625,13 +2646,15 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
   // called subsetHash for compatibility). The stored preview_hash stays the hash of the team's suggestion.
   const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
   const chosenType = canonicalChosenSessionType(activityTypeKey);
+  // ST-4: the athletes given GPEXE's values instead of the ones entered or corrected on the roster - a choice too.
+  const replaced = canonicalReplaceManual(replaceManualAthleteIds);
   const subset = excluded.length > 0;
-  const choice = subset || chosenType !== undefined;
+  const choice = subset || chosenType !== undefined || replaced.length > 0;
   if (choice && (typeof subsetHash !== "string" || !HASH.test(subsetHash))) {
-    throw refusal(400, "invalid_subset_hash", "subsetHash must be the hash of the preview of your choice (athletes left out, session type) that you reviewed.");
+    throw refusal(400, "invalid_subset_hash", "subsetHash must be the hash of the preview of your choice (athletes left out, session type, GPEXE's values over roster values) that you reviewed.");
   }
   if (!choice && subsetHash !== undefined && subsetHash !== null) {
-    throw refusal(400, "subset_hash_without_exclusion", "subsetHash is only sent together with a choice (excludedAthleteIds or activityTypeKey).");
+    throw refusal(400, "subset_hash_without_exclusion", "subsetHash is only sent together with a choice (excludedAthleteIds, activityTypeKey or replaceManualAthleteIds).");
   }
   if (acceptChanges !== undefined && typeof acceptChanges !== "boolean") {
     throw refusal(400, "invalid_accept_changes", "acceptChanges must be true or false.");
@@ -2702,6 +2725,7 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // ST-2: a session without a decided type is imported only with the approver's choice. Decided again under the locks.
     if (sessionTypeRequired(row.preview) && chosenType === undefined) throw refusal(409, "session_type_required", SESSION_TYPE_REQUIRED);
     checkExclusionAgainstPreview(row.preview, excluded);
+    checkManualChoiceAgainstPreview(row.preview, replaced);
     const changesToImported = row.preview?.changesToImported?.length ?? 0;
     if (changesToImported > 0 && acceptChanges !== true) {
       throw refusal(409, "changes_need_acceptance",
@@ -2772,7 +2796,7 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     // Steps 7-11: the plan, the classification and the import, inside the
     // preview (previewLocked); a block there is a blocked preview, refused at
     // step 12 below as a changed preview.
-    const fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded, activityTypeKey: chosenType });
+    const fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded, activityTypeKey: chosenType, replaceManualAthleteIds: replaced });
     if (approvalObserver) await approvalObserver({ client, candidateId, freshPreviewHash: fresh.previewHash });
     // ST-2: the chosen type against the types offered to the team NOW, decided inside previewLocked under the type row's
     // FOR SHARE (an archive waits for this transaction). A stale choice writes nothing and stores nothing.
@@ -2793,7 +2817,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
           || (fresh.preview.changesToImported?.length ?? 0) !== changesToImported) {
         // The recomputed choice preview travels in the body only (the route projects it for the audience); it is never stored.
         throw previewChanged(teamId, candidateId, "What this import would do has changed since the preview was made; nothing was imported. Review the candidate again.",
-          { subsetPreview: fresh.preview, subsetHash: fresh.previewHash, excludedAthleteIds: excluded, ...(chosenType !== undefined ? { activityTypeKey: chosenType } : {}) });
+          { subsetPreview: fresh.preview, subsetHash: fresh.previewHash, excludedAthleteIds: excluded, ...(chosenType !== undefined ? { activityTypeKey: chosenType } : {}),
+            ...(replaced.length ? { replaceManualAthleteIds: replaced } : {}) });
       }
     } else if (fresh.previewHash !== previewHash || fresh.preview.status !== "ready" || !fresh.summary) {
       refreshed = { expectedPreviewHash: row.preview_hash, preview: fresh.preview, previewHash: fresh.previewHash };
@@ -2811,11 +2836,12 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       `insert into training_load.gpexe_import_approvals
          (candidate_id, owner_team_id, gpexe_team_session_id, bundle_hash, preview_hash, approved_by_user_id, approval_basis,
           approver_grant_id, changes_to_imported, changes_accepted, metric_event_id, activity_id, import_batch_id, import_counts,
-          excluded_athlete_ids, subset_hash)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning id, approved_at`,
+          excluded_athlete_ids, subset_hash, replaced_manual_athlete_ids)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning id, approved_at`,
       [candidateId, teamId, row.gpexe_team_session_id, row.bundle_hash, previewHash, userId, right.basis, right.grant_id,
         changesToImported, changesToImported > 0, summary.eventId, summary.activityId, summary.importBatchId, summary.counts,
-        excluded, subset ? subsetHash : null],
+        // ST-4 (v88's pair rule): the choice hash is stored with athletes left out or roster values replaced.
+        excluded, subset || replaced.length ? subsetHash : null, replaced],
     )).rows[0];
     await client.query(
       `update training_load.gpexe_import_candidates
@@ -2838,7 +2864,8 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
     const result = {
       outcome: "imported",
       commitConfirmation: "confirmed",
-      approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported, excludedAthleteIds: excluded, subsetHash: subset ? subsetHash : null },
+      approval: { id: approval.id, approvedAt: approval.approved_at, basis: right.basis, changesAccepted: changesToImported, excludedAthleteIds: excluded, subsetHash: subset || replaced.length ? subsetHash : null,
+        ...(replaced.length ? { replacedManualAthleteIds: replaced } : {}) },
       import: {
         eventId: summary.eventId, activityId: summary.activityId, importBatchId: summary.importBatchId, counts: summary.counts,
         // ST-2: the session type of the imported session and where it came from (choice, team_suggestion, imported_session).
@@ -3163,10 +3190,11 @@ async function recomputeCandidatePreviewOnce(teamId, candidateId, { userId, expe
 //
 // ST-2: the same route previews a chosen session type (activityTypeKey), alone or together with athletes left out; the
 // hash it answers (subsetHash) is the hash of the preview with every choice of the body.
-export async function previewCandidateSubset(teamId, candidateId, { userId, excludedAthleteIds, activityTypeKey = undefined, expectedClubId = undefined }) {
+export async function previewCandidateSubset(teamId, candidateId, { userId, excludedAthleteIds, activityTypeKey = undefined, replaceManualAthleteIds = undefined, expectedClubId = undefined }) {
   const excluded = canonicalExcludedAthleteIds(excludedAthleteIds);
   const chosenType = canonicalChosenSessionType(activityTypeKey);
-  if (!excluded.length && chosenType === undefined) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must name at least one athlete to leave out.");
+  const replaced = canonicalReplaceManual(replaceManualAthleteIds);
+  if (!excluded.length && chosenType === undefined && !replaced.length) throw refusal(400, "invalid_excluded_athlete", "excludedAthleteIds must name at least one athlete to leave out.");
   // Its own in-flight set (a member without the approver right must not hold the slot of A1's recompute), and the interval slot is
   // taken only once the approver right is confirmed (a refused request does not use it up).
   if (recomputeInFlight.has(String(teamId)) || subsetInFlight.has(String(teamId))) {
@@ -3193,14 +3221,14 @@ export async function previewCandidateSubset(teamId, candidateId, { userId, excl
     takeSlot();
   };
   try {
-    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, chosenType, expectedClubId, takeSlot: holdSlot });
+    return await previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, chosenType, replaced, expectedClubId, takeSlot: holdSlot });
   } finally {
     if (held) subsetInFlight.delete(String(teamId));
   }
 }
 
 const subsetInFlight = new Set();
-async function previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, chosenType, expectedClubId, takeSlot }) {
+async function previewCandidateSubsetOnce(teamId, candidateId, { userId, excluded, chosenType, replaced = [], expectedClubId, takeSlot }) {
   const client = await pool.connect();
   let sessionLost = false;
   const onClientError = () => { sessionLost = true; };
@@ -3236,6 +3264,7 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
       throw refusal(409, "snapshot_expired_check_again", "The GPEXE data of this candidate has expired; press \"Check now\" again.");
     }
     checkExclusionAgainstPreview(row.preview, excluded);
+    checkManualChoiceAgainstPreview(row.preview, replaced);
 
     await lockTeamForImport(client, teamId);
     await lockApprovalTeam(client, teamId, expectedClubId);
@@ -3267,7 +3296,7 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
         }
         throw error;
       }
-      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded, activityTypeKey: chosenType });
+      fresh = await previewLocked(client, { bundle: row.raw_bundle, mapping, ownerTeamId: teamId, performedByUserId: userId, excludedAthleteIds: excluded, activityTypeKey: chosenType, replaceManualAthleteIds: replaced });
     }
     // ST-2: a chosen type that is not offered to the team now (or a session that keeps its own) is refused with its own code.
     if (fresh.sessionType?.refusal) throw sessionTypeRefusal(fresh.sessionType.refusal);
@@ -3289,6 +3318,7 @@ async function previewCandidateSubsetOnce(teamId, candidateId, { userId, exclude
       excludedAthleteIds: excluded,
       // The chosen session type as sent (undefined = no choice); the preview's session names the type the import writes.
       ...(chosenType !== undefined ? { activityTypeKey: chosenType } : {}),
+      ...(replaced.length ? { replaceManualAthleteIds: replaced } : {}),
       // The candidate's stored full hash: what the approval sends as previewHash (the route names it).
       fullHash: row.preview_hash,
       subsetHash: fresh.previewHash,

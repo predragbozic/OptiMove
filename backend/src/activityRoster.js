@@ -490,6 +490,8 @@ export async function loadRosterSnapshot(client, canonicalId) {
       currentDecisions: athleteDecisions,
       occasionIds: [...new Set(athleteFacts.map((f) => f.occasionId).filter(Boolean))],
       measured: athleteFacts.some((f) => MEASURED_METHODS.has(f.entryMethod) || (f.manualKind && f.sourceIdentityId)),
+      // ST-4: values entered on the roster (an entry, no source record) - a state is set only after they are removed.
+      rosterEntry: athleteFacts.some((f) => f.entryMethod === "manual" && f.manualKind && !f.sourceIdentityId),
     };
   }).sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")) || a.athleteId.localeCompare(b.athleteId));
 
@@ -532,7 +534,7 @@ export async function loadRosterSnapshot(client, canonicalId) {
 }
 
 // The public shape of one roster athlete (internal fields removed).
-export function publicAthlete({ decisionIds, currentDecisions, occasionIds, measured, ...rest }) {
+export function publicAthlete({ decisionIds, currentDecisions, occasionIds, measured, rosterEntry, ...rest }) {
   return rest;
 }
 
