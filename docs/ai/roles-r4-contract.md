@@ -774,3 +774,33 @@ no migration beyond vNN. MANAGE is two to three times that, plus the migrations 
 - The MANAGE steps and their database guards (R5, R6, R6a, R7 of the plan, in the order of O7).
 - The padlock screen (Q2), the private workspace's licence (Q9), the account target rule (plan 2.1 rule 6).
 - Any change to `requireCoach`, `computeCapabilities`, `managedTeamIds` or the old role tables.
+
+## 16. As built: R4-1 (vNN = v92, `202611241000`)
+
+Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook `docs/runbooks/roles-layers-v92.md`.
+
+- **What is built:** sections 7.1-7.5 and 7.7 in the database (the eight tables, their guards, the twin with steps 6 and
+  8, `user_holds_role_items` against the effective set, rule 7 inside a club and across clubs, the widened request record,
+  the old tables' `updated_at` and `role_ended` triggers, the seed of 4.1); the lock of 7.6 as
+  `public.lock_club_ceiling(uuid[], mode)` / `public.permission_club_lock_held(uuid, mode)` and the Node helper
+  `backend/src/clubCeilingLock.js` (namespace 891234593); section 8 (`ROLE_PERMISSIONS_SQL` reads
+  `public.permission_user_holdings`, the one definition of a holding's effective words, and the closed modules in the
+  same statement; `can()` step 6); `ENFORCED_PERMISSIONS` (= R2's seven words with their gate files) and
+  `STORABLE_PERMISSIONS` (its database twin `permission_word_honoured`, 18 words); the R2 service takes the club lock
+  first on every club-scope write; the standing rule in `.claude/rules/backend-security.md` with its test.
+- **Not built in R4-1 (R4-3, with the writers):** the routes of section 9 and the service side of 7.2's `default_follow`
+  (the database refuses at COMMIT a default change that would break rule 7 in a club - test 16 of
+  `roles-r4-v92.test.mjs` - but no route yet adds the word to the clubs' Club admin versions; no club version can exist
+  before R4-3 anyway). `permission_actor_holds` is not replaced: it delegates to the two replaced functions.
+- **Decisions taken while building (the *Rukovodilac* of OptiMove, 2026-11-23):**
+  1. *Copy as a new role* keeps R2's behaviour: only checked words are copied; the seeded view words are dropped and named
+     in the answer's `dropped` list with the reason `not_available_yet` (option B).
+  2. An unchecked word is never added to or taken away from any role through the R2 API - basic system roles included
+     (`409 permission_not_available_yet`); the seed is the only writer of unchecked words on the basic roles.
+- **Found while building:** the old tables' `updated_at` trigger reads `revoked_at` through `to_jsonb`, because the
+  minimal test scaffolds' copies of `user_club_roles` / `user_team_roles` have no such column; production's have it.
+- **Evidence:** `backend/tests/roles-r4-v92.test.mjs` (both orders against v93, seed, old-vs-new of the twin, the truth
+  table in `can()` and the twin, every guard, the lock, races, H2, H4, the rollback), `roles-r4-api.test.mjs`,
+  `roles-r4-view-seed-proof.test.mjs` (M4: every seeded row proven on its module's read route),
+  `roles-r4-checked-gates.test.mjs`, `roles-layers-v92-rehearsal-guards.test.mjs`; the rehearsal
+  (`backend/scripts/roles-layers-v92-rehearsal.mjs`) passed on PostgreSQL 16; PostgreSQL 17 is the owner's run.
