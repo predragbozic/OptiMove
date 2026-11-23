@@ -4,7 +4,7 @@ set local lock_timeout='5s';
 set local statement_timeout='30s';
 do $guard$ begin
  if not pg_try_advisory_xact_lock(822026) then raise exception 'v91 rollback refused: migrator active' using errcode='23514';end if;
- if (select checksum from public.schema_migrations where migration_name='migrations_v2/202611231100_training_load_v91_dashboard_page_writers.sql') is distinct from 'e3ffc27c03451495146cbbba8b0ae71f8063fb634c61b15baeb5e70d02c30d9f' then raise exception 'v91 rollback refused: migration checksum mismatch' using errcode='23514';end if;
+ if (select checksum from public.schema_migrations where migration_name='migrations_v2/202611231100_training_load_v91_dashboard_page_writers.sql') is distinct from '1da5706c418c0f3262d6a88689e8d1355247a97d7d31bad4a82a59d396c52247' then raise exception 'v91 rollback refused: migration checksum mismatch' using errcode='23514';end if;
  if not exists(select 1 from public.schema_migrations where migration_name='migrations_v2/202611231100_training_load_v91_dashboard_page_writers.sql') then raise exception 'v91 rollback refused: not recorded' using errcode='23514';end if;
  if exists(select 1 from public.schema_migrations where migration_name<>'migrations_v2/202611231100_training_load_v91_dashboard_page_writers.sql' and applied_at>=(select applied_at from public.schema_migrations where migration_name='migrations_v2/202611231100_training_load_v91_dashboard_page_writers.sql')) then raise exception 'v91 rollback refused: later migration' using errcode='23514';end if;
 end $guard$;
@@ -33,7 +33,7 @@ begin
  if (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.copy_dashboard_page_widget(uuid,uuid,jsonb,uuid,text,uuid,uuid,integer,uuid,integer,timestamp with time zone)')) is distinct from '75953d6b01271f1707c1f28c1a7c0632' then raise exception 'v91 rollback refused: function body changed' using errcode='23514';end if;
  if (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.guard_dashboard_page_requests()')) is distinct from 'cf603f632f6bb7ebb30e7fe932097e63' then raise exception 'v91 rollback refused: function body changed' using errcode='23514';end if;
  if (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.mutate_dashboard_page(uuid,uuid,jsonb,uuid,text,integer,text,uuid,jsonb,timestamp with time zone)')) is distinct from 'e5df8b526678889d07fb1082addbfa43' then raise exception 'v91 rollback refused: function body changed' using errcode='23514';end if;
- if (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.save_simple_page_widget(uuid,integer,uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,jsonb)')) is distinct from 'd0491909df03cb5f614f65d89438d014' then raise exception 'v91 rollback refused: function body changed' using errcode='23514';end if;
+ if (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.save_simple_page_widget(uuid,integer,uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,jsonb)')) is distinct from '545aa60b5d53f0df2d6a9f4c39d5150b' then raise exception 'v91 rollback refused: function body changed' using errcode='23514';end if;
  if (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.write_dashboard_page_widget(uuid,uuid,integer,text,uuid,uuid,uuid,jsonb)')) is distinct from '7c5843d26519f22947a421441452e691' then raise exception 'v91 rollback refused: function body changed' using errcode='23514';end if;
 end
 $current_b$;

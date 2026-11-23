@@ -185,3 +185,26 @@ for(const scenario of [
  await apply(a);await apply(b);
  }finally{await target.drop()}
 });
+
+test('v90 rollback independently refuses a non-Home Page even with legacy-looking name and position',async()=>{
+ const other=await createPagesDatabase({through:'202611231000',label:'pages_a_nonhome'}),q=other.client;
+ try{
+  const actor=(await q.query("insert into public.users(email,first_name,last_name,full_name,display_name) values('a-nonhome@test.invalid','Page','Guard','Page Guard','Page Guard') returning id")).rows[0].id;
+  const parent=(await q.query("insert into training_load.dashboards(name,owner_scope,owner_user_id,data_workspace_type,created_by_user_id) values('Guard','user',$1,'private_coach',$1) returning id",[actor])).rows[0].id;
+  // Isolate the rollback's own not-is_home predicate in this disposable transaction:
+  // remove only name uniqueness and leave position uniqueness deferred until COMMIT.
+  // No widget refers to the extra Page; the valid Home and defaults still exist.
+  await q.query('begin');await q.query('drop index training_load.dashboard_pages_name_unique');
+  await q.query('update training_load.dashboard_pages_activation set enabled=true');
+  await q.query("insert into training_load.dashboard_pages(dashboard_id,name,position,is_home) values($1,'Home',0,false)",[parent]);
+  await q.query('update training_load.dashboard_pages_activation set enabled=false');
+  const rollback=fs.readFileSync(new URL('../../docs/runbooks/dashboard-pages-v90-rollback.sql',import.meta.url),'utf8');
+  // Execute the exact state guard from the real rollback, before its DDL.
+  // This isolates the guard from deferred duplicate-position events in the fixture.
+  const guards=[...rollback.matchAll(/do \$guard\$[\s\S]*?\$guard\$;/g)];
+  assert.equal(guards.length,2);
+  await assert.rejects(q.query(guards[1][0]),e=>e.code==='23514'&&/Page state/.test(e.message));
+  await q.query('rollback');
+  assert.equal((await q.query('select count(*)::int n from training_load.dashboard_pages where not is_home')).rows[0].n,0);
+ }finally{await q.query('rollback');await other.drop()}
+});

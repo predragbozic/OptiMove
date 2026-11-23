@@ -20,7 +20,7 @@
     "training_load.copy_dashboard_page_widget(uuid,uuid,jsonb,uuid,text,uuid,uuid,integer,uuid,integer,timestamp with time zone)": "75953d6b01271f1707c1f28c1a7c0632",
     "training_load.guard_dashboard_page_requests()": "cf603f632f6bb7ebb30e7fe932097e63",
     "training_load.mutate_dashboard_page(uuid,uuid,jsonb,uuid,text,integer,text,uuid,jsonb,timestamp with time zone)": "e5df8b526678889d07fb1082addbfa43",
-    "training_load.save_simple_page_widget(uuid,integer,uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,jsonb)": "d0491909df03cb5f614f65d89438d014",
+    "training_load.save_simple_page_widget(uuid,integer,uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb,jsonb)": "545aa60b5d53f0df2d6a9f4c39d5150b",
     "training_load.write_dashboard_page_widget(uuid,uuid,integer,text,uuid,uuid,uuid,jsonb)": "7c5843d26519f22947a421441452e691"
   }
 }
