@@ -195,7 +195,8 @@ test (mockup 07). Each mark is only a mark: no number and no state.
   the order time > title > marks. The box's label and tooltip always say "Holds ...", where the marks are left out too.
   By the box's own width:
   - **A box of several lines:** the time, then "Title... marks" (the marks at the end of the title's line).
-  - **A one-line box** (under 45 minutes): "10:00 Title... marks". Under 200 px it shows only its start time; under
+  - **A one-line box** (under 45 minutes): "10:00 Title... marks". Under 200 px it shows only its start time; a
+    box that holds something also drops its type's icon (the colour stripe stays), so the title keeps its room; under
     140 px it leaves the marks out, as does a two-line box (45 to 59 minutes).
   - **61 to 110 px:** only a box of 75 minutes or more keeps the marks, on a line of their own.
   - **60 px or less** (the smaller type): the marks on a line of their own at 12 px, from an hour up.

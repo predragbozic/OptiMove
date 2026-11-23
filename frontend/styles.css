@@ -21595,10 +21595,15 @@ body.exercise-header-pinned #viewToolbar {
 }
 
 /* H4 in a one-line box (under 45 minutes): "10:00 Title... marks". Under 200 px the end time gives its room to the
-   title; under 140 px the marks go too (and those of a two-line box, 45 to 59 minutes), so the time and the title keep
-   their lines (label and tooltip say "Holds ..."). */
+   title, and so does the type's icon in a box that holds something (the stripe keeps the colour; review MEDIUM:
+   at 143 px the icon left the title 12 px, without it 36 px). Under 140 px the marks go too (and those of a two-line
+   box, 45 to 59 minutes), so the time and the title keep their lines (label and tooltip say "Holds ..."). */
 @container (max-width: 200px) {
   .cc-tg-box.is-short .cc-card-when-end {
+    display: none;
+  }
+
+  .cc-tg-box.is-short:has(.cc-card-marks) .cc-card-icon {
     display: none;
   }
 }
