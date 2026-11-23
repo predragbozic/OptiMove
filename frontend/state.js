@@ -169,6 +169,8 @@ export const emptyCentralCalendarState = () => ({
   linkWrite: null,
   linkMessage: null,
   linkRefused: new Map(),
+  // K5-3: the lone cards whose "Add to the event?" the coach answered with Leave (their keys; in memory only).
+  addToEventLeft: new Set(),
   alignStep: null,
   alignBlocked: null,
   // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,

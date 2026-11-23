@@ -8,12 +8,18 @@ import {
 import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
 import { renderK2c3FormBandHtml, renderK3PanelHtml, renderK3SheetHtml } from "./central-calendar-k3-view.js";
 import {
+  CENTRAL_CALENDAR_ADD_TO_EVENT_HINT,
+  CENTRAL_CALENDAR_ADD_TO_EVENT_NONE,
   CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED,
   CENTRAL_CALENDAR_LINK_EMPTY,
   CENTRAL_CALENDAR_LINKED_HINT,
   CENTRAL_CALENDAR_LINKS_LOAD_FAILED,
   CENTRAL_CALENDAR_ORPHANED_META,
   centralCalendarActivityLinksOf,
+  centralCalendarAddToEventKind,
+  centralCalendarAddToEventName,
+  centralCalendarAddToEventOffers,
+  centralCalendarAddToEventQuestion,
   centralCalendarAlignLine,
   centralCalendarEventLinkable,
   centralCalendarEventsForPlanned,
@@ -1377,6 +1383,46 @@ function renderPlannedLinksHtml(item, cal, pending, linkEntries = []) {
   return `<section class="cc-panel-links" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}><h4 class="cc-panel-subtitle" id="ccLinksTitle">Link to an event</h4>${feedback}${body}${partialHtml}</section>`;
 }
 
+// K5-3 (docs/ai/central-calendar-k5-plan.md, "Add to the event?"): a lone activity's or RPE request's panel asks
+// whether to add it to a training or match of its day (central-calendar-links.js has the rule). One event: the
+// question with [Add] and [Not now]; several: a row per event with its Add, then Not now. Never sent by itself; Not now
+// sends nothing and hides the question for this card until the page is loaded again. A command of this panel whose
+// result is not confirmed keeps its Check result here even after Not now (the owner's word, 2026-11-23).
+function renderAddToEventHtml(item, cal, pending) {
+  const what = centralCalendarAddToEventKind(item);
+  if (!what) return "";
+  const feedback = linkFeedbackHtml(cal, item.key, pending);
+  const left = cal.addToEventLeft?.has?.(item.key) === true;
+  const offers = left ? [] : centralCalendarAddToEventOffers(cal.data, item, cal.linkRefused);
+  if (!offers.length) {
+    if (!feedback) return "";
+    return `<section class="cc-panel-links cc-add-event" aria-labelledby="ccLinksTitle"><h4 class="cc-panel-subtitle" id="ccLinksTitle" tabindex="-1">Add to an event</h4>${feedback}</section>`;
+  }
+  const busy = Boolean(cal.linkWrite);
+  const off = busy || Boolean(pending);
+  const act = what === "activity" ? "add-activity" : "add-rpe";
+  const meta = (event) => [centralCalendarWhenLabel(event), eventKindWord(event)].filter(Boolean).join(" · ");
+  const addable = offers.some((offer) => !offer.refused);
+  const leave = `<button type="button" class="plain-button cc-panel-button cc-link-button" data-action="central-calendar-add-leave"${off ? " disabled" : ""}>${addable ? "Not now" : "Hide"}</button>`;
+  let body;
+  if (offers.length === 1 && !offers[0].refused) {
+    const { item: event } = offers[0];
+    body = `<p class="cc-add-question">${escapeHtml(centralCalendarAddToEventQuestion(event))}</p>
+      <p class="cc-link-meta">${escapeHtml(meta(event))}</p>
+      <div class="cc-add-buttons">${linkButtonHtml({ act, label: "Add", attrs: `data-event-key="${escapeAttr(event.key)}"`, busy: busyOn(cal, act, "eventKey", event.key), off, primary: true, aria: `Add to ${centralCalendarAddToEventName(event)}` })}${leave}</div>`;
+  } else {
+    body = `<p class="cc-add-question">${addable ? "Add to one of these events?" : escapeHtml(CENTRAL_CALENDAR_ADD_TO_EVENT_NONE)}</p><ul class="cc-link-list" role="list">${offers.map(({ item: event, refused }) => {
+      const button = linkButtonHtml({ act, label: "Add", attrs: `data-event-key="${escapeAttr(event.key)}"`, busy: busyOn(cal, act, "eventKey", event.key), off, aria: `Add to ${centralCalendarAddToEventName(event)}` });
+      return linkRowHtml(centralCalendarTitle(event), meta(event), button, refused);
+    }).join("")}</ul><div class="cc-add-buttons">${leave}</div>`;
+  }
+  return `<section class="cc-panel-links cc-add-event" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}>
+      <h4 class="cc-panel-subtitle" id="ccLinksTitle" tabindex="-1">Add to an event</h4>
+      ${feedback}${body}
+      ${addable ? `<p class="cc-panel-note cc-link-hint">${escapeHtml(CENTRAL_CALENDAR_ADD_TO_EVENT_HINT[what])}</p>` : ""}
+    </section>`;
+}
+
 // ---------------------------------------------------------------------------
 // K5-1 (central-calendar-k5-12-contract.md 1.2): *Go there* - each panel's way to where its work is done. A button
 // that leaves the calendar carries a trailing arrow (Q5); the openers record the calendar's place first, so Back
@@ -1496,6 +1542,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       ${questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : ""}
       ${renderEventActionsHtml(item, { locked: linksLocked })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
+      ${item.kind === "activity" || item.kind === "external" ? renderAddToEventHtml(item, cal, pending) : ""}
       ${item.kind === "event" ? "" : renderGoThereHtml(item)}
       ${renderCentralCalendarSeeEachHtml(cal, item)}
       <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`;
