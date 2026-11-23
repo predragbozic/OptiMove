@@ -1263,9 +1263,12 @@ $$ language plpgsql set search_path = pg_catalog, public;
 -- ===========================================================================
 -- BEFORE UPDATE: a change of is_active or revoked_at always moves updated_at (a raw writer that flips is_active
 -- without touching it included), so a custom bound to the row's updated_at dies with any revoke or re-grant.
+-- revoked_at is read through to_jsonb, so a database whose copy of these tables has no such column (the minimal test
+-- scaffolds) is served by the same body.
 create function public.permission_old_role_row_version() returns trigger as $$
 begin
-  if (new.is_active is distinct from old.is_active or new.revoked_at is distinct from old.revoked_at)
+  if (new.is_active is distinct from old.is_active
+      or (to_jsonb(new) -> 'revoked_at') is distinct from (to_jsonb(old) -> 'revoked_at'))
      and new.updated_at is not distinct from old.updated_at then
     new.updated_at := clock_timestamp();
   end if;

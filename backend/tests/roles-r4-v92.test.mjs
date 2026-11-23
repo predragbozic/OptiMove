@@ -604,3 +604,43 @@ test("15. races without 40P01: two club-version writers of different roles in on
   } finally { await writer.end(); }
   assert.equal((await one(`select end_kind from public.permission_custom_roles where id = $1`, [custom])).end_kind, "role_ended");
 });
+
+test("16. H4 at the database: a default change that leaves a club's own Club admin version short of a word the club's following roles now hold is refused at COMMIT", async () => {
+  const w = await world();
+  // A non-basic system role made by a platform admin, with org.view only.
+  const analyst = await asActor(db.url, w.pa, async (c) => {
+    const id = (await c.query(`insert into public.permission_roles (owner_scope, name, assignable_club, created_by_user_id) values ('system', $1, true, $2) returning id`, [`Analyst ${crypto.randomBytes(3).toString("hex")}`, w.pa])).rows[0].id;
+    await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'org.view', $2)`, [id, w.pa]);
+    await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, items_added) values ($1, 1, 'create', $2, 'platform_admin', '{org.view}')`, [id, w.pa]);
+    return id;
+  });
+  // Club w gives up calendar.view: its Team coach version, then its own Club admin version.
+  await makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["calendar.view"] });
+  await makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["calendar.view"] });
+  // The platform admin adds calendar.view to the default Analyst: v84's rule holds (the default Club admin has it), but
+  // club w follows the default Analyst while its own Club admin version lacks the word.
+  const addToAnalyst = () => asActor(db.url, w.pa, async (c) => {
+    await c.query(`update public.permission_roles set revision = revision + 1 where id = $1`, [analyst]);
+    await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, 'calendar.view', $2)`, [analyst, w.pa]);
+    await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_added) values ($1, 2, 'change', $2, 'platform_admin', 'x', '{calendar.view}')`, [analyst, w.pa]);
+  });
+  await refused(addToAnalyst(), "23514", /a club's Club admin would lack/);
+  assert.equal((await one(`select count(*)::int as n from public.permission_role_items where role_id = $1`, [analyst])).n, 1);
+  // Archived, so later tests of this database meet the catalog they expect.
+  await asActor(db.url, w.pa, async (c) => {
+    await c.query(`update public.permission_roles set revision = revision + 1, archived_at = now(), archived_by_user_id = $2 where id = $1`, [analyst, w.pa]);
+    await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason) values ($1, 2, 'archive', $2, 'platform_admin', 'done')`, [analyst, w.pa]);
+  });
+});
+
+test("17. dominance compares the effective set of the role in the club (3.2): user_holds_role_items reads the club's version, not permission_role_items", async () => {
+  const w = await world();
+  // A platform admin narrows this club's admin (a custom of Club admin without athletes.remove) and the club's Team coach.
+  await makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] });
+  await makeCustom(w.pa, w.admin, ROLE_IDS.club_admin, "club", w.club, w.club, { holding: { table: "user_club_roles", rowId: await clubRow(w.admin, w.club) }, remove: ["athletes.remove"] });
+  assert.equal(await twin(w.admin, "athletes.remove", "club", w.club), false);
+  // The admin holds every item of Team coach AS THE CLUB HAS IT, not of the default (which holds athletes.remove).
+  assert.equal((await one(`select public.user_holds_role_items($1, $2, 'team', $3) as ok`, [w.admin, ROLE_IDS.team_coach, w.team])).ok, true);
+  const other = await world();
+  assert.equal((await one(`select public.user_holds_role_items($1, $2, 'team', $3) as ok`, [w.admin, ROLE_IDS.team_coach, other.team])).ok, false, "another club follows the default");
+});
