@@ -8,6 +8,7 @@ const args = { req, dataWorkspace: workspace, dashboardId: id(2), metricRef: { k
 function setup({ denied = false, mismatch = false, dashboard = target(), item = metric() } = {}) {
   const calls = [];
   const query = async (sql, params) => { calls.push({ sql, params });
+      if(sql.includes('dashboard_chart_shapes_available'))return {rows:[{supported:false}]};
     if (sql.startsWith('select * from training_load.dashboards')) return { rows: dashboard ? [dashboard] : [] };
     if (sql.includes('from training_load.dashboard_widget_types')) return { rows: [{ key: 'table', is_active: true }] };
     if (sql.includes('from training_load.dashboard_builtin_series')) return { rows: builtins() };

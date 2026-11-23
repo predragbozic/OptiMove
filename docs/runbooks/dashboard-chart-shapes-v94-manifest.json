@@ -1,0 +1,31 @@
+{
+  "file": "migrations_v2/202611261000_training_load_v94_chart_shapes.sql",
+  "sha256": "2c018c784ace8edc1cb0c9b729d5e0143166d813477899f678060d6c6ac304cb",
+  "previous": {
+    "valid": "d547e14a8a7021702769f4e17b6d94e8",
+    "compatible": "c0a9f476ac4bb0f0e7831fbc7014cc95"
+  },
+  "previousCopy": {
+    "signature": "training_load.copy_dashboard_page_widget(uuid,uuid,jsonb,uuid,text,uuid,uuid,integer,uuid,integer,timestamp with time zone)",
+    "md5": "75953d6b01271f1707c1f28c1a7c0632"
+  },
+  "previousSave": {
+    "signature": "training_load.save_simple_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb)",
+    "md5": "33c8f87b3104a723f4c4d140d8922b43"
+  },
+  "bodies": {
+    "training_load.dashboard_chart_shape_legacy_valid(jsonb)": "d547e14a8a7021702769f4e17b6d94e8",
+    "training_load.dashboard_chart_shape_legacy_compatible(jsonb,text,text)": "c0a9f476ac4bb0f0e7831fbc7014cc95",
+    "training_load.dashboard_chart_shape_valid(jsonb)": "cfe70c9e017b204d8381f0fa40e4969c",
+    "training_load.dashboard_presentation_valid(jsonb)": "9ce11aa017244998674f357eac2d8c89",
+    "training_load.dashboard_presentation_assert_compatible(jsonb,text,text)": "439d80f9e60bbf32479afdf58f102f4b",
+    "training_load.dashboard_chart_shape_usage_guard()": "fb9fd790d161dd9a04f7f3fa551f8650",
+    "training_load.dashboard_chart_shape_touch()": "88d5e23fb9449bc6045487898f03b895",
+    "training_load.dashboard_chart_shape_assert(uuid)": "2df4cdfe2f57e746f07a3744b828cf41",
+    "training_load.dashboard_chart_shape_deferred()": "9630e50eda4624e337bc233bc8b371d3",
+    "training_load.dashboard_chart_shapes_available()": "559708f8b992b9360ec25793f4428360",
+    "training_load.dashboard_chart_shape_remap(jsonb,jsonb)": "ac6d865af34dcbfa510c66b0f1feb2da",
+    "training_load.copy_dashboard_page_widget(uuid,uuid,jsonb,uuid,text,uuid,uuid,integer,uuid,integer,timestamp with time zone)": "7bc62841d5aa09e227538c83ced8ae7a",
+    "training_load.save_simple_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb)": "a710351a0c727411e07cc3b2eba782cd"
+  }
+}

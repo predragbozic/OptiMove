@@ -35,3 +35,8 @@ test('heatmap and boxplot consume server cells and summaries without client aggr
 test('empty or unavailable projections never create an invented chart',()=>{
  assert.equal(galleryChartPlot({...base,status:'unavailable'},labels),null);assert.equal(galleryChartPlot({...base,groups:[]},labels),null);
 });
+
+test('gallery legend uses the roster comparator and the scatter labels fit inside their axes',()=>{
+ const data={...base,kind:'scatter',series:[...base.series,{seriesId:'b',unit:'min'}],groups:[{athleteId:'z',bucketKey:id,values:[1,2]},{athleteId:'a',bucketKey:id,values:[3,4]}]};
+ const plot=galleryChartPlot(data,{...labels,athleteLabel:key=>key==='z'?'Zora':'Ana'});assert.deepEqual(plot.option.series.map(s=>s.name),['Ana','Zora']);assert.equal(plot.option.xAxis.nameLocation,'middle');assert.equal(plot.option.yAxis.nameLocation,'middle');
+});

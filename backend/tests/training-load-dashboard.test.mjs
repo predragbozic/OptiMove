@@ -47,6 +47,7 @@ const MIGRATIONS = [
   "202611201300_roles_v84_permission_roles.sql",
   "202611231000_training_load_v90_dashboard_pages_home.sql",
   "202611231100_training_load_v91_dashboard_page_writers.sql",
+  "202611261000_training_load_v94_chart_shapes.sql",
 ];
 const BASE_MIGRATIONS = MIGRATIONS.slice(0, 14); // everything BEFORE the dashboard migrations — used by the upgrade-safety test
 const DASHBOARD_MIGRATIONS = MIGRATIONS.slice(14);
@@ -503,7 +504,7 @@ async function makeComponentFixture({ clubId, coachId, athleteId, connectionId, 
 // rollback-on-error, run against a real, unmodified migrate.js.
 // ============================================================
 
-test("§1.1 all dashboard migrations through v91 apply cleanly and record exactly this run's dashboard files", async () => {
+test("§1.1 all dashboard migrations through v94 apply cleanly and record exactly this run's dashboard files", async () => {
   const applied = await query(`select migration_name from public.schema_migrations where migration_name like '%dashboard%' order by migration_name`);
   assert.deepEqual(applied.rows.map(row => row.migration_name), DASHBOARD_MIGRATIONS.filter(name => name.includes("dashboard")).map(name => "migrations_v2/" + name));
 });
@@ -514,7 +515,7 @@ test("§1.2 re-applying the SAME migrations_v2 directory a second time is a genu
   assert.equal(applied.rows[0].n, DASHBOARD_MIGRATIONS.filter(name => name.includes("dashboard")).length, "re-running must not duplicate or re-apply anything");
 });
 
-test("§1.3 upgrade path: a database at exactly v1-v14 can apply dashboard prerequisites through v91 in one runner call", async () => {
+test("§1.3 upgrade path: a database at exactly v1-v14 can apply dashboard prerequisites through v94 in one runner call", async () => {
   const upgradeDb = await makeTempDb("upgrade");
   const upgradeClient = new pg.Client({ connectionString: upgradeDb.url });
   await upgradeClient.connect();

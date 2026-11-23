@@ -1,6 +1,6 @@
 // Pure projections of an already-authorized dashboard result. This module never
 // loads athletes/facts, changes aggregation, or uses a client-supplied row set.
-export const GALLERY_LIMITS = Object.freeze({ series: 20, rows: 16000, cells: 8000 });
+export const GALLERY_LIMITS = Object.freeze({ series: 20, athletes: 20, rows: 16000, cells: 8000 });
 const kinds = new Set(['area','horizontal_bar','combined','heatmap','scatter','stacked','boxplot']);
 const badFlags = ['conflict','unitConflict','typeConflict','semanticConflict'];
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -72,6 +72,10 @@ export function buildGalleryData({widget,result,shape}) {
     }
   }
   if (shape.kind === 'stacked') {
+    const refs=series.map(s=>s.definition.metric_definition_id?['metric',s.definition.metric_definition_id]:s.definition.built_in_series_key?['builtin',s.definition.built_in_series_key]:null).filter(Boolean).map(v=>JSON.stringify(v));
+    if(new Set(refs).size!==refs.length)return failure('nonAdditiveComponents');
+    const metricIds=new Set(series.map(s=>s.definition.metric_definition_id).filter(Boolean));
+    if(series.some(s=>(s.definition.galleryCalculation?.inputs??[]).some(id=>metricIds.has(id))))return failure('nonAdditiveComponents');
     if (shape.additive !== true || series.length < 2) return failure('declareComponents');
     if (series.some(s => s.definition.analytical_aggregation === 'ratio'
         || s.answer.calculation?.kind === 'ratio' || s.answer.data.calculation?.kind === 'ratio'
@@ -79,6 +83,7 @@ export function buildGalleryData({widget,result,shape}) {
         || new Set(series.map(s => s.unit)).size !== 1) return failure('nonAdditiveComponents');
   }
   const cellKeys = [...new Set(series.flatMap(s => [...s.cells.keys()]))].sort();
+  if(shape.kind!=='boxplot'&&new Set(series.flatMap(s=>[...s.cells.keys()].map(key=>JSON.parse(key)[0])).filter(Boolean)).size>GALLERY_LIMITS.athletes)return failure('athleteLimitExceeded');
   if (cellKeys.length > GALLERY_LIMITS.cells) return failure('chartTooLarge');
   const groups = [];let omitted = 0;
   for (const identity of cellKeys) {

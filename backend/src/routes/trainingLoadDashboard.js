@@ -1,3 +1,4 @@
+import {attachGalleryResult,galleryAvailable,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { pageDatabaseEnabled } from '../dashboardPages/config.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // Training Load Analysis Dashboard — HTTP routes. Mounted at
@@ -323,7 +324,7 @@ router.get("/:dashboardId", async (req, res, next) => {
     if (simplePreview && detail.dashboard.data_workspace_type === "club") {
       return res.json({ ...detail, simpleWorkspaceRequired: true });
     }
-    res.json(simplePreview ? { ...detail, simplePreview: true } : detail);
+    res.json(simplePreview ? { ...detail, simplePreview: true, chartShapes: await galleryAvailable(query) } : detail);
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -829,8 +830,9 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     try { shellFilter = normalizeShellFilter(b.shellFilter); }
     catch { return res.status(400).json({ error: "invalidRequest" }); }
     const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter });
+    const galleryWidgets=await hydrateGalleryWidgets(query,targetWidgets);
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
-    res.json({ dashboardRevision: dashboard.revision, widgets: result.map((widget) => ({ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
+    res.json({ dashboardRevision: dashboard.revision, widgets: result.map((widget) => attachGalleryResult(galleryWidgets.find(w=>w.id===widget.widgetId),{ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }

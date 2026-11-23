@@ -77,3 +77,8 @@ test('projections are pure and bounded; overflow totals are omitted',()=>{
 test('area and horizontal bars never combine incompatible units on their one axis',()=>{
  for(const kind of ['area','horizontal_bar'])assert.equal(project(kind,[[row(2)],[row(3,'2026-11-01',{unit:'min'})]]).reason,'incompatibleAxisUnit');
 });
+
+test('large athlete charts ask for a smaller selection; box distributions retain their bounded samples',()=>{
+ const rows=Array.from({length:21},(_,i)=>row(i,'2026-11-01',{athleteId:'athlete-'+i}));
+ assert.equal(project('heatmap',[rows]).reason,'athleteLimitExceeded');assert.equal(project('boxplot',[rows]).groups[0].count,21);
+});

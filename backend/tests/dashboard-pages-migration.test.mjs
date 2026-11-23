@@ -179,7 +179,19 @@ for(const scenario of [
  try{if(scenario.finish)await target.applyThrough('202611221400');const before=(await q.query(catalogSql)).rows[0];
  const apply=async file=>{const bytes=fs.readFileSync(new URL('../../migrations_v2/'+file,import.meta.url));await q.query('begin');try{await q.query(bytes.toString());await q.query("insert into public.schema_migrations(migration_name,checksum,execution_time_ms,runner_version) values($1,$2,0,'p1-registry')",['migrations_v2/'+file,crypto.createHash('sha256').update(bytes).digest('hex')]);await q.query('commit')}catch(e){await q.query('rollback');throw e}};
  const a='202611231000_training_load_v90_dashboard_pages_home.sql',b='202611231100_training_load_v91_dashboard_page_writers.sql';
- const check=async file=>{const results=await q.query(fs.readFileSync(new URL('../../docs/runbooks/'+file,import.meta.url),'utf8'));for(const result of Array.isArray(results)?results:[results])for(const row of result.rows??[])for(const [key,value] of Object.entries(row))if(typeof value==='boolean')assert.equal(value,true,scenario.name+': '+file+': '+key)};
+ const check=async file=>{
+  // A fresh disposable database can still have a finishing bootstrap connection.
+  // Ignore PostgreSQL background workers, then wait boundedly for actual client
+  // transactions to settle. Production preflight SQL is left unchanged.
+  const text=fs.readFileSync(new URL('../../docs/runbooks/'+file,import.meta.url),'utf8').replace('and pid<>pg_backend_pid() and xact_start is not null',"and backend_type='client backend' and pid<>pg_backend_pid() and xact_start is not null");
+  const deadline=Date.now()+5000;
+  while(true){const results=await q.query(text);let quiet=true;
+   for(const result of Array.isArray(results)?results:[results])for(const row of result.rows??[])for(const [key,value] of Object.entries(row))if(typeof value==='boolean'){
+    if(key==='quiet_moment')quiet=value;else assert.equal(value,true,scenario.name+': '+file+': '+key);
+   }
+   if(quiet)return;assert.ok(Date.now()<deadline,scenario.name+': '+file+': quiet_moment');await new Promise(r=>setTimeout(r,25));
+  }
+ };
  await check('dashboard-pages-v90-preflight.sql');await apply(a);await check('dashboard-pages-v90-postcheck.sql');await check('dashboard-pages-v91-preflight.sql');await apply(b);await check('dashboard-pages-v91-postcheck.sql');
  await q.query(fs.readFileSync(new URL('../../docs/runbooks/dashboard-pages-v91-rollback.sql',import.meta.url),'utf8'));await q.query(fs.readFileSync(new URL('../../docs/runbooks/dashboard-pages-v90-rollback.sql',import.meta.url),'utf8'));assert.deepEqual((await q.query(catalogSql)).rows[0],before);
  await apply(a);await apply(b);

@@ -2,7 +2,8 @@
 
 Status: implementation in progress; Draft and NOT frozen.
 Level: RISKY (stored presentation validation and server-side derived chart data).
-Stack base: #741, 04459f12291a19b903c764a1e689f005d85c5303 (independent re-review GO).
+P1 #741 is merged and deployed as 3cf0f7f92ec82ee75ed470149c9ab688c1fd384b.
+This implementation includes that main; the final evidence packet records the final base.
 Date: 2026-11-23. This branch does not modify or push the reviewed P1 branch.
 
 ## Delivery boundary
@@ -178,101 +179,32 @@ and coordinate before editing it. No multi-variable Simple table in this topic.
    independent reviewer review the same head. Owner separately orders migration and
    activation; merging/deploy is not authorized by this WIP branch.
 
-## Evidence for this WIP document
+## Implementation and evidence boundary
 
-Read current schema, v71 validator, P1 Page validation and ECharts options; compared
-with the accepted inventory's complete old SQL/processing list. No application code,
-migration, production setting or #741 file changed. No tests/build/browser/migration
-were run for this docs-only increment. SQL replacement list, concrete limits and
-old-server rehearsal remain to be verified during implementation after review; this
-is not a readiness claim. No head is frozen while #741 remains under review.
+All seven gallery forms now share the versioned chartShape contract, bounded server
+projection, Advanced picker and saved renderer. Simple offers the compatible
+single-metric forms only. Existing authorization and fact queries remain unchanged.
+The capability requires the installed v94 marker and the existing Simple pilot.
 
-## Confirmed v94 migration packet (owner instruction)
+v94 replaces four bodies: presentation validator, presentation compatibility guard,
+Page copy and atomic Simple save. Copy and save remap persisted series references to
+the actual newly created series. Nine new helpers, five triggers and an immutable
+usage ledger enforce references, units and the rollback boundary. No backfill or
+trigger disabling is used. Opaque future presentation is preserved unchanged.
 
-Slot: migrations_v2/202611261000_training_load_v94_chart_shapes.sql.
-Apply on top of the exact approved v91, with v90 transitively required. Pin the final
-v90/v91 checksums and affected function bodies after #741 review is complete; do not
-bake the currently reviewed P1 bodies into a supposedly final P2 gate. If #741 changes,
-refresh the baseline and rerun the packet before freezing.
+The migration and its preflight, postcheck, rollback, body manifest and rehearsal
+scripts are in this PR. The wrapper accepts Node >=20 and uses only loopback
+self-created disposable databases. Actual apply -> rollback -> identical catalog ->
+reapply is tested, as are changed-body, later-migration and real-write refusals.
+The owner-operated staging CLI selects only the approved v94 plus already-recorded
+files; unrelated unrecorded v92/v93 are never applied by that artifact.
 
-v92 and v93 may each be recorded or absent, in either production application order.
-Do not require a highest label or a last-applied row. Their unrelated objects are not
-P2 prerequisites. Fresh installation sorts filenames; an existing installation applies
-new files in merge order. Test both situations without editing those migrations.
-Unknown changes to an affected function/trigger still abort, independently of labels.
+PDF exports only the current Page in visible layout order, using full static legends,
+without chart controls. Only expanded data tables are included, after the charts;
+long tables repeat headers. The browser suite produces mobile screenshots and a
+PDF for raster inspection. Non-box charts are bounded to 20 returned athletes; box
+plots may summarize the bounded distribution. Row and cell limits remain enforced.
 
-Required files, implemented together after the presentation contract is confirmed:
-
-- docs/runbooks/dashboard-chart-shapes-v94.md: order, exact prerequisites and rollback
-  boundary; owner authorization and one-migration deploy/postcheck.
-- docs/runbooks/dashboard-chart-shapes-v94-preflight.sql: exact dependency/checksum and
-  function-body gates, current affected constraints/triggers, counts/digests of existing
-  presentation payloads, and bounded lock expectations. No production writes.
-- docs/runbooks/dashboard-chart-shapes-v94-postcheck.sql: one recorded checksum, expected
-  bodies/constraints/triggers enabled, unchanged old widget/series rows and revisions.
-- docs/runbooks/dashboard-chart-shapes-v94-rollback.sql: lock out competing sanctioned
-  writes, check current v94 bodies, refuse incompatible/later dependent schema and real
-  P2 writes, restore predecessor bodies verbatim, verify every restored body md5 before
-  committing. Never erase widgets or receipts to make rollback pass. A real-use marker
-  must survive removal/editing of a new presentation; checking only currently visible
-  new-shaped widgets is insufficient. Exact marker mechanism remains a design item.
-- backend/scripts/dashboard-chart-shapes-v94-rehearsal.sh and .ps1: one command creates
-  a uniquely named disposable database, prints sanitized target and versions, runs
-  apply -> rollback -> identical catalog -> reapply and refusal cases, cleans up, and
-  prints RESULT: PASS only when every assertion passes. Ship PG17-compatible scripts;
-  owner runs the production-matching PostgreSQL rehearsal before merge.
-
-The migration runner supplies the transaction: no top-level BEGIN/COMMIT in v94.
-Gate predecessor function bodies by md5 before replacing them. Do not disable triggers
-or rewrite existing payloads. New contracts must be compatible with Page save/copy,
-Simple atomic save, the legacy Home path and their revision/receipt invariants.
-
-Set explicit text eol=lf attributes for the v94 migration, runbook SQL and both
-rehearsal wrappers. Check staged blob bytes as well as working files: Windows checkout
-must not alter function-body hashes. No normalization of unrelated repository files.
-
-Rehearsal matrix includes v91 with neither optional migration, only v92, only v93,
-both in both recorded orders, and the runner's filename order on a fresh database.
-Record exact optional migration filenames/checksums from their final owner-confirmed
-registry before freeze; do not invent them while their tracks are still in progress.
-
-This confirms the slot and packet requirements, not a frozen implementation.
-#742 stays Draft and unfrozen until #741 merges. #741 review findings come first.
-## WIP implementation checkpoint, 2026-11-23
-
-Independent modules are now on this branch; existing routes, saves, capabilities and
-UI entry points are deliberately not widened before the v94-backed integration.
-
-The proposed nested chartShape is {schemaVersion:1,kind,seriesIds}, with explicit
-case-insensitively unique UUID seriesIds (1–20). Scatter needs exactly two; heatmap
-and boxplot exactly one. Combined needs at least two, plus bindings covering every
-selected series exactly once: {seriesId,mark:bar|line,axis:0|1}, using both marks.
-Stacked needs at least two and additive:true. Other fields/unknown keys are refused;
-bindings and additive are allowed only on their respective shapes. Unit/scoping and
-non-additivity checks are repeated against actual server results, never client claims.
-
-backend/src/dashboardGallery/data.js projects seven forms from authorized results.
-It counts duplicate/conflicting/missing cells as omitted, pairs exact identities,
-keeps independent line/bar gaps, rejects incompatible single-axis units, refuses ratio
-stacks, and computes the declared quartile/whisker convention without rawCount weighting.
-Frontend training-load-gallery-options.js serializes only safe resolved labels and
-numeric chart values; no internal UUID is put into the ECharts option/DOM payload.
-Legend visibility and same-name disambiguation apply across shapes.
-
-The future v94 wrapper will use assertGalleryRehearsalNode: Node >=20, not major===22.
-Its acceptance logic is tested for 20/22/24/26 and refusals for older/invalid versions.
-The actual wrapper and full migration rehearsal remain to be built after P1 merges.
-
-Commands run with Node22.22.0, no database:
-
-- node scripts/test-runner.mjs --project backend --kind unit --file dashboard-gallery-data.test.mjs: 14/14.
-- node scripts/test-runner.mjs --project backend --kind unit --file dashboard-gallery-contract.test.mjs: 3/3.
-- node scripts/test-runner.mjs --project backend --kind unit --file dashboard-gallery-rehearsal-config.test.mjs: 1/1.
-- node scripts/test-runner.mjs --project frontend --file training-load-gallery-options.test.mjs: 7/7.
-
-These 25 tests are a WIP foundation, not end-to-end gallery acceptance. No migration
-file exists yet. Real DB validation, routes/preview/save/copy integration, gallery UI,
-interactive controls, browser/PDF verification, mutation suite and whole gates remain.
-After #741 merges: merge current main, build v94/its runbooks and rehearsal, complete
-integration, then run the full packet and freeze. No SQL migration was run and no
-production setting changed. The #741 branch was not modified by this P2 work.
+Final commands, counts, baseline differences, mutations and omissions belong in the
+frozen-head PR packet. In-progress test output is not a final GO. P3 target tables /
+Radar, Simple multi-variable tables and all production activation stay out of scope.

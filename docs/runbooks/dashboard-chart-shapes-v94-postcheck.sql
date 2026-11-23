@@ -1,0 +1,22 @@
+-- Read-only; compare widget/series digests to preflight.
+begin transaction read only;
+set local time zone 'UTC';
+select count(*)=1 and bool_and(checksum='2c018c784ace8edc1cb0c9b729d5e0143166d813477899f678060d6c6ac304cb') as recorded_once_with_exact_checksum from public.schema_migrations where migration_name='migrations_v2/202611261000_training_load_v94_chart_shapes.sql';
+select 'training_load.dashboard_chart_shape_legacy_valid(jsonb)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_legacy_valid(jsonb)'))='d547e14a8a7021702769f4e17b6d94e8' as body_matches;
+select 'training_load.dashboard_chart_shape_legacy_compatible(jsonb,text,text)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_legacy_compatible(jsonb,text,text)'))='c0a9f476ac4bb0f0e7831fbc7014cc95' as body_matches;
+select 'training_load.dashboard_chart_shape_valid(jsonb)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_valid(jsonb)'))='cfe70c9e017b204d8381f0fa40e4969c' as body_matches;
+select 'training_load.dashboard_presentation_valid(jsonb)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_presentation_valid(jsonb)'))='9ce11aa017244998674f357eac2d8c89' as body_matches;
+select 'training_load.dashboard_presentation_assert_compatible(jsonb,text,text)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_presentation_assert_compatible(jsonb,text,text)'))='439d80f9e60bbf32479afdf58f102f4b' as body_matches;
+select 'training_load.dashboard_chart_shape_usage_guard()' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_usage_guard()'))='fb9fd790d161dd9a04f7f3fa551f8650' as body_matches;
+select 'training_load.dashboard_chart_shape_touch()' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_touch()'))='88d5e23fb9449bc6045487898f03b895' as body_matches;
+select 'training_load.dashboard_chart_shape_assert(uuid)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_assert(uuid)'))='2df4cdfe2f57e746f07a3744b828cf41' as body_matches;
+select 'training_load.dashboard_chart_shape_deferred()' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_deferred()'))='9630e50eda4624e337bc233bc8b371d3' as body_matches;
+select 'training_load.dashboard_chart_shapes_available()' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shapes_available()'))='559708f8b992b9360ec25793f4428360' as body_matches;
+select 'training_load.dashboard_chart_shape_remap(jsonb,jsonb)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.dashboard_chart_shape_remap(jsonb,jsonb)'))='ac6d865af34dcbfa510c66b0f1feb2da' as body_matches;
+select 'training_load.copy_dashboard_page_widget(uuid,uuid,jsonb,uuid,text,uuid,uuid,integer,uuid,integer,timestamp with time zone)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.copy_dashboard_page_widget(uuid,uuid,jsonb,uuid,text,uuid,uuid,integer,uuid,integer,timestamp with time zone)'))='7bc62841d5aa09e227538c83ced8ae7a' as body_matches;
+select 'training_load.save_simple_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb)' as signature,(select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.save_simple_widget(uuid,uuid,text,timestamp with time zone,uuid,uuid,integer,jsonb,jsonb,jsonb)'))='a710351a0c727411e07cc3b2eba782cd' as body_matches;
+select count(*)=5 and bool_and(tgenabled='O') as gallery_triggers_enabled from pg_trigger where tgname in ('dashboard_widgets_chart_shape_use','dashboard_widgets_chart_shape_check','dashboard_series_chart_shape_check','dashboard_chart_shape_usage_rows','dashboard_chart_shape_usage_truncate');
+select count(*) as widgets,md5(coalesce(string_agg(to_jsonb(w)::text,E'\n' order by id),'')) as digest from training_load.dashboard_widgets w;
+select count(*) as series,md5(coalesce(string_agg(to_jsonb(s)::text,E'\n' order by id),'')) as digest from training_load.dashboard_widget_series s;
+select count(*) as widgets_ever_using_gallery from training_load.dashboard_chart_shape_usage;
+commit;

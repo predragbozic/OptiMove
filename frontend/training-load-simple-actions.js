@@ -145,6 +145,7 @@ export async function handleSimpleEditorAction(action, onRender) {
   else if (type === 'title') simpleEditor.change(draft => { draft.title = action.value ?? ''; });
   else if (type === 'view' && !model.widgetId) simpleEditor.change(draft => { draft.view.type = action.value || action.dataset.value; });
   else if (type === 'choose-athletes') { simpleEditor.change(draft => { draft.athleteSelection = { mode: 'selected', athleteIds: [] }; }); model.step = 2; paint(model); }
+  else if(type==='chart-kind') simpleEditor.change(draft=>{draft.view.chartKind=action.value;if(['heatmap','boxplot'].includes(action.value)){draft.view.analyticalAggregation='none';if(!['day','week'].includes(draft.view.groupBy))draft.view.groupBy='day';}});
   else if (type === 'group') simpleEditor.change(draft => { draft.view.groupBy = action.value; });
   else if (type === 'scope') simpleEditor.change(draft => { if (action.value) draft.view.dataScopeLevel = action.value; else delete draft.view.dataScopeLevel; });
   else if (type === 'aggregation') simpleEditor.change(draft => { if (action.value) draft.view.analyticalAggregation = action.value; else delete draft.view.analyticalAggregation; });
