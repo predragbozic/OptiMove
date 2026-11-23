@@ -301,7 +301,9 @@ test("6. the ceiling: a platform admin only, under the club's exclusive lock, wi
 test("7. club versions: who, the exclusive lock, Club admin only by a platform admin, H1, dominance, rule 7 inside the club, no delete", async () => {
   const w = await world();
   // A club admin may not make a version of Club admin (Q3); a platform admin may, but it must keep staff.assign and roles.manage (H1).
-  await refused(makeVersion(w.admin, w.club, ROLE_IDS.club_admin, { remove: ["org.club.edit"] }), "42501", /may not write this version/);
+  // The version row itself is refused (Q3), not only its items (an item write would also fail once the half-built
+  // Club admin version has emptied the admin's own rights - an accident, not the rule).
+  await refused(makeVersion(w.admin, w.club, ROLE_IDS.club_admin, { remove: ["org.club.edit"] }), "42501", /^permission club version: the acting user may not write this version$/);
   await refused(makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["staff.assign"] }), "23514", /must hold this permission/);
   // The lock: a version write under the shared lock is refused (mutation: a writer that skips lockClubCeiling).
   await refused(asLocked(w.admin, [w.club], "shared", (c) => c.query(`insert into public.permission_club_role_versions (club_id, system_role_id, based_on_revision, answered_revision, created_by_user_id)
