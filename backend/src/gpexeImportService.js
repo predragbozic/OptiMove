@@ -2615,12 +2615,18 @@ export function canonicalReplaceManual(value) {
   return [...new Set(value.map((id) => id.toLowerCase()))].sort();
 }
 
-// The choice checked against the candidate's own stored preview: only an athlete the preview names under manualValues.
+// The choice checked against the candidate's own stored preview: only an athlete the preview names under manualValues,
+// and only where it offers the replacement (replaceAvailable).
 function checkManualChoiceAgainstPreview(preview, replaced) {
   if (!replaced.length) return;
   const named = new Set((preview?.manualValues?.athletes || []).map((a) => String(a.athleteId)));
   if (replaced.some((id) => !named.has(id))) {
     throw refusal(400, "invalid_manual_choice", "Only an athlete whose values entered or corrected on the roster this import meets can be given GPEXE's values.");
+  }
+  // Fail-closed: GPEXE's values replace roster values only where the preview offers it (a whole-session result).
+  const offered = new Set((preview.manualValues.athletes || []).filter((a) => a.replaceAvailable === true).map((a) => String(a.athleteId)));
+  if (replaced.some((id) => !offered.has(id))) {
+    throw refusal(400, "manual_replace_unavailable", "GPEXE sent only drill results for a chosen athlete, so the values entered on the roster are kept; nothing was imported.");
   }
 }
 
