@@ -16,10 +16,11 @@ select current_setting('server_version_num')::int >= 150000 as server_15_or_late
 
 -- 2. Nothing v93 adds exists; the four bodies and the five triggers it changes are as v49 / v51 left them.
 select to_regclass('calendar.event_deletion_log') is null as no_log_table,
+       to_regclass('calendar.event_deleted_request_keys') is null as no_spent_keys_table,
        not exists (select 1 from pg_proc where pronamespace = 'calendar'::regnamespace
                     and proname in ('delete_event', 'event_deletion_pending', 'event_deletion_log_before_insert', 'event_deletion_log_event_gone',
                                     'events_before_delete', 'event_history_before_delete', 'event_selected_fields_before_delete',
-                                    'event_selected_fields_need_parent_after_delete')) as no_functions,
+                                    'event_selected_fields_need_parent_after_delete', 'event_deleted_request_keys_before_insert')) as no_functions,
        (select md5(prosrc) from pg_proc where pronamespace = 'calendar'::regnamespace and proname = 'event_targets_before_delete') = '5552341e9f127259402b9d899d223988' as targets_delete_body_is_v49,
        (select md5(prosrc) from pg_proc where pronamespace = 'calendar'::regnamespace and proname = 'event_targets_need_target_after_delete') = '3771cdaffa6325d74bb8899b8be557f1' as need_target_body_is_v49,
        (select md5(prosrc) from pg_proc where pronamespace = 'calendar'::regnamespace and proname = 'event_selected_fields_guard') = 'aedf5e276badb0745a3ae45b8bc9a35c' as selected_guard_body_is_v51,

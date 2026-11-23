@@ -508,3 +508,61 @@ test("9. v93 on a database that stops before it: preflight true, applied once, p
     await before93.drop();
   }
 });
+
+// --- 7. The deleted event's request keys stay spent (code review of PR B, HIGH) --------------
+test("10. a create replayed after its event was deleted never writes again: the same request is the one 404, another body request_key_reused", async () => {
+  const w = await world("spent");
+  const body = { requestKey: newKey(), timezone: TZ, day: DAY, eventTypeId: w.training.id, title: `Replayed ${uid()}`, targets: [{ kind: "team", id: w.team1 }] };
+  const created = await api("/api/calendar/events", { method: "POST", cookie: w.coach1.cookie, body });
+  assert.equal(created.status, 201, created.text);
+  const ev = created.body.event;
+  const edit = await api(`/api/calendar/events/${ev.id}`, { method: "PATCH", cookie: w.coach1.cookie, body: { requestKey: newKey(), expectedRevision: ev.revision, title: `${ev.title} 2` } });
+  assert.equal(edit.status, 200, edit.text);
+  assert.equal((await deleteEvent(w.coach1.cookie, ev.id, { expectedRevision: edit.body.event.revision })).status, 200);
+  assert.equal((await q(`select count(*)::int as n from calendar.event_deleted_request_keys where event_id = $1`, [ev.id]))[0].n, 2, "the create's and the edit's keys kept");
+  const replay = await api("/api/calendar/events", { method: "POST", cookie: w.coach1.cookie, body });
+  assert.equal(replay.status, 404, replay.text);
+  assert.equal(replay.body.error, "notFound");
+  const other = await api("/api/calendar/events", { method: "POST", cookie: w.coach1.cookie, body: { ...body, title: "Something else" } });
+  assert.equal(other.status, 409, other.text);
+  assert.equal(other.body.error, "request_key_reused");
+  assert.equal((await q(`select count(*)::int as n from calendar.events where title = $1 or title = 'Something else'`, [body.title]))[0].n, 0, "nothing written again");
+  // Another user's same key is free (keys are per user).
+  const fresh = await api("/api/calendar/events", { method: "POST", cookie: w.clubAdmin.cookie, body: { ...body, targets: [{ kind: "club", id: w.clubId }] } });
+  assert.equal(fresh.status, 201, fresh.text);
+  // Only the sanctioned delete writes a spent key; the table is append-only.
+  await assert.rejects(admin.query(`insert into calendar.event_deleted_request_keys (performed_by_user_id, request_key, request_hash, operation, event_id) values ($1, gen_random_uuid(), repeat('f', 64), 'create', gen_random_uuid())`, [w.coach1.id]), (e) => e.code === "23514");
+  await assert.rejects(admin.query(`delete from calendar.event_deleted_request_keys where event_id = $1`, [ev.id]), (e) => e.code === "23514");
+});
+
+test("11. a direct calendar.delete_event takes the writer's rights before the event (db review): against a holder of the user row that then wants the event, no deadlock", async () => {
+  const w = await world("order");
+  const ev = await teamEvent(w);
+  const a = new pg.Client({ connectionString: db.url });
+  const b = new pg.Client({ connectionString: db.url });
+  await a.connect();
+  await b.connect();
+  try {
+    // A: a revocation's first lock (the user row, FOR UPDATE).
+    await a.query("begin");
+    await a.query(`select 1 from public.users where id = $1 for update`, [w.coach1.id]);
+    // B: a direct call; it must wait on the rights before it touches the event.
+    await b.query("begin");
+    await b.query(`set local lock_timeout = '5s'`);
+    const deleting = b.query(`select calendar.delete_event($1, $2, $3, 'team_coach', gen_random_uuid(), repeat('a', 64), '{}'::jsonb)`, [ev.id, ev.revision, w.coach1.id])
+      .then(() => "deleted", (e) => e.code);
+    await new Promise((r) => setTimeout(r, 300));
+    // A now wants the event (as a revocation's follow-up write would): it must not wait on B.
+    await a.query(`set local lock_timeout = '3s'`);
+    const aGot = await a.query(`select id from calendar.events where id = $1 for update`, [ev.id]).then(() => "locked", (e) => e.code);
+    await a.query("commit");
+    const bResult = await deleting;
+    await b.query(bResult === "deleted" ? "commit" : "rollback").catch(() => {});
+    assert.equal(aGot, "locked", "the holder of the user row got the event: the direct call had not locked it first");
+    assert.equal(bResult, "deleted");
+    assert.equal(await exists(ev.id), false);
+  } finally {
+    await a.end().catch(() => {});
+    await b.end().catch(() => {});
+  }
+});

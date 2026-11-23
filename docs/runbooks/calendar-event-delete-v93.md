@@ -34,6 +34,12 @@ tables that name an event are append-only or refuse deletes.
     - `event_has_details`: a value of a detail;
     - `event_has_schedule`: a referenced RPE or test schedule.
 - **Cancelled events** are deleted on the same terms (decision B3).
+- **`calendar.event_deleted_request_keys`**: the deleted event's request keys (user, key, hash, operation), written by
+  `delete_event` from the event's request records before they go. The command runner reads them for every event
+  command. A request whose key is there never runs again: the same request answers the one 404, another one
+  `request_key_reused`. Without it, a *Check result* of the event's create after a lost answer would create the event
+  again (code review of this pull request, HIGH). It is append-only, cannot be truncated, and only a sanctioned
+  delete writes it.
 - **The proof that a delete is sanctioned** is the deletion-log row of the SAME transaction
   (`calendar.event_deletion_pending`: the row's `xmin` is the current transaction). This is v57's transaction-local
   marker, except that only the guarded insert can create it.
@@ -47,7 +53,8 @@ tables that name an event are append-only or refuse deletes.
     `event_requests_append_only`, `event_changes_append_only`, `event_selected_fields_guard`,
     `event_selected_fields_need_parent`).
   - **Not changed:** the shared `refuse_change` and `refuse_delete`.
-- **Lock order:**
+- **Lock order** (the same in the service and in the two functions, which read the owner without a lock, lock the
+  rights, then the event, and compare the owner again):
   1. the writer's rights rows (`lock_event_writer`);
   2. the event `FOR NO KEY UPDATE` (the service, as every event command does);
   3. a Day off's day keys (as a cancel takes them);
@@ -112,7 +119,9 @@ tables that name an event are append-only or refuse deletes.
 
 - The guards prove that the log row, the actor's right and the event agree. They do not stop whoever holds the
   database credentials (as v35 states it).
-- A deleted event's history (its change rows, its request records) goes with it; only the log row stays. That is the
-  owner's "permanently" (B1).
+- A deleted event's history (its change rows, its request records) goes with it. Only the log row and the spent keys
+  stay. That is the owner's "permanently" (B1).
+- **The log keeps the event's title in plain text** for as long as the log is kept. A coach can type a name into a
+  title. No route reads the log, and there is no retention rule for it yet.
 - **The importer's undo** (v57, v60, v63) refuses while any calendar activity link names the activity, ended ones
   included. A deleted event never had one, so this is unchanged.

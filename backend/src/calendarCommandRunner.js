@@ -28,7 +28,7 @@
 // (Check result repeats the key), never "nothing was saved".
 import crypto from "node:crypto";
 import { pool } from "./db.js";
-import { EventError } from "./calendarEventAccess.js";
+import { EventError, notFound } from "./calendarEventAccess.js";
 import {
   COMMIT_ANSWER_TIMEOUT_MS, commitCertainlyRefused, NOTHING_SAVED, OUTCOME_UNKNOWN, UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS,
 } from "./activityRosterCommands.js";
@@ -53,10 +53,25 @@ export function hashOf(value) {
 // v93: an event's delete keeps its request record in the deletion log (the event's own request rows go with it).
 const REQUESTS_TABLES = new Set(["calendar.event_requests", "calendar.settings_requests", "calendar.event_deletion_log"]);
 
+// v93: the request keys of a deleted event stay spent. A request whose key is there (the same user) is never run
+// again: the same request (hash) answers the one 404 - its event is gone -, another one request_key_reused. Read
+// only where the table exists (a test world without v93 has none; production has it from v93 on).
+const SPENT_KEYS_TABLES = new Set(["calendar.event_deleted_request_keys"]);
+let spentKeysSeen = false;
+async function spentKeyOf(client, table, userId, requestKey) {
+  if (!SPENT_KEYS_TABLES.has(table)) throw new Error(`unknown spent keys table ${table}`);
+  if (!spentKeysSeen) {
+    if (!(await client.query(`select to_regclass($1) is not null as ok`, [table])).rows[0].ok) return null;
+    spentKeysSeen = true;
+  }
+  return (await client.query(`select request_hash from ${table} where performed_by_user_id = $1 and request_key = $2`, [userId, requestKey])).rows[0] || null;
+}
+
 // spec:
 //   userId, requestKey, operation, label (for the log)
 //   requestsTable          calendar.event_requests | calendar.settings_requests
 //   requestKeyConstraint   that table's unique (performed_by_user_id, request_key)
+//   spentKeysTable         optional: calendar.event_deleted_request_keys (v93) for the event commands
 //   busyMessage            the try_again sentence
 //   hooks                  the service's test seams (commit, commitTimeoutMs,
 //                          checkTimeoutMs, checkFault)
@@ -104,6 +119,11 @@ export async function runCalendarCommand(spec) {
       // "nothing was saved" for a saved request (Independent review of #325).
       await client.query("rollback").catch(() => { broken = true; });
       return { ...answer, replayed: true };
+    }
+
+    if (spec.spentKeysTable) {
+      const spent = await spentKeyOf(client, spec.spentKeysTable, userId, requestKey);
+      if (spent) throw spent.request_hash === hash ? notFound() : requestKeyReused();
     }
 
     const requestId = crypto.randomUUID();

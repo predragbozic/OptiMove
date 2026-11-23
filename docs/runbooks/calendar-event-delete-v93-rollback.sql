@@ -10,7 +10,7 @@
 begin;
 set local lock_timeout = '5s';
 
-lock table calendar.event_deletion_log, calendar.events, calendar.event_requests, calendar.event_changes,
+lock table calendar.event_deletion_log, calendar.event_deleted_request_keys, calendar.events, calendar.event_requests, calendar.event_changes,
            calendar.event_targets, calendar.event_selected_fields in share row exclusive mode;
 
 do $$
@@ -81,6 +81,8 @@ drop function calendar.events_before_delete();
 drop function calendar.event_history_before_delete();
 drop function calendar.event_selected_fields_before_delete();
 drop function calendar.event_selected_fields_need_parent_after_delete();
+drop table calendar.event_deleted_request_keys;
+drop function calendar.event_deleted_request_keys_before_insert();
 drop table calendar.event_deletion_log;
 drop function calendar.event_deletion_log_before_insert();
 drop function calendar.event_deletion_log_event_gone();

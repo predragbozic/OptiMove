@@ -745,6 +745,8 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
   return runCalendarCommand({
     userId: ctx.userId, requestKey, operation, label: "calendar", subject: `${operation} on event ${eventId ?? "(new)"}`,
     requestsTable: "calendar.event_requests", requestKeyConstraint: REQUEST_KEY_CONSTRAINT,
+    // v93: a deleted event's request keys stay spent (its create's above all).
+    spentKeysTable: "calendar.event_deleted_request_keys",
     busyMessage: "The event is being changed. Try again.", hooks: testHooks,
     async prepare(client) {
       let owner;

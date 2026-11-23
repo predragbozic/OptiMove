@@ -25,8 +25,14 @@
 --   answered from it). Append-only, no TRUNCATE. It keeps no target, note, detail or athlete.
 --
 -- Lock order: the writer's rights rows (lock_event_writer: the owner team / club FOR SHARE, the user, the role row),
--- then the event FOR UPDATE - the order of every event command (calendarEventService.js runEventCommand), so a
--- concurrent attach or edit either finishes first (and the delete is refused) or waits and finds no event (404).
+-- then the event FOR UPDATE - the order of every event command (calendarEventService.js runEventCommand), in the
+-- service and in the two functions alike (each reads the owner without a lock, locks the rights, then the event, and
+-- compares the owner again), so a concurrent attach or edit either finishes first (and the delete is refused) or
+-- waits and finds no event (404).
+--
+-- The deleted event's request keys are kept in calendar.event_deleted_request_keys (written by delete_event only):
+-- the command runner reads them, so a replay of one of the event's old requests - its create after a lost answer -
+-- never writes the event again.
 --
 -- Bodies replaced (md5-gated below): calendar.event_targets_before_delete and
 -- calendar.event_targets_need_target_after_delete (v49). Triggers split so their DELETE branch has its own function:
@@ -116,7 +122,16 @@ create function calendar.event_deletion_pending(p_event_id uuid) returns boolean
 create function calendar.event_deletion_log_before_insert() returns trigger language plpgsql as $$
 declare
   v_event record;
+  v_owner record;
 begin
+  -- The writer's rights before the event's lock (the order of every event command): the owner read without a lock,
+  -- the rights locked, then the event locked and its owner compared again.
+  select e.owner_scope, coalesce(e.owner_club_id, e.owner_team_id, e.owner_user_id) as owner_id into v_owner
+    from calendar.events e where e.id = new.event_id;
+  if not found then
+    raise exception 'calendar.event_deletion_log: event_id names no event' using errcode = '23514', constraint = 'event_delete_no_event';
+  end if;
+  perform calendar.lock_event_writer(new.performed_by_user_id, v_owner.owner_scope, v_owner.owner_id, new.basis);
   select e.*, et.kind as type_kind into v_event
     from calendar.events e join calendar.event_types et on et.id = e.event_type_id
    where e.id = new.event_id
@@ -128,11 +143,11 @@ begin
      or new.owner_club_id is distinct from v_event.owner_club_id or new.owner_team_id is distinct from v_event.owner_team_id
      or new.title is distinct from v_event.title or new.day is distinct from v_event.day or new.end_day is distinct from v_event.end_day
      or new.event_status is distinct from v_event.status or new.event_revision is distinct from v_event.revision
-     or new.event_kind is distinct from v_event.type_kind then
+     or new.event_kind is distinct from v_event.type_kind
+     or v_owner.owner_scope is distinct from v_event.owner_scope
+     or v_owner.owner_id is distinct from coalesce(v_event.owner_club_id, v_event.owner_team_id, v_event.owner_user_id) then
     raise exception 'calendar.event_deletion_log: the row does not repeat the event''s facts' using errcode = '23514', constraint = 'event_delete_facts';
   end if;
-  perform calendar.lock_event_writer(new.performed_by_user_id, v_event.owner_scope,
-    coalesce(v_event.owner_club_id, v_event.owner_team_id, v_event.owner_user_id), new.basis);
   if v_event.external_schedule_id is not null or v_event.test_schedule_id is not null then
     raise exception 'calendar.event_deletion_log: the event refers to a schedule' using errcode = '23514', constraint = 'event_delete_has_schedule';
   end if;
@@ -175,6 +190,36 @@ create constraint trigger event_deletion_log_event_gone
   after insert on calendar.event_deletion_log
   deferrable initially deferred
   for each row execute function calendar.event_deletion_log_event_gone();
+
+-- The deleted event's request keys stay spent (the command runner reads them): a replay of an old request of the
+-- event - its create above all, after a lost answer - is refused and never writes again. Only a sanctioned delete of
+-- the event writes them; append-only, no TRUNCATE.
+create table calendar.event_deleted_request_keys (
+  performed_by_user_id  uuid not null references public.users(id) on delete restrict,
+  request_key           uuid not null,
+  request_hash          text not null
+                        constraint event_deleted_request_keys_hash_check check (request_hash ~ '^[0-9a-f]{64}$'),
+  operation             varchar(20) not null,
+  event_id              uuid not null,
+  deleted_at            timestamptz not null default now(),
+  constraint event_deleted_request_keys_pkey primary key (performed_by_user_id, request_key)
+);
+create function calendar.event_deleted_request_keys_before_insert() returns trigger language plpgsql as $$
+begin
+  if not calendar.event_deletion_pending(new.event_id) then
+    raise exception 'calendar.event_deleted_request_keys: written only by the sanctioned delete of its event' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+create trigger event_deleted_request_keys_before_insert
+  before insert on calendar.event_deleted_request_keys
+  for each row execute function calendar.event_deleted_request_keys_before_insert();
+create trigger event_deleted_request_keys_append_only
+  before update or delete on calendar.event_deleted_request_keys
+  for each row execute function calendar.refuse_change();
+create trigger event_deleted_request_keys_no_truncate
+  before truncate on calendar.event_deleted_request_keys
+  for each statement execute function calendar.refuse_truncate();
 
 -- ---------------------------------------------------------------------------
 -- 2. The guards that refused a delete: through for a sanctioned delete only
@@ -289,8 +334,16 @@ create function calendar.delete_event(p_event_id uuid, p_expected_revision integ
 returns uuid language plpgsql as $$
 declare
   v_event record;
+  v_owner record;
   v_log_id uuid;
 begin
+  -- Rights first, then the event (as the log row's guard and every event command).
+  select e.owner_scope, coalesce(e.owner_club_id, e.owner_team_id, e.owner_user_id) as owner_id into v_owner
+    from calendar.events e where e.id = p_event_id;
+  if not found then
+    raise exception 'calendar.delete_event: no such event' using errcode = '23514', constraint = 'event_delete_no_event';
+  end if;
+  perform calendar.lock_event_writer(p_user_id, v_owner.owner_scope, v_owner.owner_id, p_basis);
   select e.*, et.kind as type_kind into v_event
     from calendar.events e join calendar.event_types et on et.id = e.event_type_id
    where e.id = p_event_id
@@ -307,7 +360,10 @@ begin
       v_event.owner_user_id, v_event.owner_club_id, v_event.owner_team_id, v_event.type_kind, v_event.title, v_event.day,
       v_event.end_day, v_event.status, v_event.revision, p_result)
     returning id into v_log_id;
-  -- The event's own rows: the change log before the request records it names.
+  -- The event's request keys stay spent; then its own rows: the change log before the request records it names.
+  insert into calendar.event_deleted_request_keys (performed_by_user_id, request_key, request_hash, operation, event_id)
+    select r.performed_by_user_id, r.request_key, r.request_hash, r.operation, r.event_id
+      from calendar.event_requests r where r.event_id = p_event_id;
   delete from calendar.event_changes where event_id = p_event_id;
   delete from calendar.event_requests where event_id = p_event_id;
   delete from calendar.event_selected_fields where event_id = p_event_id;

@@ -11,12 +11,13 @@ select (select count(*) from public.schema_migrations where migration_name = 'mi
 
 -- 2. The objects: the log table with its two unique keys, the functions, every trigger of the five tables enabled.
 select to_regclass('calendar.event_deletion_log') is not null as log_table,
+       to_regclass('calendar.event_deleted_request_keys') is not null as spent_keys_table,
        (select count(*) from pg_constraint where conrelid = 'calendar.event_deletion_log'::regclass
          and conname in ('event_deletion_log_one_per_key', 'event_deletion_log_one_per_event')) = 2 as log_unique_keys,
        (select count(*) from pg_proc where pronamespace = 'calendar'::regnamespace
          and proname in ('delete_event', 'event_deletion_pending', 'event_deletion_log_before_insert', 'event_deletion_log_event_gone',
                          'events_before_delete', 'event_history_before_delete', 'event_selected_fields_before_delete',
-                         'event_selected_fields_need_parent_after_delete')) = 8 as functions,
+                         'event_selected_fields_need_parent_after_delete', 'event_deleted_request_keys_before_insert')) = 9 as functions,
        (select count(*) from pg_trigger g join pg_proc p on p.oid = g.tgfoid
          where not g.tgisinternal and g.tgenabled = 'O' and (g.tgrelid, g.tgname, p.proname, g.tgtype) in (
            ('calendar.events'::regclass, 'events_no_delete', 'events_before_delete', 11::int2),
@@ -31,7 +32,10 @@ select to_regclass('calendar.event_deletion_log') is not null as log_table,
            ('calendar.event_deletion_log'::regclass, 'event_deletion_log_before_insert', 'event_deletion_log_before_insert', 7::int2),
            ('calendar.event_deletion_log'::regclass, 'event_deletion_log_append_only', 'refuse_change', 27::int2),
            ('calendar.event_deletion_log'::regclass, 'event_deletion_log_no_truncate', 'refuse_truncate', 34::int2),
-           ('calendar.event_deletion_log'::regclass, 'event_deletion_log_event_gone', 'event_deletion_log_event_gone', 5::int2))) = 13 as triggers_enabled;
+           ('calendar.event_deletion_log'::regclass, 'event_deletion_log_event_gone', 'event_deletion_log_event_gone', 5::int2),
+           ('calendar.event_deleted_request_keys'::regclass, 'event_deleted_request_keys_before_insert', 'event_deleted_request_keys_before_insert', 7::int2),
+           ('calendar.event_deleted_request_keys'::regclass, 'event_deleted_request_keys_append_only', 'refuse_change', 27::int2),
+           ('calendar.event_deleted_request_keys'::regclass, 'event_deleted_request_keys_no_truncate', 'refuse_truncate', 34::int2))) = 16 as triggers_enabled;
 
 -- 3. The two replaced bodies are v93's (the sanctioned delete first).
 select (select md5(prosrc) from pg_proc where pronamespace = 'calendar'::regnamespace and proname = 'event_targets_before_delete') = '4d0401c862000970cb1399b4ae2e11a3' as targets_delete_body_is_v93,
@@ -39,7 +43,8 @@ select (select md5(prosrc) from pg_proc where pronamespace = 'calendar'::regname
        (select md5(prosrc) from pg_proc where pronamespace = 'calendar'::regnamespace and proname = 'event_selected_fields_guard') = 'aedf5e276badb0745a3ae45b8bc9a35c' as selected_guard_body_unchanged;
 
 -- 4. Nothing deleted yet (right after the deploy): the log is empty.
-select not exists (select 1 from calendar.event_deletion_log) as no_deletion_rows;
+select not exists (select 1 from calendar.event_deletion_log) as no_deletion_rows,
+       not exists (select 1 from calendar.event_deleted_request_keys) as no_spent_keys;
 
 -- 5. No idle transaction, no lock wait.
 select not exists (select 1 from pg_stat_activity where datname = current_database() and state = 'idle in transaction') as no_idle_tx,
