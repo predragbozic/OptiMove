@@ -547,7 +547,8 @@ async function supersede(client, { common, currentOccasionId, identityId }) {
 //       - keep: every result of that athlete is stored flagged (stale_resend_ignored, never current; outcome
 //         manual_kept), so the entry stays the athlete's only effective values;
 //       - replace: the results are written as usual and the whole-session occasion supersedes the entry (outcome
-//         manual_replaced); the entry stays as history;
+//         manual_replaced); the entry stays as history. Only with a whole-session result: an athlete with drill
+//         results alone is listed with replaceAvailable false and a replace is refused (manual_replace_unavailable);
 //   * a roster CORRECTION or RESTORE that is its record's current occasion, when GPEXE now sends other values than the
 //     measured ones it rests on (the same values are "unchanged"):
 //       - keep: today's path, the GPEXE version stored flagged (stale_resend_ignored);
@@ -877,10 +878,20 @@ export async function importGpexePlanLocked(client, plan, ctx, { onResultImporte
       const participantId = participantIds.get(participant.gpexeAthleteId);
       const entryOccasionId = entries.get(String(participantId)) ?? null;
       const replace = replaceManual.has(athleteId);
-      if (entryOccasionId) manualConflicts.set(athleteId, { athleteId, kind: "entry", choice: replace ? "replace" : "keep" });
+      // An entry is replaced only by a whole-session result: with drill results alone it would stay effective beside
+      // GPEXE's drill values, so such an athlete is offered Keep only (replaceAvailable false) and a replace is refused.
+      const replaceAvailable = participant.results.some((r) => r.level !== "drill");
+      if (entryOccasionId) {
+        manualConflicts.set(athleteId, { athleteId, kind: "entry", choice: replace ? "replace" : "keep", replaceAvailable });
+        if (replace && !replaceAvailable) {
+          const error = new GpexeImportError("manual_replace_unavailable", "A chosen athlete has no whole-session result from GPEXE to replace the values entered on the roster.");
+          error.manualAthleteIds = [athleteId];
+          throw error;
+        }
+      }
       const manual = {
         entryOccasionId, replace,
-        onCorrection: (kind) => manualConflicts.set(athleteId, { athleteId, kind, choice: replace ? "replace" : "keep" }),
+        onCorrection: (kind) => manualConflicts.set(athleteId, { athleteId, kind, choice: replace ? "replace" : "keep", replaceAvailable: true }),
       };
       for (const result of participant.results) {
         const segmentId = result.level === "drill" ? segmentsByDrillIndex.get(result.drillIndex)?.segmentId : null;

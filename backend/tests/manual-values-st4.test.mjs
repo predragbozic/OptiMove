@@ -850,7 +850,7 @@ test("19. the re-import question, Keep my values (the default): a check that bri
   assert.equal(cand.blockedSourceCode, null, JSON.stringify(cand));
   const full = await fullCandidate(team, cand.id);
   const preview = full.candidate?.preview ?? full.preview;
-  assert.deepEqual(preview.manualValues.athletes, [cil, dan].sort().map((id) => ({ athleteId: String(id), kind: "entry", choice: "keep" })));
+  assert.deepEqual(preview.manualValues.athletes, [cil, dan].sort().map((id) => ({ athleteId: String(id), kind: "entry", choice: "keep", replaceAvailable: true })));
   const kept = preview.changesToImported.filter((c) => c.outcome === "manual_kept");
   assert.deepEqual([...new Set(kept.map((c) => c.athleteId))].sort(), [String(cil), String(dan)].sort(), "both athletes are listed as changes");
   assert.ok(kept.every((c) => c.newVersionBecomesCurrent === false));
@@ -902,7 +902,7 @@ test("19d. the re-import question, Use GPEXE's values for an entry: the choice p
   const p = await choicePreview(team, cand, { replaceManualAthleteIds: [cil] });
   assert.equal(p.status, 200, p.text);
   assert.deepEqual(p.body.subset.replaceManualAthleteIds, [String(cil)]);
-  assert.deepEqual(p.body.subset.preview.manualValues.athletes, [{ athleteId: String(cil), kind: "entry", choice: "replace" }]);
+  assert.deepEqual(p.body.subset.preview.manualValues.athletes, [{ athleteId: String(cil), kind: "entry", choice: "replace", replaceAvailable: true }]);
   assert.ok(p.body.subset.preview.changesToImported.some((c) => c.athleteId === String(cil) && c.outcome === "manual_replaced" && c.newVersionBecomesCurrent === true));
   assert.notEqual(p.body.subset.subsetHash, cand.previewHash);
   // The stored keep-preview's hash does not stand for the choice.
@@ -954,6 +954,90 @@ test("19f. a choice that no longer fits is refused and writes nothing: (a) an ap
   assert.deepEqual(await writesBefore(), after, "nothing written");
 });
 
+// Only drill results for the team: every mapping activation of the team made drill-only, in the disposable database
+// (activations are immutable by trigger; the replica role leaves the triggers out for this test-only change).
+async function drillOnlyMappings(team) {
+  await admin.query("begin");
+  try {
+    await admin.query("set local session_replication_role = replica");
+    const r = await admin.query(`update training_load.source_metric_mapping_activations set applies_to_session = false where team_id = $1 and ended_at is null and applies_to_drill`, [team.teamId]);
+    await admin.query(`update training_load.source_metric_mapping_activations set ended_at = now() where team_id = $1 and ended_at is null and not applies_to_drill`, [team.teamId]);
+    await admin.query("commit");
+    assert.ok(r.rowCount > 0, "the team has drill activations");
+  } catch (error) {
+    await admin.query("rollback");
+    throw error;
+  }
+}
+
+test("19g. Use GPEXE's values only where GPEXE sends a whole-session result: with drill results alone the athlete is listed replaceAvailable false (Keep only); a choice preview or an approval naming them is 400 manual_replace_unavailable and writes nothing; a stored preview that still offered it (stale) is refused under the locks by the writer (subset_blocked); Keep still imports", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9717, hour: 18, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const cil = team.athleteIds[CIL];
+  const entry = await saveValues(s, { athleteId: cil, values: [{ metricDefinitionId: distance, value: 1111 }] }, team.coach.cookie);
+  assert.equal(entry.status, 201, entry.text);
+  // The state is built in the disposable database: through the routes an entry needs the session's imported whole-session
+  // values, and a later drill-only GPEXE answer first blocks on those (identities_missing_from_source). So the team's
+  // mappings become drill-only and the earlier whole-session results are detached from their source identities.
+  await drillOnlyMappings(team);
+  await admin.query("begin");
+  try {
+    await admin.query("set local session_replication_role = replica");
+    await admin.query(
+      `update training_load.metric_source_identities si set current_occasion_id = null
+         from training_load.metric_measurement_occasions o join training_load.metric_event_participants p on p.id = o.event_participant_id
+        where o.id = si.current_occasion_id and p.event_id = $1 and o.segment_id is null`, [s.eventId]);
+    await admin.query("commit");
+  } catch (error) {
+    await admin.query("rollback");
+    throw error;
+  }
+  await checkNow(team, [bundleOf({ sessionId: 9717, hour: 18, ids: [101, 102, 104] })]);
+  const cand = await candidateFor(team, 9717, [s.candidateId]);
+  const previewOf = async () => { const f = await fullCandidate(team, cand.id); return f.candidate?.preview ?? f.preview; };
+  const preview = await previewOf();
+  assert.deepEqual(preview.manualValues?.athletes, [{ athleteId: String(cil), kind: "entry", choice: "keep", replaceAvailable: false }], JSON.stringify(preview.blocked ?? preview.manualValues));
+  const writes = async () => (await admin.query(
+    `select (select count(*) from training_load.gpexe_import_approvals where candidate_id = $1)::int as approvals,
+            (select count(*) from training_load.metric_measurement_occasions o join training_load.metric_event_participants pp on pp.id = o.event_participant_id
+              where pp.event_id = $2)::int as occasions`, [cand.id, s.eventId])).rows[0];
+  const before = await writes();
+
+  const refusedPreview = await choicePreview(team, cand, { replaceManualAthleteIds: [cil] });
+  assert.deepEqual([refusedPreview.status, refusedPreview.body.error], [400, "manual_replace_unavailable"], refusedPreview.text);
+  const refusedApprove = await approveWith(team, cand, { acceptChanges: true, replaceManualAthleteIds: [cil], subsetHash: "c".repeat(64) });
+  assert.deepEqual([refusedApprove.status, refusedApprove.body.error], [400, "manual_replace_unavailable"], refusedApprove.text);
+  assert.deepEqual(await writes(), before, "nothing written");
+
+  // A stored preview that still offers the replacement (a review made before the data changed): the writer refuses it.
+  const setOffered = async (value) => {
+    await admin.query("begin");
+    try {
+      await admin.query("set local session_replication_role = replica");
+      await admin.query(`update training_load.gpexe_import_candidates set preview = jsonb_set(preview, '{manualValues,athletes,0,replaceAvailable}', $2::jsonb) where id = $1`, [cand.id, JSON.stringify(value)]);
+      await admin.query("commit");
+    } catch (error) {
+      await admin.query("rollback");
+      throw error;
+    }
+  };
+  await setOffered(true);
+  try {
+    const stale = await choicePreview(team, cand, { replaceManualAthleteIds: [cil] });
+    assert.deepEqual([stale.status, stale.body.error], [409, "subset_blocked"], stale.text);
+    assert.deepEqual(await writes(), before, "nothing written");
+  } finally {
+    await setOffered(false);
+  }
+
+  // Keep (no choice) still imports, and the entry stays the only effective whole-session values.
+  const ok = await approveWith(team, cand, { acceptChanges: true });
+  assert.equal(ok.status, 200, ok.text);
+  const eff = (await effectiveOccasions(s.eventId, cil)).filter((o) => o.flag === null);
+  assert.deepEqual(eff.map((o) => o.entry_method), ["manual"], JSON.stringify(eff));
+});
+
 test("19b. the re-import question for a roster correction: GPEXE's SAME measured values are unchanged (not listed); OTHER values are listed (correction / keep) and kept by default (stored flagged, the correction stays current); with Use GPEXE's values they become current and the correction is history", async () => {
   const team = await setupTeam();
   const s = await importSession(team, bundleOf({ sessionId: 9707, ids: [101, 102] }));
@@ -973,7 +1057,7 @@ test("19b. the re-import question for a roster correction: GPEXE's SAME measured
   await checkNow(team, [bundleOf({ sessionId: 9707, ids: [101, 102], distances: { 101: 2600 } })]);
   const cand = await candidateFor(team, 9707, seen);
   const preview = (await fullCandidate(team, cand.id)).candidate.preview;
-  assert.deepEqual(preview.manualValues.athletes, [{ athleteId: String(ana), kind: "correction", choice: "keep" }]);
+  assert.deepEqual(preview.manualValues.athletes, [{ athleteId: String(ana), kind: "correction", choice: "keep", replaceAvailable: true }]);
   // Use GPEXE's values.
   const p = await choicePreview(team, cand, { replaceManualAthleteIds: [ana] });
   assert.equal(p.status, 200, p.text);

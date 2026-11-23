@@ -662,7 +662,7 @@ reviewers:
 
 - **The re-import question (section 8)** replaces part 1's fail-closed `manual_values_conflict`. An import that meets
   values written on the roster no longer blocks. The preview lists every such athlete in `manualValues.athletes`:
-  `{ athleteId, kind: entry | correction | restore, choice: keep | replace }`. It is present only then, so every other
+  `{ athleteId, kind: entry | correction | restore, choice: keep | replace, replaceAvailable }`. It is present only then, so every other
   preview and its hash are unchanged. Each of those athletes' results is listed in `changesToImported`, so the
   approval needs `acceptChanges` either way.
   - **Keep my values** is the default and needs no choice.
@@ -682,6 +682,13 @@ reviewers:
       choice, and v23 binds `changes_to_imported` to the stored preview's count.
   - A chosen athlete the import does not meet is refused: `400 invalid_manual_choice` against the stored preview, and
     the writer's `manual_choice_invalid` under the locks.
+  - **Only with a whole-session result** (the *Rukovodilac*, 2026-11-23, fail-closed): an entry is superseded only by
+    GPEXE's whole-session occasion. With drill results alone it would stay effective beside GPEXE's drill values, so
+    such an athlete is listed with `replaceAvailable: false` (Keep only; a correction is always `true`). A choice
+    preview or an approval naming them is `400 manual_replace_unavailable` against the stored preview, and the writer
+    refuses it under the locks with the same code (a stale preview: the choice preview answers `409 subset_blocked`).
+    Through the routes the case is not reachable today (an entry needs the session's imported whole-session values,
+    and a later drill-only answer first blocks on `identities_missing_from_source`); the guard is fail-closed.
 - **Remove these values** (the owner, 2026-11-22): `POST /api/training-activity/:activityId/manual-values/remove`
   `{ requestKey, athleteId, expectedOccasionId, note? }`.
   - It has the same frame as a save: the switch, the roster audience with the identical 404, the team's import
