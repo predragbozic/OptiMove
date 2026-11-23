@@ -522,9 +522,11 @@ export async function openGpexeCandidate(candidateId, render, { group = "", grou
   // J20-B: an unconfirmed subset approval keeps the set it was sent with; a reopened review restores it, so the whole session can never be
   // offered (and sent) in its place. The reviewed hash is not kept: the review is made again.
   const keptSet = Array.isArray(uncertain?.chosenExcluded) ? uncertain.chosenExcluded.map(String) : [];
+  // ST-4: and the athletes given GPEXE's values, so the import is never offered again with their roster values kept.
+  const keptReplace = Array.isArray(uncertain?.chosenReplace) ? uncertain.chosenReplace.map(String) : [];
   // ST-5: so does the session type it was sent with.
   const keptType = typeof uncertain?.chosenType === "string" ? uncertain.chosenType : null;
-  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, typeChoice: keptType, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
+  gx.detail = { id: candidateId, candidate: null, loading: true, error: null, acceptChanges: false, approving: false, outcome: uncertain, leaveOut: keptSet, useGpexe: keptReplace, typeChoice: keptType, subset: null, group: String(group || ""), groupIds: group ? groupIds.map(String) : [], fix };
   gx.linkConfirm = null;
   gx.linkOpen = "";
   gx.linkPicks = {};
@@ -607,6 +609,22 @@ export function setGpexeLeaveOut(gpexeAthleteId, checked) {
   return true;
 }
 
+// ST-4 (section 8): "Use GPEXE's values" for an athlete whose values were entered or corrected on the roster (unticked: keep
+// them, the default). A change of the set makes the choice review stale, like a change of the left-out set.
+export function setGpexeUseGpexe(athleteId, checked) {
+  const gx = g();
+  const detail = gx.detail;
+  if (!detail || detail.approving || detail.subset?.status === "loading") return false;
+  const id = String(athleteId);
+  const set = new Set(detail.useGpexe || []);
+  if (checked) set.add(id); else set.delete(id);
+  const next = [...set].sort();
+  if (next.join(",") === (detail.useGpexe || []).join(",")) return false;
+  detail.useGpexe = next;
+  detail.subset = null;
+  return true;
+}
+
 // ST-5: the session types offered in this workspace (GET /api/training-activity/session-types), read once per Imports visit.
 // A failed read leaves the review usable for a session that already has a type; the chooser says it could not be read.
 export async function loadSessionTypes(render, { again = false } = {}) {
@@ -642,31 +660,31 @@ export function setGpexeSessionType(typeKey) {
 }
 
 // The deliberate Review step: ONE request that asks the server for the preview of the reviewer's choice - without the ticked
-// athletes, with the chosen session type, or both. It stores nothing on the server; the answer is only used by the Import
-// button that follows it.
-export async function reviewGpexeSubset(ids, render) {
+// athletes, with the chosen session type, with GPEXE's values for athletes whose values were entered on the roster (ST-4,
+// `replace`), or any of them. It stores nothing on the server; the answer is only used by the Import button that follows it.
+export async function reviewGpexeSubset(ids, render, replace = []) {
   const gx = g();
   const detail = gx.detail;
   const candidate = detail?.candidate;
   const typeKey = detail?.typeChoice ?? null;
-  if (!candidate || detail.approving || detail.subset?.status === "loading" || (!ids.length && !typeKey)) return;
+  if (!candidate || detail.approving || detail.subset?.status === "loading" || (!ids.length && !typeKey && !replace.length)) return;
   const generation = gx.generation;
-  const sub = { status: "loading", ids: [...ids], typeKey };
+  const sub = { status: "loading", ids: [...ids], typeKey, replace: [...replace] };
   detail.subset = sub;
   render();
   try {
-    const body = { ...(ids.length ? { excludedAthleteIds: ids } : {}), ...(typeKey ? { activityTypeKey: typeKey } : {}) };
+    const body = { ...(ids.length ? { excludedAthleteIds: ids } : {}), ...(typeKey ? { activityTypeKey: typeKey } : {}), ...(replace.length ? { replaceManualAthleteIds: replace } : {}) };
     const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/preview`), { method: "POST", body: JSON.stringify(body) });
     if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
     const s = answer?.subset;
     if (!s || typeof s.subsetHash !== "string" || !s.preview) {
-      detail.subset = { status: "error", ids: [...ids], typeKey, error: { code: "bad_answer" } };
+      detail.subset = { status: "error", ids: [...ids], typeKey, replace: [...replace], error: { code: "bad_answer" } };
     } else {
-      detail.subset = { status: "ready", ids: [...(s.excludedAthleteIds || ids)], typeKey, subsetHash: s.subsetHash, previewHash: s.previewHash, preview: s.preview };
+      detail.subset = { status: "ready", ids: [...(s.excludedAthleteIds || ids)], typeKey, replace: [...(s.replaceManualAthleteIds || replace)], subsetHash: s.subsetHash, previewHash: s.previewHash, preview: s.preview };
     }
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
-    detail.subset = { status: "error", ids: [...ids], typeKey, error: errorInfo(error) };
+    detail.subset = { status: "error", ids: [...ids], typeKey, replace: [...replace], error: errorInfo(error) };
     // The list the chooser shows is out of date: read it again.
     if (detail.subset.error?.code === "session_type_not_offered") gx.sessionTypes = null;
   } finally {
@@ -695,6 +713,8 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
       if (subset.ids.length) body.excludedAthleteIds = subset.ids;
       // ST-5: the chosen session type travels with the same reviewed hash.
       if (subset.typeKey) body.activityTypeKey = subset.typeKey;
+      // ST-4: and so do the athletes given GPEXE's values.
+      if (subset.replace?.length) body.replaceManualAthleteIds = subset.replace;
       body.subsetHash = subset.subsetHash;
     }
     const result = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/approve`), { method: "POST", body: JSON.stringify(body) });
@@ -721,7 +741,7 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     } else {
       // A lost answer, a gateway error, a 503: the import may or may not be
       // in the database. Never "nothing was imported".
-      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks, chosenExcluded: subset ? [...subset.ids] : [], chosenType: subset?.typeKey ?? null };
+      detail.outcome = { kind: "unknown", error: info, verify: info.data?.verify || null, checks, chosenExcluded: subset ? [...subset.ids] : [], chosenType: subset?.typeKey ?? null, chosenReplace: subset ? [...(subset.replace || [])] : [] };
     }
     rememberOutcome(detail.id, detail.outcome);
   } finally {

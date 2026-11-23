@@ -1,3 +1,5 @@
+import { pagesEnabled } from './dashboardPages/config.js';
+import { createPagesRouter } from './dashboardPages/router.js';
 import { captureSimplePreviewRequestBytes } from './dashboardSimple/previewRouter.js';
 import { mediaRetentionDatabaseError } from './mediaReferences.js';
 import "dotenv/config";
@@ -92,6 +94,7 @@ function missingRoute(req, res) {
 
 const simpleRuntime = await createSimpleRuntime({ pool, poolMax: POOL_MAX, queryDashboard });
 app.locals.dashboardSimpleMode = simpleRuntime.mode;
+app.locals.dashboardPagesEnabled = pagesEnabled();
 // Parse first with the normal API rules, even for denied and anonymous requests.
 // Simple's routers still enforce their smaller limits using the captured length.
 app.use(express.json({ verify: captureSimplePreviewRequestBytes }));
@@ -193,6 +196,7 @@ app.use("/api/calendar", requireAuth, calendarRouter);
 // (self-view); coach-only lifecycle/write routes are gated by
 // canManageDashboardRow inside the router itself, same pattern as every
 // other training_load router above.
+if (app.locals.dashboardPagesEnabled) app.use("/api/training-load/dashboards", requireAuth, createPagesRouter({ pool }));
 app.use("/api/training-load/dashboards", requireAuth, trainingLoadDashboardRouter);
 app.use("/api/training-load/gpexe", requireAuth, gpexeImportRouter);
 // Source metric mapping administration (M2): a platform admin, or a club's

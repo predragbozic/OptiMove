@@ -1,3 +1,4 @@
+import {renderDashboardPages} from './training-load-pages-view.js';
 import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
 import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
@@ -79,6 +80,11 @@ function resultByWidgetId(widgetId) {
 function layoutFor(widget) {
   const draft = state.trainingLoad.analysis.layoutDraft?.find((entry) => entry.widgetId === widget.id);
   return draft || { widgetId: widget.id, x: widget.x, y: widget.y, width: widget.width, height: widget.height, mobileOrder: widget.mobile_order };
+}
+
+function pageBusy() {
+  const a = state.trainingLoad.analysis;
+  return Boolean(a.pagesAvailable && (a.pageLoading || a.pageSaving || a.pagePending));
 }
 
 function canEdit() {
@@ -386,7 +392,7 @@ function renderWidgetMenuHtml(widget) {
   if (!canEdit()) return "";
   const menuKey = `widget:${widget.id}`;
   const open = a.menu === menuKey;
-  const blocked = Boolean(a.editMode && a.layoutDraft);
+  const blocked = Boolean(a.editMode && a.layoutDraft) || pageBusy();
   const dataset = { "widget-id": widget.id };
   return `
     <div class="tl-popover-anchor tl-widget-menu-anchor ${open ? "is-open" : ""}">
@@ -394,10 +400,11 @@ function renderWidgetMenuHtml(widget) {
       ${open ? `
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu tl-popover-align-end" role="menu" tabindex="-1" aria-label="${escapeAttr(`Actions for ${widget.title}`)}">
-          ${blocked ? `<p class="tl-menu-note" role="note">Save or cancel the layout changes first.</p>` : ""}
+          ${blocked ? `<p class="tl-menu-note" role="note">${pageBusy() ? (a.pagePending ? "Check the pending page update before editing widgets." : "Wait until this page finishes updating.") : "Save or cancel the layout changes first."}</p>` : ""}
           ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: "Settings", dataset, disabled: blocked || a.saving })}
           ${menuItemHtml({ action: "training-load-analysis-open-advanced", label: "Advanced settings", dataset, disabled: blocked || a.saving })}
-          ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout" })}
+          ${a.pagesAvailable ? menuItemHtml({ action: "training-load-pages-open-copy", label: "Copy to page", dataset, disabled: blocked || a.saving }) : ""}
+          ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout", disabled: pageBusy() })}
           <div class="tl-menu-separator" role="separator"></div>
           ${menuItemHtml({ action: "training-load-analysis-delete-widget", label: "Delete widget", dataset, danger: true, disabled: blocked || a.saving })}
         </div>
@@ -582,7 +589,7 @@ function renderGridHtml() {
       </div>
       ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
-          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add widget</span></button>
+          <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget" ${pageBusy() ? "disabled" : ""}><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add widget</span></button>
         </div>
       ` : ""}
     </section>
@@ -598,7 +605,7 @@ function renderGridHtml() {
       : `<section class="panel tl-analysis-empty">
           <h3>No metrics yet</h3>
           <p class="muted">${canEdit() ? "Pick a metric (RPE, sRPE, duration or any catalog metric), choose how to show it, and it appears here." : "This dashboard has no widgets."}</p>
-          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget">Add your first metric</button></div>` : ""}
+          ${canEdit() ? `<div class="tl-analysis-empty-actions"><button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-add-widget" ${pageBusy() ? "disabled" : ""}>Add your first metric</button></div>` : ""}
         </section>`}
   `;
 }
@@ -921,6 +928,7 @@ export function renderTrainingLoadAnalysisHtml() {
     <div class="tl-analysis">
       <div${a.simpleEditor?.open ? ' inert' : ''}>
       ${renderTopBarHtml()}
+      ${renderDashboardPages()}
       ${a.simpleWorkspaceRequired ? '<p role="status">This club dashboard is outside your active workspace, so open a platform dashboard to use Simple.</p>' : ""}
       ${a.notice ? `<p class="tl-analysis-status" aria-live="polite">${escapeHtml(a.notice)}</p>` : ""}
       ${a.mutationError ? `<p class="builder-error" role="alert">${escapeHtml(a.mutationError)}</p>` : ""}

@@ -1,0 +1,65 @@
+[
+  {
+    "tgname": "dashboard_widgets_bump_parent_on_delete",
+    "signature": "training_load.dashboard_widgets_bump_parent_dashboard_revision()",
+    "body_md5": "4d2495c0884475299f69811f7e3b0831",
+    "definition": "CREATE TRIGGER dashboard_widgets_bump_parent_on_delete AFTER DELETE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_bump_parent_dashboard_revision()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_bump_parent_on_insert",
+    "signature": "training_load.dashboard_widgets_bump_parent_dashboard_revision()",
+    "body_md5": "4d2495c0884475299f69811f7e3b0831",
+    "definition": "CREATE TRIGGER dashboard_widgets_bump_parent_on_insert AFTER INSERT ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_bump_parent_dashboard_revision()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_bump_revision",
+    "signature": "training_load.dashboard_widgets_bump_revision()",
+    "body_md5": "a845d879d38d8a6dccf443736a34fe8f",
+    "definition": "CREATE TRIGGER dashboard_widgets_bump_revision BEFORE UPDATE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_bump_revision()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_check_no_overlap",
+    "signature": "training_load.dashboard_widgets_check_no_overlap()",
+    "body_md5": "4d67afabd6f05ad36fcba27b9fdb5fb0",
+    "definition": "CREATE CONSTRAINT TRIGGER dashboard_widgets_check_no_overlap AFTER INSERT OR UPDATE OF x, y, width, height ON training_load.dashboard_widgets DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_check_no_overlap()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_guard_presentation",
+    "signature": "training_load.dashboard_widgets_guard_presentation()",
+    "body_md5": "f66d2b259464e844e9f73df286761b6f",
+    "definition": "CREATE TRIGGER dashboard_widgets_guard_presentation BEFORE INSERT OR UPDATE ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_guard_presentation()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_lock_dashboard_before_layout_write",
+    "signature": "training_load.dashboard_widgets_lock_dashboard_before_layout_write()",
+    "body_md5": "587a5c613a2e69d578cd9af8e23150f9",
+    "definition": "CREATE TRIGGER dashboard_widgets_lock_dashboard_before_layout_write BEFORE INSERT OR UPDATE OF x, y, width, height ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_lock_dashboard_before_layout_write()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_protect_dashboard_id",
+    "signature": "training_load.protect_dashboard_widgets_dashboard_id()",
+    "body_md5": "dc61219b2601d30c239e507a10262a69",
+    "definition": "CREATE TRIGGER dashboard_widgets_protect_dashboard_id BEFORE UPDATE OF dashboard_id ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.protect_dashboard_widgets_dashboard_id()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_revalidate_series_on_type_change",
+    "signature": "training_load.dashboard_widgets_revalidate_series_on_type_change()",
+    "body_md5": "cc37fcbb542c99405a6801d0b50e9ea3",
+    "definition": "CREATE TRIGGER dashboard_widgets_revalidate_series_on_type_change AFTER UPDATE OF widget_type ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_revalidate_series_on_type_change()",
+    "enabled": "O"
+  },
+  {
+    "tgname": "dashboard_widgets_validate_layout",
+    "signature": "training_load.dashboard_widgets_validate_layout()",
+    "body_md5": "b43588b955a6aece5cac50db425312c0",
+    "definition": "CREATE TRIGGER dashboard_widgets_validate_layout BEFORE INSERT OR UPDATE OF widget_type, width, height ON training_load.dashboard_widgets FOR EACH ROW EXECUTE FUNCTION training_load.dashboard_widgets_validate_layout()",
+    "enabled": "O"
+  }
+]

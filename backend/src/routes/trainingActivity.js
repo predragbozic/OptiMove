@@ -25,7 +25,7 @@ import {
 import { athleteHasRecordedSessions, getCanonicalActivityResults, listActivities } from "../trainingActivityResults.js";
 import { getActivityRoster, RosterError } from "../activityRoster.js";
 import { getEstimateProposal, saveEstimate } from "../metricEstimateService.js";
-import { getManualValueForm, restoreMeasuredValues, saveManualValues } from "../manualValueService.js";
+import { getManualValueForm, removeManualValues, restoreMeasuredValues, saveManualValues } from "../manualValueService.js";
 import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
 import { SourceMetricMappingError } from "../sourceMetricAccess.js";
 import {
@@ -353,6 +353,8 @@ router.post("/:activityId/manual-values", rosterCommandRoute((ctx, activityId, r
   saveManualValues(ctx, activityId, req.body)));
 router.post("/:activityId/manual-values/restore", rosterCommandRoute((ctx, activityId, req) =>
   restoreMeasuredValues(ctx, activityId, req.body)));
+router.post("/:activityId/manual-values/remove", rosterCommandRoute((ctx, activityId, req) =>
+  removeManualValues(ctx, activityId, req.body)));
 
 // ------------------------------------------------------------
 // Match suggestions

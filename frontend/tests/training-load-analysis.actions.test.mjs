@@ -1410,3 +1410,7 @@ test('a shell selection over the shared limit gives a plain next step, never an 
   installFetchMock(async()=>({status:400,body:{error:'invalidRequest'}}));await queryAnalysisDashboard(()=>{});
   assert.equal(a.queryError,'Choose at most 200 clubs, teams and athletes in the filter.');assert.doesNotMatch(renderTrainingLoadAnalysisHtml(),/invalidRequest/);
 });
+
+test('Page reload/save/unknown outcome blocks programmatic widget creation before any request',async()=>{
+ for(const field of ['pageLoading','pageSaving','pagePending']){resetState();const a=state.trainingLoad.analysis;a.dashboard=dashboard();a.pagesAvailable=true;a[field]=true;installFetchMock(()=>{throw Error('A widget must not open against a changing Page')});await handleTrainingLoadAction(fakeAction({action:'training-load-analysis-add-widget'}),{renderTrainingLoad(){}});assert.equal(fetchCalls.length,0,field);assert.equal(a.metricPanel,null)}
+});

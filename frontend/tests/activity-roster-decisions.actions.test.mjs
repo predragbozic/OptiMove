@@ -634,3 +634,12 @@ test("a row write does not mark or close an open bulk picker", async () => {
   await p;
   assert.equal(roster.picker?.scope, "bulk", "the group picker stays open");
 });
+
+test("ST-4: a state refused because values were entered on the roster (manual_values_present) says so plainly and offers Change values… for that athlete", async () => {
+  const roster = await openRoster({ onWrite: () => ({ status: 409, body: { error: "manual_values_present", message: "x" } }) });
+  await act("training-load-roster-set", { athleteId: "ath-1", kind: "participated_no_values" });
+  const notice = roster.notices.rows["ath-1"];
+  assert.match(notice.text, /has values entered on the roster, so no state was saved\. Remove the values first to set a state\./);
+  assert.deepEqual(notice.action, { label: "Change values…", action: "training-load-roster-manual-open", athleteId: "ath-1" });
+  assert.match(html(), /data-action="training-load-roster-manual-open"\s+data-athlete-id="ath-1"[^>]*>Change values…</);
+});

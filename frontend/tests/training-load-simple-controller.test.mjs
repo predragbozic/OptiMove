@@ -762,3 +762,19 @@ test('a preview shell-limit refusal gives a plain next step',async()=>{
   const h=harness();h.context={...h.context,shellFilter:{clubIds:[],teamIds:[],athleteIds:Array.from({length:201},(_,i)=>`athlete-${i}`)}};await ready(h);
   h.reply('preview',()=>Promise.reject(apiError(400,'invalidRequest')));await h.controller.preview();assert.equal(h.controller.model.error,'Close the editor and choose at most 200 clubs, teams and athletes.');
 });
+
+test('Page preview carries Page identity/defaults revision and switching Page invalidates it',async()=>{
+ const h=harness();h.context={...h.context,pageId:'page-one',pageDefaultsRevision:3};
+ await ready(h);
+ const context=h.of('preview')[0].body.context;
+ assert.equal(context.kind,'page');assert.equal(context.pageId,'page-one');assert.equal(context.expectedPageDefaultsRevision,3);
+ h.context={...h.context,pageId:'page-two'};
+ const count=h.of('preview').length;await h.controller.preview();assert.equal(h.of('preview').length,count);
+ await h.controller.save();assert.equal(h.of('save').length,0);
+});
+
+test('Page defaults revision change invalidates the current preview',async()=>{
+ const h=harness();h.context={...h.context,pageId:'page-one',pageDefaultsRevision:3};await ready(h);
+ h.context={...h.context,pageDefaultsRevision:4};
+ await h.controller.save();assert.equal(h.of('save').length,0);
+});

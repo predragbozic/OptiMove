@@ -71,6 +71,12 @@ docs/runbooks/calculated-variables-v78*.sql text eol=lf
 docs/runbooks/calendar-questions-v81*.sql text eol=lf
 # ST-1 (v85): the rehearsal and the migration test read the runbook SQL by blocks and run the rollback as one script.
 docs/runbooks/session-types-v85*.sql text eol=lf
+
+# P1: SQL bodies and rollback hashes must be identical on Windows and Linux.
+migrations_v2/202611231000_training_load_v90_dashboard_pages_home.sql text eol=lf
+migrations_v2/202611231100_training_load_v91_dashboard_page_writers.sql text eol=lf
+docs/runbooks/dashboard-pages-*.sql text eol=lf
+backend/scripts/dashboard-pages-*.sh text eol=lf
 # ST-3 (v89): the rollback restores v4's merge and reparent bodies verbatim, compared by md5; new files only, same reason.
 docs/runbooks/participant-session-types-v89*.sql text eol=lf
 # Its rehearsal wrapper too (a CRLF bash script stops under Git Bash).

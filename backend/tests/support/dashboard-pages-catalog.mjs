@@ -1,0 +1,9 @@
+export const PAGE_CATALOG_SQL=`select jsonb_build_object(
+ 'relations',(select jsonb_agg(jsonb_build_array(c.relname,c.relkind,pg_get_userbyid(c.relowner),c.relacl,c.relrowsecurity,c.relforcerowsecurity) order by c.relname) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='training_load' and c.relname like 'dashboard%'),
+ 'policies',(select jsonb_agg(jsonb_build_array(tablename,policyname,permissive,roles,cmd,qual,with_check) order by tablename,policyname) from pg_policies where schemaname='training_load' and tablename like 'dashboard%'),
+ 'columns',(select jsonb_agg(jsonb_build_array(table_name,column_name,data_type,is_nullable,column_default) order by table_name,ordinal_position) from information_schema.columns where table_schema='training_load' and table_name like 'dashboard%'),
+ 'constraints',(select jsonb_agg(jsonb_build_array(c.conname,pg_get_constraintdef(c.oid)) order by c.conname,c.conrelid::regclass::text) from pg_constraint c join pg_class t on t.oid=c.conrelid join pg_namespace n on n.oid=t.relnamespace where n.nspname='training_load' and t.relname like 'dashboard%'),
+ 'indexes',(select jsonb_agg(indexdef order by indexname) from pg_indexes where schemaname='training_load' and tablename like 'dashboard%'),
+ 'functions',(select jsonb_agg(jsonb_build_array(p.oid::regprocedure::text,pg_get_functiondef(p.oid),p.proacl) order by p.oid::regprocedure::text) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='training_load' and (p.proname like '%dashboard%' or p.proname like '%home%' or p.proname like '%page%' or p.proname='save_simple_widget')),
+ 'triggers',(select jsonb_agg(jsonb_build_array(pg_get_triggerdef(t.oid),t.tgenabled) order by t.tgrelid::regclass::text,t.tgname) from pg_trigger t join pg_class r on r.oid=t.tgrelid join pg_namespace n on n.oid=r.relnamespace where n.nspname='training_load' and r.relname like 'dashboard%' and not t.tgisinternal)
+) catalog`;

@@ -61,6 +61,8 @@ export function resetActivityRoster(activityId) {
   r.retryBulk = null;
   r.retry = null;
   r.estimate = null;
+  // ST-4: the manual-values panel (activity-manual-values.js).
+  r.manual = null;
   // ST-5: the session type slice of this session (activity-session-type.js).
   r.types = null;
 }

@@ -32,11 +32,14 @@ async function seed(databaseUrl) {
       const name = `${first} Example`;
       const id = (await client.query("insert into public.users(email,first_name,last_name,full_name,display_name,password_hash) values($1,$2,'Example',$3,$3,$4) returning id", [`${role}@shell-test.invalid`,first,name,hashPassword(crypto.randomBytes(24).toString('base64url'))])).rows[0].id;
       if (role === 'platform_admin') await client.query("insert into public.user_global_roles(user_id,role,is_active) values($1,'platform_admin',true)", [id]);
-      else await client.query('update public.athletes set user_id=$1 where id=$2', [id,athleteIds[0]]);
-      await client.query('insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,$2,null)', [id,type]);
+      else if (role === 'athlete') await client.query('update public.athletes set user_id=$1 where id=$2', [id,athleteIds[0]]);
+      else if (role === 'independent_coach') await client.query("insert into public.user_global_roles(user_id,role,is_active) values($1,'independent_coach',true)", [id]);
+      else if (role === 'club_admin') await client.query("insert into public.user_club_roles(user_id,club_id,role,is_active) values($1,$2,'club_admin',true)", [id,clubA]);
+      else if (role === 'team_coach') await client.query("insert into public.user_team_roles(user_id,team_id,role,is_active) values($1,$2,'team_coach',true)", [id,teamA]);
+      await client.query('insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,$2,$3)', [id,type,type==='club'?clubA:type==='team'?teamA:null]);
       return { role,id,sessionToken:await createSession(id,client) };
     };
-    const accounts = [await account('platform_admin','platform','Platform Admin'), await account('athlete','athlete','Ana')];
+    const accounts = [await account('platform_admin','platform','Platform Admin'), await account('athlete','athlete','Ana'), await account('club_admin','club','Club Admin'), await account('team_coach','team','Team Coach'), await account('independent_coach','private_coach','Private Coach')];
     return { accounts,ids:{clubA,clubB,teamA,teamA2,teamB,athleteIds} };
   } finally { await client.end(); }
 }
@@ -49,7 +52,7 @@ async function freePort() {
   });
 }
 
-export async function startDashboardShellFixture() {
+export async function startDashboardShellFixture({ envOverrides = {} } = {}) {
   const db = await createDisposableDatabase({prefix:'dashboard',label:'shell_http'});
   let child;
   const stop = async () => {
@@ -71,7 +74,7 @@ export async function startDashboardShellFixture() {
     await runMigrations({databaseUrl:db.url,migrationsRoot});
     const seeded=await seed(db.url);
     const port=await freePort(),baseUrl=`http://127.0.0.1:${port}`;
-    const env={...process.env,DATABASE_URL:db.url,PORT:String(port),NODE_ENV:'development'};
+    const env={...process.env,...envOverrides,DATABASE_URL:db.url,PORT:String(port),NODE_ENV:'development'};
     for (const key of Object.keys(env)) if (/^(SUPABASE|RENDER|GPEXE_API_TOKEN|SOURCE_CREDENTIAL_|APP_ERROR_USER_HASH_KEYS)/.test(key)) delete env[key];
     env.SOURCE_CREDENTIAL_KEYS=generateKeyEntry(1);
     env.APP_ERROR_USER_HASH_KEYS=generateKeyEntry(2);

@@ -87,6 +87,8 @@ import {
   setCentralCalendarQuestionWindow,
 } from "./central-calendar-event-form.js";
 import {
+  centralCalendarAddToEventDone,
+  centralCalendarAddToEventOffers,
   centralCalendarDeleteEventDone,
   centralCalendarDeleteRefusedKey,
   centralCalendarEventLinkable,
@@ -1670,7 +1672,7 @@ function rememberLinkWrite(spec) {
   const entry = {
     mode: spec.family === "question" ? "question" : "link", act: spec.act, kind: spec.kind || "", questionId: spec.questionId || "", eventId: spec.eventId, eventTitle: spec.eventTitle, requestKey: spec.requestKey,
     path: spec.path, sentBody: spec.body, name: spec.name, panelKey: spec.panelKey, date: spec.date, eventKey: spec.eventKey,
-    pairKey: spec.pairKey || "",
+    pairKey: spec.pairKey || "", method: spec.method || "POST",
   };
   uncertainWrites.set(key, [...(uncertainWrites.get(key) || []).filter((other) => other.requestKey !== spec.requestKey), entry]);
 }
@@ -1697,6 +1699,15 @@ function linkSpecOf(cal, dataset) {
       || cal.deleteStep.revision !== panelItem.revision) return null;
     name = centralCalendarTitle(panelItem);
     pairKey = centralCalendarDeleteRefusedKey(panelItem.eventId);
+  } else if (act === "add-activity" || act === "add-rpe") {
+    // K5-3: only an offer the panel shows now (the rule over the loaded answer, a refused pair excluded).
+    const offer = centralCalendarAddToEventOffers(cal.data, panelItem, cal.linkRefused).find((entry) => entry.item.key === dataset.eventKey && !entry.refused);
+    if (!offer || (act === "add-activity") !== (panelItem.kind === "activity")) return null;
+    event = offer.item;
+    if (act === "add-activity") fields.activityId = String(panelItem.links.activityIds[0]);
+    else fields.externalScheduleId = String(panelItem.links.externalScheduleId);
+    name = centralCalendarTitle(panelItem);
+    pairKey = centralCalendarRefusedPairKey(event.eventId, panelItem);
   } else if (act === "link-to-event") {
     if (panelItem.kind !== "planned") return null;
     event = findItemOnDay(cal, dataset.eventKey, panelItem.date);
@@ -1744,7 +1755,7 @@ function linkSpecOf(cal, dataset) {
     eventId: event.eventId, requestKey, expectedRevision: eventRevisionOf(cal, event), ...fields, confirmDisableWithResults: act === "align-results",
   });
   return {
-    act, wire, requestKey, path: request.path, body: request.body, name, pairKey,
+    act, wire, requestKey, path: request.path, method: request.method || "POST", body: request.body, name, pairKey,
     eventId: event.eventId, eventKey: event.key, eventTitle: centralCalendarTitle(event), date: event.date,
     panelKey: panelItem.key, plannedKey: dataset.plannedKey || "", activityKey: dataset.activityKey || "",
     group: dataset.group || "", activityId: fields.activityId || "",
@@ -1775,6 +1786,7 @@ function focusLinkStatus() {
 function wireOf(act) {
   if (String(act).startsWith("question-")) return "question";
   if (act === "link-to-event") return "link-session";
+  if (act === "add-activity") return "link-activity";
   if (act === "align-confirm" || act === "align-results") return "align";
   return act;
 }
@@ -1788,7 +1800,7 @@ function showLinkText(cal, text, { alert = false, family = "link", at = null } =
   const item = cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
   const sectionShown = item && (family === "question"
     ? Boolean(cal.panelQuestions && cal.panelQuestions.key === item.key && !cal.panelQuestions.hidden)
-    : centralCalendarEventLinkable(item) || item.kind === "planned");
+    : centralCalendarEventLinkable(item) || item.kind === "planned" || item.kind === "activity" || item.kind === "external");
   if (sectionShown) {
     cal.linkMessage = { panelKey: item.key, text, alert, family, at: at ? { kind: at.kind || "", questionId: at.questionId || "" } : null };
     cal.notice = "";
@@ -1822,7 +1834,7 @@ async function sendLinkWrite(cal, spec, render, { check = false } = {}) {
   let data = null;
   let info = null;
   try {
-    data = await sendCentralCalendarLinkWrite(spec.path, spec.body);
+    data = await sendCentralCalendarLinkWrite(spec.path, spec.body, spec.method);
   } catch (failure) {
     info = centralCalendarErrorInfo(failure);
   }
@@ -1887,7 +1899,7 @@ async function checkLinkWrite(cal, entry, render, { openPanel = false } = {}) {
   const spec = {
     family: entry.mode === "question" ? "question" : "link", kind: entry.kind || "", questionId: entry.questionId || "",
     act: entry.act, wire: wireOf(entry.act), requestKey: entry.requestKey,
-    path: entry.path, body: entry.sentBody, name: entry.name, pairKey: entry.pairKey, eventId: entry.eventId,
+    path: entry.path, method: entry.method || "POST", body: entry.sentBody, name: entry.name, pairKey: entry.pairKey, eventId: entry.eventId,
     eventKey: entry.eventKey, eventTitle: entry.eventTitle, date: entry.date, panelKey: entry.panelKey,
   };
   await sendLinkWrite(cal, spec, render, { check: true });
@@ -1921,12 +1933,15 @@ async function linkSettled(cal, spec, data, render) {
     return;
   }
   const fromPlanned = spec.act === "link-to-event";
+  // K5-3: an added activity or RPE request folds into the event, so the panel moves there too.
+  const added = spec.act === "add-activity" || spec.act === "add-rpe";
   const stayed = cal.panel.open && cal.panel.key === spec.panelKey;
-  const target = stayed ? (fromPlanned ? { panelKey: spec.eventKey, panelDate: spec.date } : { panelKey: spec.panelKey, panelDate: cal.panel.date }) : {};
+  const target = stayed ? (fromPlanned || added ? { panelKey: spec.eventKey, panelDate: spec.date } : { panelKey: spec.panelKey, panelDate: cal.panel.date }) : {};
   if (!(await rereadForLinks(cal, render, target))) return;
   const event = findItemOnDay(cal, spec.eventKey, spec.date);
-  const text = centralCalendarLinkDoneText(spec.wire, { name: spec.name, data, event });
-  const done = fromPlanned ? `Linked to “${spec.eventTitle}”.${text.replace(/^Linked “[^”]*”\./, "")}` : text;
+  const text = added ? "" : centralCalendarLinkDoneText(spec.wire, { name: spec.name, data, event });
+  const done = added ? centralCalendarAddToEventDone(event || { title: spec.eventTitle })
+    : fromPlanned ? `Linked to “${spec.eventTitle}”.${text.replace(/^Linked “[^”]*”\./, "")}` : text;
   if (spec.wire === "align") {
     cal.alignStep = null;
     const alignment = data?.alignment || {};
@@ -2456,6 +2471,15 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   }
   if (type === "central-calendar-delete-keep") {
     if (!cal.linkWrite) cal.deleteStep = null;
+    render?.();
+    return true;
+  }
+  // K5-3: [Leave] - this card is not offered again until the page is loaded again (in memory only, nothing sent).
+  if (type === "central-calendar-add-leave") {
+    const item = cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
+    if (!item || cal.linkWrite) return true;
+    cal.addToEventLeft.add(item.key);
+    if (cal.linkMessage?.panelKey === item.key) cal.linkMessage = null;
     render?.();
     return true;
   }
