@@ -13,7 +13,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ENFORCED_PERMISSIONS, HONOURED_PERMISSIONS, PERMISSIONS, STORABLE_PERMISSIONS } from "../src/permissions.js";
+
+// permissions.js imports authz.js, which imports db.js, which needs a URL even to construct its lazy pool. This
+// unreachable loopback placeholder is never connected to (the unit runner scrubs every real database target).
+process.env.DATABASE_URL ??= "postgresql://gates_fixture@127.0.0.1:1/gates_no_database";
+const { ENFORCED_PERMISSIONS, HONOURED_PERMISSIONS, PERMISSIONS, STORABLE_PERMISSIONS } = await import("../src/permissions.js");
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
 function files(dir) {
