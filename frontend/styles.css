@@ -22967,6 +22967,25 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   }
 }
 
+/* K5-3: "Add to the event?" in a lone activity's or RPE request's panel. */
+.cc-add-question {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cc-add-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 390px) {
+  .cc-add-buttons .cc-link-button {
+    flex: 1 1 0;
+  }
+}
+
 /* K2b-2a-2b: the panel's "Questions for athletes" (contract 4.2, 6). */
 .cc-panel-questions {
   display: grid;

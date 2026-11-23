@@ -443,7 +443,7 @@ export const setCentralCalendarEventFields = (eventId, body) => eventWrite(`${ev
 // K2c-1: a link command of an event (central-calendar-links.js builds the
 // path and the body: /sessions, /sessions/detach, /sessions/align,
 // /activities, /activities/detach), sent again unchanged by Check result.
-export const sendCentralCalendarLinkWrite = (path, body) => eventWrite(path, "POST", body);
+export const sendCentralCalendarLinkWrite = (path, body, method = "POST") => eventWrite(path, method === "PATCH" ? "PATCH" : "POST", body);
 // K2b-2a-2b: an event's questions. The read is for a manager while the club's
 // switch is on (the identical 404 otherwise); the three writes take
 // { requestKey, expectedRevision, ... } and are sent again unchanged by Check
