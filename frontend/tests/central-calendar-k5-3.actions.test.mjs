@@ -229,7 +229,7 @@ test("3. an RPE request's panel: Add sends one PATCH with only externalScheduleI
   const { calls } = await start();
   await open(`external:${EXT1}:${D}`);
   assert.match(section().textContent, /Add to “Training 10:00”\?/);
-  assert.match(section().textContent, /collects this RPE request/);
+  assert.match(section().textContent, /will collect this RPE request/);
   await press(addButtons()[0]);
   await tick();
   const writes = writesOf(calls);
@@ -274,6 +274,30 @@ test("6. a refusal: one plain sentence, the pair kept without its Add, nothing r
   assert.equal(state.centralCalendar.panel.key, `external:${EXT1}:${D}`, "the panel stays");
   assert.equal(addButtons().length, 0, "no Add for the refused pair");
   assert.match(section().textContent, /This event already takes RPE another way\./);
+  assert.match(section().textContent, /Can't be added to an event on this day\./, "no question offering a missing choice");
+  assert.doesNotMatch(section().textContent, /Add to one of these events\?/);
+  assert.equal(dom().querySelector('[data-action="central-calendar-add-leave"]').textContent, "Hide");
+});
+
+test("6b. an RPE-channel refusal is offered again once the event changed (its revision moved)", () => {
+  const pair = links.centralCalendarRefusedPairKey(E1, EXT());
+  for (const code of ["rpe_from_question", "rpe_from_sessions"]) {
+    const refused = new Map([[pair, { code, revision: 1 }]]);
+    const data = (revision) => ({ days: [{ date: D, items: [TRAINING({ revision }), EXT()] }] });
+    assert.notEqual(links.centralCalendarAddToEventOffers(data(1), EXT(), refused)[0].refused, "", `${code}: kept while the event is as it was`);
+    assert.equal(links.centralCalendarAddToEventOffers(data(2), EXT(), refused)[0].refused, "", `${code}: offered again`);
+  }
+  const kept = new Map([[pair, { code: "schedule_already_referenced", revision: 1 }]]);
+  assert.notEqual(links.centralCalendarAddToEventOffers({ days: [{ date: D, items: [TRAINING({ revision: 2 }), EXT()] }] }, EXT(), kept)[0].refused, "", "a schedule refusal stays");
+});
+
+test("1c. an RPE schedule an event of the loaded range already refers to is not offered on another day", () => {
+  const tomorrow = addDaysIso(D, 1);
+  const elsewhere = eventItem(E2, { date: tomorrow, key: `event:${E2}:${tomorrow}`, athleteIds: [A1, A2], links: { ...TRAINING().links, eventId: E2, externalScheduleId: EXT1 } });
+  const data = { days: [{ date: D, items: [TRAINING(), EXT()] }, { date: tomorrow, items: [elsewhere] }] };
+  assert.deepEqual(links.centralCalendarAddToEventOffers(data, EXT()), []);
+  const cancelledElsewhere = { ...elsewhere, cancelled: true };
+  assert.deepEqual(links.centralCalendarAddToEventOffers({ days: [data.days[0], { date: tomorrow, items: [cancelledElsewhere] }] }, EXT()).map((o) => o.item.eventId), [E1], "a cancelled event frees it");
 });
 
 test("7. a lost answer: Result not confirmed, the panel's buttons off; Check result sends the same request and settles it", async () => {
@@ -306,10 +330,15 @@ test("7b. a lost PATCH: Check result sends PATCH again, never a POST", async () 
   assert.deepEqual(writesOf(calls).map((c) => c.method), ["PATCH", "PATCH"]);
 });
 
-test("8. a reader, the athlete view and a cancelled event: no question", async () => {
+test("8. a reader's and a cancelled event: no question in the panel", async () => {
   await start({ items: [TRAINING({ canManage: false, details: undefined, alignment: undefined }), ACT()] });
   await open(`activity:${ACT1}`);
-  assert.equal(section(), null);
+  assert.equal(section(), null, "a reader's event");
+  clearAllViewCache();
+  resetCentralCalendarForWorkspaceChange();
+  await start({ items: [TRAINING({ cancelled: true, status: "cancelled" }), ACT()] });
+  await open(`activity:${ACT1}`);
+  assert.equal(section(), null, "a cancelled event");
 });
 
 test("9. a forged press for an event that is not offered sends nothing", async () => {

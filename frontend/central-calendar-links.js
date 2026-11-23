@@ -51,6 +51,9 @@ export function centralCalendarRefusedPairKey(eventId, item) {
 // { code, revision }: the server's code and the event's revision it was sent
 // with).
 const NOT_TARGETED = new Set(["athlete_not_targeted", "activity_not_targeted"]);
+// K5-3: refusals the coach can clear by changing the same event (its RPE question, its linked trainings, its
+// targets) hold only while the event is as it was, like the "not targeted" ones.
+const EVENT_BOUND = new Set([...NOT_TARGETED, "rpe_from_question", "rpe_from_sessions"]);
 export function centralCalendarRefusedReason(code) {
   if (code === "session_already_attached" || code === "activity_already_attached") return "Already linked to another event.";
   if (NOT_TARGETED.has(code)) return "Some athletes are not in this event.";
@@ -64,7 +67,7 @@ export function centralCalendarRefusedReason(code) {
 function refusalOf(refused, key, event) {
   const entry = refused?.get?.(key);
   if (!entry) return "";
-  if (NOT_TARGETED.has(entry.code) && Number(entry.revision) !== Number(event?.revision)) return "";
+  if (EVENT_BOUND.has(entry.code) && Number(entry.revision) !== Number(event?.revision)) return "";
   return centralCalendarRefusedReason(entry.code);
 }
 
@@ -132,6 +135,10 @@ export function centralCalendarAddToEventKind(item) {
 export function centralCalendarAddToEventOffers(data, item, refused = new Map()) {
   const what = centralCalendarAddToEventKind(item);
   if (!what) return [];
+  // A recurring RPE schedule has a card per day, and only one planned event may refer to it: once an event of the
+  // loaded range refers to it, no other day's card offers it (the server would answer schedule_already_referenced).
+  if (what === "rpe" && (data?.days || []).some((day) => (day.items || []).some((other) => other.kind === "event" && !other.cancelled
+    && String(other.links?.externalScheduleId || "") === String(item.links.externalScheduleId)))) return [];
   const out = [];
   for (const event of dayItems(data, item.date)) {
     if (!centralCalendarEventLinkable(event) || !CENTRAL_CALENDAR_ADD_EVENT_KINDS.includes(event.eventKind)) continue;
@@ -154,9 +161,10 @@ export function centralCalendarAddToEventName(event) {
 }
 export const centralCalendarAddToEventQuestion = (event) => `Add to “${centralCalendarAddToEventName(event)}”?`;
 export const CENTRAL_CALENDAR_ADD_TO_EVENT_HINT = Object.freeze({
-  activity: "The activity then shows inside the event. Unlink in the event undoes it.",
-  rpe: "The event then collects this RPE request. Edit the event to remove it.",
+  activity: "It will show inside the event. To undo, open the event and choose Unlink.",
+  rpe: "The event will collect this RPE request. To undo, edit the event.",
 });
+export const CENTRAL_CALENDAR_ADD_TO_EVENT_NONE = "Can't be added to an event on this day.";
 export const centralCalendarAddToEventDone = (event) => `Added to “${centralCalendarAddToEventName(event)}”.`;
 
 const normalizedName = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -321,7 +329,7 @@ const REFUSALS = Object.freeze({
   rpe_from_question: "This event already asks athletes for RPE; remove that question first. Nothing was saved.",
   // K5-3: an RPE request added to an event (PATCH).
   rpe_from_sessions: "This event takes RPE from its linked trainings, so it can't take this RPE request. Nothing was saved.",
-  schedule_not_available: "This RPE request can't be added to this event here. Nothing was saved.",
+  schedule_not_available: "This RPE request can't be added to this event. Nothing was saved.",
   schedule_already_referenced: "This RPE request already belongs to another event. Nothing was saved.",
   try_again: "The calendar is busy. Nothing was saved; try again in a moment.",
   request_key_reused: "This could not be sent. Nothing was saved; try again.",

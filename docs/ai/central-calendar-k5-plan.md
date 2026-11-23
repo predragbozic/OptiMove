@@ -107,6 +107,31 @@ with [Add] and [Leave].
   change is needed.
 - The rule of one RPE channel per event holds, and its refusals read as the sentences of #643.
 
+**As built (K5-3, the pull request that adds this note; frontend only, no route change).** The OptiMove manager's
+decisions of 2026-11-22 replaced "its own contract first":
+- **A1:** the plan's version above (a lone card's panel asks), not an offer while a training is created.
+- **A2:** a test schedule is never offered. The database and `checkScheduleRefs` take a test schedule only on an
+  event of kind `test` (`schedule_kind_mismatch`), so a training or a match can never take one.
+- **A3:** reviewed by `code-reviewer`, `mobile-qa` and `ux-design-reviewer`.
+- **The rule** (`centralCalendarAddToEventOffers`, `frontend/central-calendar-links.js`), over the calendar answer
+  already loaded. The event must be a manager's planned event of kind `training` or `match` on the card's day.
+  - An activity: at least one athlete in common (the rule of `attachActivity`), and a start in the half of the day
+    the event covers (O15, `k3EventHalf`). With no start, or an event with no time, there is no limit. Sent as
+    `POST /api/calendar/events/:eventId/activities`.
+  - An RPE request: every one of its athletes is a target of the event (the only case in which the event card folds
+    it), the event refers to no RPE schedule yet (a PATCH would replace it), the event has no linked training
+    (`rpe_from_sessions`), and no event of the loaded range already refers to the same schedule (one planned event
+    per schedule). **No half-of-day rule:** the card's time is when the RPE opens (`opens_time`), not when the
+    athletes trained. Sent as `PATCH /api/calendar/events/:eventId` with `externalScheduleId` only.
+- **[Leave]** sends nothing and hides the question for that card until the page is loaded again (in memory). When
+  every offered event was refused, the panel says "Can't be added to an event on this day." and the button reads
+  Hide.
+- **Refusals:** one plain sentence each. `rpe_from_question` and `rpe_from_sessions` are remembered for the pair only
+  while the event's revision is unchanged, like the "not targeted" ones. `schedule_not_available` and
+  `schedule_already_referenced` are remembered until the page is loaded again.
+- **A lost answer:** *Result not confirmed* with Check result, which sends the same method, path and body.
+- Tests: `frontend/tests/central-calendar-k5-3.actions.test.mjs`.
+
 ### K5-4 — GPS sessions waiting for import (the OptiMove manager's answers, 2026-11-19)
 
 The manager agrees with the direction, on one condition: the calendar **writes nothing into another module and

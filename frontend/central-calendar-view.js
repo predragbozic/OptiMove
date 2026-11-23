@@ -9,6 +9,7 @@ import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } fro
 import { renderK2c3FormBandHtml, renderK3PanelHtml, renderK3SheetHtml } from "./central-calendar-k3-view.js";
 import {
   CENTRAL_CALENDAR_ADD_TO_EVENT_HINT,
+  CENTRAL_CALENDAR_ADD_TO_EVENT_NONE,
   CENTRAL_CALENDAR_ALIGN_NOT_ALLOWED,
   CENTRAL_CALENDAR_LINK_EMPTY,
   CENTRAL_CALENDAR_LINKED_HINT,
@@ -1401,7 +1402,8 @@ function renderAddToEventHtml(item, cal, pending) {
   const off = busy || Boolean(pending);
   const act = what === "activity" ? "add-activity" : "add-rpe";
   const meta = (event) => [centralCalendarWhenLabel(event), eventKindWord(event)].filter(Boolean).join(" · ");
-  const leave = `<button type="button" class="plain-button cc-panel-button cc-link-button" data-action="central-calendar-add-leave"${off ? " disabled" : ""}>Leave</button>`;
+  const addable = offers.some((offer) => !offer.refused);
+  const leave = `<button type="button" class="plain-button cc-panel-button cc-link-button" data-action="central-calendar-add-leave"${off ? " disabled" : ""}>${addable ? "Leave" : "Hide"}</button>`;
   let body;
   if (offers.length === 1 && !offers[0].refused) {
     const { item: event } = offers[0];
@@ -1409,7 +1411,7 @@ function renderAddToEventHtml(item, cal, pending) {
       <p class="cc-link-meta">${escapeHtml(meta(event))}</p>
       <div class="cc-add-buttons">${linkButtonHtml({ act, label: "Add", attrs: `data-event-key="${escapeAttr(event.key)}"`, busy: busyOn(cal, act, "eventKey", event.key), off, primary: true, aria: `Add to ${centralCalendarAddToEventName(event)}` })}${leave}</div>`;
   } else {
-    body = `<p class="cc-add-question">Add to one of these events?</p><ul class="cc-link-list" role="list">${offers.map(({ item: event, refused }) => {
+    body = `<p class="cc-add-question">${addable ? "Add to one of these events?" : escapeHtml(CENTRAL_CALENDAR_ADD_TO_EVENT_NONE)}</p><ul class="cc-link-list" role="list">${offers.map(({ item: event, refused }) => {
       const button = linkButtonHtml({ act, label: "Add", attrs: `data-event-key="${escapeAttr(event.key)}"`, busy: busyOn(cal, act, "eventKey", event.key), off, aria: `Add to ${centralCalendarAddToEventName(event)}` });
       return linkRowHtml(centralCalendarTitle(event), meta(event), button, refused);
     }).join("")}</ul><div class="cc-add-buttons">${leave}</div>`;
@@ -1417,7 +1419,7 @@ function renderAddToEventHtml(item, cal, pending) {
   return `<section class="cc-panel-links cc-add-event" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}>
       <h4 class="cc-panel-subtitle" id="ccLinksTitle" tabindex="-1">Add to an event</h4>
       ${feedback}${body}
-      <p class="cc-panel-note cc-link-hint">${escapeHtml(CENTRAL_CALENDAR_ADD_TO_EVENT_HINT[what])}</p>
+      ${addable ? `<p class="cc-panel-note cc-link-hint">${escapeHtml(CENTRAL_CALENDAR_ADD_TO_EVENT_HINT[what])}</p>` : ""}
     </section>`;
 }
 
