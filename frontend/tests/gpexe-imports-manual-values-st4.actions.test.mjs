@@ -287,3 +287,18 @@ test("8. the outcome labels: Your values kept / GPEXE's values used", async () =
   assert.match(page, /GPEXE(?:'|&#0?39;)s values used/);
   assert.doesNotMatch(page, /saved aside/);
 });
+
+test("9. the summary at the top of the review links to the choice only when the choice is on the page: a session that can't be approved right now shows neither", async () => {
+  manualValues = { athletes: [{ athleteId: "ath-1", kind: "entry", choice: "keep", replaceAvailable: true }] };
+  resetState();
+  approval = null;
+  responder = server({ teamStatus: { enabled: true, canApprove: true }, candidates: [row({ approvalBlockers: ["team_import_switch_off"] })], onSubset: async (call) => subsetOk(call), onApprove: async () => ({ status: 500, body: {} }) });
+  await act("training-load-section", { section: "imports" });
+  await act("training-load-gpexe-open", { candidateId: "cand-1" });
+  const page = html();
+  assert.doesNotMatch(page, /href="#gpexe-manual-choice"/);
+  assert.doesNotMatch(page, /id="gpexe-manual-choice"/);
+  await openReview();
+  assert.match(html(), /href="#gpexe-manual-choice"/);
+  assert.match(html(), /id="gpexe-manual-choice"/);
+});

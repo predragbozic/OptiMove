@@ -2861,7 +2861,7 @@ function renderReviewTableHtml(preview, c, detail = state.trainingLoad.gpexe.det
     <section class="gpexe-review-table" aria-label="Session review">
       <h4>Session review (${plural(rows.length, "athlete", "athletes")})</h4>
       <p class="muted">${n ? `${plural(n - Math.min(n, leaveOutIds(c, detail).length), "athlete is", "athletes are")} ready to import${partOnly ? ` (${partOnly} participation only)` : ""}${leaveOutIds(c, detail).length ? `, ${leaveOutIds(c, detail).length} left out` : ""}.` : "No athlete can be imported yet."}${needLink ? ` ${plural(needLink, "athlete needs", "athletes need")} a link first.` : ""}</p>
-      ${state.trainingLoad.gpexe.status?.viewer?.canApprove === true && c?.status === "pending" ? manualSummaryHtml(c) : ""}
+      ${manualValueAthletes(c).length && c?.status === "pending" && renderApproveHtml(c, detail, state.trainingLoad.gpexe.status).includes('id="gpexe-manual-choice"') ? manualSummaryHtml(c) : ""}
       ${updating}${updateError}
       ${lo.offered && rows.some((r) => r.status === "importable" || r.status === "participation") ? `<p class="muted">To import without someone, tick Leave out on their row${fine.length && shown.length && filter !== "all" ? ` (open "${escapeHtml(plural(fine.length, "athlete is fine", "athletes are fine"))}" below)` : ""}.</p>` : ""}
       ${lo.states && stateAthleteIds(c, detail).length ? `<p class="muted">Attendance you choose on a row is optional. It is saved right after the import, and you can change it later in the Roster tab.</p>` : ""}
