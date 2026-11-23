@@ -36,8 +36,9 @@ Read against the checked-out P1 head, not the old draft descriptions:
 
 One NEW migration is expected for consolidated validation and compatible-series
 checks, rather than the six sequential validator replacements from #391–#397.
-No slot is claimed: v92 and v93 are reserved elsewhere; request the owner's final
-number/prefix (possibly v94) before writing any migration file. Never rename/replay
+Owner confirmed v94 / 202611261000. The new file will be
+migrations_v2/202611261000_training_load_v94_chart_shapes.sql.
+v92 / 202611241000 (roles) and v93 / 202611251000 (calendar delete) are independent. Never rename/replay
 an old migration or widen dashboard_builtin_series for these display variants.
 Whether any sanctioned function body also needs replacement is part of the final
 SQL dependency inventory, not assumed to be CREATE-only.
@@ -149,7 +150,7 @@ and coordinate before editing it. No multi-variable Simple table in this topic.
 ## Verification packet and review checkpoints
 
 1. Before implementation: confirm this validation/pairing/distribution contract and
-   allocate the fresh migration prefix. Review the exact field allow-lists and
+   use the owner-confirmed v94 / 202611261000 slot. Review the exact field allow-lists and
    bounds, old/new-server compatibility, and dependent function/trigger inventory.
 2. Disposable DB tests: JS/SQL validation parity; each form's allowed/refused shapes;
    both Page and legacy save/edit/copy/clone; rollback refusal after new payloads;
@@ -185,3 +186,55 @@ migration, production setting or #741 file changed. No tests/build/browser/migra
 were run for this docs-only increment. SQL replacement list, concrete limits and
 old-server rehearsal remain to be verified during implementation after review; this
 is not a readiness claim. No head is frozen while #741 remains under review.
+
+## Confirmed v94 migration packet (owner instruction)
+
+Slot: migrations_v2/202611261000_training_load_v94_chart_shapes.sql.
+Apply on top of the exact approved v91, with v90 transitively required. Pin the final
+v90/v91 checksums and affected function bodies after #741 review is complete; do not
+bake the currently reviewed P1 bodies into a supposedly final P2 gate. If #741 changes,
+refresh the baseline and rerun the packet before freezing.
+
+v92 and v93 may each be recorded or absent, in either production application order.
+Do not require a highest label or a last-applied row. Their unrelated objects are not
+P2 prerequisites. Fresh installation sorts filenames; an existing installation applies
+new files in merge order. Test both situations without editing those migrations.
+Unknown changes to an affected function/trigger still abort, independently of labels.
+
+Required files, implemented together after the presentation contract is confirmed:
+
+- docs/runbooks/dashboard-chart-shapes-v94.md: order, exact prerequisites and rollback
+  boundary; owner authorization and one-migration deploy/postcheck.
+- docs/runbooks/dashboard-chart-shapes-v94-preflight.sql: exact dependency/checksum and
+  function-body gates, current affected constraints/triggers, counts/digests of existing
+  presentation payloads, and bounded lock expectations. No production writes.
+- docs/runbooks/dashboard-chart-shapes-v94-postcheck.sql: one recorded checksum, expected
+  bodies/constraints/triggers enabled, unchanged old widget/series rows and revisions.
+- docs/runbooks/dashboard-chart-shapes-v94-rollback.sql: lock out competing sanctioned
+  writes, check current v94 bodies, refuse incompatible/later dependent schema and real
+  P2 writes, restore predecessor bodies verbatim, verify every restored body md5 before
+  committing. Never erase widgets or receipts to make rollback pass. A real-use marker
+  must survive removal/editing of a new presentation; checking only currently visible
+  new-shaped widgets is insufficient. Exact marker mechanism remains a design item.
+- backend/scripts/dashboard-chart-shapes-v94-rehearsal.sh and .ps1: one command creates
+  a uniquely named disposable database, prints sanitized target and versions, runs
+  apply -> rollback -> identical catalog -> reapply and refusal cases, cleans up, and
+  prints RESULT: PASS only when every assertion passes. Ship PG17-compatible scripts;
+  owner runs the production-matching PostgreSQL rehearsal before merge.
+
+The migration runner supplies the transaction: no top-level BEGIN/COMMIT in v94.
+Gate predecessor function bodies by md5 before replacing them. Do not disable triggers
+or rewrite existing payloads. New contracts must be compatible with Page save/copy,
+Simple atomic save, the legacy Home path and their revision/receipt invariants.
+
+Set explicit text eol=lf attributes for the v94 migration, runbook SQL and both
+rehearsal wrappers. Check staged blob bytes as well as working files: Windows checkout
+must not alter function-body hashes. No normalization of unrelated repository files.
+
+Rehearsal matrix includes v91 with neither optional migration, only v92, only v93,
+both in both recorded orders, and the runner's filename order on a fresh database.
+Record exact optional migration filenames/checksums from their final owner-confirmed
+registry before freeze; do not invent them while their tracks are still in progress.
+
+This confirms the slot and packet requirements, not a frozen implementation.
+#742 stays Draft and unfrozen until #741 merges. #741 review findings come first.

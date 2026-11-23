@@ -90,3 +90,9 @@ backend/scripts/athlete-positions-v87-rehearsal.sh text eol=lf
 # ST-4 (v88): the rollback restores three bodies and compares them by md5; the rehearsal runs the runbook SQL as written.
 docs/runbooks/manual-values-v88*.sql text eol=lf
 backend/scripts/manual-values-v88-rehearsal.sh text eol=lf
+
+# P2 v94: preserve migration/rollback body hashes across platforms.
+migrations_v2/202611261000_training_load_v94_chart_shapes.sql text eol=lf
+docs/runbooks/dashboard-chart-shapes-v94*.sql text eol=lf
+backend/scripts/dashboard-chart-shapes-v94-rehearsal.sh text eol=lf
+backend/scripts/dashboard-chart-shapes-v94-rehearsal.ps1 text eol=lf
