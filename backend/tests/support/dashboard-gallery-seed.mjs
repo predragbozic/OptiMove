@@ -28,7 +28,7 @@ export async function seedGalleryDashboard(q,{actorId,ownerId=actorId,workspaceT
  await q.query('update training_load.dashboard_pages set period_config=$2 where id=$1',[home.id,{schemaVersion:1,mode:'fixed',dateFrom:'2026-11-01',dateTo:'2026-11-07',timeZone:'UTC'}]);
  const widgets=[];
  for(const [index,kind]of ['area','horizontal_bar','combined','heatmap','scatter','stacked','boxplot'].entries()){
-  const widget=(await q.query("insert into training_load.dashboard_widgets(dashboard_id,widget_type,title,widget_order,x,y,width,height,mobile_order,group_by,display_config) values($1,$2,$3,$4,$5,$6,6,4,$4,'day',$7) returning *",[dashboard.id,kind==='area'?'line_chart':'bar_chart',kind,index,index%2*6,Math.floor(index/2)*4,{schemaVersion:2,numberFormat:{maximumFractionDigits:2},legend:{visible:true}}])).rows[0];
+  const widget=(await q.query("insert into training_load.dashboard_widgets(dashboard_id,widget_type,title,widget_order,x,y,width,height,mobile_order,group_by,display_config) values($1,$2,$3,$4,$5,$6,6,8,$4,'day',$7) returning *",[dashboard.id,kind==='area'?'line_chart':'bar_chart',kind,index,index%2*6,Math.floor(index/2)*8,{schemaVersion:2,numberFormat:{maximumFractionDigits:2},legend:{visible:true}}])).rows[0];
   const ids=[];for(const [n,definition]of (['combined','scatter','stacked'].includes(kind)?definitions:definitions.slice(0,1)).entries()){
    const revision=(await q.query('select revision from training_load.dashboard_widgets where id=$1',[widget.id])).rows[0].revision;
    const added=(await q.query("select * from training_load.add_series($1,$2,$3,$4,null,null,$5,null,null,'manual',null,'session','none')",[widget.id,revision,n,definition.id,n&&kind==='combined'?'secondary':'primary'])).rows[0];ids.push(added.series_id);
