@@ -114,7 +114,7 @@ async function v92Catalog(client) {
   return (await client.query(`
     select 'f:' || p.proname || ':' || md5(p.prosrc) as x from pg_proc p where p.pronamespace = 'public'::regnamespace
        and (p.proname like 'permission%' or p.proname in ('user_has_permission', 'user_holds_role_items', 'lock_permission_actor', 'lock_club_ceiling', 'club_permission_ceiling_guard', 'club_permission_ceiling_changes_guard', 'club_permission_ceiling_complete'))
-    union all select 't:' || tgrelid::regclass || ':' || tgname || ':' || tgenabled from pg_trigger
+    union all select 't:' || tgrelid::regclass || ':' || tgname || ':' || tgenabled::text from pg_trigger
      where not tgisinternal and tgrelid::regclass::text in ('club_permission_ceiling', 'club_permission_ceiling_changes', 'permission_club_role_versions',
        'permission_club_role_version_items', 'permission_club_role_version_changes', 'permission_custom_roles', 'permission_custom_role_items',
        'permission_custom_role_changes', 'user_club_roles', 'user_team_roles', 'permission_role_items', 'permission_roles', 'permission_requests')
@@ -376,8 +376,8 @@ test("8. custom roles: who, the shared lock, the named holding, never for an adm
   // The marker is cleared after the trigger: a raw end without it is refused.
   const w2 = await world();
   const id2 = await makeCustom(w2.admin, w2.coach, ROLE_IDS.team_coach, "team", w2.team, w2.club, { holding: { table: "user_team_roles", rowId: await teamRow(w2.coach, w2.team) } });
-  await refused(k.query(`update public.permission_custom_roles set ended_at = now(), end_kind = 'role_ended', revision = revision + 1 where id = $1`, [id2]), "55000");
-  await refused(k.query(`select set_config('optimove.custom_role_end_tx', '1', false)`).then(() => k.query(`update public.permission_custom_roles set ended_at = now(), end_kind = 'role_ended', revision = revision + 1 where id = $1`, [id2])), "55000");
+  await refused(k.query(`update public.permission_custom_roles set ended_at = now(), end_kind = 'role_ended', revision = revision + 1 where id = $1`, [id2]), "42501", /may not write/);
+  await refused(k.query(`select set_config('optimove.custom_role_end_tx', '1', false)`).then(() => k.query(`update public.permission_custom_roles set ended_at = now(), end_kind = 'role_ended', revision = revision + 1 where id = $1`, [id2])), "42501", /may not write/);
   await k.query(`select set_config('optimove.custom_role_end_tx', '', false)`);
   // A re-grant of an already active coach (only updated_at changes) ends the custom (N2), through the real route.
   const cookie = await srv.cookieFor(w2.admin);

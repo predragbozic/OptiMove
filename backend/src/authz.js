@@ -122,7 +122,11 @@ export const ROLE_PERMISSIONS_SQL = `
          h.expires_at as "expiresAt", h.club_id as "clubId", h.custom_role_id as "customRoleId", h.words,
          public.permission_club_closed_modules(h.club_id) as "closedModules",
          case when h.scope_type = 'club' then array(select t.id from public.teams t where t.club_id = h.scope_id order by 1) else '{}'::uuid[] end as "teamIds"
-    from public.permission_user_holdings($1) h`
+    from public.permission_user_holdings($1) h
+   -- Every table the answer rests on is named in this statement itself, so an unreadable one fails it whatever the
+   -- account holds (a platform admin without a role row included): the context is then marked unavailable.
+   where not exists (select 1 from public.permission_role_items, public.permission_club_role_version_items,
+                       public.permission_custom_role_items, public.club_permission_ceiling limit 0)`
 
 const loggedRolePermissionFailures = new Set();
 

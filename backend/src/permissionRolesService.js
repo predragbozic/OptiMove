@@ -1016,6 +1016,8 @@ export async function assignRole(ctx, body) {
     standingFor: staffStanding(ctx),
     reread: assignmentReread,
     prepare: async (client) => {
+      // R4 contract 7.6 place 0: the club's ceiling lock (shared) before any row lock.
+      await takeClubLock(client, scopeType, scopeId);
       // Contract 4.3 place 2: both users rows, in id order, one statement, no is_active filter.
       await client.query(PAIR_SQL, [ctx.userId, userId]);
       const basis = await lockActor(client, ctx, { scopeType, scopeId, roleForShare: roleId });
