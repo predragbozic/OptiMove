@@ -45,6 +45,7 @@ const MIGRATIONS = [
   "202609170900_training_load_v19_dashboard_delete.sql",
   "202611151000_training_load_v71_dashboard_simple_atomic_save.sql",
   "202611201300_roles_v84_permission_roles.sql",
+  "202611241000_roles_v92_layers_foundation.sql",
   "202611231000_training_load_v90_dashboard_pages_home.sql",
   "202611231100_training_load_v91_dashboard_page_writers.sql",
 ];

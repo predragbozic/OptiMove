@@ -203,19 +203,33 @@ export const BASIC_ROLE_PERMISSIONS = Object.freeze({
   ]),
 });
 
-// The honoured words (roles R2 contract 3.3): the words some can() call site
-// checks at a club or a team scope - the only words a role may hold in R2. Its
-// database twin is public.permission_word_honoured() (v84); a test asserts the
-// two agree and that this list equals R1's call-site table taken by (word,
-// scope type) with scope type club or team, plus roles.manage (the Roles API).
-export const HONOURED_PERMISSIONS = Object.freeze([
-  "org.view",
-  "org.teams.manage",
-  "org.club.edit",
-  "athletes.manage",
-  "athletes.remove",
-  "staff.assign",
-  "roles.manage",
+// The CHECKED words (roles R4 contract 3.1 and 4): a word for which EVERY route that gives what the word means calls
+// can() with it. Each word lists its gates: the source files (relative to backend/src) whose can() calls check it.
+// A word enters this list only in the pull request that moves every gate of that word to can() (a module's VIEW or
+// MANAGE step). `checked-gates-r4.test.mjs` proves both directions: every listed gate file calls can() with the
+// word, and every can() call with a literal word in backend/src names a listed word from a listed file.
+// R4-1 starts it as R2's honoured words with their call sites.
+export const ENFORCED_PERMISSIONS = Object.freeze({
+  "org.view": Object.freeze(["routes/organization.js"]),
+  "org.teams.manage": Object.freeze(["routes/organization.js"]),
+  "org.club.edit": Object.freeze(["routes/organization.js"]),
+  "athletes.manage": Object.freeze(["routes/organization.js"]),
+  "athletes.remove": Object.freeze(["routes/organization.js"]),
+  "staff.assign": Object.freeze(["routes/organization.js", "permissionRolesService.js"]),
+  "roles.manage": Object.freeze(["permissionRolesService.js"]),
+});
+
+// The checked words as a list (R2's name, kept for its callers): the words /me may offer and the only words a role
+// change may add or take away (O6: an unchecked word is locked, "not available yet").
+export const HONOURED_PERMISSIONS = Object.freeze(Object.keys(ENFORCED_PERMISSIONS));
+
+// The STORABLE words: the words the database lets a role, a club version or a custom role hold. Its database twin is
+// public.permission_word_honoured() (v92: v84's seven plus the VIEW package of contract 4.1). A storable word that
+// is not checked acts nowhere: no route asks for it.
+export const STORABLE_PERMISSIONS = Object.freeze([
+  ...HONOURED_PERMISSIONS,
+  "athletes.view", "programs.view", "exercises.use", "presets.use", "calendar.view", "load.view.team",
+  "load.view.athlete", "dashboards.view", "tests.view", "tests.results.view", "variables.view",
 ]);
 
 // Resource scopes. A scope names the club or team the row belongs to, the
@@ -256,8 +270,12 @@ export class PermissionsUnavailableError extends Error {
 //     PermissionsUnavailableError (fail closed, loudly);
 //   - global scope and platform-only words: a platform admin only;
 //   - a scope without an id (null, undefined, "", the nil uuid) is no resource;
+//   - the ceiling (roles R4, contract 3.2 step 6): the word's module closed for
+//     the resource's club answers no for everyone but a platform admin (each
+//     loaded entry carries the closed modules of its own club);
 //   - otherwise: true when a role the account holds for that scope has the word
-//     in its items (authz.rolePermissions, loaded from the database: the basic
+//     in its EFFECTIVE items (R4: a live custom role of that holding, else the
+//     club's live version of a system role, else the role's own items) (authz.rolePermissions, loaded from the database: the basic
 //     roles of the old tables and the active non-basic assignments). A club's
 //     entry also holds at that club's teams.
 // A context without rolePermissions (built by hand) answers false: there is no
@@ -285,6 +303,7 @@ export function can(authz, permission, scope) {
   const id = String(scope.id);
   for (const e of entries) {
     if (!e.words.includes(permission)) continue;
+    if (Array.isArray(e.closedModules) && e.closedModules.includes(entry.module)) continue;
     if (e.scopeType === type && String(e.scopeId) === id) return true;
     if (type === "team" && e.scopeType === "club" && e.teamIds.some((t) => String(t) === id)) return true;
   }

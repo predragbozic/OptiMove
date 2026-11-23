@@ -30,26 +30,29 @@ export const NIL = "00000000-0000-0000-0000-000000000000";
 
 // A migrations_v2 folder (same basename, so the runner records the same names)
 // holding every file of the repository's folder except those `skip` names.
-export function migrationsWithout(skip) {
+export const V92_FILE = "202611241000_roles_v92_layers_foundation.sql";
+export const V92_NAME = `migrations_v2/${V92_FILE}`;
+// `upTo`: the last file kept (v84's by default; "all" keeps every file of the folder).
+export function migrationsWithout(skip, upTo = V84_FILE) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-roles-mig-"));
   const dir = path.join(root, "migrations_v2");
   fs.mkdirSync(dir);
   for (const f of fs.readdirSync(MIGRATIONS)) {
     // The world is v84's own: migrations that sort after v84 (v85 on) are left out, so the v84 rollback is never
     // refused for a migration applied after it (that refusal is test 1b's own case, planted on purpose).
-    if (!f.endsWith(".sql") || skip.includes(f) || f > V84_FILE) continue;
+    if (!f.endsWith(".sql") || skip.includes(f) || (upTo !== "all" && f > upTo)) continue;
     fs.copyFileSync(path.join(MIGRATIONS, f), path.join(dir, f));
   }
   return { dir, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-export async function buildDatabase({ label, baseDatabaseUrl = process.env.DATABASE_URL, withoutV84 = false }) {
+export async function buildDatabase({ label, baseDatabaseUrl = process.env.DATABASE_URL, withoutV84 = false, upTo = V84_FILE, skip = [] }) {
   const snapshotSql = fs.readFileSync(path.join(__dirname, "legacy-schema.sql"), "utf8");
   const last = snapshotSql.match(/^-- Last migration contained in the dump: (\S+)\.$/m)[1];
   const db = await createDisposableDatabase({ prefix: "roles", label, baseDatabaseUrl });
   try {
     await bootstrapLegacySnapshot({ databaseUrl: db.url, snapshotSql, migrationsRoot: MIGRATIONS, lastMigration: last });
-    const tmp = migrationsWithout(withoutV84 ? [V84_FILE] : []);
+    const tmp = migrationsWithout([...(withoutV84 ? [V84_FILE] : []), ...skip], upTo);
     try { await runMigrations({ databaseUrl: db.url, migrationsRoot: tmp.dir }); } finally { tmp.cleanup(); }
   } catch (error) {
     await db.drop().catch(() => {});

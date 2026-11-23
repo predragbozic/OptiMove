@@ -29,7 +29,8 @@
 import crypto from "node:crypto";
 import pg from "pg";
 import { pool } from "./db.js";
-import { can, clubScope, GLOBAL_SCOPE, HONOURED_PERMISSIONS, PERMISSION_GROUPS, PERMISSIONS, teamScope } from "./permissions.js";
+import { can, clubScope, GLOBAL_SCOPE, HONOURED_PERMISSIONS, PERMISSION_GROUPS, PERMISSIONS, STORABLE_PERMISSIONS, teamScope } from "./permissions.js";
+import { clubOfScope, lockClubCeiling } from "./clubCeilingLock.js";
 
 const { DatabaseError } = pg;
 
@@ -50,6 +51,7 @@ const ROLE_SCOPE_TYPES = ["club", "team", "private", "global"];
 const MODULE_WORDS = PERMISSION_GROUPS.map((g) => g.key);
 const RULE7_REQUIRED = Object.freeze(["staff.assign", "roles.manage"]);
 const HONOURED = new Set(HONOURED_PERMISSIONS);
+const STORABLE = new Set(STORABLE_PERMISSIONS);
 
 // The text rule of v84's public.permission_text_ok (a copy of v40's): 1..max
 // characters, none of the invisible or control characters, no blank at either
@@ -88,6 +90,7 @@ const MESSAGES = {
   role_exceeds_your_permissions: "The role holds permissions you do not hold.",
   permission_not_delegable: "This permission exists only in the Club admin role.",
   permission_not_honoured: "No part of the app checks this permission yet.",
+  permission_not_available_yet: "This permission is not available yet.",
   role_limit_reached: "This club already has the largest number of roles allowed.",
   permission_platform_only: "This permission belongs to no role.",
   permission_scope_mismatch: "A permission does not cover the places this role can be assigned.",
@@ -337,7 +340,7 @@ export async function getCatalog(ctx, query) {
         array(select s.scope_type from public.permission_scope_types s where s.permission_word = p.word order by 1) as scope_types
       from public.permissions p order by p.sort_order`)).rows.map((p) => ({
       word: p.word, module: p.module_word, scopeTypes: p.scope_types, platformOnly: p.platform_only,
-      systemRoleOnly: p.system_role_only, honoured: HONOURED.has(p.word),
+      systemRoleOnly: p.system_role_only, honoured: HONOURED.has(p.word), storable: STORABLE.has(p.word), checked: HONOURED.has(p.word),
     }));
     const modules = (await client.query(`select word, label from public.permission_modules order by sort_order`)).rows;
     const systemOnly = new Set(permissions.filter((p) => p.systemRoleOnly).map((p) => p.word));
@@ -541,6 +544,11 @@ async function answerAfterCommit(written, reread) {
 }
 
 // Under the locks: the acting user's basis for the club (or the platform).
+// The club's ceiling lock (R4 contract 7.6, place 0) comes before it, taken by the caller as the first statement of
+// prepare (takeClubLock), never inside: the pair statement and this function lock rows.
+async function takeClubLock(client, scopeType, scopeId) {
+  await lockClubCeiling(client, [await clubOfScope(client, scopeType, scopeId)], "shared");
+}
 async function lockActor(client, ctx, { scopeType, scopeId, roleForUpdate = null, assignmentForUpdate = null, roleForShare = null }) {
   return (await client.query(LOCK_ACTOR_SQL, [ctx.userId, scopeType, scopeId, roleForUpdate, assignmentForUpdate, roleForShare])).rows[0].basis;
 }
@@ -559,7 +567,9 @@ async function lockedRole(client, roleId) {
 function itemRuleRefusal(words, { basicKey, scopeTypes }) {
   for (const w of words) if (PERMISSIONS[w].platformOnly) return refuse("permission_platform_only", { words: [w] });
   for (const w of words) if (PERMISSIONS[w].systemRoleOnly && basicKey !== "club_admin") return refuse("permission_not_delegable", { words: [w] });
-  for (const w of words) if (!HONOURED.has(w)) return refuse("permission_not_honoured", { words: [w] });
+  for (const w of words) if (!STORABLE.has(w)) return refuse("permission_not_honoured", { words: [w] });
+  // Roles R4 (O6): a storable word that no route checks yet is locked - never added, never taken away.
+  for (const w of words) if (!HONOURED.has(w)) return refuse("permission_not_available_yet", { words: [w] });
   for (const w of words) if (scopeTypes.some((t) => !PERMISSIONS[w].scopeTypes.includes(t))) return refuse("permission_scope_mismatch", { words: [w] });
   return null;
 }
@@ -653,6 +663,7 @@ export async function createRole(ctx, body) {
     standingFor: roleStanding(ctx),
     reread: roleReread(ctx, (c) => standingAt(ctx, c)),
     prepare: async (client) => {
+      await takeClubLock(client, clubId ? "club" : "global", clubId);
       const basis = await lockActor(client, ctx, { scopeType: clubId ? "club" : "global", scopeId: clubId ?? NIL });
       if (clubId ? basis == null : basis !== "platform_admin") throw NOT_FOUND();
       // The basis also counts staff.assign; a role write needs roles.manage itself (as P9 re-checks staff.assign).
@@ -709,6 +720,7 @@ export async function changeRole(ctx, roleIdRaw, body) {
     standingFor: roleStanding(ctx),
     reread: roleReread(ctx, (c) => standingAt(ctx, c)),
     prepare: async (client) => {
+      await takeClubLock(client, ownerClubId ? "club" : "global", ownerClubId);
       const basis = await lockActor(client, ctx, { scopeType: ownerClubId ? "club" : "global", scopeId: ownerClubId ?? NIL, roleForUpdate: roleId });
       if (ownerClubId ? basis == null : basis !== "platform_admin") throw NOT_FOUND();
       if (!(await roleStanding(ctx)(client, ownerClubId))) throw NOT_FOUND();
@@ -728,6 +740,10 @@ export async function changeRole(ctx, roleIdRaw, body) {
       const remove = role.items.filter((w) => !newItems.includes(w));
       const ruled = itemRuleRefusal(add, { basicKey: role.basic_key, scopeTypes: newTypes });
       if (ruled) throw ruled;
+      // Roles R4 (O6): taking away a word no route checks yet is refused too, in every role (the basic roles
+      // included: the seed is the only writer of their unchecked words, so a module's day-one old-vs-new holds).
+      const lockedOut = remove.filter((w) => !HONOURED.has(w));
+      if (lockedOut.length) throw refuse("permission_not_available_yet", { words: lockedOut });
       // Every kept item must cover a widened scope too.
       const uncovered = newItems.filter((w) => newTypes.some((t) => !PERMISSIONS[w].scopeTypes.includes(t)));
       if (uncovered.length) throw refuse("permission_scope_mismatch", { words: uncovered });
@@ -807,6 +823,7 @@ export async function archiveRole(ctx, roleIdRaw, body) {
     standingFor: roleStanding(ctx),
     reread: roleReread(ctx, (c) => standingAt(ctx, c)),
     prepare: async (client) => {
+      await takeClubLock(client, ownerClubId ? "club" : "global", ownerClubId);
       const basis = await lockActor(client, ctx, { scopeType: ownerClubId ? "club" : "global", scopeId: ownerClubId ?? NIL, roleForUpdate: roleId });
       if (ownerClubId ? basis == null : basis !== "platform_admin") throw NOT_FOUND();
       if (!(await roleStanding(ctx)(client, ownerClubId))) throw NOT_FOUND();
@@ -850,6 +867,7 @@ export async function copyRole(ctx, roleIdRaw, body) {
     standingFor: roleStanding(ctx),
     reread: roleReread(ctx, (c) => standingAt(ctx, c)),
     prepare: async (client) => {
+      await takeClubLock(client, "club", clubId);
       const basis = await lockActor(client, ctx, { scopeType: "club", scopeId: clubId, roleForShare: sourceId });
       if (basis == null) throw NOT_FOUND();
       if (!(await roleStanding(ctx)(client, clubId))) throw NOT_FOUND();
@@ -1050,6 +1068,7 @@ export async function revokeAssignment(ctx, assignmentIdRaw, body) {
     standingFor: staffStanding(ctx),
     reread: assignmentReread,
     prepare: async (client) => {
+      await takeClubLock(client, found.scope_type, found.scope_id);
       await client.query(PAIR_SQL, [ctx.userId, found.user_id]);
       const basis = await lockActor(client, ctx, { scopeType: found.scope_type, scopeId: found.scope_id, assignmentForUpdate: assignmentId });
       if (!basis || !(await staffStanding(ctx)(client, clubId))) throw NOT_FOUND();
