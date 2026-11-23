@@ -547,8 +547,29 @@ async function readableActivityIdsOf(queryable, ctx, row) {
   const result = await queryable.query(`select a.id from training.activities a where a.id = any($1::uuid[]) and (${scope})`, params);
   return new Set(result.rows.map((r) => String(r.id)));
 }
+// v93: whether the event holds nothing, so its manager is offered Delete (the deletion log's insert guard decides
+// again under the event's lock; this read only chooses the button). Ended links count too.
+const EVENT_DELETABLE_SQL = `
+  select e.external_schedule_id is null and e.test_schedule_id is null
+     and not exists (select 1 from calendar.event_session_links l where l.event_id = e.id)
+     and not exists (select 1 from calendar.event_activity_links l where l.event_id = e.id)
+     and not exists (select 1 from calendar.event_questions q where q.event_id = e.id)
+     and not exists (select 1 from calendar.question_assignment_skips k where k.event_id = e.id)
+     and not exists (select 1 from calendar.event_field_values v where v.event_id = e.id) as deletable
+    from calendar.events e where e.id = $1`;
+// A database without v93 (a test world built without the calendar's question tables, which v93 reads) offers no
+// Delete; once seen, the deletion log stays (v93 is forward-only once used).
+let deletionInstalledCache = false;
+async function deletionInstalled(queryable) {
+  if (deletionInstalledCache) return true;
+  const ok = (await queryable.query(`select to_regclass('calendar.event_deletion_log') is not null as ok`)).rows[0].ok;
+  if (ok) deletionInstalledCache = true;
+  return ok;
+}
 async function managerViewOf(queryable, ctx, row) {
-  return viewOf(row, await readableActivityIdsOf(queryable, ctx, row), await readEventFields(queryable, row.id));
+  const view = viewOf(row, await readableActivityIdsOf(queryable, ctx, row), await readEventFields(queryable, row.id));
+  view.deletable = (await deletionInstalled(queryable)) && (await queryable.query(EVENT_DELETABLE_SQL, [row.id])).rows[0]?.deletable === true;
+  return view;
 }
 
 // Test-only seam (K2b-1d3): the reader's view of an event for a given context, whatever its manage right - no route
@@ -724,6 +745,8 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
   return runCalendarCommand({
     userId: ctx.userId, requestKey, operation, label: "calendar", subject: `${operation} on event ${eventId ?? "(new)"}`,
     requestsTable: "calendar.event_requests", requestKeyConstraint: REQUEST_KEY_CONSTRAINT,
+    // v93: a deleted event's request keys stay spent (its create's above all).
+    spentKeysTable: "calendar.event_deleted_request_keys",
     busyMessage: "The event is being changed. Try again.", hooks: testHooks,
     async prepare(client) {
       let owner;
@@ -1348,6 +1371,124 @@ export async function cancelEvent(ctx, eventId, body) {
         ...(qstate.live.length ? { questionsEnded: qstate.live.map((q) => String(q.id)).sort() } : {}),
       },
     };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Delete (v93, docs/runbooks/calendar-event-delete-v93.md): an event that holds nothing is deleted for good, by
+// whoever may cancel it (the same right, decided the same way: runEventCommand's writer lock and the event's lock).
+// Nothing attached: no session or activity link (ended ones included), no question for athletes, no skipped
+// assignment, no detail value, no referenced RPE or test schedule - the database decides it under the event's
+// lock (calendar.delete_event and the deletion log's insert guard) and each class is its own stable 409. A missing
+// event and one the caller may not delete are the one 404. The request record is the deletion-log row: a replay of
+// the same key answers "deleted" again (authorized again on the owner the log kept), and after a COMMIT whose
+// answer was lost the log is looked for by the key - never "not deleted" when the outcome is not known.
+// ---------------------------------------------------------------------------
+export function validateDeleteBody(body) {
+  const requestKey = requestKeyOf(body);
+  const expectedRevision = revisionField(body);
+  return { requestKey, canonical: { operation: "delete", expectedRevision } };
+}
+
+const DELETE_LOG_OWNER_SQL = `
+  select l.event_id, l.request_hash, l.owner_scope, l.owner_user_id, l.owner_club_id, l.owner_team_id,
+         t.club_id as owner_team_club_id, coalesce(t.is_active, true) as owner_team_active,
+         coalesce(c.is_active, true) as owner_club_active, coalesce(tc.is_active, true) as owner_team_club_active
+    from calendar.event_deletion_log l
+    left join public.teams t on t.id = l.owner_team_id
+    left join public.clubs c on c.id = l.owner_club_id
+    left join public.clubs tc on tc.id = t.club_id
+   where l.performed_by_user_id = $1 and l.request_key = $2 and l.event_id = $3`;
+
+// The refusals of the database, by the class of what is attached (no id, no count).
+export const DELETE_ATTACHED_CODES = Object.freeze({
+  event_delete_has_trainings: ["event_has_trainings", "This event has linked trainings, so it can't be deleted. Cancel it instead."],
+  event_delete_has_activities: ["event_has_activities", "This event has linked activities, so it can't be deleted. Cancel it instead."],
+  event_delete_has_questions: ["event_has_questions", "This event has questions for athletes, so it can't be deleted. Cancel it instead."],
+  event_delete_has_assignments: ["event_has_assignments", "This event changed athletes' assignments, so it can't be deleted. Cancel it instead."],
+  event_delete_has_details: ["event_has_details", "This event has entered details, so it can't be deleted. Cancel it instead."],
+  event_delete_has_schedule: ["event_has_schedule", "This event refers to an RPE or test schedule, so it can't be deleted. Cancel it instead."],
+});
+
+export async function deleteEvent(ctx, eventId, body) {
+  if (!isUuid(eventId)) throw notFound();
+  const { requestKey, canonical } = validateDeleteBody(body);
+  if (ctx.type !== "coach") throw notFound();
+  const id = eventId.toLowerCase();
+  // The owner a deletion of THIS key by THIS user kept (a replay, a second request racing the first): the event is
+  // gone, so the right is decided again on the owner the log holds.
+  const ownDeletionOwner = async (client) => {
+    const log = (await client.query(DELETE_LOG_OWNER_SQL, [ctx.userId, requestKey, id])).rows[0];
+    return log ? eventOwnerOfRow(log) : null;
+  };
+  return runCalendarCommand({
+    userId: ctx.userId, requestKey, operation: "delete", label: "calendar", subject: `delete on event ${id}`,
+    requestsTable: "calendar.event_deletion_log", requestKeyConstraint: "event_deletion_log_one_per_key",
+    busyMessage: "The event is being changed. Try again.", hooks: testHooks,
+    async prepare(client) {
+      let row = (await client.query(EVENT_ROW_FOR_WRITE_SQL, [id])).rows[0] || null;
+      let owner = row ? eventOwnerOfRow(row) : await ownDeletionOwner(client);
+      if (!owner) throw notFound();
+      const basis = eventWriteBasis(ctx, owner);
+      if (!basis) throw notFound();
+      const hash = requestHash(canonical, { eventId: id, owner });
+      if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation: "delete" });
+      try {
+        await client.query(`select calendar.lock_event_writer($1, $2, $3, $4)`, [ctx.userId, owner.scope, eventOwnerId(owner), basis]);
+      } catch (error) {
+        if (error?.code === "42501") throw notFound();
+        throw error;
+      }
+      if (row) {
+        // The lock of every event command (NO KEY UPDATE, runEventCommand): a Tests materialization's foreign key
+        // check is not blocked by it, so it never waits here holding a day key this command takes next. The delete
+        // itself (calendar.delete_event) takes FOR UPDATE after those keys.
+        row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for no key update of e`, [id])).rows[0] || null;
+        if (row) {
+          if (testHooks.afterEventLock) await testHooks.afterEventLock({ client, operation: "delete", eventId: id });
+          owner = eventOwnerOfRow(row);
+          if (eventWriteBasis(ctx, owner) !== basis) throw notFound();
+        } else if (!(await ownDeletionOwner(client))) {
+          // Deleted meanwhile by another request.
+          throw notFound();
+        }
+      }
+      return { hash, owner, basis, row };
+    },
+    sameRequest: (prior, prepared) => prior.request_hash === prepared.hash && String(prior.event_id) === id,
+    answer: async (_queryable, stored, extra) => ({ status: stored.httpStatus || 200, body: { deleted: true, eventId: stored.eventId, ...extra } }),
+    async apply({ client, owner, row }) {
+      if (!row) throw notFound();
+      if (row.revision !== canonical.expectedRevision) {
+        throw conflict("event_changed", "This event was changed meanwhile. Reload it and try again.", { current: await readEventView(client, ctx, row.id) });
+      }
+      // A Day off's span: the day keys a cancel takes too (calendarQuestions.js), after the event's lock and before
+      // its FOR UPDATE, so a materialization that read the Day off finishes first and its skip row refuses the delete.
+      if (row.event_kind === "day_off") await Q.lockWellnessDays(client, ownerClubOf(owner), Q.daysBetween(dateStr(row.day), dateStr(row.end_day) || dateStr(row.day)));
+      return { eventId: row.id, httpStatus: 200, body: { deleted: true, eventId: row.id } };
+    },
+    async beforeRequestRow(client, out, prepared) {
+      if (testHooks.beforeRequestRow) await testHooks.beforeRequestRow({ client, operation: "delete", requestKey, hash: prepared.hash, eventId: out.eventId, userId: ctx.userId });
+    },
+    async writeRecord({ client, out, prepared, hash }) {
+      await client.query(
+        `select calendar.delete_event($1, $2, $3, $4, $5, $6, $7)`,
+        [out.eventId, canonical.expectedRevision, ctx.userId, prepared.basis, requestKey, hash, JSON.stringify({ httpStatus: 200, eventId: out.eventId })],
+      );
+    },
+    async beforeCommit(client, out) {
+      if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, operation: "delete", eventId: out.eventId });
+    },
+    respond: (out) => ({ status: out.httpStatus, body: out.body }),
+    mapError(error) {
+      if (error?.code === "23514" && DELETE_ATTACHED_CODES[error.constraint]) {
+        const [code, message] = DELETE_ATTACHED_CODES[error.constraint];
+        return conflict(code, message);
+      }
+      if (error?.code === "23514" && error.constraint === "event_delete_revision") return conflict("event_changed", "This event was changed meanwhile. Reload it and try again.");
+      if ((error?.code === "23514" && error.constraint === "event_delete_no_event") || error?.code === "42501") return notFound();
+      return null;
+    },
   });
 }
 

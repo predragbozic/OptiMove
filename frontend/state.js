@@ -171,6 +171,8 @@ export const emptyCentralCalendarState = () => ({
   linkRefused: new Map(),
   // K5-3: the lone cards whose "Add to the event?" the coach answered with Leave (their keys; in memory only).
   addToEventLeft: new Set(),
+  // v93: the open Delete step of an event panel ({ eventKey, revision }), null when none.
+  deleteStep: null,
   alignStep: null,
   alignBlocked: null,
   // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,

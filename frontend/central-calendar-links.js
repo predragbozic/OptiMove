@@ -50,6 +50,9 @@ export function centralCalendarRefusedPairKey(eventId, item) {
 // The reason a refused pair keeps on its row (`refused` maps a pair key to
 // { code, revision }: the server's code and the event's revision it was sent
 // with).
+// v93: the refusals of Delete (an event that holds something): the pair is remembered so the button goes away.
+export const CENTRAL_CALENDAR_DELETE_REFUSALS = Object.freeze(["event_has_trainings", "event_has_activities", "event_has_questions",
+  "event_has_assignments", "event_has_details", "event_has_schedule"]);
 const NOT_TARGETED = new Set(["athlete_not_targeted", "activity_not_targeted"]);
 // K5-3: refusals the coach can clear by changing the same event (its RPE question, its linked trainings, its
 // targets) hold only while the event is as it was, like the "not targeted" ones.
@@ -166,6 +169,10 @@ export const CENTRAL_CALENDAR_ADD_TO_EVENT_HINT = Object.freeze({
 });
 export const CENTRAL_CALENDAR_ADD_TO_EVENT_NONE = "Can't be added to an event on this day.";
 export const centralCalendarAddToEventDone = (event) => `Added to “${centralCalendarAddToEventName(event)}”.`;
+// v93: Delete's step and its result.
+export const centralCalendarDeleteEventQuestion = (event) => `Delete “${String(event?.title ?? "").replace(/\s+/g, " ").trim() || "this event"}” for good? It can't be undone.`;
+export const centralCalendarDeleteEventDone = (title) => `Deleted “${String(title ?? "").replace(/\s+/g, " ").trim() || "the event"}”.`;
+export const centralCalendarDeleteRefusedKey = (eventId) => `${eventId}|delete`;
 
 const normalizedName = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -220,6 +227,8 @@ export function centralCalendarLinkRequest(act, { eventId, requestKey, expectedR
   if (act === "align") return { path: `${eventPath(eventId)}/sessions/align`, body: { ...base, confirmDisableWithResults } };
   if (act === "link-activity") return { path: `${eventPath(eventId)}/activities`, body: { ...base, activityId } };
   if (act === "unlink-activity") return { path: `${eventPath(eventId)}/activities/detach`, body: { ...base, activityId } };
+  // v93: delete an event that holds nothing.
+  if (act === "delete-event") return { path: `${eventPath(eventId)}/delete`, body: base };
   // K5-3: the event takes the RPE request through its own edit route (PATCH, the event form's field).
   if (act === "add-rpe") return { path: eventPath(eventId), method: "PATCH", body: { ...base, externalScheduleId } };
   return null;
@@ -268,7 +277,7 @@ export function centralCalendarOrphanedLine(n) {
 
 export const CENTRAL_CALENDAR_LINK_EMPTY = "No training or activity on this day can be linked to this event.";
 
-const BUSY_WORDS = Object.freeze({ "add-activity": "Adding…", "add-rpe": "Adding…", "link-session": "Linking…", "link-activity": "Linking…", "unlink-sessions": "Unlinking…", "unlink-activity": "Unlinking…", align: "Updating…" });
+const BUSY_WORDS = Object.freeze({ "delete-event": "Deleting…", "add-activity": "Adding…", "add-rpe": "Adding…", "link-session": "Linking…", "link-activity": "Linking…", "unlink-sessions": "Unlinking…", "unlink-activity": "Unlinking…", align: "Updating…" });
 export const centralCalendarLinkBusyWord = (act) => BUSY_WORDS[act] || "Saving…";
 
 // The notice after a confirmed write. `event` is the event card after the
@@ -327,6 +336,13 @@ const REFUSALS = Object.freeze({
   rpe_already_linked: "This event already collects RPE through another schedule; remove it first. Nothing was saved.",
   rpe_already_answered: "Athletes have already answered this event's own RPE question, so trainings can't take it over. Keep the event's RPE, or link the training to another event. Nothing was saved.",
   rpe_from_question: "This event already asks athletes for RPE; remove that question first. Nothing was saved.",
+  // v93: Delete refused because something is attached (the server decides under the event's lock).
+  event_has_trainings: "This event has linked trainings, so it can't be deleted. Nothing was deleted.",
+  event_has_activities: "This event has linked activities, so it can't be deleted. Nothing was deleted.",
+  event_has_questions: "This event has questions for athletes, so it can't be deleted. Nothing was deleted.",
+  event_has_assignments: "This event changed athletes' test assignments, so it can't be deleted. Nothing was deleted.",
+  event_has_details: "This event has entered details, so it can't be deleted. Nothing was deleted.",
+  event_has_schedule: "This event refers to an RPE or test schedule, so it can't be deleted. Nothing was deleted.",
   // K5-3: an RPE request added to an event (PATCH).
   rpe_from_sessions: "This event takes RPE from its linked trainings, so it can't take this RPE request. Nothing was saved.",
   schedule_not_available: "This RPE request can't be added to this event. Nothing was saved.",
@@ -346,14 +362,15 @@ export function centralCalendarLinkRefusalText(info) {
 // or the read cannot tell this pair will be refused - section 1.1.10).
 const REREAD = new Set(["event_changed", "event_cancelled", "link_not_available", "nothing_to_align", "activity_superseded",
   "session_not_available", "session_already_attached", "activity_not_available", "activity_already_attached",
-  "athlete_not_targeted", "activity_not_targeted", "schedule_not_available", "schedule_already_referenced", "rpe_from_sessions", "rpe_from_question"]);
+  "athlete_not_targeted", "activity_not_targeted", "schedule_not_available", "schedule_already_referenced", "rpe_from_sessions", "rpe_from_question",
+  ...CENTRAL_CALENDAR_DELETE_REFUSALS]);
 export const centralCalendarLinkRefusalRereads = (info) => info.status === 404 || REREAD.has(info.code);
 
 // The refusals that the read cannot predict: the pair is remembered and
 // shown without its Link (the manager's GO, section 1.1.10). The two
 // "not targeted" codes too (review M2): a card without its athletes cannot
 // tell a linked athlete who is no target any more.
-const UNPREDICTABLE = new Set(["session_not_available", "session_already_attached", "activity_not_available", "activity_already_attached",
+const UNPREDICTABLE = new Set([...CENTRAL_CALENDAR_DELETE_REFUSALS, "session_not_available", "session_already_attached", "activity_not_available", "activity_already_attached",
   "athlete_not_targeted", "activity_not_targeted", "schedule_not_available", "schedule_already_referenced", "rpe_from_sessions", "rpe_from_question"]);
 export const centralCalendarLinkRefusalRemembered = (info) => UNPREDICTABLE.has(info.code);
 
@@ -366,6 +383,7 @@ const SETTLED_ON_CHECK = new Set([
   "activity_superseded", "activity_outside_event", "activity_not_targeted", "activity_already_attached",
   "rpe_already_linked", "rpe_already_answered", "rpe_from_question",
   "rpe_from_sessions", "schedule_not_available", "schedule_already_referenced",
+  "event_has_trainings", "event_has_activities", "event_has_questions", "event_has_assignments", "event_has_details", "event_has_schedule",
 ]);
 export const centralCalendarLinkCheckSettles = (info) => info.status >= 400 && info.status < 500
   && (SETTLED_ON_CHECK.has(info.code) || String(info.code).startsWith("invalid_"));

@@ -22798,6 +22798,31 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   color: var(--danger);
 }
 
+/* v93: a disabled danger button looks disabled (a write in flight, a result not confirmed). */
+.cc-danger:disabled,
+.cc-danger-outline:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* v93: Delete, after Edit / Cancel event; its step names the event. */
+.cc-panel-delete {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  margin-top: 8px;
+}
+
+.cc-panel-delete .cc-panel-button {
+  min-height: 44px;
+}
+
+@media (max-width: 390px) {
+  .cc-panel-delete .cc-panel-button {
+    width: 100%;
+  }
+}
+
 .cc-new-event {
   display: inline-flex;
   align-items: center;

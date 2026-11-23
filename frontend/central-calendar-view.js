@@ -21,6 +21,8 @@ import {
   centralCalendarAddToEventOffers,
   centralCalendarAddToEventQuestion,
   centralCalendarAlignLine,
+  centralCalendarDeleteEventQuestion,
+  centralCalendarDeleteRefusedKey,
   centralCalendarEventLinkable,
   centralCalendarEventsForPlanned,
   centralCalendarLinkBusyWord,
@@ -1215,6 +1217,36 @@ function renderEventActionsHtml(item, { locked = false } = {}) {
     </div>`;
 }
 
+// v93 (docs/runbooks/calendar-event-delete-v93.md): Delete, for a manager, only when the event holds nothing - a
+// planned event by its manager read (`deletable`, read under the same rules the database applies), a cancelled one
+// (no manager read) by its card's schedules; the server decides again under the event's lock, and a refusal hides
+// the button. A first press shows the step that names the event; only its second button sends. A cancelled event
+// has no links section, so its Delete's unconfirmed result is shown here.
+export function centralCalendarDeleteOffered(item, cal) {
+  if (item?.kind !== "event" || item.canManage !== true) return false;
+  if (cal.linkRefused?.has?.(centralCalendarDeleteRefusedKey(item.eventId))) return false;
+  if (item.cancelled) return !item.links?.externalScheduleId && !item.links?.testScheduleId;
+  const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent : null;
+  return Boolean(view && !view.loading && !view.error && view.event?.deletable === true);
+}
+function renderEventDeleteHtml(item, cal, pending, { locked = false } = {}) {
+  if (item.kind !== "event" || item.canManage !== true) return "";
+  const own = pending && pending.act === "delete-event" ? pending : null;
+  const feedback = item.cancelled ? linkFeedbackHtml(cal, item.key, own) : "";
+  if (!centralCalendarDeleteOffered(item, cal)) return feedback ? `<div class="cc-panel-delete">${feedback}</div>` : "";
+  const busy = busyOn(cal, "delete-event", "eventKey", item.key);
+  const off = locked || Boolean(pending) || busy;
+  const step = cal.deleteStep && cal.deleteStep.eventKey === item.key && cal.deleteStep.revision === item.revision ? cal.deleteStep : null;
+  if (!step) {
+    return `<div class="cc-panel-delete">${feedback}<button type="button" class="plain-button cc-panel-button cc-danger-outline" data-action="central-calendar-delete-open" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${off ? " disabled" : ""}>Delete event</button></div>`;
+  }
+  return `<div class="cc-panel-delete cc-panel-delete-step" role="group" aria-labelledby="ccDeleteQuestion">${feedback}
+      <p class="cc-panel-note" id="ccDeleteQuestion" role="status">${escapeHtml(centralCalendarDeleteEventQuestion(item))}</p>
+      <div class="cc-link-align-buttons">${linkButtonHtml({ act: "delete-event", label: "Delete event", attrs: `data-event-key="${escapeAttr(item.key)}"`, busy, off, extraClass: "cc-danger" })}
+      <button type="button" class="plain-button cc-panel-button cc-link-button" data-action="central-calendar-delete-keep"${busy ? " disabled" : ""}>Keep</button></div>
+    </div>`;
+}
+
 // ---------------------------------------------------------------------------
 // K2c-1 (docs/ai/central-calendar-k2c-plan.md 1.1): the links of an event, in
 // its panel and in a planned card's panel. `pending` is this panel's link
@@ -1541,6 +1573,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending, pendingQuestion) : ""}
       ${questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : ""}
       ${renderEventActionsHtml(item, { locked: linksLocked })}
+      ${renderEventDeleteHtml(item, cal, pending, { locked: linksLocked || Boolean(cal.form) })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
       ${item.kind === "activity" || item.kind === "external" ? renderAddToEventHtml(item, cal, pending) : ""}
       ${item.kind === "event" ? "" : renderGoThereHtml(item)}
