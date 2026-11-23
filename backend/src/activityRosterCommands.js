@@ -470,6 +470,8 @@ function decisionRefusal(athlete, kind, expected) {
   if (!athlete) return "not_on_roster";
   if (!expectedMatches(expected, athlete.currentDecisions)) return "decision_changed";
   if (kind !== "cleared" && athlete.measured) return "measured_record_exists";
+  // ST-4 (the owner, 2026-11-22): a state is offered only after the values entered on the roster are removed.
+  if (kind !== "cleared" && athlete.rosterEntry) return "manual_values_present";
   return null;
 }
 
@@ -523,6 +525,7 @@ async function applySingle(cmd, canonical, kind) {
   if (refusal === "not_on_roster") throw conflict("not_on_roster", "This athlete is not on this session's roster.");
   if (refusal === "decision_changed") throw conflict("decision_changed", "This athlete's state changed.", { current: currentStateView(athlete) });
   if (refusal === "measured_record_exists") throw conflict("measured_record_exists", "This athlete has measured values.", { current: currentStateView(athlete) });
+  if (refusal === "manual_values_present") throw conflict("manual_values_present", "This athlete has values entered on the roster; remove them first.", { current: currentStateView(athlete) });
   if (kind === "cleared" && !athlete.currentDecisions.some((d) => d.decision_kind !== "cleared")) {
     throw conflict("nothing_to_clear", "This athlete has no state to remove.", { current: currentStateView(athlete) });
   }

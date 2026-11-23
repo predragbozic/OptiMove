@@ -634,7 +634,7 @@ reviewers:
   value or a whole entry?"); if yes, *Remove these values* is a route of the re-import pull request, with no migration.
 - **Not in part 1:** the re-import question and the `manual_replaced` writer path (after ST-2's merge), the screens.
 - **Runbook:** `docs/runbooks/manual-values-v88.md`, with its preflight, post-check and rollback.
-- **Fail closed until the re-import question** (the *Nezavisni revizor*'s HIGH on `c146b66`; the *Rukovodilac*'s decision
+- *(Superseded by 16.2, the re-import question.)* **Fail closed until the re-import question** (the *Nezavisni revizor*'s HIGH on `c146b66`; the *Rukovodilac*'s decision
   of 2026-11-22: in this pull request, the switch stays on by default): nothing written on the roster is replaced or
   doubled by an import without the owner's choice. The import writer (`backend/src/gpexeImportWriter.js`) refuses the
   whole session with `manual_values_conflict`, naming every such athlete (`blocked.athleteIds`, OptiMove ids), when
@@ -657,6 +657,58 @@ reviewers:
 - **The owner's answers of 2026-11-22** (relayed by the *Rukovodilac*): (1) yes, *Remove these values*: an entry is ended
   as history (who entered, who removed) and the athlete needs a state again - v88's `removal` kind holds it, so its route
   and screen come with PR3, no migration; (2) *Did not participate* is offered only after the values are removed.
+
+### 16.2 ST-4 as built, part 2: the re-import question, Remove these values (no migration)
+
+- **The re-import question (section 8)** replaces part 1's fail-closed `manual_values_conflict`. An import that meets
+  values written on the roster no longer blocks. The preview lists every such athlete in `manualValues.athletes`:
+  `{ athleteId, kind: entry | correction | restore, choice: keep | replace, replaceAvailable }`. It is present only then, so every other
+  preview and its hash are unchanged. Each of those athletes' results is listed in `changesToImported`, so the
+  approval needs `acceptChanges` either way.
+  - **Keep my values** is the default and needs no choice.
+    - For an entry: every result of the athlete is stored flagged (`stale_resend_ignored`, outcome `manual_kept`),
+      never current. The entry stays the athlete's only effective values and can still be changed or removed.
+    - For a correction: today's path. GPEXE's other values are stored flagged and the correction stays current.
+    - GPEXE resending the measured values is `unchanged` and is not listed.
+  - **Use GPEXE's values** is `replaceManualAthleteIds`: OptiMove athlete ids, at most 60, each one named in the
+    preview's `manualValues`.
+    - It is a choice like the athletes left out and the session type. `POST …/candidates/:id/preview` answers its
+      `subsetHash`, and the approval sends the ids with that hash.
+    - The approval stores `replaced_manual_athlete_ids` with the hash (v88's pair rule).
+    - For an entry: GPEXE's whole-session occasion supersedes the entry (`supersedes_occasion_id` and
+      `superseded_by_occasion_id`), and the entry stays as history.
+    - For a correction: GPEXE's version supersedes the correction and is the record's current occasion.
+    - Every result of such an athlete reads `manual_replaced`. The review then lists the same results under either
+      choice, and v23 binds `changes_to_imported` to the stored preview's count.
+  - A chosen athlete the import does not meet is refused: `400 invalid_manual_choice` against the stored preview, and
+    the writer's `manual_choice_invalid` under the locks.
+  - **Only with a whole-session result** (the *Rukovodilac*, 2026-11-23, fail-closed): an entry is superseded only by
+    GPEXE's whole-session occasion. With drill results alone it would stay effective beside GPEXE's drill values, so
+    such an athlete is listed with `replaceAvailable: false` (Keep only; a correction is always `true`). A choice
+    preview or an approval naming them is `400 manual_replace_unavailable` against the stored preview, and the writer
+    refuses it under the locks with the same code (a stale preview: the choice preview answers `409 subset_blocked`).
+    Through the routes the case is not reachable today (an entry needs the session's imported whole-session values,
+    and a later drill-only answer first blocks on `identities_missing_from_source`); the guard is fail-closed.
+- **Remove these values** (the owner, 2026-11-22): `POST /api/training-activity/:activityId/manual-values/remove`
+  `{ requestKey, athleteId, expectedOccasionId, note? }`.
+  - It has the same frame as a save: the switch, the roster audience with the identical 404, the team's import
+    try-lock, the request key, a bounded COMMIT.
+  - It ends the athlete's current roster **entry** with an empty v88 `removal` occasion. The entry stays as history
+    with who entered it, the removal records who removed it, and the athlete needs a state again.
+  - A correction goes back with the restore; `409 nothing_to_remove` otherwise.
+- **A state only after the values are removed** (the owner, 2026-11-22): a roster decision (any but `cleared`) for an
+  athlete with a current roster entry is `409 manual_values_present`. It is checked under the team's import lock, which
+  every manual write takes. The database's own decision trigger still counts only imported values (part 1's known
+  limit).
+- **Known limit (code review, MEDIUM; an owner decision):** after *Keep my values* and then *Remove these values*,
+  GPEXE's version stays stored flagged. A later check of the SAME GPEXE data is `unchanged` and makes no candidate, so
+  the athlete needs a state while a device record exists in the database. The only way back today is an undo and a
+  fresh import. Options: (a) leave it as a known limit; (b) the removal offers to make the flagged GPEXE version
+  current; (c) a check surfaces such a session again.
+- **Follow-up (LOW):** the approval's read-back (`APPROVAL_COLUMNS` / `approvalView`) does not show
+  `replaced_manual_athlete_ids` (guarded for a database before v88).
+- **Tests:** `manual-values-st4` 19, 19b, 19c, 19d, 19e, 21, 22, and 23 (an undo of a session with manual values and a
+  per-athlete type exception, the reviewer's LOW).
 
 ## 17. ST-3 as built (migration v89, `migrations_v2/202611221400_training_load_v89_participant_session_types.sql`)
 

@@ -673,6 +673,32 @@ export async function restoreMeasuredValues(ctx, activityId, body) {
   });
 }
 
+// "Remove these values" (the owner, 2026-11-22): the athlete's current roster ENTRY is ended by an empty manual occasion
+// (v88's 'removal' kind) - the entry stays as history with who entered it, the removal records who removed it, and the
+// athlete needs a state again. Only an entry: a correction goes back with the restore.
+export function validateRemove(body) {
+  const common = commonOf(body);
+  if (body.values !== undefined) throw bad("invalid_values", "A removal takes no values.");
+  if (common.expectedOccasionId === null) throw bad("invalid_expected_occasion", "expectedOccasionId is required.");
+  return common;
+}
+
+export async function removeManualValues(ctx, activityId, body) {
+  if (!manualValuesEnabled()) throw notFound();
+  const input = validateRemove(body);
+  const canonical = { operation: "manual_remove", activityId, athleteId: input.athleteId, expectedOccasionId: input.expectedOccasionId, note: input.note };
+  return runManualWrite(ctx, activityId, input, canonical, async ({ client, event, basis, hash }) => {
+    const state = await lockCurrent(client, event.id, input);
+    const current = state.current;
+    if (state.mode !== "entry" || !current || current.entry_method !== "manual" || current.manual_kind !== "entry") {
+      throw conflict("nothing_to_remove", "This athlete has no values entered on the roster. Nothing was saved.");
+    }
+    const occasionId = await insertOccasion(client, { participantId: await participantOf(client, current.id), sourceIdentityId: null, userId: ctx.userId, supersedes: current.id });
+    await supersede(client, { current: String(current.id), occasionId, identityId: null });
+    await writeProvenance(client, { occasionId, kind: "removal", replaced: String(current.id), measured: null, userId: ctx.userId, basis, note: input.note, requestKey: input.requestKey, hash });
+  });
+}
+
 async function participantOf(client, occasionId) {
   return String((await client.query(`select event_participant_id from training_load.metric_measurement_occasions where id = $1`, [occasionId])).rows[0].event_participant_id);
 }
