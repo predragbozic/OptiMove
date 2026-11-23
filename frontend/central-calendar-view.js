@@ -1385,9 +1385,9 @@ function renderPlannedLinksHtml(item, cal, pending, linkEntries = []) {
 
 // K5-3 (docs/ai/central-calendar-k5-plan.md, "Add to the event?"): a lone activity's or RPE request's panel asks
 // whether to add it to a training or match of its day (central-calendar-links.js has the rule). One event: the
-// question with [Add] and [Leave]; several: a row per event with its Add, then Leave. Never sent by itself; Leave
+// question with [Add] and [Not now]; several: a row per event with its Add, then Not now. Never sent by itself; Not now
 // sends nothing and hides the question for this card until the page is loaded again. A command of this panel whose
-// result is not confirmed keeps its Check result here even after Leave.
+// result is not confirmed keeps its Check result here even after Not now (the owner's word, 2026-11-23).
 function renderAddToEventHtml(item, cal, pending) {
   const what = centralCalendarAddToEventKind(item);
   if (!what) return "";
@@ -1403,7 +1403,7 @@ function renderAddToEventHtml(item, cal, pending) {
   const act = what === "activity" ? "add-activity" : "add-rpe";
   const meta = (event) => [centralCalendarWhenLabel(event), eventKindWord(event)].filter(Boolean).join(" · ");
   const addable = offers.some((offer) => !offer.refused);
-  const leave = `<button type="button" class="plain-button cc-panel-button cc-link-button" data-action="central-calendar-add-leave"${off ? " disabled" : ""}>${addable ? "Leave" : "Hide"}</button>`;
+  const leave = `<button type="button" class="plain-button cc-panel-button cc-link-button" data-action="central-calendar-add-leave"${off ? " disabled" : ""}>${addable ? "Not now" : "Hide"}</button>`;
   let body;
   if (offers.length === 1 && !offers[0].refused) {
     const { item: event } = offers[0];

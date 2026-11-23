@@ -123,7 +123,7 @@ decisions of 2026-11-22 replaced "its own contract first":
     (`rpe_from_sessions`), and no event of the loaded range already refers to the same schedule (one planned event
     per schedule). **No half-of-day rule:** the card's time is when the RPE opens (`opens_time`), not when the
     athletes trained. Sent as `PATCH /api/calendar/events/:eventId` with `externalScheduleId` only.
-- **[Leave]** sends nothing and hides the question for that card until the page is loaded again (in memory). When
+- **[Not now]** (the owner's word of 2026-11-23, replacing the plan's [Leave]) sends nothing and hides the question for that card until the page is loaded again (in memory). When
   every offered event was refused, the panel says "Can't be added to an event on this day." and the button reads
   Hide.
 - **Refusals:** one plain sentence each. `rpe_from_question` and `rpe_from_sessions` are remembered for the pair only

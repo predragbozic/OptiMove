@@ -208,7 +208,7 @@ test("2. an activity's panel asks, Add sends one POST with the exact body, the p
   assert.ok(s, "the question is there");
   assert.match(s.textContent, /Add to “Training 10:00”\?/);
   assert.equal(addButtons().length, 1);
-  assert.ok(s.querySelector('[data-action="central-calendar-add-leave"]'), "and Leave");
+  assert.equal(s.querySelector('[data-action="central-calendar-add-leave"]').textContent, "Not now", "and Not now (the owner's word)");
   assert.doesNotMatch(s.textContent, UUID_ANYWHERE);
   assert.equal(writesOf(calls).length, 0, "never sent by itself");
   await press(addButtons()[0]);
@@ -242,7 +242,7 @@ test("3. an RPE request's panel: Add sends one PATCH with only externalScheduleI
   assert.equal(state.centralCalendar.panel.key, `event:${E1}:${D}`);
 });
 
-test("4. Leave sends nothing and hides the question for this card; another card still asks", async () => {
+test("4. Not now sends nothing and hides the question for this card; another card still asks", async () => {
   const { calls } = await start();
   await open(`activity:${ACT1}`);
   await act({ action: "central-calendar-add-leave" });
@@ -254,7 +254,7 @@ test("4. Leave sends nothing and hides the question for this card; another card 
   assert.equal(section(), null, "still left after reopening");
 });
 
-test("5. several events: one row each with its Add, then Leave", async () => {
+test("5. several events: one row each with its Add, then Not now", async () => {
   await start({ items: [TRAINING(), eventItem(E2, { title: "Match", eventKind: "match", eventTypeLabel: "Match", athleteIds: [A2], athleteCount: 1, startTime: "09:00" }), eventItem(E_MEET, { title: "Meeting", eventKind: "meeting", athleteIds: [A2], startTime: "10:00" }), ACT()] });
   await open(`activity:${ACT1}`);
   const rows = [...dom().querySelectorAll(".cc-add-event .cc-link-row")];
