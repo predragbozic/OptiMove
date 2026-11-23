@@ -191,11 +191,17 @@ test (mockup 07). Each mark is only a mark: no number and no state.
 - **Phone:** the marks and the type's icon share one row; the title wraps below and is never cut (mockup 07's long
   title).
 - **The time grid (K7, week and day views; restored 2026-11-23 at the owner's request, "this was one of the
-  requirements"):** an event box keeps its marks too, right after its time.
-  - In a box 60 px wide or less, the marks take their own line at 12 px.
-  - A box that is both that narrow and under 45 minutes long keeps only its time and title.
-  - A box of 44 px or less drops the marks.
-  - The box's label and tooltip always say "Holds ...". The K7 build had hidden the marks in every box.
+  requirements").** The K7 build had hidden the marks in every box; an event box now keeps them after its title, with
+  the order time > title > marks. The box's label and tooltip always say "Holds ...", where the marks are left out too.
+  By the box's own width:
+  - **A box of several lines:** the time, then "Title... marks" (the marks at the end of the title's line).
+  - **A one-line box** (under 45 minutes): "10:00 Title... marks". Under 200 px it shows only its start time; under
+    140 px it leaves the marks out, as does a two-line box (45 to 59 minutes).
+  - **61 to 110 px:** only a box of 75 minutes or more keeps the marks, on a line of their own.
+  - **60 px or less** (the smaller type): the marks on a line of their own at 12 px, from an hour up.
+  - **44 px or less:** no marks.
+  - The browser check of this change measured every case at 1280 and 1024 px: the title is visible and the marks fit
+    whole or are left out, never cut.
 
 ### 2.4 H5 — day chips (what is in no event)
 

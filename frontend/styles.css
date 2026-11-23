@@ -21549,11 +21549,14 @@ body.exercise-header-pinned #viewToolbar {
   display: none;
 }
 
-/* H4 (the owner's requirement, K5-2 contract 2.3): what an event holds stays visible in the week and day grids too -
-   the RPE, GPS and test marks right after the time. A narrow box puts them on their own line; only a box of 44 px or
-   less drops them (below), and its label and tooltip still say "Holds ...". */
+/* H4 (the owner's requirement, K5-2 contract 2.3): what an event holds stays visible in the week and day grids too.
+   The marks come after the title: a box of several lines reads the time, then "Title... marks"; a one-line box (under
+   45 minutes) "10:00 Title... marks", the title cut first; a narrow box (60 px or less) puts them on a line of their
+   own. Where even that does not fit (below) they are dropped; the
+   box's label and tooltip still say "Holds ...". */
 .cc-tg-box .cc-card-marks {
   flex: none;
+  min-height: 14px;
 }
 
 /* A narrow box (a shared cluster) keeps its colour stripe and time; the icon goes. */
@@ -21591,33 +21594,77 @@ body.exercise-header-pinned #viewToolbar {
   }
 }
 
+/* H4 in a one-line box (under 45 minutes): "10:00 Title... marks". Under 200 px the end time gives its room to the
+   title; under 140 px the marks go too (and those of a two-line box, 45 to 59 minutes), so the time and the title keep
+   their lines (label and tooltip say "Holds ..."). */
+@container (max-width: 200px) {
+  .cc-tg-box.is-short .cc-card-when-end {
+    display: none;
+  }
+}
+
+/* H4: a box of several lines reads the time, then the title with the marks at the end of its line (a 45-minute box
+   holds just these two lines). */
+.cc-tg-box:not(.is-short) .cc-card-body {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 4px;
+}
+
+.cc-tg-box:not(.is-short) .cc-card-top {
+  grid-column: 1 / -1;
+}
+
+.cc-tg-box .cc-card-marks {
+  align-self: center;
+}
+
+@container (max-width: 140px) {
+  .cc-tg-box.is-short .cc-card-marks,
+  .cc-tg-box.is-two-line .cc-card-marks {
+    display: none;
+  }
+}
+
 /* Under 120 px the type icon gives its room to the title (the stripe keeps the colour). */
 @container (max-width: 120px) {
+
   .cc-tg-box .cc-card-icon {
     display: none;
   }
 }
 
+/* H4 in a box 61 to 110 px wide: no room for the marks beside the title. A box of 75 minutes or more puts them on a
+   line of their own; a shorter one leaves them out (label and tooltip say "Holds ..."). */
+@container (max-width: 110px) {
+  .cc-tg-box:not(.is-short) .cc-card-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cc-tg-box:not(.is-tall) .cc-card-marks {
+    display: none;
+  }
+}
+
 @container (max-width: 60px) {
-  /* A narrow box: the time stays whole on the first line, the marks take their own line below it, at 12 px. */
-  .cc-tg-box .cc-card-top {
-    flex-wrap: wrap;
-    row-gap: 1px;
+  /* A narrow box (smaller type): the marks take their own line under the title, at 12 px; with the smaller type a box
+     of an hour has room for them too. */
+  .cc-tg-box:not(.is-short):not(.is-two-line) .cc-card-marks {
+    display: inline-flex;
+  }
+
+  .cc-tg-box:not(.is-short) .cc-card-body {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .cc-tg-box .cc-card-marks {
-    flex-basis: 100%;
     gap: 1px;
+    min-height: 12px;
+    align-self: start;
   }
 
   .cc-tg-box .cc-mark {
     width: 12px;
     height: 12px;
-  }
-
-  /* A narrow box under 45 minutes has one line: the time and the title keep it (label and tooltip say "Holds ..."). */
-  .cc-tg-box.is-short .cc-card-marks {
-    display: none;
   }
 
   .cc-tg-box > .cc-card {
@@ -21643,7 +21690,8 @@ body.exercise-header-pinned #viewToolbar {
    10 px tabular figures so "10:00" still shows whole. */
 @container (max-width: 44px) {
   /* A third of a column: no room for the marks; its label and tooltip still say "Holds ...". */
-  .cc-tg-box .cc-card-marks {
+  .cc-tg-box .cc-card-marks,
+  .cc-tg-box:not(.is-short):not(.is-two-line) .cc-card-marks {
     display: none;
   }
 
