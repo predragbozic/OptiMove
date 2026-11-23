@@ -357,7 +357,7 @@ test("2. Link from the event: one POST with the exact body; the calendar read ag
   assert.equal(dom().querySelector('.cc-panel-links .cc-link-message[role="status"]').textContent, said(), "in the panel's own line (review M4)");
   assert.equal(state.centralCalendar.notice, "", "not behind the sheet");
   assert.equal(dom().querySelector('[data-act="align"]').textContent, "Ask for RPE in the linked trainings");
-  assert.match(section().textContent, /A linked training shows inside this event on the calendar\. Unlink undoes it\./);
+  assert.match(section().textContent, /A linked training shows inside this event on the calendar\. To unlink one, use ⋯ on its row\./);
 });
 
 // --- 3. Link from a planned card --------------------------------------------------------------
@@ -1102,14 +1102,21 @@ test("20c. a linked row's '⋯' opens a menu with the same Unlink; one menu at a
   const unlink = doc.querySelector('.cc-row-menu [data-act="unlink-sessions"]');
   assert.equal(unlink.getAttribute("aria-label"), "Unlink Morning session");
   assert.equal(doc.querySelector(".cc-row-more").getAttribute("aria-expanded"), "true");
+  assert.equal(doc.querySelectorAll(".cc-row-more")[1].hasAttribute("aria-controls"), false, "a closed menu names no element");
   assert.equal(doc.querySelector(".cc-row-menu").id, doc.querySelector(".cc-row-more").getAttribute("aria-controls"));
   // The other row's menu replaces it.
   await act({ ...dom().querySelectorAll(".cc-row-more")[1].dataset });
   doc = dom();
   assert.equal(doc.querySelectorAll(".cc-row-menu").length, 1);
   assert.ok(doc.querySelector(`.cc-row-menu [data-act="unlink-activity"][data-activity-id="${ACT1}"]`));
-  // Escape closes the menu, not the panel.
-  assert.equal(closeCentralCalendarPanel(render), true);
+  // Escape closes the menu, not the panel (the real page holds the drawn menu).
+  const fakeDocument = globalThis.document;
+  globalThis.document = dom();
+  try {
+    assert.equal(closeCentralCalendarPanel(render), true);
+  } finally {
+    globalThis.document = fakeDocument;
+  }
   assert.equal(state.centralCalendar.panel.open, true);
   assert.equal(dom().querySelectorAll(".cc-row-menu").length, 0);
   // The Unlink in the menu sends what it sent before.
@@ -1134,4 +1141,46 @@ test("20d. Edit · Cancel event · Delete sit together at the bottom, after ever
   assert.ok(sections.length >= 3);
   assert.ok(sections.every((sec) => sec.compareDocumentPosition(bottom) & 4), "the actions come after the sections");
   assert.equal(panel.querySelectorAll(".cc-panel-actions").length, 1, "one place for the event's acts");
+});
+
+test("20e. a menu whose row left the screen (its section folded) does not take Escape: the panel closes at once", async () => {
+  unfold = false;
+  await start();
+  await openEvent();
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  await act({ ...dom().querySelector(".cc-psec[data-section='trainings'] .cc-row-more").dataset });
+  assert.equal(dom().querySelectorAll(".cc-row-menu").length, 1);
+  await pressToggle("trainings");
+  assert.equal(state.centralCalendar.panelView.menu, "", "folding the section forgets its menu");
+  // Even a menu remembered but not drawn: Escape goes on to close the panel.
+  state.centralCalendar.panelView = { ...state.centralCalendar.panelView, menu: "session:gone" };
+  const fake = globalThis.document;
+  globalThis.document = dom();
+  try {
+    assert.equal(closeCentralCalendarPanel(render), true);
+  } finally {
+    globalThis.document = fake;
+  }
+  assert.equal(state.centralCalendar.panel.open, false);
+});
+
+test("20f. the section the coach acts in stays open after the answer: linking the last offer does not fold Trainings", async () => {
+  unfold = false;
+  await start();
+  await openEvent();
+  // Open by default for its offer; the coach links it - no offer is left and Align is answered "Not now".
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "true");
+  await press(linkButton('[data-planned-key="planned:p1"]'));
+  await tick();
+  assert.equal(linkButton('[data-planned-key="planned:p1"]'), null, "no offer left");
+  assert.equal(toggleOf("trainings").getAttribute("aria-expanded"), "true", "the new linked row stays in view");
+  assert.match(sectionEl("trainings").textContent, /Morning session/);
+  // The activity: its offer opened GPS and activities; once linked nothing else keeps it open - the act does.
+  assert.equal(toggleOf("activities").getAttribute("aria-expanded"), "true");
+  await press(linkButton(`[data-activity-key="activity:${ACT1}"]`));
+  await tick();
+  assert.equal(linkButton(`[data-activity-key="activity:${ACT1}"]`), null, "no activity offer left");
+  assert.equal(toggleOf("activities").getAttribute("aria-expanded"), "true", "the linked activity stays in view");
+  assert.match(sectionEl("activities").textContent, /GPS session/);
 });

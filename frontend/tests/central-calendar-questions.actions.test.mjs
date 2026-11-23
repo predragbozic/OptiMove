@@ -129,8 +129,9 @@ function server({ enabled = true, event = eventView(), questions = [], write = n
 }
 
 let rendered = "";
+let unfold = true;
 function render() {
-  openEveryPanelSection(state.centralCalendar);
+  if (unfold) openEveryPanelSection(state.centralCalendar);
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, {
     today: TODAY, layout: "wide", roster: centralCalendarRosterIndex(), canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
     uncertainWrites: centralCalendarUncertainWrites(),
@@ -852,7 +853,7 @@ test("B1e. never in the athlete workspace, even for a card that says canManage",
 test("P14. while a question is live, the panel's status line says answers are awaited (never 'Nothing is expected')", async () => {
   await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())], items: [eventItem(E_MATCH, DAY(1), { status: "none", expects: [] })] });
   const panelText = dom().querySelector(".cc-panel").textContent;
-  assert.match(panelText, /Waiting for athletes' answers: see Questions for athletes\./);
+  assert.match(panelText, /Waiting for athletes' answers: see Questions and RPE\./);
   assert.doesNotMatch(panelText, /Nothing is expected after this event\./);
 });
 
@@ -1108,5 +1109,35 @@ test("P29b. while a link write is in flight, Escape closes the panel and keeps t
     assert.equal(state.centralCalendar.questionStep, step, "the step is kept");
   } finally {
     state.centralCalendar.linkWrite = null;
+  }
+});
+
+test("P-fold. a question's unconfirmed result and its Check result stay in view even after the coach folded Questions", async () => {
+  unfold = false;
+  try {
+    const calls = await openQuestionsPanel({ lose: true, questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
+    await act({ action: "central-calendar-panel-reveal", key: "questions" });
+    await qact("remove-open", { questionId: Q_RPE });
+    await qact("send");
+    assert.equal(questionWrites(calls).length, 1);
+    // The coach folds the section: it stays open while the result is not confirmed.
+    const toggle = dom().querySelector('.cc-psec-toggle[data-key="questions"]');
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    await handleCentralCalendarAction(fakeAction({ ...toggle.dataset }, { getAttribute: (name) => toggle.getAttribute(name) }), { render });
+    let doc = dom();
+    assert.equal(doc.querySelector('.cc-psec-toggle[data-key="questions"]').getAttribute("aria-expanded"), "true", "forced open");
+    assert.match(section().textContent, /The result is not confirmed\./);
+    // The screen line's check settles it: its line is in view.
+    const key = section().querySelector('[data-action="central-calendar-link-check"]').dataset.requestKey;
+    await act({ action: "central-calendar-link-check", requestKey: key });
+    doc = dom();
+    assert.ok(doc.querySelector(".cc-panel-questions .cc-link-message"), "the result line is drawn");
+    assert.equal(doc.querySelector('.cc-psec-toggle[data-key="questions"]').getAttribute("aria-expanded"), "true");
+    // Once the line is gone (another act), the coach's fold wins again.
+    state.centralCalendar.linkMessage = null;
+    render();
+    assert.equal(dom().querySelector('.cc-psec-toggle[data-key="questions"]').getAttribute("aria-expanded"), "false");
+  } finally {
+    unfold = true;
   }
 });

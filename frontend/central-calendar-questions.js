@@ -341,7 +341,7 @@ function namesHtml(label, people, open) {
 export function ccPanelQuestionsWaiting(pq, item) {
   return Boolean(pq && pq.key === item?.key && !pq.hidden && ccPanelQuestionList(pq.read).some((q) => q.status === "live"));
 }
-export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions for athletes.";
+export const CC_WAITING_SENTENCE = "Waiting for athletes' answers: see Questions and RPE.";
 
 // `feedbackAt` ({ kind, questionId }): the command the line belongs to - drawn
 // in that question's row, else in the row of its kind's live question, else

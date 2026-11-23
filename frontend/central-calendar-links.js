@@ -265,7 +265,7 @@ export function centralCalendarPartialLine(n) {
 }
 
 export const CENTRAL_CALENDAR_ORPHANED_META = "Unlink to clear it; nothing else changes.";
-export const CENTRAL_CALENDAR_LINKED_HINT = "A linked training shows inside this event on the calendar. Unlink undoes it.";
+export const CENTRAL_CALENDAR_LINKED_HINT = "A linked training shows inside this event on the calendar. To unlink one, use ⋯ on its row.";
 export const CENTRAL_CALENDAR_LINKS_LOAD_FAILED = "Linked trainings and activities could not be loaded.";
 export function centralCalendarPlannedPartialLine(event) {
   return `“${String(event?.title ?? "").replace(/\s+/g, " ").trim() || "This event"}” does not include all of these athletes. Add them to the event, then link.`;

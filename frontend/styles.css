@@ -30409,8 +30409,14 @@ body.athlete-questions-prompt-open {
 .cc-sum-icon { flex: 0 0 auto; color: var(--muted); }
 .cc-sum-count { font-weight: 800; font-variant-numeric: tabular-nums; }
 .cc-sum-name { color: var(--muted); font-weight: 600; }
+/* A kind with nothing in it reads quieter than one that holds something (its count says 0, never colour alone). */
+.cc-sum-chip.is-empty { background: transparent; border-style: dashed; }
+.cc-sum-chip.is-empty .cc-sum-count { color: var(--muted); }
 
 .cc-psec { border-top: 1px solid var(--line); min-width: 0; }
+/* In the sheet every direct child gets 12 px above it; the folded sections sit as one list instead. */
+.cc-panel.cc-sheet > .cc-psec + .cc-psec { margin-top: 0; }
+.cc-panel-links .cc-psec + .cc-psec { margin-top: 0; }
 .cc-psec-title { margin: 0; font-size: 15px; }
 .cc-psec-toggle {
   display: flex;
@@ -30474,10 +30480,9 @@ body.athlete-questions-prompt-open {
 .cc-row-menu { flex: 1 0 100%; display: flex; justify-content: flex-end; }
 @media (max-width: 390px) {
   .cc-link-row.cc-link-row-compact .cc-link-button { width: auto; justify-self: auto; }
-  .cc-row-menu .cc-link-button { width: 100%; }
 }
 
-.cc-see-each-choose { display: inline-flex; align-items: center; gap: 6px; }
+.cc-see-each-choose { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-start; }
 .cc-see-each-count { font-weight: 600; opacity: 0.85; }
 .cc-see-each-choose .cc-psec-chevron { margin-left: 4px; }
 .cc-see-each-forms { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }

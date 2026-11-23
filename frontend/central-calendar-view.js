@@ -1327,15 +1327,18 @@ function panelViewOf(cal, item) {
   return cal.panelView && cal.panelView.key === item.key ? cal.panelView : null;
 }
 
-function panelSectionOpen(cal, item, id, fallback) {
+// `force`: the section holds a command's result, its Check result or an open step - it stays open whatever the coach
+// chose earlier, so an unconfirmed outcome is never folded away.
+function panelSectionOpen(cal, item, id, fallback, force = false) {
+  if (force) return true;
   const chosen = panelViewOf(cal, item)?.sections?.[id];
   return typeof chosen === "boolean" ? chosen : Boolean(fallback);
 }
 
 // A collapsible section: its header is one button (aria-expanded / aria-controls) with the section's icon, name,
 // count and an optional short fact; the body is in the markup only while it is open.
-function panelSectionHtml(cal, item, { id, title, count = "", meta = "", open = false, body = "", className = "", busy = false }) {
-  const expanded = panelSectionOpen(cal, item, id, open);
+function panelSectionHtml(cal, item, { id, title, count = "", meta = "", open = false, force = false, body = "", className = "", busy = false }) {
+  const expanded = panelSectionOpen(cal, item, id, open, force);
   const countHtml = count === "" ? "" : `<span class="cc-psec-count">${escapeHtml(String(count))}</span>`;
   const spoken = [title, count === "" ? "" : String(count), meta].filter(Boolean).join(", ");
   return `<section class="cc-psec${className ? ` ${className}` : ""}${expanded ? " is-open" : ""}" data-section="${escapeAttr(id)}"${busy ? ' aria-busy="true"' : ""}>
@@ -1352,7 +1355,7 @@ function linkedRowHtml(cal, item, { menuId, title, meta = "", button }) {
   const open = panelViewOf(cal, item)?.menu === menuId;
   const domId = `ccMenu-${menuId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   return `<li class="cc-link-row cc-link-row-compact${open ? " is-menu-open" : ""}"><div class="cc-link-text"><p class="cc-link-name">${escapeHtml(title)}</p>${meta ? `<p class="cc-link-meta">${escapeHtml(meta)}</p>` : ""}</div>
-      <button type="button" class="plain-button icon-button cc-row-more" data-action="central-calendar-row-menu" data-key="${escapeAttr(menuId)}" aria-expanded="${open ? "true" : "false"}" aria-controls="${escapeAttr(domId)}" aria-label="${escapeAttr(`More for ${title}`)}"><span aria-hidden="true">⋯</span></button>
+      <button type="button" class="plain-button icon-button cc-row-more" data-action="central-calendar-row-menu" data-key="${escapeAttr(menuId)}" aria-expanded="${open ? "true" : "false"}"${open ? ` aria-controls="${escapeAttr(domId)}"` : ""} aria-label="${escapeAttr(`More for ${title}`)}"><span aria-hidden="true">⋯</span></button>
       ${open ? `<div class="cc-row-menu" id="${escapeAttr(domId)}" role="group" aria-label="${escapeAttr(title)}">${button}</div>` : ""}</li>`;
 }
 
@@ -1579,9 +1582,18 @@ function goRowHtml(target) {
   return `<div class="cc-go cc-go-event"><ul class="cc-go-list" role="list"><li class="cc-go-row"><p class="cc-go-name">${escapeHtml(target.name)}${target.meta ? ` <span class="cc-go-meta">· ${escapeHtml(target.meta)}</span>` : ""}</p>${goButtonHtml({ ...target, aria: `${target.label}: ${target.name}` })}</li></ul>${target.hint ? `<p class="cc-panel-note cc-go-hint">${escapeHtml(target.hint)}</p>` : ""}</div>`;
 }
 
+// The answers' first fact ("Answered 2/12") for the folded Athletes header: a manager's event whose answers are read.
+function athleteAnswersMeta(item, cal) {
+  if (!ccAnswersWanted(item) || !ccAnswersReadable(item)) return "";
+  const panel = cal.panel;
+  const view = cal.panelAnswers && cal.panelAnswers.panel === panel && cal.panelAnswers.key === item.key ? cal.panelAnswers : null;
+  if (!view || view.loading || view.error || !view.weekly || !Array.isArray(panel.athletes)) return "";
+  return ccAnswersSummaryParts(ccAnswersSummary(panel.athletes, ccAnswerEntries(item, view.weekly)))[0] || "";
+}
+
 // The event's panel below its facts (the owner's redesign of 2026-11-23): the summary row, Plan / Open the training,
 // the sections, See each athlete, Athletes, Details, then Edit · Cancel event · Delete together at the bottom.
-function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today }) {
+function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe = false }) {
   const targets = centralCalendarGoTargets(item);
   const target = (key) => targets.find((entry) => entry.key === key) || null;
   const links = eventLinkParts(item, cal, pending, pendingQuestion);
@@ -1591,7 +1603,8 @@ function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion,
     const body = [links.readState === "ok" ? "" : links.stateHtml, ...links.trainings.parts,
       links.trainings.hint ? `<p class="cc-panel-note cc-link-hint">${escapeHtml(links.trainings.hint)}</p>` : "",
       links.nothing ? `<p class="cc-panel-note">${escapeHtml(CENTRAL_CALENDAR_LINK_EMPTY)}</p>` : ""].join("");
-    sections.push({ id: "trainings", title: "Trainings", count: links.trainings.count, open: links.readState === "error" || links.trainings.offers, body, busy: links.busy });
+    const alignOpen = Boolean(cal.alignStep && cal.alignStep.eventKey === item.key);
+    sections.push({ id: "trainings", title: "Trainings", count: links.trainings.count, open: links.readState === "error" || links.trainings.offers, force: alignOpen, body, busy: links.busy });
   }
   // GPS and activities: the card's activities (open them), then a manager's linked ones and the day's offers.
   const activity = target("activity");
@@ -1610,9 +1623,10 @@ function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion,
     const questionsHtml = questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : "";
     const ownLine = cal.linkMessage?.family === "question" && cal.linkMessage.panelKey === item.key;
     const step = cal.questionStep && cal.questionStep.eventKey === item.key;
-    const open = Boolean(pendingQuestion) || ownLine || step || Boolean(pq?.error);
+    const force = Boolean(pendingQuestion) || ownLine || step;
     const count = (rpe ? 1 : 0) + asked;
-    sections.push({ id: "questions", title: "Questions and RPE", count: questionsOn && (!pq || pq.loading) && !rpe ? "" : count, meta: rpe?.meta || "", open, body: `${rpe ? goRowHtml(rpe) : ""}${questionsHtml}` || `<p class="cc-panel-note">No question is asked yet.</p>` });
+    // Open by default while the RPE gap's next step is Ask RPE here (askRpe), or after a failed read.
+    sections.push({ id: "questions", title: "Questions and RPE", count: questionsOn && (!pq || pq.loading) && !rpe ? "" : count, meta: rpe?.meta || "", open: askRpe || Boolean(pq?.error), force, body: `${rpe ? goRowHtml(rpe) : ""}${questionsHtml}` || `<p class="cc-panel-note">No question is asked yet.</p>` });
   }
   // The event's test.
   const test = target("test");
@@ -1623,7 +1637,7 @@ function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion,
       <div class="cc-sum-chips">${sections.map((entry) => {
         const shown = entry.count === "" ? "…" : String(entry.count);
         const spoken = `${entry.title}: ${entry.count === "" ? "loading" : entry.count}${entry.meta ? `, ${entry.meta}` : ""}. Show`;
-        return `<button type="button" class="cc-sum-chip" data-action="central-calendar-panel-reveal" data-key="${escapeAttr(entry.id)}" aria-label="${escapeAttr(spoken)}">${renderIconSvg(PANEL_SECTION_ICONS[entry.id] || "list", { size: 18, className: "cc-sum-icon" })}<span class="cc-sum-count">${escapeHtml(shown)}</span><span class="cc-sum-name">${escapeHtml(entry.title)}</span></button>`;
+        return `<button type="button" class="cc-sum-chip${entry.count === 0 ? " is-empty" : ""}" data-action="central-calendar-panel-reveal" data-key="${escapeAttr(entry.id)}" aria-label="${escapeAttr(spoken)}">${renderIconSvg(PANEL_SECTION_ICONS[entry.id] || "list", { size: 18, className: "cc-sum-icon" })}<span class="cc-sum-count">${escapeHtml(shown)}</span><span class="cc-sum-name">${escapeHtml(entry.title)}</span></button>`;
       }).join("")}</div>
     </div>` : "";
   // The link sections share one status line (a write's result, its Check result), always in view.
@@ -1637,7 +1651,7 @@ function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion,
   const count = Number(item.athleteCount) || 0;
   const athletes = panelSectionHtml(cal, item, {
     id: "athletes", title: "Athletes", count: count || (Array.isArray(cal.panel.athletes) ? cal.panel.athletes.length : ""), className: "cc-panel-athletes",
-    open: false, body: renderPanelAthletesHtml(item, cal, roster, { headless: true }),
+    meta: athleteAnswersMeta(item, cal), open: false, body: renderPanelAthletesHtml(item, cal, roster, { headless: true }),
   });
   const details = centralCalendarEventDetailsParts(item, cal.panelEvent);
   const detailsHtml = details ? panelSectionHtml(cal, item, {
@@ -1683,6 +1697,9 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
   const linksLocked = Boolean(cal.linkWrite) || Boolean(pending && item.kind === "event") || Boolean(pendingQuestion) || Boolean(cal.questionStep);
   // The section also stays while one of its commands is not confirmed (its Check result).
   const questionsOn = item.kind === "event" && item.canManage === true && (formCtx.catalog?.questionsEnabled === true || Boolean(pendingQuestion));
+  // The RPE gap names Ask RPE (and the Questions section opens for it) only when the section really offers it.
+  const eventAskRpe = item.kind === "event" && item.canManage === true && formCtx.catalog?.questionsEnabled === true && (item.gaps || []).includes("rpe")
+    && ccPanelAskOffered(item, cal.panelQuestions, "rpe", questionChannelsOf(item, cal));
   const body = `<header class="cc-panel-head">
         <h3 class="cc-panel-title" id="ccPanelTitle">${escapeHtml(centralCalendarTitle(item))}</h3>
         <button type="button" class="plain-button icon-button cc-panel-close" data-action="central-calendar-close-panel" aria-label="Close">&times;</button>
@@ -1691,9 +1708,9 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when ? ` · ${escapeHtml(when)}` : ""}</p>
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
-      ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: item.canManage === true && formCtx.catalog?.questionsEnabled === true && ccPanelAskOffered(item, cal.panelQuestions, "rpe", questionChannelsOf(item, cal)) }) : ""}
+      ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: eventAskRpe }) : ""}
       ${item.kind === "event"
-    ? renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today })
+    ? renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe: eventAskRpe })
     : `${renderEventActionsHtml(item, { locked: linksLocked })}
       ${renderEventDeleteHtml(item, cal, pending, { locked: linksLocked || Boolean(cal.form) })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}

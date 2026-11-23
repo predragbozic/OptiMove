@@ -50,11 +50,12 @@ test("a manager is offered ONE See each athlete; with several linked slots it op
   const choose = doc.querySelector(".cc-see-each-choose");
   assert.match(choose.textContent, /^See each athlete· 2 forms$/);
   assert.equal(choose.getAttribute("aria-expanded"), "false");
-  assert.equal(choose.getAttribute("aria-controls"), "ccSeeEachForms");
+  assert.equal(choose.hasAttribute("aria-controls"), false, "no reference to a list that is not drawn");
   assert.equal(doc.querySelectorAll(".cc-see-each .cc-panel-note").length, 1, "one explanation for the section, not one per button");
   await chooser();
   doc = dom();
   assert.equal(doc.querySelector(".cc-see-each-choose").getAttribute("aria-expanded"), "true");
+  assert.ok(doc.getElementById(doc.querySelector(".cc-see-each-choose").getAttribute("aria-controls")), "aria-controls names the drawn list");
   const buttons = [...doc.querySelectorAll('#ccSeeEachForms [data-action="central-calendar-see-each-athlete"]')];
   assert.deepEqual(buttons.map((b) => b.textContent), ["Main session · Training (PM)", "Gym · Before training (AM)"]);
   assert.deepEqual(buttons.map((b) => b.dataset.slotIndex), ["0", "1"]);

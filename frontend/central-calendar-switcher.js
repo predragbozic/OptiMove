@@ -371,7 +371,7 @@ export function renderCentralCalendarSeeEachHtml(cal, item) {
       ? `<ul class="cc-see-each-forms" id="ccSeeEachForms" role="list" aria-label="Choose a form">${slots.map((slot, index) => `<li>${button(labels[index], index, false, " cc-see-each-form")}</li>`).join("")}</ul>`
       : "";
     return `<section class="cc-see-each" aria-label="See each athlete">
-        <button type="button" class="plain-button cc-primary cc-panel-button cc-see-each-choose" data-action="central-calendar-row-menu" data-key="see-each" aria-expanded="${open ? "true" : "false"}" aria-controls="ccSeeEachForms">See each athlete<span class="cc-see-each-count">· ${slots.length} forms</span><span class="cc-psec-chevron" aria-hidden="true"></span></button>
+        <button type="button" class="plain-button cc-primary cc-panel-button cc-see-each-choose" data-action="central-calendar-row-menu" data-key="see-each" aria-expanded="${open ? "true" : "false"}"${open ? ' aria-controls="ccSeeEachForms"' : ""}>See each athlete<span class="cc-see-each-count">· ${slots.length} forms</span><span class="cc-psec-chevron" aria-hidden="true"></span></button>
         ${chooser}<p class="cc-panel-note">Choose a form: it opens one athlete at a time, only the ${count} of this event.</p>${hidden}</section>`;
   }
   return `<section class="cc-see-each" aria-label="Open the week">${button("Open the week", "", true)}<p class="cc-panel-note">Opens the weekly plan on this day, one athlete at a time, only the ${count} of this event.</p></section>`;

@@ -271,12 +271,17 @@ export function closeCentralCalendarPanel(render) {
     return true;
   }
   // The event panel's open "⋯" menu or form chooser closes first, its button keeps the focus (the panel stays).
+  // A menu whose row left the screen (its section folded, its training unlinked) is forgotten and Escape goes on.
   if (cal.panelView?.menu && cal.panelView.key === cal.panel.key) {
     const menu = cal.panelView.menu;
     cal.panelView = { ...cal.panelView, menu: "" };
-    render?.();
-    if (render) globalThis.document?.querySelector?.(`.cc-panel [data-action="central-calendar-row-menu"][data-key="${cssValue(menu)}"]`)?.focus?.({ preventScroll: true });
-    return true;
+    const doc = globalThis.document;
+    const drawn = doc?.querySelector?.(`.cc-panel [data-action="central-calendar-row-menu"][data-key="${cssValue(menu)}"][aria-expanded="true"]`);
+    if (drawn) {
+      render?.();
+      if (render) doc.querySelector(`.cc-panel [data-action="central-calendar-row-menu"][data-key="${cssValue(menu)}"]`)?.focus?.({ preventScroll: true });
+      return true;
+    }
   }
   // K3: an open "Plan the training" sheet closes first (the panel stays).
   if (cal.k3?.sheet && !cal.k3.busy) {
@@ -2470,6 +2475,12 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   // --- Events (K2a-2) ---
   // --- Links (K2c-1) ---
   if (type === "central-calendar-link") {
+    // The event panel's section the coach acts in stays open after the answer (its last offer gone, its Align done).
+    const section = { "link-session": "trainings", "unlink-sessions": "trainings", align: "trainings", "align-confirm": "trainings", "align-results": "trainings", "link-activity": "activities", "unlink-activity": "activities" }[action.dataset?.act || ""];
+    if (section && cal.panel.open) {
+      const view = cal.panelView && cal.panelView.key === cal.panel.key ? cal.panelView : { key: cal.panel.key, sections: {}, menu: "" };
+      cal.panelView = { ...view, sections: { ...view.sections, [section]: true } };
+    }
     await startLinkWrite(cal, action.dataset || {}, render);
     return true;
   }
@@ -2691,7 +2702,9 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
       return true;
     }
     const open = type === "central-calendar-panel-reveal" ? true : action.getAttribute?.("aria-expanded") !== "true";
-    cal.panelView = { ...view, sections: { ...view.sections, [id]: open } };
+    // A section that folds takes its open "⋯" menu with it.
+    const menuGone = !open && String(view.menu || "").startsWith(`${id === "trainings" ? "session" : id === "activities" ? "activity" : id}:`);
+    cal.panelView = { ...view, sections: { ...view.sections, [id]: open }, menu: menuGone ? "" : view.menu };
     render?.();
     if (type === "central-calendar-panel-reveal") {
       const toggle = globalThis.document?.querySelector?.(`.cc-panel [data-action="central-calendar-panel-section"][data-key="${cssValue(id)}"]`);

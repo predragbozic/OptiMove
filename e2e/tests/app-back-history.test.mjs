@@ -121,6 +121,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await openCard(page, { hasText: EVENT_TITLE });
       const atEvent = await where(page);
       assert.ok(atEvent.openKey, "the event's panel is open");
+      // The redesign (2026-11-23): the event's athletes are in its folded Athletes section.
+      await page.locator('.cc-psec-toggle[data-key="athletes"]').click({ timeout: 20_000 });
       await page.locator('[data-action="central-calendar-open-athlete"]').first().click();
       await page.waitForFunction(() => !document.querySelector(".cc-toolbar"), null, { timeout: 20_000 });
       await backTo(page, calendarAt, [atEvent.period, atEvent.openKey]);
