@@ -14,7 +14,7 @@ const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 let db, k, F, srv, W;
 
 before(async () => {
-  db = await buildDatabase({ label: "club_admin_users" });
+  db = await buildDatabase({ label: "club_admin_users", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);

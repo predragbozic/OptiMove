@@ -12,7 +12,7 @@ const R = "/api/organization/roles";
 let db, k, F, srv, P, A;
 
 before(async () => {
-  db = await buildDatabase({ label: "me_perm_r3" });
+  db = await buildDatabase({ label: "me_perm_r3", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);

@@ -17,7 +17,7 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await buildDatabase({ label: "roles_api" });
+  db = await buildDatabase({ label: "roles_api", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);

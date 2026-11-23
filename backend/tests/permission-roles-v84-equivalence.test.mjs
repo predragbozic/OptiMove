@@ -18,7 +18,7 @@ let db, k, F, srv, authz, perms, oracle;
 const W = {};
 
 before(async () => {
-  db = await buildDatabase({ label: "v84_eq" });
+  db = await buildDatabase({ label: "v84_eq", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
