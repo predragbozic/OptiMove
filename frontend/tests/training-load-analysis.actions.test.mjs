@@ -1421,3 +1421,8 @@ test('a chart period action from a previous workspace/page/filter context never 
  await handleTrainingLoadAction(fakeAction({action:'training-load-analysis-chart-period',widgetId,boundPeriod:JSON.stringify(a.period),boundGeneration:'0',dateFrom:'2026-11-02',dateTo:'2026-11-03'}),{renderTrainingLoad:()=>{}});
  assert.deepEqual(a.period,before);assert.equal(fetchCalls.length,0);
 });
+
+test('switching an Advanced gallery to a non-chart type clears its hidden gallery choice',async()=>{
+ const {setEditorWidgetType}=await import('../training-load-analysis-data.js');const d={widgetType:'bar_chart',galleryKind:'combined',series:[]};
+ setEditorWidgetType(d,'table');assert.equal(d.galleryKind,'standard');assert.equal(d.widgetType,'table');
+});

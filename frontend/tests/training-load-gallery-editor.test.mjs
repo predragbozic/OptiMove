@@ -27,3 +27,10 @@ test('opaque future presentation is never interpreted as a gallery on opening or
  assert.deepEqual(galleryDraftSettings(widget),{galleryKind:'standard',galleryKeys:null,galleryMarks:{},galleryAdditive:false});
  assert.equal(gallerySettingsChanged(widget,d),false);assert.equal(galleryEditorProblem(d),'');
 });
+
+test('changing a gallery to table or KPI drops incompatible chart settings',()=>{
+ for(const widgetType of ['table','kpi']){
+  const d={...draft(),widgetType,galleryKind:'standard'},widget={presentation_config:{schemaVersion:1,chartShape:{schemaVersion:1,kind:'combined'},chartInteractions:{zoom:{mode:'local'}},chartComposition:'athletes-v1'}};
+  assert.equal(gallerySettingsChanged(widget,d),true);assert.deepEqual(galleryEditorPresentation(widget,d),{schemaVersion:1});assert.equal(galleryEditorProblem(d),'');
+ }
+});

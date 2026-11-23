@@ -33,6 +33,7 @@ export function gallerySettingsChanged(widget,draft){
 export function galleryEditorPresentation(widget,draft){
  const config=widget.presentation_config?.schemaVersion===1?structuredClone(widget.presentation_config):{schemaVersion:1};
  delete config.chartShape;
+ if(!["line_chart","bar_chart"].includes(draft.widgetType)){delete config.chartInteractions;delete config.chartComposition;}
  if((draft.galleryKind??'standard')==='standard')return config;
  const entries=galleryEntries(draft);if(entries.some(e=>!e.id))throw Error('Save the measurements before configuring the chart.');
  config.chartShape={schemaVersion:1,kind:draft.galleryKind,seriesIds:entries.map(e=>e.id),

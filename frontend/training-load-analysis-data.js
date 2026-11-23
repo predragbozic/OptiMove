@@ -1085,6 +1085,7 @@ function editorMetricFacts(metric) {
 
 export function setEditorWidgetType(draft, widgetType) {
   draft.widgetType = widgetType;
+  if(!["line_chart","bar_chart"].includes(widgetType))draft.galleryKind="standard";
   if (!analysisWidgetSupportsComparison(widgetType)) {
     for (const entry of draft.series) entry.fields.comparisonPeriod = null;
   }

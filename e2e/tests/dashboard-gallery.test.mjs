@@ -67,3 +67,11 @@ for(const role of ['club_admin','team_coach'])test(role+': saved gallery is read
   assert.equal(await page.locator('.tl-simple-technical').count(),0);assert.doesNotMatch(await page.locator('.tl-analysis-grid').textContent(),/[0-9a-f]{8}-[0-9a-f-]{27,}|Source provenance/i);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
+
+test('an existing gallery can become a table without a hidden gallery setting blocking save',async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',1280);try{
+  await openDashboard(page,gallery.dashboard.id);await page.getByRole('button',{name:'Widget actions: combined',exact:true}).click();await action(page,'analysis-edit-widget').click();await action(page,'simple-advanced').click();
+  const dialog=page.getByRole('dialog',{name:'Widget settings'});await dialog.waitFor();await action(page,'analysis-widget-type').selectOption('table');await dialog.getByRole('button',{name:'Save changes',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  await page.locator('[data-analysis-widget-id="'+gallery.widgets[2]+'"] table').waitFor();assert.deepEqual(pageErrors,[]);
+ }finally{await context.close()}
+});
