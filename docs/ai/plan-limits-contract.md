@@ -5,7 +5,7 @@ marked **(recommendation)** and, when it needs the owner, listed in section 7.
 
 | | |
 |---|---|
-| Status | **Proposed.** Documentation only. No code and no migration file. |
+| Status | **Accepted** (2026-11-23): merged as PR #747; the owner decided Q1-Q14 as recommended, plus the coach-in-both-places rule (section 3.5), relayed by the *Rukovodilac*. Documentation only. No code and no migration file. PL-1 starts after R4-1 merges, on the *Rukovodilac*'s order. |
 | Mark | Risky when built: external-review triggers 1 (a migration), 2 (club scope, info hiding) and 4 (lock order, concurrency) of `CLAUDE.md`. |
 | Written against | `origin/main` at `d75a1ba` (2026-11-23). Every `file:line` is at that commit; each implementation PR re-checks its rows at its own base. |
 | Depends on | `docs/ai/roles-r4-contract.md` (R4-1, migration v92, `202611241000`): the club ceiling (its 7.1), the club lock order (its 7.6) and the effective holdings (its 3.2, 3.4). Section 5 says which PRs wait for R4-1. |
@@ -109,7 +109,7 @@ Consequences:
 - **Two clubs: counted in each** (a club pays for the athletes it trains). **(recommendation, Q3)**
 - **A club membership without a team counts** (the athlete is in the club). **(recommendation, Q4)**
 - **Private coach athletes** (`user_athletes`, `relationship_type = 'coach'`, no membership) count in **no** club, even if
-  the coach is also a club coach. A private coach plan is not in this contract (R4 Q9; Q12).
+  the coach is also a club coach (section 3.5). A private coach plan is not in this contract (R4 Q9; Q12).
 - The legacy pointer columns `athletes.club_id` / `team_id` are never read for the count.
 - A login or no login makes no difference.
 
@@ -138,7 +138,21 @@ Consequences:
 The club's storage account (`media.storage_accounts` with `owner_club_id = C`): the plan sets its limit in place of
 `default_limit_bytes` (section 4.1); used and reserved bytes keep the R2 meaning. Personal accounts are untouched (Q8).
 
-### 3.5 Effective limit
+### 3.5 A coach in a club and on their own (the owner, 2026-11-23)
+
+One person may at the same time be **staff of a club** and an **independent (private) coach** with an individual
+subscription. The two never mix:
+- As club staff, the person takes a seat in that club (3.3), under the club's plan.
+- The person's private workspace, its athletes (`user_athletes`, `relationship_type = 'coach'`, no club membership) and
+  the person's personal storage account (`media.storage_accounts` with `owner_user_id`) belong to the person's own
+  individual plan. They never count in any club's teams, athletes, seats or storage, and a club's plan never limits them.
+- An athlete who is both a private athlete of the coach and an active member of a club counts in that club (3.2) only
+  through the club membership. The private relationship adds nothing to the club's count.
+
+Individual plans themselves are a later step (Q12). Until they exist, the private side has no plan limits. The
+separation above is fixed now, and PL-1 to PL-4 must not count the private side in a club.
+
+### 3.6 Effective limit
 
 For club C and limit kind K: a live exception of (C, K) if one exists, else the club's plan value for K, else no limit.
 A null value means unlimited. A club with **no plan row** has no limits (Q1).
@@ -268,9 +282,13 @@ a plan with a reason, grant or end an exception with a reason and an optional en
 | An athlete is archived and added again in one minute | archive frees a place at COMMIT; the add counts after |
 | A team restore with coaches | one transaction: team and seats counted together; refused as a whole |
 
-## 7. Open questions for the owner (each with a recommendation)
+## 7. The owner's decisions (2026-11-23)
 
-| # | Question | Recommendation |
+All fourteen were decided **as recommended** (the owner, relayed by the *Rukovodilac*), plus the coach-in-both-places
+rule of section 3.5. Where a recommendation offered an alternative (Q7), the recommendation is what holds. Q9 leaves
+"advanced dashboards" undefined: until the owner defines it, dashboards stay one whole module.
+
+| # | Question | Decision (as recommended) |
 |---|---|---|
 | Q1 | Existing clubs on the day of the deploy: which plan? | No plan = no limits, so nothing changes at the deploy; you assign plans club by club. |
 | Q2 | Can a limit be "unlimited"? | Yes (empty value), per limit. |
@@ -283,7 +301,7 @@ a plan with a reason, grant or end an exception with a reason and an optional en
 | Q9 | Features per plan: reuse the club licence of R4 (a module missing from the plan is closed like a module you close by hand)? What exactly is "advanced dashboards"? | Yes, reuse the licence (one mechanism). "Advanced dashboards" needs your definition (for example: own dashboards beyond the templates, or widgets beyond a list); until then dashboards stay a whole module. |
 | Q10 | Exceptions: per limit, with a number and an optional end date? | Yes; an ended or expired exception goes back to the plan's value, nothing is deleted. |
 | Q11 | A database guard behind the server check (a little slower adds, but nothing can slip past)? | Yes, as R4 does. |
-| Q12 | Plans for independent coaches (private workspace)? | Later, with the private coach licence (R4 Q9). |
+| Q12 | Plans for independent coaches (private workspace)? | Later, with the private coach licence (R4 Q9). The separation is fixed now (section 3.5): a coach may be club staff, counted under the club's plan, and at the same time a private coach whose private workspace, private athletes and personal storage belong to the coach's own individual plan, never to a club's counts. |
 | Q13 | A join request when the club is full? | It stays pending; the approver sees why; approving works again once there is room. |
 | Q14 | Payment, invoices, trial periods? | Out of this contract. |
 
