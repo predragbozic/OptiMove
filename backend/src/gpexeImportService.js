@@ -2836,12 +2836,13 @@ export async function approveCandidate(teamId, candidateId, { userId, previewHas
       `insert into training_load.gpexe_import_approvals
          (candidate_id, owner_team_id, gpexe_team_session_id, bundle_hash, preview_hash, approved_by_user_id, approval_basis,
           approver_grant_id, changes_to_imported, changes_accepted, metric_event_id, activity_id, import_batch_id, import_counts,
-          excluded_athlete_ids, subset_hash, replaced_manual_athlete_ids)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning id, approved_at`,
+          excluded_athlete_ids, subset_hash${replaced.length ? ", replaced_manual_athlete_ids" : ""})
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16${replaced.length ? ",$17" : ""}) returning id, approved_at`,
       [candidateId, teamId, row.gpexe_team_session_id, row.bundle_hash, previewHash, userId, right.basis, right.grant_id,
         changesToImported, changesToImported > 0, summary.eventId, summary.activityId, summary.importBatchId, summary.counts,
         // ST-4 (v88's pair rule): the choice hash is stored with athletes left out or roster values replaced.
-        excluded, subset || replaced.length ? subsetHash : null, replaced],
+        // (The column is named only with a replacement: an approval without one is the row it always was, v88 or not.)
+        excluded, subset || replaced.length ? subsetHash : null, ...(replaced.length ? [replaced] : [])],
     )).rows[0];
     await client.query(
       `update training_load.gpexe_import_candidates
