@@ -17512,6 +17512,38 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-undo .gpexe-button.gpexe-danger 
   height: 22px;
   flex: none;
 }
+/* ST-4: the values entered on the roster, kept unless "Use GPEXE's values" is ticked. */
+.gpexe-manual-choice {
+  margin: 0 0 12px;
+}
+.gpexe-manual-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.gpexe-manual-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  overflow-wrap: anywhere;
+}
+.gpexe-manual-use {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.gpexe-manual-use input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+}
+
 .gpexe-accept {
   display: flex;
   align-items: flex-start;

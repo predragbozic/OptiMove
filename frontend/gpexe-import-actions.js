@@ -3,7 +3,7 @@
 // action. Controls that only carry a value (the check's dates, the athlete
 // chosen for a link) have no data-action; the button that uses them reads
 // them when it is pressed.
-import { importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds } from "./gpexe-import-view.js";
+import { importableAthleteCount, keptLinkPick, leaveOutIds, leaveOutOffered, sameIds, stateAthleteIds, useGpexeIds } from "./gpexe-import-view.js";
 import { chooseState, chosenStateCount, prepareStateKeys, retryStates, saveImportStates } from "./gpexe-import-states-data.js";
 import { state } from "./state.js";
 import { groupItems, nextInGroup, reviewMustStay } from "./gpexe-attention-groups.js";
@@ -17,6 +17,7 @@ import { ensurePeriodData,
   approveGpexeCandidate,
   reviewGpexeSubset,
   setGpexeLeaveOut,
+  setGpexeUseGpexe,
   backFromTeamMappingConfirm,
   batchSelectableList,
   checkBatchAgain,
@@ -403,14 +404,27 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     }
     return true;
   }
+  // ST-4: "Use GPEXE's values" for an athlete with values entered or corrected on the roster (unticked: keep them).
+  if (type === "training-load-gpexe-use-gpexe") {
+    const id = action.dataset.athleteId;
+    const listed = (gx.detail?.candidate?.preview?.manualValues?.athletes || []).some((a) => String(a.athleteId) === String(id));
+    if (!id || !listed || gx.status?.viewer?.canApprove !== true) return true;
+    if (setGpexeUseGpexe(id, Boolean(action.checked))) {
+      renderTrainingLoad();
+      globalThis.document?.querySelector?.(`[data-action="training-load-gpexe-use-gpexe"][data-athlete-id="${id}"]`)?.focus?.();
+    }
+    return true;
+  }
   if (type === "training-load-gpexe-subset-review") {
     const candidate = gx.detail?.candidate;
     // Offered like the boxes, or (after an unconfirmed answer) for the set that was sent: the review is how a retry is made.
     const retrying = gx.detail?.outcome?.kind === "unknown" && gx.detail.outcome.verified === "not_visible_yet" && (gx.detail.leaveOut || []).length > 0;
-    if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
+    const choosing = useGpexeIds(candidate, gx.detail).length > 0 && gx.status?.viewer?.canApprove === true;
+    if (!candidate || !(leaveOutOffered(candidate, gx.detail, gx.status) || choosing || (retrying && candidate.status === "pending" && gx.status?.viewer?.canApprove === true))) return true;
     const ids = leaveOutIds(candidate, gx.detail);
-    if (!ids.length) return true;
-    await reviewGpexeSubset(ids, renderTrainingLoad);
+    const replace = useGpexeIds(candidate, gx.detail);
+    if (!ids.length && !replace.length) return true;
+    await reviewGpexeSubset(ids, renderTrainingLoad, replace);
     return true;
   }
   if (type === "training-load-gpexe-approve") {
@@ -418,7 +432,9 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     if (!candidate) return true;
     // J20-B: with athletes left out only the reviewed subset is approved - never the whole session behind their backs.
     const leave = leaveOutIds(candidate, gx.detail);
-    if (leave.length && !(gx.detail.subset?.status === "ready" && sameIds(gx.detail.subset.ids, leave))) return true;
+    const replace = useGpexeIds(candidate, gx.detail);
+    // ST-4: with GPEXE's values chosen over roster values, too, only the reviewed choice is approved.
+    if ((leave.length || replace.length) && !(gx.detail.subset?.status === "ready" && sameIds(gx.detail.subset.ids, leave) && sameIds(gx.detail.subset.replace || [], replace))) return true;
     const changes = candidate.changesToImported || 0;
     if (changes && !gx.detail.acceptChanges) {
       gx.detail.outcome = { kind: "refused", error: { code: "changes_need_acceptance", status: 0, data: null } };
@@ -430,11 +446,11 @@ async function handleGpexeImportActionInner(action, { renderTrainingLoad }) {
     // not confirm or no longer found (v33) - the server would refuse it too.
     if (reviewMadeBeforeLinkChange(candidate, gx)) return true;
     if (notConfirmedForImport(candidate) || withdrawnByCheck(candidate)) return true;
-    const athletes = leave.length ? importableAthleteCount(gx.detail.subset.preview) : importableAthleteCount(candidate.preview);
+    const athletes = leave.length || replace.length ? importableAthleteCount(gx.detail.subset.preview) : importableAthleteCount(candidate.preview);
     // J20-C: the attendance states chosen on the rows are saved after the import (their keys are made now, before anything is sent).
     const stateIds = stateAthleteIds(candidate, gx.detail);
     const states = chosenStateCount(gx.detail, stateIds);
-    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown${leave.length ? `, leaving out ${leave.length} ${leave.length === 1 ? "athlete" : "athletes"}` : ""}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}${states ? ` Then it saves ${states} ${states === 1 ? "attendance state" : "attendance states"}.` : ""}`;
+    const question = `Import this session for ${athletes} ${athletes === 1 ? "athlete" : "athletes"} under the names shown${leave.length ? `, leaving out ${leave.length} ${leave.length === 1 ? "athlete" : "athletes"}` : ""}${replace.length ? `, with GPEXE's values for ${replace.length} ${replace.length === 1 ? "athlete" : "athletes"} instead of the values entered on the roster` : ""}? This writes their results and the activity.${changes ? ` It also changes ${changes} ${changes === 1 ? "result that was" : "results that were"} already imported.` : ""}${states ? ` Then it saves ${states} ${states === 1 ? "attendance state" : "attendance states"}.` : ""}`;
     if (!globalThis.window?.confirm?.(question)) return true;
     if (states) prepareStateKeys(gx.detail, stateIds);
     await approveGpexeCandidate({ acceptChanges: Boolean(changes && gx.detail.acceptChanges) }, renderTrainingLoad);

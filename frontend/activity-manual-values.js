@@ -2,6 +2,8 @@
 // GET  /api/training-activity/:activityId/manual-values?athleteId=…           the form: entry or correction, the variables
 // POST /api/training-activity/:activityId/manual-values { requestKey, athleteId, expectedOccasionId, values[], note? }
 // POST /api/training-activity/:activityId/manual-values/restore { requestKey, athleteId, expectedOccasionId, note? }
+// POST /api/training-activity/:activityId/manual-values/remove  { requestKey, athleteId, expectedOccasionId } (ST-4 PR2: ends an
+//   entry; the values stay in the history and the athlete needs a state again)
 //
 // An athlete without a device record gets "Enter values…"; a measured athlete gets "Correct values…". A manual value is
 // always shown as manual (who and when); a corrected value also names the measured value it replaced. The server offers the
@@ -26,6 +28,7 @@ const REFUSALS = {
   record_ambiguous: "This athlete has more than one device record in this session. Fix it in GPEXE first.",
   changed_elsewhere: "This athlete's values were changed outside the roster, so they can't be changed here. Ask an administrator to look at them.",
   nothing_to_restore: "These are already the measured values.",
+  nothing_to_remove: "There are no entered values to remove.",
   activity_superseded: "This session was merged into another one. Open the other session.",
   request_key_reused: "Something changed while saving. Nothing was saved. The values below are the current ones now.",
   try_again: "The server was busy and saved nothing. Try again.",
@@ -181,6 +184,19 @@ function saveCommand(activityId, m, values) {
   return { method: "POST", path: `/api/training-activity/${encodeURIComponent(activityId)}/manual-values`, body };
 }
 
+// "Remove these values" is offered for values entered on the roster (an entry), never for a correction (that is the restore).
+export function canRemove(form) {
+  return form?.mode === "entry" && form.manual?.kind === "entry" && typeof form.expectedOccasionId === "string";
+}
+
+function removeCommand(activityId, m) {
+  return {
+    method: "POST",
+    path: `/api/training-activity/${encodeURIComponent(activityId)}/manual-values/remove`,
+    body: { requestKey: m.requestKey, athleteId: m.athleteId, expectedOccasionId: m.form.expectedOccasionId },
+  };
+}
+
 function restoreCommand(activityId, m) {
   return {
     method: "POST",
@@ -251,6 +267,27 @@ export async function handleManualAction(action, { render }) {
     render();
     return true;
   }
+  // The removal asks first too, inline: Remove → the question with two buttons.
+  if (type === "training-load-roster-manual-remove-ask") {
+    if (!canRemove(m.form) || m.loading || rosterWriteBusy(r)) return true;
+    m.confirmRemove = true;
+    m.confirmRestore = false;
+    render();
+    return true;
+  }
+  if (type === "training-load-roster-manual-remove-keep") {
+    m.confirmRemove = false;
+    render();
+    return true;
+  }
+  if (type === "training-load-roster-manual-remove") {
+    if (!m.confirmRemove || !canRemove(m.form) || m.loading || rosterWriteBusy(r)) return true;
+    m.confirmRemove = false;
+    m.problem = "";
+    m.refusal = null;
+    m.requestKey = newRosterRequestKey();
+    return send(r, m, removeCommand(r.activityId, m), render);
+  }
   if (type === "training-load-roster-manual-restore-keep") {
     m.confirmRestore = false;
     render();
@@ -285,11 +322,13 @@ async function send(r, m, command, render) {
   if (result.outcome === "saved") {
     const name = (r.data?.athletes || []).find((a) => a.athleteId === m.athleteId)?.name || "this athlete";
     const restored = command.path.endsWith("/restore");
+    const removed = command.path.endsWith("/remove");
     r.manual = null;
     const corrected = m.form?.mode === "correction";
     r.notices.rows[m.athleteId] = {
       tone: "saved",
-      text: restored ? `Measured values restored for ${name}.`
+      text: removed ? `Values removed for ${name}. They stay in the history; set a state for ${name} in the roster.`
+        : restored ? `Measured values restored for ${name}.`
         : corrected ? `Corrected values saved for ${name}. The measured values are kept.`
         : `Values saved for ${name}. They are shown as entered by hand, never as measured.`,
     };
@@ -382,10 +421,18 @@ export function renderManualPanelHtml(r, athlete) {
             <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-manual-restore" ${canSave ? "" : "disabled"}>Restore measured values</button>
             <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-restore-keep">Keep my correction</button>
           </div>
+        </div>` : m.confirmRemove ? `
+        <div class="tl-roster-confirm" role="group" aria-label="Remove the values entered">
+          <p>Remove the values entered for ${escapeHtml(name)}? They stay in the history, and ${escapeHtml(name)} needs a state again.</p>
+          <div class="tl-roster-actions">
+            <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-manual-remove" ${canSave ? "" : "disabled"}>Remove values</button>
+            <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-remove-keep">Keep them</button>
+          </div>
         </div>` : `
       <div class="tl-roster-actions">
         <button type="button" class="primary-button tl-roster-button" data-action="training-load-roster-manual-save" ${canSave && fields ? "" : "disabled"}>${m.sending ? "Saving…" : "Save values"}</button>
         ${f?.canRestore ? `<button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-restore-ask" ${canSave ? "" : "disabled"}>Restore measured values…</button>` : ""}
+        ${canRemove(f) ? `<button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-remove-ask" ${canSave ? "" : "disabled"}>Remove these values…</button>` : ""}
         <button type="button" class="plain-button tl-roster-button" data-action="training-load-roster-manual-cancel" ${m.sending ? "disabled" : ""}>Cancel</button>
       </div>`}
     </section>`;

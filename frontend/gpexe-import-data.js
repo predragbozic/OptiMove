@@ -601,29 +601,48 @@ export function setGpexeLeaveOut(gpexeAthleteId, checked) {
   return true;
 }
 
+// ST-4 (section 8): "Use GPEXE's values" for an athlete whose values were entered or corrected on the roster (unticked: keep
+// them, the default). A change of the set makes the choice review stale, like a change of the left-out set.
+export function setGpexeUseGpexe(athleteId, checked) {
+  const gx = g();
+  const detail = gx.detail;
+  if (!detail || detail.approving || detail.subset?.status === "loading") return false;
+  const id = String(athleteId);
+  const set = new Set(detail.useGpexe || []);
+  if (checked) set.add(id); else set.delete(id);
+  const next = [...set].sort();
+  if (next.join(",") === (detail.useGpexe || []).join(",")) return false;
+  detail.useGpexe = next;
+  detail.subset = null;
+  return true;
+}
+
 // The deliberate Review step: ONE request that asks the server for the preview without the ticked athletes. It stores nothing
 // on the server; the answer is only used by the Import button that follows it.
-export async function reviewGpexeSubset(ids, render) {
+// ST-4: `replace` - the athletes given GPEXE's values over their roster values - travels in the same review.
+export async function reviewGpexeSubset(ids, render, replace = []) {
   const gx = g();
   const detail = gx.detail;
   const candidate = detail?.candidate;
-  if (!candidate || detail.approving || detail.subset?.status === "loading" || !ids.length) return;
+  if (!candidate || detail.approving || detail.subset?.status === "loading" || (!ids.length && !replace.length)) return;
   const generation = gx.generation;
-  const sub = { status: "loading", ids: [...ids] };
+  const sub = { status: "loading", ids: [...ids], replace: [...replace] };
   detail.subset = sub;
   render();
   try {
-    const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/preview`), { method: "POST", body: JSON.stringify({ excludedAthleteIds: ids }) });
+    const answer = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/preview`), {
+      method: "POST", body: JSON.stringify({ excludedAthleteIds: ids, ...(replace.length ? { replaceManualAthleteIds: replace } : {}) }),
+    });
     if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
     const s = answer?.subset;
     if (!s || typeof s.subsetHash !== "string" || !s.preview) {
-      detail.subset = { status: "error", ids: [...ids], error: { code: "bad_answer" } };
+      detail.subset = { status: "error", ids: [...ids], replace: [...replace], error: { code: "bad_answer" } };
     } else {
-      detail.subset = { status: "ready", ids: [...(s.excludedAthleteIds || ids)], subsetHash: s.subsetHash, previewHash: s.previewHash, preview: s.preview };
+      detail.subset = { status: "ready", ids: [...(s.excludedAthleteIds || ids)], replace: [...(s.replaceManualAthleteIds || replace)], subsetHash: s.subsetHash, previewHash: s.previewHash, preview: s.preview };
     }
   } catch (error) {
     if (generation !== gx.generation || gx.detail !== detail || detail.subset !== sub) return;
-    detail.subset = { status: "error", ids: [...ids], error: errorInfo(error) };
+    detail.subset = { status: "error", ids: [...ids], replace: [...replace], error: errorInfo(error) };
   } finally {
     if (generation === gx.generation && gx.detail === detail) render();
   }
@@ -648,6 +667,7 @@ export async function approveGpexeCandidate({ acceptChanges }, render) {
     if (subset) {
       body.previewHash = subset.previewHash;
       body.excludedAthleteIds = subset.ids;
+      if (subset.replace?.length) body.replaceManualAthleteIds = subset.replace;
       body.subsetHash = subset.subsetHash;
     }
     const result = await api(teamPath(gx.teamId, `/candidates/${encodeURIComponent(candidate.id)}/approve`), { method: "POST", body: JSON.stringify(body) });

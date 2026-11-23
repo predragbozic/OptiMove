@@ -383,3 +383,39 @@ test("11. Check result refused as busy (409 try_again) or gone (404) stays NOT c
   assert.match(rowHtml("ath-1"), /The server was busy and saved nothing\./);
   assert.equal(state.trainingLoad.calendar.roster.manual.unconfirmed, null);
 });
+
+test("14. Remove these values (ST-4 PR2): offered only for values entered on the roster (never for a correction, never before an entry); asked inline first; sends the removal with the current occasion and its own key; a nothing_to_remove refusal says so", async () => {
+  const ENTRY = "33333333-0000-4000-8000-000000000003";
+  const form = () => ({ status: 200, body: { ...formEntry(), expectedOccasionId: ENTRY, manual: { kind: "entry", enteredBy: COACH, enteredAt: "2026-11-21T10:00:00Z" }, variables: VARS_ENTRY.map((v) => ({ ...v, value: 3000 })) } });
+  await openRoster({ form, onWrite: () => ({ status: 201, body: {} }) });
+  await act("training-load-roster-manual-open", { athleteId: "ath-1" });
+  assert.match(rowHtml("ath-1"), /data-action="training-load-roster-manual-remove-ask"[^>]*>Remove these values…</);
+  // Without the question first nothing is sent.
+  await act("training-load-roster-manual-remove");
+  assert.equal(writes().length, 0);
+  await act("training-load-roster-manual-remove-ask");
+  assert.match(rowHtml("ath-1"), /Remove the values entered for Ivan Marković\? They stay in the history, and Ivan Marković needs a state again\./);
+  await act("training-load-roster-manual-remove-keep");
+  assert.equal(writes().length, 0, "kept");
+  assert.equal(confirmQuestions.length, 0, "no modal question");
+  await act("training-load-roster-manual-remove-ask");
+  await act("training-load-roster-manual-remove");
+  assert.equal(writes().length, 1);
+  assert.match(writes()[0].url, /\/manual-values\/remove$/);
+  assert.deepEqual(Object.keys(writes()[0].body).sort(), ["athleteId", "expectedOccasionId", "requestKey"]);
+  assert.equal(writes()[0].body.expectedOccasionId, ENTRY);
+  assert.match(rowHtml("ath-1"), /Values removed for Ivan Marković\. They stay in the history; set a state for Ivan Marković in the roster\./);
+  // A refusal names it.
+  await openRoster({ form, onWrite: () => ({ status: 409, body: { error: "nothing_to_remove", message: "x" } }) });
+  await act("training-load-roster-manual-open", { athleteId: "ath-1" });
+  await act("training-load-roster-manual-remove-ask");
+  await act("training-load-roster-manual-remove");
+  assert.match(rowHtml("ath-1"), /There are no entered values to remove\./);
+  // Not offered for a correction, nor before an entry exists.
+  await openRoster({ form: () => ({ status: 200, body: formCorr() }) });
+  await act("training-load-roster-manual-open", { athleteId: "ath-3" });
+  assert.doesNotMatch(rowHtml("ath-3"), /manual-remove/);
+  await openRoster();
+  await act("training-load-roster-manual-open", { athleteId: "ath-1" });
+  assert.doesNotMatch(rowHtml("ath-1"), /manual-remove/);
+});

@@ -173,6 +173,10 @@ function refusalNotice(roster, result, ctx) {
   if (code === "measured_record_exists") {
     return { tone: "refused", text: `${sourceName()} values for ${name} just arrived; ${name} is now Measured. ${NOTHING_SAVED}`, action: null, code };
   }
+  // ST-4: values were entered for the athlete on the roster meanwhile; a state comes only after they are removed.
+  if (code === "manual_values_present") {
+    return { tone: "refused", text: `Values were entered for ${name} on the roster. To set a state, remove them first (Change values… → Remove these values). ${NOTHING_SAVED}`, action: null, code };
+  }
   if (code === "not_on_roster") return { tone: "refused", text: `${name} is no longer on this session's roster. ${NOTHING_SAVED}`, action: null, code };
   if (code === "nothing_to_clear") {
     return { tone: "refused", text: `${name} has no state to remove any more (now: ${currentText(roster, data.current)}). ${NOTHING_SAVED}`, action: null, code };
@@ -187,6 +191,7 @@ function refusalNotice(roster, result, ctx) {
       const who = nameOf(roster, f.athleteId);
       if (f.error === "not_on_roster") return `${who} (no longer on the roster)`;
       if (f.error === "measured_record_exists") return `${who} (now Measured)`;
+      if (f.error === "manual_values_present") return `${who} (values were entered on the roster)`;
       return `${who} (now ${currentText(roster, f.current)})`;
     });
     const remaining = (ctx.athleteIds || []).filter((id) => !failedIds.has(id));
