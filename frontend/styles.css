@@ -27335,7 +27335,7 @@ body:not(.athlete-mode):not(.login-mode) .tests-result-back {
 
 /* ST-5: Settings -> Tags & Presets -> Session types. Fields keep 16 px; buttons a 44 px target on phones. */
 .session-types-settings { overflow-wrap: anywhere; }
-.session-types-settings .primary-button { border: 1px solid var(--accent); border-radius: var(--radius, 8px); background: var(--accent); color: #ffffff; font-weight: 600; padding: 0 16px; min-height: 40px; }
+.session-types-settings .primary-button { border: 1px solid var(--accent); border-radius: var(--radius, 8px); background: var(--accent); color: #ffffff; font-weight: 600; padding: 0 16px; min-height: 44px; }
 .session-types-settings .primary-button:disabled { opacity: 0.55; cursor: not-allowed; }
 .tl-roster-type-hint { margin: 4px 0 0; flex-basis: 100%; }
 .session-types-list { list-style: none; margin: 8px 0; padding: 0; }
