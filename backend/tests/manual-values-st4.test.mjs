@@ -923,6 +923,37 @@ test("19d. the re-import question, Use GPEXE's values for an entry: the choice p
   assert.equal(f.body.mode, "correction", "the athlete now has a device record");
 });
 
+test("19f. a choice that no longer fits is refused and writes nothing: (a) an approval naming an athlete the stored preview does not list is 400 invalid_manual_choice; (b) an entry removed after the review makes the same choice refused under the locks (the writer's manual_choice_invalid: the choice preview is refused subset_blocked, the approval preview_changed)", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9716, hour: 17, ids: [101, 102] }));
+  const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
+  const cil = team.athleteIds[CIL];
+  const entry = await saveValues(s, { athleteId: cil, values: [{ metricDefinitionId: distance, value: 1111 }] }, team.coach.cookie);
+  assert.equal(entry.status, 201, entry.text);
+  await checkNow(team, [bundleOf({ sessionId: 9716, hour: 17, ids: [101, 102, 104] })]);
+  const cand = await candidateFor(team, 9716, [s.candidateId]);
+  const p = await choicePreview(team, cand, { replaceManualAthleteIds: [cil] });
+  assert.equal(p.status, 200, p.text);
+  const writesBefore = async () => (await admin.query(
+    `select (select count(*) from training_load.gpexe_import_approvals where candidate_id = $1)::int as approvals,
+            (select count(*) from training_load.metric_measurement_occasions o join training_load.metric_event_participants pp on pp.id = o.event_participant_id
+              where pp.event_id = $2)::int as occasions`, [cand.id, s.eventId])).rows[0];
+  const before = await writesBefore();
+  // (a) An athlete the stored preview does not list (Ana has no roster values), with a well-formed hash.
+  const notListed = await approveWith(team, cand, { acceptChanges: true, replaceManualAthleteIds: [team.athleteIds[ANA]], subsetHash: p.body.subset.subsetHash });
+  assert.deepEqual([notListed.status, notListed.body.error], [400, "invalid_manual_choice"], notListed.text);
+  assert.deepEqual(await writesBefore(), before, "nothing written");
+  // (b) The entry is removed after the review: the stored preview still lists Cil, the locks no longer find the entry.
+  const removed = await removeValues(s, { athleteId: cil, expectedOccasionId: entry.body.occasionId }, team.coach.cookie);
+  assert.equal(removed.status, 201, removed.text);
+  const after = await writesBefore();
+  const again = await choicePreview(team, cand, { replaceManualAthleteIds: [cil] });
+  assert.deepEqual([again.status, again.body.error], [409, "subset_blocked"], again.text);
+  const stale = await approveWith(team, cand, { acceptChanges: true, replaceManualAthleteIds: [cil], subsetHash: p.body.subset.subsetHash });
+  assert.deepEqual([stale.status, stale.body.error], [409, "preview_changed"], stale.text);
+  assert.deepEqual(await writesBefore(), after, "nothing written");
+});
+
 test("19b. the re-import question for a roster correction: GPEXE's SAME measured values are unchanged (not listed); OTHER values are listed (correction / keep) and kept by default (stored flagged, the correction stays current); with Use GPEXE's values they become current and the correction is history", async () => {
   const team = await setupTeam();
   const s = await importSession(team, bundleOf({ sessionId: 9707, ids: [101, 102] }));
