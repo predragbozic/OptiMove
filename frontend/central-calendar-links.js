@@ -4,6 +4,7 @@
 // calendar answer already loaded (nothing new is read for it), the grouping
 // of the manager view's session links, the request bodies and every sentence
 // the coach reads. Nothing here talks to the server or touches the state.
+import { k3EventHalf, k3HalfFits } from "./central-calendar-k3.js";
 
 // The athletes an event reaches on its day. When the card carries its
 // athletes (the day's read), a linked athlete who is no target any more
@@ -40,6 +41,7 @@ export function centralCalendarEventLinkable(item) {
 // The identity of a link the server refused for reasons the read cannot see
 // (section 1.1.10): the event and the training's sessions, or the activity.
 export function centralCalendarRefusedPairKey(eventId, item) {
+  if (item?.kind === "external") return `${eventId}|external|${String(item.links?.externalScheduleId || "")}`;
   if (item?.kind === "planned") return `${eventId}|planned|${[...(item.links?.logicalSessionIds || [])].map(String).sort().join(",")}`;
   if (item?.kind === "activity") return `${eventId}|activity|${String(item.links?.activityIds?.[0] || "")}`;
   return "";
@@ -52,6 +54,8 @@ const NOT_TARGETED = new Set(["athlete_not_targeted", "activity_not_targeted"]);
 export function centralCalendarRefusedReason(code) {
   if (code === "session_already_attached" || code === "activity_already_attached") return "Already linked to another event.";
   if (NOT_TARGETED.has(code)) return "Some athletes are not in this event.";
+  if (code === "schedule_already_referenced") return "Already in another event.";
+  if (code === "rpe_from_sessions" || code === "rpe_from_question") return "This event already takes RPE another way.";
   return "Can't be linked here.";
 }
 // A "not targeted" refusal holds only while the event is as it was (review
@@ -97,6 +101,63 @@ export function centralCalendarEventsForPlanned(data, planned, refused = new Map
   }
   return out;
 }
+
+// K5-3 (docs/ai/central-calendar-k5-plan.md, "Add to the event?"): the events a LONE activity or RPE request card
+// (one that folded into no event, so it is its own card on the day) may be added to. Never done automatically: the
+// panel asks. The rule, over the calendar answer already loaded (nothing new is read):
+// - the event is a manager's planned event of kind training or match on the same day;
+// - an activity: at least one of its athletes is a target of the event (the server's attachActivity rule), and its
+//   start falls in the half of the day the event covers (K4 O15, k3EventHalf; no start or no event time: no limit);
+// - an RPE request: every one of its athletes is a target of the event (the only case in which the event card folds
+//   it, calendarQuery's scheduleFold), the event refers to no RPE schedule yet (a PATCH would replace it) and has no
+//   linked training (RPE comes from those: rpe_from_sessions). Its time is when the RPE opens, not when it trained,
+//   so no half-of-day rule.
+// A test schedule is never offered (owner's A2: a test schedule fits only an event of kind test). A pair the server
+// refused for a reason the read cannot see stays listed without its Add (`refused`).
+export const CENTRAL_CALENDAR_ADD_EVENT_KINDS = Object.freeze(["training", "match"]);
+
+function halfOfStart(value) {
+  const s = String(value ?? "").slice(0, 5);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) return null;
+  return s < "12:00" ? "AM" : "PM";
+}
+
+export function centralCalendarAddToEventKind(item) {
+  if (!item || item.cancelled === true || !(item.athleteIds || []).length) return "";
+  if (item.kind === "activity" && item.links?.activityIds?.[0]) return "activity";
+  if (item.kind === "external" && item.links?.externalScheduleId) return "rpe";
+  return "";
+}
+
+export function centralCalendarAddToEventOffers(data, item, refused = new Map()) {
+  const what = centralCalendarAddToEventKind(item);
+  if (!what) return [];
+  const out = [];
+  for (const event of dayItems(data, item.date)) {
+    if (!centralCalendarEventLinkable(event) || !CENTRAL_CALENDAR_ADD_EVENT_KINDS.includes(event.eventKind)) continue;
+    if (what === "activity") {
+      if (!sharesAny(event, item) || !k3HalfFits(halfOfStart(item.startTime), k3EventHalf(event, item.date))) continue;
+    } else {
+      if (!covers(event, item) || event.links?.externalScheduleId || (event.links?.logicalSessionIds || []).length) continue;
+    }
+    out.push({ item: event, refused: refusalOf(refused, centralCalendarRefusedPairKey(event.eventId, item), event) });
+  }
+  out.sort((a, b) => String(a.item.startTime || "99:99").localeCompare(String(b.item.startTime || "99:99")) || String(a.item.title || "").localeCompare(String(b.item.title || "")));
+  return out;
+}
+
+// The event's name in the question: its title and, when it has one, its start ("Training 10:00").
+export function centralCalendarAddToEventName(event) {
+  const title = String(event?.title ?? "").replace(/\s+/g, " ").trim() || "the event";
+  const time = String(event?.startTime ?? "").slice(0, 5);
+  return /^\d\d:\d\d$/.test(time) && !title.includes(time) ? `${title} ${time}` : title;
+}
+export const centralCalendarAddToEventQuestion = (event) => `Add to “${centralCalendarAddToEventName(event)}”?`;
+export const CENTRAL_CALENDAR_ADD_TO_EVENT_HINT = Object.freeze({
+  activity: "The activity then shows inside the event. Unlink in the event undoes it.",
+  rpe: "The event then collects this RPE request. Edit the event to remove it.",
+});
+export const centralCalendarAddToEventDone = (event) => `Added to “${centralCalendarAddToEventName(event)}”.`;
 
 const normalizedName = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -144,13 +205,15 @@ export function centralCalendarActivityLinksOf(event, date) {
 const EVENTS_BASE = "/api/calendar/events";
 const eventPath = (eventId) => `${EVENTS_BASE}/${encodeURIComponent(eventId)}`;
 
-export function centralCalendarLinkRequest(act, { eventId, requestKey, expectedRevision, logicalSessionIds, linkIds, activityId, confirmDisableWithResults = false }) {
+export function centralCalendarLinkRequest(act, { eventId, requestKey, expectedRevision, logicalSessionIds, linkIds, activityId, externalScheduleId, confirmDisableWithResults = false }) {
   const base = { requestKey, expectedRevision };
   if (act === "link-session") return { path: `${eventPath(eventId)}/sessions`, body: { ...base, logicalSessionIds: [...logicalSessionIds], alignSessions: false } };
   if (act === "unlink-sessions") return { path: `${eventPath(eventId)}/sessions/detach`, body: { ...base, linkIds: [...linkIds] } };
   if (act === "align") return { path: `${eventPath(eventId)}/sessions/align`, body: { ...base, confirmDisableWithResults } };
   if (act === "link-activity") return { path: `${eventPath(eventId)}/activities`, body: { ...base, activityId } };
   if (act === "unlink-activity") return { path: `${eventPath(eventId)}/activities/detach`, body: { ...base, activityId } };
+  // K5-3: the event takes the RPE request through its own edit route (PATCH, the event form's field).
+  if (act === "add-rpe") return { path: eventPath(eventId), method: "PATCH", body: { ...base, externalScheduleId } };
   return null;
 }
 
@@ -197,7 +260,7 @@ export function centralCalendarOrphanedLine(n) {
 
 export const CENTRAL_CALENDAR_LINK_EMPTY = "No training or activity on this day can be linked to this event.";
 
-const BUSY_WORDS = Object.freeze({ "link-session": "Linking…", "link-activity": "Linking…", "unlink-sessions": "Unlinking…", "unlink-activity": "Unlinking…", align: "Updating…" });
+const BUSY_WORDS = Object.freeze({ "add-activity": "Adding…", "add-rpe": "Adding…", "link-session": "Linking…", "link-activity": "Linking…", "unlink-sessions": "Unlinking…", "unlink-activity": "Unlinking…", align: "Updating…" });
 export const centralCalendarLinkBusyWord = (act) => BUSY_WORDS[act] || "Saving…";
 
 // The notice after a confirmed write. `event` is the event card after the
@@ -256,6 +319,10 @@ const REFUSALS = Object.freeze({
   rpe_already_linked: "This event already collects RPE through another schedule; remove it first. Nothing was saved.",
   rpe_already_answered: "Athletes have already answered this event's own RPE question, so trainings can't take it over. Keep the event's RPE, or link the training to another event. Nothing was saved.",
   rpe_from_question: "This event already asks athletes for RPE; remove that question first. Nothing was saved.",
+  // K5-3: an RPE request added to an event (PATCH).
+  rpe_from_sessions: "This event takes RPE from its linked trainings, so it can't take this RPE request. Nothing was saved.",
+  schedule_not_available: "This RPE request can't be added to this event here. Nothing was saved.",
+  schedule_already_referenced: "This RPE request already belongs to another event. Nothing was saved.",
   try_again: "The calendar is busy. Nothing was saved; try again in a moment.",
   request_key_reused: "This could not be sent. Nothing was saved; try again.",
 });
@@ -271,7 +338,7 @@ export function centralCalendarLinkRefusalText(info) {
 // or the read cannot tell this pair will be refused - section 1.1.10).
 const REREAD = new Set(["event_changed", "event_cancelled", "link_not_available", "nothing_to_align", "activity_superseded",
   "session_not_available", "session_already_attached", "activity_not_available", "activity_already_attached",
-  "athlete_not_targeted", "activity_not_targeted"]);
+  "athlete_not_targeted", "activity_not_targeted", "schedule_not_available", "schedule_already_referenced", "rpe_from_sessions", "rpe_from_question"]);
 export const centralCalendarLinkRefusalRereads = (info) => info.status === 404 || REREAD.has(info.code);
 
 // The refusals that the read cannot predict: the pair is remembered and
@@ -279,7 +346,7 @@ export const centralCalendarLinkRefusalRereads = (info) => info.status === 404 |
 // "not targeted" codes too (review M2): a card without its athletes cannot
 // tell a linked athlete who is no target any more.
 const UNPREDICTABLE = new Set(["session_not_available", "session_already_attached", "activity_not_available", "activity_already_attached",
-  "athlete_not_targeted", "activity_not_targeted"]);
+  "athlete_not_targeted", "activity_not_targeted", "schedule_not_available", "schedule_already_referenced", "rpe_from_sessions", "rpe_from_question"]);
 export const centralCalendarLinkRefusalRemembered = (info) => UNPREDICTABLE.has(info.code);
 
 // Check result: these answers come only after the server read its request
@@ -290,6 +357,7 @@ const SETTLED_ON_CHECK = new Set([
   "session_already_attached", "link_not_available", "nothing_to_align", "has_existing_results", "activity_not_available",
   "activity_superseded", "activity_outside_event", "activity_not_targeted", "activity_already_attached",
   "rpe_already_linked", "rpe_already_answered", "rpe_from_question",
+  "rpe_from_sessions", "schedule_not_available", "schedule_already_referenced",
 ]);
 export const centralCalendarLinkCheckSettles = (info) => info.status >= 400 && info.status < 500
   && (SETTLED_ON_CHECK.has(info.code) || String(info.code).startsWith("invalid_"));
