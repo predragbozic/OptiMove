@@ -190,6 +190,12 @@ test (mockup 07). Each mark is only a mark: no number and no state.
   wide and medium screens; on a phone the month cell stays a count, as today.
 - **Phone:** the marks and the type's icon share one row; the title wraps below and is never cut (mockup 07's long
   title).
+- **The time grid (K7, week and day views; restored 2026-11-23 at the owner's request, "this was one of the
+  requirements"):** an event box keeps its marks too, right after its time.
+  - In a box 60 px wide or less, the marks take their own line at 12 px.
+  - A box that is both that narrow and under 45 minutes long keeps only its time and title.
+  - A box of 44 px or less drops the marks.
+  - The box's label and tooltip always say "Holds ...". The K7 build had hidden the marks in every box.
 
 ### 2.4 H5 — day chips (what is in no event)
 

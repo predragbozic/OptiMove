@@ -581,6 +581,9 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
   const span = centralCalendarSpanLabel(item);
   const firstTeam = (item.teamIds || [])[0];
   const place = item.kind === "event" ? eventPlaceText(item) : "";
+  // H4: what the card holds. In a time-grid box the marks follow the time (the time stays first, K7); elsewhere they
+  // follow the type's icon (K5-2 contract 2.3).
+  const marks = renderMarksHtml(item);
   const classes = ["cc-card", `cc-card-${escapeAttr(item.kind)}`];
   if (item.cancelled) classes.push("is-cancelled");
   if (openKey && openKey === item.key) classes.push("is-open");
@@ -588,7 +591,7 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
   return `<button type="button" class="${classes.join(" ")}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)}${titleAttr} aria-label="${escapeAttr(cardAriaLabel(item, teams, today, { spanWhen }))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
       <span class="cc-card-stripe" aria-hidden="true"></span>
       <span class="cc-card-body">
-        <span class="cc-card-top">${itemIconHtml(item)}${renderMarksHtml(item)}${when ? `<span class="cc-card-when">${whenHtml}</span>` : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
+        <span class="cc-card-top">${itemIconHtml(item)}${gridBox ? "" : marks}${when ? `<span class="cc-card-when">${whenHtml}</span>` : ""}${gridBox ? marks : ""}<span class="cc-card-kind" title="${escapeAttr(centralCalendarKindLabel(item))}">${escapeHtml(shortKind ? centralCalendarShortKindLabel(item) : centralCalendarKindLabel(item))}</span>${span ? `<span class="cc-card-span">${escapeHtml(span)}</span>` : ""}</span>
         <span class="cc-card-title">${escapeHtml(centralCalendarTitle(item))}</span>
         ${place ? `<span class="cc-card-place">${escapeHtml(place)}</span>` : ""}
         ${centralCalendarScheduleSeparate(item) ? `<span class="cc-card-note">${SEPARATE_WORDS}</span>` : ""}
