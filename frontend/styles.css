@@ -30385,3 +30385,112 @@ body.athlete-questions-prompt-open {
 .builder-tw-save-modal .builder-modal-head .icon-button { min-height: 44px; min-width: 44px; }
 .builder-tw-week-options .builder-athlete-option { grid-template-columns: minmax(0, 1fr) auto; }
 /* end WT-C */
+
+/* The event panel's redesign (2026-11-23): the "In this event" summary row, collapsible sections, one "⋯" menu per
+   linked row, one See each athlete with its form chooser, and Edit · Cancel event · Delete together at the bottom. */
+.cc-panel-summary { display: grid; gap: 6px; }
+.cc-sum-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cc-sum-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.cc-sum-chip:hover { border-color: var(--line-strong); }
+.cc-sum-icon { flex: 0 0 auto; color: var(--muted); }
+.cc-sum-count { font-weight: 800; font-variant-numeric: tabular-nums; }
+.cc-sum-name { color: var(--muted); font-weight: 600; }
+
+.cc-psec { border-top: 1px solid var(--line); min-width: 0; }
+.cc-psec-title { margin: 0; font-size: 15px; }
+.cc-psec-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.cc-psec-icon { flex: 0 0 auto; color: var(--muted); }
+.cc-psec-name { min-width: 0; overflow-wrap: anywhere; }
+.cc-psec-count {
+  flex: 0 0 auto;
+  min-width: 24px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.cc-psec-meta { min-width: 0; color: var(--muted); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.cc-psec-chevron {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+.cc-psec-toggle[aria-expanded="true"] .cc-psec-chevron,
+.cc-see-each-choose[aria-expanded="true"] .cc-psec-chevron { transform: rotate(-135deg); }
+.cc-psec-body { display: grid; gap: 8px; padding: 0 0 12px; min-width: 0; }
+.cc-psec-body[hidden] { display: none; }
+.cc-psec-body .cc-go { padding-top: 0; border-top: 0; }
+.cc-psec-body .cc-panel-questions,
+.cc-psec-body .cc-panel-details { margin: 0; padding: 0; border: 0; }
+
+/* A linked row stays one line at every width: its name, its quiet line, "⋯" at the end. */
+.cc-link-row.cc-link-row-compact { flex-direction: row; flex-wrap: wrap; align-items: center; }
+.cc-link-row-compact .cc-link-text { flex: 1 1 0; }
+.cc-row-more {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+.cc-row-menu { flex: 1 0 100%; display: flex; justify-content: flex-end; }
+@media (max-width: 390px) {
+  .cc-link-row.cc-link-row-compact .cc-link-button { width: auto; justify-self: auto; }
+  .cc-row-menu .cc-link-button { width: 100%; }
+}
+
+.cc-see-each-choose { display: inline-flex; align-items: center; gap: 6px; }
+.cc-see-each-count { font-weight: 600; opacity: 0.85; }
+.cc-see-each-choose .cc-psec-chevron { margin-left: 4px; }
+.cc-see-each-forms { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cc-see-each-forms .cc-panel-button { width: 100%; }
+
+.cc-panel-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.cc-panel-bottom .cc-panel-delete { margin-top: 0; }
+.cc-panel-bottom .cc-panel-delete-step { flex: 1 0 100%; }
+.cc-panel-k3 { margin: 0; }

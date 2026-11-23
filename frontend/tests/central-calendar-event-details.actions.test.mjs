@@ -7,6 +7,7 @@
 // `{ types, fields, locations, teamDefaults }`, the manager's GET /events/:id
 // with `locationId`, `place` and `fields`, and POST /events/:id/fields with
 // its refusals and its requestKey replay.
+import { openEveryPanelSection } from "./support/central-calendar-panel-sections.mjs";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -32,7 +33,7 @@ const {
 } = await import("../central-calendar-actions.js");
 const { centralCalendarCatalogChanged, loadCentralCalendar, resetCentralCalendarForWorkspaceChange } = await import("../central-calendar-data.js");
 const view = await import("../central-calendar-view.js");
-const { renderCentralCalendarEventDetailsHtml } = await import("../central-calendar-event-details.js");
+const { centralCalendarEventDetailsParts } = await import("../central-calendar-event-details.js");
 const { addDaysIso, localDateIso, weekMondayIso } = await import("../utils.js");
 
 const TODAY = localDateIso();
@@ -188,7 +189,9 @@ function server({ items = ITEMS, workspace = { type: "club", scopeId: CLUB }, ca
 
 let rendered = "";
 const renders = [];
+let unfold = true;
 function render() {
+  if (unfold) openEveryPanelSection(state.centralCalendar);
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, {
     today: TODAY, layout: "wide", roster: centralCalendarRosterIndex(), canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
     uncertainWrites: centralCalendarUncertainWrites(),
@@ -652,7 +655,9 @@ test("D17. Enter details on an event cancelled meanwhile, or not the coach's any
   assert.equal(writesOf(calls).length, 0);
   // A cancelled event's panel shows its details without Enter details.
   const cancelled = eventItem(E_MATCH, DAY(1), { status: "cancelled", cancelled: true });
-  const html = renderCentralCalendarEventDetailsHtml(cancelled, { key: cancelled.key, loading: false, error: "", event: eventView() });
+  const parts = centralCalendarEventDetailsParts(cancelled, { key: cancelled.key, loading: false, error: "", event: eventView() });
+  assert.equal(parts.count, "1/3", "the section's header count");
+  const html = parts.body;
   assert.match(html, /1 of 3 filled in/);
   assert.equal(html.includes("central-calendar-enter-details"), false);
 });
@@ -1007,4 +1012,23 @@ test("D30. a place's name, address and note are text everywhere: the card, the p
   const form = doc.querySelector(".cc-event-form");
   assert.ok([...form.querySelectorAll("[data-cc-event-place] option")].some((o) => o.textContent === `${name} — ${address}`));
   assert.equal(form.querySelector("img, b, script"), null);
+});
+
+test("D-layout. the Details section is folded by default; its header says 1/3 and what is still required; Enter details is inside", async () => {
+  unfold = false;
+  try {
+    await openPanel();
+    let doc = dom();
+    const toggle = doc.querySelector('.cc-psec-toggle[data-key="details"]');
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(toggle.querySelector(".cc-psec-count").textContent, "1/3");
+    assert.equal(toggle.querySelector(".cc-psec-meta").textContent, "1 required empty");
+    assert.equal(doc.querySelector('[data-action="central-calendar-enter-details"]'), null, "folded: not in the markup");
+    await act({ action: "central-calendar-panel-reveal", key: "details" });
+    doc = dom();
+    assert.equal(doc.querySelector('.cc-psec-toggle[data-key="details"]').getAttribute("aria-expanded"), "true");
+    assert.ok(doc.querySelector(`#ccSec-details [data-action="central-calendar-enter-details"][data-key="event:${E_MATCH}:${DAY(1)}"]`));
+  } finally {
+    unfold = true;
+  }
 });

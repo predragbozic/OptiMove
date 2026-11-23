@@ -124,6 +124,11 @@ for (const width of [1280, 390, 375, 360]) {
       await openCalendar(page);
       await page.waitForSelector(cardOf(ids.managerId), { timeout: 20_000 });
       await page.locator(cardOf(ids.managerId)).first().click();
+      // The redesign (2026-11-23): Athletes is a folded section with its count; its header opens it.
+      const athletesToggle = page.locator('.cc-psec-toggle[data-key="athletes"]');
+      await athletesToggle.waitFor({ timeout: 20_000 });
+      assert.equal(await athletesToggle.getAttribute("aria-expanded"), "false", "folded by default");
+      await athletesToggle.click();
       const summary = page.locator(".cc-answers-summary");
       await page.waitForFunction(() => /Answered/.test(document.querySelector(".cc-answers-summary")?.textContent || ""), null, { timeout: 20_000 });
       // Twelve athletes asked; two answered: (5 + 8) / 2 = 6.5. The changed answer counts with its current value.
@@ -147,7 +152,9 @@ for (const width of [1280, 390, 375, 360]) {
       await row(names[1]).click();
       await page.waitForFunction(() => !document.querySelector(".cc-answers-summary"), null, { timeout: 20_000 });
       await page.goBack();
+      // Back returns with the Athletes section still open (the place keeps the panel's sections).
       await page.waitForFunction(() => /Answered/.test(document.querySelector(".cc-answers-summary")?.textContent || ""), null, { timeout: 20_000 });
+      assert.equal(await page.locator('.cc-psec-toggle[data-key="athletes"]').getAttribute("aria-expanded"), "true");
       assert.match(await page.locator(".cc-panel").first().textContent(), new RegExp(managerTitle));
       assert.deepEqual(pageErrors, []);
     } finally {
@@ -164,6 +171,7 @@ test("(1280 px) a reader's panel: the states only, no summary, no weekly read", 
     const weekly = [];
     page.on("request", (req) => { if (req.url().includes("/api/training-load/weekly")) weekly.push(req.url()); });
     await page.locator(cardOf(ids.readerId)).first().click();
+    await page.locator('.cc-psec-toggle[data-key="athletes"]').click({ timeout: 20_000 });
     await page.waitForSelector(".cc-athletes .cc-athlete", { timeout: 20_000 });
     await page.waitForTimeout(500);
     assert.equal(await page.locator(".cc-answers-summary").count(), 0);

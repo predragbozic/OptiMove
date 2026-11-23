@@ -19,6 +19,8 @@ export function appHistoryEntryOf(state, extra = {}) {
       selectedDate: String(cal.selectedDate || ""),
       panelKey: cal.panel?.open ? String(cal.panel.key || "") : "",
       panelDate: cal.panel?.open ? String(cal.panel.date || "") : "",
+      // The event panel's opened / closed sections (the redesign of 2026-11-23): Back returns with them as they were.
+      panelSections: cal.panel?.open && cal.panelView?.key === cal.panel.key ? { ...(cal.panelView.sections || {}) } : null,
     }
     : null;
   const athleteCalendar = tab === "athlete-calendar" && extra.athleteCalendar ? { ...extra.athleteCalendar } : null;

@@ -37,31 +37,60 @@ beforeEach(() => {
   state.athletes = [1, 2, 3, 4, 5].map((n) => ({ athlete_uuid: uuid(n), athlete_id: `R${n}`, athlete: `Athlete ${n}` }));
 });
 
-test("a manager is offered See each athlete; one button per linked slot", () => {
+// The redesign (2026-11-23): ONE See each athlete; with several linked forms it opens a chooser of the forms (the same
+// targets, one button per slot, through the same action and slot index); with one form it opens that form at once.
+const chooser = () => handleCentralCalendarAction(fakeAction({ action: "central-calendar-row-menu", key: "see-each" }), { render });
+
+test("a manager is offered ONE See each athlete; with several linked slots it opens a chooser, one button per slot", async () => {
   const main = { amPm: "PM", bta: "T", name: "Main session" };
   const gym = { amPm: "AM", bta: "B", name: "Gym" };
   world({ panelAthletes: [1, 2, 3, 4, 5].map((n) => A(n, `Athlete ${n}`)), links: [link(1, main), link(2, main), link(3, gym)] });
-  const buttons = [...dom().querySelectorAll('[data-action="central-calendar-see-each-athlete"]')];
-  assert.deepEqual(buttons.map((b) => b.textContent), ["See each athlete · Main session · Training (PM)", "See each athlete · Gym · Before training (AM)"]);
+  let doc = dom();
+  assert.equal(doc.querySelectorAll('[data-action="central-calendar-see-each-athlete"]').length, 0, "closed: no form buttons yet");
+  const choose = doc.querySelector(".cc-see-each-choose");
+  assert.match(choose.textContent, /^See each athlete· 2 forms$/);
+  assert.equal(choose.getAttribute("aria-expanded"), "false");
+  assert.equal(choose.getAttribute("aria-controls"), "ccSeeEachForms");
+  assert.equal(doc.querySelectorAll(".cc-see-each .cc-panel-note").length, 1, "one explanation for the section, not one per button");
+  await chooser();
+  doc = dom();
+  assert.equal(doc.querySelector(".cc-see-each-choose").getAttribute("aria-expanded"), "true");
+  const buttons = [...doc.querySelectorAll('#ccSeeEachForms [data-action="central-calendar-see-each-athlete"]')];
+  assert.deepEqual(buttons.map((b) => b.textContent), ["Main session · Training (PM)", "Gym · Before training (AM)"]);
+  assert.deepEqual(buttons.map((b) => b.dataset.slotIndex), ["0", "1"]);
+  assert.match(doc.querySelector(".cc-see-each").textContent, /one athlete at a time, only the 5 of this event/);
+  await chooser();
+  assert.equal(dom().querySelectorAll('[data-action="central-calendar-see-each-athlete"]').length, 0, "the same button closes it");
   world({ panelAthletes: [1, 2].map((n) => A(n, `Athlete ${n}`)), links: [link(1, main)] });
   assert.equal(dom().querySelector('[data-action="central-calendar-see-each-athlete"]').textContent, "See each athlete");
+  assert.equal(dom().querySelector('[data-action="central-calendar-see-each-athlete"]').dataset.slotIndex, "0", "one form: opens it at once");
   assert.match(dom().querySelector(".cc-see-each").textContent, /one athlete at a time, only the 2 of this event/);
 });
 
-test("unnamed slots are told apart by their own facts; the note names the same slot; no ids", () => {
+test("unnamed slots are told apart by their own facts in the chooser; no ids", async () => {
   const slots = [{ amPm: "AM", bta: "B", name: "" }, { amPm: "AM", bta: "T", name: "" }, { amPm: "PM", bta: "", name: "" }, { amPm: "", bta: "A", name: "" }, { amPm: "", bta: "", name: "" }];
   world({ panelAthletes: [1, 2, 3, 4, 5].map((n) => A(n, `Athlete ${n}`)), links: slots.map((slot, i) => link(i + 1, slot)) });
+  await chooser();
   const doc = dom();
   const buttons = [...doc.querySelectorAll('[data-action="central-calendar-see-each-athlete"]')];
-  assert.deepEqual(buttons.map((b) => b.textContent), [
-    "See each athlete · Before training (AM)", "See each athlete · Training (AM)", "See each athlete · Session (PM)",
-    "See each athlete · After training", "See each athlete · Session",
-  ]);
+  assert.deepEqual(buttons.map((b) => b.textContent), ["Before training (AM)", "Training (AM)", "Session (PM)", "After training", "Session"]);
   assert.equal(new Set(buttons.map((b) => b.textContent)).size, 5);
-  assert.deepEqual(buttons.map((b) => b.classList.contains("cc-primary")), [true, false, false, false, false]);
-  const notes = [...doc.querySelectorAll(".cc-see-each .cc-panel-note")].map((n) => n.textContent);
-  assert.match(notes[0], /^Opens Before training \(AM\), one athlete at a time, only the 5 of this event\.$/);
-  assert.equal(notes.length, 5);
+  assert.equal(doc.querySelector(".cc-see-each-choose").classList.contains("cc-primary"), true, "the one button is primary");
+  assert.deepEqual(buttons.map((b) => b.classList.contains("cc-primary")), [false, false, false, false, false]);
+  assert.doesNotMatch(doc.querySelector(".cc-see-each").outerHTML.replace(/data-[a-z-]+="[^"]*"/g, ""), /[0-9a-f]{8}-[0-9a-f]{4}-/i);
+});
+
+test("each chosen form opens its own slot, as before: the slot index decides who is in", async () => {
+  const main = { amPm: "PM", bta: "T", name: "Main session" };
+  const gym = { amPm: "AM", bta: "B", name: "Gym" };
+  world({ panelAthletes: [1, 2, 3].map((n) => A(n, `Athlete ${n}`)), links: [link(1, main), link(2, main), link(3, gym)] });
+  await chooser();
+  const opened = [];
+  const gymButton = [...dom().querySelectorAll('[data-action="central-calendar-see-each-athlete"]')][1];
+  await handleCentralCalendarAction(fakeAction({ ...gymButton.dataset }), { render, openWeeklyPlanForAthleteOnDate: async (...args) => opened.push(args) });
+  assert.equal(opened[0][0], "R3", "Gym's only athlete opens first");
+  assert.deepEqual(opened[0][2].slot, { amPm: "AM", bta: "B" });
+  assert.deepEqual(opened[0][2].flow.notInKeys, [uuid(1), uuid(2)]);
 });
 
 test("a link whose Builder session was deleted gets no button; a later link names a slot the first left unnamed", () => {

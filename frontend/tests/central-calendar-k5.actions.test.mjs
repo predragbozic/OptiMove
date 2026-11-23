@@ -2,6 +2,7 @@
 // the H5 day chips, *Show only* with GPS imports and Other activities, and *Go there* with its three openers. Through
 // the real handlers, loaders and templates with a fake fetch that honours `kinds` as the route does (the FE-D16
 // pattern) and JSDOM for the markup; the openers of app.js run from its source against recording fakes.
+import { openEveryPanelSection } from "./support/central-calendar-panel-sections.mjs";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -79,6 +80,7 @@ const kindsOf = (calls) => calls.filter((call) => call.url.startsWith("/api/cale
 let rendered = "";
 let layout = "wide";
 function render() {
+  openEveryPanelSection(state.centralCalendar);
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, { today: TODAY, layout, roster: centralCalendarRosterIndex() });
 }
 const dom = (html = rendered) => new JSDOM(`<!doctype html><body>${html}</body>`).window.document;
@@ -348,9 +350,11 @@ test("K5-1. a manager's event lists what it holds under In this event, RPE, Test
   installFetchMock(server());
   await loadCentralCalendar({ render });
   await act({ action: "central-calendar-open-item", key: EVENT.key, date: EVENT.date });
-  const section = dom().querySelector(".cc-panel .cc-go-event");
-  assert.equal(section.querySelector(".cc-panel-subtitle").textContent, "In this event");
-  const rows = [...section.querySelectorAll(".cc-go-row")];
+  // The redesign (2026-11-23): the summary row names each kind with its count; each target sits in its own section.
+  const doc = dom();
+  assert.equal(doc.querySelector(".cc-panel-summary .cc-panel-subtitle").textContent, "In this event");
+  assert.deepEqual([...doc.querySelectorAll(".cc-sum-chip")].map((chip) => chip.dataset.key), ["trainings", "activities", "questions", "tests"]);
+  const rows = ["questions", "tests", "activities"].map((id) => doc.querySelector(`.cc-psec[data-section="${id}"] .cc-go-row`));
   assert.deepEqual(rows.map((row) => row.querySelector(".cc-go-name").textContent), ["RPE request · RPE 12/18", "Test", "GPS data"]);
   assert.deepEqual(rows.map((row) => row.querySelector("button").dataset.action), ["central-calendar-open-rpe-schedule", "central-calendar-open-tests", "central-calendar-open-training-load"]);
   assert.deepEqual(rows.map((row) => row.querySelector("button").textContent), ["Open in Training Load", "Open in Tests", "Open in Training Load"]);

@@ -2,7 +2,7 @@ import { calendarColorIndex, calendarTeamColorIndexes } from "./calendar-colors.
 import { CENTRAL_CALENDAR_EVENT_KINDS, CENTRAL_CALENDAR_SHOW_ONLY, centralCalendarShownData, centralCalendarTeamLabel } from "./central-calendar-data.js";
 import {
   centralCalendarCatalogOf,
-  renderCentralCalendarEventDetailsHtml,
+  centralCalendarEventDetailsParts,
   renderCentralCalendarEventPlaceHtml,
 } from "./central-calendar-event-details.js";
 import { CENTRAL_CALENDAR_EXPECT_SHORT, renderCentralCalendarEventFormHtml } from "./central-calendar-event-form.js";
@@ -33,7 +33,7 @@ import {
   centralCalendarResultsQuestion,
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
-import { CC_WAITING_SENTENCE, ccPanelAskOffered, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
+import { CC_WAITING_SENTENCE, ccPanelAskOffered, ccPanelQuestionList, ccPanelQuestionsWaiting, renderCentralCalendarQuestionsHtml } from "./central-calendar-questions.js";
 import { centralCalendarGridHours, centralCalendarMinutesOf, centralCalendarTimeLayout } from "./central-calendar-timegrid.js";
 import {
   ccAnswerEntries,
@@ -1100,14 +1100,15 @@ function renderBodyHtml(cal, layout, today) {
 // `roster` maps an athlete UUID to the rail roster's athlete_id, the id the
 // weekly plan's route reads (central-calendar-actions.js
 // centralCalendarRosterIndex). An athlete outside it has no drill-in here.
-function renderPanelAthletesHtml(item, cal, roster) {
+// `headless`: an event's list sits in its collapsible Athletes section, whose header names it and its count.
+function renderPanelAthletesHtml(item, cal, roster, { headless = false } = {}) {
   const panel = cal.panel;
   const count = Number(item.athleteCount) || 0;
   // An imported activity's athletes are its recorded participants; who
   // still needs an attendance state is the Roster tab's knowledge (K1a
   // gives no per-athlete roster state), so the head says what the list is.
   const recorded = item.kind === "activity" && Boolean(item.attendance);
-  const head = `<h4 class="cc-panel-subtitle">${recorded ? "Recorded athletes" : "Athletes"}${count ? ` (${count})` : ""}</h4>`;
+  const head = headless ? "" : `<h4 class="cc-panel-subtitle">${recorded ? "Recorded athletes" : "Athletes"}${count ? ` (${count})` : ""}</h4>`;
   if (panel.loading) return `${head}<p class="cc-panel-note" role="status">Loading athletes…</p>`;
   if (panel.error === "changed") return `${head}<p class="cc-panel-note">This item has changed since the calendar was loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry">Refresh the calendar</button>`;
   if (panel.error) return `${head}<p class="cc-panel-note">Athlete names could not be loaded.</p><button type="button" class="plain-button cc-panel-button" data-action="central-calendar-retry-athletes">Try again</button>`;
@@ -1202,7 +1203,7 @@ function eventDatesText(item) {
 // manages the event - the RPE gap names the panel's next step.
 function renderEventFactsHtml(item, { askRpe = false } = {}) {
   const expects = item.expects || [];
-  const gaps = (item.gaps || []).map((gap) => (gap === "rpe" && askRpe ? `${GAP_NOTES.rpe} Use Ask RPE below.` : GAP_NOTES[gap])).filter(Boolean);
+  const gaps = (item.gaps || []).map((gap) => (gap === "rpe" && askRpe ? `${GAP_NOTES.rpe} Use Ask RPE under Questions and RPE.` : GAP_NOTES[gap])).filter(Boolean);
   if (item.scheduleFold?.external === "separate") gaps.push("The linked RPE request reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts.");
   if (item.scheduleFold?.test === "separate") gaps.push("The linked test reaches athletes this event does not list, so it is shown as its own card on this day, with its own counts.");
   const multiDay = item.span?.from && item.span?.to && item.span.to !== item.span.from;
@@ -1313,84 +1314,125 @@ function renderAlignHtml(item, cal, off) {
   return `<div class="cc-link-align"><p class="cc-panel-note">${escapeHtml(align.text)}</p>${linkButtonHtml({ act: "align", label: align.button, off, extraClass: "cc-link-wrap" })}</div>`;
 }
 
-// `otherPending`: a question command of this event not confirmed - it keeps
-// these buttons off too (one control at a time), its Check result is drawn in
-// the questions section.
-function renderEventLinksHtml(item, cal, pending, otherPending = null) {
-  if (!centralCalendarEventLinkable(item)) return "";
+// ---------------------------------------------------------------------------
+// The event panel's layout (the owner's redesign of 2026-11-23): the head, one "In this event" summary row, then
+// collapsible sections (Trainings, GPS and activities, Questions, Test, Athletes, Details) and the event's own acts
+// at the bottom. Only the layout changes: every control below sends exactly what it sent before.
+// `cal.panelView` ({ key, sections, menu }) is this panel's memory of what the coach opened or closed; a section
+// nobody touched follows its default (open only while it asks for a decision).
+// ---------------------------------------------------------------------------
+const PANEL_SECTION_ICONS = Object.freeze({ trainings: "barbell", activities: "gps", questions: "clipboard", tests: "ruler-measure", athletes: "team", details: "notes" });
+
+function panelViewOf(cal, item) {
+  return cal.panelView && cal.panelView.key === item.key ? cal.panelView : null;
+}
+
+function panelSectionOpen(cal, item, id, fallback) {
+  const chosen = panelViewOf(cal, item)?.sections?.[id];
+  return typeof chosen === "boolean" ? chosen : Boolean(fallback);
+}
+
+// A collapsible section: its header is one button (aria-expanded / aria-controls) with the section's icon, name,
+// count and an optional short fact; the body is in the markup only while it is open.
+function panelSectionHtml(cal, item, { id, title, count = "", meta = "", open = false, body = "", className = "", busy = false }) {
+  const expanded = panelSectionOpen(cal, item, id, open);
+  const countHtml = count === "" ? "" : `<span class="cc-psec-count">${escapeHtml(String(count))}</span>`;
+  const spoken = [title, count === "" ? "" : String(count), meta].filter(Boolean).join(", ");
+  return `<section class="cc-psec${className ? ` ${className}` : ""}${expanded ? " is-open" : ""}" data-section="${escapeAttr(id)}"${busy ? ' aria-busy="true"' : ""}>
+      <h4 class="cc-psec-title"><button type="button" class="cc-psec-toggle" data-action="central-calendar-panel-section" data-key="${escapeAttr(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-controls="ccSec-${escapeAttr(id)}" aria-label="${escapeAttr(spoken)}">
+        ${renderIconSvg(PANEL_SECTION_ICONS[id] || "list", { size: 18, className: "cc-psec-icon" })}<span class="cc-psec-name">${escapeHtml(title)}</span>${countHtml}${meta ? `<span class="cc-psec-meta">${escapeHtml(meta)}</span>` : ""}<span class="cc-psec-chevron" aria-hidden="true"></span>
+      </button></h4>
+      <div class="cc-psec-body" id="ccSec-${escapeAttr(id)}"${expanded ? "" : " hidden"}>${expanded ? body : ""}</div>
+    </section>`;
+}
+
+// A linked row: its name and quiet line, and a "⋯" button whose small menu holds the row's Unlink (the same
+// button, the same request, as before). The menu is in the markup only while it is open.
+function linkedRowHtml(cal, item, { menuId, title, meta = "", button }) {
+  const open = panelViewOf(cal, item)?.menu === menuId;
+  const domId = `ccMenu-${menuId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+  return `<li class="cc-link-row cc-link-row-compact${open ? " is-menu-open" : ""}"><div class="cc-link-text"><p class="cc-link-name">${escapeHtml(title)}</p>${meta ? `<p class="cc-link-meta">${escapeHtml(meta)}</p>` : ""}</div>
+      <button type="button" class="plain-button icon-button cc-row-more" data-action="central-calendar-row-menu" data-key="${escapeAttr(menuId)}" aria-expanded="${open ? "true" : "false"}" aria-controls="${escapeAttr(domId)}" aria-label="${escapeAttr(`More for ${title}`)}"><span aria-hidden="true">⋯</span></button>
+      ${open ? `<div class="cc-row-menu" id="${escapeAttr(domId)}" role="group" aria-label="${escapeAttr(title)}">${button}</div>` : ""}</li>`;
+}
+
+// An offer on this day: one compact row with its small Link (a refused pair keeps its reason, no button).
+function offerRowHtml(title, meta, button, refusedReason = "") {
+  return `<li class="cc-link-row cc-link-row-compact cc-link-offer"><div class="cc-link-text"><p class="cc-link-name">${escapeHtml(title)}</p>${meta ? `<p class="cc-link-meta">${escapeHtml(meta)}</p>` : ""}${refusedReason ? `<p class="cc-link-refused">${escapeHtml(refusedReason)}</p>` : ""}</div>${refusedReason ? "" : button}</li>`;
+}
+
+// The event's links split into its two sections. `otherPending`: a question command of this event not confirmed -
+// it keeps these buttons off too (one control at a time), its Check result is drawn in the questions section.
+function eventLinkParts(item, cal, pending, otherPending = null) {
+  if (!centralCalendarEventLinkable(item)) return null;
   const busy = Boolean(cal.linkWrite);
   // An open question step holds the panel too (one control at a time).
   const off = busy || Boolean(pending) || Boolean(otherPending) || Boolean(cal.questionStep);
   const view = cal.panelEvent && cal.panelEvent.key === item.key ? cal.panelEvent : null;
   const suggestions = centralCalendarLinkSuggestions(cal.data, item, cal.linkRefused);
-  const parts = [];
-  // 1. The linked trainings (the manager view).
-  let linkedCount = 0;
-  if (!view || view.loading) {
-    parts.push(`<p class="cc-panel-note" role="status">Loading linked trainings…</p>`);
-  } else if (view.error || !view.event) {
-    parts.push(`<p class="cc-panel-note" role="alert">${escapeHtml(CENTRAL_CALENDAR_LINKS_LOAD_FAILED)}</p>${view.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-details-retry">Try again</button>`}`);
-  } else {
+  const settled = Boolean(view && !view.loading && !view.error && view.event);
+  const readState = !view || view.loading ? "loading" : settled ? "ok" : "error";
+  const stateHtml = readState === "loading"
+    ? `<p class="cc-panel-note" role="status">Loading linked trainings…</p>`
+    : readState === "error" ? `<p class="cc-panel-note" role="alert">${escapeHtml(CENTRAL_CALENDAR_LINKS_LOAD_FAILED)}</p>${view.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-details-retry">Try again</button>`}` : "";
+  // 1. Trainings: the linked ones, Align, then the day's offers.
+  const t = [];
+  let linkedTrainings = 0;
+  if (settled) {
     const { groups, orphaned, orphanedCount } = centralCalendarSessionLinkGroups(view.event, item.date);
-    linkedCount += groups.length + orphaned.length;
-    if (groups.length || orphaned.length) {
-      const rows = groups.map((group) => {
-        const name = group.name || "Training";
-        const meta = [centralCalendarWhenLabel({ slot: group.slot }), athleteCountLabel(group.athleteCount), group.renamedFrom ? `was “${group.renamedFrom}”` : ""].filter(Boolean).join(" · ");
-        return linkRowHtml(name, meta, linkButtonHtml({ act: "unlink-sessions", label: "Unlink", attrs: `data-group="${escapeAttr(group.key)}"`, busy: busyOn(cal, "unlink-sessions", "group", group.key), off, aria: `Unlink ${name}` }));
-      });
-      if (orphaned.length) {
-        rows.push(linkRowHtml(centralCalendarOrphanedLine(orphanedCount), CENTRAL_CALENDAR_ORPHANED_META, linkButtonHtml({ act: "unlink-sessions", label: "Unlink", attrs: `data-group="orphaned"`, busy: busyOn(cal, "unlink-sessions", "group", "orphaned"), off, aria: "Unlink the deleted trainings" })));
-      }
-      parts.push(`<h5 class="cc-link-heading">Linked trainings</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
-      if (groups.length) parts.push(`<p class="cc-panel-note cc-link-hint">${escapeHtml(CENTRAL_CALENDAR_LINKED_HINT)}</p>`);
+    linkedTrainings = groups.length + orphaned.length;
+    const rows = groups.map((group) => {
+      const name = group.name || "Training";
+      const meta = [centralCalendarWhenLabel({ slot: group.slot }), athleteCountLabel(group.athleteCount), group.renamedFrom ? `was “${group.renamedFrom}”` : ""].filter(Boolean).join(" · ");
+      return linkedRowHtml(cal, item, { menuId: `session:${group.key}`, title: name, meta, button: linkButtonHtml({ act: "unlink-sessions", label: "Unlink", attrs: `data-group="${escapeAttr(group.key)}"`, busy: busyOn(cal, "unlink-sessions", "group", group.key), off, aria: `Unlink ${name}` }) });
+    });
+    if (orphaned.length) {
+      rows.push(linkedRowHtml(cal, item, { menuId: "session:orphaned", title: centralCalendarOrphanedLine(orphanedCount), meta: CENTRAL_CALENDAR_ORPHANED_META, button: linkButtonHtml({ act: "unlink-sessions", label: "Unlink", attrs: `data-group="orphaned"`, busy: busyOn(cal, "unlink-sessions", "group", "orphaned"), off, aria: "Unlink the deleted trainings" }) }));
     }
+    if (rows.length) t.push(`<h5 class="cc-link-heading">Linked</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
   }
-  // 2. Align (the card's own count).
   const alignHtml = renderAlignHtml(item, cal, off);
-  if (alignHtml) parts.push(alignHtml);
-  // 3. The trainings of the day.
+  if (alignHtml) t.push(alignHtml);
   if (suggestions.trainings.length) {
     const rows = suggestions.trainings.map(({ item: planned, refused }) => {
       const title = centralCalendarTitle(planned);
       const meta = [centralCalendarWhenLabel(planned), athleteCountLabel(Number(planned.athleteCount) || 0)].filter(Boolean).join(" · ");
-      return linkRowHtml(title, meta, linkButtonHtml({ act: "link-session", label: "Link", attrs: `data-planned-key="${escapeAttr(planned.key)}"`, busy: busyOn(cal, "link-session", "plannedKey", planned.key), off, aria: `Link ${title}` }), refused);
+      return offerRowHtml(title, meta, linkButtonHtml({ act: "link-session", label: "Link", attrs: `data-planned-key="${escapeAttr(planned.key)}"`, busy: busyOn(cal, "link-session", "plannedKey", planned.key), off, aria: `Link ${title}` }), refused);
     });
-    parts.push(`<h5 class="cc-link-heading">Trainings on this day</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
+    t.push(`<h5 class="cc-link-heading">On this day, not linked</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
   }
   const partial = centralCalendarPartialLine(suggestions.partial);
-  if (partial) parts.push(`<p class="cc-panel-note">${escapeHtml(partial)}</p>`);
-  // 4. The linked activities (the manager view).
-  if (view?.event && !view.loading && !view.error) {
+  if (partial) t.push(`<p class="cc-panel-note">${escapeHtml(partial)}</p>`);
+  // 2. Activities: the linked ones, then the day's offers.
+  const a = [];
+  let linkedActivities = 0;
+  if (settled) {
     const links = centralCalendarActivityLinksOf(view.event, item.date);
-    linkedCount += links.length;
+    linkedActivities = links.length;
     if (links.length) {
       const rows = links.map((link) => {
         const name = link.visible ? link.name || "Activity" : "An activity you cannot open here";
-        return linkRowHtml(name, "", linkButtonHtml({ act: "unlink-activity", label: "Unlink", attrs: `data-activity-id="${escapeAttr(link.activityId)}"`, busy: busyOn(cal, "unlink-activity", "activityId", link.activityId), off, aria: `Unlink ${name}` }));
+        return linkedRowHtml(cal, item, { menuId: `activity:${link.activityId}`, title: name, button: linkButtonHtml({ act: "unlink-activity", label: "Unlink", attrs: `data-activity-id="${escapeAttr(link.activityId)}"`, busy: busyOn(cal, "unlink-activity", "activityId", link.activityId), off, aria: `Unlink ${name}` }) });
       });
-      parts.push(`<h5 class="cc-link-heading">Linked activities</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
+      a.push(`<h5 class="cc-link-heading">Linked</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
     }
   }
-  // 5. The activities of the day.
   if (suggestions.activities.length) {
     const rows = suggestions.activities.map(({ item: activity, refused }) => {
       const title = centralCalendarTitle(activity);
       const meta = [centralCalendarWhenLabel(activity), centralCalendarKindLabel(activity)].filter(Boolean).join(" · ");
-      return linkRowHtml(title, meta, linkButtonHtml({ act: "link-activity", label: "Link", attrs: `data-activity-key="${escapeAttr(activity.key)}"`, busy: busyOn(cal, "link-activity", "activityKey", activity.key), off, aria: `Link ${title}` }), refused);
+      return offerRowHtml(title, meta, linkButtonHtml({ act: "link-activity", label: "Link", attrs: `data-activity-key="${escapeAttr(activity.key)}"`, busy: busyOn(cal, "link-activity", "activityKey", activity.key), off, aria: `Link ${title}` }), refused);
     });
-    parts.push(`<h5 class="cc-link-heading">Activities on this day</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
+    a.push(`<h5 class="cc-link-heading">On this day, not linked</h5><ul class="cc-link-list" role="list">${rows.join("")}</ul>`);
   }
-  // 6. Nothing at all.
-  const viewSettled = view && !view.loading && !view.error && view.event;
-  if (viewSettled && !linkedCount && !suggestions.trainings.length && !suggestions.activities.length && !alignHtml) {
-    parts.push(`<p class="cc-panel-note">${escapeHtml(CENTRAL_CALENDAR_LINK_EMPTY)}</p>`);
-  }
-  return `<section class="cc-panel-links" aria-labelledby="ccLinksTitle"${busy ? ' aria-busy="true"' : ""}>
-      <h4 class="cc-panel-subtitle" id="ccLinksTitle" tabindex="-1">Trainings and activities</h4>
-      ${linkFeedbackHtml(cal, item.key, pending)}
-      ${parts.join("")}
-    </section>`;
+  const offersTrainings = suggestions.trainings.some((s) => !s.refused);
+  const offersActivities = suggestions.activities.some((s) => !s.refused);
+  const nothing = settled && !linkedTrainings && !linkedActivities && !suggestions.trainings.length && !suggestions.activities.length && !alignHtml;
+  return {
+    busy, readState, stateHtml, nothing,
+    trainings: { count: settled ? linkedTrainings : "", parts: t, hint: linkedTrainings ? CENTRAL_CALENDAR_LINKED_HINT : "", offers: offersTrainings || Boolean(alignHtml) },
+    activities: { count: settled ? linkedActivities : "", parts: a, offers: offersActivities },
+  };
 }
 
 // `linkEntries`: every link command not confirmed in this workspace - an
@@ -1518,13 +1560,7 @@ export function centralCalendarGoTargets(item) {
 function renderGoThereHtml(item) {
   const targets = centralCalendarGoTargets(item);
   if (!targets.length) return "";
-  // An event lists what it holds, one row per item with its own button (E2).
-  if (item.kind === "event") {
-    return `<section class="cc-go cc-go-event" aria-labelledby="ccGoTitle">
-        <h4 class="cc-panel-subtitle" id="ccGoTitle">In this event</h4>
-        <ul class="cc-go-list" role="list">${targets.map((target) => `<li class="cc-go-row"><p class="cc-go-name">${escapeHtml(target.name)}${target.meta ? ` <span class="cc-go-meta">· ${escapeHtml(target.meta)}</span>` : ""}</p>${goButtonHtml({ ...target, aria: `${target.label}: ${target.name}` })}</li>`).join("")}</ul>
-      </section>`;
-  }
+  // An event's targets live in its sections (renderEventPanelBodyHtml), each with its own button.
   // Any other panel: the first target full width and primary with its line; the rest after it (Q2).
   const needsState = item.kind === "activity" ? Number(item.attendance?.needsState) || 0 : 0;
   const activityId = (item.links?.activityIds || [])[0];
@@ -1536,6 +1572,87 @@ function renderGoThereHtml(item) {
       ${targets.map((target, index) => `${goButtonHtml({ ...target, primary: index === 0 })}${target.hint ? `<p class="cc-panel-note cc-go-hint">${escapeHtml(target.hint)}</p>` : ""}`).join("")}
       ${roster}
     </section>`;
+}
+
+// One target of an event (E2) inside its section: the name, its count, and its own button with one short line.
+function goRowHtml(target) {
+  return `<div class="cc-go cc-go-event"><ul class="cc-go-list" role="list"><li class="cc-go-row"><p class="cc-go-name">${escapeHtml(target.name)}${target.meta ? ` <span class="cc-go-meta">· ${escapeHtml(target.meta)}</span>` : ""}</p>${goButtonHtml({ ...target, aria: `${target.label}: ${target.name}` })}</li></ul>${target.hint ? `<p class="cc-panel-note cc-go-hint">${escapeHtml(target.hint)}</p>` : ""}</div>`;
+}
+
+// The event's panel below its facts (the owner's redesign of 2026-11-23): the summary row, Plan / Open the training,
+// the sections, See each athlete, Athletes, Details, then Edit · Cancel event · Delete together at the bottom.
+function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today }) {
+  const targets = centralCalendarGoTargets(item);
+  const target = (key) => targets.find((entry) => entry.key === key) || null;
+  const links = eventLinkParts(item, cal, pending, pendingQuestion);
+  const sections = [];
+  // Trainings (a manager's: linked, Align, the day's offers).
+  if (links) {
+    const body = [links.readState === "ok" ? "" : links.stateHtml, ...links.trainings.parts,
+      links.trainings.hint ? `<p class="cc-panel-note cc-link-hint">${escapeHtml(links.trainings.hint)}</p>` : "",
+      links.nothing ? `<p class="cc-panel-note">${escapeHtml(CENTRAL_CALENDAR_LINK_EMPTY)}</p>` : ""].join("");
+    sections.push({ id: "trainings", title: "Trainings", count: links.trainings.count, open: links.readState === "error" || links.trainings.offers, body, busy: links.busy });
+  }
+  // GPS and activities: the card's activities (open them), then a manager's linked ones and the day's offers.
+  const activity = target("activity");
+  if (links || activity) {
+    const linked = links && links.readState === "ok" ? links.activities.count : "";
+    const count = activity ? Math.max(Number(linked) || 0, (item.links?.activityIds || []).length) : linked;
+    const body = [activity ? goRowHtml(activity) : "", ...(links ? links.activities.parts : [])].join("")
+      || `<p class="cc-panel-note">Nothing is recorded for this event yet.</p>`;
+    sections.push({ id: "activities", title: "GPS and activities", count, open: Boolean(links?.activities.offers), body, busy: Boolean(links?.busy) });
+  }
+  // Questions and the event's RPE request.
+  const rpe = target("rpe");
+  if (questionsOn || rpe) {
+    const pq = cal.panelQuestions && cal.panelQuestions.key === item.key ? cal.panelQuestions : null;
+    const asked = pq && !pq.loading && !pq.error && !pq.hidden ? ccPanelQuestionList(pq.read).length : 0;
+    const questionsHtml = questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : "";
+    const ownLine = cal.linkMessage?.family === "question" && cal.linkMessage.panelKey === item.key;
+    const step = cal.questionStep && cal.questionStep.eventKey === item.key;
+    const open = Boolean(pendingQuestion) || ownLine || step || Boolean(pq?.error);
+    const count = (rpe ? 1 : 0) + asked;
+    sections.push({ id: "questions", title: "Questions and RPE", count: questionsOn && (!pq || pq.loading) && !rpe ? "" : count, meta: rpe?.meta || "", open, body: `${rpe ? goRowHtml(rpe) : ""}${questionsHtml}` || `<p class="cc-panel-note">No question is asked yet.</p>` });
+  }
+  // The event's test.
+  const test = target("test");
+  if (test) sections.push({ id: "tests", title: "Test", count: 1, meta: test.meta, open: false, body: goRowHtml(test) });
+  const sectionHtml = (entry) => panelSectionHtml(cal, item, entry);
+  const summary = sections.length ? `<div class="cc-panel-summary" role="group" aria-labelledby="ccSumTitle">
+      <h4 class="cc-panel-subtitle" id="ccSumTitle">In this event</h4>
+      <div class="cc-sum-chips">${sections.map((entry) => {
+        const shown = entry.count === "" ? "…" : String(entry.count);
+        const spoken = `${entry.title}: ${entry.count === "" ? "loading" : entry.count}${entry.meta ? `, ${entry.meta}` : ""}. Show`;
+        return `<button type="button" class="cc-sum-chip" data-action="central-calendar-panel-reveal" data-key="${escapeAttr(entry.id)}" aria-label="${escapeAttr(spoken)}">${renderIconSvg(PANEL_SECTION_ICONS[entry.id] || "list", { size: 18, className: "cc-sum-icon" })}<span class="cc-sum-count">${escapeHtml(shown)}</span><span class="cc-sum-name">${escapeHtml(entry.title)}</span></button>`;
+      }).join("")}</div>
+    </div>` : "";
+  // The link sections share one status line (a write's result, its Check result), always in view.
+  const linkIds = ["trainings", "activities"];
+  const linkSections = sections.filter((entry) => linkIds.includes(entry.id));
+  const linksHtml = links
+    ? `<div class="cc-panel-links"${links.busy ? ' aria-busy="true"' : ""}><h4 class="visually-hidden" id="ccLinksTitle" tabindex="-1">Trainings and activities</h4>${linkFeedbackHtml(cal, item.key, pending)}${linkSections.map(sectionHtml).join("")}</div>`
+    : linkSections.map(sectionHtml).join("");
+  const others = sections.filter((entry) => !linkIds.includes(entry.id)).map(sectionHtml).join("");
+  // Athletes and Details: folded, with their count.
+  const count = Number(item.athleteCount) || 0;
+  const athletes = panelSectionHtml(cal, item, {
+    id: "athletes", title: "Athletes", count: count || (Array.isArray(cal.panel.athletes) ? cal.panel.athletes.length : ""), className: "cc-panel-athletes",
+    open: false, body: renderPanelAthletesHtml(item, cal, roster, { headless: true }),
+  });
+  const details = centralCalendarEventDetailsParts(item, cal.panelEvent);
+  const detailsHtml = details ? panelSectionHtml(cal, item, {
+    id: "details", title: "Details", count: details.count, meta: details.missing ? `${details.missing} required empty` : "", open: details.state === "error", body: details.body,
+  }) : "";
+  const actions = renderEventActionsHtml(item, { locked: linksLocked });
+  const del = renderEventDeleteHtml(item, cal, pending, { locked: linksLocked || Boolean(cal.form) });
+  return `${summary}
+      ${renderK3PanelHtml(item, cal, { locked: linksLocked })}
+      ${linksHtml}
+      ${others}
+      ${renderCentralCalendarSeeEachHtml(cal, item)}
+      ${athletes}
+      ${detailsHtml}
+      ${actions || del ? `<div class="cc-panel-bottom">${actions}${del}</div>` : ""}`;
 }
 
 function panelHost(body, layout) {
@@ -1575,18 +1692,15 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: item.canManage === true && formCtx.catalog?.questionsEnabled === true && ccPanelAskOffered(item, cal.panelQuestions, "rpe", questionChannelsOf(item, cal)) }) : ""}
-      ${item.kind === "event" ? renderCentralCalendarEventDetailsHtml(item, cal.panelEvent) : ""}
-      ${item.kind === "event" ? renderGoThereHtml(item) : ""}
-      ${item.kind === "event" ? renderK3PanelHtml(item, cal, { locked: linksLocked }) : ""}
-      ${item.kind === "event" ? renderEventLinksHtml(item, cal, pending, pendingQuestion) : ""}
-      ${questionsOn ? renderEventQuestionsHtml(item, cal, pendingQuestion, Boolean(pending), today) : ""}
-      ${renderEventActionsHtml(item, { locked: linksLocked })}
+      ${item.kind === "event"
+    ? renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today })
+    : `${renderEventActionsHtml(item, { locked: linksLocked })}
       ${renderEventDeleteHtml(item, cal, pending, { locked: linksLocked || Boolean(cal.form) })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
       ${item.kind === "activity" || item.kind === "external" ? renderAddToEventHtml(item, cal, pending) : ""}
-      ${item.kind === "event" ? "" : renderGoThereHtml(item)}
+      ${renderGoThereHtml(item)}
       ${renderCentralCalendarSeeEachHtml(cal, item)}
-      <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`;
+      <section class="cc-panel-athletes">${renderPanelAthletesHtml(item, cal, roster)}</section>`}`;
   return panelHost(body, layout);
 }
 
@@ -1602,6 +1716,7 @@ function renderEventQuestionsHtml(item, cal, pendingQuestion, linkPending, today
     feedbackAt: (cal.linkMessage?.family === "question" && cal.linkMessage.panelKey === item.key ? cal.linkMessage.at : null)
       || (pendingQuestion ? { kind: pendingQuestion.kind || "", questionId: pendingQuestion.questionId || "" } : null),
     ...questionChannelsOf(item, cal),
+    inSection: true,
   });
 }
 

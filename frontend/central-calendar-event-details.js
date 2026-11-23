@@ -309,20 +309,23 @@ export function centralCalendarValueText(field) {
 }
 
 // The manager's details (T7): read once when the panel opens (`view` is the
-// panel's event read: { key, loading, error, event }).
-export function renderCentralCalendarEventDetailsHtml(item, view) {
-  if (item.kind !== "event" || item.canManage !== true || !item.details || item.details.selected < 1) return "";
-  if (!view || view.key !== item.key || view.loading) return `<div class="cc-panel-details"><h4 class="cc-panel-subtitle">Details</h4><p class="cc-panel-note" role="status">Loading the details…</p></div>`;
+// panel's event read: { key, loading, error, event }). The event panel shows
+// them in its collapsible Details section: `centralCalendarEventDetailsParts`
+// gives that section its count ("1/3") and its body.
+export function centralCalendarEventDetailsParts(item, view) {
+  if (item.kind !== "event" || item.canManage !== true || !item.details || item.details.selected < 1) return null;
+  if (!view || view.key !== item.key || view.loading) return { state: "loading", count: "", missing: 0, body: `<div class="cc-panel-details"><p class="cc-panel-note" role="status">Loading the details…</p></div>` };
   if (view.error || !view.event) {
-    return `<div class="cc-panel-details"><h4 class="cc-panel-subtitle">Details</h4><p class="cc-panel-note" role="alert">${escapeHtml(view.error || "The details could not be read.")}</p>
-      ${view.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-details-retry">Try again</button>`}</div>`;
+    return { state: "error", count: "", missing: 0, body: `<div class="cc-panel-details"><p class="cc-panel-note" role="alert">${escapeHtml(view.error || "The details could not be read.")}</p>
+      ${view.retry === false ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-details-retry">Try again</button>`}</div>` };
   }
   const fields = view.event.fields || [];
-  if (!fields.length) return "";
+  if (!fields.length) return null;
   const filled = fields.filter((field) => centralCalendarValueText(field)).length;
   const missingRequired = fields.filter((field) => field.required && !field.archived && !centralCalendarValueText(field)).length;
-  return `<div class="cc-panel-details">
-      <h4 class="cc-panel-subtitle">Details</h4>
+  return {
+    state: "ok", count: `${filled}/${fields.length}`, missing: missingRequired,
+    body: `<div class="cc-panel-details">
       <p class="cc-panel-note">${escapeHtml(`${filled} of ${fields.length} filled in${missingRequired ? ` · ${missingRequired} required ${missingRequired === 1 ? "detail is" : "details are"} still empty` : ""}.`)}</p>
       <dl class="cc-detail-values">
         ${fields.map((field) => {
@@ -331,7 +334,8 @@ export function renderCentralCalendarEventDetailsHtml(item, view) {
         }).join("")}
       </dl>
       ${item.cancelled ? "" : `<button type="button" class="plain-button cc-panel-button" data-action="central-calendar-enter-details" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}">Enter details</button>`}
-    </div>`;
+    </div>`,
+  };
 }
 
 // ---------------------------------------------------------------------------
