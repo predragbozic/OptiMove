@@ -881,7 +881,9 @@ export async function copyRole(ctx, roleIdRaw, body) {
       const items = [];
       for (const w of src.items) {
         if (PERMISSIONS[w].systemRoleOnly) dropped.push({ word: w, reason: "system_role_only" });
-        else if (!HONOURED.has(w)) dropped.push({ word: w, reason: "not_honoured" });
+        // R4 (O6): a storable word no route checks yet is not copied (the copy is a new role; R2's rule that a role
+        // holds only checked words stays); the answer names it as "not available yet".
+        else if (!HONOURED.has(w)) dropped.push({ word: w, reason: STORABLE.has(w) ? "not_available_yet" : "not_honoured" });
         else if (basis !== "platform_admin" && !(await holdsSql(client, ctx.userId, w, clubId))) dropped.push({ word: w, reason: "not_held" });
         else items.push(w);
       }
