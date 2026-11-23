@@ -86,7 +86,7 @@ export function scrollUndoIntoView() {
 export async function openUndo(candidateId, render, { teamId = g().teamId, origin = "imports", admin = undoAdminViewer(), activityId = null, label = "", day = "", afterSettled = null } = {}) {
   const gx = g();
   if (undoBusy(gx) || !candidateId || !teamId) return;
-  const undo = { id: candidateId, teamId, origin, admin, activityId, label, day, afterSettled, generation: origin === "imports" ? gx.generation : null, step: "previewing", preview: null, error: null, reason: "", requestKey: null, result: null, checks: 0, laterConfirmed: false, body: null };
+  const undo = { id: candidateId, teamId, origin, admin, activityId, label, day, afterSettled, generation: origin === "imports" ? gx.generation : null, step: "previewing", preview: null, error: null, reason: "", requestKey: null, result: null, checks: 0, laterConfirmed: false, manualConfirmed: false, body: null };
   gx.undo = undo;
   render();
   try {
@@ -128,6 +128,10 @@ export function handleUndoReasonInput(target, gx = g()) {
     if (gx.undo?.step === "ready") gx.undo.laterConfirmed = target.checked === true;
     return true;
   }
+  if (target?.matches?.("[data-gpexe-undo-manual-confirm]")) {
+    if (gx.undo?.step === "ready") gx.undo.manualConfirmed = target.checked === true;
+    return true;
+  }
   if (!target?.matches?.("[data-gpexe-undo-reason]")) return false;
   if (gx.undo?.step === "ready") gx.undo.reason = String(target.value ?? "");
   return true;
@@ -147,6 +151,19 @@ export function laterChangeCount(later) {
   if (Number.isInteger(later.changes) && later.changes >= 0) return later.changes;
   const sessionActs = (Array.isArray(later.list) ? later.list : []).filter((i) => !i?.athleteId).length;
   return (Number(later.decisions) || 0) + sessionActs;
+}
+
+// v87 (ST-4): values coaches entered or corrected in the Roster tab. They are removed only with their own tick, which sends
+// the fingerprint of exactly the listed values.
+export function manualToRemove(undo) {
+  const manual = undo?.preview?.manualValues;
+  return manual && Number(manual.count) > 0 && typeof manual.fingerprint === "string" ? manual : null;
+}
+
+export function undoManualProblem(undo, confirmed) {
+  if (!manualToRemove(undo)) return "";
+  if (confirmed !== true) return "Tick \"Remove these values too\" to continue. Nothing was removed.";
+  return "";
 }
 
 // Checked before the question: later changes are never removed without their own tick.
@@ -194,6 +211,17 @@ async function settle(undo, body, render) {
       undo.refusalNote = Number(info.data.rosterWork.laterWork?.total) > 0 ? "" : "The session's attendance changed since you opened this. Check what is removed below, then delete again.";
       undo.rereadPreview = true;
       undo.step = "ready";
+    } else if (isDefiniteRefusal(info) && (info.code === "manual_values_changed" || info.code === "manual_values_need_confirmation") && info.data?.manualValues) {
+      // Nothing was removed: the manual values changed since the preview. Show them as they are now and ask again.
+      undo.requestKey = null;
+      undo.preview = { ...undo.preview, manualValues: info.data.manualValues, needsManualConfirmation: Number(info.data.manualValues.count) > 0 };
+      undo.manualConfirmed = false;
+      undo.manualNote = Number(info.data.manualValues.count) > 0
+        ? "Values in this session changed since you opened this. Nothing was removed. The list below now shows the current values; tick the box again to remove them too."
+        : "";
+      undo.refusalNote = Number(info.data.manualValues.count) > 0 ? "" : "The session's values changed since you opened this. Check what is removed below, then delete again.";
+      undo.rereadPreview = true;
+      undo.step = "ready";
     } else if (isDefiniteRefusal(info) && info.code === "try_again") {
       // Nothing was removed and nothing is lost: back to the question with the reason kept.
       undo.requestKey = null;
@@ -235,9 +263,11 @@ async function rereadPreview(undo) {
     const { undoPreview } = await api(candidatePath(undo.teamId, undo.id, "/undo-preview"), bounded({}));
     if (current(undo) && undo.step === "ready" && undoPreview) {
       const before = undo.preview?.rosterWork?.laterWork?.fingerprint ?? null;
+      const manualBefore = undo.preview?.manualValues?.fingerprint ?? null;
       undo.preview = undoPreview;
       // A list that moved again is a new list: the tick never carries over.
       if ((undoPreview.rosterWork?.laterWork?.fingerprint ?? null) !== before) undo.laterConfirmed = false;
+      if ((undoPreview.manualValues?.fingerprint ?? null) !== manualBefore) undo.manualConfirmed = false;
     }
   } catch {
     // The refusal's own scope stays shown; the server compares the list again on the next attempt.
@@ -257,35 +287,43 @@ async function refreshReviewedCandidate(undo) {
 }
 
 // The explicit undo. The key is chosen once for this attempt and reused by Check result.
-export async function sendUndo(reason, render, { laterConfirmed = undefined } = {}) {
+export async function sendUndo(reason, render, { laterConfirmed = undefined, manualConfirmed = undefined } = {}) {
   const gx = g();
   const undo = gx.undo;
   if (!undo || undo.step !== "ready" || !undo.preview?.eventId) return false;
   if (laterConfirmed !== undefined) undo.laterConfirmed = laterConfirmed === true;
+  if (manualConfirmed !== undefined) undo.manualConfirmed = manualConfirmed === true;
   const reasonProblem = undoReasonProblem(reason);
   const laterProblem = undoLaterProblem(undo, undo.laterConfirmed);
-  const problem = reasonProblem || laterProblem;
+  const manualProblem = undoManualProblem(undo, undo.manualConfirmed);
+  const problem = reasonProblem || laterProblem || manualProblem;
   if (problem) {
-    // Each problem in its own place: the reason's under the field, the tick's under the checkbox.
+    // Each problem in its own place: the reason's under the field, each tick's under its checkbox.
     undo.reasonProblem = reasonProblem;
     undo.laterProblem = reasonProblem ? "" : laterProblem;
+    undo.manualProblem = reasonProblem ? "" : manualProblem;
     render();
     return false;
   }
   undo.reasonProblem = "";
   undo.laterProblem = "";
+  undo.manualProblem = "";
   undo.refusalNote = "";
   undo.laterNote = "";
+  undo.manualNote = "";
   undo.reason = normalizeUndoReason(reason);
   undo.requestKey = undo.requestKey || globalThis.crypto.randomUUID();
   undo.step = "sending";
   undo.error = null;
   const later = laterRosterWork(undo);
+  const manual = manualToRemove(undo);
   // The body is kept as sent: Check result repeats exactly this request.
   undo.body = {
     requestKey: undo.requestKey, reason: undo.reason, expected: { eventId: undo.preview.eventId },
     // Sending the fingerprint is the confirmation of exactly the listed later changes.
     ...(later ? { laterRosterFingerprint: later.fingerprint } : {}),
+    // The same for the listed manual values (v87).
+    ...(manual ? { manualValuesFingerprint: manual.fingerprint } : {}),
   };
   render();
   await settle(undo, undo.body, render);

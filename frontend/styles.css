@@ -14636,6 +14636,43 @@ button.tests-assignment-card {
   width: 7em;
 }
 
+/* ST-4: manual values on the roster - one labelled field per variable. */
+.tl-manual-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 11em), 1fr));
+  gap: 10px 12px;
+  margin: 8px 0;
+}
+
+.tl-manual-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tl-manual-field label {
+  overflow-wrap: anywhere;
+}
+
+.tl-manual-field input {
+  min-height: 44px;
+  font-size: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tl-manual-field.is-fixed {
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The restore question inside the panel: the panel's own padding, no second margin. */
+.tl-estimate-panel .tl-roster-confirm {
+  margin: 0;
+}
+
 .tl-estimate-inline select {
   min-width: 0;
   flex: 1 1 12em;
@@ -17475,6 +17512,57 @@ body:not(.athlete-mode):not(.login-mode) .gpexe-undo .gpexe-button.gpexe-danger 
   height: 22px;
   flex: none;
 }
+/* ST-4: the values entered on the roster, kept unless "Use GPEXE's values" is ticked. */
+.gpexe-manual-choice {
+  margin: 0 0 12px;
+}
+.gpexe-manual-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.gpexe-manual-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  overflow-wrap: anywhere;
+}
+.gpexe-manual-use {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.gpexe-manual-use input {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  accent-color: var(--accent);
+  /* The pinned import bar of a phone must not cover a box focused after a tick (the J20-C select's margin). */
+  scroll-margin-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
+}
+.gpexe-manual-kept {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.gpexe-manual-summary p {
+  margin: 0;
+}
+.gpexe-manual-summary .gpexe-manual-jump {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .gpexe-accept {
   display: flex;
   align-items: flex-start;
