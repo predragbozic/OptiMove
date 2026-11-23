@@ -22,7 +22,8 @@ const ROOT = path.resolve(__dirname, "../..");
 const MIGRATIONS = path.join(ROOT, "migrations_v2");
 const V81 = "202611191000_calendar_v81_athlete_questions.sql";
 const V81_SHA256 = (await import("node:crypto")).createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V81))).digest("hex");
-const BEFORE = calendarMigrations().filter((x) => x !== V81);
+// The world before v81: no later calendar migration either (v93 reads v81's tables, so it never exists without it).
+const BEFORE = calendarMigrations().filter((x) => x !== V81 && !(x > V81 && /_calendar_/.test(x)));
 const MD5 = {
   materializeBefore: "2d961f5acd6c6309baa51de868773ba4",
   materializeAfter: "ef7e1093ca427ba0bf2f2bab120ba14f",

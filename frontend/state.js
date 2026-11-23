@@ -169,6 +169,8 @@ export const emptyCentralCalendarState = () => ({
   linkWrite: null,
   linkMessage: null,
   linkRefused: new Map(),
+  // v93: the open Delete step of an event panel ({ eventKey, revision }), null when none.
+  deleteStep: null,
   alignStep: null,
   alignBlocked: null,
   // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,

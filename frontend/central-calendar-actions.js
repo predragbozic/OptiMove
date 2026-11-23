@@ -87,6 +87,8 @@ import {
   setCentralCalendarQuestionWindow,
 } from "./central-calendar-event-form.js";
 import {
+  centralCalendarDeleteEventDone,
+  centralCalendarDeleteRefusedKey,
   centralCalendarEventLinkable,
   centralCalendarLinkCheckSettles,
   centralCalendarLinkDoneText,
@@ -97,7 +99,7 @@ import {
   centralCalendarRefusedPairKey,
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
-import { centralCalendarDisplayedDays, centralCalendarTitle } from "./central-calendar-view.js";
+import { centralCalendarDeleteOffered, centralCalendarDisplayedDays, centralCalendarTitle } from "./central-calendar-view.js";
 
 // Central calendar (K1b, K2a-2) - every data-action="central-calendar-*" of
 // the screen (docs/ai/central-calendar-k1b-plan.md,
@@ -675,6 +677,7 @@ export function restoreCentralCalendarPlace(place) {
 // Later move no revision, so an old read is never trusted).
 function resetPanelReads(cal) {
   cal.panelEvent = null;
+  cal.deleteStep = null;
   cal.k3 = null;
   cal.linkMessage = null;
   cal.alignStep = null;
@@ -1688,7 +1691,13 @@ function linkSpecOf(cal, dataset) {
   let name = "";
   let pairKey = "";
   const fields = {};
-  if (act === "link-to-event") {
+  if (act === "delete-event") {
+    // v93: only from its open step, on the event as it is now.
+    if (!centralCalendarDeleteOffered(panelItem, cal) || !cal.deleteStep || cal.deleteStep.eventKey !== panelItem.key
+      || cal.deleteStep.revision !== panelItem.revision) return null;
+    name = centralCalendarTitle(panelItem);
+    pairKey = centralCalendarDeleteRefusedKey(panelItem.eventId);
+  } else if (act === "link-to-event") {
     if (panelItem.kind !== "planned") return null;
     event = findItemOnDay(cal, dataset.eventKey, panelItem.date);
     if (!centralCalendarEventLinkable(event)) return null;
@@ -1901,6 +1910,16 @@ async function rereadForLinks(cal, render, { panelKey, panelDate }) {
 }
 
 async function linkSettled(cal, spec, data, render) {
+  if (spec.act === "delete-event") {
+    // v93: the event is gone; the calendar is read again and the panel closes (its card is no longer there).
+    cal.deleteStep = null;
+    if (!(await rereadForLinks(cal, render, {}))) return;
+    if (cal.panel.open && cal.panel.key === spec.panelKey) cal.panel = closedPanel();
+    cal.linkMessage = null;
+    cal.notice = centralCalendarDeleteEventDone(spec.eventTitle);
+    render?.();
+    return;
+  }
   const fromPlanned = spec.act === "link-to-event";
   const stayed = cal.panel.open && cal.panel.key === spec.panelKey;
   const target = stayed ? (fromPlanned ? { panelKey: spec.eventKey, panelDate: spec.date } : { panelKey: spec.panelKey, panelDate: cal.panel.date }) : {};
@@ -1933,6 +1952,7 @@ async function linkRefused(cal, spec, info, render) {
     return;
   }
   cal.alignStep = null;
+  if (spec.act === "delete-event") cal.deleteStep = null;
   if (centralCalendarLinkRefusalRemembered(info) && spec.pairKey) cal.linkRefused.set(spec.pairKey, { code: info.code, revision: spec.body.expectedRevision });
   const text = centralCalendarLinkRefusalText(info);
   if (centralCalendarLinkRefusalRereads(info)) {
@@ -2422,6 +2442,21 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   // --- Links (K2c-1) ---
   if (type === "central-calendar-link") {
     await startLinkWrite(cal, action.dataset || {}, render);
+    return true;
+  }
+  // v93: Delete's first press opens its step (nothing sent); Keep closes it.
+  if (type === "central-calendar-delete-open") {
+    const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
+    if (!item || cal.form || cal.questionStep || cal.alignStep || linkLockedFor(cal, item) || !centralCalendarDeleteOffered(item, cal)) return true;
+    cal.deleteStep = { eventKey: item.key, revision: item.revision };
+    cal.linkMessage = null;
+    render?.();
+    globalThis.document?.querySelector?.('.cc-panel-delete [data-act="delete-event"]')?.focus?.({ preventScroll: false });
+    return true;
+  }
+  if (type === "central-calendar-delete-keep") {
+    if (!cal.linkWrite) cal.deleteStep = null;
+    render?.();
     return true;
   }
   if (type === "central-calendar-question") {

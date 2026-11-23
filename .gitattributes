@@ -84,3 +84,7 @@ backend/scripts/athlete-positions-v87-rehearsal.sh text eol=lf
 # ST-4 (v88): the rollback restores three bodies and compares them by md5; the rehearsal runs the runbook SQL as written.
 docs/runbooks/manual-values-v88*.sql text eol=lf
 backend/scripts/manual-values-v88-rehearsal.sh text eol=lf
+# Calendar v93: the rollback restores v49's two bodies and compares them by md5; the rehearsal runs the runbook SQL as written.
+docs/runbooks/calendar-event-delete-v93*.sql text eol=lf
+migrations_v2/202611251000_calendar_v93_event_delete.sql text eol=lf
+backend/scripts/calendar-event-delete-v93-rehearsal.sh text eol=lf

@@ -50,7 +50,8 @@ export function hashOf(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-const REQUESTS_TABLES = new Set(["calendar.event_requests", "calendar.settings_requests"]);
+// v93: an event's delete keeps its request record in the deletion log (the event's own request rows go with it).
+const REQUESTS_TABLES = new Set(["calendar.event_requests", "calendar.settings_requests", "calendar.event_deletion_log"]);
 
 // spec:
 //   userId, requestKey, operation, label (for the log)

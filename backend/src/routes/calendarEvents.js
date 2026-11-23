@@ -7,7 +7,7 @@
 // codes only — a database message is logged, never sent.
 import { Router } from "express";
 import {
-  alignSessions, askQuestion, attachActivity, attachSessions, cancelEvent, createEvent, detachActivity, detachSessions, getEvent, moveQuestion,
+  alignSessions, askQuestion, attachActivity, attachSessions, cancelEvent, createEvent, deleteEvent, detachActivity, detachSessions, getEvent, moveQuestion,
   removeQuestion, setEventFields, updateEvent,
 } from "../calendarEventService.js";
 import { getEventQuestions } from "../calendarQuestionService.js";
@@ -52,6 +52,8 @@ const command = (run) => calendarCommand(run);
 router.post("/", command((ctx, req) => createEvent(ctx, req.body)));
 router.patch("/:eventId", command((ctx, req) => updateEvent(ctx, req.params.eventId, req.body)));
 router.post("/:eventId/cancel", command((ctx, req) => cancelEvent(ctx, req.params.eventId, req.body)));
+// v93: delete an event that holds nothing (the cancel right; calendarEventService.js deleteEvent).
+router.post("/:eventId/delete", command((ctx, req) => deleteEvent(ctx, req.params.eventId, req.body)));
 // K2a-1b: the links of an event (plan sections 2 and 3.2), each a command
 // with its requestKey, expectedRevision and audit like the three above.
 router.post("/:eventId/sessions", command((ctx, req) => attachSessions(ctx, req.params.eventId, req.body)));
