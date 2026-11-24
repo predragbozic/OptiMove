@@ -836,7 +836,7 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   `roles-r4-checked-gates.test.mjs`, `roles-layers-v92-rehearsal-guards.test.mjs`; the rehearsal
   (`backend/scripts/roles-layers-v92-rehearsal.mjs`) passed on PostgreSQL 16; PostgreSQL 17 is the owner's run.
 
-## 17. As built: R4-3 (no migration)
+## 17. As built: R4-3 (no migration of its own; on v95)
 
 `backend/src/permissionLayersService.js` (the routes of section 9, mounted in `routes/permissionRoles.js`), written through
 R2's one write runner (`permissionRolesService.js`: requestKey replay with the standing evaluated again, the bounded COMMIT
@@ -877,15 +877,17 @@ verified by the request record; the record now carries `ceiling_change_id`, `clu
 - **Codes added:** `closed_by_club_ceiling`, `admin_not_narrowable`, `custom_exists`, `custom_changed`, `version_changed`
   (also the `23505` of the live keys), `question_outdated`, `club_admin_would_lack` (also for the in-club rule-7 trigger),
   `module_not_closable`, `ceiling_unchanged`, `holding_ambiguous`, `self_custom`.
-- **Known limit, raised with the *Rukovodilac* of OptiMove (decision pending):** v92's dominance checks (the version and
-  custom item guards and their COMMIT checks) ask `user_has_permission` for every item, and that answer applies the
-  ceiling. So once a club's licence closes a module whose words its roles carry (the seeded view words sit in Team coach
-  and Club admin), that club's admin can make or change no club version or custom role that carries one; R4-3 answers
-  `409 closed_by_club_ceiling` naming the words (never a 500). A platform admin is not limited. Lifting it is a
-  migration (the four checks skip words of closed modules, as rule 7 does).
+- **Built on v95** (`docs/runbooks/roles-closed-module-dominance-v95.md`, PR #755; the *Rukovodilac*'s decision (A)):
+  v92's dominance checks applied the ceiling, so a club's admin could change no club version or custom role once the
+  licence closed a module its roles carry. v95's `permission_actor_holds_in_club` counts a word of a closed module when
+  the admin would hold it the moment the module opens; R4-3's pre-checks ask the same function (test 11: Calendar closed,
+  the club admin's version and custom go through). Adding a word of a closed module stays refused
+  (`409 closed_by_club_ceiling`), for a platform admin too. R2's assignment dominance (`user_holds_role_items`) still
+  applies the ceiling (recorded in v95's runbook).
 - **Evidence:** `backend/tests/roles-r4-3-api.test.mjs` (the real routes: ceiling, versions with Q3 / H1 / rule 7 / the
   ceiling, the O3 question, customs with liveness through the real revoke / re-grant routes, R2 assignment revoked and
   given again, O5, Q14, Q15, the races of 7.6 route against route - ceiling vs a guarded write, version vs custom, two
   versions, ceiling vs club archive both orders, custom vs revocation, default vs version (H4) - the recorded lock order,
-  the uncertain COMMIT both ways, the replay re-evaluating standing); `roles-r4-api.test.mjs` test 5 now proves
+  the uncertain COMMIT both ways, the replay re-evaluating standing inside its transaction, drift leaving dead customs out,
+  `default_follow` skipping a club with its own version of the role, v95 end to end); `roles-r4-api.test.mjs` test 5 now proves
   `default_follow` and N4 through the route.
