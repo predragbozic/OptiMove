@@ -155,6 +155,8 @@ export const emptyCentralCalendarState = () => ({
   // { key, loading, error, event }) for its details and their values.
   eventCatalog: null,
   panelEvent: null,
+  // The event panel's memory of its opened sections and its one open "⋯" menu ({ key, sections, menu }).
+  panelView: null,
   form: null,
   // K2c-1 (docs/ai/central-calendar-k2c-plan.md 1.1): the link command in
   // flight ({ act, eventId, panelKey, requestKey, … }, null when none; a
@@ -171,6 +173,8 @@ export const emptyCentralCalendarState = () => ({
   linkRefused: new Map(),
   // K5-3: the lone cards whose "Add to the event?" the coach answered with Leave (their keys; in memory only).
   addToEventLeft: new Set(),
+  // v93: the open Delete step of an event panel ({ eventKey, revision }), null when none.
+  deleteStep: null,
   alignStep: null,
   alignBlocked: null,
   // K2b-2a-2b: the open panel's questions ({ key, eventId, revision, loading,

@@ -36,9 +36,14 @@ const calendarState = (overrides = {}) => ({
 test("1. the entry: the tab, and on the central calendar its view, week, day and open panel by key", () => {
   assert.deepEqual(history.appHistoryEntryOf({ activeTab: "central-calendar", centralCalendar: calendarState() }), {
     tab: "central-calendar",
-    calendar: { view: "week", anchor: "2026-11-18", selectedDate: "2026-11-19", panelKey: "event:e1", panelDate: "2026-11-19" },
+    calendar: { view: "week", anchor: "2026-11-18", selectedDate: "2026-11-19", panelKey: "event:e1", panelDate: "2026-11-19", panelSections: null },
     athleteCalendar: null,
   });
+  // The event panel's opened sections travel with the place (the redesign of 2026-11-23); never another panel's.
+  const opened = calendarState({ panelView: { key: "event:e1", sections: { athletes: true, trainings: false }, menu: "session:x" } });
+  assert.deepEqual(history.appHistoryEntryOf({ activeTab: "central-calendar", centralCalendar: opened }).calendar.panelSections, { athletes: true, trainings: false });
+  const other = calendarState({ panelView: { key: "event:e2", sections: { athletes: true }, menu: "" } });
+  assert.equal(history.appHistoryEntryOf({ activeTab: "central-calendar", centralCalendar: other }).calendar.panelSections, null);
   const closed = calendarState({ panel: { open: false, key: "event:e1", date: "2026-11-19" } });
   assert.equal(history.appHistoryEntryOf({ activeTab: "central-calendar", centralCalendar: closed }).calendar.panelKey, "");
   assert.deepEqual(history.appHistoryEntryOf({ activeTab: "builder", centralCalendar: calendarState() }), { tab: "builder", calendar: null, athleteCalendar: null });

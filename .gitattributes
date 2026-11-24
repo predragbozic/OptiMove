@@ -96,3 +96,7 @@ migrations_v2/202611261000_training_load_v94_chart_shapes.sql text eol=lf
 docs/runbooks/dashboard-chart-shapes-v94*.sql text eol=lf
 backend/scripts/dashboard-chart-shapes-v94-rehearsal.sh text eol=lf
 backend/scripts/dashboard-chart-shapes-v94-rehearsal.ps1 text eol=lf
+# Calendar v93: the rollback restores v49's two bodies and compares them by md5; the rehearsal runs the runbook SQL as written.
+docs/runbooks/calendar-event-delete-v93*.sql text eol=lf
+migrations_v2/202611251000_calendar_v93_event_delete.sql text eol=lf
+backend/scripts/calendar-event-delete-v93-rehearsal.sh text eol=lf

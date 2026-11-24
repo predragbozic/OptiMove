@@ -89,6 +89,8 @@ import {
 import {
   centralCalendarAddToEventDone,
   centralCalendarAddToEventOffers,
+  centralCalendarDeleteEventDone,
+  centralCalendarDeleteRefusedKey,
   centralCalendarEventLinkable,
   centralCalendarLinkCheckSettles,
   centralCalendarLinkDoneText,
@@ -99,7 +101,7 @@ import {
   centralCalendarRefusedPairKey,
   centralCalendarSessionLinkGroups,
 } from "./central-calendar-links.js";
-import { centralCalendarDisplayedDays, centralCalendarTitle } from "./central-calendar-view.js";
+import { centralCalendarDeleteOffered, centralCalendarDisplayedDays, centralCalendarTitle } from "./central-calendar-view.js";
 
 // Central calendar (K1b, K2a-2) - every data-action="central-calendar-*" of
 // the screen (docs/ai/central-calendar-k1b-plan.md,
@@ -267,6 +269,19 @@ export function closeCentralCalendarPanel(render) {
     render?.();
     if (render) focusQuestionControl(".cc-question-button");
     return true;
+  }
+  // The event panel's open "⋯" menu or form chooser closes first, its button keeps the focus (the panel stays).
+  // A menu whose row left the screen (its section folded, its training unlinked) is forgotten and Escape goes on.
+  if (cal.panelView?.menu && cal.panelView.key === cal.panel.key) {
+    const menu = cal.panelView.menu;
+    cal.panelView = { ...cal.panelView, menu: "" };
+    const doc = globalThis.document;
+    const drawn = doc?.querySelector?.(`.cc-panel [data-action="central-calendar-row-menu"][data-key="${cssValue(menu)}"][aria-expanded="true"]`);
+    if (drawn) {
+      render?.();
+      if (render) doc.querySelector(`.cc-panel [data-action="central-calendar-row-menu"][data-key="${cssValue(menu)}"]`)?.focus?.({ preventScroll: true });
+      return true;
+    }
   }
   // K3: an open "Plan the training" sheet closes first (the panel stays).
   if (cal.k3?.sheet && !cal.k3.busy) {
@@ -664,6 +679,11 @@ export function restoreCentralCalendarPlace(place) {
         resetPanelReads(cal);
         cal.panel = { ...closedPanel(), open: true, key: place.panelKey, date: place.panelDate };
       }
+      // The sections the coach had opened or closed come back as they were (never an open "⋯" menu).
+      if (place.panelSections && typeof place.panelSections === "object") {
+        const sections = Object.fromEntries(Object.entries(place.panelSections).filter(([, open]) => typeof open === "boolean"));
+        cal.panelView = { key: place.panelKey, sections, menu: "" };
+      }
     } else if (cal.panel.open) {
       resetPanelReads(cal);
       cal.panel = closedPanel();
@@ -676,7 +696,9 @@ export function restoreCentralCalendarPlace(place) {
 // link and question lines and steps, and its questions read (answers and
 // Later move no revision, so an old read is never trusted).
 function resetPanelReads(cal) {
+  cal.panelView = null;
   cal.panelEvent = null;
+  cal.deleteStep = null;
   cal.k3 = null;
   cal.linkMessage = null;
   cal.alignStep = null;
@@ -1690,7 +1712,13 @@ function linkSpecOf(cal, dataset) {
   let name = "";
   let pairKey = "";
   const fields = {};
-  if (act === "add-activity" || act === "add-rpe") {
+  if (act === "delete-event") {
+    // v93: only from its open step, on the event as it is now.
+    if (!centralCalendarDeleteOffered(panelItem, cal) || !cal.deleteStep || cal.deleteStep.eventKey !== panelItem.key
+      || cal.deleteStep.revision !== panelItem.revision) return null;
+    name = centralCalendarTitle(panelItem);
+    pairKey = centralCalendarDeleteRefusedKey(panelItem.eventId);
+  } else if (act === "add-activity" || act === "add-rpe") {
     // K5-3: only an offer the panel shows now (the rule over the loaded answer, a refused pair excluded).
     const offer = centralCalendarAddToEventOffers(cal.data, panelItem, cal.linkRefused).find((entry) => entry.item.key === dataset.eventKey && !entry.refused);
     if (!offer || (act === "add-activity") !== (panelItem.kind === "activity")) return null;
@@ -1913,6 +1941,16 @@ async function rereadForLinks(cal, render, { panelKey, panelDate }) {
 }
 
 async function linkSettled(cal, spec, data, render) {
+  if (spec.act === "delete-event") {
+    // v93: the event is gone; the calendar is read again and the panel closes (its card is no longer there).
+    cal.deleteStep = null;
+    if (!(await rereadForLinks(cal, render, {}))) return;
+    if (cal.panel.open && cal.panel.key === spec.panelKey) cal.panel = closedPanel();
+    cal.linkMessage = null;
+    cal.notice = centralCalendarDeleteEventDone(spec.eventTitle);
+    render?.();
+    return;
+  }
   const fromPlanned = spec.act === "link-to-event";
   // K5-3: an added activity or RPE request folds into the event, so the panel moves there too.
   const added = spec.act === "add-activity" || spec.act === "add-rpe";
@@ -1948,6 +1986,7 @@ async function linkRefused(cal, spec, info, render) {
     return;
   }
   cal.alignStep = null;
+  if (spec.act === "delete-event") cal.deleteStep = null;
   if (centralCalendarLinkRefusalRemembered(info) && spec.pairKey) cal.linkRefused.set(spec.pairKey, { code: info.code, revision: spec.body.expectedRevision });
   const text = centralCalendarLinkRefusalText(info);
   if (centralCalendarLinkRefusalRereads(info)) {
@@ -2436,7 +2475,28 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
   // --- Events (K2a-2) ---
   // --- Links (K2c-1) ---
   if (type === "central-calendar-link") {
+    // The event panel's section the coach acts in stays open after the answer (its last offer gone, its Align done).
+    const section = { "link-session": "trainings", "unlink-sessions": "trainings", align: "trainings", "align-confirm": "trainings", "align-results": "trainings", "link-activity": "activities", "unlink-activity": "activities" }[action.dataset?.act || ""];
+    if (section && cal.panel.open) {
+      const view = cal.panelView && cal.panelView.key === cal.panel.key ? cal.panelView : { key: cal.panel.key, sections: {}, menu: "" };
+      cal.panelView = { ...view, sections: { ...view.sections, [section]: true } };
+    }
     await startLinkWrite(cal, action.dataset || {}, render);
+    return true;
+  }
+  // v93: Delete's first press opens its step (nothing sent); Keep closes it.
+  if (type === "central-calendar-delete-open") {
+    const item = findItemOnDay(cal, action.dataset.key, action.dataset.date);
+    if (!item || cal.form || cal.questionStep || cal.alignStep || linkLockedFor(cal, item) || !centralCalendarDeleteOffered(item, cal)) return true;
+    cal.deleteStep = { eventKey: item.key, revision: item.revision };
+    cal.linkMessage = null;
+    render?.();
+    globalThis.document?.querySelector?.('.cc-panel-delete [data-act="delete-event"]')?.focus?.({ preventScroll: false });
+    return true;
+  }
+  if (type === "central-calendar-delete-keep") {
+    if (!cal.linkWrite) cal.deleteStep = null;
+    render?.();
     return true;
   }
   // K5-3: [Leave] - this card is not offered again until the page is loaded again (in memory only, nothing sent).
@@ -2626,6 +2686,31 @@ export async function handleCentralCalendarAction(action, { render, openWeeklyPl
     // PR2: an athlete's row in the open panel opens the plan with the athletes of THAT item on that day in the switcher.
     const panelItem = action.dataset.athleteList === "panel" && cal.panel.open ? findItemOnDay(cal, cal.panel.key, cal.panel.date) : null;
     await openWeeklyPlanForAthleteOnDate?.(rosterAthleteId, date, { flow: panelItem ? weeklyFlowFromPanel(athleteUuid, panelItem) : weeklyFlowFromCalendar(athleteUuid) });
+    return true;
+  }
+  // The event panel's layout (2026-11-23): a section's header opens or closes it; a chip of the "In this event" row
+  // opens its section and brings it into view; "⋯" (and See each athlete's form chooser) opens one small menu at a
+  // time. Nothing is sent: only what this panel shows changes.
+  if (type === "central-calendar-panel-section" || type === "central-calendar-panel-reveal" || type === "central-calendar-row-menu") {
+    if (!cal.panel.open || cal.form) return true;
+    const id = String(action.dataset.key || "");
+    if (!id) return true;
+    const view = cal.panelView && cal.panelView.key === cal.panel.key ? cal.panelView : { key: cal.panel.key, sections: {}, menu: "" };
+    if (type === "central-calendar-row-menu") {
+      cal.panelView = { ...view, menu: view.menu === id ? "" : id };
+      render?.();
+      return true;
+    }
+    const open = type === "central-calendar-panel-reveal" ? true : action.getAttribute?.("aria-expanded") !== "true";
+    // A section that folds takes its open "⋯" menu with it.
+    const menuGone = !open && String(view.menu || "").startsWith(`${id === "trainings" ? "session" : id === "activities" ? "activity" : id}:`);
+    cal.panelView = { ...view, sections: { ...view.sections, [id]: open }, menu: menuGone ? "" : view.menu };
+    render?.();
+    if (type === "central-calendar-panel-reveal") {
+      const toggle = globalThis.document?.querySelector?.(`.cc-panel [data-action="central-calendar-panel-section"][data-key="${cssValue(id)}"]`);
+      toggle?.focus?.({ preventScroll: true });
+      toggle?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    }
     return true;
   }
   // K6-3: See each athlete / Open the week from an event's panel.

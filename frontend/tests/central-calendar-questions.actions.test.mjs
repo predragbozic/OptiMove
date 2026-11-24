@@ -6,6 +6,7 @@
 // switch is on; GET /events/:id/questions for a manager while it is on, else
 // the identical 404; create and PATCH take `questions: [{ kind, window }]`;
 // the question commands take a requestKey and expectedRevision.
+import { openEveryPanelSection } from "./support/central-calendar-panel-sections.mjs";
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
@@ -128,7 +129,9 @@ function server({ enabled = true, event = eventView(), questions = [], write = n
 }
 
 let rendered = "";
+let unfold = true;
 function render() {
+  if (unfold) openEveryPanelSection(state.centralCalendar);
   rendered = view.renderCentralCalendarHtml(state.centralCalendar, {
     today: TODAY, layout: "wide", roster: centralCalendarRosterIndex(), canCreate: centralCalendarCanCreateEvents(), eventRoster: centralCalendarEventRoster(),
     uncertainWrites: centralCalendarUncertainWrites(),
@@ -719,7 +722,7 @@ test("P11. RPE with linked trainings: no Ask RPE, its line; the RPE gap names As
   resetCentralCalendarForWorkspaceChange();
   await openQuestionsPanel({ items: [eventItem(E_MATCH, DAY(1), { expects: ["rpe"], gaps: ["rpe"] })] });
   doc = dom();
-  assert.equal(doc.querySelector(".cc-panel-gap").textContent, "RPE is expected, but nothing attached to this event asks the athletes for it yet. Use Ask RPE below.");
+  assert.equal(doc.querySelector(".cc-panel-gap").textContent, "RPE is expected, but nothing attached to this event asks the athletes for it yet. Use Ask RPE under Questions and RPE.");
 });
 
 test("P12. a revision move reads the questions again; the section's HTML names no id or code", async () => {
@@ -850,7 +853,7 @@ test("B1e. never in the athlete workspace, even for a card that says canManage",
 test("P14. while a question is live, the panel's status line says answers are awaited (never 'Nothing is expected')", async () => {
   await openQuestionsPanel({ questions: [liveQuestion(Q_RPE, "rpe", AFTER())], items: [eventItem(E_MATCH, DAY(1), { status: "none", expects: [] })] });
   const panelText = dom().querySelector(".cc-panel").textContent;
-  assert.match(panelText, /Waiting for athletes' answers: see Questions for athletes\./);
+  assert.match(panelText, /Waiting for athletes' answers: see Questions and RPE\./);
   assert.doesNotMatch(panelText, /Nothing is expected after this event\./);
 });
 
@@ -929,14 +932,14 @@ test("P19. a busy answer after the coach closed the panel: the sentence reaches 
   assert.equal(state.centralCalendar.questionStep, null);
 });
 
-test("P20. the switch off with a question still not confirmed: no 'Use Ask RPE below.' (no Ask RPE is offered)", async () => {
+test("P20. the switch off with a question still not confirmed: no 'Use Ask RPE under Questions and RPE.' (no Ask RPE is offered)", async () => {
   await openQuestionsPanel({ lose: true, items: [eventItem(E_MATCH, DAY(1), { expects: ["rpe"], gaps: ["rpe"] })] });
   await qact("ask-open", { kind: "wellness" });
   await qact("send");
   state.centralCalendar.eventCatalog = { ...state.centralCalendar.eventCatalog, questionsEnabled: false };
   render();
   assert.ok(dom().querySelector('.cc-panel [data-action="central-calendar-link-check"]'), "Check result stays");
-  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/);
+  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE under Questions and RPE/);
 });
 
 test("P21. the button says what its step does: Remove question while unanswered, Stop question once answered", async () => {
@@ -998,7 +1001,7 @@ test("P23. a refused Ask: role alert, beside that kind's Ask; a lost Move: Check
   assert.equal(rowOf(check), "WELLNESS", "the not-confirmed box sits in the row that sent it");
 });
 
-test("P24. 'Use Ask RPE below.' only when the section really offers Ask RPE: not while loading, not after a failed read", async () => {
+test("P24. 'Use Ask RPE under Questions and RPE.' only when the section really offers Ask RPE: not while loading, not after a failed read", async () => {
   const items = [eventItem(E_MATCH, DAY(1), { expects: ["rpe"], gaps: ["rpe"] })];
   let answer = null;
   const responder = panelServer({ items });
@@ -1010,22 +1013,22 @@ test("P24. 'Use Ask RPE below.' only when the section really offers Ask RPE: not
   await tick();
   render();
   assert.equal(state.centralCalendar.panelQuestions?.loading, true, "the read is still loading");
-  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/, "not while loading");
+  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE under Questions and RPE/, "not while loading");
   answer({ status: 503, body: { error: "try_again" } });
   await opening;
   await tick();
-  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/, "not after a failed read");
+  assert.doesNotMatch(dom().querySelector(".cc-panel-gap").textContent, /Use Ask RPE under Questions and RPE/, "not after a failed read");
   assert.equal(dom().querySelector('[data-act="ask-open"][data-kind="rpe"]'), null);
 });
 
-test("P25. the event's own RPE request (no live RPE question owns it): no Ask RPE, its line instead, and no 'Use Ask RPE below.'", async () => {
+test("P25. the event's own RPE request (no live RPE question owns it): no Ask RPE, its line instead, and no 'Use Ask RPE under Questions and RPE.'", async () => {
   const items = [eventItem(E_MATCH, DAY(1), { expects: ["rpe"], gaps: ["rpe"], links: { eventId: E_MATCH, planIds: [], logicalSessionIds: [], activityIds: [], externalScheduleId: "ext-1", testScheduleId: null } })];
   await openQuestionsPanel({ items, event: eventView({ externalScheduleId: "ext-1" }) });
   const doc = dom();
   assert.equal(doc.querySelector('[data-act="ask-open"][data-kind="rpe"]'), null);
   assert.match(section().textContent, /RPE comes from the event's RPE request\./);
   assert.ok(doc.querySelector('[data-act="ask-open"][data-kind="wellness"]'), "WELLNESS can still be asked");
-  assert.doesNotMatch(doc.querySelector(".cc-panel-gap").textContent, /Use Ask RPE below/);
+  assert.doesNotMatch(doc.querySelector(".cc-panel-gap").textContent, /Use Ask RPE under Questions and RPE/);
 });
 
 test("P26. the panel's refusal of a move once answered points to Stop question", async () => {
@@ -1106,5 +1109,35 @@ test("P29b. while a link write is in flight, Escape closes the panel and keeps t
     assert.equal(state.centralCalendar.questionStep, step, "the step is kept");
   } finally {
     state.centralCalendar.linkWrite = null;
+  }
+});
+
+test("P-fold. a question's unconfirmed result and its Check result stay in view even after the coach folded Questions", async () => {
+  unfold = false;
+  try {
+    const calls = await openQuestionsPanel({ lose: true, questions: [liveQuestion(Q_RPE, "rpe", AFTER())] });
+    await act({ action: "central-calendar-panel-reveal", key: "questions" });
+    await qact("remove-open", { questionId: Q_RPE });
+    await qact("send");
+    assert.equal(questionWrites(calls).length, 1);
+    // The coach folds the section: it stays open while the result is not confirmed.
+    const toggle = dom().querySelector('.cc-psec-toggle[data-key="questions"]');
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    await handleCentralCalendarAction(fakeAction({ ...toggle.dataset }, { getAttribute: (name) => toggle.getAttribute(name) }), { render });
+    let doc = dom();
+    assert.equal(doc.querySelector('.cc-psec-toggle[data-key="questions"]').getAttribute("aria-expanded"), "true", "forced open");
+    assert.match(section().textContent, /The result is not confirmed\./);
+    // The screen line's check settles it: its line is in view.
+    const key = section().querySelector('[data-action="central-calendar-link-check"]').dataset.requestKey;
+    await act({ action: "central-calendar-link-check", requestKey: key });
+    doc = dom();
+    assert.ok(doc.querySelector(".cc-panel-questions .cc-link-message"), "the result line is drawn");
+    assert.equal(doc.querySelector('.cc-psec-toggle[data-key="questions"]').getAttribute("aria-expanded"), "true");
+    // Once the line is gone (another act), the coach's fold wins again.
+    state.centralCalendar.linkMessage = null;
+    render();
+    assert.equal(dom().querySelector('.cc-psec-toggle[data-key="questions"]').getAttribute("aria-expanded"), "false");
+  } finally {
+    unfold = true;
   }
 });

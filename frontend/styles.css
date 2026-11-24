@@ -21545,9 +21545,18 @@ body.exercise-header-pinned #viewToolbar {
 .cc-tg-box .cc-card-place,
 .cc-tg-box .cc-card-note,
 .cc-tg-box .cc-card-meta,
-.cc-tg-box .cc-card-span,
-.cc-tg-box .cc-card-marks {
+.cc-tg-box .cc-card-span {
   display: none;
+}
+
+/* H4 (the owner's requirement, K5-2 contract 2.3): what an event holds stays visible in the week and day grids too.
+   The marks come after the title: a box of several lines reads the time, then "Title... marks"; a one-line box (under
+   45 minutes) "10:00 Title... marks", the title cut first; a narrow box (60 px or less) puts them on a line of their
+   own. Where even that does not fit (below) they are dropped; the
+   box's label and tooltip still say "Holds ...". */
+.cc-tg-box .cc-card-marks {
+  flex: none;
+  min-height: 14px;
 }
 
 /* A narrow box (a shared cluster) keeps its colour stripe and time; the icon goes. */
@@ -21585,14 +21594,84 @@ body.exercise-header-pinned #viewToolbar {
   }
 }
 
+/* H4 in a one-line box (under 45 minutes): "10:00 Title... marks". Under 200 px the end time gives its room to the
+   title, and so does the type's icon in a box that holds something (the stripe keeps the colour; review MEDIUM:
+   at 143 px the icon left the title 12 px, without it 36 px). Under 140 px the marks go too (and those of a two-line
+   box, 45 to 59 minutes), so the time and the title keep their lines (label and tooltip say "Holds ..."). */
+@container (max-width: 200px) {
+  .cc-tg-box.is-short .cc-card-when-end {
+    display: none;
+  }
+
+  .cc-tg-box.is-short:has(.cc-card-marks) .cc-card-icon {
+    display: none;
+  }
+}
+
+/* H4: a box of several lines reads the time, then the title with the marks at the end of its line (a 45-minute box
+   holds just these two lines). */
+.cc-tg-box:not(.is-short) .cc-card-body {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 4px;
+}
+
+.cc-tg-box:not(.is-short) .cc-card-top {
+  grid-column: 1 / -1;
+}
+
+.cc-tg-box .cc-card-marks {
+  align-self: center;
+}
+
+@container (max-width: 140px) {
+  .cc-tg-box.is-short .cc-card-marks,
+  .cc-tg-box.is-two-line .cc-card-marks {
+    display: none;
+  }
+}
+
 /* Under 120 px the type icon gives its room to the title (the stripe keeps the colour). */
 @container (max-width: 120px) {
+
   .cc-tg-box .cc-card-icon {
     display: none;
   }
 }
 
+/* H4 in a box 61 to 110 px wide: no room for the marks beside the title. A box of 75 minutes or more puts them on a
+   line of their own; a shorter one leaves them out (label and tooltip say "Holds ..."). */
+@container (max-width: 110px) {
+  .cc-tg-box:not(.is-short) .cc-card-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cc-tg-box:not(.is-tall) .cc-card-marks {
+    display: none;
+  }
+}
+
 @container (max-width: 60px) {
+  /* A narrow box (smaller type): the marks take their own line under the title, at 12 px; with the smaller type a box
+     of an hour has room for them too. */
+  .cc-tg-box:not(.is-short):not(.is-two-line) .cc-card-marks {
+    display: inline-flex;
+  }
+
+  .cc-tg-box:not(.is-short) .cc-card-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cc-tg-box .cc-card-marks {
+    gap: 1px;
+    min-height: 12px;
+    align-self: start;
+  }
+
+  .cc-tg-box .cc-mark {
+    width: 12px;
+    height: 12px;
+  }
+
   .cc-tg-box > .cc-card {
     grid-template-columns: 3px minmax(0, 1fr);
     gap: 2px;
@@ -21615,6 +21694,12 @@ body.exercise-header-pinned #viewToolbar {
 /* A third of a week column on a 1024 px screen (about 33 px): the thinnest stripe, no side border, the start in
    10 px tabular figures so "10:00" still shows whole. */
 @container (max-width: 44px) {
+  /* A third of a column: no room for the marks; its label and tooltip still say "Holds ...". */
+  .cc-tg-box .cc-card-marks,
+  .cc-tg-box:not(.is-short):not(.is-two-line) .cc-card-marks {
+    display: none;
+  }
+
   .cc-tg-box > .cc-card {
     grid-template-columns: 2px minmax(0, 1fr);
     gap: 1px;
@@ -22796,6 +22881,31 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 .cc-danger-outline {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* v93: a disabled danger button looks disabled (a write in flight, a result not confirmed). */
+.cc-danger:disabled,
+.cc-danger-outline:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* v93: Delete, after Edit / Cancel event; its step names the event. */
+.cc-panel-delete {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  margin-top: 8px;
+}
+
+.cc-panel-delete .cc-panel-button {
+  min-height: 44px;
+}
+
+@media (max-width: 390px) {
+  .cc-panel-delete .cc-panel-button {
+    width: 100%;
+  }
 }
 
 .cc-new-event {
@@ -30292,3 +30402,116 @@ body.athlete-questions-prompt-open {
 .tl-gallery-pick svg{width:96px;max-width:100%;height:48px;grid-column:2;color:#006b68}
 .tl-gallery-pick span{grid-column:1/-1}.tl-gallery-pick.is-selected{border:2px solid #007f78;background:#edf8f6}
 @media(max-width:760px){.tl-gallery-picks{grid-template-columns:repeat(2,minmax(0,1fr))}.tl-gallery-picks .tl-gallery-pick{min-height:106px}.tl-gallery-pick input{min-width:24px;min-height:24px}}
+/* The event panel's redesign (2026-11-23): the "In this event" summary row, collapsible sections, one "⋯" menu per
+   linked row, one See each athlete with its form chooser, and Edit · Cancel event · Delete together at the bottom. */
+.cc-panel-summary { display: grid; gap: 6px; }
+.cc-sum-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cc-sum-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.cc-sum-chip:hover { border-color: var(--line-strong); }
+.cc-sum-icon { flex: 0 0 auto; color: var(--muted); }
+.cc-sum-count { font-weight: 800; font-variant-numeric: tabular-nums; }
+.cc-sum-name { color: var(--muted); font-weight: 600; }
+/* A kind with nothing in it reads quieter than one that holds something (its count says 0, never colour alone). */
+.cc-sum-chip.is-empty { background: transparent; border-style: dashed; }
+.cc-sum-chip.is-empty .cc-sum-count { color: var(--muted); }
+
+.cc-psec { border-top: 1px solid var(--line); min-width: 0; }
+/* In the sheet every direct child gets 12 px above it; the folded sections sit as one list instead. */
+.cc-panel.cc-sheet > .cc-psec + .cc-psec { margin-top: 0; }
+.cc-panel-links .cc-psec + .cc-psec { margin-top: 0; }
+.cc-psec-title { margin: 0; font-size: 15px; }
+.cc-psec-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.cc-psec-icon { flex: 0 0 auto; color: var(--muted); }
+.cc-psec-name { min-width: 0; overflow-wrap: anywhere; }
+.cc-psec-count {
+  flex: 0 0 auto;
+  min-width: 24px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.cc-psec-meta { min-width: 0; color: var(--muted); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.cc-psec-chevron {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+.cc-psec-toggle[aria-expanded="true"] .cc-psec-chevron,
+.cc-see-each-choose[aria-expanded="true"] .cc-psec-chevron { transform: rotate(-135deg); }
+.cc-psec-body { display: grid; gap: 8px; padding: 0 0 12px; min-width: 0; }
+.cc-psec-body[hidden] { display: none; }
+.cc-psec-body .cc-go { padding-top: 0; border-top: 0; }
+.cc-psec-body .cc-panel-questions,
+.cc-psec-body .cc-panel-details { margin: 0; padding: 0; border: 0; }
+
+/* A linked row stays one line at every width: its name, its quiet line, "⋯" at the end. */
+.cc-link-row.cc-link-row-compact { flex-direction: row; flex-wrap: wrap; align-items: center; }
+.cc-link-row-compact .cc-link-text { flex: 1 1 0; }
+.cc-row-more {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+.cc-row-menu { flex: 1 0 100%; display: flex; justify-content: flex-end; }
+@media (max-width: 390px) {
+  .cc-link-row.cc-link-row-compact .cc-link-button { width: auto; justify-self: auto; }
+}
+
+.cc-see-each-choose { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-start; }
+.cc-see-each-count { font-weight: 600; opacity: 0.85; }
+.cc-see-each-choose .cc-psec-chevron { margin-left: 4px; }
+.cc-see-each-forms { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cc-see-each-forms .cc-panel-button { width: 100%; }
+
+.cc-panel-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.cc-panel-bottom .cc-panel-delete { margin-top: 0; }
+.cc-panel-bottom .cc-panel-delete-step { flex: 1 0 100%; }
+.cc-panel-k3 { margin: 0; }
