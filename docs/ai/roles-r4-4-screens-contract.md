@@ -7,7 +7,7 @@ manager's go.**
 | | |
 |---|---|
 | Status | **Proposed** (draft pull request). Documentation only. |
-| Written against | `origin/main` at `2f2a2b3` (2026-11-24): R4-1 (v92), R4-2 (`club_view` / `team_view`), v95 and the R4-3 API are merged. R4-3b (PR #759, tests and a grant lock) was being merged; the branch merges `main` again before any freeze. Every `file:line` below is at `2f2a2b3`. |
+| Written against | `origin/main` at `2f2a2b3` (2026-11-24): R4-1 (v92), R4-2 (`club_view` / `team_view`), v95 and the R4-3 API are merged. Re-checked at `766e338` (R4-3b, PR #759, merged): it changes only the grant routes' locks, tests and R4 contract 18; no route, body or code this document uses changed. Its decision that *Accept the default* is not checked against the admin's own words means both O3 buttons are always offered to a club admin (5.2). Every `file:line` below is at `2f2a2b3`; the frontend files did not change since. |
 | Level | Ordinary (frontend only, no server change planned; section 9 names the one place where a server change could be asked). Reviews: `code-reviewer`, `ux-design-reviewer`, `mobile-qa`; the *Rukovodilac*. |
 | Owner orders | Every new or substantially reworked screen is a React island (`.claude/rules/frontend.md`, "React islands"). Simple and plain for a club admin. Phone first: 360 / 375 / 390 px, 44 px targets, 16 px inputs. No real athlete's name in tests, fixtures or screenshots. |
 
