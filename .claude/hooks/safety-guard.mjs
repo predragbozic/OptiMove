@@ -609,7 +609,7 @@ export function isGhPrMerge(segment) {
   const m = /^gh\s+api\b(.*)$/i.exec(String(segment).trim());
   if (!m) return false;
   const args = m[1];
-  const method = /(?:^|\s)(?:-X|--method)(?:\s+|=)['"]?([A-Za-z]+)/.exec(args);
+  const method = /(?:^|\s)(?:-X\s*=?|--method(?:\s+|=))['"]?([A-Za-z]+)/.exec(args);
   if (method) return method[1].toUpperCase() !== "GET";
   return /(?:^|\s)(?:-f|-F|--field|--raw-field|--input)(?:\s|=)/.test(args);
 }
@@ -2554,13 +2554,19 @@ const PROTECTED_GUARD_RE = /\.claude[\\/]+(?:hooks(?![A-Za-z0-9_-])|settings(?:\
 // The name split by quotes or a backslash (`sett''ings.json`, `".claude/sett"ings.json`), a
 // variable or a glob inside a .claude path (`.claude/$s.json`, `.claude/s*.json`), or a glob that
 // could expand to .claude (`.cl*`, `.c?aude`, `.[c]laude`) counts as naming the guard's files.
-const GUARD_PATH_PIECES_RE = /\.claude[\\/]+[^\s;&|<>]*[$`*?[{]|(?:^|[\s'"=\/\\<>(])\.(?:c(?:l(?:a(?:u(?:de?)?)?)?)?)?[*?[{][^\s;&|<>]*|(?:^|[\s'"=\/\\<>(])\.[*?[{]/;
+// A variable or a glob right after .claude/, or after the start of hooks / settings (the rules and
+// agent folders are routine edits): `.claude/$s.json`, `.claude/s*.json`, `.claude/h*`.
+const GUARD_NAME_PIECES_RE = /\.claude[\\/]+(?:[hs][A-Za-z0-9._-]*)?[$`*?[{]/;
+// A glob the shell expands that can reach .claude, .git or another dot name (`.cl*`, `.c?aude`,
+// `.[c]laude`, `.*`) — read only outside quotes, where the shell expands it (`'s/.*x//'` is text).
+const DOT_GLOB_RE = /(?:^|[\s=\/\\<>(])\.(?:c(?:l(?:a(?:u(?:de?)?)?)?)?)?[*?[{]/;
 export function mentionsGuardFiles(cmd) {
   const text = String(cmd);
-  const unquoted = text.replace(/['"\\]/g, "");
+  const unquoted = text.replace(/['"\\]/g, ""); // a name split by quotes (`sett''ings.json`)
+  const outsideQuotes = text.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, " ");
   // the .claude folder itself as a word (`mv .claude /tmp/x`, `cp -r /tmp/x/.claude .`, `rm -r ./.claude/`)
   const wholeFolder = /(?:^|[\s=(])(?:[^\s;&|<>]*[\\/])?\.claude[\\/]?(?=$|[\s;&|)<>])/;
-  return PROTECTED_GUARD_RE.test(text) || PROTECTED_GUARD_RE.test(unquoted) || GUARD_PATH_PIECES_RE.test(unquoted) || wholeFolder.test(unquoted);
+  return PROTECTED_GUARD_RE.test(text) || PROTECTED_GUARD_RE.test(unquoted) || GUARD_NAME_PIECES_RE.test(unquoted) || DOT_GLOB_RE.test(outsideQuotes) || wholeFolder.test(unquoted);
 }
 
 const READ_ONLY_COMMANDS = new Set(["cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "wc", "ls", "diff", "cmp", "sha256sum", "sha1sum",
@@ -2723,8 +2729,15 @@ export function gitThroughOperandAdder(segment) {
   const words = tokenizeWords(stripLeadingEnvAssignments(String(segment))).map(shellWord);
   const k = words.findIndex((w, i) => i < 8 && ["xargs", "parallel", "find"].includes(path.basename(w)));
   if (k < 0) return false;
-  if (path.basename(words[k]) === "find") return words.some((w, i) => i > k && /^-(exec|execdir|ok|okdir)$/.test(w) && /(^|\/)git$/.test(words[i + 1] ?? ""));
-  return words.slice(k + 1).some((w) => /(^|\/)git$/.test(w));
+  let rest = words.slice(k + 1);
+  if (path.basename(words[k]) === "find") {
+    const e = rest.findIndex((w) => /^-(exec|execdir|ok|okdir)$/.test(w));
+    if (e < 0) return false;
+    rest = rest.slice(e + 1);
+  }
+  // git anywhere in what the wrapper runs, also inside a quoted command (`sh -c 'git push …'`,
+  // `parallel 'git push origin {}'`, `env git …`), or a shell that runs a string
+  return rest.some((w) => /(^|[\s\/;&|(`'"])git(\s|$)/.test(w)) || rest.some((w, i) => SHELLS.has(path.basename(w)) && rest.slice(i + 1).some((x) => /^-[A-Za-z]*c/.test(x)));
 }
 
 // `git commit --amend` rewrites a commit that may already be pushed.
@@ -3072,7 +3085,11 @@ export function classifyShellCommand(cmd, cwd) {
       const top = segmentTop[index];
       const written = top === null || top === undefined ? null : topLevel[top];
       const sameCommand = written !== null && stripLeadingEnvAssignments(written.trim()) === stripLeadingEnvAssignments(segment.trim()) || written !== null && normalizeSegment(written) === normalizeSegment(segment);
-      if (!(sameCommand && migrationTargetsDisposableDatabase(written, topLevel.slice(0, top)))) return { decision: "ask", reason: ASK_REASONS.migration };
+      // an earlier export counts only when it surely ran in this shell: no ||, pipe, background job
+      // or subshell on the line (`true || export …`, `export … | cat`, `(export …)`)
+      const bare = text.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, "");
+      const exportSurelyRan = !/\|\||\||(?<![&>])&(?![&>])|[()]/.test(bare.replace(/&&/g, "").replace(/\d?>&\d?|&>/g, ""));
+      if (!(sameCommand && migrationTargetsDisposableDatabase(written, exportSurelyRan ? topLevel.slice(0, top) : []))) return { decision: "ask", reason: ASK_REASONS.migration };
     }
     if (relaxedPersistentSqlWrite(segment)) return { decision: "ask", reason: ASK_REASONS.sqlWrite };
   }

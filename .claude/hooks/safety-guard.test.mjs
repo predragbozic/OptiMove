@@ -2018,6 +2018,15 @@ test("relaxed policy: every kept protection still asks or is denied when chained
       ["export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x; unset DATABASE_URL; npm --prefix backend run migrate", ASK],
       ["git diff --output=.claude/settings.json HEAD~1", ASK], ["git diff --out=.claude/hooks/safety-guard.mjs", ASK],
       ["mv .claude /tmp/x", ASK], ["cp -r /tmp/x/.claude .", ASK], ["rm -r ./.claude/", ASK], ["ls .claude", ALLOW],
+      // the narrow re-review of a22dccb
+      ["find . -maxdepth 0 -exec sh -c 'git push origin main' \\;", ASK], ["find . -maxdepth 0 -exec env git push origin main \\;", ASK],
+      ["parallel 'git push origin {}' ::: main", ASK], ["echo main | xargs -I X sh -c 'git push origin X'", ASK],
+      ["gh api -XDELETE repos/o/r/git/refs/heads/main", ASK], ["gh api -XPUT repos/o/r/pulls/1/merge", ASK], ["gh api -XGET repos/o/r", ALLOW],
+      ["sed -i 's/.*TODO//' f", ALLOW], ["sed -i -E 's/(.*)=.*/\\1/' f", ALLOW], ["node -e \"console.log('.*')\"", ALLOW], ["npm test -- --grep \"x.*y\"", ALLOW],
+      ["sed -i 's/a/b/' .claude/rules/*.md", ALLOW], ["cp x .claude/agents/$n.md", ALLOW], ["cp x .cl*/set*", ASK], ["sed -i s/a/b/ .claude/s*.json", ASK],
+      ["true || export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x; npm --prefix backend run migrate", ASK],
+      ["export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x | cat; npm --prefix backend run migrate", ASK],
+      ["(export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x); npm --prefix backend run migrate", ASK],
     ], repo, { exact: true });
     // a checkout that may fail leaves HEAD on main: the commit after it asks
     execFileSync("git", ["checkout", "-q", "main"], { cwd: repo });

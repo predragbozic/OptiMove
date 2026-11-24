@@ -32,10 +32,12 @@ git diff --staged   # if there are staged changes
   `main`/`master`) needs no confirmation (the hook reads the branch as a full ref, so a tag named `main`
   cannot pass for a working branch); merges INTO `main` are done only by the Rukovodilac,
   through GitHub.
-- Committing on `main`/`master`, or pushing anything other than one's own work branch:
-  a push to `main`/`master`, a force push, another branch, a refspec (`a:b`), tags, a bare
-  `git push` whose target is not visible. Merging into `main` is done only by the
-  Rukovodilac, through GitHub.
+- Committing on `main`/`master`, or a push that can reach `main`/`master`: a push to
+  `main`/`master`, a force push, a refspec (`a:b`), `--all`/`--tags`/`--mirror`, a bare
+  `git push` while on `main`/`master` or one that git configuration sends there. (A push of a
+  named branch that is not `main`/`master`, or a bare push from such a branch, goes without a
+  question since the owner's order of 2026-11-23, below.) Merging into `main` is done only by
+  the Rukovodilac, through GitHub.
 
 ## Without a question (the owner's order of 2026-11-23)
 
