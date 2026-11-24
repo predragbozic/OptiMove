@@ -245,7 +245,8 @@ test("4. a custom role of an old-table coach: frozen, live only through its hold
   assert.equal(await holds(w.coach.id, "athletes.manage", "team", w.T1), true);
   // The holding version is exactly the row's updated_at (never a JavaScript Date round trip).
   assert.equal((await one(`select c.holding_row_version = r.updated_at as same from public.permission_custom_roles c join public.user_team_roles r on r.id = c.holding_row_id where c.id = $1`, [made.custom.id])).same, true);
-  assert.match(made.custom.holding.rowVersion, /\.\d{6}|:\d\d[+-]/);
+  // PostgreSQL's text form (trailing zeros of the microseconds dropped), never a JavaScript ISO string.
+  assert.match(made.custom.holding.rowVersion, /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d)?$/);
   // Frozen: a later club version does not reach it.
   ok(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: null, remove: ["athletes.manage"] }));
   assert.equal(await holds(w.coach.id, "athletes.manage", "team", w.T1), true, "the custom beats the club version");
