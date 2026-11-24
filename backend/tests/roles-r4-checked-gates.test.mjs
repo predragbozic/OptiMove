@@ -105,6 +105,9 @@ const REVIEWED = Object.freeze({
   "joinLinkContext.js": 5,
   "mediaStorage.js": 2,
   "permissionRolesService.js": 5,
+  // R4-3 (reviewed in its pull request): a custom role's scope (club or team) - which club a team lies in, and that
+  // the team is still active; a resource scope of the request, never an offered workspace.
+  "permissionLayersService.js": 2,
   "permissions.js": 4,
   "positionService.js": 8,
   "routes/auth.js": 1,

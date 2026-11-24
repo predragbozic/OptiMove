@@ -159,7 +159,7 @@ test("4. info hiding stays: another club's admin changing a club role answers th
   assert.deepEqual(random.body, r.res.body);
 });
 
-test("5. H4 through R2's change route: a default change that would leave a club's own Club admin version short answers 409 club_admin_would_lack, nothing written", async () => {
+test("5. H4 through R2's change route (R4-3): a word added to a default the club follows is added to its own Club admin version (default_follow); removing a word from the default Club admin that a club's version still gives answers 409 club_admin_would_lack", async () => {
   const w = await world();
   // Club A gives up athletes.remove: its Team coach version, then its own Club admin version (planted as R4-3 will write them).
   const plant = (roleId) => asActor(db.url, w.pa.id, async (c) => {
@@ -173,11 +173,29 @@ test("5. H4 through R2's change route: a default change that would leave a club'
   await plant(ROLE_IDS.team_coach);
   await plant(ROLE_IDS.club_admin);
   const sys = ok(await createRole(w.pa, { name: `Analyst ${hex()}`, scopeTypes: ["club"], items: ["org.view"] })).role;
-  const res = code(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "athletes.remove"] }), 409, "club_admin_would_lack");
-  assert.equal(typeof res.message, "string");
-  assert.equal(await revision(sys.id), 1, "nothing written");
-  assert.equal((await one(`select count(*)::int as n from public.permission_role_items where role_id = $1`, [sys.id])).n, 1);
-  // A word that leaves no club short still goes through.
-  ok(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "org.club.edit"] }));
+  const caVersion = async () => one(`select v.id, v.revision, array(select i.permission_word from public.permission_club_role_version_items i where i.version_id = v.id order by 1) as items
+      from public.permission_club_role_versions v where v.club_id = $1 and v.system_role_id = $2 and v.ended_at is null`, [w.A, ROLE_IDS.club_admin]);
+  assert.ok(!(await caVersion()).items.includes("athletes.remove"));
+  const res = ok(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "athletes.remove"] }));
+  assert.deepEqual(res.clubsTouched.filter((c) => c.clubId === w.A), [{ clubId: w.A, wordsAdded: ["athletes.remove"] }]);
+  const after = await caVersion();
+  assert.ok(after.items.includes("athletes.remove"));
+  assert.equal(after.revision, 2);
+  assert.equal((await one(`select kind, basis from public.permission_club_role_version_changes where version_id = $1 and revision_after = 2`, [after.id])).kind, "default_follow");
   ok(await srv.api(w.pa.cookie, `${R}/${sys.id}/archive`, { method: "POST", body: { requestKey: key(), expectedRevision: 2, reason: "Done" } }));
+  // N4: club B follows the default Club admin and has its own version of a club-scope system role that holds
+  // org.club.edit; taking org.club.edit from the default Club admin would leave B's admin short.
+  const sys2 = ok(await createRole(w.pa, { name: `Secretary ${hex()}`, scopeTypes: ["club"], items: ["org.view"] })).role;
+  await asActor(db.url, w.pa.id, async (c) => {
+    await c.query(`select public.lock_club_ceiling($1::uuid[], 'exclusive')`, [[w.B]]);
+    const id = (await c.query(`insert into public.permission_club_role_versions (club_id, system_role_id, based_on_revision, answered_revision, created_by_user_id) values ($1, $2, 1, 1, $3) returning id`, [w.B, sys2.id, w.pa.id])).rows[0].id;
+    for (const x of ["org.club.edit", "org.view"]) await c.query(`insert into public.permission_club_role_version_items (version_id, permission_word) values ($1, $2)`, [id, x]);
+    await c.query(`insert into public.permission_club_role_version_changes (version_id, revision_after, kind, performed_by_user_id, basis, reason, items_added) values ($1, 1, 'create', $2, 'platform_admin', 'licence', $3)`, [id, w.pa.id, ["org.club.edit", "org.view"]]);
+  });
+  const caItems = (await one(`select array(select permission_word from public.permission_role_items where role_id = $1 order by 1) as w`, [ROLE_IDS.club_admin])).w;
+  const caRev = await revision(ROLE_IDS.club_admin);
+  const refused = code(await change(w.pa, ROLE_IDS.club_admin, { expectedRevision: caRev, items: caItems.filter((x) => x !== "org.club.edit") }), 409, "club_admin_would_lack");
+  assert.equal(typeof refused.message, "string");
+  assert.equal(await revision(ROLE_IDS.club_admin), caRev, "nothing written");
+  ok(await srv.api(w.pa.cookie, `${R}/${sys2.id}/archive`, { method: "POST", body: { requestKey: key(), expectedRevision: 1, reason: "Done" } }));
 });

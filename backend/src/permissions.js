@@ -210,13 +210,13 @@ export const BASIC_ROLE_PERMISSIONS = Object.freeze({
 // word, and every can() call with a literal word in backend/src names a listed word from a listed file.
 // R4-1 starts it as R2's honoured words with their call sites.
 export const ENFORCED_PERMISSIONS = Object.freeze({
-  "org.view": Object.freeze(["routes/organization.js"]),
+  "org.view": Object.freeze(["routes/organization.js", "permissionLayersService.js"]),
   "org.teams.manage": Object.freeze(["routes/organization.js"]),
   "org.club.edit": Object.freeze(["routes/organization.js"]),
   "athletes.manage": Object.freeze(["routes/organization.js"]),
   "athletes.remove": Object.freeze(["routes/organization.js"]),
-  "staff.assign": Object.freeze(["routes/organization.js", "permissionRolesService.js"]),
-  "roles.manage": Object.freeze(["permissionRolesService.js"]),
+  "staff.assign": Object.freeze(["routes/organization.js", "permissionRolesService.js", "permissionLayersService.js"]),
+  "roles.manage": Object.freeze(["permissionRolesService.js", "permissionLayersService.js"]),
 });
 
 // The checked words as a list (R2's name, kept for its callers): the words /me may offer and the only words a role
