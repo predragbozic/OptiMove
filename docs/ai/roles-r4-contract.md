@@ -900,3 +900,87 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   modules, the end of an assignment, L1, `org.view` as the right, the fail-closed filter, and section 6's mandatory sweep:
   an account holding every view word in `club_view`, also with a forged `club` preference, gets from 23 module reads the
   same status and answer as an account with no role, and no write of 5 lands).
+
+## 18. As built: R4-3 (no migration of its own; on v95)
+
+`backend/src/permissionLayersService.js` (the routes of section 9, mounted in `routes/permissionRoles.js`), written through
+R2's one write runner (`permissionRolesService.js`: requestKey replay with the standing evaluated again, the bounded COMMIT
+verified by the request record; the record now carries `ceiling_change_id`, `club_version_change_id` or
+`custom_role_change_id`). The new file is a listed gate of `org.view`, `staff.assign` and `roles.manage` in
+`ENFORCED_PERMISSIONS`, and its two resource-scope branches are on the reviewed list of `roles-r4-checked-gates.test.mjs`.
+
+- **Who.** The ceiling: read by a platform admin and the club's `staff.assign` holders (reason, who and the history only
+  for a platform admin); written by a platform admin only. A club's roles: `org.view` or `roles.manage` holders. Versions
+  and the O3 answer: `roles.manage` holders and a platform admin. Customs, the user read, drift, *Take it from them too*
+  and the end: `staff.assign` holders and a platform admin. Everyone else, and every id of another club, the identical
+  `404 {"error":"notFound"}`, decided from the session before the transaction (N5: no lock is taken for them; test 1
+  records it).
+- **Locks (7.6), recorded per route (test 9):** the request-key lock; the club's ceiling lock, exclusive for the ceiling
+  and every version write, shared for every custom write; then rows: a custom write locks both `users` rows in one
+  statement, the target's holding row (old row or assignment) FOR SHARE, the target's live customs of that key FOR
+  UPDATE, then `lock_permission_actor` (a version writer passes `p_all_system_roles = true`); then the `clubs` row FOR
+  SHARE (a club archive waits; an archive that lands first answers the identical 404); the request record last; no lock
+  after the first write.
+- **`default_follow` (H4)** is built in R2's `changeRole`: a change of a system role's items first takes the exclusive
+  lock of every club with a live Club admin version (read without a lock), and, under the role's FOR UPDATE, adds every
+  added club-scope word to the Club admin version of each club that follows the role (no live version of it), kind
+  `default_follow`. A club whose Club admin version appeared after the unlocked read is a lost race: `409 try_again`,
+  nothing written (test 7). The answer lists `clubsTouched`. Words of closed modules are followed too, so a later reopen
+  does not break rule 7.
+- **Customs (3.4).** Exactly one live holding of the role in that scope (else 404, or `holding_ambiguous` - unreachable
+  today: the old tables are unique per user, scope and role, assignments per live key). `holding_row_version` is copied
+  from the row inside the INSERT ... SELECT and returned as text. A custom whose holding ended (an R2 assignment revoked or
+  expired; an old row ends its customs by the v92 trigger) is ended by the next custom write on that key, `end_kind =
+  'reset'`, before the new one is made. O5 / Q13: a club's admin never makes, changes, ends or shortens a custom of the
+  Club admin role **or of any role held by a club admin of that club** (the database guards know the base role only; the
+  service is the guard for the second case). Q14: the user read and the custom answer name `stillHeldThrough`.
+- **Q15.** A version change and an R2 role change that take words away answer `customsStillHolding` (live customs of
+  that role that still hold them; a system role's change lists every club, capped at 200); `GET /clubs/:clubId/custom-drift`
+  lists them later; *Take it from them too* takes one checked word from listed live customs (each still holding it, else
+  `custom_changed`).
+- **R2's assignments list** marks a holding with a live custom: `custom`, `customRoleId`, `displayName = "<Role> (custom)"`.
+- **Codes added:** `closed_by_club_ceiling`, `admin_not_narrowable`, `custom_exists`, `custom_changed`, `version_changed`
+  (also the `23505` of the live keys), `question_outdated`, `club_admin_would_lack` (also for the in-club rule-7 trigger),
+  `module_not_closable`, `ceiling_unchanged`, `holding_ambiguous`, `self_custom`.
+- **Built on v95** (`docs/runbooks/roles-closed-module-dominance-v95.md`, PR #755; the *Rukovodilac*'s decision (A)):
+  v92's dominance checks applied the ceiling, so a club's admin could change no club version or custom role once the
+  licence closed a module its roles carry. v95's `permission_actor_holds_in_club` counts a word of a closed module when
+  the admin would hold it the moment the module opens; R4-3's pre-checks ask the same function (test 11: Calendar closed,
+  the club admin's version and custom go through). Adding a word of a closed module stays refused
+  (`409 closed_by_club_ceiling`), for a platform admin too. R2's assignment dominance (`user_holds_role_items`) still
+  applies the ceiling (recorded in v95's runbook).
+- **Evidence:** `backend/tests/roles-r4-3-api.test.mjs` (the real routes: ceiling, versions with Q3 / H1 / rule 7 / the
+  ceiling, the O3 question, customs with liveness through the real revoke / re-grant routes, R2 assignment revoked and
+  given again, O5, Q14, Q15, the races of 7.6 route against route - ceiling vs a guarded write, version vs custom, two
+  versions, ceiling vs club archive both orders, custom vs revocation, default vs version (H4) - the recorded lock order,
+  the uncertain COMMIT both ways, the replay re-evaluating standing inside its transaction, drift leaving dead customs out,
+  `default_follow` skipping a club with its own version of the role, v95 end to end); `roles-r4-api.test.mjs` test 5 now proves
+  `default_follow` and N4 through the route.
+- **After the internal review (security, db, code):**
+  - Ending a custom and *Take it from them too* refuse the actor's own custom (`self_custom`, Q13), as the custom write does.
+  - Ending a custom gives back the role's club words, so a club's admin ends only a custom whose role's club items it
+    holds (`role_exceeds_your_permissions`; test 12), the dominance of 3.5 applied to "back to the role". A platform admin
+    always may. *Accept the default* (O3) is not checked this way: it gives the club the platform's default, not words
+    the admin chose (an owner decision if that should change).
+  - The three custom writers lock the targets' Club admin rows of the club (any `is_active`) FOR SHARE after the users
+    rows, and lock the target's customs together with the actor's own live customs in the club (one statement, id order),
+    so the O5 check and the dominance check read rows a concurrent writer cannot change under them. The role of a custom
+    write is read again under its share lock (a role archived meanwhile is the identical 404).
+  - Before the customs statement, the three custom writers take the acting user's own place-2 rows in
+    `lock_permission_actor`'s order (its global roles, its club rows in the same statement as the targets' Club admin
+    rows, its team rows for a team scope, its live assignments of the scope). The v92 trigger that ends customs goes old
+    row -> custom, so locking the actor's customs FOR UPDATE before its old rows could deadlock against a grant upsert
+    without a users lock (the db re-review's F1; test 14 runs that race, test 9 records the order).
+  - *Take it from them too* refuses `staff.assign` / `roles.manage` out of a Club admin custom (`club_admin_requires`,
+    not a 500); its replay lists the request's own customs (same hash, same ids), never a cross-transaction `xmin` match.
+  - `customsStillHolding` carries `customsStillHoldingTruncated` past 200; a club's roles offer *Change* / *Answer* only
+    to a reader with `roles.manage` (or a platform admin).
+- **Recorded limits:**
+  - **A brand-new Club admin grant against O5.** `PUT /api/organization/users/:id/club-roles/:clubId/club_admin` is an
+    upsert that locks no users row, so a grant of a user with no Club admin row in the club yet can commit while a custom
+    write by a peer admin is past its O5 check; both commit. An existing row (any `is_active`) is locked and serializes.
+    Closing it needs the grant route to lock the target's users row FOR UPDATE first (`organization.js`, outside R4-3).
+  - A stale custom (its R2 assignment revoked or expired) ended by the next write is recorded as `end_kind = 'reset'` by
+    the writing admin, with the reason `STALE_END_REASON`; `role_ended` would need a service marker in the v92 guard.
+  - A custom is bound to its old holding row by `updated_at`: a write that does not change the row's rights but bumps
+    `updated_at` ends the custom (fail closed).

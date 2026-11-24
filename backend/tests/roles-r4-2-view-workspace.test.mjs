@@ -300,6 +300,20 @@ test("10. no fallback is persisted when the role tables could not be read (5.1, 
   await setPref(w.revoked, "club", w.A);
   await resolveActiveWorkspace(w.revoked.id, { ...unreadable, userId: w.revoked.id });
   assert.deepEqual(await pref(w.revoked), { workspace_type: "athlete", scope_id: null });
+  // An expired assignment in that scope does not keep it either (LOW-2).
+  await setPref(w.expired, "club", w.A);
+  await resolveActiveWorkspace(w.expired.id, { ...unreadable, userId: w.expired.id });
+  assert.deepEqual(await pref(w.expired), { workspace_type: "athlete", scope_id: null }, "an expired assignment does not keep it");
+  // The assignments question itself failing with any error but "no such table" keeps the stored preference (LOW-1): a
+  // column renamed for the call makes it a 42703.
+  await setPref(w.revoked, "club", w.A);
+  await k.query(`alter table public.user_role_assignments rename column revoked_at to revoked_at_hidden`);
+  try {
+    await resolveActiveWorkspace(w.revoked.id, { ...unreadable, userId: w.revoked.id });
+  } finally {
+    await k.query(`alter table public.user_role_assignments rename column revoked_at_hidden to revoked_at`);
+  }
+  assert.deepEqual(await pref(w.revoked), { workspace_type: "club", scope_id: w.A }, "a failed question never overwrites it");
   await setPref(w.viewer, "team", w.TA1);
   await resolveActiveWorkspace(w.viewer.id, unreadable);
   assert.deepEqual(await pref(w.viewer), { workspace_type: "athlete", scope_id: null }, "an assignment of another scope does not keep it");
