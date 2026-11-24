@@ -107,7 +107,7 @@ test("3. the other /me fields are unchanged in shape; a signed-out caller still 
   assert.deepEqual(anon.body, { user: null });
 });
 
-test("4. a non-basic assignment: its words appear where can() grants them; an account holding ONLY a non-basic role has no workspace and gets nothing (O8 (a): requireCoach still gates until R4)", async () => {
+test("4. a non-basic assignment: its words appear where can() grants them; an account holding ONLY a non-basic role lands in its club's club_view workspace (R4-2, O8 (a)) with exactly those words", async () => {
   const w = await world();
   const role = ok(await createRole(w.adminA, { clubId: w.A, scopeTypes: ["club"], items: ["org.teams.manage"] })).role;
   const coach2 = await person("coach2", (id) => F.grantTeam(id, w.T1));
@@ -117,8 +117,11 @@ test("4. a non-basic assignment: its words appear where can() grants them; an ac
   const only = await person("onlyNonBasic");
   ok(await grant(w.adminA, { userId: only.id, roleId: role.id, scopeType: "club", scopeId: w.A }));
   const onlyMe = await me(only);
-  assert.equal(onlyMe.activeWorkspace, null);
-  assert.deepEqual(onlyMe.permissions, []);
+  // Before roles R4-2 this account had no workspace at all (requireCoach gated it); since R4-2 its way in is the
+  // club_view type, which the six workspace-authorizing modules do not recognize (contract section 6).
+  assert.deepEqual([onlyMe.activeWorkspace?.type, onlyMe.activeWorkspace?.scopeId], ["club_view", w.A]);
+  assert.deepEqual(onlyMe.availableWorkspaces.map((x) => x.type), ["club_view"]);
+  assert.deepEqual(onlyMe.permissions, ["org.teams.manage"]);
 });
 
 test("5. an expired assignment, an archived role and a revoked assignment give nothing", async () => {

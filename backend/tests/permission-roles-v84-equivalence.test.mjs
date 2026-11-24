@@ -211,7 +211,10 @@ test("33. the old helpers never read the new context fields; the old fields keep
     const body = source.slice(start, end);
     assert.ok(!/rolePermissions|roleAssignments/.test(body), `${fn} reads a new field`);
   }
-  for (const file of ["backend/src/workspace.js", "backend/src/auth.js"]) {
+  // workspace.js left this list in roles R4-2 (contract 5.1): it reads roleAssignments to offer the club_view /
+  // team_view types, and rolePermissions only to know the role tables were unreadable (no fallback persisted then).
+  // It still offers a club or team workspace only from the old role rows: roles-r4-checked-gates.test.mjs B2.
+  for (const file of ["backend/src/auth.js"]) {
     assert.ok(!/rolePermissions|roleAssignments/.test(fs.readFileSync(path.join(REPO, file), "utf8")), file);
   }
   const ctx = await ctxOf(W.users["club admin of A and team coach of T2"]);

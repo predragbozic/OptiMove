@@ -835,3 +835,48 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   `roles-r4-view-seed-proof.test.mjs` (M4: every seeded row proven on its module's read route),
   `roles-r4-checked-gates.test.mjs`, `roles-layers-v92-rehearsal-guards.test.mjs`; the rehearsal
   (`backend/scripts/roles-layers-v92-rehearsal.mjs`) passed on PostgreSQL 16; PostgreSQL 17 is the owner's run.
+
+## 17. As built: R4-2 (the way in; no migration)
+
+- **Workspaces** (`backend/src/workspace.js`): `VIEW_WORKSPACE_TYPES` (`club_view`, `team_view`) beside the five. A
+  `club_view` C for every live club-scope assignment in an active club without a `club_admin` row for C; a `team_view` T
+  (with its `clubId`) for every live team-scope assignment on an active team **of an active club** (the club's state is
+  read too; the old `team` workspace does not read it) without a `team_coach` row for T. The assignments come from
+  `authz.roleAssignments` (already live and of a non-archived role); one query per type for the names. `role` is
+  `"role_holder"`. A stored `club` / `team` preference resolves to the exact workspace, else to the view one of the same
+  scope (`findPreferredWorkspace`), else the fallback; `saveWorkspacePreference` stores the base type
+  (`storedWorkspaceType`) on every path; `FALLBACK_ORDER` has the two after `team`. No fallback is persisted while
+  `authz.rolePermissions` is unavailable (L1). `PUT /api/auth/workspace` matches exactly: `club` + C is refused for an
+  account that has only `club_view` C.
+- **The entry gate** (`backend/src/organizationEntry.js`, in place of `requireCoach` on `/api/organization`): an account
+  that passes `requireCoach` goes on unchanged; any other account only on `GET /`, only while its active workspace
+  (read-only: the saved preference or the fallback, never written by the gate) is a view one; everything else is
+  today's `403 {"error":"Forbidden"}`. The route decides again on the workspace it resolves itself.
+- **`GET /api/organization` for a view workspace** (`viewWorkspaceOrganization`, keys fixed as
+  `VIEW_ORGANIZATION_KEYS`): `club_view` C - club C and its active teams while `can(org.view, club C)`; `team_view` T -
+  team T while `can(org.view, team T)`; athletes, archived teams, access requests, invite statuses, join links and
+  applications empty; create flags false; no manageable id; users: the club's members only while `can(staff.assign,
+  club C)` (the #717 rule, `clubMembersViewClubId` now also for `club_view`), otherwise the account itself, every row
+  narrowed to this club. A mixed account (an old role elsewhere) in a view workspace gets the same answer: the old
+  loaders' rows are not used. `filterOrganizationDataForWorkspace` has `club_view` / `team_view` branches and its
+  fallthrough is empty lists (its "no workspace" branch is unchanged).
+- **Members with live assignments** (11 (b)): for the club whose members a viewer may see, an account with a live
+  assignment (not revoked, not expired, role not archived) of club scope in C or team scope on a team of C is a member,
+  in `club` and `club_view` alike; revoked or expired assignments never count, whatever `CLUB_MEMBERS_ACTIVE_ROLES_ONLY`
+  says. The mark is a symbol key, never in the JSON.
+- **`/me`**: `permissionsForWorkspace` maps the view types to their scope (checked words only, as before);
+  `closedModules` = the closed modules of the active workspace's club, read only from an entry the account itself holds
+  in that club (none for a platform admin without one).
+- **Not in R4-2:** the frontend of 5.2 (R4-4); no module of section 6 learns the view types (each in its VIEW pull
+  request). `requireCoach`, `computeCapabilities`, `managedTeamIds` and the old helpers are unchanged.
+- **Tests changed because they pinned "until R4":** `me-permissions-r3` test 4 (an assignment-only account now lands in
+  `club_view`), `permission-roles-v84-equivalence` test 33 (`workspace.js` now reads `roleAssignments`; B2 still pins
+  that `club` / `team` come only from the old rows), `permissions-r1` b1 / b2z (two new `org.view` call sites, club and
+  team), `roles-r4-checked-gates` B1 counts and B3 (the view types named only in `workspace.js` and
+  `routes/organization.js`).
+- **Evidence:** `backend/tests/roles-r4-2-view-workspace.test.mjs` (13 tests, disposable database, the real server:
+  offers, preference mapping and forged rows, the fixed keys, the entry gate's 403 on every other method and path, no
+  preference written by a refused request, cross-club identical 404, the mixed account, the members list and L3, closed
+  modules, the end of an assignment, L1, `org.view` as the right, the fail-closed filter, and section 6's mandatory sweep:
+  an account holding every view word in `club_view`, also with a forged `club` preference, gets from 23 module reads the
+  same status and answer as an account with no role, and no write of 5 lands).

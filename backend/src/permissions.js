@@ -324,11 +324,32 @@ export function can(authz, permission, scope) {
 //     (`unavailable: true`), for a platform admin as well (fail closed: the
 //     list is navigation, the routes still decide);
 //   - a role the account holds through a non-basic assignment counts as can()
-//     says. Such an account reaches a club or team workspace only through a
-//     role of the old tables (loadAvailableWorkspaces), so a word listed here
-//     is never one that requireCoach (O8 (a), until R4) stands in front of.
+//     says. Since roles R4-2 such an account reaches its club or team through a
+//     club_view / team_view workspace (loadAvailableWorkspaces), which names the
+//     same scope; the words listed are only the checked ones (a module whose
+//     word is not checked yet stays closed for a view workspace).
 // Pure: no query. Returns { permissions: string[], unavailable: boolean }.
-const WORKSPACE_SCOPE_TYPES = Object.freeze({ platform: "global", club: "club", team: "team", private_coach: "private" });
+// Roles R4-2 (contract 5.1): a view workspace names the same scope as its base type, so a role holder's /me lists the
+// checked words it holds in that club or team (can() never reads the workspace type itself).
+const WORKSPACE_SCOPE_TYPES = Object.freeze({
+  platform: "global", club: "club", team: "team", private_coach: "private", club_view: "club", team_view: "team",
+});
+
+// The closed modules (the club's ceiling, contract 7.1) of the ACTIVE workspace's club, for /me's navigation (5.1):
+// read only from an entry the account itself holds in that club (each loaded entry carries its own club's closed
+// modules), so a module list is never shown to an account without a role there - a platform admin without one gets
+// none (the ceiling never limits a platform admin). Module words only, never data. Pure: no query.
+export function closedModulesForWorkspace(authz, workspace) {
+  const entries = authz?.rolePermissions;
+  if (!Array.isArray(entries) || !workspace?.scopeId) return [];
+  const scopeType = WORKSPACE_SCOPE_TYPES[workspace.type];
+  if (scopeType !== "club" && scopeType !== "team") return [];
+  const id = String(workspace.scopeId);
+  const held = entries.find((e) => (scopeType === "club"
+    ? String(e.clubId) === id
+    : (e.scopeType === "team" && String(e.scopeId) === id) || (e.scopeType === "club" && e.teamIds.some((t) => String(t) === id))));
+  return held ? [...held.closedModules].sort() : [];
+}
 
 export function permissionsForWorkspace(authz, workspace) {
   if (authz?.rolePermissions && !Array.isArray(authz.rolePermissions)) {

@@ -12,15 +12,30 @@
 //   - role_hint plays no part here, in either direction.
 import { query } from "./db.js";
 
-export const WORKSPACE_TYPES = new Set(["platform", "private_coach", "club", "team", "athlete"]);
+// Roles R4-2 (docs/ai/roles-r4-contract.md 5.1, O8): club_view and team_view are the way into a club or a team for an
+// account that holds a role there only through a live new-style assignment (user_role_assignments), with no club_admin
+// row for that club / no team_coach row for that team. They are DIFFERENT types on purpose: the six modules that still
+// treat an active "club" / "team" workspace as the permission itself (contract section 6) do not recognize them, so
+// they stay closed for a view workspace by construction until each module's own VIEW pull request opens it next to a
+// can() check. A "club" or "team" workspace stays offered only from the old role rows (the R4-1 standing rule).
+export const VIEW_WORKSPACE_TYPES = new Set(["club_view", "team_view"]);
+export const WORKSPACE_TYPES = new Set(["platform", "private_coach", "club", "team", "athlete", ...VIEW_WORKSPACE_TYPES]);
+
+// The saved preference allows exactly five types (migrations/20260805_user_workspace_preferences.sql); a view
+// workspace is stored as its base type and the same scope, and mapped back on read (findPreferredWorkspace).
+const STORED_TYPE = Object.freeze({ club_view: "club", team_view: "team" });
+export function storedWorkspaceType(type) {
+  return STORED_TYPE[type] || type;
+}
 
 // Deterministic fallback order used only when there's no saved preference,
 // or the saved one no longer matches a currently-available workspace (its
 // backing role/FK was revoked or archived since it was chosen). A user
 // whose only available workspace is athlete lands there automatically -
 // there's no separate special case for that, it falls out of the loop
-// simply finding nothing earlier in this list.
-const FALLBACK_ORDER = ["platform", "club", "team", "private_coach", "athlete"];
+// simply finding nothing earlier in this list. An account whose only
+// workspace is a view one lands in it (after every staff workspace).
+const FALLBACK_ORDER = ["platform", "club", "team", "club_view", "team_view", "private_coach", "athlete"];
 
 function sortByLabel(rows) {
   return [...rows].sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -60,14 +75,58 @@ export async function loadAvailableWorkspaces(authz, queryRunner = query) {
     workspaces.push({ type: "team", scopeId: team.id, clubId: team.club_id || null, label: team.name, role: "team_coach" });
   }
 
+  workspaces.push(...await loadViewWorkspaces(authz, queryRunner));
+
   if (authz.isAthlete) {
     workspaces.push({ type: "athlete", scopeId: null, label: "Athlete", role: "athlete" });
   }
   return workspaces;
 }
 
+// The view workspaces (contract 5.1): a club C for every live club-scope assignment in an active club where the account
+// has no club_admin row for C; a team T for every live team-scope assignment on an active team of an active club where
+// the account has no team_coach row for T. The assignments come from authz.roleAssignments (the live, non-archived
+// holdings loadAuthorizationContext already read: a revoked or expired assignment, or an archived role, is not there);
+// only the names and the active state are read here. When the role tables could not be read for this request the list
+// is empty, so nothing is offered (and resolveActiveWorkspace does not persist a fallback, below).
+async function loadViewWorkspaces(authz, queryRunner) {
+  const assignments = Array.isArray(authz.roleAssignments) ? authz.roleAssignments : [];
+  const adminClubIds = new Set((authz.clubRoles || []).filter((r) => r.role === "club_admin").map((r) => String(r.clubId)));
+  const coachTeamIds = new Set((authz.teamRoles || []).filter((r) => r.role === "team_coach").map((r) => String(r.teamId)));
+  const viewClubIds = [...new Set(assignments.filter((a) => a.scopeType === "club").map((a) => String(a.scopeId)))]
+    .filter((id) => !adminClubIds.has(id));
+  const viewTeamIds = [...new Set(assignments.filter((a) => a.scopeType === "team").map((a) => String(a.scopeId)))]
+    .filter((id) => !coachTeamIds.has(id));
+  const [clubs, teams] = await Promise.all([
+    viewClubIds.length
+      ? queryRunner(`select id, name from public.clubs where id = any($1::uuid[]) and coalesce(is_active, true)`, [viewClubIds])
+      : { rows: [] },
+    viewTeamIds.length
+      ? queryRunner(
+        `select t.id, t.name, t.club_id from public.teams t join public.clubs c on c.id = t.club_id
+          where t.id = any($1::uuid[]) and coalesce(t.is_active, true) and coalesce(c.is_active, true)`, [viewTeamIds])
+      : { rows: [] },
+  ]);
+  return [
+    ...sortByLabel(clubs.rows).map((club) => ({ type: "club_view", scopeId: club.id, label: club.name, role: "role_holder" })),
+    ...sortByLabel(teams.rows).map((team) => ({ type: "team_view", scopeId: team.id, clubId: team.club_id, label: team.name, role: "role_holder" })),
+  ];
+}
+
 function findWorkspace(workspaces, type, scopeId) {
   return workspaces.find((w) => w.type === type && String(w.scopeId || "") === String(scopeId || "")) || null;
+}
+
+// A saved preference names one of the five stored types. A stored club + C is the club workspace when the account has
+// the club_admin row for C, else the club_view workspace when it has a live assignment there, else nothing (the
+// fallback, as for any unavailable preference); team + T the same with team_view. A stored type never resolves to
+// "club" or "team" without the old role row: the match is only ever against the list loadAvailableWorkspaces built.
+function findPreferredWorkspace(workspaces, storedType, scopeId) {
+  const exact = findWorkspace(workspaces, storedType, scopeId);
+  if (exact) return exact;
+  if (storedType === "club") return findWorkspace(workspaces, "club_view", scopeId);
+  if (storedType === "team") return findWorkspace(workspaces, "team_view", scopeId);
+  return null;
 }
 
 export async function resolveActiveWorkspaceReadOnly(userId, authz, queryRunner = query) {
@@ -75,11 +134,11 @@ export async function resolveActiveWorkspaceReadOnly(userId, authz, queryRunner 
   const preference = (await queryRunner(
     'select workspace_type, scope_id from public.user_workspace_preferences where user_id = $1 limit 1', [userId],
   )).rows[0];
-  const workspace = preference ? findWorkspace(availableWorkspaces, preference.workspace_type, preference.scope_id) : null;
+  const workspace = preference ? findPreferredWorkspace(availableWorkspaces, preference.workspace_type, preference.scope_id) : null;
   return { workspace, availableWorkspaces };
 }
 
-function pickFallbackWorkspace(workspaces) {
+export function pickFallbackWorkspace(workspaces) {
   for (const type of FALLBACK_ORDER) {
     const match = workspaces.find((w) => w.type === type);
     if (match) return match;
@@ -91,6 +150,8 @@ function pickFallbackWorkspace(workspaces) {
 // in resolveActiveWorkspace below - the only two places a preference row is
 // ever written. Never called with anything that loadAvailableWorkspaces
 // hasn't just proven is real and currently available.
+// A view type is stored as its base type (storedWorkspaceType) on every write path, so the five-value CHECK of the
+// preference table is never hit.
 export async function saveWorkspacePreference(userId, type, scopeId) {
   await query(
     `insert into public.user_workspace_preferences (user_id, workspace_type, scope_id, updated_at)
@@ -99,7 +160,7 @@ export async function saveWorkspacePreference(userId, type, scopeId) {
        set workspace_type = excluded.workspace_type,
            scope_id = excluded.scope_id,
            updated_at = now()`,
-    [userId, type, scopeId || null],
+    [userId, storedWorkspaceType(type), scopeId || null],
   );
 }
 
@@ -124,14 +185,18 @@ export async function resolveActiveWorkspace(userId, authz) {
   );
   const preference = preferenceResult.rows[0] || null;
   if (preference) {
-    const matched = findWorkspace(availableWorkspaces, preference.workspace_type, preference.scope_id);
+    const matched = findPreferredWorkspace(availableWorkspaces, preference.workspace_type, preference.scope_id);
     if (matched) return { workspace: matched, availableWorkspaces };
   }
 
   const fallback = pickFallbackWorkspace(availableWorkspaces);
-  if (fallback) {
+  // No fallback is persisted when the role tables could not be read for this request (contract 5.1, the Nezavisni
+  // revizor's L1): the view workspaces are then missing from the list, and a passing database error must not overwrite
+  // a role holder's saved club.
+  const rolesReadable = !(authz?.rolePermissions && !Array.isArray(authz.rolePermissions));
+  if (fallback && rolesReadable) {
     const alreadyStored = preference
-      && preference.workspace_type === fallback.type
+      && preference.workspace_type === storedWorkspaceType(fallback.type)
       && String(preference.scope_id || "") === String(fallback.scopeId || "");
     if (!alreadyStored) await saveWorkspacePreference(userId, fallback.type, fallback.scopeId);
   }
