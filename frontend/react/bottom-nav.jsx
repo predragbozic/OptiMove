@@ -1,5 +1,5 @@
-// The phone's main navigation (owner, 2026-11-24): a bar at the bottom of the screen with the main sections and a
-// More sheet for the rest. It decides nothing about who sees what: frontend/bottom-nav.js reads the sections from the
+// The phone's main navigation (owner, 2026-11-24): a bar at the bottom of the screen - Home first, then three sections
+// of the person's own choice (Edit menu, in More; defaults per role) - and a More sheet for the rest. It decides nothing about who sees what: frontend/bottom-nav.js reads the sections from the
 // existing menu (the same items, hidden for the same roles) and passes them here, and a tap goes back to the plain
 // app through onSelect, which runs the menu's own control (its leave guards and history included).
 import { useEffect, useId, useRef, useState } from "react";
@@ -17,13 +17,52 @@ function MoreIcon() {
   );
 }
 
-const FOCUSABLE = "button:not([disabled]), [href], [tabindex]:not([tabindex='-1'])";
+const FOCUSABLE = "button:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex='-1'])";
+const PLACE_NAMES = ["Second", "Third", "Fourth"];
 
-function MoreSheet({ groups, titleId, onClose, onSelect }) {
+// Edit menu: the three places after Home. Choosing a section another place already holds swaps the two, so a section
+// is never twice on the bar. Nothing is kept until Save.
+function EditMenu({ slots, defaults, options, titleId, onSave, onCancel }) {
+  const [draft, setDraft] = useState(slots);
+  const firstRef = useRef(null);
+  useEffect(() => { firstRef.current?.focus({ preventScroll: true }); }, []);
+  const choose = (index, id) => {
+    setDraft((current) => {
+      const next = [...current];
+      const other = next.indexOf(id);
+      if (other >= 0) next[other] = next[index];
+      next[index] = id;
+      return next;
+    });
+  };
+  const same = (a, b) => a.length === b.length && a.every((id, i) => id === b[i]);
+  return (
+    <div className="om-bottom-sheet-edit">
+      <h2 className="om-bottom-sheet-title" id={titleId}>Edit menu</h2>
+      <p className="om-bottom-sheet-note">Home stays first. Choose the sections for the next three buttons; the rest stay under More.</p>
+      {draft.map((id, index) => (
+        <label key={PLACE_NAMES[index]} className="om-bottom-sheet-field">
+          <span>{`${PLACE_NAMES[index]} button`}</span>
+          <select ref={index === 0 ? firstRef : undefined} value={id} onChange={(event) => choose(index, event.target.value)}>
+            {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+          </select>
+        </label>
+      ))}
+      <div className="om-bottom-sheet-actions">
+        <button className="om-bottom-sheet-primary" type="button" onClick={() => onSave(draft)}>Save</button>
+        <button className="om-bottom-sheet-secondary" type="button" onClick={onCancel}>Cancel</button>
+        {same(draft, defaults) ? null : <button className="om-bottom-sheet-secondary" type="button" onClick={() => setDraft(defaults)}>Use the default</button>}
+      </div>
+    </div>
+  );
+}
+
+function MoreSheet({ groups, titleId, onClose, onSelect, edit }) {
   const sheetRef = useRef(null);
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
-    sheetRef.current?.querySelector(".om-bottom-sheet-item")?.focus({ preventScroll: true });
-  }, []);
+    if (!editing) sheetRef.current?.querySelector(".om-bottom-sheet-item")?.focus({ preventScroll: true });
+  }, [editing]);
   const onKeyDown = (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -43,6 +82,17 @@ function MoreSheet({ groups, titleId, onClose, onSelect }) {
     <>
       <button className="om-bottom-sheet-backdrop" type="button" tabIndex={-1} aria-label="Close More" onClick={() => onClose({ restoreFocus: true })} />
       <div className="om-bottom-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={sheetRef} onKeyDown={onKeyDown}>
+        {editing ? (
+          <EditMenu
+            slots={edit.slots}
+            defaults={edit.defaults}
+            options={edit.options}
+            titleId={titleId}
+            onSave={(slots) => { edit.onSave(slots); onClose({ restoreFocus: true }); }}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+        <>
         <div className="om-bottom-sheet-head">
           <h2 className="om-bottom-sheet-title" id={titleId}>More</h2>
           <button className="om-bottom-sheet-close" type="button" aria-label="Close More" onClick={() => onClose({ restoreFocus: true })}>
@@ -70,12 +120,21 @@ function MoreSheet({ groups, titleId, onClose, onSelect }) {
             </li>
           ))}
         </ul>
+        {edit ? (
+          <div className="om-bottom-sheet-foot">
+            <button className="om-bottom-sheet-secondary" type="button" onClick={() => setEditing(true)}>Edit menu</button>
+          </div>
+        ) : null}
+        </>
+        )}
       </div>
     </>
   );
 }
 
-export function BottomNav({ items = [], more = [], onSelect = () => {} }) {
+export function BottomNav({ items = [], more = [], onSelect = () => {}, slots = [], defaults = [], options = [], onSaveSlots }) {
+  // Edit menu is offered when there is a real choice: a save callback and more sections than places.
+  const edit = onSaveSlots && slots.length && options.length > slots.length ? { slots, defaults, options, onSave: onSaveSlots } : null;
   const [open, setOpen] = useState(false);
   const moreRef = useRef(null);
   const titleId = useId();
@@ -131,7 +190,7 @@ export function BottomNav({ items = [], more = [], onSelect = () => {} }) {
       </ul>
       {open ? (
         <div id={sheetId}>
-          <MoreSheet groups={more} titleId={titleId} onClose={close} onSelect={select} />
+          <MoreSheet groups={more} titleId={titleId} onClose={close} onSelect={select} edit={edit} />
         </div>
       ) : null}
     </nav>

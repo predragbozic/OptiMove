@@ -13,6 +13,20 @@ before(async () => { world = await startWorld(); browser = await launch(); });
 after(async () => { await browser?.close(); await world?.stop(); });
 
 const bar = '.om-bottom-nav';
+const barIds = (page) => page.$$eval(`${bar} .om-bottom-nav-item`, (e) => e.map((x) => x.dataset.navId));
+
+// A section wherever it is: on the bar, or in More by its label.
+async function go(page, id, label) {
+  if (await page.locator(`${bar} [data-nav-id="${id}"]`).count()) return page.click(`${bar} [data-nav-id="${id}"]`);
+  await page.click(`${bar} [data-nav-id="more"]`);
+  await page.locator(".om-bottom-sheet-item", { hasText: label }).first().click();
+}
+
+async function editMenu(page) {
+  await page.click(`${bar} [data-nav-id="more"]`);
+  await page.getByRole("button", { name: "Edit menu", exact: true }).click();
+  await page.waitForSelector(".om-bottom-sheet-field select");
+}
 
 // The menu's visible sections (as the menu decides them) and the bar's own (bar + More), by label.
 async function sections(page) {
@@ -24,6 +38,9 @@ async function sections(page) {
       if (el.closest(".sidebar-subnav") || el.closest(".brand") || hidden(el)) continue;
       out.push((el.getAttribute("title") || "").trim());
     }
+    // Messages may hold a place too, where the shell shows its header button.
+    const messages = document.getElementById("messageToggle");
+    if (messages && !hidden(messages)) out.push("Messages");
     return out;
   });
   const onBar = await page.$$eval(`${bar} .om-bottom-nav-item:not([data-nav-id="more"])`, (e) => e.map((x) => x.textContent.trim()));
@@ -102,7 +119,8 @@ test("(team_coach, 390 px) Training load and Calendar from the bar, the current 
 test("(platform_admin, 390 px) an unsaved variable form is asked about before the bar leaves Training Load", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "platform_admin", 390);
   try {
-    await page.click(`${bar} [data-nav-id="training-load"]`);
+    // An administrator's Training load is under More by default.
+    await go(page, "training-load", "Training load");
     await page.click('[data-action="training-load-section"][data-section="variables"]');
     await page.click('[data-action="metric-classification-view"][data-view="variables"]');
     await page.click('[data-action="metric-variables-create-open"]', { timeout: 20_000 });
@@ -115,7 +133,7 @@ test("(platform_admin, 390 px) an unsaved variable form is asked about before th
     assert.match(asked[0], /Discard/);
     await page.waitForTimeout(300);
     assert.equal(await page.inputValue('input[data-mv-field="label"]'), "Bar guard test", "Stay keeps the form and what was typed");
-    assert.equal(await page.getAttribute(`${bar} [data-nav-id="training-load"]`, "aria-current"), "page");
+    assert.equal(await page.locator('[data-action="training-load-section"]').count() > 0, true, "still on Training load");
     page.once("dialog", (d) => d.accept().catch(() => {}));
     await page.click(`${bar} [data-nav-id="home"]`);
     await page.waitForFunction(() => document.querySelector('.om-bottom-nav [data-nav-id="home"]')?.getAttribute("aria-current") === "page", null, { timeout: 20_000 });
@@ -124,13 +142,68 @@ test("(platform_admin, 390 px) an unsaved variable form is asked about before th
   } finally { await context.close(); }
 });
 
-test("(athlete, 390 px) the bar's Weekly plan and Calendar open the athlete's screens", async () => {
+test("(athlete, 390 px) Calendar from the bar; Weekly plan from wherever it is (the bar or More)", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "athlete", 390);
   try {
+    const ids = await barIds(page);
+    assert.deepEqual(ids.slice(0, 3), ["home", "athlete-calendar", "tests"], "the athlete's defaults: Calendar and Tests after Home");
     await page.click(`${bar} [data-nav-id="athlete-calendar"]`);
     await page.waitForFunction(() => document.querySelector('.om-bottom-nav [data-nav-id="athlete-calendar"]')?.getAttribute("aria-current") === "page", null, { timeout: 20_000 });
-    await page.click(`${bar} [data-nav-id="calendar"]`);
-    await page.waitForFunction(() => document.querySelector('.om-bottom-nav [data-nav-id="calendar"]')?.getAttribute("aria-current") === "page", null, { timeout: 20_000 });
+    await go(page, "calendar", "Weekly plan");
+    await page.waitForFunction(() => document.querySelector('.sidebar [data-athlete-tab="calendar"]')?.classList.contains("is-active"), null, { timeout: 20_000 });
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+test("(defaults) a coach: Calendar, Athletes, Training load; an administrator: Calendar, Athletes, Settings", async () => {
+  for (const [role, expected] of [["team_coach", ["home", "central-calendar", "athletes", "training-load", "more"]], ["club_admin", ["home", "central-calendar", "athletes", "organization", "more"]], ["platform_admin", ["home", "central-calendar", "athletes", "organization", "more"]]]) {
+    const { context, page } = await openAs(browser, world, role, 390);
+    try {
+      await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+      assert.deepEqual(await barIds(page), expected, role);
+    } finally { await context.close(); }
+  }
+});
+
+test("(team_coach, 390 px) Edit menu: choose and order the three buttons; kept after a reload; the default restores it", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 390);
+  try {
+    await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+    await editMenu(page);
+    const fields = page.locator(".om-bottom-sheet-field select");
+    assert.equal(await fields.count(), 3);
+    // Every choice is a section this coach's menu offers; Home is not one (it is always first).
+    const offered = await fields.first().locator("option").allTextContents();
+    assert.ok(!offered.includes("Home") && offered.includes("Tests") && offered.includes("Builder"), offered.join(", "));
+    const sizes = await page.$$eval(".om-bottom-sheet select, .om-bottom-sheet button", (e) => e.map((x) => ({ h: x.getBoundingClientRect().height, f: parseFloat(getComputedStyle(x).fontSize), tag: x.tagName })));
+    assert.ok(sizes.every((s) => s.h >= 44), "44 px controls");
+    assert.ok(sizes.filter((s) => s.tag === "SELECT").every((s) => s.f >= 16), "16 px selects");
+    await fields.nth(0).selectOption({ label: "Tests" });
+    await fields.nth(1).selectOption({ label: "Builder" });
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector(".om-bottom-sheet"));
+    assert.deepEqual(await barIds(page), ["home", "tests", "builder", "training-load", "more"]);
+    // Calendar and Athletes moved under More.
+    await page.click(`${bar} [data-nav-id="more"]`);
+    const inMore = await page.$$eval(".om-bottom-sheet-item", (e) => e.map((x) => x.textContent.trim()));
+    assert.ok(inMore.includes("Calendar") && inMore.includes("Athletes"), inMore.join(", "));
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".om-bottom-sheet"));
+    // The bar's Tests opens Tests.
+    await page.click(`${bar} [data-nav-id="tests"]`);
+    await page.waitForFunction(() => document.querySelector('.om-bottom-nav [data-nav-id="tests"]')?.getAttribute("aria-current") === "page", null, { timeout: 20_000 });
+    // Kept on this device after a reload.
+    await page.reload();
+    await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+    await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+    assert.deepEqual(await barIds(page), ["home", "tests", "builder", "training-load", "more"]);
+    // Back to the default.
+    await editMenu(page);
+    await page.getByRole("button", { name: "Use the default", exact: true }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector(".om-bottom-sheet"));
+    assert.deepEqual(await barIds(page), ["home", "central-calendar", "athletes", "training-load", "more"]);
+    assert.equal(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("optimove.bottomNav")).length), 0, "the default stores nothing");
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });

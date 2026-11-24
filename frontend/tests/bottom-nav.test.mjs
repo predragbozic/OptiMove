@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
-import { BAR_SECTIONS, PHONE_QUERY, buildBottomNavModel, runBottomNav } from "../bottom-nav.js";
+import { DEFAULT_SLOTS, PHONE_QUERY, buildBottomNavModel, navRoleOf, readBarSlots, resolveSlots, runBottomNav, writeBarSlots } from "../bottom-nav.js";
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 function shell(file) {
@@ -57,17 +57,29 @@ test("the current section follows the menu's own is-active marks, sections inclu
   assert.equal(buildBottomNavModel(doc, {}).items.find((i) => i.id === "athletes").active, false);
 });
 
-test("athlete shell: Home, Calendar, Weekly plan and Tests on the bar; My training only once the menu shows it", () => {
+test("athlete shell: Home, Calendar, Tests and Messages by default; Weekly plan fills in while Messages is not shown", () => {
   const doc = shell("athlete.html");
-  let model = buildBottomNavModel(doc, { activeTab: "athlete-home" });
+  let model = buildBottomNavModel(doc, { activeTab: "athlete-home" }, null);
   assert.equal(model.shell, "athlete");
-  assert.deepEqual(ids(model.items), [...BAR_SECTIONS.athlete]);
-  assert.deepEqual(model.items.map((i) => i.label), ["Home", "Calendar", "Weekly plan", "Tests"]);
+  assert.equal(model.role, "athlete");
+  assert.deepEqual([...DEFAULT_SLOTS.athlete], ["athlete-calendar", "tests", "messages"]);
+  // The page as served hides Messages until the inbox is read: the next section of the menu takes its place.
+  assert.deepEqual(ids(model.items), ["home", "athlete-calendar", "tests", "calendar"]);
+  doc.getElementById("messageToggle").hidden = false;
+  model = buildBottomNavModel(doc, { activeTab: "athlete-home" }, null);
+  assert.deepEqual(ids(model.items), ["home", "athlete-calendar", "tests", "messages"]);
+  assert.deepEqual(model.items.map((i) => i.label), ["Home", "Calendar", "Tests", "Messages"]);
+  assert.ok(ids(model.more).includes("calendar"), "Weekly plan is under More");
+  doc.body.classList.add("messages-open");
+  assert.equal(buildBottomNavModel(doc, {}, null).items.find((i) => i.id === "messages").active, true);
+  doc.getElementById("messageToggle").hidden = true;
+  doc.body.classList.remove("messages-open");
+  model = buildBottomNavModel(doc, { activeTab: "athlete-home" }, null);
   assert.equal(model.items[0].active, true);
   assert.ok(!ids(model.more).includes("my-training"), "hidden in the page");
   assert.ok(!ids(model.more).includes("exercises"), "hidden in the page");
   doc.querySelector('[data-athlete-tab="my-training"]').hidden = false;
-  model = buildBottomNavModel(doc, {});
+  model = buildBottomNavModel(doc, {}, null);
   assert.ok(ids(model.more).includes("my-training"));
   // The athlete's logo opens her Home (data-action="home").
   assert.equal(model.targets.get("home").dataset.action, "home");
@@ -99,6 +111,69 @@ test("Athletes opens the menu drawer with the athlete list; tapped again while b
   clicked.length = 0;
   runBottomNav("athletes", model, doc, { mobileNavOpen: true, athletesExpanded: true });
   assert.deepEqual(clicked, ["mobileNavToggle"]);
+});
+
+test("the defaults by role: a coach Calendar, Athletes, Training load; an administrator Calendar, Athletes, Settings", () => {
+  assert.equal(navRoleOf("coach", { currentUser: { activeWorkspace: { type: "team" } } }), "coach");
+  assert.equal(navRoleOf("coach", { currentUser: { activeWorkspace: { type: "private_coach" } } }), "coach");
+  assert.equal(navRoleOf("coach", { currentUser: { activeWorkspace: { type: "club" } } }), "admin");
+  assert.equal(navRoleOf("coach", { currentUser: { activeWorkspace: { type: "platform" } } }), "admin");
+  assert.equal(navRoleOf("athlete", {}), "athlete");
+  const doc = shell("index.html");
+  doc.querySelector('[data-sidebar-submenu="settings"]').hidden = false;
+  const admin = buildBottomNavModel(doc, { currentUser: { activeWorkspace: { type: "club" } } }, null);
+  assert.deepEqual(ids(admin.items), ["home", "central-calendar", "athletes", "organization"]);
+  assert.ok(ids(admin.more).includes("training-load"));
+  // An administrator without Settings in the menu: the next section of the menu takes the place.
+  doc.querySelector('[data-sidebar-submenu="settings"]').hidden = true;
+  assert.deepEqual(ids(buildBottomNavModel(doc, { currentUser: { activeWorkspace: { type: "club" } } }, null).items), ["home", "central-calendar", "athletes", "coaches"]);
+});
+
+test("a stored choice: kept where the role can open it, filled from the defaults, never twice, never Home", () => {
+  const available = ["central-calendar", "athletes", "training-load", "builder", "tests"];
+  assert.deepEqual(resolveSlots(["tests", "builder", "athletes"], DEFAULT_SLOTS.coach, available), ["tests", "builder", "athletes"]);
+  assert.deepEqual(resolveSlots(["organization", "tests", "tests"], DEFAULT_SLOTS.coach, available), ["tests", "central-calendar", "athletes"], "a section the role cannot open and a repeat are dropped");
+  assert.deepEqual(resolveSlots(["home", 7, null], DEFAULT_SLOTS.coach, available), ["central-calendar", "athletes", "training-load"]);
+  assert.deepEqual(resolveSlots("garbage", DEFAULT_SLOTS.coach, available), ["central-calendar", "athletes", "training-load"]);
+  const doc = shell("index.html");
+  const model = buildBottomNavModel(doc, {}, ["tests", "builder", "training-load"]);
+  assert.deepEqual(ids(model.items), ["home", "tests", "builder", "training-load"]);
+  assert.deepEqual(model.defaults, ["central-calendar", "athletes", "training-load"]);
+  assert.ok(ids(model.more).includes("central-calendar") && ids(model.more).includes("athletes"), "the sections moved off the bar are under More");
+  assert.ok(!model.options.some((o) => o.id === "home"), "Home is not a choice: it is always first");
+});
+
+test("the choice is stored per user and shell on this device; storage that throws or holds garbage gives the defaults", () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const store = new Map();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) } });
+  try {
+    assert.equal(writeBarSlots("coach", "u1", ["tests", "builder", "athletes"]), true);
+    assert.deepEqual(readBarSlots("coach", "u1"), ["tests", "builder", "athletes"]);
+    assert.equal(readBarSlots("coach", "u2"), null, "another user's choice is not read");
+    assert.equal(readBarSlots("athlete", "u1"), null, "nor another shell's");
+    assert.deepEqual(ids(buildBottomNavModel(shell("index.html"), { currentUser: { id: "u1" } }).items), ["home", "tests", "builder", "athletes"]);
+    writeBarSlots("coach", "u1", null);
+    assert.equal(readBarSlots("coach", "u1"), null, "back to the defaults removes the stored choice");
+    store.set("optimove.bottomNav.slots.v1.coach.u1", "{not json");
+    assert.equal(readBarSlots("coach", "u1"), null);
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => { throw new Error("blocked"); } } });
+    assert.equal(readBarSlots("coach", "u1"), null);
+    assert.equal(writeBarSlots("coach", "u1", ["tests"]), false);
+    assert.deepEqual(ids(buildBottomNavModel(shell("index.html"), { currentUser: { id: "u1" } }).items), ["home", "central-calendar", "athletes", "training-load"]);
+  } finally {
+    if (saved) Object.defineProperty(globalThis, "localStorage", saved); else delete globalThis.localStorage;
+  }
+});
+
+test("Messages: a tap runs the header's own Messages button", () => {
+  const doc = shell("athlete.html");
+  doc.getElementById("messageToggle").hidden = false;
+  const model = buildBottomNavModel(doc, {}, null);
+  let clicked = "";
+  doc.addEventListener("click", (e) => { clicked = e.target.closest("button")?.id; });
+  runBottomNav("messages", model, doc, {});
+  assert.equal(clicked, "messageToggle");
 });
 
 test("no menu, no bar: a page without the app shell (sign-in, invite) gives no model", () => {

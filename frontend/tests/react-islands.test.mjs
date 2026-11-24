@@ -177,3 +177,78 @@ test("a current section inside More marks the More button and names it for a scr
   assert.equal(button.getAttribute("aria-current"), null, "More is not itself a page");
   assert.equal(button.querySelector(".visually-hidden").textContent, ", current: Users");
 });
+
+const OPTIONS = [
+  { id: "central-calendar", label: "Calendar" }, { id: "athletes", label: "Athletes" }, { id: "training-load", label: "Training load" },
+  { id: "builder", label: "Builder" }, { id: "tests", label: "Tests" },
+];
+const SLOTS = ["central-calendar", "athletes", "training-load"];
+const pick = (select, value) => {
+  select.value = value;
+  select.dispatchEvent(new window.Event("change", { bubbles: true }));
+};
+async function openEdit(props) {
+  const saved = [];
+  const r = renderBar({ items: ITEMS, more: MORE, slots: SLOTS, defaults: SLOTS, options: OPTIONS, onSaveSlots: (s) => saved.push(s), ...props });
+  click(r.el.querySelector('[data-nav-id="more"]'));
+  await tick();
+  const edit = [...r.el.querySelectorAll(".om-bottom-sheet-foot button")].find((b) => b.textContent === "Edit menu");
+  assert.ok(edit, "More offers Edit menu");
+  click(edit);
+  await tick();
+  return { ...r, saved };
+}
+const selects = (el) => [...el.querySelectorAll(".om-bottom-sheet-field select")];
+
+test("Edit menu: three labelled choices after Home, the current ones chosen, only the offered sections", async () => {
+  const { el } = await openEdit();
+  const sheet = el.querySelector('.om-bottom-sheet[role="dialog"]');
+  assert.equal(document.getElementById(sheet.getAttribute("aria-labelledby")).textContent, "Edit menu");
+  assert.match(sheet.textContent, /Home stays first/);
+  const list = selects(el);
+  assert.deepEqual(list.map((s) => s.closest("label").querySelector("span").textContent), ["Second button", "Third button", "Fourth button"]);
+  assert.deepEqual(list.map((s) => s.value), SLOTS);
+  assert.deepEqual([...list[0].options].map((o) => o.textContent), OPTIONS.map((o) => o.label));
+  assert.ok(document.activeElement === list[0], "focus on the first choice");
+  // The draft equals the default: no "Use the default".
+  assert.ok(![...sheet.querySelectorAll("button")].some((b) => b.textContent === "Use the default"));
+});
+
+test("Edit menu: a section another place holds swaps places (never twice on the bar); Save passes the order and closes", async () => {
+  const { el, saved } = await openEdit();
+  pick(selects(el)[0], "tests");
+  await tick();
+  assert.deepEqual(selects(el).map((s) => s.value), ["tests", "athletes", "training-load"]);
+  pick(selects(el)[2], "tests");
+  await tick();
+  assert.deepEqual(selects(el).map((s) => s.value), ["training-load", "athletes", "tests"], "chosen again elsewhere: the two swap");
+  assert.deepEqual(saved, [], "nothing is kept before Save");
+  click([...el.querySelectorAll(".om-bottom-sheet button")].find((b) => b.textContent === "Save"));
+  await tick();
+  assert.deepEqual(saved, [["training-load", "athletes", "tests"]]);
+  assert.ok(!el.querySelector(".om-bottom-sheet"), "the sheet closed");
+  assert.ok(document.activeElement === el.querySelector('[data-nav-id="more"]'), "focus back on More");
+});
+
+test("Edit menu: Cancel goes back to More without saving; Use the default resets the draft", async () => {
+  const { el, saved } = await openEdit({ slots: ["tests", "builder", "athletes"] });
+  const sheet = () => el.querySelector(".om-bottom-sheet");
+  const reset = [...sheet().querySelectorAll("button")].find((b) => b.textContent === "Use the default");
+  assert.ok(reset, "offered while the choice differs from the default");
+  click(reset);
+  await tick();
+  assert.deepEqual(selects(el).map((s) => s.value), SLOTS);
+  click([...sheet().querySelectorAll("button")].find((b) => b.textContent === "Cancel"));
+  await tick();
+  assert.ok(sheet().querySelector(".om-bottom-sheet-list"), "back on the More list");
+  assert.deepEqual(saved, []);
+});
+
+test("no Edit menu without a choice to make (as many sections as places) or without a save callback", async () => {
+  for (const props of [{ options: OPTIONS.slice(0, 3) }, { onSaveSlots: undefined }]) {
+    const { el } = renderBar({ items: ITEMS, more: MORE, slots: SLOTS, defaults: SLOTS, options: OPTIONS, onSaveSlots: () => {}, ...props });
+    click(el.querySelector('[data-nav-id="more"]'));
+    await tick();
+    assert.ok(!el.querySelector(".om-bottom-sheet-foot"));
+  }
+});

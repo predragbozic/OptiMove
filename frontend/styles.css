@@ -30730,4 +30730,79 @@ body.athlete-questions-prompt-open {
     color: var(--om-accent-strong);
     font-weight: var(--om-weight-semibold);
   }
+
+  /* Edit menu: the three places after Home. */
+  .om-bottom-sheet-foot {
+    display: flex;
+    justify-content: flex-start;
+    padding-top: 8px;
+    border-top: 1px solid var(--om-border-subtle);
+  }
+
+  .om-bottom-sheet-edit {
+    display: grid;
+    gap: 12px;
+  }
+
+  .om-bottom-sheet-note {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--om-text-sm);
+  }
+
+  .om-bottom-sheet-field {
+    display: grid;
+    gap: 4px;
+    font-size: var(--om-text-sm);
+    font-weight: var(--om-weight-medium);
+  }
+
+  .om-bottom-sheet-field select {
+    width: 100%;
+    min-height: var(--om-tap-target);
+    padding: 8px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--om-radius-md);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 16px;
+    font-weight: var(--om-weight-regular);
+  }
+
+  .om-bottom-sheet-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .om-bottom-sheet-primary,
+  .om-bottom-sheet-secondary {
+    min-height: var(--om-tap-target);
+    padding: 0 16px;
+    border-radius: var(--om-radius-md);
+    font: inherit;
+    font-size: var(--om-text-md);
+    cursor: pointer;
+  }
+
+  .om-bottom-sheet-primary {
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-weight: var(--om-weight-semibold);
+  }
+
+  .om-bottom-sheet-secondary {
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .om-bottom-sheet-primary:focus-visible,
+  .om-bottom-sheet-secondary:focus-visible,
+  .om-bottom-sheet-field select:focus-visible {
+    outline: none;
+    box-shadow: var(--om-focus-ring);
+  }
 }

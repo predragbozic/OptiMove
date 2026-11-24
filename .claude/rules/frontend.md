@@ -46,6 +46,9 @@ stays plain ES modules until it is touched (incremental, island by island). Reac
   calls back through props (`onSelect`, `onSave`…). When a component must read or write itself, it imports the app's
   own modules by a relative path (`../api.js`, `../state.js`): `vite.islands.config.js` keeps every import outside
   `react/` external, so the island uses the same module instance, the same `state` and the same cookie session.
+- **Per-person UI choices** (e.g. the bottom bar's three places): there is no server-side store for UI preferences
+  yet, so they are kept per device in `localStorage`, every read and write inside try/catch with the role's default
+  as the fallback (the `athlete-strip-pref.js` pattern). A server store is a separate follow-up with its own migration.
 - **Navigation and leave guards:** an island never changes `state.activeTab` itself; it runs the existing control or
   action, so the leave guards of unsaved work, the app's history and the section resets run as before.
 - **Testing:** unit tests import `../react-build/islands.js` under a JSDOM window set as globals before the import
